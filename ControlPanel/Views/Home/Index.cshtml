@@ -2,4 +2,40 @@
     ViewData["Title"] = "Home Page";
 }
 
+<link rel="stylesheet" href="~/css/gridstack.min.css" />
+<link rel="stylesheet" href="~/css/gridstack-extra.min.css" />
+<script src="~/js/gridstack-all.js"></script>
+
 <h1>A.R.I homepage</h1>
+
+<div class="grid-stack">
+
+    <div class="grid-stack-item" gs-x="0" gs-y="1" gs-w="4" gs-h="6">
+        <div class="grid-stack-item-content">Logs Panel</div>
+    </div>
+
+    <div class="grid-stack-item" gs-x="3" gs-y="0" gs-w="3" gs-h="1">
+        <div class="grid-stack-item-content">Voice Synthesis Panel</div>
+    </div>
+
+    <div class="grid-stack-item" gs-x="0" gs-y="0" gs-w="3" gs-h="1">
+        <div class="grid-stack-item-content">Selected Voice </div>
+    </div>
+
+</div>
+
+<script>
+    GridStack.init({
+        column: 12,
+        maxRow: 8
+    });
+</script>
+
+<style>
+    .grid-stack-item-content {
+        background-color: #2a2a3d;
+        border-radius: 8px;
+        color: white;
+        padding: 16px;
+    }
+</style>
