@@ -2,6 +2,7 @@
     ViewData["Title"] = "Home Page";
 }
 
+// references for gridstack.js
 <link rel="stylesheet" href="~/css/gridstack.min.css" />
 <link rel="stylesheet" href="~/css/gridstack-extra.min.css" />
 <script src="~/js/gridstack-all.js"></script>
@@ -27,10 +28,12 @@
 <script>
     GridStack.init({
         column: 12,
-        maxRow: 8
+        maxRow: 8,
+        float: false // Disable floating items to prevent gaps when dragging
     });
 </script>
 
+// styling for gridstack items
 <style>
     .grid-stack-item-content {
         background-color: #2a2a3d;
