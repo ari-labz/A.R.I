@@ -15,6 +15,13 @@
     </ItemGroup>
 
     <ItemGroup>
+    <Content Include="..\compose.yaml">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <Link>compose.yaml</Link>
+    </Content>
+</ItemGroup>
+
+    <ItemGroup>
       <None Update="AriConfig.json">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       </None>

@@ -1,14 +1,12 @@
 {
-  "ARI": {
-    "LLM": {
-      "Model": "mistral:7b",
-      "Endpoint": "http://localhost:11434"
-    },
-    "Trilium": {
-      "Endpoint": "http://localhost:8080"
-    },
-    "Docker": {
-      "ComposePath": "../compose.yaml"
-    }
+  "LLM": {
+    "Model": "mistral:7b",
+    "Endpoint": "http://localhost:11434"
+  },
+  "Trilium": {
+    "Endpoint": "http://localhost:8080"
+  },
+  "Docker": {
+    "ComposePath": "compose.yaml"
   }
 }

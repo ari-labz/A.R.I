@@ -24,14 +24,26 @@ public class Docker
 
     public async Task StartContainers()
     {
-        if (!File.Exists(composePath))
-            throw new Exception($"compose.yaml not found at: {composePath}");
+        string fullComposePath = Path.GetFullPath(composePath);
+        
+        if (!File.Exists(fullComposePath))
+        {
+            Console.WriteLine($"compose.yaml not found at {fullComposePath}");
+            throw new Exception($"compose.yaml not found at: {fullComposePath}");
+        }
 
-        Process process = Common.RunCommand("docker", $"compose -f {composePath} up -d");
+        Process process = Common.RunCommand("docker", $"compose -f {fullComposePath} up -d");
         await process.WaitForExitAsync();
+        
+        
+        string output = await process.StandardOutput.ReadToEndAsync();
+        string errors = await process.StandardError.ReadToEndAsync();
 
         if (process.ExitCode != 0)
-            throw new Exception("Failed to start ARI containers. Check Docker logs for details.");
+        {
+            Console.WriteLine($"docker exited with errors: {errors}");
+            throw new Exception("Failed to start ARI containers. Check logs for details.");
+        }
 
         Console.WriteLine("Containers are running.");
     }

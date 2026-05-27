@@ -14,17 +14,25 @@ public class Ollama
 
     public async Task IsInstalled()
     {
-        Process process = Common.RunCommand("ollama", "--version");
-        await process.WaitForExitAsync();
+        try
+        {
+            Process process = Common.RunCommand("ollama", "--version");
+            await process.WaitForExitAsync();
 
-        if (process.ExitCode != 0)
+            if (process.ExitCode != 0)
+            {
+                Console.WriteLine("Ollama not found. Installing...");
+                await Install();
+            }
+            else
+            {
+                Console.WriteLine("Ollama is installed.");
+            }
+        }
+        catch (Exception)
         {
             Console.WriteLine("Ollama not found. Installing...");
             await Install();
-        }
-        else
-        {
-            Console.WriteLine("Ollama is installed.");
         }
     }
 
@@ -32,40 +40,52 @@ public class Ollama
     {
         Console.WriteLine($"Checking for model: {model}");
 
-        Process process = Common.RunCommand("ollama", $"show {model}");
-        await process.WaitForExitAsync();
+        try
+        {
+            Process process = Common.RunCommand("ollama", $"show {model}");
+            await process.WaitForExitAsync();
 
-        if (process.ExitCode != 0)
-        {
-            Console.WriteLine($"Model {model} not found. Pulling now, this may take a while...");
-            await PullModel();
+            if (process.ExitCode != 0)
+            {
+                Console.WriteLine($"Model {model} not found. Pulling now, this may take a while...");
+                await PullModel();
+            }
+            else
+            {
+                Console.WriteLine($"Model {model} is ready.");
+            }
         }
-        else
+        catch (Exception)
         {
-            Console.WriteLine($"Model {model} is ready.");
+            Console.WriteLine("Ollama is not installed. Cannot check for model.");
+            throw new Exception("Ollama is not installed. Cannot check for model.");
         }
     }
 
     private async Task Install()
     {
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux) || RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
         {
-            Process process = Common.RunCommand("brew", "install ollama");
-            await process.WaitForExitAsync();
+            try
+            {
+                Process process = Common.RunCommand("curl", "-fsSL https://ollama.com/install.sh | sh");
+                await process.WaitForExitAsync();
 
-            if (process.ExitCode != 0)
-                throw new Exception("Failed to install Ollama. Please install it manually from https://ollama.com");
-        }
-        else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-        {
-            Process process = Common.RunCommand("curl", "-fsSL https://ollama.com/install.sh | sh");
-            await process.WaitForExitAsync();
-
-            if (process.ExitCode != 0)
-                throw new Exception("Failed to install Ollama. Please install it manually from https://ollama.com");
+                if (process.ExitCode != 0)
+                {
+                    Console.WriteLine("Failed to install Ollama. Please install it manually from https://ollama.com");
+                    throw new Exception("Failed to install Ollama. Please install it manually from https://ollama.com");
+                }
+            }
+            catch (Exception)
+            {
+                Console.WriteLine("curl is not installed. Please install Ollama manually from https://ollama.com");
+                throw new Exception("curl is not installed. Please install Ollama manually from https://ollama.com");
+            }
         }
         else
         {
+            Console.WriteLine("Automatic Ollama installation is not supported on this platform. Please install it manually from https://ollama.com");
             throw new Exception("Automatic Ollama installation is not supported on this platform. Please install it manually from https://ollama.com");
         }
 
@@ -78,7 +98,10 @@ public class Ollama
         await process.WaitForExitAsync();
 
         if (process.ExitCode != 0)
+        {
+            Console.WriteLine($"Failed to pull model {model}. Check your internet connection and try again.");
             throw new Exception($"Failed to pull model {model}. Check your internet connection and try again.");
+        }
 
         Console.WriteLine($"Model {model} pulled successfully.");
     }

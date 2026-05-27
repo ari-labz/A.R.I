@@ -1,10 +1,4 @@
 ﻿services:
-  ari.core:
-    image: ari.core
-    build:
-      context: .
-      dockerfile: ARI.Core/Dockerfile
-
   trilium:
     image: zadam/trilium:latest
     ports:
@@ -19,12 +13,4 @@
       - "11434:11434"
     volumes:
       - ./External/Ollama/models:/root/.ollama
-    restart: unless-stopped
-
-  rvc:
-    image: realvocoder/rvc-webui:latest
-    ports:
-      - "7865:7865"
-    volumes:
-      - ./External/RVC/models:/app/assets/weights
     restart: unless-stopped
