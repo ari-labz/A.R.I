@@ -1,5 +1,5 @@
-using System.ComponentModel.Design;
 using System.Text.Json;
+using ARI.Core.LLM;
 
 namespace ARI.Core.Scripts;
 
@@ -9,22 +9,23 @@ public class Startup
 
     public Startup()
     {
-        
         string executableDirectory = AppDomain.CurrentDomain.BaseDirectory;
         string appSettingsPath = Path.Combine(executableDirectory, "AriConfig.json");
-        if(!File.Exists(appSettingsPath))
-            throw new FileNotFoundException("AriConfig.json file not found.");
-        
-        Console.WriteLine("AriConfig.json found at " + appSettingsPath);
+
+        if (!File.Exists(appSettingsPath))
+            throw new Exception("AriConfig.json file not found.");
+
+        Console.WriteLine($"AriConfig.json found at {appSettingsPath}");
+
         string json = File.ReadAllText(appSettingsPath);
 
-        AriConfig? ariConfig = JsonSerializer.Deserialize<AriConfig>(json, new JsonSerializerOptions
+        AriConfig? deserialized = JsonSerializer.Deserialize<AriConfig>(json, new JsonSerializerOptions
         {
             PropertyNameCaseInsensitive = true
         });
 
-        config = ariConfig ?? throw new Exception("Failed to deserialise AriConfig.json.");
-        
+        config = deserialized ?? throw new Exception("Failed to deserialise AriConfig.json.");
+
         Console.WriteLine("AriConfig deserialised.");
     }
 
@@ -35,14 +36,29 @@ public class Startup
         await Dependency.CheckDocker();
         await Dependency.CheckPython();
 
-        Docker docker = new Docker(config.Docker.ComposePath);
+        string executableDirectory = AppDomain.CurrentDomain.BaseDirectory;
+        string fullComposePath = Path.Combine(executableDirectory, config.Docker.ComposePath);
+
+        AppDomain.CurrentDomain.ProcessExit += async (sender, e) =>
+        {
+            Console.WriteLine("ARI is shutting down...");
+            Docker docker = new Docker(fullComposePath);
+            await docker.StopContainers();
+        };
+
+        Docker docker = new Docker(fullComposePath);
         await docker.IsRunning();
         await docker.StartContainers();
 
-        Ollama ollama = new Ollama(config.LLM.Model);
+        Ollama ollama = new Ollama(config.LLM.Endpoint, config.LLM.Model);
         await ollama.IsInstalled();
         await ollama.ModelExists();
 
-        Console.WriteLine("ARI is ready.");
+        LlmService llm = new LlmService(config.LLM.Endpoint, config.LLM.Model);
+        string response = await llm.SendMessage("Say hello. Introduce yourself as ARI, a personal AI assistant.");
+        Console.WriteLine(response);
+
+        Console.WriteLine("ARI is ready. Press any key to shut down.");
+        Console.ReadKey();
     }
 }
