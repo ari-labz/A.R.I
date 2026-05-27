@@ -39,26 +39,28 @@ public class Startup
         string executableDirectory = AppDomain.CurrentDomain.BaseDirectory;
         string fullComposePath = Path.Combine(executableDirectory, config.Docker.ComposePath);
 
-        AppDomain.CurrentDomain.ProcessExit += async (sender, e) =>
-        {
-            Console.WriteLine("ARI is shutting down...");
-            Docker docker = new Docker(fullComposePath);
-            await docker.StopContainers();
-        };
 
         Docker docker = new Docker(fullComposePath);
-        await docker.IsRunning();
-        await docker.StartContainers();
+        try
+        {
+            await docker.IsRunning();
+            await docker.StartContainers();
 
-        Ollama ollama = new Ollama(config.LLM.Endpoint, config.LLM.Model);
-        await ollama.IsInstalled();
-        await ollama.ModelExists();
+            Ollama ollama = new Ollama(config.LLM.Endpoint, config.LLM.Model);
+            await ollama.IsInstalled();
+            await ollama.ModelExists();
 
-        LlmService llm = new LlmService(config.LLM.Endpoint, config.LLM.Model);
-        string response = await llm.SendMessage("Say hello. Introduce yourself as ARI, a personal AI assistant.");
-        Console.WriteLine(response);
+            LlmService llm = new LlmService(config.LLM.Endpoint, config.LLM.Model);
+            string response = await llm.SendMessage("Say hello. Introduce yourself as ARI, a personal AI assistant.");
+            Console.WriteLine(response);
 
-        Console.WriteLine("ARI is ready. Press any key to shut down.");
-        Console.ReadKey();
+            Console.WriteLine("ARI is ready. Press any key to shut down.");
+            Console.ReadKey();
+        }
+        finally
+        {
+            Console.WriteLine("ARI is shutting down...");
+            await docker.StopContainers();
+        }
     }
 }
