@@ -12,8 +12,6 @@ public class Dependency
             Process process = Common.RunCommand("docker", "--version");
             await process.WaitForExitAsync();
 
-            if (process.ExitCode != 0)
-
             Console.WriteLine("Docker is installed.");
         }
         catch (Exception e)
@@ -29,9 +27,6 @@ public class Dependency
         {
             Process process = Common.RunCommand("python3", "--version");
             await process.WaitForExitAsync();
-
-            if (process.ExitCode != 0)
-                throw new Exception("");
 
             Console.WriteLine("Python is installed.");
         }
