@@ -2,5 +2,6 @@
   "Token": "[REDACTED]",
   "WhitelistedUserIds": [
     0
-  ]
+  ],
+  "ContextPrompt": "{username} is sending you a message via Discord.."
 }

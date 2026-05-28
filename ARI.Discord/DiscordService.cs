@@ -10,6 +10,7 @@ public class DiscordService : BackgroundService
 {
     private const int MAX_MESSAGE_LENGTH = 2000;
     private const int MESSAGE_SEND_DELAY_MS = 500;
+    private const string USERNAME_TOKEN = "{username}";
 
     private readonly DiscordSocketClient client;
     private readonly DiscordConfig config;
@@ -46,6 +47,18 @@ public class DiscordService : BackgroundService
         await Task.Delay(Timeout.Infinite, stoppingToken);
     }
 
+    public async Task NotifyOfflineAsync()
+    {
+        Common.Logger.LogInformation("Notifying whitelisted users that ARI is going offline...");
+
+        foreach (ulong userId in config.WhitelistedUserIds)
+        {
+            IUser user = await client.GetUserAsync(userId);
+            IDMChannel dm = await user.CreateDMChannelAsync();
+            await dm.SendMessageAsync("A.R.I is offline.");
+        }
+    }
+
     private async Task OnReadyAsync()
     {
         Common.Logger.LogInformation("Discord bot is ready. Notifying whitelisted users...");
@@ -78,7 +91,8 @@ public class DiscordService : BackgroundService
 
         try
         {
-            string response = await llmService.PromptModel("Dialogue", message.Content);
+            string context = config.ContextPrompt.Replace(USERNAME_TOKEN, message.Author.Username);
+            string response = await llmService.PromptModel("Dialogue", message.Content, context);
 
             foreach (string chunk in SplitIntoChunks(response))
             {
