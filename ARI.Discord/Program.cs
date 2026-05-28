@@ -1,7 +1,13 @@
 using ARI.Discord;
 
-var builder = Host.CreateApplicationBuilder(args);
-builder.Services.AddHostedService<Worker>();
+IHost host = Host.CreateDefaultBuilder(args)
+    .ConfigureServices((context, services) =>
+    {
+        services.Configure<DiscordConfig>(
+            context.Configuration.GetSection("Discord"));
 
-var host = builder.Build();
-host.Run();
+        services.AddHostedService<DiscordService>();
+    })
+    .Build();
+
+await host.RunAsync();

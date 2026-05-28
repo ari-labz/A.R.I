@@ -1,7 +1,9 @@
 using ARI.Core.LLM;
 using ARI.Core.Scripts;
+using ARI.Discord;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Common = ARI.Core.Scripts.Common;
 
 namespace ARI.Core;
 
@@ -38,9 +40,16 @@ public class AriHostService : BackgroundService
 
         Common.Logger.LogInformation("ARI is ready.");
 
-        LlmService llm = new LlmService(config.LLM.Endpoint, config.LLM.Model);
-        string response = await llm.SendMessage("Say hello. Introduce yourself as ARI.");
-        Common.Logger.LogInformation("LLM response: {Response}", response);
+        
+        if (config.Modules.Discord)
+        {
+            Common.Logger.LogInformation("Discord module is enabled. Starting...");
+            DiscordService discordService = new DiscordService(loggerFactory);
+            await discordService.StartAsync(stoppingToken);
+
+            // Await the running task directly so exceptions surface to the debugger
+            await Task.WhenAny(discordService.ExecuteTask ?? Task.CompletedTask, Task.Delay(Timeout.Infinite, stoppingToken));
+        }
 
         await Task.Delay(Timeout.Infinite, stoppingToken);
     }
