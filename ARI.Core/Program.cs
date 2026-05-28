@@ -1,22 +1,37 @@
 using ARI.Core;
 using ARI.Core.Scripts;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
+using Serilog;
+using Serilog.Events;
 
-var host = Host.CreateDefaultBuilder(args)
+string logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ARI.log");
+
+if (File.Exists(logPath))
+    File.Delete(logPath);
+
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Debug()
+    .MinimumLevel.Override("Microsoft.Hosting.Lifetime", LogEventLevel.Warning)
+    .MinimumLevel.Override("Microsoft.Extensions.Hosting", LogEventLevel.Warning)
+    .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss}] {Message:lj}{NewLine}{Exception}")
+    .WriteTo.File(logPath, outputTemplate: "[{Timestamp:HH:mm:ss}] {Message:lj}{NewLine}{Exception}")
+    .CreateLogger();
+
+IHost host = Host.CreateDefaultBuilder(args)
+    .UseSerilog()
     .ConfigureServices((context, services) =>
     {
         services.AddHostedService<AriHostService>();
     })
     .Build();
 
-AppDomain.CurrentDomain.UnhandledException += (sender, args) =>
+AppDomain.CurrentDomain.UnhandledException += (sender, eventArgs) =>
 {
-    Console.WriteLine($"[FATAL] Unhandled exception: {args.ExceptionObject}");
+    Log.Fatal("[FATAL] Unhandled exception: {Exception}", eventArgs.ExceptionObject);
     EmergencyShutdown();
 };
 
-AppDomain.CurrentDomain.ProcessExit += (sender, args) =>
+AppDomain.CurrentDomain.ProcessExit += (sender, eventArgs) =>
 {
     EmergencyShutdown();
 };
@@ -32,10 +47,14 @@ void EmergencyShutdown()
         AriConfig config = AriConfig.LoadFrom(Path.Combine(executableDirectory, "AriConfig.json"));
         Docker docker = new Docker(Path.Combine(executableDirectory, config.Docker.ComposePath), config.LLM.Endpoint);
         docker.StopContainers().GetAwaiter().GetResult();
-        Console.WriteLine("Emergency shutdown complete.");
+        Log.Information("Emergency shutdown complete.");
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"[FATAL] Emergency shutdown failed: {ex.Message}");
+        Log.Fatal("Emergency shutdown failed: {Error}", ex.Message);
+    }
+    finally
+    {
+        Log.CloseAndFlush();
     }
 }

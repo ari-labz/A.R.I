@@ -30,5 +30,6 @@ internal class ModelConfig
     public string Endpoint { get; init; }
     public string Model { get; init; }
     public string SystemPrompt { get; init; }
+    public int HistoryLimit { get; init; }
     public bool Enabled { get; init; }
 }

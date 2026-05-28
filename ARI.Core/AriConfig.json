@@ -3,7 +3,6 @@
     "Discord": true
   },
   "LLM": {
-    "Model": "mistral:7b",
     "Endpoint": "http://localhost:11434"
   },
   "Trilium": {

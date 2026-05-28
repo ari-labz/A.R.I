@@ -35,13 +35,15 @@ public class AriHostService : BackgroundService
         await docker.IsRunning();
         await docker.StartContainers();
 
-        Ollama ollama = new Ollama(config.LLM.Endpoint, config.LLM.Model, docker.OllamaContainerName);
+        Ollama ollama = new Ollama(config.LLM.Endpoint, docker.OllamaContainerName);
         await ollama.IsRunning();
-        await ollama.IsModelInstalled();
 
         Common.Logger.LogInformation("Loading LLM models...");
         LlmService llmService = new LlmService(Path.Combine(executableDirectory, "AriModels.json"));
         Common.Logger.LogInformation("LLM models loaded.");
+
+        foreach (string ollamaModel in llmService.OllamaModelStrings)
+            await ollama.IsModelInstalled(ollamaModel);
 
         Common.Logger.LogInformation("ARI is ready.");
 

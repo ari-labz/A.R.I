@@ -33,7 +33,6 @@ public class AriConfig
 
 public class LlmConfig
 {
-    public string Model { get; init; }
     public string Endpoint { get; init; }
 }
 

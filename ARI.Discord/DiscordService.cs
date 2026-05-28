@@ -10,7 +10,6 @@ public class DiscordService : BackgroundService
 {
     private const int MAX_MESSAGE_LENGTH = 2000;
     private const int MESSAGE_SEND_DELAY_MS = 500;
-    private const string USERNAME_TOKEN = "{username}";
 
     private readonly DiscordSocketClient client;
     private readonly DiscordConfig config;
@@ -67,7 +66,7 @@ public class DiscordService : BackgroundService
         {
             IUser user = await client.GetUserAsync(userId);
             IDMChannel dm = await user.CreateDMChannelAsync();
-            await dm.SendMessageAsync("Ari is online.");
+            await dm.SendMessageAsync("A.R.I is online.");
             Common.Logger.LogInformation("Sent online notification to user {UserId}", userId);
         }
     }
@@ -91,8 +90,9 @@ public class DiscordService : BackgroundService
 
         try
         {
-            string context = config.ContextPrompt.Replace(USERNAME_TOKEN, message.Author.Username);
-            string response = await llmService.PromptModel("Dialogue", message.Content, context);
+            string response = await llmService.PromptModel("Dialogue", message.Content);
+
+            Common.Logger.LogInformation("ARI reply to {Username}: {Response}", message.Author.Username, response);
 
             foreach (string chunk in SplitIntoChunks(response))
             {
