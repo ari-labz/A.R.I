@@ -16,6 +16,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ARI.Discord", "ARI.Discord\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ARI.Core", "ARI.Core\ARI.Core.csproj", "{B7BB436E-C9E2-4369-97CB-CB58D1A564DE}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ARI.LLM", "ARI.LLM\ARI.LLM.csproj", "{E0283126-6EAA-442D-B6AF-D10CB6E245D9}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -74,6 +76,18 @@ Global
 		{B7BB436E-C9E2-4369-97CB-CB58D1A564DE}.Release|x64.Build.0 = Release|Any CPU
 		{B7BB436E-C9E2-4369-97CB-CB58D1A564DE}.Release|x86.ActiveCfg = Release|Any CPU
 		{B7BB436E-C9E2-4369-97CB-CB58D1A564DE}.Release|x86.Build.0 = Release|Any CPU
+		{E0283126-6EAA-442D-B6AF-D10CB6E245D9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E0283126-6EAA-442D-B6AF-D10CB6E245D9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E0283126-6EAA-442D-B6AF-D10CB6E245D9}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{E0283126-6EAA-442D-B6AF-D10CB6E245D9}.Debug|x64.Build.0 = Debug|Any CPU
+		{E0283126-6EAA-442D-B6AF-D10CB6E245D9}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{E0283126-6EAA-442D-B6AF-D10CB6E245D9}.Debug|x86.Build.0 = Debug|Any CPU
+		{E0283126-6EAA-442D-B6AF-D10CB6E245D9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E0283126-6EAA-442D-B6AF-D10CB6E245D9}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E0283126-6EAA-442D-B6AF-D10CB6E245D9}.Release|x64.ActiveCfg = Release|Any CPU
+		{E0283126-6EAA-442D-B6AF-D10CB6E245D9}.Release|x64.Build.0 = Release|Any CPU
+		{E0283126-6EAA-442D-B6AF-D10CB6E245D9}.Release|x86.ActiveCfg = Release|Any CPU
+		{E0283126-6EAA-442D-B6AF-D10CB6E245D9}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

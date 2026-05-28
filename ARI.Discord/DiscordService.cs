@@ -1,8 +1,8 @@
+using ARI.LLM;
 using Discord;
 using Discord.WebSocket;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace ARI.Discord;
 
@@ -10,15 +10,17 @@ public class DiscordService : BackgroundService
 {
     private readonly DiscordSocketClient client;
     private readonly DiscordConfig config;
+    private readonly LlmService llmService;
 
-    public DiscordService(ILoggerFactory loggerFactory)
+    public DiscordService(ILoggerFactory loggerFactory, LlmService llmService)
     {
         Common.InitialiseLogger(loggerFactory);
         Common.Logger.LogInformation("Initialising Discord...");
-        
+
+        this.llmService = llmService;
+
         string executableDirectory = AppDomain.CurrentDomain.BaseDirectory;
         config = DiscordConfig.LoadFrom(Path.Combine(executableDirectory, "DiscordConfig.json"));
-        
 
         client = new DiscordSocketClient(new DiscordSocketConfig
         {
@@ -67,7 +69,23 @@ public class DiscordService : BackgroundService
         Common.Logger.LogInformation("Message from {Username} ({UserId}): {Content}",
             message.Author.Username, message.Author.Id, message.Content);
 
-        await message.Channel.SendMessageAsync("Ari received your message.");
+        await message.Channel.TriggerTypingAsync();
+
+        try
+        {
+            string response = await llmService.PromptModel("Dialogue", message.Content);
+            await message.Channel.SendMessageAsync(response);
+        }
+        catch (LlmRequestFailedException ex)
+        {
+            Common.Logger.LogError("LLM request failed: {Error}", ex.Message);
+            await message.Channel.SendMessageAsync("Ari is unable to respond right now.");
+        }
+        catch (ModelNotFoundException ex)
+        {
+            Common.Logger.LogError("Dialogue model not available: {Error}", ex.Message);
+            await message.Channel.SendMessageAsync("Ari is unable to respond right now.");
+        }
     }
 
     private Task LogAsync(LogMessage log)

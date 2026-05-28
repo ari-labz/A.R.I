@@ -1,6 +1,6 @@
-using ARI.Core.LLM;
 using ARI.Core.Scripts;
 using ARI.Discord;
+using ARI.LLM;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Common = ARI.Core.Scripts.Common;
@@ -38,16 +38,18 @@ public class AriHostService : BackgroundService
         await ollama.IsRunning();
         await ollama.IsModelInstalled();
 
+        Common.Logger.LogInformation("Loading LLM models...");
+        LlmService llmService = new LlmService(Path.Combine(executableDirectory, "AriModels.json"));
+        Common.Logger.LogInformation("LLM models loaded.");
+
         Common.Logger.LogInformation("ARI is ready.");
 
-        
         if (config.Modules.Discord)
         {
             Common.Logger.LogInformation("Discord module is enabled. Starting...");
-            DiscordService discordService = new DiscordService(loggerFactory);
+            DiscordService discordService = new DiscordService(loggerFactory, llmService);
             await discordService.StartAsync(stoppingToken);
 
-            // Await the running task directly so exceptions surface to the debugger
             await Task.WhenAny(discordService.ExecuteTask ?? Task.CompletedTask, Task.Delay(Timeout.Infinite, stoppingToken));
         }
 

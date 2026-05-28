@@ -1,0 +1,10 @@
+{
+  "Models": [
+    {
+      "Name": "Dialogue",
+      "Endpoint": "http://localhost:11434",
+      "Model": "mistral:7b",
+      "Enabled": true
+    }
+  ]
+}

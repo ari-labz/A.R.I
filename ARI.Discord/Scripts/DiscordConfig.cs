@@ -6,7 +6,6 @@ public class DiscordConfig
 {
     public string Token { get; init; }
     public List<ulong> WhitelistedUserIds { get; init; }
-    
     public static DiscordConfig LoadFrom(string path)
     {
         if (!File.Exists(path))
