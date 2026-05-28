@@ -11,6 +11,7 @@ public class AriHostService : BackgroundService
 {
     private readonly ILoggerFactory loggerFactory;
     private Docker? docker;
+    private DiscordService? discordService;
 
     public AriHostService(ILoggerFactory loggerFactory)
     {
@@ -47,7 +48,7 @@ public class AriHostService : BackgroundService
         if (config.Modules.Discord)
         {
             Common.Logger.LogInformation("Discord module is enabled. Starting...");
-            DiscordService discordService = new DiscordService(loggerFactory, llmService);
+            discordService = new DiscordService(loggerFactory, llmService);
             await discordService.StartAsync(stoppingToken);
 
             await Task.WhenAny(discordService.ExecuteTask ?? Task.CompletedTask, Task.Delay(Timeout.Infinite, stoppingToken));
@@ -59,6 +60,9 @@ public class AriHostService : BackgroundService
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
         Common.Logger.LogInformation("ARI is shutting down...");
+
+        if (discordService != null)
+            await discordService.NotifyOfflineAsync();
 
         if (docker != null)
             await docker.StopContainers();
