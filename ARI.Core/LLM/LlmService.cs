@@ -7,13 +7,17 @@ public class LlmService
 {
     private readonly string endpoint;
     private readonly string model;
-    private readonly HttpClient httpClient;
+    private readonly HttpClient httpClient; 
+    private static readonly TimeSpan RequestTimeout = Timeout.InfiniteTimeSpan; // OR TimeSpan.FromMinutes(10);
 
     public LlmService(string endpoint, string model)
     {
         this.endpoint = endpoint;
         this.model = model;
-        httpClient = new HttpClient();
+        httpClient = new HttpClient
+        {
+            Timeout = RequestTimeout
+        };
     }
 
     public async Task<string> SendMessage(string prompt)
