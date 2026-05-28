@@ -8,6 +8,9 @@ namespace ARI.Discord;
 
 public class DiscordService : BackgroundService
 {
+    private const int MAX_MESSAGE_LENGTH = 2000;
+    private const int MESSAGE_SEND_DELAY_MS = 500;
+
     private readonly DiscordSocketClient client;
     private readonly DiscordConfig config;
     private readonly LlmService llmService;
@@ -29,7 +32,9 @@ public class DiscordService : BackgroundService
 
         client.Log += LogAsync;
         client.Ready += OnReadyAsync;
-        client.MessageReceived += OnMessageReceivedAsync;
+        // Task.Run frees the gateway thread immediately. If multiple whitelisted users are ever
+        // added, concurrent LLM calls will race — a per-user queue will be needed at that point.
+        client.MessageReceived += message => { _ = Task.Run(() => OnMessageReceivedAsync(message)); return Task.CompletedTask; };
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -74,7 +79,12 @@ public class DiscordService : BackgroundService
         try
         {
             string response = await llmService.PromptModel("Dialogue", message.Content);
-            await message.Channel.SendMessageAsync(response);
+
+            foreach (string chunk in SplitIntoChunks(response))
+            {
+                await message.Channel.SendMessageAsync(chunk);
+                await Task.Delay(MESSAGE_SEND_DELAY_MS);
+            }
         }
         catch (LlmRequestFailedException ex)
         {
@@ -86,6 +96,12 @@ public class DiscordService : BackgroundService
             Common.Logger.LogError("Dialogue model not available: {Error}", ex.Message);
             await message.Channel.SendMessageAsync("Ari is unable to respond right now.");
         }
+    }
+
+    private static IEnumerable<string> SplitIntoChunks(string text)
+    {
+        for (int i = 0; i < text.Length; i += MAX_MESSAGE_LENGTH)
+            yield return text.Substring(i, Math.Min(MAX_MESSAGE_LENGTH, text.Length - i));
     }
 
     private Task LogAsync(LogMessage log)
