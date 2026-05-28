@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace ARI.Core.Scripts;
@@ -7,189 +7,130 @@ public class Ollama
 {
     private readonly string endpoint;
     private readonly string model;
-    public bool isNativeInstall;
+    private readonly string? containerName;
+    private readonly bool isNative = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
 
-    public Ollama(string endpoint, string model)
+    public Ollama(string endpoint, string model, string? containerName = null)
     {
         this.endpoint = endpoint;
         this.model = model;
-        isNativeInstall = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
+        this.containerName = containerName;
     }
 
-    public async Task IsInstalled()
+    public async Task IsRunning()
     {
-        if (isNativeInstall)
-        {
-            await EnsureNativeOllamaIsRunning();
-            return;
-        }
+        Common.Logger.LogInformation("Checking Ollama is running...");
 
-        Console.WriteLine("Ollama is running via Docker.");
-    }
-
-    public async Task ModelExists()
-    {
-        Console.WriteLine($"Checking for model: {model}");
-
-        try
-        {
-            Process process = Common.RunCommand("ollama", $"show {model}");
-            await process.WaitForExitAsync();
-
-            if (process.ExitCode != 0)
-            {
-                Console.WriteLine($"Model {model} not found. Pulling now, this may take a while...");
-                await PullModel();
-            }
-            else
-            {
-                Console.WriteLine($"Model {model} is ready.");
-            }
-        }
-        catch (System.ComponentModel.Win32Exception)
-        {
-            Console.WriteLine("Ollama is not installed. Cannot check for model.");
-            throw new Exception("Ollama is not installed. Cannot check for model.");
-        }
-    }
-
-    private async Task EnsureNativeOllamaIsRunning()
-    {
-        try
-        {
-            Process process = Common.RunCommand("ollama", "--version");
-            await process.WaitForExitAsync();
-
-            if (process.ExitCode != 0)
-            {
-                Console.WriteLine("Ollama not found. Installing...");
-                await Install();
-            }
-            else
-            {
-                Console.WriteLine("Ollama is installed.");
-            }
-        }
-        catch (System.ComponentModel.Win32Exception)
-        {
-            Console.WriteLine("Ollama not found. Installing...");
-            await Install();
-        }
-
-        if (!await IsResponding())
-        {
-            Console.WriteLine("Starting Ollama natively...");
-            Common.RunCommand("ollama", "serve");
-            await WaitUntilReady();
-        }
-        else
-        {
-            Console.WriteLine("Ollama is already running.");
-        }
-    }
-
-    private async Task<bool> IsResponding()
-    {
         try
         {
             using HttpClient httpClient = new HttpClient();
             HttpResponseMessage response = await httpClient.GetAsync(endpoint);
-            return response.IsSuccessStatusCode;
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Common.Logger.LogError("Ollama is not responding. Something went wrong during startup.");
+                throw new Exception("Ollama is not responding. Check Docker logs for details.");
+            }
+
+            Common.Logger.LogInformation("Ollama is running.");
         }
         catch (HttpRequestException)
         {
-            return false;
+            Common.Logger.LogError("Ollama is not reachable at {Endpoint}.", endpoint);
+            throw new Exception($"Ollama is not reachable at {endpoint}. Check Docker logs for details.");
         }
     }
 
-    private async Task WaitUntilReady()
+    public async Task IsModelInstalled()
     {
-        Console.WriteLine("Waiting for Ollama to come online...");
+        Common.Logger.LogInformation("Checking for model: {Model}", model);
 
-        using HttpClient httpClient = new HttpClient();
-        DateTime timeout = DateTime.UtcNow.AddSeconds(30);
-
-        while (DateTime.UtcNow < timeout)
+        try
         {
-            try
-            {
-                HttpResponseMessage response = await httpClient.GetAsync(endpoint);
+            Process process = RunOllamaCommand($"show {model}");
+            await process.WaitForExitAsync();
 
-                if (response.IsSuccessStatusCode)
-                    return;
-            }
-            catch (HttpRequestException)
+            if (process.ExitCode != 0)
             {
-                // not ready yet, keep waiting
+                Common.Logger.LogInformation("Model {Model} not found. Pulling now, this may take a while...", model);
+                await PullModelWithCorruptionHandling();
             }
-
-            await Task.Delay(500);
+            else
+            {
+                Common.Logger.LogInformation("Model {Model} is ready.", model);
+            }
         }
-
-        Console.WriteLine("Ollama did not come online within 30 seconds.");
-        throw new Exception("Ollama did not come online within 30 seconds.");
+        catch (System.ComponentModel.Win32Exception)
+        {
+            Common.Logger.LogError("Ollama CLI is not available. Cannot check for model.");
+            throw new Exception("Ollama CLI is not available. Cannot check for model.");
+        }
     }
 
-    private async Task Install()
+    /// <summary>
+    /// Runs an ollama command either natively (macOS) or inside the Docker container (Windows/Linux).
+    /// </summary>
+    private Process RunOllamaCommand(string ollamaArgs)
     {
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        if (isNative)
+            return Common.RunCommand("ollama", ollamaArgs);
+
+        if (string.IsNullOrWhiteSpace(containerName))
+            throw new Exception("ContainerName must be set in AriConfig.json when running Ollama via Docker.");
+
+        return Common.RunCommand("docker", $"exec {containerName} ollama {ollamaArgs}");
+    }
+
+    private async Task PullModelWithCorruptionHandling()
+    {
+        try
         {
+            await PullModel();
+        }
+        catch (Exception ex) when (ex.Message.Contains("EOF") || ex.Message.Contains("unexpected end"))
+        {
+            Common.Logger.LogWarning("Model appears corrupted. Deleting and retrying once...");
+            await DeleteModel();
+
             try
             {
-                Process process = Common.RunCommand("brew", "install ollama");
-                await process.WaitForExitAsync();
-
-                if (process.ExitCode != 0)
-                {
-                    Console.WriteLine("Failed to install Ollama. Please install it manually from https://ollama.com");
-                    throw new Exception("Failed to install Ollama. Please install it manually from https://ollama.com");
-                }
+                await PullModel();
             }
-            catch (System.ComponentModel.Win32Exception)
+            catch (Exception)
             {
-                Console.WriteLine("Homebrew is not installed. Please install Ollama manually from https://ollama.com");
-                throw new Exception("Homebrew is not installed. Please install Ollama manually from https://ollama.com");
+                Common.Logger.LogError("Model re-download failed after corruption recovery. Check your connection.");
+                throw;
             }
         }
-        else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-        {
-            try
-            {
-                Process process = Common.RunCommand("curl", "-fsSL https://ollama.com/install.sh | sh");
-                await process.WaitForExitAsync();
+    }
 
-                if (process.ExitCode != 0)
-                {
-                    Console.WriteLine("Failed to install Ollama. Please install it manually from https://ollama.com");
-                    throw new Exception("Failed to install Ollama. Please install it manually from https://ollama.com");
-                }
-            }
-            catch (System.ComponentModel.Win32Exception)
-            {
-                Console.WriteLine("curl is not installed. Please install Ollama manually from https://ollama.com");
-                throw new Exception("curl is not installed. Please install Ollama manually from https://ollama.com");
-            }
-        }
-        else
-        {
-            Console.WriteLine("Automatic Ollama installation is not supported on this platform. Please install it manually from https://ollama.com");
-            throw new Exception("Automatic Ollama installation is not supported on this platform. Please install it manually from https://ollama.com");
-        }
-
-        Console.WriteLine("Ollama installed successfully.");
+    private async Task DeleteModel()
+    {
+        Process process = RunOllamaCommand($"rm {model}");
+        await process.WaitForExitAsync();
+        Common.Logger.LogInformation("Deleted corrupted model: {Model}", model);
     }
 
     private async Task PullModel()
     {
-        Process process = Common.RunCommand("ollama", $"pull {model}");
-        await process.WaitForExitAsync();
+        Process process = RunOllamaCommand($"pull {model}");
+        //await process.WaitForExitAsync();
+
+        Task<string> stdout = process.StandardOutput.ReadToEndAsync();
+        Task<string> stderr = process.StandardError.ReadToEndAsync();
+
+        await Task.WhenAll(
+            stdout,
+            stderr,
+            process.WaitForExitAsync()
+        );
 
         if (process.ExitCode != 0)
         {
-            Console.WriteLine($"Failed to pull model {model}. Check your internet connection and try again.");
+            Common.Logger.LogError("Failed to pull model {Model}.", model);
             throw new Exception($"Failed to pull model {model}. Check your internet connection and try again.");
         }
 
-        Console.WriteLine($"Model {model} pulled successfully.");
+        Common.Logger.LogInformation("Model {Model} pulled successfully.", model);
     }
 }

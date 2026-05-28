@@ -1,6 +1,6 @@
 {
   "LLM": {
-    "Model": "mistral:7b",
+    "Model": "tinyllama:latest",
     "Endpoint": "http://localhost:11434"
   },
   "Trilium": {
