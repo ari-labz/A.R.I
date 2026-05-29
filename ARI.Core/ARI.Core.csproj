@@ -16,6 +16,10 @@
   		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
   		<Link>AriModels.json</Link>
   	</Content>
+  	<Content Include="..\ARI.Brain\AriBrain.json">
+  		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+  		<Link>AriBrain.json</Link>
+  	</Content>
   </ItemGroup>
 	
   <ItemGroup>
@@ -26,6 +30,7 @@
   </ItemGroup>
 	
   <ItemGroup>
+    <ProjectReference Include="..\ARI.Brain\ARI.Brain.csproj" />
     <ProjectReference Include="..\ARI.Discord\ARI.Discord.csproj" />
     <ProjectReference Include="..\ARI.LLM\ARI.LLM.csproj" />
   </ItemGroup>

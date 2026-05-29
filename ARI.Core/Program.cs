@@ -13,8 +13,8 @@ Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Debug()
     .MinimumLevel.Override("Microsoft.Hosting.Lifetime", LogEventLevel.Warning)
     .MinimumLevel.Override("Microsoft.Extensions.Hosting", LogEventLevel.Warning)
-    .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss}] {Message:lj}{NewLine}{Exception}")
-    .WriteTo.File(logPath, outputTemplate: "[{Timestamp:HH:mm:ss}] {Message:lj}{NewLine}{Exception}")
+    .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss}] [{SourceContext}] {Message:lj}{NewLine}{Exception}")
+    .WriteTo.File(logPath, outputTemplate: "[{Timestamp:HH:mm:ss}] [{SourceContext}] {Message:lj}{NewLine}{Exception}")
     .CreateLogger();
 
 IHost host = Host.CreateDefaultBuilder(args)

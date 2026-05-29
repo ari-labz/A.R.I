@@ -96,8 +96,15 @@ public class DiscordService : BackgroundService
             return;
         }
 
+        if (message.Content.Equals("/purge notes", StringComparison.OrdinalIgnoreCase))
+        {
+            await HandlePurgeNotesCommandAsync(message);
+            return;
+        }
+
         string conversationKey = $"dm:{message.Author.Id}";
-        string prompt = $"[{message.Author.Username} via DM]: {message.Content}";
+        string timestamp = message.Timestamp.LocalDateTime.ToString("dd/MM/yyyy HH:mm");
+        string prompt = $"[{timestamp}] [{message.Author.Username} via DM]: {message.Content}";
 
         Common.Logger.LogInformation("DM from {Username} ({UserId}): {Content}",
             message.Author.Username, message.Author.Id, message.Content);
@@ -130,7 +137,8 @@ public class DiscordService : BackgroundService
 
         string conversationKey = $"guild:{guildChannel.Guild.Id}";
         string content = message.Content.Replace($"<@{client.CurrentUser.Id}>", "").Trim();
-        string prompt = $"[{message.Author.Username} in #{guildChannel.Name}]: {content}";
+        string timestamp = message.Timestamp.LocalDateTime.ToString("dd/MM/yyyy HH:mm");
+        string prompt = $"[{timestamp}] [{message.Author.Username} in #{guildChannel.Name}]: {content}";
 
         Common.Logger.LogInformation("Server message from {Username} ({UserId}) in #{ChannelName}: {Content}",
             message.Author.Username, message.Author.Id, guildChannel.Name, message.Content);
@@ -175,6 +183,13 @@ public class DiscordService : BackgroundService
             Common.Logger.LogError("Dialogue model not available: {Error}", ex.Message);
             await message.Channel.SendMessageAsync("Ari is unable to respond right now.");
         }
+    }
+
+    private async Task HandlePurgeNotesCommandAsync(SocketMessage message)
+    {
+        Common.Logger.LogInformation("Owner requested brain purge.");
+        int deleted = await llmService.PurgeNotes();
+        await message.Channel.SendMessageAsync($"Purged {deleted} notes from the brain.");
     }
 
     private async Task HandleWhitelistCommandAsync(SocketMessage message)

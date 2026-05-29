@@ -92,7 +92,7 @@ public class Docker
     {
         Common.Logger.LogInformation("Stopping containers...");
 
-        ProcessStartInfo startInfo = new ProcessStartInfo("docker", $"compose -f {fullComposePath} down")
+        ProcessStartInfo startInfo = new ProcessStartInfo("docker", $"compose -f {fullComposePath} stop")
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
