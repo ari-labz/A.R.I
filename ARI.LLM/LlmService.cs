@@ -22,16 +22,16 @@ public class LlmService
     public IReadOnlyCollection<string> OllamaModelNames => ollamaModelnames.AsReadOnly();
 
 
-    public Task<string> Prompt(string threadKey, string prompt)
+    public Task<string> Prompt(string threadKey, string prompt, string? contextNote = null)
     {
-        return PromptModel("Dialogue", threadKey, prompt);
+        return PromptModel("Dialogue", threadKey, prompt, contextNote);
     }
 
-    private Task<string> PromptModel(string modelName, string threadKey, string prompt)
+    private Task<string> PromptModel(string modelName, string threadKey, string prompt, string? contextNote = null)
     {
         if (!models.TryGetValue(modelName, out Model? model))
             throw new ModelNotFoundException($"Model '{modelName}' is not loaded or is not enabled.");
 
-        return model.SendPrompt(threadKey, prompt);
+        return model.SendPrompt(threadKey, prompt, contextNote);
     }
 }

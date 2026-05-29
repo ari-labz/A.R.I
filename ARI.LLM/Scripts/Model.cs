@@ -18,11 +18,11 @@ internal class Model
         threads = new Dictionary<string, Thread>();
     }
 
-    internal Task<string> SendPrompt(string threadKey, string prompt)
+    internal Task<string> SendPrompt(string threadKey, string prompt, string? contextNote = null)
     {
         if (!threads.TryGetValue(threadKey, out Thread? thread))
         {
-            thread = new Thread(this);
+            thread = new Thread(this, contextNote);
             threads[threadKey] = thread;
         }
 

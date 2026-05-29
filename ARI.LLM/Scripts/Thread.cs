@@ -9,16 +9,21 @@ internal class Thread
     private readonly HttpClient httpClient;
     private readonly List<ChatMessage> history;
 
-    internal Thread(Model model)
+    internal Thread(Model model, string? contextNote = null)
     {
         this.model = model;
         httpClient = new HttpClient
         {
             Timeout = System.Threading.Timeout.InfiniteTimeSpan
         };
+
+        string systemContent = contextNote is null
+            ? model.SystemPrompt
+            : $"{model.SystemPrompt}\n\n{contextNote}";
+
         history = new List<ChatMessage>
         {
-            new ChatMessage { Role = "system", Content = model.SystemPrompt }
+            new ChatMessage { Role = "system", Content = systemContent }
         };
     }
 

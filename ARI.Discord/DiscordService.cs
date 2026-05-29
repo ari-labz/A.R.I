@@ -76,6 +76,7 @@ public class DiscordService : BackgroundService
 
         string conversationKey;
         string contextualPrompt;
+        string? contextNote = null;
 
         if (message.Channel is IDMChannel)
         {
@@ -116,7 +117,8 @@ public class DiscordService : BackgroundService
 
             conversationKey = $"guild:{guildChannel.Guild.Id}";
             string content = message.Content.Replace($"<@{client.CurrentUser.Id}>", "").Trim();
-            contextualPrompt = $"{ServerContextPrompt}\n\n[{message.Author.Username} in #{guildChannel.Name}]: {content}";
+            contextualPrompt = $"[{message.Author.Username} in #{guildChannel.Name}]: {content}";
+            contextNote = ServerContextPrompt;
         }
         else
         {
@@ -131,7 +133,7 @@ public class DiscordService : BackgroundService
 
         try
         {
-            string response = await llmService.Prompt( conversationKey, contextualPrompt);
+            string response = await llmService.Prompt(conversationKey, contextualPrompt, contextNote);
             typingCts.Cancel();
 
             if (response.Trim() == PassToken)
