@@ -34,7 +34,8 @@ internal class ModelClient
         {
             model,
             messages = history,
-            stream = false
+            stream = false,
+            think = false
         };
 
         string json = JsonSerializer.Serialize(requestBody);
