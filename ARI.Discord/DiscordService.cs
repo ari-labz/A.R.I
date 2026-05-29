@@ -27,7 +27,7 @@ public class DiscordService : BackgroundService
 
         client = new DiscordSocketClient(new DiscordSocketConfig
         {
-            GatewayIntents = GatewayIntents.DirectMessages | GatewayIntents.MessageContent
+            GatewayIntents = GatewayIntents.AllUnprivileged | GatewayIntents.MessageContent
         });
 
         client.Log += LogAsync;
@@ -86,11 +86,13 @@ public class DiscordService : BackgroundService
         Common.Logger.LogInformation("Message from {Username} ({UserId}): {Content}",
             message.Author.Username, message.Author.Id, message.Content);
 
-        await message.Channel.TriggerTypingAsync();
+        using CancellationTokenSource typingCts = new();
+        _ = KeepTypingAsync(message.Channel, typingCts.Token);
 
         try
         {
             string response = await llmService.PromptModel("Dialogue", message.Content);
+            typingCts.Cancel();
 
             Common.Logger.LogInformation("ARI reply to {Username}: {Response}", message.Author.Username, response);
 
@@ -102,13 +104,24 @@ public class DiscordService : BackgroundService
         }
         catch (LlmRequestFailedException ex)
         {
+            typingCts.Cancel();
             Common.Logger.LogError("LLM request failed: {Error}", ex.Message);
             await message.Channel.SendMessageAsync("Ari is unable to respond right now.");
         }
         catch (ModelNotFoundException ex)
         {
+            typingCts.Cancel();
             Common.Logger.LogError("Dialogue model not available: {Error}", ex.Message);
             await message.Channel.SendMessageAsync("Ari is unable to respond right now.");
+        }
+    }
+
+    private static async Task KeepTypingAsync(IMessageChannel channel, CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            await channel.TriggerTypingAsync();
+            try { await Task.Delay(8000, ct); } catch (TaskCanceledException) { break; }
         }
     }
 
