@@ -32,8 +32,6 @@ public class DiscordService : BackgroundService
 
         client.Log += LogAsync;
         client.Ready += OnReadyAsync;
-        // Task.Run frees the gateway thread immediately. If multiple whitelisted users are ever
-        // added, concurrent LLM calls will race — a per-user queue will be needed at that point.
         client.MessageReceived += message => { _ = Task.Run(() => OnMessageReceivedAsync(message)); return Task.CompletedTask; };
     }
 
@@ -46,55 +44,104 @@ public class DiscordService : BackgroundService
         await Task.Delay(Timeout.Infinite, stoppingToken);
     }
 
+    private const string PassToken = "[PASS]";
+
+    private const string ServerContextPrompt =
+        "You are present in a Discord server. Each message shows who is speaking and in which channel. " +
+        "If the conversation was clearly not directed at you and you don't need to be involved, reply with only: [PASS] — nothing else. " +
+        "Otherwise, reply normally.";
+
     public async Task NotifyOfflineAsync()
     {
-        Common.Logger.LogInformation("Notifying whitelisted users that ARI is going offline...");
+        Common.Logger.LogInformation("Notifying owner that ARI is going offline...");
 
-        foreach (ulong userId in config.WhitelistedUserIds)
-        {
-            IUser user = await client.GetUserAsync(userId);
-            IDMChannel dm = await user.CreateDMChannelAsync();
-            await dm.SendMessageAsync("A.R.I is offline.");
-        }
+        IUser owner = await client.GetUserAsync(config.OwnerId);
+        IDMChannel dm = await owner.CreateDMChannelAsync();
+        await dm.SendMessageAsync("A.R.I is offline.");
     }
 
     private async Task OnReadyAsync()
     {
-        Common.Logger.LogInformation("Discord bot is ready. Notifying whitelisted users...");
+        Common.Logger.LogInformation("Discord bot is ready. Notifying owner...");
 
-        foreach (ulong userId in config.WhitelistedUserIds)
-        {
-            IUser user = await client.GetUserAsync(userId);
-            IDMChannel dm = await user.CreateDMChannelAsync();
-            await dm.SendMessageAsync("A.R.I is online.");
-            Common.Logger.LogInformation("Sent online notification to user {UserId}", userId);
-        }
+        IUser owner = await client.GetUserAsync(config.OwnerId);
+        IDMChannel dm = await owner.CreateDMChannelAsync();
+        await dm.SendMessageAsync("A.R.I is online.");
+        Common.Logger.LogInformation("Sent online notification to owner {OwnerId}", config.OwnerId);
     }
 
     private async Task OnMessageReceivedAsync(SocketMessage message)
     {
         if (message.Author.IsBot) return;
 
-        bool isWhitelisted = config.WhitelistedUserIds.Contains(message.Author.Id);
+        string conversationKey;
+        string contextualPrompt;
 
-        if (!isWhitelisted)
+        if (message.Channel is IDMChannel)
         {
-            Common.Logger.LogDebug("Ignored message from non-whitelisted user {UserId}", message.Author.Id);
+            // Only the owner can DM Ari directly
+            if (message.Author.Id != config.OwnerId)
+            {
+                Common.Logger.LogDebug("Ignored DM from non-owner user {UserId}", message.Author.Id);
+                return;
+            }
+
+            conversationKey = $"dm:{message.Author.Id}";
+            contextualPrompt = $"[{message.Author.Username} via DM]: {message.Content}";
+        }
+        else if (message.Channel is SocketGuildChannel guildChannel)
+        {
+            // Only whitelisted users get responses in servers
+            if (!config.WhitelistedUserIds.Contains(message.Author.Id))
+            {
+                Common.Logger.LogDebug("Ignored server message from non-whitelisted user {UserId}", message.Author.Id);
+                return;
+            }
+
+            // Respect the allowed guild list if configured
+            if (config.AllowedGuildIds.Count > 0 && !config.AllowedGuildIds.Contains(guildChannel.Guild.Id))
+            {
+                Common.Logger.LogDebug("Ignored message from non-allowed guild {GuildId}", guildChannel.Guild.Id);
+                return;
+            }
+
+            bool isMentioned = message.MentionedUsers.Any(u => u.Id == client.CurrentUser.Id);
+            bool isWatchedChannel = config.WatchedChannelIds.Contains(message.Channel.Id);
+
+            if (!isMentioned && !isWatchedChannel)
+            {
+                Common.Logger.LogDebug("Ignored server message in non-watched channel {ChannelId} with no mention", message.Channel.Id);
+                return;
+            }
+
+            conversationKey = $"guild:{guildChannel.Guild.Id}";
+            string content = message.Content.Replace($"<@{client.CurrentUser.Id}>", "").Trim();
+            contextualPrompt = $"{ServerContextPrompt}\n\n[{message.Author.Username} in #{guildChannel.Name}]: {content}";
+        }
+        else
+        {
             return;
         }
 
-        Common.Logger.LogInformation("Message from {Username} ({UserId}): {Content}",
-            message.Author.Username, message.Author.Id, message.Content);
+        Common.Logger.LogInformation("Message from {Username} ({UserId}) [{ConversationKey}]: {Content}",
+            message.Author.Username, message.Author.Id, conversationKey, message.Content);
 
         using CancellationTokenSource typingCts = new();
         _ = KeepTypingAsync(message.Channel, typingCts.Token);
 
         try
         {
-            string response = await llmService.PromptModel("Dialogue", message.Content);
+            string response = await llmService.Prompt( conversationKey, contextualPrompt);
             typingCts.Cancel();
 
-            Common.Logger.LogInformation("ARI reply to {Username}: {Response}", message.Author.Username, response);
+            if (response.Trim() == PassToken)
+            {
+                Common.Logger.LogInformation("Ari chose not to respond in [{ConversationKey}]", conversationKey);
+                return;
+            }
+
+            Common.Logger.LogInformation("ARI reply to {Username} [{ConversationKey}]: {Response}",
+                message.Author.Username, conversationKey, response);
 
             foreach (string chunk in SplitIntoChunks(response))
             {

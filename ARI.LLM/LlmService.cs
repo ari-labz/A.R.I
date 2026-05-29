@@ -2,31 +2,36 @@ namespace ARI.LLM;
 
 public class LlmService
 {
-    private readonly Dictionary<string, ModelClient> loadedModels;
-    private readonly List<string> ollamaModelStrings;
+    private readonly Dictionary<string, Model> models;
+    private readonly List<string> ollamaModelnames;
 
     public LlmService(string modelsConfigPath)
     {
         AriModelsConfig config = AriModelsConfig.LoadFrom(modelsConfigPath);
 
-        loadedModels = new Dictionary<string, ModelClient>();
-        ollamaModelStrings = new List<string>();
+        models = new Dictionary<string, Model>();
+        ollamaModelnames = new List<string>();
 
         foreach (ModelConfig modelConfig in config.Models.Where(m => m.Enabled))
         {
-            loadedModels[modelConfig.Name] = new ModelClient(modelConfig.Endpoint, modelConfig.Model, modelConfig.SystemPrompt, modelConfig.HistoryLimit);
-            ollamaModelStrings.Add(modelConfig.Model);
+            models[modelConfig.Name] = new Model(modelConfig);
+            ollamaModelnames.Add(modelConfig.Model);
         }
     }
+    
+    public IReadOnlyCollection<string> OllamaModelNames => ollamaModelnames.AsReadOnly();
 
-    // The Ollama model strings (e.g. "qwen2.5:14b"), not the logical names (e.g. "Dialogue")
-    public IReadOnlyCollection<string> OllamaModelStrings => ollamaModelStrings.AsReadOnly();
 
-    public Task<string> PromptModel(string modelName, string prompt)
+    public Task<string> Prompt(string threadKey, string prompt)
     {
-        if (!loadedModels.TryGetValue(modelName, out ModelClient? client))
+        return PromptModel("Dialogue", threadKey, prompt);
+    }
+
+    private Task<string> PromptModel(string modelName, string threadKey, string prompt)
+    {
+        if (!models.TryGetValue(modelName, out Model? model))
             throw new ModelNotFoundException($"Model '{modelName}' is not loaded or is not enabled.");
 
-        return client.SendPrompt(prompt);
+        return model.SendPrompt(threadKey, prompt);
     }
 }

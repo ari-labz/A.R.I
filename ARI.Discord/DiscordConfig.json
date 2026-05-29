@@ -1,7 +1,10 @@
 {
   "Token": "[REDACTED]",
+  "OwnerId": 0,
   "WhitelistedUserIds": [
+    0,
     0
   ],
-  "ContextPrompt": "{username} is sending you a message via Discord.."
+  "WatchedChannelIds": [ 0 ],
+  "AllowedGuildIds": [ 0 ]
 }
