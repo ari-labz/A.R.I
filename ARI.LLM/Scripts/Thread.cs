@@ -7,7 +7,7 @@ internal class Thread
 {
     private readonly Model model;
     private readonly HttpClient httpClient;
-    private readonly List<ChatMessage> history;
+    private readonly List<ChatMessage> shortTermMemory;
 
     internal Thread(Model model, string? contextNote = null)
     {
@@ -21,7 +21,7 @@ internal class Thread
             ? model.SystemPrompt
             : $"{model.SystemPrompt}\n\n{contextNote}";
 
-        history = new List<ChatMessage>
+        shortTermMemory = new List<ChatMessage>
         {
             new ChatMessage { Role = "system", Content = systemContent }
         };
@@ -29,12 +29,12 @@ internal class Thread
 
     internal async Task<string> SendPrompt(string prompt)
     {
-        history.Add(new ChatMessage { Role = "user", Content = prompt });
+        shortTermMemory.Add(new ChatMessage { Role = "user", Content = prompt });
 
         object requestBody = new
         {
             model = model.ModelString,
-            messages = history,
+            messages = shortTermMemory,
             stream = false,
             think = false
         };
@@ -56,16 +56,16 @@ internal class Thread
             .GetString()
             ?? throw new LlmRequestFailedException("LLM response was empty.");
 
-        history.Add(new ChatMessage { Role = "assistant", Content = responseText });
-        TrimHistory();
+        shortTermMemory.Add(new ChatMessage { Role = "assistant", Content = responseText });
+        TrimShortTermMemory();
 
         return responseText;
     }
 
-    private void TrimHistory()
+    private void TrimShortTermMemory()
     {
         // System message at index 0 is never trimmed
-        if (history.Count > model.HistoryLimit + 1)
-            history.RemoveRange(1, history.Count - model.HistoryLimit - 1);
+        if (shortTermMemory.Count > model.ShortTermMemoryLimit + 1)
+            shortTermMemory.RemoveRange(1, shortTermMemory.Count - model.ShortTermMemoryLimit - 1);
     }
 }

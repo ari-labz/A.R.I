@@ -5,7 +5,7 @@ internal class Model
     internal readonly string Endpoint;
     internal readonly string ModelString;
     internal readonly string SystemPrompt;
-    internal readonly int HistoryLimit;
+    internal readonly int ShortTermMemoryLimit;
 
     private readonly Dictionary<string, Thread> threads;
 
@@ -14,7 +14,7 @@ internal class Model
         Endpoint = config.Endpoint;
         ModelString = config.Model;
         SystemPrompt = config.SystemPrompt;
-        HistoryLimit = config.HistoryLimit;
+        ShortTermMemoryLimit = config.ShortTermMemoryLimit;
         threads = new Dictionary<string, Thread>();
     }
 
