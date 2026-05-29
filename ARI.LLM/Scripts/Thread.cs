@@ -3,26 +3,22 @@ using System.Text.Json;
 
 namespace ARI.LLM;
 
-internal class ModelClient
+internal class Thread
 {
-    private readonly string endpoint;
-    private readonly string model;
-    private readonly int historyLimit;
+    private readonly Model model;
     private readonly HttpClient httpClient;
     private readonly List<ChatMessage> history;
 
-    internal ModelClient(string endpoint, string model, string systemPrompt, int historyLimit)
+    internal Thread(Model model)
     {
-        this.endpoint = endpoint;
         this.model = model;
-        this.historyLimit = historyLimit;
         httpClient = new HttpClient
         {
-            Timeout = Timeout.InfiniteTimeSpan
+            Timeout = System.Threading.Timeout.InfiniteTimeSpan
         };
         history = new List<ChatMessage>
         {
-            new ChatMessage { Role = "system", Content = systemPrompt }
+            new ChatMessage { Role = "system", Content = model.SystemPrompt }
         };
     }
 
@@ -32,7 +28,7 @@ internal class ModelClient
 
         object requestBody = new
         {
-            model,
+            model = model.ModelString,
             messages = history,
             stream = false,
             think = false
@@ -41,7 +37,7 @@ internal class ModelClient
         string json = JsonSerializer.Serialize(requestBody);
         StringContent content = new StringContent(json, Encoding.UTF8, "application/json");
 
-        HttpResponseMessage response = await httpClient.PostAsync($"{endpoint}/api/chat", content);
+        HttpResponseMessage response = await httpClient.PostAsync($"{model.Endpoint}/api/chat", content);
 
         if (!response.IsSuccessStatusCode)
             throw new LlmRequestFailedException($"LLM request failed with status: {response.StatusCode}");
@@ -64,7 +60,7 @@ internal class ModelClient
     private void TrimHistory()
     {
         // System message at index 0 is never trimmed
-        if (history.Count > historyLimit + 1)
-            history.RemoveRange(1, history.Count - historyLimit - 1);
+        if (history.Count > model.HistoryLimit + 1)
+            history.RemoveRange(1, history.Count - model.HistoryLimit - 1);
     }
 }

@@ -42,7 +42,7 @@ public class AriHostService : BackgroundService
         LlmService llmService = new LlmService(Path.Combine(executableDirectory, "AriModels.json"));
         Common.Logger.LogInformation("LLM models loaded.");
 
-        foreach (string ollamaModel in llmService.OllamaModelStrings)
+        foreach (string ollamaModel in llmService.OllamaModelNames)
             await ollama.IsModelInstalled(ollamaModel);
 
         Common.Logger.LogInformation("ARI is ready.");
