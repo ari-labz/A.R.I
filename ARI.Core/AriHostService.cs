@@ -39,7 +39,12 @@ public class AriHostService : BackgroundService
         await ollama.IsRunning();
 
         Common.Logger.LogInformation("Loading LLM models...");
-        LlmService llmService = new LlmService(Path.Combine(executableDirectory, "AriModels.json"));
+        string brainConfigPath = Path.Combine(executableDirectory, "AriBrain.json");
+        LlmService llmService = new LlmService(
+            Path.Combine(executableDirectory, "AriModels.json"),
+            File.Exists(brainConfigPath) ? brainConfigPath : null,
+            loggerFactory
+        );
         Common.Logger.LogInformation("LLM models loaded.");
 
         foreach (string ollamaModel in llmService.OllamaModelNames)

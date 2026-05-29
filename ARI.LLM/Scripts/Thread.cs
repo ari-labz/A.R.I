@@ -9,6 +9,13 @@ internal class Thread
     private readonly HttpClient httpClient;
     private readonly List<ChatMessage> shortTermMemory;
 
+    private int messageCount;
+    private bool bufferEverFilled;
+
+    internal DateTime LastMessageAt { get; private set; } = DateTime.MinValue;
+
+    internal event Action<IReadOnlyList<ChatMessage>>? BufferFull;
+
     internal Thread(Model model, string? contextNote = null)
     {
         this.model = model;
@@ -27,8 +34,11 @@ internal class Thread
         };
     }
 
+    internal IReadOnlyList<ChatMessage> GetHistory() => shortTermMemory.AsReadOnly();
+
     internal async Task<string> SendPrompt(string prompt)
     {
+        LastMessageAt = DateTime.UtcNow;
         shortTermMemory.Add(new ChatMessage { Role = "user", Content = prompt });
 
         object requestBody = new
@@ -59,13 +69,29 @@ internal class Thread
         shortTermMemory.Add(new ChatMessage { Role = "assistant", Content = responseText });
         TrimShortTermMemory();
 
+        messageCount++;
+        if (ShouldFireBufferFull())
+            BufferFull?.Invoke(shortTermMemory.AsReadOnly());
+
         return responseText;
     }
 
     private void TrimShortTermMemory()
     {
-        // System message at index 0 is never trimmed
+        if (model.ShortTermMemoryLimit == 0) return; // 0 = unlimited
         if (shortTermMemory.Count > model.ShortTermMemoryLimit + 1)
+        {
             shortTermMemory.RemoveRange(1, shortTermMemory.Count - model.ShortTermMemoryLimit - 1);
+            bufferEverFilled = true;
+        }
+    }
+
+    private bool ShouldFireBufferFull()
+    {
+        if (!bufferEverFilled) return false;
+
+        // Fire once when the buffer first fills, then every limit/2 messages
+        int interval = Math.Max(1, model.ShortTermMemoryLimit / 2);
+        return messageCount % interval == 0;
     }
 }
