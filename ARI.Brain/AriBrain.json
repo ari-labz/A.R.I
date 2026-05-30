@@ -1,6 +1,5 @@
 {
   "TriliumUrl": "http://localhost:8080",
   "EtapiToken": "[REDACTED]",
-  "RootNoteId": "root",
-  "WrenName": "[REDACT]"
+  "RootNoteId": "root"
 }

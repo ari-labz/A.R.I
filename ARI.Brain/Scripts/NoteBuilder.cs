@@ -75,16 +75,23 @@ public static class NoteBuilder
         return note.ToHtml();
     }
 
-    // Replaces {{LINK:NoteName}} placeholders with Trilium HTML anchor tags
+    // Replaces {{LINK:NoteName}} placeholders with Trilium HTML anchor tags.
+    // Only replaces in the visible body — skips the metadata div to avoid corrupting data-* attributes.
     public static string ResolveLinks(string html, Dictionary<string, string> noteIds)
     {
+        // The metadata div is always first; stop at its closing tag
+        int bodyStart = html.IndexOf("</div>", StringComparison.OrdinalIgnoreCase);
+        string meta = bodyStart >= 0 ? html[..(bodyStart + 6)] : string.Empty;
+        string body = bodyStart >= 0 ? html[(bodyStart + 6)..] : html;
+
         foreach (var (name, id) in noteIds)
         {
             string placeholder = string.Format(LinkPlaceholder, name);
             string link = $"<a class=\"reference-link\" data-note-path=\"root/{id}\">{HttpUtility.HtmlEncode(name)}</a>";
-            html = html.Replace(placeholder, link);
+            body = body.Replace(placeholder, link, StringComparison.OrdinalIgnoreCase);
         }
-        return html;
+
+        return meta + body;
     }
 
     private static void MergeList(List<string> target, IEnumerable<string> incoming)

@@ -1,24 +1,14 @@
-﻿using System.Diagnostics;
-using System.Runtime.InteropServices;
-using System.Text.Json;
+using System.Diagnostics;
 
 namespace ARI.Core.Scripts;
 
 public class Docker
 {
-    private readonly string composePath;
     private readonly string fullComposePath;
-    private readonly string ollamaEndpoint;
-    public static bool IsNativeOllamaInstall = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
-    public static bool DockerLogging = true;
 
-    public string? OllamaContainerName { get; private set; }
-
-    public Docker(string composePath, string ollamaEndpoint)
+    public Docker(string composePath)
     {
-        this.composePath = composePath;
-        this.fullComposePath = Path.GetFullPath(composePath);
-        this.ollamaEndpoint = ollamaEndpoint;
+        fullComposePath = Path.GetFullPath(composePath);
     }
 
     public async Task IsRunning()
@@ -43,16 +33,8 @@ public class Docker
             throw new Exception($"compose.yaml not found at: {fullComposePath}");
         }
 
-        if (IsNativeOllamaInstall)
-        {
-            Common.Logger.LogInformation("macOS detected. Ollama will be managed natively.");
-            LocalOllama localOllama = new LocalOllama(ollamaEndpoint);
-            await localOllama.IsRunning();
-        }
-
-        string scaleArgument = IsNativeOllamaInstall ? "--scale ollama=0" : "";
-
-        ProcessStartInfo startInfo = new ProcessStartInfo("docker", $"compose -f {fullComposePath} up -d {scaleArgument}")
+        // Scale Ollama container to 0 — llama-server replaces it
+        ProcessStartInfo startInfo = new("docker", $"compose -f {fullComposePath} up -d --scale ollama=0")
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -62,17 +44,15 @@ public class Docker
         Process process = Process.Start(startInfo)
             ?? throw new Exception("Failed to start docker compose process.");
 
-        process.ErrorDataReceived += (sender, args) =>
+        process.ErrorDataReceived += (_, args) =>
         {
-            if (string.IsNullOrWhiteSpace(args.Data)) return;
-            if (DockerLogging)
+            if (!string.IsNullOrWhiteSpace(args.Data))
                 Common.Logger.LogInformation("[Docker] {Line}", args.Data);
         };
 
         process.BeginErrorReadLine();
 
         string stdout = await process.StandardOutput.ReadToEndAsync();
-
         await process.WaitForExitAsync();
 
         if (process.ExitCode != 0)
@@ -84,15 +64,13 @@ public class Docker
         }
 
         Common.Logger.LogInformation("Containers are running.");
-
-        await ResolveContainerNames();
     }
 
     public async Task StopContainers()
     {
         Common.Logger.LogInformation("Stopping containers...");
 
-        ProcessStartInfo startInfo = new ProcessStartInfo("docker", $"compose -f {fullComposePath} stop")
+        ProcessStartInfo startInfo = new("docker", $"compose -f {fullComposePath} stop")
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -100,66 +78,17 @@ public class Docker
         };
 
         Process process = Process.Start(startInfo)
-            ?? throw new Exception("Failed to start docker compose down process.");
+            ?? throw new Exception("Failed to start docker compose stop process.");
 
-        process.ErrorDataReceived += (sender, args) =>
+        process.ErrorDataReceived += (_, args) =>
         {
-            if (string.IsNullOrWhiteSpace(args.Data)) return;
-            if (DockerLogging)
+            if (!string.IsNullOrWhiteSpace(args.Data))
                 Common.Logger.LogInformation("[Docker] {Line}", args.Data);
         };
 
         process.BeginErrorReadLine();
-
         await process.WaitForExitAsync();
 
         Common.Logger.LogInformation("Containers stopped.");
-    }
-
-    /// <summary>
-    /// Asks Docker for the actual container names after startup so we never
-    /// have to guess or ask the user to provide them.
-    /// </summary>
-    private async Task ResolveContainerNames()
-    {
-        Process process = Common.RunCommand(
-            "docker",
-            $"compose -f {fullComposePath} ps --format json"
-        );
-
-        string output = await process.StandardOutput.ReadToEndAsync();
-        await process.WaitForExitAsync();
-
-        if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(output))
-        {
-            Common.Logger.LogWarning("Could not resolve container names from docker compose ps.");
-            return;
-        }
-
-        // docker compose ps --format json returns one JSON object per line
-        foreach (string line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-        {
-            try
-            {
-                JsonDocument doc = JsonDocument.Parse(line);
-                JsonElement root = doc.RootElement;
-
-                if (!root.TryGetProperty("Service", out JsonElement serviceElement)) continue;
-                if (!root.TryGetProperty("Name", out JsonElement nameElement)) continue;
-
-                string service = serviceElement.GetString() ?? string.Empty;
-                string name = nameElement.GetString() ?? string.Empty;
-
-                if (service.Equals("ollama", StringComparison.OrdinalIgnoreCase))
-                {
-                    OllamaContainerName = name;
-                    Common.Logger.LogInformation("Ollama container name resolved: {Name}", name);
-                }
-            }
-            catch (JsonException)
-            {
-                // skip malformed lines
-            }
-        }
     }
 }
