@@ -11,8 +11,9 @@ if (File.Exists(logPath))
 
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Debug()
-    .MinimumLevel.Override("Microsoft.Hosting.Lifetime", LogEventLevel.Warning)
-    .MinimumLevel.Override("Microsoft.Extensions.Hosting", LogEventLevel.Warning)
+    .Filter.ByExcluding(e =>
+        e.Properties.TryGetValue("SourceContext", out var source) &&
+        source.ToString().StartsWith("\"Microsoft"))
     .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss}] [{SourceContext}] {Message:lj}{NewLine}{Exception}")
     .WriteTo.File(logPath, outputTemplate: "[{Timestamp:HH:mm:ss}] [{SourceContext}] {Message:lj}{NewLine}{Exception}")
     .CreateLogger();
@@ -31,11 +32,6 @@ AppDomain.CurrentDomain.UnhandledException += (sender, eventArgs) =>
     EmergencyShutdown();
 };
 
-AppDomain.CurrentDomain.ProcessExit += (sender, eventArgs) =>
-{
-    EmergencyShutdown();
-};
-
 await host.RunAsync();
 return;
 
@@ -45,7 +41,7 @@ void EmergencyShutdown()
     {
         string executableDirectory = AppDomain.CurrentDomain.BaseDirectory;
         AriConfig config = AriConfig.LoadFrom(Path.Combine(executableDirectory, "AriConfig.json"));
-        Docker docker = new Docker(Path.Combine(executableDirectory, config.Docker.ComposePath), config.LLM.Endpoint);
+        Docker docker = new Docker(Path.Combine(executableDirectory, config.Docker.ComposePath));
         docker.StopContainers().GetAwaiter().GetResult();
         Log.Information("Emergency shutdown complete.");
     }

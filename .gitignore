@@ -431,3 +431,6 @@ FodyWeavers.xsd
 
 # ARI's Brain data
 /Brain/
+
+# Downloaded model files
+/Models/

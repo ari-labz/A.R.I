@@ -62,36 +62,8 @@ public class TriliumClient
         }
     }
 
-    public async Task<string?> FindNoteIdByTitle(string title, NoteCategory category)
-    {
-        string categoryId = await GetOrCreateCategoryFolder(category);
-
-        string encoded = Uri.EscapeDataString(title);
-        HttpResponseMessage res = await http.GetAsync($"etapi/notes?search={encoded}");
-        res.EnsureSuccessStatusCode();
-
-        JsonArray results = ParseArray(await res.Content.ReadAsStringAsync());
-
-        foreach (JsonNode? item in results)
-        {
-            if (item is null) continue;
-            string noteId = item["noteId"]!.GetValue<string>();
-            string noteTitle = item["title"]!.GetValue<string>();
-
-            if (!string.Equals(noteTitle, title, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            if (await NoteIsUnder(noteId, categoryId))
-                return noteId;
-        }
-
-        return null;
-    }
-
-    // Finds a note by exact title match anywhere in Trilium, ignoring category
     public async Task<string?> FindNoteIdByTitleAnywhere(string title)
     {
-        // Try two search forms — plain keyword and quoted exact match
         foreach (string query in new[] { $"\"{title}\"", title })
         {
             string encoded = Uri.EscapeDataString(query);
@@ -102,10 +74,13 @@ public class TriliumClient
             foreach (JsonNode? item in results)
             {
                 if (item is null) continue;
-                if (string.Equals(item["title"]?.GetValue<string>(), title, StringComparison.OrdinalIgnoreCase))
-                    return item["noteId"]!.GetValue<string>();
+                string? foundTitle = item["title"]?.GetValue<string>();
+                string? foundId    = item["noteId"]?.GetValue<string>();
+                if (string.Equals(foundTitle, title, StringComparison.OrdinalIgnoreCase) && foundId is not null)
+                    return foundId;
             }
         }
+
         return null;
     }
 
@@ -137,9 +112,9 @@ public class TriliumClient
         return result["note"]!["noteId"]!.GetValue<string>();
     }
 
-    public async Task UpdateNoteContent(string noteId, string yamlContent)
+    public async Task UpdateNoteContent(string noteId, string content)
     {
-        StringContent payload = new(yamlContent, Encoding.UTF8, "text/plain");
+        StringContent payload = new(content, Encoding.UTF8, "text/plain");
         HttpResponseMessage res = await http.PutAsync($"etapi/notes/{noteId}/content", payload);
         res.EnsureSuccessStatusCode();
     }
@@ -159,22 +134,34 @@ public class TriliumClient
             .ToList();
     }
 
-    // Returns all note titles across the brain (excluding folders/root)
+    // TODO: optimise — traverses the full note tree on every call.
+    // Future: replace with a single search query once a working one is found.
+    // Returns titles of entity notes only (excludes category folders).
     public async Task<List<string>> GetAllNoteTitles()
     {
-        HttpResponseMessage res = await http.GetAsync("etapi/notes?search=*");
-        if (!res.IsSuccessStatusCode) return new List<string>();
-
-        JsonArray results = ParseArray(await res.Content.ReadAsStringAsync());
-        return results
-            .Where(n => n is not null)
-            .Select(n => n!["title"]?.GetValue<string>())
-            .Where(t => !string.IsNullOrWhiteSpace(t))
-            .Select(t => t!)
+        HashSet<string> folderTitles = new(CategoryTitles.Values, StringComparer.OrdinalIgnoreCase);
+        List<(string Id, string Title)> all = await TraverseTree();
+        return all
+            .Where(n => !folderTitles.Contains(n.Title))
+            .Select(n => n.Title)
             .ToList();
     }
 
-    // Creates a Trilium relation attribute linking two notes
+    // Deletes all notes by cascading category folder deletion
+    public async Task<int> PurgeAllNotes()
+    {
+        int count = 0;
+        foreach (string folderTitle in CategoryTitles.Values)
+        {
+            string? folderId = await FindNoteIdByTitleAnywhere(folderTitle);
+            if (folderId is null) continue;
+            await DeleteNote(folderId);
+            count++;
+        }
+        categoryNoteIds.Clear();
+        return count;
+    }
+
     public async Task CreateRelation(string fromNoteId, string toNoteId, string relationName = "references")
     {
         var body = new
@@ -188,30 +175,48 @@ public class TriliumClient
 
         StringContent payload = new(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
         await http.PostAsync("etapi/attributes", payload);
-        // Best-effort — don't throw if relation creation fails
     }
 
-    public async Task<List<string>> GetAllNoteIds()
-    {
-        HttpResponseMessage res = await http.GetAsync("etapi/notes?search=*");
-        if (!res.IsSuccessStatusCode) return new List<string>();
-
-        JsonArray results = ParseArray(await res.Content.ReadAsStringAsync());
-        return results
-            .Where(n => n is not null)
-            .Select(n => n!["noteId"]?.GetValue<string>())
-            .Where(id => !string.IsNullOrWhiteSpace(id) && id != rootNoteId)
-            .Select(id => id!)
-            .ToList();
-    }
-
-    // Deletes a note by ID
     public async Task DeleteNote(string noteId)
     {
         await http.DeleteAsync($"etapi/notes/{noteId}");
     }
 
-    public void ClearCache() => categoryNoteIds.Clear();
+    // ── Tree traversal ──────────────────────────────────────────────────────────
+
+    // Walks the full note tree from root using childNoteIds — no search queries required.
+    private async Task<List<(string Id, string Title)>> TraverseTree()
+    {
+        List<(string, string)> notes = new();
+        HashSet<string> visited = new();
+        await Traverse(rootNoteId, notes, visited, isRoot: true);
+        return notes;
+    }
+
+    private async Task Traverse(string noteId, List<(string, string)> notes, HashSet<string> visited, bool isRoot = false)
+    {
+        if (!visited.Add(noteId)) return;
+
+        HttpResponseMessage res = await http.GetAsync($"etapi/notes/{noteId}");
+        if (!res.IsSuccessStatusCode) return;
+
+        JsonNode? node = JsonNode.Parse(await res.Content.ReadAsStringAsync());
+        if (node is null) return;
+
+        string? title = node["title"]?.GetValue<string>();
+        if (!isRoot && !string.IsNullOrWhiteSpace(title))
+            notes.Add((noteId, title));
+
+        JsonArray? children = node["childNoteIds"] as JsonArray;
+        if (children is null) return;
+
+        foreach (JsonNode? child in children)
+        {
+            string? childId = child?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(childId) || childId.StartsWith("_")) continue;
+            await Traverse(childId, notes, visited);
+        }
+    }
 
     // ── Category folder management ──────────────────────────────────────────────
 
@@ -227,7 +232,6 @@ public class TriliumClient
         return folderId;
     }
 
-    // Searches for a folder note by exact title match using the ETAPI search endpoint
     private async Task<string?> SearchForFolder(string title)
     {
         string encoded = Uri.EscapeDataString(title);
@@ -235,7 +239,6 @@ public class TriliumClient
         if (!res.IsSuccessStatusCode) return null;
 
         JsonArray results = ParseArray(await res.Content.ReadAsStringAsync());
-
         foreach (JsonNode? item in results)
         {
             if (item is null) continue;
@@ -265,23 +268,6 @@ public class TriliumClient
         return result["note"]!["noteId"]!.GetValue<string>();
     }
 
-    // Uses the branches endpoint to check if a note sits under a given ancestor
-    private async Task<bool> NoteIsUnder(string noteId, string ancestorId)
-    {
-        HttpResponseMessage res = await http.GetAsync($"etapi/notes/{noteId}/branches");
-        if (!res.IsSuccessStatusCode) return false;
-
-        JsonArray branches = ParseArray(await res.Content.ReadAsStringAsync());
-        foreach (JsonNode? branch in branches)
-        {
-            if (branch is null) continue;
-            if (branch["parentNoteId"]?.GetValue<string>() == ancestorId)
-                return true;
-        }
-        return false;
-    }
-
-    // Safely parses JSON that should be an array — returns empty array on any parse failure
     private static JsonArray ParseArray(string json)
     {
         try

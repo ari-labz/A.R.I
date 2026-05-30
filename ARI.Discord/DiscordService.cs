@@ -162,8 +162,8 @@ public class DiscordService : BackgroundService
                 return;
             }
 
-            Common.Logger.LogInformation("ARI reply to {Username} [{ConversationKey}]: {Response}",
-                message.Author.Username, conversationKey, response);
+            Common.Logger.LogInformation("ARI reply sent to {Username} [{ConversationKey}]",
+                message.Author.Username, conversationKey);
 
             foreach (string chunk in SplitIntoChunks(response))
             {
