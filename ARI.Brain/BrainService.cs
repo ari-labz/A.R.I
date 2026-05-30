@@ -26,14 +26,20 @@ public class BrainService
         try
         {
             await trilium.VerifyConnection();
-            triliumReady = true;
-            Common.Logger.LogInformation("Brain connected to Trilium.");
+            await OnReady();
         }
         catch (InvalidOperationException ex)
         {
             triliumReady = false;
             Common.Logger.LogError("Brain could not connect to Trilium: {Message}", ex.Message);
         }
+    }
+
+    private async Task OnReady()
+    {
+        triliumReady = true;
+        List<string> titles = await trilium.GetAllNoteTitles();
+        Common.Logger.LogInformation("Brain connected to Trilium. {Count} note(s) in graph.", titles.Count);
     }
 
     // ── Public API ───────────────────────────────────────────────────────────────
@@ -57,13 +63,10 @@ public class BrainService
     {
         if (!triliumReady) return 0;
 
-        List<string> ids = await trilium.GetAllNoteIds();
-        foreach (string id in ids)
-            await trilium.DeleteNote(id);
-
-        trilium.ClearCache();
-        Common.Logger.LogInformation("Brain purged {Count} notes.", ids.Count);
-        return ids.Count;
+        // Deletes category folders — Trilium cascades to all child notes
+        int count = await trilium.PurgeAllNotes();
+        Common.Logger.LogInformation("Brain purged {Count} category folder(s) and all their notes.", count);
+        return count;
     }
 
     public async Task<List<string>> SearchNote(string searchTerm)
@@ -91,11 +94,17 @@ public class BrainService
             List<string> linkedNames = ExtractLinkPlaceholders(currentContent);
             if (linkedNames.Count == 0) return;
 
+            // The canonical name for the note we just saved — avoids a search that would miss it
+            string savedName = !string.IsNullOrWhiteSpace(incoming.MergeWith) ? incoming.MergeWith : incoming.Name;
+
             Dictionary<string, string> resolvedLinkIds = new(StringComparer.OrdinalIgnoreCase);
 
             foreach (string linkName in linkedNames)
             {
-                string? toId = await trilium.FindNoteIdByTitleAnywhere(linkName);
+                // If this link refers to the note we just saved, use its ID directly
+                string? toId = string.Equals(linkName, savedName, StringComparison.OrdinalIgnoreCase)
+                    ? noteId
+                    : await trilium.FindNoteIdByTitleAnywhere(linkName);
 
                 if (toId is null)
                 {
@@ -106,7 +115,7 @@ public class BrainService
                         Info     = new List<string> { "Mentioned in conversation. No further details yet." }
                     };
                     toId = await trilium.CreateNote(linkName, BuildNote(stub, null), NoteCategory.Unknown);
-                    Common.Logger.LogInformation("Brain created stub note: {Name}", linkName);
+                    Common.Logger.LogInformation("created stub: {Name}", linkName);
                 }
 
                 resolvedLinkIds[linkName] = toId;
@@ -152,14 +161,14 @@ public class BrainService
                 if (merged.Trim() != existing?.Trim())
                 {
                     await trilium.UpdateNoteContent(targetId, merged);
-                    Common.Logger.LogInformation("Brain merged '{From}' into '{To}'.", incoming.Name, incoming.MergeWith);
+                    Common.Logger.LogInformation("merged '{From}' into '{To}'.", incoming.Name, incoming.MergeWith);
                 }
                 return targetId;
             }
             else
             {
                 string newId = await trilium.CreateNote(incoming.MergeWith, BuildNote(canonical, null), incoming.Category);
-                Common.Logger.LogInformation("Brain created note (via mergeWith): {Name}", incoming.MergeWith);
+                Common.Logger.LogInformation("created note: {Name} (via mergeWith)", incoming.MergeWith);
                 return newId;
             }
         }
@@ -174,18 +183,18 @@ public class BrainService
             if (mergedHtml.Trim() != existing?.Trim())
             {
                 await trilium.UpdateNoteContent(existingId, mergedHtml);
-                Common.Logger.LogInformation("Brain updated note: {Name} [{Category}]", incoming.Name, incoming.Category);
+                Common.Logger.LogInformation("updated note: {Name}", incoming.Name);
             }
             else
             {
-                Common.Logger.LogInformation("Brain skipped note (no changes): {Name}", incoming.Name);
+                Common.Logger.LogInformation("skipped: {Name} (no changes)", incoming.Name);
             }
             return existingId;
         }
         else
         {
             string newId = await trilium.CreateNote(incoming.Name, BuildNote(incoming, null), incoming.Category);
-            Common.Logger.LogInformation("Brain created note: {Name} [{Category}]", incoming.Name, incoming.Category);
+            Common.Logger.LogInformation("created note: {Name}", incoming.Name);
             return newId;
         }
     }
