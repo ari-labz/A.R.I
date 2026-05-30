@@ -6,6 +6,12 @@ internal class AriModelsConfig
 {
     public List<ModelConfig> Models { get; init; }
 
+    /// <summary>
+    /// How often (in minutes) to sweep threads for new Engram activity.
+    /// 0 = disabled. Any other value = sweep every N minutes, but only if the thread has new messages.
+    /// </summary>
+    public int EngramSweepIntervalMinutes { get; init; } = 0;
+
     internal static AriModelsConfig LoadFrom(string path)
     {
         if (!File.Exists(path))
@@ -32,4 +38,7 @@ internal class ModelConfig
     public string SystemPrompt { get; init; }
     public int ShortTermMemoryLimit { get; init; }
     public bool Enabled { get; init; }
+
+    /// <summary>Maximum tokens to generate per response. -1 = unlimited.</summary>
+    public int MaxTokens { get; init; } = -1;
 }

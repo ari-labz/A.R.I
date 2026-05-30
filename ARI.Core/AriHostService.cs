@@ -11,7 +11,10 @@ public class AriHostService : BackgroundService
 {
     private readonly ILoggerFactory loggerFactory;
     private Docker? docker;
+    private LocalLlamaServer? llamaServer;
     private DiscordService? discordService;
+    private bool containersStarted;
+    private bool startupFailed;
 
     public AriHostService(ILoggerFactory loggerFactory)
     {
@@ -21,22 +24,36 @@ public class AriHostService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        try
+        {
+            await StartAsync(stoppingToken);
+        }
+        catch
+        {
+            startupFailed = true;
+            throw;
+        }
+    }
+
+    private async Task StartAsync(CancellationToken stoppingToken)
+    {
         Common.Logger.LogInformation("ARI is starting...");
 
         string executableDirectory = AppDomain.CurrentDomain.BaseDirectory;
         AriConfig config = AriConfig.LoadFrom(Path.Combine(executableDirectory, "AriConfig.json"));
 
         string fullComposePath = Path.Combine(executableDirectory, config.Docker.ComposePath);
-        docker = new Docker(fullComposePath, config.LLM.Endpoint);
+        docker = new Docker(fullComposePath);
 
         await Dependency.CheckDocker();
         await Dependency.CheckPython();
 
         await docker.IsRunning();
         await docker.StartContainers();
+        containersStarted = true;
 
-        Ollama ollama = new Ollama(config.LLM.Endpoint, docker.OllamaContainerName);
-        await ollama.IsRunning();
+        llamaServer = new LocalLlamaServer(config.LlamaServer, executableDirectory);
+        await llamaServer.IsReady();
 
         Common.Logger.LogInformation("Loading LLM models...");
         string brainConfigPath = Path.Combine(executableDirectory, "AriBrain.json");
@@ -46,9 +63,6 @@ public class AriHostService : BackgroundService
             loggerFactory
         );
         Common.Logger.LogInformation("LLM models loaded.");
-
-        foreach (string ollamaModel in llmService.OllamaModelNames)
-            await ollama.IsModelInstalled(ollamaModel);
 
         Common.Logger.LogInformation("ARI is ready.");
 
@@ -66,12 +80,16 @@ public class AriHostService : BackgroundService
 
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
+        if (startupFailed) return;
+
         Common.Logger.LogInformation("ARI is shutting down...");
 
         if (discordService != null)
             await discordService.NotifyOfflineAsync();
 
-        if (docker != null)
+        llamaServer?.Stop();
+
+        if (docker != null && containersStarted)
             await docker.StopContainers();
 
         await base.StopAsync(cancellationToken);

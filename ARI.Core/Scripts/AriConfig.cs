@@ -1,10 +1,10 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 
 namespace ARI.Core.Scripts;
 
 public class AriConfig
 {
-    public LlmConfig LLM { get; init; }
+    public LlamaServerConfig LlamaServer { get; init; }
     public TriliumConfig Trilium { get; init; }
     public DockerConfig Docker { get; init; }
     public ModulesConfig Modules { get; init; }
@@ -31,9 +31,15 @@ public class AriConfig
     }
 }
 
-public class LlmConfig
+public class LlamaServerConfig
 {
     public string Endpoint { get; init; }
+    public int Port { get; init; } = 8081;
+    public string ModelsPath { get; init; }
+    public string ModelFile { get; init; }
+    public string MmprojFile { get; init; }
+    public int ContextSize { get; init; } = 245760;
+    public string DownloadBaseUrl { get; init; }
 }
 
 public class TriliumConfig
