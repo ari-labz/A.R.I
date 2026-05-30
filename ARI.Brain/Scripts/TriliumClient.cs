@@ -10,15 +10,8 @@ public class TriliumClient
     private readonly HttpClient http;
     private readonly string rootNoteId;
 
-    private static readonly Dictionary<NoteCategory, string> CategoryTitles = new()
-    {
-        { NoteCategory.People,  "People"  },
-        { NoteCategory.Places,  "Places"  },
-        { NoteCategory.Events,  "Events"  },
-        { NoteCategory.Unknown, "Unknown" }
-    };
-
-    private readonly Dictionary<NoteCategory, string> categoryNoteIds = new();
+    // Full folder path → noteId.  Keys: "People", "People/Family", etc.
+    private readonly Dictionary<string, string> folderCache = new(StringComparer.OrdinalIgnoreCase);
 
     public TriliumClient(string baseUrl, string token, string rootNoteId)
     {
@@ -80,7 +73,6 @@ public class TriliumClient
                     return foundId;
             }
         }
-
         return null;
     }
 
@@ -91,17 +83,18 @@ public class TriliumClient
         return await res.Content.ReadAsStringAsync();
     }
 
-    public async Task<string> CreateNote(string title, string htmlContent, NoteCategory category)
+    /// <summary>Creates a note at the specified folder path, creating intermediate folders as needed.</summary>
+    public async Task<(string NoteId, string BranchId)> CreateNoteAtPath(string[] folderPath, string noteName, string htmlContent)
     {
-        string parentId = await GetOrCreateCategoryFolder(category);
+        string parentId = await GetOrCreateFolderPath(folderPath);
 
         var body = new
         {
             parentNoteId = parentId,
-            title,
-            content = htmlContent,
-            type = "text",
-            mime = "text/html"
+            title        = noteName,
+            content      = htmlContent,
+            type         = "text",
+            mime         = "text/html"
         };
 
         StringContent payload = new(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
@@ -109,7 +102,9 @@ public class TriliumClient
         res.EnsureSuccessStatusCode();
 
         JsonNode result = JsonNode.Parse(await res.Content.ReadAsStringAsync())!;
-        return result["note"]!["noteId"]!.GetValue<string>();
+        string noteId   = result["note"]!["noteId"]!.GetValue<string>();
+        string branchId = result["branch"]!["branchId"]!.GetValue<string>();
+        return (noteId, branchId);
     }
 
     public async Task UpdateNoteContent(string noteId, string content)
@@ -117,6 +112,35 @@ public class TriliumClient
         StringContent payload = new(content, Encoding.UTF8, "text/plain");
         HttpResponseMessage res = await http.PutAsync($"etapi/notes/{noteId}/content", payload);
         res.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>
+    /// Moves a note to a new folder path by deleting its old branch and creating a new one.
+    /// Returns the new branch ID so the caller can update its cache.
+    /// </summary>
+    public async Task<string> MoveNoteToFolderPath(string branchId, string noteId, string[] newFolderPath)
+    {
+        string newParentId = await GetOrCreateFolderPath(newFolderPath);
+
+        // Trilium ETAPI does not support changing parentNoteId via PATCH on a branch.
+        // The correct approach is: delete the old branch, then create a new one.
+        await http.DeleteAsync($"etapi/branches/{branchId}");
+
+        var body = new { noteId, parentNoteId = newParentId, notePosition = 0 };
+        StringContent payload = new(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+        HttpResponseMessage res = await http.PostAsync("etapi/branches", payload);
+        res.EnsureSuccessStatusCode();
+
+        JsonNode result = JsonNode.Parse(await res.Content.ReadAsStringAsync())!;
+        return result["branchId"]!.GetValue<string>();
+    }
+
+    /// <summary>Renames a note. Best-effort — failures are silently ignored.</summary>
+    public async Task RenameNote(string noteId, string newTitle)
+    {
+        var body = new { title = newTitle };
+        StringContent payload = new(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+        await http.PatchAsync($"etapi/notes/{noteId}", payload);
     }
 
     public async Task<List<string>> SearchNotes(string searchTerm)
@@ -134,66 +158,53 @@ public class TriliumClient
             .ToList();
     }
 
-    // TODO: optimise — traverses the full note tree on every call.
-    // Future: replace with a single search query once a working one is found.
-    // Returns titles of entity notes only (excludes category folders).
+    /// <summary>
+    /// Returns title → (noteId, folderPath) for all entity notes in the tree.
+    /// Category folders (depth-1 children of root) are detected by depth, not by title.
+    /// Also populates the internal folderCache for later path-based operations.
+    /// </summary>
+    public async Task<Dictionary<string, (string Id, string FolderPath)>> GetAllNoteIds()
+    {
+        List<(string Id, string Title, string FolderPath)> all = await TraverseTree();
+        return all.ToDictionary(n => n.Title, n => (n.Id, n.FolderPath), StringComparer.OrdinalIgnoreCase);
+    }
+
     public async Task<List<string>> GetAllNoteTitles()
-    {
-        HashSet<string> folderTitles = new(CategoryTitles.Values, StringComparer.OrdinalIgnoreCase);
-        List<(string Id, string Title)> all = await TraverseTree();
-        return all
-            .Where(n => !folderTitles.Contains(n.Title))
-            .Select(n => n.Title)
-            .ToList();
-    }
+        => (await GetAllNoteIds()).Keys.ToList();
 
-    // Deletes all notes by cascading category folder deletion
-    public async Task<int> PurgeAllNotes()
+    /// <summary>Deletes all known category folders (and their children) from Trilium.</summary>
+    public async Task PurgeCategoryFolders()
     {
-        int count = 0;
-        foreach (string folderTitle in CategoryTitles.Values)
+        foreach (string folderId in folderCache.Values.ToList())
         {
-            string? folderId = await FindNoteIdByTitleAnywhere(folderTitle);
-            if (folderId is null) continue;
-            await DeleteNote(folderId);
-            count++;
+            try { await DeleteNote(folderId); } catch { }
         }
-        categoryNoteIds.Clear();
-        return count;
-    }
-
-    public async Task CreateRelation(string fromNoteId, string toNoteId, string relationName = "references")
-    {
-        var body = new
-        {
-            noteId = fromNoteId,
-            type = "relation",
-            name = relationName,
-            value = toNoteId,
-            isInheritable = false
-        };
-
-        StringContent payload = new(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
-        await http.PostAsync("etapi/attributes", payload);
+        folderCache.Clear();
     }
 
     public async Task DeleteNote(string noteId)
     {
-        await http.DeleteAsync($"etapi/notes/{noteId}");
+        HttpResponseMessage res = await http.DeleteAsync($"etapi/notes/{noteId}");
+        res.EnsureSuccessStatusCode();
     }
 
     // ── Tree traversal ──────────────────────────────────────────────────────────
 
-    // Walks the full note tree from root using childNoteIds — no search queries required.
-    private async Task<List<(string Id, string Title)>> TraverseTree()
+    private async Task<List<(string Id, string Title, string FolderPath)>> TraverseTree()
     {
-        List<(string, string)> notes = new();
+        List<(string, string, string)> notes = new();
         HashSet<string> visited = new();
-        await Traverse(rootNoteId, notes, visited, isRoot: true);
+        await Traverse(rootNoteId, notes, visited, folderPath: "", depth: 0);
         return notes;
     }
 
-    private async Task Traverse(string noteId, List<(string, string)> notes, HashSet<string> visited, bool isRoot = false)
+    // depth 0 = root  |  depth 1 = category folders  |  depth 2+ = notes
+    private async Task Traverse(
+        string noteId,
+        List<(string Id, string Title, string FolderPath)> notes,
+        HashSet<string> visited,
+        string folderPath,
+        int depth)
     {
         if (!visited.Add(noteId)) return;
 
@@ -204,46 +215,89 @@ public class TriliumClient
         if (node is null) return;
 
         string? title = node["title"]?.GetValue<string>();
-        if (!isRoot && !string.IsNullOrWhiteSpace(title))
-            notes.Add((noteId, title));
 
-        JsonArray? children = node["childNoteIds"] as JsonArray;
-        if (children is null) return;
+        if (depth == 1 && !string.IsNullOrWhiteSpace(title))
+        {
+            // Category folder — register in cache and recurse with this as the folder context.
+            string thisFolderPath = title;
+            folderCache[thisFolderPath] = noteId;
+
+            JsonArray? children = node["childNoteIds"] as JsonArray;
+            foreach (JsonNode? child in children ?? new JsonArray())
+            {
+                string? childId = child?.GetValue<string>();
+                if (!string.IsNullOrWhiteSpace(childId) && !childId.StartsWith("_"))
+                    await Traverse(childId, notes, visited, thisFolderPath, depth + 1);
+            }
+            return;
+        }
+
+        if (depth >= 2 && !string.IsNullOrWhiteSpace(title))
+            notes.Add((noteId, title, folderPath));
+
+        JsonArray? noteChildren = node["childNoteIds"] as JsonArray;
+        if (noteChildren is null) return;
+
+        foreach (JsonNode? child in noteChildren)
+        {
+            string? childId = child?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(childId) || childId.StartsWith("_")) continue;
+            await Traverse(childId, notes, visited, folderPath, depth + 1);
+        }
+    }
+
+    // ── Folder management ───────────────────────────────────────────────────────
+
+    /// <summary>Finds or creates the folder at the given path, returning its noteId.</summary>
+    private async Task<string> GetOrCreateFolderPath(string[] pathParts)
+    {
+        if (pathParts.Length == 0) return rootNoteId;
+
+        string parentId   = rootNoteId;
+        string currentPath = "";
+
+        foreach (string part in pathParts)
+        {
+            currentPath = currentPath.Length == 0 ? part : $"{currentPath}/{part}";
+
+            if (folderCache.TryGetValue(currentPath, out string? cachedId))
+            {
+                parentId = cachedId;
+                continue;
+            }
+
+            string? existingId = await FindChildByTitle(parentId, part);
+            string folderId    = existingId ?? await CreateFolder(part, parentId);
+            folderCache[currentPath] = folderId;
+            parentId = folderId;
+        }
+
+        return parentId;
+    }
+
+    /// <summary>Finds a direct child of parentId whose title matches, without a global search.</summary>
+    private async Task<string?> FindChildByTitle(string parentId, string title)
+    {
+        HttpResponseMessage res = await http.GetAsync($"etapi/notes/{parentId}");
+        if (!res.IsSuccessStatusCode) return null;
+
+        JsonNode? node = JsonNode.Parse(await res.Content.ReadAsStringAsync());
+        JsonArray? children = node?["childNoteIds"] as JsonArray;
+        if (children is null) return null;
 
         foreach (JsonNode? child in children)
         {
             string? childId = child?.GetValue<string>();
             if (string.IsNullOrWhiteSpace(childId) || childId.StartsWith("_")) continue;
-            await Traverse(childId, notes, visited);
-        }
-    }
 
-    // ── Category folder management ──────────────────────────────────────────────
+            HttpResponseMessage childRes = await http.GetAsync($"etapi/notes/{childId}");
+            if (!childRes.IsSuccessStatusCode) continue;
 
-    private async Task<string> GetOrCreateCategoryFolder(NoteCategory category)
-    {
-        if (categoryNoteIds.TryGetValue(category, out string? cached))
-            return cached;
+            JsonNode? childNode = JsonNode.Parse(await childRes.Content.ReadAsStringAsync());
+            string? childTitle  = childNode?["title"]?.GetValue<string>();
 
-        string title = CategoryTitles[category];
-        string? existingId = await SearchForFolder(title);
-        string folderId = existingId ?? await CreateFolder(title, rootNoteId);
-        categoryNoteIds[category] = folderId;
-        return folderId;
-    }
-
-    private async Task<string?> SearchForFolder(string title)
-    {
-        string encoded = Uri.EscapeDataString(title);
-        HttpResponseMessage res = await http.GetAsync($"etapi/notes?search={encoded}");
-        if (!res.IsSuccessStatusCode) return null;
-
-        JsonArray results = ParseArray(await res.Content.ReadAsStringAsync());
-        foreach (JsonNode? item in results)
-        {
-            if (item is null) continue;
-            if (string.Equals(item["title"]?.GetValue<string>(), title, StringComparison.OrdinalIgnoreCase))
-                return item["noteId"]!.GetValue<string>();
+            if (string.Equals(childTitle, title, StringComparison.OrdinalIgnoreCase))
+                return childId;
         }
 
         return null;
@@ -256,8 +310,8 @@ public class TriliumClient
             parentNoteId = parentId,
             title,
             content = string.Empty,
-            type = "text",
-            mime = "text/html"
+            type    = "text",
+            mime    = "text/html"
         };
 
         StringContent payload = new(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");

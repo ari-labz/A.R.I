@@ -5,36 +5,26 @@ using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
-/// <summary>
-/// Maintains a per-thread evolving context summary.
-/// After each Dialogue exchange, the Context LLM updates the summary with named entities,
-/// pronoun resolution, primary/secondary topics, and topic shifts.
-/// Engram receives this summary alongside the transcript so pronouns are never ambiguous.
-/// </summary>
-internal class ContextService
+internal class Context : Model
 {
-    private readonly ModelConfig config;
     private readonly HttpClient httpClient;
     private readonly Dictionary<string, string> contexts = new();
     private readonly SemaphoreSlim updateLock = new(1, 1);
 
-    internal ContextService(ModelConfig config)
+    internal Context(ModelConfig config) : base(config)
     {
-        this.config = config;
         httpClient = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
     }
 
-    /// <summary>Returns the current context summary for a thread, or empty string if none yet.</summary>
     internal string GetContext(string threadKey)
         => contexts.TryGetValue(threadKey, out string? ctx) ? ctx : string.Empty;
 
     /// <summary>
-    /// Updates the context summary for a thread based on the latest exchange.
+    /// Updates the context summary after each Dialogue exchange.
     /// Fire-and-forget safe — errors are logged, never thrown.
     /// </summary>
     internal async Task UpdateAsync(string threadKey, string userMessage, string assistantResponse)
     {
-        // Serialize updates per-thread to avoid races, but don't block other threads.
         await updateLock.WaitAsync();
         try
         {
@@ -57,7 +47,7 @@ internal class ContextService
     }
 
     /// <summary>
-    /// Rebuilds the context summary for a thread from a full conversation transcript.
+    /// Rebuilds the context summary from the full conversation transcript.
     /// Called by Engram before extraction so Context has the complete untrimmed history.
     /// </summary>
     internal async Task RebuildFromTranscriptAsync(string threadKey, string transcript)
@@ -66,6 +56,7 @@ internal class ContextService
         try
         {
             string current = GetContext(threadKey);
+            Common.Logger.LogInformation("[Engram] [Context] analysing...");
             (string updated, int tokens, double elapsed) = await CallContextFromTranscriptAsync(current, transcript);
 
             double tokPerSec = elapsed > 0 && tokens > 0 ? tokens / elapsed : 0;
@@ -96,31 +87,29 @@ internal class ContextService
 
     private async Task<(string content, int tokens, double elapsed)> CallContextFromTranscriptAsync(string currentContext, string transcript)
     {
-        string contextBlock = string.IsNullOrWhiteSpace(currentContext)
-            ? "No prior context."
-            : currentContext;
+        string contextBlock = string.IsNullOrWhiteSpace(currentContext) ? "No prior context." : currentContext;
 
         object requestBody = new
         {
-            model = config.Model,
+            model    = ModelString,
             messages = new[]
             {
-                new { role = "system", content = config.SystemPrompt + "\n<|think_off|>" },
+                new { role = "system", content = SystemPrompt + "\n<|think_off|>" },
                 new { role = "user",   content =
                     $"CURRENT CONTEXT:\n{contextBlock}\n\n" +
                     $"FULL CONVERSATION:\n{transcript}\n\n" +
                     "Produce an updated context summary covering this full conversation." }
             },
-            stream = false,
-            max_tokens = 400,
-            temperature = 0.3,
-            top_p = 0.95,
-            top_k = 20,
+            stream         = false,
+            max_tokens     = 400,
+            temperature    = 0.3,
+            top_p          = 0.95,
+            top_k          = 20,
             repeat_penalty = 1.0
         };
 
         string json = JsonSerializer.Serialize(requestBody);
-        HttpRequestMessage request = new(HttpMethod.Post, $"{config.Endpoint}/v1/chat/completions")
+        HttpRequestMessage request = new(HttpMethod.Post, $"{Endpoint}/v1/chat/completions")
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
@@ -154,25 +143,25 @@ internal class ContextService
 
         object requestBody = new
         {
-            model = config.Model,
+            model    = ModelString,
             messages = new[]
             {
-                new { role = "system", content = config.SystemPrompt + "\n<|think_off|>" },
+                new { role = "system", content = SystemPrompt + "\n<|think_off|>" },
                 new { role = "user",   content =
                     $"CURRENT CONTEXT:\n{contextBlock}\n\n" +
                     $"NEW EXCHANGE:\nWren: {userMessage}\nARI: {assistantResponse}\n\n" +
                     "Update the context summary." }
             },
-            stream = false,
-            max_tokens = 400,
-            temperature = 0.3,
-            top_p = 0.95,
-            top_k = 20,
+            stream         = false,
+            max_tokens     = 400,
+            temperature    = 0.3,
+            top_p          = 0.95,
+            top_k          = 20,
             repeat_penalty = 1.0
         };
 
         string json = JsonSerializer.Serialize(requestBody);
-        HttpRequestMessage request = new(HttpMethod.Post, $"{config.Endpoint}/v1/chat/completions")
+        HttpRequestMessage request = new(HttpMethod.Post, $"{Endpoint}/v1/chat/completions")
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json")
         };

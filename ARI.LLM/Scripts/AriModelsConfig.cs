@@ -12,6 +12,13 @@ internal class AriModelsConfig
     /// </summary>
     public int EngramSweepIntervalMinutes { get; init; } = 0;
 
+    /// <summary>
+    /// How many rounds of recursive note fetching Engram can do before extraction.
+    /// Each round lets Engram follow references found in previously fetched notes.
+    /// Default 7. Set to 1 to disable recursive fetching.
+    /// </summary>
+    public int EngramFetchDepth { get; init; } = 7;
+
     internal static AriModelsConfig LoadFrom(string path)
     {
         if (!File.Exists(path))
@@ -41,4 +48,7 @@ internal class ModelConfig
 
     /// <summary>Maximum tokens to generate per response. -1 = unlimited.</summary>
     public int MaxTokens { get; init; } = -1;
+
+    /// <summary>Optional prompt sent as the final extraction step in Engram. Loaded from config so it can be tuned without recompiling.</summary>
+    public string? ExtractionPrompt { get; init; }
 }
