@@ -1,0 +1,386 @@
+@model string?
+@{
+    Layout = "_Layout";
+    ViewData["Title"] = "ARI";
+}
+
+<div id="shell">
+
+    <!-- sidebar -->
+    <aside id="sidebar">
+        <div id="sidebar-inner">
+            <div id="sidebar-header">
+                <span id="sidebar-wordmark">A.R.I</span>
+                <button id="btn-toggle-sidebar" title="Close sidebar">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>
+                    </svg>
+                </button>
+            </div>
+
+            <button id="btn-new-chat">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+                New chat
+            </button>
+
+            <div id="sidebar-section-label">Recents</div>
+            <ul id="thread-list"></ul>
+        </div>
+    </aside>
+
+    <!-- floating toggle when sidebar is collapsed -->
+    <button id="topbar-toggle" title="Open sidebar">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>
+        </svg>
+    </button>
+
+    <!-- main -->
+    <div id="main">
+
+        <!-- landing: shown when no thread is active -->
+        <div id="landing">
+            <h1 id="landing-greeting">Hey, [REDACT].</h1>
+            <div id="landing-input-wrap">
+                <textarea id="landing-input" placeholder="Message ARI..." rows="1"></textarea>
+                <div id="landing-input-footer">
+                    <button class="btn-send" id="btn-landing-send" disabled title="Send">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- conversation: shown when a thread is active -->
+        <div id="conversation" class="hidden">
+            <div id="messages"></div>
+            <div id="input-area">
+                <div id="input-wrap">
+                    <textarea id="input" placeholder="Message ARI..." rows="1"></textarea>
+                    <div id="input-footer">
+                        <button class="btn-send" id="btn-send" disabled title="Send">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+                        </button>
+                    </div>
+                </div>
+                <p id="input-hint">Enter to send &nbsp;·&nbsp; Shift+Enter for new line</p>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+@section Scripts {
+<script>
+    let activeThread    = null;
+    let isStreaming     = false;
+    let knownMsgCount   = 0;
+
+    // ── sidebar ─────────────────────────────────────────
+    const sidebar   = document.getElementById('sidebar');
+    const floatBtn  = document.getElementById('topbar-toggle');
+
+    function setSidebarCollapsed(collapsed) {
+        sidebar.classList.toggle('collapsed', collapsed);
+        floatBtn.classList.toggle('visible', collapsed);
+    }
+
+    document.getElementById('btn-toggle-sidebar').addEventListener('click', () => setSidebarCollapsed(true));
+    floatBtn.addEventListener('click', () => setSidebarCollapsed(false));
+
+    // ── thread list ─────────────────────────────────────
+    async function loadThreads() {
+        const res = await fetch('/api/threads');
+        const threads = await res.json();
+        const list = document.getElementById('thread-list');
+        list.innerHTML = '';
+
+        threads.forEach(t => {
+            const li = document.createElement('li');
+            li.dataset.key = t.key;
+            if (t.key === activeThread) li.classList.add('active');
+
+            const label = t.key.startsWith('web-') ? 'Web chat' : 'Discord';
+            const time  = t.lastMessageAt && !t.lastMessageAt.startsWith('0001')
+                ? new Date(t.lastMessageAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                : '';
+
+            li.innerHTML = `<span class="thread-time">${time}</span>${label}`;
+            li.addEventListener('click', () => openThread(t.key));
+            list.appendChild(li);
+        });
+    }
+
+    document.getElementById('btn-new-chat').addEventListener('click', async () => {
+        const res = await fetch('/api/threads', { method: 'POST' });
+        const { key } = await res.json();
+        await loadThreads();
+        openThread(key);
+    });
+
+    // ── open thread ─────────────────────────────────────
+    async function openThread(key) {
+        activeThread = key;
+        document.querySelectorAll('#thread-list li').forEach(li =>
+            li.classList.toggle('active', li.dataset.key === key));
+
+        const res  = await fetch(`/api/threads/${key}/history`);
+        const msgs = await res.json();
+
+        const box = document.getElementById('messages');
+        box.innerHTML = '';
+        msgs.forEach(m => appendRow(m.role, m.content, m.timestamp, m.thinkingSeconds, m.recallNotes, m.contextSummary));
+        knownMsgCount = msgs.length;
+
+        showConversation();
+        scrollBottom();
+        document.getElementById('input').focus();
+    }
+
+    // poll active thread for new messages (catches Discord replies)
+    async function pollActiveThread() {
+        if (!activeThread || isStreaming) return;
+        try {
+            const res  = await fetch(`/api/threads/${activeThread}/history`);
+            const msgs = await res.json();
+            if (msgs.length > knownMsgCount) {
+                const box = document.getElementById('messages');
+                for (let i = knownMsgCount; i < msgs.length; i++) {
+                    const m = msgs[i];
+                    appendRow(m.role, m.content, m.timestamp, m.thinkingSeconds, m.recallNotes, m.contextSummary);
+                }
+                knownMsgCount = msgs.length;
+                scrollBottom();
+            }
+        } catch { /* silently ignore network hiccups */ }
+    }
+
+    function showConversation() {
+        document.getElementById('landing').classList.add('hidden');
+        document.getElementById('conversation').classList.remove('hidden');
+    }
+
+    // ── send ─────────────────────────────────────────────
+    async function send(prompt, fromLanding) {
+        if (isStreaming || !prompt) return;
+
+        // if sent from landing, create a new thread first
+        if (fromLanding || !activeThread) {
+            const res = await fetch('/api/threads', { method: 'POST' });
+            const { key } = await res.json();
+            activeThread = key;
+            await loadThreads();
+            showConversation();
+        }
+
+        isStreaming = true;
+        updateButtons();
+
+        appendRow('user', prompt, new Date().toISOString());
+        showTyping();
+        scrollBottom();
+
+        const url = `/api/threads/${activeThread}/stream?prompt=${encodeURIComponent(prompt)}`;
+        const es  = new EventSource(url);
+
+        let ariRow = null;
+        let bubbleEl = null;
+
+        es.onmessage = e => {
+            if (e.data === '[DONE]') {
+                es.close(); isStreaming = false; knownMsgCount += 2; updateButtons(); loadThreads();
+                // refresh the last ARI row to attach thought metadata
+                refreshLastAriRow();
+                return;
+            }
+            if (e.data.startsWith('[ERROR]')) {
+                hideTyping();
+                appendRow('assistant', e.data.replace('[ERROR] ', ''), new Date().toISOString());
+                es.close(); isStreaming = false; updateButtons(); return;
+            }
+            if (!ariRow) {
+                hideTyping();
+                ariRow   = appendRow('assistant', '', new Date().toISOString());
+                bubbleEl = ariRow.querySelector('.bubble');
+            }
+            bubbleEl.textContent = e.data.replace(/\\n/g, '\n');
+            scrollBottom();
+        };
+
+        es.onerror = () => {
+            hideTyping();
+            if (!ariRow) appendRow('assistant', '[connection error]', new Date().toISOString());
+            es.close(); isStreaming = false; updateButtons();
+        };
+    }
+
+    // landing send
+    document.getElementById('btn-landing-send').addEventListener('click', () => {
+        const el = document.getElementById('landing-input');
+        const t  = el.value.trim();
+        if (!t) return;
+        el.value = ''; el.style.height = 'auto';
+        send(t, true);
+    });
+
+    // conversation send
+    document.getElementById('btn-send').addEventListener('click', () => {
+        const el = document.getElementById('input');
+        const t  = el.value.trim();
+        if (!t) return;
+        el.value = ''; el.style.height = 'auto';
+        send(t, false);
+    });
+
+    // ── helpers ──────────────────────────────────────────
+    function appendRow(role, content, timestamp, thinkingSeconds, recallNotes, contextSummary) {
+        const box = document.getElementById('messages');
+        const row = document.createElement('div');
+        row.className = `msg-row ${role}`;
+
+        const timeStr = timestamp
+            ? new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : '';
+
+        if (role === 'user') {
+            row.innerHTML = `<div><div class="bubble"></div><div class="msg-time">${timeStr}</div></div>`;
+        } else {
+            let thoughtHtml = '';
+            if (thinkingSeconds != null) {
+                const secs = typeof thinkingSeconds === 'number' ? thinkingSeconds.toFixed(1) : thinkingSeconds;
+                let detailParts = '';
+                if (recallNotes) {
+                    detailParts += `<h4>Recalled memories</h4>${escHtml(recallNotes)}\n`;
+                }
+                if (contextSummary) {
+                    detailParts += `<h4>Context summary</h4>${escHtml(contextSummary)}`;
+                }
+                const hasDetails = detailParts.length > 0;
+                thoughtHtml =
+                    `<details class="thought-block"${hasDetails ? '' : ' style="pointer-events:none"'}>` +
+                    `<summary>ARI thought for ${secs}s</summary>` +
+                    (hasDetails ? `<div class="thought-content">${detailParts}</div>` : '') +
+                    `</details>`;
+            }
+            row.innerHTML =
+                `<div class="sender">ARI</div>` +
+                thoughtHtml +
+                `<div class="bubble"></div>` +
+                `<div class="msg-time">${timeStr}</div>`;
+        }
+
+        row.querySelector('.bubble').textContent = content;
+        box.appendChild(row);
+        return row;
+    }
+
+    async function refreshLastAriRow() {
+        if (!activeThread) return;
+        try {
+            const res  = await fetch(`/api/threads/${activeThread}/history`);
+            const msgs = await res.json();
+            if (!msgs.length) return;
+            const last = msgs[msgs.length - 1];
+            if (last.role !== 'assistant') return;
+            // replace the last .msg-row.assistant in the box
+            const box  = document.getElementById('messages');
+            const rows = box.querySelectorAll('.msg-row.assistant');
+            if (!rows.length) return;
+            const lastRow = rows[rows.length - 1];
+            const replacement = document.createElement('div');
+            replacement.className = 'msg-row assistant';
+            box.insertBefore(replacement, lastRow);
+            box.removeChild(lastRow);
+            // re-render into replacement
+            const tmp = appendRow(last.role, last.content, last.timestamp, last.thinkingSeconds, last.recallNotes, last.contextSummary);
+            replacement.replaceWith(tmp);
+        } catch { /* ignore */ }
+    }
+
+    function escHtml(str) {
+        return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    function showTyping() {
+        const box = document.getElementById('messages');
+        const row = document.createElement('div');
+        row.className = 'msg-row assistant';
+        row.id = 'typing-indicator';
+        row.innerHTML =
+            `<div class="sender">ARI</div>` +
+            `<div class="typing-indicator">` +
+            `<span>A.R.I is thinking</span>` +
+            `<div class="typing-dots"><b></b><b></b><b></b></div>` +
+            `</div>`;
+        box.appendChild(row);
+        scrollBottom();
+    }
+
+    function hideTyping() {
+        document.getElementById('typing-indicator')?.remove();
+    }
+
+    function scrollBottom() {
+        const box = document.getElementById('messages');
+        box.scrollTop = box.scrollHeight;
+    }
+
+    function updateButtons() {
+        const landingText = document.getElementById('landing-input').value.trim();
+        const chatText    = document.getElementById('input').value.trim();
+        document.getElementById('btn-landing-send').disabled = isStreaming || !landingText;
+        document.getElementById('btn-send').disabled         = isStreaming || !chatText;
+    }
+
+    // ── auto-resize + keydown for all textareas ──────────
+    function wireTextarea(id, sendFn) {
+        const el = document.getElementById(id);
+        el.addEventListener('input', function () {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 180) + 'px';
+            updateButtons();
+        });
+        el.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendFn(); }
+        });
+    }
+
+    wireTextarea('landing-input', () => {
+        const el = document.getElementById('landing-input');
+        const t  = el.value.trim(); if (!t) return;
+        el.value = ''; el.style.height = 'auto'; send(t, true);
+    });
+
+    wireTextarea('input', () => {
+        const el = document.getElementById('input');
+        const t  = el.value.trim(); if (!t) return;
+        el.value = ''; el.style.height = 'auto'; send(t, false);
+    });
+
+    // ── wait for ARI to be ready (polls /api/threads until not 503) ──
+    async function waitForReady() {
+        const greeting = document.getElementById('landing-greeting');
+        while (true) {
+            const res = await fetch('/api/threads').catch(() => null);
+            if (res && res.status !== 503) {
+                if (greeting) greeting.textContent = 'Hey, [REDACT].';
+                await loadThreads();
+                return;
+            }
+            if (greeting) greeting.textContent = 'A.R.I is starting up…';
+            await new Promise(r => setTimeout(r, 2000));
+        }
+    }
+
+    // ── init ─────────────────────────────────────────────
+    (async () => {
+        await waitForReady();
+        const initial = '@Html.Raw(Model ?? "")';
+        if (initial) openThread(initial);
+        setInterval(loadThreads, 5000);
+        setInterval(pollActiveThread, 3000);
+    })();
+</script>
+}

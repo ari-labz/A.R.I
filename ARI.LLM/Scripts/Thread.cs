@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
@@ -9,10 +10,15 @@ internal class Thread
 {
     private const string QwenSystemPrefix = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant.\n\n";
 
+    // Strips Discord-injected prefix, e.g. "[31/05/2026 15:02] [xywren via DM]: "
+    private static readonly Regex DiscordPrefixPattern =
+        new(@"^\[\d{2}/\d{2}/\d{4} \d{2}:\d{2}\] \[.+?\]: ", RegexOptions.Compiled);
+
     private readonly Model model;
     private readonly string threadKey;
     private readonly HttpClient httpClient;
     private readonly List<ChatMessage> shortTermMemory;
+    private readonly List<ChatMessage> displayHistory = new(); // original prompts, no augmentation
 
     private int messageCount;
     private bool bufferEverFilled;
@@ -44,10 +50,14 @@ internal class Thread
     }
 
     internal IReadOnlyList<ChatMessage> GetHistory() => shortTermMemory.AsReadOnly();
+    internal IReadOnlyList<ChatMessage> GetDisplayHistory() => displayHistory.AsReadOnly();
 
-    internal async Task<string> SendPrompt(string prompt)
+    internal async Task<string> SendPrompt(string prompt, string? originalUserMessage = null, string? recallNotes = null, string? contextSummary = null)
     {
         LastMessageAt = DateTime.UtcNow;
+        string displayText = originalUserMessage ?? prompt;
+        displayText = DiscordPrefixPattern.Replace(displayText, "");
+        displayHistory.Add(new ChatMessage { Role = "user", Content = displayText, Timestamp = DateTime.Now });
         shortTermMemory.Add(new ChatMessage { Role = "user", Content = prompt });
 
         object requestBody = new
@@ -152,6 +162,15 @@ internal class Thread
             model.Name, threadKey, responseText);
 
         shortTermMemory.Add(new ChatMessage { Role = "assistant", Content = responseText });
+        displayHistory.Add(new ChatMessage
+        {
+            Role = "assistant",
+            Content = responseText,
+            Timestamp = DateTime.Now,
+            ThinkingSeconds = elapsed,
+            RecallNotes = recallNotes,
+            ContextSummary = contextSummary
+        });
         messageCount++;
 
         ExchangeCompleted?.Invoke(prompt, responseText);

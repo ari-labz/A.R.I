@@ -1,12 +1,16 @@
 {
   "Modules": {
-    "Discord": true
+    "Discord": true,
+    "WebPanel": true
+  },
+  "WebPanel": {
+    "Port": 5000
   },
   "LlamaServer": {
     "Endpoint": "http://localhost:8081",
     "Port": 8081,
     "ModelsPath": "/Users/user/Documents/GitHub/A.R.I/Models",
-    "ModelFile": "Qwen3.6-27B-Q8_0-mtp.gguf",
+    "ModelFile": "Qwen3.6-27B-Q6_K-mtp.gguf",
     "MmprojFile": "mmproj-Qwen3.6-27B-f16.gguf",
     "ContextSize": 32768,
     "DownloadBaseUrl": "https://huggingface.co/froggeric/Qwen3.6-27B-MTP-GGUF/resolve/main"

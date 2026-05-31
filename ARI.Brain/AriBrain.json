@@ -1,5 +1,6 @@
 {
   "TriliumUrl": "http://localhost:8080",
   "EtapiToken": "[REDACTED]",
-  "RootNoteId": "root"
+  "RootNoteId": "root",
+  "ContentCacheSize": 10
 }

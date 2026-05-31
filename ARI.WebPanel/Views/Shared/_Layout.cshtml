@@ -1,47 +1,349 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>@ViewData["Title"] - ControlPanel</title>
-    <script type="importmap"></script>
-    <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" />
-    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
-    <link rel="stylesheet" href="~/ControlPanel.styles.css" asp-append-version="true" />
+    <title>@ViewData["Title"] — A.R.I</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+    --sidebar-bg:   #223742;
+    --sidebar-border: #16262E;
+    --sidebar-hover: rgba(255,255,255,.07);
+    --sidebar-active: rgba(255,255,255,.13);
+    --sidebar-text: #c8d8df;
+    --sidebar-dim:  #7a9aaa;
+    --main-bg:      #ffffff;
+    --text:         #1a1a1a;
+    --text-dim:     #6b7280;
+    --border:       #e5e7eb;
+    --user-bubble:  #f3f4f6;
+    --input-bg:     #ffffff;
+    --input-border: #d1d5db;
+    --input-focus:  #9ca3af;
+    --accent:       #223742;
+    --accent-hover: #16262E;
+    --col-max:      680px;
+    --sidebar-w:    240px;
+}
+
+html, body {
+    height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: var(--main-bg);
+    color: var(--text);
+    font-size: 15px;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* ── shell ───────────────────────────────────────────── */
+#shell { display: flex; height: 100vh; overflow: hidden; }
+
+/* ── sidebar ─────────────────────────────────────────── */
+#sidebar {
+    width: var(--sidebar-w);
+    min-width: var(--sidebar-w);
+    background: var(--sidebar-bg);
+    border-right: 1px solid var(--sidebar-border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    transition: width .2s ease, min-width .2s ease;
+    flex-shrink: 0;
+}
+#sidebar.collapsed { width: 0; min-width: 0; border-right: none; }
+#sidebar-inner { width: var(--sidebar-w); display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+
+#sidebar-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 14px 12px;
+}
+
+#sidebar-wordmark {
+    font-size: 15px; font-weight: 700;
+    color: #ffffff; letter-spacing: .02em;
+}
+
+#btn-toggle-sidebar {
+    background: none; border: none; cursor: pointer;
+    color: var(--sidebar-dim); padding: 4px; border-radius: 6px;
+    display: flex; align-items: center;
+    transition: color .12s, background .12s;
+}
+#btn-toggle-sidebar:hover { color: #fff; background: var(--sidebar-hover); }
+
+#btn-new-chat {
+    margin: 0 10px 14px;
+    display: flex; align-items: center; gap: 9px;
+    padding: 9px 12px;
+    border: 1px solid rgba(255,255,255,.15);
+    background: none; color: var(--sidebar-text);
+    cursor: pointer; border-radius: 8px;
+    font-size: 14px; font-family: inherit;
+    transition: background .12s, border-color .12s;
+    width: calc(100% - 20px); text-align: left;
+}
+#btn-new-chat:hover { background: var(--sidebar-hover); border-color: rgba(255,255,255,.25); }
+
+#sidebar-section-label {
+    font-size: 11px; font-weight: 600; letter-spacing: .07em;
+    text-transform: uppercase; color: var(--sidebar-dim);
+    padding: 0 16px 6px;
+}
+
+#thread-list {
+    list-style: none; overflow-y: auto; flex: 1;
+    padding: 0 8px 16px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,.1) transparent;
+}
+
+#thread-list li {
+    padding: 9px 12px; border-radius: 7px;
+    cursor: pointer; font-size: 14px; color: var(--sidebar-text);
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+    transition: background .1s;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+#thread-list li:hover  { background: var(--sidebar-hover); }
+#thread-list li.active { background: var(--sidebar-active); color: #fff; }
+
+.thread-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.thread-time { font-size: 11px; color: var(--sidebar-dim); flex-shrink: 0; }
+
+/* ── main ────────────────────────────────────────────── */
+#main {
+    flex: 1; display: flex; flex-direction: column;
+    overflow: hidden; background: var(--main-bg); position: relative;
+}
+
+/* floating toggle when sidebar collapsed */
+#topbar-toggle {
+    position: absolute; top: 14px; left: 14px; z-index: 10;
+    background: none; border: none; cursor: pointer;
+    color: var(--text-dim); padding: 5px; border-radius: 7px;
+    display: none; align-items: center;
+    transition: color .12s, background .12s;
+}
+#topbar-toggle.visible { display: flex; }
+#topbar-toggle:hover { color: var(--text); background: var(--user-bubble); }
+
+/* ── landing ─────────────────────────────────────────── */
+#landing {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 0 24px 80px; gap: 28px;
+}
+#landing.hidden { display: none; }
+
+#landing-greeting {
+    font-size: 34px; font-weight: 700;
+    color: var(--text); text-align: center;
+    letter-spacing: -.02em;
+}
+
+#landing-input-wrap {
+    width: 100%; max-width: var(--col-max);
+    background: var(--input-bg);
+    border: 1px solid var(--input-border);
+    border-radius: 16px;
+    padding: 14px 14px 12px 18px;
+    display: flex; flex-direction: column; gap: 10px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.06);
+    transition: border-color .15s, box-shadow .15s;
+}
+#landing-input-wrap:focus-within {
+    border-color: var(--input-focus);
+    box-shadow: 0 1px 8px rgba(0,0,0,.1);
+}
+
+#landing-input {
+    background: transparent; border: none; outline: none;
+    color: var(--text); font-family: inherit; font-size: 16px;
+    line-height: 1.55; resize: none; width: 100%;
+    max-height: 200px; min-height: 28px;
+}
+#landing-input::placeholder { color: #9ca3af; }
+
+#landing-input-footer { display: flex; justify-content: flex-end; }
+
+/* ── conversation ────────────────────────────────────── */
+#conversation { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+#conversation.hidden { display: none; }
+
+#messages {
+    flex: 1; overflow-y: auto;
+    padding: 36px 24px 8px;
+    display: flex; flex-direction: column; gap: 0;
+    scrollbar-width: thin;
+    scrollbar-color: #d1d5db transparent;
+}
+
+/* centered column for every row */
+.msg-row {
+    width: 100%; max-width: var(--col-max);
+    margin: 0 auto; padding: 8px 0;
+}
+
+/* user: right-aligned pill */
+.msg-row.user { display: flex; justify-content: flex-end; }
+.msg-row.user > div { display: flex; flex-direction: column; align-items: flex-end; max-width: 82%; }
+.msg-row.user .bubble {
+    background: var(--user-bubble);
+    border-radius: 18px 18px 4px 18px;
+    padding: 10px 16px;
+    font-size: 15px; line-height: 1.6;
+    white-space: pre-wrap; word-break: break-word;
+    color: var(--text);
+}
+
+/* ARI: left-aligned plain text */
+.msg-row.assistant { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.msg-row.assistant .sender {
+    font-size: 12px; font-weight: 700;
+    letter-spacing: .04em; text-transform: uppercase;
+    color: var(--sidebar-bg);
+}
+.msg-row.assistant .bubble {
+    font-size: 15px; line-height: 1.7;
+    white-space: pre-wrap; word-break: break-word;
+    color: var(--text); max-width: 100%;
+}
+
+/* ── bottom input ────────────────────────────────────── */
+#input-area { padding: 10px 24px 20px; flex-shrink: 0; }
+
+#input-wrap {
+    max-width: var(--col-max); margin: 0 auto;
+    background: var(--input-bg);
+    border: 1px solid var(--input-border);
+    border-radius: 16px;
+    padding: 12px 12px 10px 16px;
+    display: flex; flex-direction: column; gap: 8px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.06);
+    transition: border-color .15s, box-shadow .15s;
+}
+#input-wrap:focus-within {
+    border-color: var(--input-focus);
+    box-shadow: 0 1px 8px rgba(0,0,0,.1);
+}
+
+#input {
+    background: transparent; border: none; outline: none;
+    color: var(--text); font-family: inherit; font-size: 15px;
+    line-height: 1.55; resize: none;
+    max-height: 180px; min-height: 24px; width: 100%;
+}
+#input::placeholder { color: #9ca3af; }
+
+#input-footer { display: flex; justify-content: flex-end; }
+
+#input-hint {
+    text-align: center; font-size: 12px; color: #9ca3af;
+    margin-top: 6px;
+    max-width: var(--col-max); margin-left: auto; margin-right: auto;
+}
+
+/* ── thought section ────────────────────────────────── */
+.thought-block {
+    margin-bottom: 6px;
+}
+
+.thought-block summary {
+    font-size: 12px;
+    color: var(--text-dim);
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    display: flex; align-items: center; gap: 5px;
+    padding: 2px 0;
+}
+.thought-block summary::-webkit-details-marker { display: none; }
+
+.thought-block summary::before {
+    content: '▶';
+    font-size: 9px;
+    color: var(--text-dim);
+    transition: transform .15s;
+    display: inline-block;
+}
+.thought-block[open] summary::before { transform: rotate(90deg); }
+
+.thought-block summary:hover { color: var(--text); }
+
+.thought-content {
+    margin-top: 8px;
+    padding: 10px 12px;
+    background: #f9fafb;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 12px;
+    color: #4b5563;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.6;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.thought-content h4 {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    color: #6b7280;
+    margin-bottom: 4px;
+}
+
+.thought-content h4:not(:first-child) { margin-top: 12px; }
+
+/* ── timestamps ─────────────────────────────────────── */
+.msg-time {
+    font-size: 11px;
+    color: #9ca3af;
+    margin-top: 4px;
+}
+.msg-row.user .msg-time { text-align: right; }
+.msg-row.assistant .msg-time { text-align: left; }
+
+/* ── typing indicator ────────────────────────────────── */
+.typing-indicator {
+    display: flex; align-items: center; gap: 5px;
+    padding: 2px 0 6px;
+}
+.typing-indicator span {
+    font-size: 13px; color: var(--text-dim);
+    font-style: italic;
+}
+.typing-dots { display: flex; gap: 4px; align-items: center; }
+.typing-dots b {
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--text-dim); display: block;
+    animation: bounce 1.2s infinite ease-in-out;
+}
+.typing-dots b:nth-child(2) { animation-delay: .2s; }
+.typing-dots b:nth-child(3) { animation-delay: .4s; }
+@@keyframes bounce {
+    0%, 80%, 100% { transform: translateY(0); opacity: .4; }
+    40%           { transform: translateY(-4px); opacity: 1; }
+}
+
+/* ── send button ─────────────────────────────────────── */
+.btn-send {
+    width: 32px; height: 32px; border-radius: 8px; border: none;
+    background: var(--accent); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; flex-shrink: 0;
+    transition: background .15s, opacity .15s;
+}
+.btn-send:hover:not(:disabled) { background: var(--accent-hover); }
+.btn-send:disabled { opacity: .3; cursor: default; }
+</style>
 </head>
 <body>
-    <header>
-        <nav class="navbar navbar-expand-sm navbar-toggleable-sm navbar-light bg-white border-bottom box-shadow mb-3">
-            <div class="container-fluid">
-                <a class="navbar-brand" asp-area="" asp-controller="Home" asp-action="Index">A.R.I</a>
-                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target=".navbar-collapse" aria-controls="navbarSupportedContent"
-                        aria-expanded="false" aria-label="Toggle navigation">
-                    <span class="navbar-toggler-icon"></span>
-                </button>
-                <div class="navbar-collapse collapse d-sm-inline-flex justify-content-between">
-                    <ul class="navbar-nav flex-grow-1">
-                        <li class="nav-item">
-                            <a class="nav-link text-dark" asp-area="" asp-controller="Home" asp-action="Index">Home</a>
-                        </li>
-                    </ul>
-                </div>
-            </div>
-        </nav>
-    </header>
-    <div class="container">
-        <main role="main" class="pb-3">
-            @RenderBody()
-        </main>
-    </div>
-
-    <footer class="border-top footer text-muted">
-        <div class="container">
-            footer text 
-        </div>
-    </footer>
-    <script src="~/lib/jquery/dist/jquery.min.js"></script>
-    <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="~/js/site.js" asp-append-version="true"></script>
+    @RenderBody()
     @await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>

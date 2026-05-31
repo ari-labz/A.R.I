@@ -6,11 +6,16 @@ namespace ARI.Brain;
 public class BrainService
 {
     private readonly TriliumClient trilium;
+    private readonly int contentCacheSize;
     private bool triliumReady = false;
 
     private Dictionary<string, string> noteIdCache   = new(StringComparer.OrdinalIgnoreCase); // title → noteId
     private readonly Dictionary<string, string> branchIdCache   = new(); // noteId → branchId
     private readonly Dictionary<string, string> noteFolderCache = new(); // noteId → folder path (e.g. "People")
+
+    // MRU content cache: keyed by note title. Front = most recently used, back = oldest.
+    private readonly LinkedList<string> contentCacheOrder = new();
+    private readonly Dictionary<string, string> contentCacheStore = new(StringComparer.OrdinalIgnoreCase);
 
     public BrainService(string configPath, ILoggerFactory? loggerFactory = null)
     {
@@ -18,7 +23,8 @@ public class BrainService
             Common.InitialiseLogger(loggerFactory);
 
         BrainConfig config = BrainConfig.LoadFrom(configPath);
-        trilium = new TriliumClient(config.TriliumUrl, config.EtapiToken, config.RootNoteId);
+        trilium          = new TriliumClient(config.TriliumUrl, config.EtapiToken, config.RootNoteId);
+        contentCacheSize = config.ContentCacheSize;
         _ = Startup();
     }
 
@@ -59,15 +65,22 @@ public class BrainService
     public async Task<string?> GetNoteContent(string title)
     {
         if (!triliumReady) return null;
+        if (TryGetCachedContent(title, out string? cached)) return cached;
         string? noteId = await FindNoteId(title);
         if (noteId is null) return null;
-        return await trilium.GetNoteContent(noteId);
+        string? content = await trilium.GetNoteContent(noteId);
+        if (content is not null) AddContentToCache(title, content);
+        return content;
     }
 
-    /// <summary>Returns the note as Engram markdown (with [[Name]] links) for the fetch step.</summary>
-    public async Task<string?> GetNoteForEngram(string noteName)
+    /// <summary>Returns the note as markdown (with [[Name]] links) for recursive fetch steps.</summary>
+    public async Task<string?> GetNote(string noteName)
     {
         if (!triliumReady) return null;
+
+        string cacheKey = $"\x00markdown\x00{noteName}";
+        if (TryGetCachedContent(cacheKey, out string? cached)) return cached;
+
         string? noteId = await FindNoteId(noteName);
         if (noteId is null) return null;
         string? html = await trilium.GetNoteContent(noteId);
@@ -75,7 +88,9 @@ public class BrainService
 
         string folder   = noteFolderCache.TryGetValue(noteId, out string? f) ? f : "Unknown";
         string markdown = MarkdownConverter.FromHtml(html);
-        return $"Path: {folder}/{noteName}\n\n{markdown}";
+        string result   = $"Path: {folder}/{noteName}\n\n{markdown}";
+        AddContentToCache(cacheKey, result);
+        return result;
     }
 
     public async Task<int> PurgeAllNotes()
@@ -98,6 +113,8 @@ public class BrainService
         noteIdCache.Clear();
         branchIdCache.Clear();
         noteFolderCache.Clear();
+        contentCacheOrder.Clear();
+        contentCacheStore.Clear();
         Common.Logger.LogInformation("Brain purged — {Deleted}/{Total} note(s) deleted.", deleted, noteIds.Count);
         return deleted;
     }
@@ -172,8 +189,10 @@ public class BrainService
         string? existingId = await FindNoteId(name);
         if (existingId is not null)
         {
+            string[] folders = FolderPath(add.NoteName);
             await trilium.UpdateNoteContent(existingId, resolved);
-            noteFolderCache[existingId] = string.Join("/", FolderPath(add.NoteName));
+            noteFolderCache[existingId] = string.Join("/", folders);
+            UpdateContentCache(name, string.Join("/", folders), resolved);
             Common.Logger.LogInformation("added (updated): {Name}", add.NoteName);
         }
         else
@@ -183,6 +202,7 @@ public class BrainService
             noteIdCache[name]   = id;
             branchIdCache[id]   = branchId;
             noteFolderCache[id] = string.Join("/", folders);
+            UpdateContentCache(name, string.Join("/", folders), resolved);
             Common.Logger.LogInformation("added: {Name}", add.NoteName);
         }
     }
@@ -201,6 +221,8 @@ public class BrainService
         string html     = MarkdownConverter.ToHtml(edit.Content);
         string resolved = MarkdownConverter.ResolveLinks(html, await ResolveLinkNames(html));
         await trilium.UpdateNoteContent(noteId, resolved);
+        string currentFolder = noteFolderCache.TryGetValue(noteId, out string? cf) ? cf : "Unknown";
+        UpdateContentCache(currentName, currentFolder, resolved);
         Common.Logger.LogInformation("edited: {Name}", currentName);
 
         if (string.IsNullOrWhiteSpace(edit.NewNoteName)) return;
@@ -219,6 +241,8 @@ public class BrainService
             await trilium.RenameNote(noteId, newName);
             noteIdCache.Remove(currentName);
             noteIdCache[newName] = noteId;
+            // Old name entries are now stale; new name will be populated on next read.
+            InvalidateContentCache(currentName);
             Common.Logger.LogInformation("moved+renamed: {From} → {To}", edit.NoteName, edit.NewNoteName);
         }
         else
@@ -262,6 +286,57 @@ public class BrainService
         noteFolderCache[newId] = "Unknown";
         Common.Logger.LogInformation("created stub: {Name}", name);
         return newId;
+    }
+
+    // ── Content cache ─────────────────────────────────────────────────────────────
+
+    private bool TryGetCachedContent(string key, out string? content)
+    {
+        if (contentCacheSize <= 0 || !contentCacheStore.TryGetValue(key, out content))
+        {
+            content = null;
+            return false;
+        }
+
+        contentCacheOrder.Remove(key);
+        contentCacheOrder.AddFirst(key);
+        return true;
+    }
+
+    private void AddContentToCache(string key, string content)
+    {
+        if (contentCacheSize <= 0) return;
+
+        if (contentCacheStore.ContainsKey(key))
+        {
+            contentCacheOrder.Remove(key);
+        }
+        else if (contentCacheStore.Count >= contentCacheSize)
+        {
+            string oldest = contentCacheOrder.Last!.Value;
+            contentCacheOrder.RemoveLast();
+            contentCacheStore.Remove(oldest);
+        }
+
+        contentCacheStore[key] = content;
+        contentCacheOrder.AddFirst(key);
+    }
+
+    private void UpdateContentCache(string name, string folder, string resolvedHtml)
+    {
+        string markdown = MarkdownConverter.FromHtml(resolvedHtml);
+        AddContentToCache(name, resolvedHtml);
+        AddContentToCache($"\x00markdown\x00{name}", $"Path: {folder}/{name}\n\n{markdown}");
+    }
+
+    private void InvalidateContentCache(string name)
+    {
+        if (contentCacheStore.Remove(name))
+            contentCacheOrder.Remove(name);
+
+        string markdownKey = $"\x00markdown\x00{name}";
+        if (contentCacheStore.Remove(markdownKey))
+            contentCacheOrder.Remove(markdownKey);
     }
 
     // ── Path helpers ──────────────────────────────────────────────────────────────

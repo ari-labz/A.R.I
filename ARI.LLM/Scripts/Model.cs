@@ -28,10 +28,13 @@ internal class Model
     internal IReadOnlyList<ChatMessage> GetThreadHistory(string threadKey)
         => threads.TryGetValue(threadKey, out Thread? t) ? t.GetHistory() : Array.Empty<ChatMessage>();
 
+    internal IReadOnlyList<ChatMessage> GetThreadDisplayHistory(string threadKey)
+        => threads.TryGetValue(threadKey, out Thread? t) ? t.GetDisplayHistory() : Array.Empty<ChatMessage>();
+
     internal DateTime GetThreadLastMessageAt(string threadKey)
         => threads.TryGetValue(threadKey, out Thread? t) ? t.LastMessageAt : DateTime.MinValue;
 
-    protected Task<string> PromptThread(string threadKey, string prompt, string? contextNote = null)
+    protected Task<string> PromptThread(string threadKey, string prompt, string? contextNote = null, string? originalUserMessage = null, string? recallNotes = null, string? contextSummary = null)
     {
         if (!threads.TryGetValue(threadKey, out Thread? thread))
         {
@@ -39,7 +42,7 @@ internal class Model
             OnThreadCreated(threadKey, thread);
             threads[threadKey] = thread;
         }
-        return thread.SendPrompt(prompt);
+        return thread.SendPrompt(prompt, originalUserMessage, recallNotes, contextSummary);
     }
 
     protected virtual void OnThreadCreated(string threadKey, Thread thread) { }

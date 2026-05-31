@@ -1,4 +1,4 @@
-namespace ControlPanel.Models;
+namespace ARI.WebPanel.Models;
 
 public class ErrorViewModel
 {

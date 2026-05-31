@@ -14,6 +14,14 @@ public class BrainConfig
     [JsonPropertyName("RootNoteId")]
     public string RootNoteId { get; set; } = "root";
 
+    /// <summary>
+    /// Maximum number of note contents held in BrainService's in-memory cache.
+    /// Most-recently used notes are at the front; when full the oldest is evicted.
+    /// Set to 0 to disable caching. Default 500.
+    /// </summary>
+    [JsonPropertyName("ContentCacheSize")]
+    public int ContentCacheSize { get; set; } = 500;
+
     public static BrainConfig LoadFrom(string path)
     {
         string json = File.ReadAllText(path);
