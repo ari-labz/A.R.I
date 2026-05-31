@@ -8,6 +8,7 @@ public class AriConfig
     public TriliumConfig Trilium { get; init; }
     public DockerConfig Docker { get; init; }
     public ModulesConfig Modules { get; init; }
+    public WebPanelConfig WebPanel { get; init; } = new();
 
     public static AriConfig LoadFrom(string path)
     {
@@ -55,4 +56,10 @@ public class DockerConfig
 public class ModulesConfig
 {
     public bool Discord { get; init; }
+    public bool WebPanel { get; init; }
+}
+
+public class WebPanelConfig
+{
+    public int Port { get; init; } = 5000;
 }

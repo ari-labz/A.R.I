@@ -13,10 +13,12 @@ internal class Engram : Model, IDisposable
     private readonly Context? context;
 
     private readonly Dictionary<string, DateTime> lastEngramRun = new();
+    private readonly Dictionary<string, int> lastEngramHistoryCount = new();
     private readonly SemaphoreSlim engramLock = new(1, 1);
     private readonly Timer? sweepTimer;
     private readonly int fetchDepth;
     private TimeSpan sweepInterval;
+    private readonly HttpClient httpClient = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
 
     internal Engram(ModelConfig config, Dialogue dialogue, BrainService brain, Context? context, int sweepIntervalMinutes, int fetchDepth = 7) : base(config)
     {
@@ -42,6 +44,7 @@ internal class Engram : Model, IDisposable
     {
         sweepTimer?.Dispose();
         engramLock.Dispose();
+        httpClient.Dispose();
     }
 
     // ── Private ──────────────────────────────────────────────────────────────────
@@ -72,7 +75,15 @@ internal class Engram : Model, IDisposable
         if (!await engramLock.WaitAsync(0)) return;
         try
         {
-            lastEngramRun[threadKey] = DateTime.UtcNow;
+            // Slice to messages since the last Engram run on this thread.
+            int lastCount = lastEngramHistoryCount.TryGetValue(threadKey, out int c) ? c : 0;
+            IReadOnlyList<ChatMessage> recentMessages = history.Skip(lastCount).ToList();
+
+            lastEngramRun[threadKey]          = DateTime.UtcNow;
+            lastEngramHistoryCount[threadKey] = history.Count;
+
+            // Pre-classify: skip extraction if recent conversation contains nothing worth storing.
+            if (!await ClassifyConversationAsync(recentMessages, trigger)) return;
 
             List<string> existingNotes = await brain.GetNoteTitles();
             string existingNotesList   = existingNotes.Count > 0 ? string.Join(", ", existingNotes) : "none";
@@ -129,7 +140,7 @@ internal class Engram : Model, IDisposable
                 StringBuilder sb = new();
                 foreach (string name in toFetch)
                 {
-                    string? noteContent = await brain.GetNoteForEngram(name);
+                    string? noteContent = await brain.GetNote(name);
                     if (noteContent is null) continue;
                     alreadyFetched.Add(name);
                     sb.AppendLine($"--- {name} ---");
@@ -167,6 +178,64 @@ internal class Engram : Model, IDisposable
         finally
         {
             engramLock.Release();
+        }
+    }
+
+    private async Task<bool> ClassifyConversationAsync(IReadOnlyList<ChatMessage> recentMessages, string trigger)
+    {
+        string transcript = BuildTranscript(recentMessages);
+        if (string.IsNullOrWhiteSpace(transcript))
+        {
+            Common.Logger.LogInformation("[Engram] [{Trigger}] no new messages to classify, skipping.", trigger);
+            return false;
+        }
+
+        object requestBody = new
+        {
+            model    = ModelString,
+            messages = new[]
+            {
+                new { role = "system", content = "You classify whether a conversation contains information worth storing as a long-term memory.\n<|think_off|>" },
+                new { role = "user",   content =
+                    "Does the following conversation contain anything worth storing as a long-term memory — " +
+                    "personal facts, relationships, events, or world knowledge about the user or their life?\n\n" +
+                    "A purely task-focused exchange (coding, debugging, technical problem-solving, or general Q&A) does NOT qualify.\n\n" +
+                    $"CONVERSATION:\n{transcript}\n\n" +
+                    "Respond with only 'yes' or 'no'." }
+            },
+            stream      = false,
+            max_tokens  = 5,
+            temperature = 0.0
+        };
+
+        string json = JsonSerializer.Serialize(requestBody);
+        HttpRequestMessage request = new(HttpMethod.Post, $"{Endpoint}/v1/chat/completions")
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json")
+        };
+
+        try
+        {
+            HttpResponseMessage response = await httpClient.SendAsync(request);
+            response.EnsureSuccessStatusCode();
+            string responseJson = await response.Content.ReadAsStringAsync();
+            using JsonDocument doc = JsonDocument.Parse(responseJson);
+            string answer = doc.RootElement
+                .GetProperty("choices")[0]
+                .GetProperty("message")
+                .GetProperty("content")
+                .GetString() ?? string.Empty;
+
+            bool worthStoring = answer.Trim().StartsWith("yes", StringComparison.OrdinalIgnoreCase);
+            if (!worthStoring)
+                Common.Logger.LogInformation("[Engram] [{Trigger}] classified as task-only, skipping extraction.", trigger);
+            return worthStoring;
+        }
+        catch (Exception ex)
+        {
+            // On failure, fall through to extraction rather than silently dropping memories.
+            Common.Logger.LogWarning("[Engram] Classification failed ({Error}), proceeding with extraction.", ex.Message);
+            return true;
         }
     }
 

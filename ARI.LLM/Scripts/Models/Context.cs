@@ -10,10 +10,12 @@ internal class Context : Model
     private readonly HttpClient httpClient;
     private readonly Dictionary<string, string> contexts = new();
     private readonly SemaphoreSlim updateLock = new(1, 1);
+    private readonly string resolvedPrompt;
 
-    internal Context(ModelConfig config) : base(config)
+    internal Context(ModelConfig config, int shortTermMemoryLimit) : base(config)
     {
-        httpClient = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+        httpClient     = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+        resolvedPrompt = config.SystemPrompt.Replace("{memoryLimit}", shortTermMemoryLimit.ToString());
     }
 
     internal string GetContext(string threadKey)
@@ -94,7 +96,7 @@ internal class Context : Model
             model    = ModelString,
             messages = new[]
             {
-                new { role = "system", content = SystemPrompt + "\n<|think_off|>" },
+                new { role = "system", content = resolvedPrompt + "\n<|think_off|>" },
                 new { role = "user",   content =
                     $"CURRENT CONTEXT:\n{contextBlock}\n\n" +
                     $"FULL CONVERSATION:\n{transcript}\n\n" +
@@ -146,7 +148,7 @@ internal class Context : Model
             model    = ModelString,
             messages = new[]
             {
-                new { role = "system", content = SystemPrompt + "\n<|think_off|>" },
+                new { role = "system", content = resolvedPrompt + "\n<|think_off|>" },
                 new { role = "user",   content =
                     $"CURRENT CONTEXT:\n{contextBlock}\n\n" +
                     $"NEW EXCHANGE:\nWren: {userMessage}\nARI: {assistantResponse}\n\n" +

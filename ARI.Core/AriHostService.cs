@@ -1,6 +1,7 @@
 using ARI.Core.Scripts;
 using ARI.Discord;
 using ARI.LLM;
+using ARI.WebPanel;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Common = ARI.Core.Scripts.Common;
@@ -13,6 +14,7 @@ public class AriHostService : BackgroundService
     private Docker? docker;
     private LocalLlamaServer? llamaServer;
     private DiscordService? discordService;
+    private WebPanelService? webPanelService;
     private bool containersStarted;
     private bool startupFailed;
 
@@ -42,6 +44,15 @@ public class AriHostService : BackgroundService
         string executableDirectory = AppDomain.CurrentDomain.BaseDirectory;
         AriConfig config = AriConfig.LoadFrom(Path.Combine(executableDirectory, "AriConfig.json"));
 
+        // Start web panel immediately so the browser never gets "connection refused"
+        // It serves 503 until LlmService is ready later in startup
+        if (config.Modules.WebPanel)
+        {
+            Common.Logger.LogInformation("Web panel module is enabled. Starting on port {Port}...", config.WebPanel.Port);
+            webPanelService = new WebPanelService(loggerFactory, config.WebPanel.Port);
+            await webPanelService.StartAsync(stoppingToken);
+        }
+
         string fullComposePath = Path.Combine(executableDirectory, config.Docker.ComposePath);
         docker = new Docker(fullComposePath);
 
@@ -66,16 +77,24 @@ public class AriHostService : BackgroundService
 
         Common.Logger.LogInformation("ARI is ready.");
 
+        // Give the web panel the LlmService now that it's ready
+        webPanelService?.Holder.Set(llmService);
+
+        List<Task> moduleTasks = new();
+
         if (config.Modules.Discord)
         {
             Common.Logger.LogInformation("Discord module is enabled. Starting...");
             discordService = new DiscordService(loggerFactory, llmService);
             await discordService.StartAsync(stoppingToken);
-
-            await Task.WhenAny(discordService.ExecuteTask ?? Task.CompletedTask, Task.Delay(Timeout.Infinite, stoppingToken));
+            if (discordService.ExecuteTask is not null)
+                moduleTasks.Add(discordService.ExecuteTask);
         }
 
-        await Task.Delay(Timeout.Infinite, stoppingToken);
+        if (moduleTasks.Count > 0)
+            await Task.WhenAny(moduleTasks.Concat(new[] { Task.Delay(Timeout.Infinite, stoppingToken) }));
+        else
+            await Task.Delay(Timeout.Infinite, stoppingToken);
     }
 
     public override async Task StopAsync(CancellationToken cancellationToken)
@@ -86,6 +105,9 @@ public class AriHostService : BackgroundService
 
         if (discordService != null)
             await discordService.NotifyOfflineAsync();
+
+        if (webPanelService is not null)
+            await webPanelService.StopAsync(cancellationToken);
 
         llamaServer?.Stop();
 
