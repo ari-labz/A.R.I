@@ -61,6 +61,17 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
         return Ok(messages);
     }
 
+    [HttpPost("~/api/commands")]
+    public async Task<IActionResult> RunCommand([FromBody] CommandRequest req)
+    {
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        if (string.IsNullOrWhiteSpace(req.Input)) return BadRequest("Input is required.");
+
+        string? result = await Llm.HandleCommandAsync(req.Input);
+        if (result is null) return BadRequest($"Unknown command: {req.Input}");
+        return Ok(new { result });
+    }
+
     [HttpGet("{threadKey}/stream")]
     public async Task Stream(string threadKey, [FromQuery] string prompt, CancellationToken cancellationToken)
     {
@@ -90,3 +101,5 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
         await Response.Body.FlushAsync(cancellationToken);
     }
 }
+
+public record CommandRequest(string Input);

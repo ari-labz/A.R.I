@@ -182,6 +182,16 @@ public class TriliumClient
         folderCache.Clear();
     }
 
+    /// <summary>Returns the first branch ID for a note, or null if not found.</summary>
+    public async Task<string?> GetPrimaryBranchId(string noteId)
+    {
+        HttpResponseMessage res = await http.GetAsync($"etapi/notes/{noteId}");
+        if (!res.IsSuccessStatusCode) return null;
+        JsonNode? node = JsonNode.Parse(await res.Content.ReadAsStringAsync());
+        JsonArray? branchIds = node?["branchIds"] as JsonArray;
+        return branchIds?.FirstOrDefault()?.GetValue<string>();
+    }
+
     public async Task DeleteNote(string noteId)
     {
         HttpResponseMessage res = await http.DeleteAsync($"etapi/notes/{noteId}");

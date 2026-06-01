@@ -9,6 +9,7 @@ public class LlmService : IDisposable
     private readonly Context? context;
     private readonly Recall? recall;
     private readonly Engram? engram;
+    private readonly CommandService commands;
 
     public LlmService(string modelsConfigPath, string? brainConfigPath = null, ILoggerFactory? loggerFactory = null)
     {
@@ -47,6 +48,12 @@ public class LlmService : IDisposable
                 engram = new Engram(engramConfig, dialogue, brain, context, engramConfig.SweepIntervalMinutes, engramConfig.RecursiveBrainSearchDepth);
                 Common.Logger.LogInformation("Engram is active. Brain connected.");
             }
+
+            commands = new CommandService(engram, brain.PurgeAllNotes);
+        }
+        else
+        {
+            commands = new CommandService(engram);
         }
     }
 
@@ -77,7 +84,11 @@ public class LlmService : IDisposable
         return await dialogue.SendPrompt(threadKey, prompt, contextNote, recallBlock, contextSummary);
     }
 
-    public Task<int> PurgeNotes() => engram?.PurgeNotes() ?? Task.FromResult(0);
+    /// <summary>
+    /// Passes a slash command to the CommandService for processing.
+    /// Returns a human-readable result, or null if the input is not a recognised command.
+    /// </summary>
+    public Task<string?> HandleCommandAsync(string input) => commands.HandleAsync(input);
 
     public void Dispose() => engram?.Dispose();
 }

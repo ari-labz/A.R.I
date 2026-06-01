@@ -230,9 +230,13 @@ public class BrainService
         string newName    = NoteName(edit.NewNoteName);
         string[] newFolders = FolderPath(edit.NewNoteName);
 
-        if (branchIdCache.TryGetValue(noteId, out string? branchId))
+        if (!branchIdCache.TryGetValue(noteId, out string? branchId))
+            branchId = await trilium.GetPrimaryBranchId(noteId);
+
+        if (!string.IsNullOrEmpty(branchId))
         {
-            await trilium.MoveNoteToFolderPath(branchId, noteId, newFolders);
+            string newBranchId = await trilium.MoveNoteToFolderPath(branchId, noteId, newFolders);
+            branchIdCache[noteId] = newBranchId;
             noteFolderCache[noteId] = string.Join("/", newFolders);
         }
 
@@ -274,8 +278,11 @@ public class BrainService
 
     private async Task<string> EnsureNoteExists(string name)
     {
-        string? id = await FindNoteId(name);
+        // Strip any folder prefix — [[Hardware/MacBook Studio M3 Ultra]] should resolve to "MacBook Studio M3 Ultra".
+        string normalizedName = NoteName(name);
+        string? id = await FindNoteId(normalizedName);
         if (id is not null) return id;
+        name = normalizedName;
 
         string stubHtml = MarkdownConverter.ToHtml(
             $"# {name}\n\nMentioned in conversation. No further details yet.");

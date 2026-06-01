@@ -38,6 +38,35 @@ internal class Engram : Model, IDisposable
         }
     }
 
+    internal bool IsEnabled { get; private set; } = true;
+
+    internal void Enable()
+    {
+        IsEnabled = true;
+        Common.Logger.LogInformation("[Engram] Enabled.");
+    }
+
+    internal void Disable()
+    {
+        IsEnabled = false;
+        Common.Logger.LogInformation("[Engram] Disabled.");
+    }
+
+    /// <summary>
+    /// Manually triggers a sweep of all active threads, regardless of the sweep timer.
+    /// Respects the enabled flag — if Engram is disabled, the sweep is a no-op.
+    /// </summary>
+    internal async Task ManualSweepAsync()
+    {
+        if (!IsEnabled)
+        {
+            Common.Logger.LogInformation("[Engram] Manual sweep requested but Engram is disabled.");
+            return;
+        }
+        Common.Logger.LogInformation("[Engram] Manual sweep triggered.");
+        await SweepThreadsAsync(resetTimer: false);
+    }
+
     internal Task<int> PurgeNotes() => brain.PurgeAllNotes();
 
     public void Dispose()
@@ -49,7 +78,7 @@ internal class Engram : Model, IDisposable
 
     // ── Private ──────────────────────────────────────────────────────────────────
 
-    private async Task SweepThreadsAsync()
+    private async Task SweepThreadsAsync(bool resetTimer = true)
     {
         try
         {
@@ -66,12 +95,14 @@ internal class Engram : Model, IDisposable
         }
         finally
         {
-            sweepTimer?.Change(sweepInterval, Timeout.InfiniteTimeSpan);
+            if (resetTimer)
+                sweepTimer?.Change(sweepInterval, Timeout.InfiniteTimeSpan);
         }
     }
 
     private async Task RunEngramAsync(string threadKey, IReadOnlyList<ChatMessage> history, string trigger)
     {
+        if (!IsEnabled) return;
         if (!await engramLock.WaitAsync(0)) return;
         try
         {
