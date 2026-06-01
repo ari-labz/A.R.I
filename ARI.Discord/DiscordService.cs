@@ -96,10 +96,15 @@ public class DiscordService : BackgroundService
             return;
         }
 
-        if (message.Content.Equals("/purge notes", StringComparison.OrdinalIgnoreCase))
+        if (message.Content.StartsWith("/", StringComparison.OrdinalIgnoreCase))
         {
-            await HandlePurgeNotesCommandAsync(message);
-            return;
+            string? result = await llmService.HandleCommandAsync(message.Content);
+            if (result is not null)
+            {
+                Common.Logger.LogInformation("Command [{Input}] → {Result}", message.Content, result);
+                await message.Channel.SendMessageAsync(result);
+                return;
+            }
         }
 
         string conversationKey = $"dm:{message.Author.Id}";
@@ -183,13 +188,6 @@ public class DiscordService : BackgroundService
             Common.Logger.LogError("Dialogue model not available: {Error}", ex.Message);
             await message.Channel.SendMessageAsync("Ari is unable to respond right now.");
         }
-    }
-
-    private async Task HandlePurgeNotesCommandAsync(SocketMessage message)
-    {
-        Common.Logger.LogInformation("Owner requested brain purge.");
-        int deleted = await llmService.PurgeNotes();
-        await message.Channel.SendMessageAsync($"Purged {deleted} notes from the brain.");
     }
 
     private async Task HandleWhitelistCommandAsync(SocketMessage message)
