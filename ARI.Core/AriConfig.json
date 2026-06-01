@@ -4,7 +4,12 @@
     "WebPanel": true
   },
   "WebPanel": {
-    "Port": 5000
+    "Port": 5074,
+    "Google": {
+      "ClientId": "886723798260-eapta34u4n4bug81ut10bq2399leu9vn.apps.googleusercontent.com",
+      "ClientSecret": "[REDACTED]",
+      "AllowedEmail": "owner@example.com"
+    }
   },
   "LlamaServer": {
     "Endpoint": "http://localhost:8081",

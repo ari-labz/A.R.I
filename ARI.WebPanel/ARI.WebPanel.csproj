@@ -15,4 +15,8 @@
     <ProjectReference Include="..\ARI.LLM\ARI.LLM.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.Google" Version="10.0.8" />
+  </ItemGroup>
+
 </Project>

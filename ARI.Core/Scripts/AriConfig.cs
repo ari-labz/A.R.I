@@ -62,4 +62,14 @@ public class ModulesConfig
 public class WebPanelConfig
 {
     public int Port { get; init; } = 5000;
+    public GoogleAuthConfig Google { get; init; } = new();
 }
+
+public class GoogleAuthConfig
+{
+    public string ClientId { get; init; } = "";
+    public string ClientSecret { get; init; } = "";
+    public string AllowedEmail { get; init; } = "";
+}
+
+

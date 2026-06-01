@@ -12,6 +12,10 @@
   		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
   		<Link>compose.yaml</Link>
   	</Content>
+  	<Content Include="..\\.env">
+  		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+  		<Link>.env</Link>
+  	</Content>
   	<Content Include="..\ARI.LLM\AriModels.json">
   		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
   		<Link>AriModels.json</Link>
