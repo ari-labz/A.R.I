@@ -281,6 +281,75 @@ public class BrainService
         return deleted;
     }
 
+    // ── Dirty set ─────────────────────────────────────────────────────────────────
+
+    private const string DirtyLabel = "ariDirty";
+
+    /// <summary>
+    /// Marks notes as dirty by attaching an #ariDirty label in Trilium.
+    /// Called by Engram after every write so Refactor knows what changed.
+    /// Already-dirty notes are skipped (no duplicate labels created).
+    /// </summary>
+    public async Task MarkDirty(IEnumerable<string> titles)
+    {
+        if (!triliumReady) return;
+        foreach (string title in titles)
+        {
+            string? noteId = await FindNoteId(title);
+            if (noteId is null) continue;
+
+            // Skip if already marked
+            var attrs = await trilium.GetNoteAttributes(noteId);
+            if (attrs.Any(a => a.Type == "label" && a.Name == DirtyLabel)) continue;
+
+            try { await trilium.CreateLabelAttribute(noteId, DirtyLabel); }
+            catch (Exception ex) { Common.Logger.LogWarning("[Brain] MarkDirty failed for '{Title}': {Msg}", title, ex.Message); }
+        }
+    }
+
+    /// <summary>Returns the bare titles of all notes currently marked #ariDirty.</summary>
+    public async Task<List<string>> GetDirtyNotes()
+    {
+        if (!triliumReady) return new();
+        List<string> noteIds = await trilium.SearchNoteIdsByLabel(DirtyLabel);
+        var titles = new List<string>();
+        foreach (string id in noteIds)
+        {
+            string? title = noteIdCache.FirstOrDefault(kv => kv.Value == id).Key;
+            if (title is not null) titles.Add(title);
+        }
+        return titles;
+    }
+
+    /// <summary>Removes the #ariDirty label from the given notes after a successful refactor pass.</summary>
+    public async Task ClearDirty(IEnumerable<string> titles)
+    {
+        if (!triliumReady) return;
+        foreach (string title in titles)
+        {
+            string? noteId = await FindNoteId(title);
+            if (noteId is null) continue;
+
+            var attrs = await trilium.GetNoteAttributes(noteId);
+            foreach (var (attrId, type, name, _) in attrs)
+                if (type == "label" && name == DirtyLabel)
+                    try { await trilium.DeleteAttribute(attrId); }
+                    catch (Exception ex) { Common.Logger.LogWarning("[Brain] ClearDirty failed for '{Title}': {Msg}", title, ex.Message); }
+        }
+    }
+
+    /// <summary>
+    /// Returns bare titles of all notes whose top-level folder matches <paramref name="folderPath"/>.
+    /// Pure in-memory lookup — no network calls.
+    /// Pass an empty string to get root-level notes (hub notes with no folder).
+    /// </summary>
+    public List<string> GetTitlesByFolder(string folderPath)
+        => noteIdCache
+            .Where(kv => noteFolderCache.TryGetValue(kv.Value, out string? f)
+                         && string.Equals(f, folderPath, StringComparison.OrdinalIgnoreCase))
+            .Select(kv => kv.Key)
+            .ToList();
+
     public async Task<List<string>> SearchNote(string searchTerm)
     {
         if (!triliumReady) return new List<string>();

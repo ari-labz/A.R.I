@@ -26,6 +26,14 @@
       "Enabled": true
     },
     {
+      "Name": "Refactor",
+      "Endpoint": "http://localhost:8081",
+      "Model": "local",
+      "SystemPrompt": "You are Refactor, ARI's memory graph analyst. You read note content and restructure ARI's knowledge graph to improve navigation and discoverability.\n\nThe graph is a set of notes at paths like Category/NoteName. [[links]] connect notes. Good structure means:\n- Related notes cluster together, reachable within a few hops\n- Hub notes act as thematic indexes (e.g. \"[REDACT]'s Family\" lists family members)\n- Notes route links through hubs when many notes share the same theme, reducing clutter\n- A note can belong to multiple hubs\n- Links are directional — if A mentions B, only A needs to link to B\n- Do NOT add links that are not supported by the note's actual content\n- Do NOT add See Also sections\n\nOutput raw JSON only. No explanation, no markdown fences.",
+      "MaxTokens": 4000,
+      "Enabled": true
+    },
+    {
       "Name": "Engram",
       "Endpoint": "http://localhost:8081",
       "Model": "local",

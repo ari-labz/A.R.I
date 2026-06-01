@@ -8,13 +8,15 @@ namespace ARI.LLM;
 /// </summary>
 internal class CommandService
 {
-    private readonly Engram? engram;
+    private readonly Engram?   engram;
+    private readonly Refactor? refactor;
     private readonly Func<Task<int>>?    purgeNotes;
     private readonly Func<Task<string>>? backupBrain;
 
-    internal CommandService(Engram? engram, Func<Task<int>>? purgeNotes = null, Func<Task<string>>? backupBrain = null)
+    internal CommandService(Engram? engram, Refactor? refactor = null, Func<Task<int>>? purgeNotes = null, Func<Task<string>>? backupBrain = null)
     {
         this.engram      = engram;
+        this.refactor    = refactor;
         this.purgeNotes  = purgeNotes;
         this.backupBrain = backupBrain;
     }
@@ -34,10 +36,11 @@ internal class CommandService
 
         return command switch
         {
-            "/engram" => await HandleEngramAsync(sub),
-            "/purge"  => sub == "notes" ? await HandlePurgeNotesAsync() : null,
-            "/brain"  => sub == "backup" ? await HandleBrainBackupAsync() : null,
-            _         => null
+            "/engram"   => await HandleEngramAsync(sub),
+            "/refactor" => await HandleRefactorAsync(sub),
+            "/purge"    => sub == "notes" ? await HandlePurgeNotesAsync() : null,
+            "/brain"    => sub == "backup" ? await HandleBrainBackupAsync() : null,
+            _           => null
         };
     }
 
@@ -49,12 +52,11 @@ internal class CommandService
 
         return sub switch
         {
-            "on"      => EngramEnable(),
-            "off"     => EngramDisable(),
-            "sweep"   => await EngramSweepAsync(),
-            "status"  => EngramStatus(),
-            "refactor" => await EngramRefactorAsync(),
-            _         => "Unknown engram command. Options: `/engram on`, `/engram off`, `/engram sweep`, `/engram status`, `/engram refactor`"
+            "on"     => EngramEnable(),
+            "off"    => EngramDisable(),
+            "sweep"  => await EngramSweepAsync(),
+            "status" => EngramStatus(),
+            _        => "Unknown engram command. Options: `/engram on`, `/engram off`, `/engram sweep`, `/engram status`"
         };
     }
 
@@ -79,10 +81,14 @@ internal class CommandService
     private string EngramStatus()
         => engram!.IsEnabled ? "Engram is currently **enabled**." : "Engram is currently **disabled**.";
 
-    private async Task<string> EngramRefactorAsync()
+    // ── /refactor ─────────────────────────────────────────────────────────────────
+
+    private async Task<string> HandleRefactorAsync(string sub)
     {
-        Common.Logger.LogInformation("[Commands] Graph refactor requested.");
-        return await engram!.RefactorAsync();
+        if (refactor is null) return "Refactor is not loaded.";
+        bool allNotes = sub == "all";
+        Common.Logger.LogInformation("[Commands] Refactor requested (mode: {Mode}).", allNotes ? "all" : "incremental");
+        return await refactor.RunAsync(allNotes);
     }
 
     // ── /purge notes ──────────────────────────────────────────────────────────────

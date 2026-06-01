@@ -5,10 +5,11 @@ namespace ARI.LLM;
 
 public class LlmService : IDisposable
 {
-    private readonly Dialogue? dialogue;
-    private readonly Context? context;
-    private readonly Recall? recall;
-    private readonly Engram? engram;
+    private readonly Dialogue?  dialogue;
+    private readonly Context?   context;
+    private readonly Recall?    recall;
+    private readonly Engram?    engram;
+    private readonly Refactor?  refactor;
     private readonly CommandService commands;
 
     public LlmService(string modelsConfigPath, string? brainConfigPath = null, ILoggerFactory? loggerFactory = null)
@@ -49,7 +50,13 @@ public class LlmService : IDisposable
                 Common.Logger.LogInformation("Engram is active. Brain connected.");
             }
 
-            commands = new CommandService(engram, brain.PurgeAllNotes, brain.BackupAsync);
+            if (enabled.TryGetValue("Refactor", out ModelConfig? refactorConfig))
+            {
+                refactor = new Refactor(refactorConfig, brain);
+                Common.Logger.LogInformation("Refactor is active.");
+            }
+
+            commands = new CommandService(engram, refactor, brain.PurgeAllNotes, brain.BackupAsync);
         }
         else
         {
@@ -88,18 +95,20 @@ public class LlmService : IDisposable
             }
         }
 
-        Add(engram,  "Engram");
-        Add(recall,  "Recall");
-        Add(context, "Context");
+        Add(engram,    "Engram");
+        Add(refactor,  "Refactor");
+        Add(recall,    "Recall");
+        Add(context,   "Context");
         return result;
     }
 
     // Returns the raw message history (including system messages) for an internal thread.
     public IReadOnlyList<ChatMessage> GetInternalThreadHistory(string threadKey)
     {
-        if (engram?.ThreadKeys.Contains(threadKey)  == true) return engram.GetThreadHistory(threadKey);
-        if (recall?.ThreadKeys.Contains(threadKey)  == true) return recall.GetThreadHistory(threadKey);
-        if (context?.ThreadKeys.Contains(threadKey) == true) return context.GetThreadHistory(threadKey);
+        if (engram?.ThreadKeys.Contains(threadKey)    == true) return engram.GetThreadHistory(threadKey);
+        if (refactor?.ThreadKeys.Contains(threadKey)  == true) return refactor.GetThreadHistory(threadKey);
+        if (recall?.ThreadKeys.Contains(threadKey)    == true) return recall.GetThreadHistory(threadKey);
+        if (context?.ThreadKeys.Contains(threadKey)   == true) return context.GetThreadHistory(threadKey);
         return Array.Empty<ChatMessage>();
     }
 
