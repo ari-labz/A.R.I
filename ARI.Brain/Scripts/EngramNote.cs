@@ -12,3 +12,9 @@ public class EngramEdit
     public string? NewNoteName { get; init; }                  // new path if moving e.g. "Games/VRChat"
     public string  Content     { get; init; } = string.Empty; // full markdown replacement
 }
+
+public class EngramDelete
+{
+    public string NoteName { get; init; } = string.Empty; // title of the note to delete (bare name, no folder prefix)
+    public string Reason   { get; init; } = string.Empty; // logged but not written to Trilium
+}

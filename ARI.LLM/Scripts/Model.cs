@@ -7,6 +7,7 @@ internal class Model
     internal readonly string ModelString;
     internal readonly string SystemPrompt;
     internal readonly int ShortTermMemoryLimit;
+    internal readonly int MaxContextTokens;
     internal readonly int MaxTokens;
     internal readonly string? ExtractionPrompt;
 
@@ -19,6 +20,7 @@ internal class Model
         ModelString          = config.Model;
         SystemPrompt         = config.SystemPrompt;
         ShortTermMemoryLimit = config.ShortTermMemoryLimit;
+        MaxContextTokens     = config.MaxContextTokens;
         MaxTokens            = config.MaxTokens;
         ExtractionPrompt     = config.ExtractionPrompt;
     }
@@ -34,7 +36,7 @@ internal class Model
     internal DateTime GetThreadLastMessageAt(string threadKey)
         => threads.TryGetValue(threadKey, out Thread? t) ? t.LastMessageAt : DateTime.MinValue;
 
-    protected Task<string> PromptThread(string threadKey, string prompt, string? contextNote = null, string? originalUserMessage = null, string? recallNotes = null, string? contextSummary = null)
+    protected Task<string> PromptThread(string threadKey, string prompt, string? contextNote = null, string? originalUserMessage = null, string? recallNotes = null, string? contextSummary = null, int maxTokensOverride = 0)
     {
         if (!threads.TryGetValue(threadKey, out Thread? thread))
         {
@@ -42,7 +44,19 @@ internal class Model
             OnThreadCreated(threadKey, thread);
             threads[threadKey] = thread;
         }
-        return thread.SendPrompt(prompt, originalUserMessage, recallNotes, contextSummary);
+        return thread.SendPrompt(prompt, originalUserMessage, recallNotes, contextSummary, maxTokensOverride);
+    }
+
+    // Returns a snapshot of a thread's short-term memory for use as a ContextCache.
+    protected IReadOnlyList<ChatMessage> GetThreadSnapshot(string threadKey)
+        => threads.TryGetValue(threadKey, out Thread? t) ? t.GetShortTermMemoryCopy() : Array.Empty<ChatMessage>();
+
+    // Sends a single prompt to an ephemeral thread seeded from a ContextCache.
+    // The thread is not stored in the threads dictionary — it exists only for this call.
+    protected Task<string> PromptAdHocThread(IReadOnlyList<ChatMessage> seedMessages, string prompt, int maxTokensOverride = 0)
+    {
+        Thread thread = new Thread(this, $"adhoc:{Guid.NewGuid()}", seedMessages);
+        return thread.SendPrompt(prompt, maxTokensOverride: maxTokensOverride);
     }
 
     protected virtual void OnThreadCreated(string threadKey, Thread thread) { }

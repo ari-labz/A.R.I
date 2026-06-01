@@ -38,7 +38,7 @@ public class LlmService : IDisposable
 
             if (enabled.TryGetValue("Recall", out ModelConfig? recallConfig) && recallConfig.RecursiveBrainSearchDepth > 0)
             {
-                recall = new Recall(recallConfig, brain, recallConfig.RecursiveBrainSearchDepth, recallConfig.CacheSize);
+                recall = new Recall(recallConfig, brain, recallConfig.RecursiveBrainSearchDepth);
                 Common.Logger.LogInformation("Recall is active. Depth: {Depth}, Cache: {Cache}.",
                     recallConfig.RecursiveBrainSearchDepth, recallConfig.CacheSize > 0 ? recallConfig.CacheSize : 0);
             }
@@ -49,7 +49,7 @@ public class LlmService : IDisposable
                 Common.Logger.LogInformation("Engram is active. Brain connected.");
             }
 
-            commands = new CommandService(engram, brain.PurgeAllNotes);
+            commands = new CommandService(engram, brain.PurgeAllNotes, brain.BackupAsync);
         }
         else
         {
@@ -68,6 +68,42 @@ public class LlmService : IDisposable
 
     public DateTime GetThreadLastMessageAt(string threadKey)
         => dialogue?.GetThreadLastMessageAt(threadKey) ?? DateTime.MinValue;
+
+    // Returns metadata for all internal model threads (Engram, Recall, Context).
+    // Context threads that share a key with a Dialogue thread are excluded to avoid duplication.
+    public IReadOnlyList<InternalThreadInfo> GetInternalThreads()
+    {
+        var result = new List<InternalThreadInfo>();
+        HashSet<string> dialogueKeys = new(dialogue?.ThreadKeys ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+
+        void Add(Model? model, string modelName)
+        {
+            if (model is null) return;
+            foreach (string key in model.ThreadKeys)
+            {
+                if (dialogueKeys.Contains(key)) continue;
+                result.Add(new InternalThreadInfo(key, modelName,
+                    model.GetThreadLastMessageAt(key),
+                    model.GetThreadHistory(key).Count));
+            }
+        }
+
+        Add(engram,  "Engram");
+        Add(recall,  "Recall");
+        Add(context, "Context");
+        return result;
+    }
+
+    // Returns the raw message history (including system messages) for an internal thread.
+    public IReadOnlyList<ChatMessage> GetInternalThreadHistory(string threadKey)
+    {
+        if (engram?.ThreadKeys.Contains(threadKey)  == true) return engram.GetThreadHistory(threadKey);
+        if (recall?.ThreadKeys.Contains(threadKey)  == true) return recall.GetThreadHistory(threadKey);
+        if (context?.ThreadKeys.Contains(threadKey) == true) return context.GetThreadHistory(threadKey);
+        return Array.Empty<ChatMessage>();
+    }
+
+    public record InternalThreadInfo(string Key, string ModelName, DateTime LastMessageAt, int MessageCount);
 
     public async Task<string> Prompt(string threadKey, string prompt, string? contextNote = null)
     {

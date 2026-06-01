@@ -38,9 +38,10 @@ public class DiscordService : BackgroundService
             GatewayIntents = GatewayIntents.AllUnprivileged | GatewayIntents.MessageContent
         });
 
-        client.Log += LogAsync;
-        client.Ready += OnReadyAsync;
+        client.Log             += LogAsync;
+        client.Ready           += OnReadyAsync;
         client.MessageReceived += message => { _ = Task.Run(() => OnMessageReceivedAsync(message)); return Task.CompletedTask; };
+        client.SlashCommandExecuted += cmd => { _ = Task.Run(() => OnSlashCommandAsync(cmd)); return Task.CompletedTask; };
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -64,12 +65,151 @@ public class DiscordService : BackgroundService
 
     private async Task OnReadyAsync()
     {
-        Common.Logger.LogInformation("Discord bot is ready. Notifying owner...");
+        Common.Logger.LogInformation("Discord bot is ready. Registering slash commands...");
+        await RegisterSlashCommandsAsync();
 
-        IUser owner = await client.GetUserAsync(config.OwnerId);
-        IDMChannel dm = await owner.CreateDMChannelAsync();
-        await dm.SendMessageAsync("A.R.I is online.");
-        Common.Logger.LogInformation("Sent online notification to owner {OwnerId}", config.OwnerId);
+        try
+        {
+            IUser owner = await client.GetUserAsync(config.OwnerId);
+            IDMChannel dm = await owner.CreateDMChannelAsync();
+            await dm.SendMessageAsync("A.R.I is online.");
+            Common.Logger.LogInformation("Sent online notification to owner {OwnerId}", config.OwnerId);
+        }
+        catch (Exception ex)
+        {
+            Common.Logger.LogWarning("Could not send online notification to owner: {Message}", ex.Message);
+        }
+    }
+
+    private async Task RegisterSlashCommandsAsync()
+    {
+        ApplicationCommandProperties[] commands =
+        [
+            new SlashCommandBuilder()
+                .WithName("engram")
+                .WithDescription("Control ARI's memory system")
+                .AddOption(new SlashCommandOptionBuilder().WithName("on")      .WithDescription("Enable Engram")                    .WithType(ApplicationCommandOptionType.SubCommand))
+                .AddOption(new SlashCommandOptionBuilder().WithName("off")     .WithDescription("Disable Engram")                   .WithType(ApplicationCommandOptionType.SubCommand))
+                .AddOption(new SlashCommandOptionBuilder().WithName("status")  .WithDescription("Show whether Engram is enabled")   .WithType(ApplicationCommandOptionType.SubCommand))
+                .AddOption(new SlashCommandOptionBuilder().WithName("sweep")   .WithDescription("Manually trigger a memory sweep")  .WithType(ApplicationCommandOptionType.SubCommand))
+                .AddOption(new SlashCommandOptionBuilder().WithName("refactor").WithDescription("Restructure the brain graph")       .WithType(ApplicationCommandOptionType.SubCommand))
+                .Build(),
+
+            new SlashCommandBuilder()
+                .WithName("brain")
+                .WithDescription("Brain management")
+                .AddOption(new SlashCommandOptionBuilder().WithName("backup").WithDescription("Export the full brain to a backup zip").WithType(ApplicationCommandOptionType.SubCommand))
+                .Build(),
+
+            new SlashCommandBuilder()
+                .WithName("purge")
+                .WithDescription("Destructive brain operations")
+                .AddOption(new SlashCommandOptionBuilder().WithName("notes").WithDescription("Delete every note in the brain").WithType(ApplicationCommandOptionType.SubCommand))
+                .Build(),
+
+            new SlashCommandBuilder()
+                .WithName("whitelist")
+                .WithDescription("Manage which users ARI responds to in servers")
+                .AddOption(new SlashCommandOptionBuilder()
+                    .WithName("add")
+                    .WithDescription("Allow a user")
+                    .WithType(ApplicationCommandOptionType.SubCommand)
+                    .AddOption("user", ApplicationCommandOptionType.User, "The user to allow", isRequired: true))
+                .AddOption(new SlashCommandOptionBuilder()
+                    .WithName("remove")
+                    .WithDescription("Remove a user")
+                    .WithType(ApplicationCommandOptionType.SubCommand)
+                    .AddOption("user", ApplicationCommandOptionType.User, "The user to remove", isRequired: true))
+                .Build(),
+        ];
+
+        try
+        {
+            // Always register globally so commands work in DMs (guild commands never appear in DMs).
+            // Global commands take up to 1 hour to propagate on first registration, but updates
+            // to existing global commands are usually near-instant.
+            await client.Rest.BulkOverwriteGlobalCommands(commands);
+            Common.Logger.LogInformation("Slash commands registered globally (available in DMs and servers).");
+
+            // Also register per-guild for instant availability in known servers.
+            foreach (ulong guildId in config.AllowedGuildIds)
+            {
+                await client.Rest.BulkOverwriteGuildCommands(commands, guildId);
+                Common.Logger.LogInformation("Slash commands registered for guild {GuildId}", guildId);
+            }
+        }
+        catch (Exception ex)
+        {
+            Common.Logger.LogError("Failed to register slash commands: {Error}", ex.Message);
+        }
+    }
+
+    private async Task OnSlashCommandAsync(SocketSlashCommand cmd)
+    {
+        // Only the owner may use ARI's commands.
+        if (cmd.User.Id != config.OwnerId)
+        {
+            await cmd.RespondAsync("You are not authorised to use ARI's commands.", ephemeral: true);
+            return;
+        }
+
+        string sub = cmd.Data.Options.FirstOrDefault()?.Name ?? string.Empty;
+
+        // whitelist is Discord-specific — it manages Discord user IDs directly.
+        if (cmd.CommandName == "whitelist")
+        {
+            await HandleWhitelistSlashAsync(cmd, sub);
+            return;
+        }
+
+        // All other commands: reconstruct the text form and route through CommandService.
+        string commandText = string.IsNullOrEmpty(sub)
+            ? $"/{cmd.CommandName}"
+            : $"/{cmd.CommandName} {sub}";
+
+        // Defer immediately — sweep/refactor/backup can take well over 3 seconds.
+        await cmd.DeferAsync(ephemeral: true);
+        string result = await llmService.HandleCommandAsync(commandText) ?? $"Unknown command: {commandText}";
+        await cmd.FollowupAsync(result, ephemeral: true);
+    }
+
+    private async Task HandleWhitelistSlashAsync(SocketSlashCommand cmd, string sub)
+    {
+        SocketSlashCommandDataOption? subCmd = cmd.Data.Options.FirstOrDefault();
+        IUser? target = subCmd?.Options.FirstOrDefault()?.Value as IUser;
+
+        if (target is null)
+        {
+            await cmd.RespondAsync("Could not resolve user.", ephemeral: true);
+            return;
+        }
+
+        ulong userId = target.Id;
+
+        if (sub == "add")
+        {
+            if (config.WhitelistedUserIds.Contains(userId))
+            {
+                await cmd.RespondAsync($"`{target.Username}` is already whitelisted.", ephemeral: true);
+                return;
+            }
+            config.WhitelistedUserIds.Add(userId);
+            config.Save();
+            Common.Logger.LogInformation("Owner added {UserId} to whitelist", userId);
+            await cmd.RespondAsync($"`{target.Username}` added to whitelist.", ephemeral: true);
+        }
+        else
+        {
+            if (!config.WhitelistedUserIds.Contains(userId))
+            {
+                await cmd.RespondAsync($"`{target.Username}` is not on the whitelist.", ephemeral: true);
+                return;
+            }
+            config.WhitelistedUserIds.Remove(userId);
+            config.Save();
+            Common.Logger.LogInformation("Owner removed {UserId} from whitelist", userId);
+            await cmd.RespondAsync($"`{target.Username}` removed from whitelist.", ephemeral: true);
+        }
     }
 
     private async Task OnMessageReceivedAsync(SocketMessage message)
@@ -90,12 +230,9 @@ public class DiscordService : BackgroundService
             return;
         }
 
-        if (message.Content.StartsWith("/whitelist", StringComparison.OrdinalIgnoreCase))
-        {
-            await HandleWhitelistCommandAsync(message);
-            return;
-        }
-
+        // Slash commands are the primary path (OnSlashCommandAsync).
+        // Plain-text /commands in DMs are kept as a fallback — useful before global slash
+        // commands have propagated, or if the interaction system fails.
         if (message.Content.StartsWith("/", StringComparison.OrdinalIgnoreCase))
         {
             string? result = await llmService.HandleCommandAsync(message.Content);
@@ -103,8 +240,8 @@ public class DiscordService : BackgroundService
             {
                 Common.Logger.LogInformation("Command [{Input}] → {Result}", message.Content, result);
                 await message.Channel.SendMessageAsync(result);
-                return;
             }
+            return;
         }
 
         string conversationKey = $"dm:{message.Author.Id}";
@@ -187,58 +324,6 @@ public class DiscordService : BackgroundService
             typingCts.Cancel();
             Common.Logger.LogError("Dialogue model not available: {Error}", ex.Message);
             await message.Channel.SendMessageAsync("Ari is unable to respond right now.");
-        }
-    }
-
-    private async Task HandleWhitelistCommandAsync(SocketMessage message)
-    {
-        // Expected syntax: /whitelist add/remove <userId or @mention>
-        string[] parts = message.Content.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-
-        if (parts.Length < 3)
-        {
-            await message.Channel.SendMessageAsync("Usage: `/whitelist add/remove <user>`");
-            return;
-        }
-
-        string action = parts[1].ToLowerInvariant();
-        if (action != "add" && action != "remove")
-        {
-            await message.Channel.SendMessageAsync("Unknown action. Use `add` or `remove`.");
-            return;
-        }
-
-        // Accept a raw ID or a mention (<@userId> or <@!userId>)
-        string rawUser = parts[2].Trim('<', '>', '@', '!');
-        if (!ulong.TryParse(rawUser, out ulong userId))
-        {
-            await message.Channel.SendMessageAsync("Could not parse user ID. Provide a user ID or mention.");
-            return;
-        }
-
-        if (action == "add")
-        {
-            if (config.WhitelistedUserIds.Contains(userId))
-            {
-                await message.Channel.SendMessageAsync($"`{userId}` is already whitelisted.");
-                return;
-            }
-            config.WhitelistedUserIds.Add(userId);
-            config.Save();
-            Common.Logger.LogInformation("Owner added {UserId} to whitelist", userId);
-            await message.Channel.SendMessageAsync($"`{userId}` added to whitelist.");
-        }
-        else
-        {
-            if (!config.WhitelistedUserIds.Contains(userId))
-            {
-                await message.Channel.SendMessageAsync($"`{userId}` is not on the whitelist.");
-                return;
-            }
-            config.WhitelistedUserIds.Remove(userId);
-            config.Save();
-            Common.Logger.LogInformation("Owner removed {UserId} from whitelist", userId);
-            await message.Channel.SendMessageAsync($"`{userId}` removed from whitelist.");
         }
     }
 

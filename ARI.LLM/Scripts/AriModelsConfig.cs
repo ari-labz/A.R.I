@@ -59,4 +59,11 @@ internal class ModelConfig
     /// Set to 0 to disable caching.
     /// </summary>
     public int CacheSize { get; init; } = 0;
+
+    /// <summary>
+    /// Dialogue only. Maximum estimated tokens to keep in short-term memory after the message-count trim.
+    /// If the remaining messages are still too large, oldest messages are dropped until under budget.
+    /// Tokens are estimated at 4 characters per token. 0 = no token budget enforced.
+    /// </summary>
+    public int MaxContextTokens { get; init; } = 0;
 }

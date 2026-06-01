@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Logging;
 
 namespace ARI.Brain;
 
@@ -166,7 +167,37 @@ public class TriliumClient
     public async Task<Dictionary<string, (string Id, string FolderPath)>> GetAllNoteIds()
     {
         List<(string Id, string Title, string FolderPath)> all = await TraverseTree();
-        return all.ToDictionary(n => n.Title, n => (n.Id, n.FolderPath), StringComparer.OrdinalIgnoreCase);
+
+        // Deduplicate by title: prefer notes NOT in Unknown/ over Unknown stubs that share
+        // a name with a real categorised note (e.g. Unknown/People vs the real People folder).
+        var result = new Dictionary<string, (string Id, string FolderPath)>(StringComparer.OrdinalIgnoreCase);
+        foreach ((string id, string title, string folderPath) in all)
+        {
+            if (!result.TryGetValue(title, out (string Id, string FolderPath) existing))
+            {
+                result[title] = (id, folderPath);
+            }
+            else
+            {
+                // Keep whichever is not in Unknown/; if both are in Unknown, keep first.
+                bool existingIsUnknown = existing.FolderPath == "Unknown";
+                bool incomingIsUnknown = folderPath == "Unknown";
+                if (existingIsUnknown && !incomingIsUnknown)
+                {
+                    Common.Logger.LogWarning("[Brain] Duplicate note title '{Title}' — preferring '{Incoming}' over Unknown stub.", title, folderPath.Length > 0 ? $"{folderPath}/{title}" : title);
+                    result[title] = (id, folderPath);
+                }
+                else if (!existingIsUnknown && incomingIsUnknown)
+                {
+                    Common.Logger.LogWarning("[Brain] Duplicate note title '{Title}' — keeping '{Existing}', ignoring Unknown stub.", title, existing.FolderPath.Length > 0 ? $"{existing.FolderPath}/{title}" : title);
+                }
+                else
+                {
+                    Common.Logger.LogWarning("[Brain] Duplicate note title '{Title}' — keeping first occurrence, skipping second.", title);
+                }
+            }
+        }
+        return result;
     }
 
     public async Task<List<string>> GetAllNoteTitles()
@@ -192,10 +223,30 @@ public class TriliumClient
         return branchIds?.FirstOrDefault()?.GetValue<string>();
     }
 
-    public async Task DeleteNote(string noteId)
+    /// <summary>
+    /// Deletes a single note. Refuses to delete if the note still has children in Trilium
+    /// to prevent cascading destruction of notes that were recently moved out of a folder.
+    /// Returns true if deleted, false if skipped.
+    /// </summary>
+    public async Task<bool> DeleteNote(string noteId)
     {
+        // Safety check: fetch the note and verify it has no children before deleting.
+        HttpResponseMessage checkRes = await http.GetAsync($"etapi/notes/{noteId}");
+        if (checkRes.IsSuccessStatusCode)
+        {
+            JsonNode? node = JsonNode.Parse(await checkRes.Content.ReadAsStringAsync());
+            JsonArray? children = node?["childNoteIds"] as JsonArray;
+            int childCount = children?.Count(c => c?.GetValue<string>()?.StartsWith("_") == false) ?? 0;
+            if (childCount > 0)
+            {
+                Common.Logger.LogWarning("[Brain] Refusing to delete '{NoteId}' — it still has {Count} child note(s). Skipping to prevent cascade.", noteId, childCount);
+                return false;
+            }
+        }
+
         HttpResponseMessage res = await http.DeleteAsync($"etapi/notes/{noteId}");
         res.EnsureSuccessStatusCode();
+        return true;
     }
 
     // ── Tree traversal ──────────────────────────────────────────────────────────
@@ -228,9 +279,11 @@ public class TriliumClient
 
         if (depth == 1 && !string.IsNullOrWhiteSpace(title))
         {
-            // Category folder — register in cache and recurse with this as the folder context.
+            // Category folder — register in cache, add the folder note itself to the index
+            // (so FindNoteId("People") can locate and update it), then recurse into children.
             string thisFolderPath = title;
             folderCache[thisFolderPath] = noteId;
+            notes.Add((noteId, title, "")); // empty folderPath = lives at root level
 
             JsonArray? children = node["childNoteIds"] as JsonArray;
             foreach (JsonNode? child in children ?? new JsonArray())

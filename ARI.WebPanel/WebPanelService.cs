@@ -1,6 +1,7 @@
 using ARI.WebPanel.Controllers;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -37,6 +38,18 @@ public class WebPanelService : IAsyncDisposable
 
         app = builder.Build();
 
+        app.UseExceptionHandler(errorApp => errorApp.Run(async ctx =>
+        {
+            ctx.Response.StatusCode  = 500;
+            ctx.Response.ContentType = "text/html";
+            await ctx.Response.WriteAsync(
+                "<!DOCTYPE html><html><head><meta charset='utf-8'/>" +
+                "<meta http-equiv='refresh' content='3'/>" +
+                "<style>body{font-family:sans-serif;background:#f3f4f6;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}" +
+                "div{text-align:center;color:#6b7280}h2{color:#374151;margin-bottom:8px}</style></head><body>" +
+                "<div><h2>Something went wrong</h2><p>Reloading in 3 seconds…</p></div>" +
+                "</body></html>");
+        }));
         app.UseStaticFiles();
         app.UseRouting();
         app.MapControllerRoute(

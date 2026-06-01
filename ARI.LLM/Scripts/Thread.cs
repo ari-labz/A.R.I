@@ -49,10 +49,22 @@ internal class Thread
         };
     }
 
+    // Seeded constructor — creates a thread pre-loaded with a snapshot of another thread's messages.
+    // Used by Engram to fork a ContextCache for per-note write calls.
+    internal Thread(Model model, string threadKey, IReadOnlyList<ChatMessage> seedMessages)
+    {
+        this.model = model;
+        this.threadKey = threadKey;
+        httpClient = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+        shortTermMemory = seedMessages.ToList();
+        displayHistory  = new List<ChatMessage>();
+    }
+
     internal IReadOnlyList<ChatMessage> GetHistory() => shortTermMemory.AsReadOnly();
     internal IReadOnlyList<ChatMessage> GetDisplayHistory() => displayHistory.AsReadOnly();
+    internal List<ChatMessage> GetShortTermMemoryCopy() => shortTermMemory.ToList();
 
-    internal async Task<string> SendPrompt(string prompt, string? originalUserMessage = null, string? recallNotes = null, string? contextSummary = null)
+    internal async Task<string> SendPrompt(string prompt, string? originalUserMessage = null, string? recallNotes = null, string? contextSummary = null, int maxTokensOverride = 0)
     {
         LastMessageAt = DateTime.UtcNow;
         string displayText = originalUserMessage ?? prompt;
@@ -60,13 +72,14 @@ internal class Thread
         displayHistory.Add(new ChatMessage { Role = "user", Content = displayText, Timestamp = DateTime.Now });
         shortTermMemory.Add(new ChatMessage { Role = "user", Content = prompt });
 
+        int maxTokens = maxTokensOverride != 0 ? maxTokensOverride : model.MaxTokens;
         object requestBody = new
         {
             model = model.ModelString,
             messages = shortTermMemory,
             stream = true,
             stream_options = new { include_usage = true },
-            max_tokens = model.MaxTokens,
+            max_tokens = maxTokens,
             temperature = 0.7,
             top_p = 0.80,
             top_k = 20,
@@ -186,11 +199,26 @@ internal class Thread
 
     private void TrimShortTermMemory()
     {
-        if (model.ShortTermMemoryLimit == 0) return;
-        if (shortTermMemory.Count > model.ShortTermMemoryLimit + 1)
+        // Pass 1 — message-count cap.
+        if (model.ShortTermMemoryLimit > 0 && shortTermMemory.Count > model.ShortTermMemoryLimit + 1)
         {
             shortTermMemory.RemoveRange(1, shortTermMemory.Count - model.ShortTermMemoryLimit - 1);
             bufferEverFilled = true;
+        }
+
+        // Pass 2 — token-budget cap (1 token ≈ 4 chars).
+        // Drops the oldest non-system messages until the estimated token count is within budget.
+        // Preserves at least the system message + the most recent exchange.
+        if (model.MaxContextTokens > 0)
+        {
+            int budgetChars = model.MaxContextTokens * 4;
+            while (shortTermMemory.Count > 3) // system + at least one user/assistant pair
+            {
+                int totalChars = shortTermMemory.Sum(m => m.Content?.Length ?? 0);
+                if (totalChars <= budgetChars) break;
+                shortTermMemory.RemoveAt(1); // drop oldest non-system message
+                bufferEverFilled = true;
+            }
         }
     }
 
