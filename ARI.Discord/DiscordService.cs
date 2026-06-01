@@ -92,7 +92,12 @@ public class DiscordService : BackgroundService
                 .AddOption(new SlashCommandOptionBuilder().WithName("off")     .WithDescription("Disable Engram")                   .WithType(ApplicationCommandOptionType.SubCommand))
                 .AddOption(new SlashCommandOptionBuilder().WithName("status")  .WithDescription("Show whether Engram is enabled")   .WithType(ApplicationCommandOptionType.SubCommand))
                 .AddOption(new SlashCommandOptionBuilder().WithName("sweep")   .WithDescription("Manually trigger a memory sweep")  .WithType(ApplicationCommandOptionType.SubCommand))
-                .AddOption(new SlashCommandOptionBuilder().WithName("refactor").WithDescription("Restructure the brain graph")       .WithType(ApplicationCommandOptionType.SubCommand))
+                .Build(),
+
+            new SlashCommandBuilder()
+                .WithName("refactor")
+                .WithDescription("Rule-based graph analysis — algorithmic fixes + bounded LLM calls")
+                .AddOption(new SlashCommandOptionBuilder().WithName("all").WithDescription("Full scan of every note — use for first run or explicit rebuild").WithType(ApplicationCommandOptionType.SubCommand))
                 .Build(),
 
             new SlashCommandBuilder()

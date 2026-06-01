@@ -385,6 +385,61 @@ public class TriliumClient
         return result["note"]!["noteId"]!.GetValue<string>();
     }
 
+    // ── Attribute API ───────────────────────────────────────────────────────────
+
+    /// <summary>Adds a label attribute to a note. Duplicates are allowed — caller deduplicates if needed.</summary>
+    public async Task CreateLabelAttribute(string noteId, string name, string value = "")
+    {
+        var body = new { noteId, type = "label", name, value, isInheritable = false };
+        StringContent payload = new(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+        HttpResponseMessage res = await http.PostAsync("etapi/attributes", payload);
+        res.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>Returns all attributes (label or relation) on a note as (attributeId, type, name, value) tuples.</summary>
+    public async Task<List<(string AttributeId, string Type, string Name, string Value)>> GetNoteAttributes(string noteId)
+    {
+        HttpResponseMessage res = await http.GetAsync($"etapi/notes/{noteId}/attributes");
+        if (!res.IsSuccessStatusCode) return new();
+
+        JsonArray arr = ParseArray(await res.Content.ReadAsStringAsync());
+        var result = new List<(string, string, string, string)>();
+        foreach (JsonNode? item in arr)
+        {
+            if (item is null) continue;
+            string? attrId = item["attributeId"]?.GetValue<string>();
+            string? type   = item["type"]?.GetValue<string>();
+            string? aName  = item["name"]?.GetValue<string>();
+            string? aValue = item["value"]?.GetValue<string>() ?? string.Empty;
+            if (attrId is not null && type is not null && aName is not null)
+                result.Add((attrId, type, aName, aValue));
+        }
+        return result;
+    }
+
+    /// <summary>Deletes an attribute by its ID.</summary>
+    public async Task DeleteAttribute(string attributeId)
+    {
+        await http.DeleteAsync($"etapi/attributes/{attributeId}");
+    }
+
+    /// <summary>Returns noteIds of all notes carrying the given label, via Trilium's search syntax.</summary>
+    public async Task<List<string>> SearchNoteIdsByLabel(string labelName)
+    {
+        string encoded = Uri.EscapeDataString($"#{labelName}");
+        HttpResponseMessage res = await http.GetAsync($"etapi/notes?search={encoded}");
+        if (!res.IsSuccessStatusCode) return new();
+
+        JsonArray arr = ParseArray(await res.Content.ReadAsStringAsync());
+        var ids = new List<string>();
+        foreach (JsonNode? item in arr)
+        {
+            string? id = item?["noteId"]?.GetValue<string>();
+            if (id is not null) ids.Add(id);
+        }
+        return ids;
+    }
+
     private static JsonArray ParseArray(string json)
     {
         try
