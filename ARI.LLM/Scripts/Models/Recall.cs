@@ -9,17 +9,11 @@ internal class Recall : Model
 {
     private readonly BrainService brain;
     private readonly int recallDepth;
-    private readonly int cacheSize;
 
-    // MRU cache: front = most recently used, back = oldest (next to evict).
-    private readonly LinkedList<string> cacheOrder = new();
-    private readonly Dictionary<string, string> cacheStore = new(StringComparer.OrdinalIgnoreCase);
-
-    internal Recall(ModelConfig config, BrainService brain, int recallDepth, int cacheSize) : base(config)
+    internal Recall(ModelConfig config, BrainService brain, int recallDepth) : base(config)
     {
         this.brain       = brain;
         this.recallDepth = recallDepth;
-        this.cacheSize   = cacheSize;
     }
 
     /// <summary>
@@ -33,6 +27,14 @@ internal class Recall : Model
 
         List<string> allTitles = await brain.GetNoteTitles();
         if (allTitles.Count == 0) return null;
+
+        // Fast pre-flight: skip the LLM entirely for short messages that mention no known
+        // entity and contain no memory-seeking language. No inference cost at all.
+        if (ShouldSkip(incomingPrompt, allTitles))
+        {
+            Common.Logger.LogInformation("[Recall] skipped — short message with no known entities or memory keywords.");
+            return null;
+        }
 
         // Include the incoming prompt so Recall can search based on what was just asked,
         // not only prior history (which may be empty on the first message of a thread).
@@ -63,28 +65,15 @@ internal class Recall : Model
             Common.Logger.LogInformation("[Recall] depth {Depth}: fetching [{Notes}]",
                 depth + 1, string.Join(", ", toFetch));
 
-            // Serve cached notes instantly; fetch the rest from Brain in parallel.
-            List<(string name, string content)> cached = new();
-            List<string> toFetchFromBrain = new();
-            foreach (string name in toFetch)
-            {
-                if (TryGetCached(name, out string? hit))
-                    cached.Add((name, hit!));
-                else
-                    toFetchFromBrain.Add(name);
-            }
-
-            IEnumerable<Task<(string name, string? content)>> fetchTasks = toFetchFromBrain.Select(async name =>
+            // Fetch all requested notes in parallel. Brain handles caching internally —
+            // cache hits return instantly; misses hit Trilium and are cached for next time.
+            IEnumerable<Task<(string name, string? content)>> fetchTasks = toFetch.Select(async name =>
             {
                 string? content = await brain.GetNote(name);
                 return (name, content);
             });
 
-            (string name, string? content)[] fetched2 = await Task.WhenAll(fetchTasks);
-            // Merge: cached results + freshly fetched results
-            IEnumerable<(string name, string? content)> results =
-                cached.Select(c => (c.name, (string?)c.content))
-                      .Concat(fetched2);
+            IEnumerable<(string name, string? content)> results = await Task.WhenAll(fetchTasks);
 
             StringBuilder notesBlock = new();
             foreach ((string name, string? content) in results)
@@ -92,7 +81,6 @@ internal class Recall : Model
                 if (content is null) continue;
                 fetched.Add(name);
                 noteContents[name] = content;
-                AddToCache(name, content);
                 notesBlock.AppendLine($"--- {name} ---");
                 notesBlock.AppendLine(content);
                 notesBlock.AppendLine("---");
@@ -127,42 +115,37 @@ internal class Recall : Model
         return result.ToString().TrimEnd();
     }
 
-    // ── Cache ────────────────────────────────────────────────────────────────────
+    // ── Private ──────────────────────────────────────────────────────────────────
 
-    private bool TryGetCached(string name, out string? content)
+    // Words/phrases that signal the user is reaching into memory even without naming an entity.
+    private static readonly string[] MemoryKeywords =
+    [
+        "remember", "last time", "before", "yesterday", "you said", "we talked",
+        "earlier", "previously", "used to", "told me", "you mentioned", "we discussed"
+    ];
+
+    /// <summary>
+    /// Returns true if Recall can safely be skipped without any LLM call.
+    /// Skips only when ALL three conditions hold:
+    ///   1. The message is short (under 50 chars — likely a greeting or brief social exchange).
+    ///   2. No known note title appears in the message (no named entity to look up).
+    ///   3. No memory-seeking keyword is present (user isn't explicitly reaching back in time).
+    /// If any condition fails we fall through to the normal LLM path.
+    /// </summary>
+    private static bool ShouldSkip(string message, List<string> noteTitles)
     {
-        if (cacheSize <= 0 || !cacheStore.TryGetValue(name, out content))
-        {
-            content = null;
-            return false;
-        }
+        if (message.Length >= 50) return false;
 
-        // Move to front (most recently used).
-        cacheOrder.Remove(name);
-        cacheOrder.AddFirst(name);
+        foreach (string kw in MemoryKeywords)
+            if (message.Contains(kw, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+        foreach (string title in noteTitles)
+            if (message.Contains(title, StringComparison.OrdinalIgnoreCase))
+                return false;
+
         return true;
     }
-
-    private void AddToCache(string name, string content)
-    {
-        if (cacheSize <= 0) return;
-
-        if (cacheStore.ContainsKey(name))
-        {
-            cacheOrder.Remove(name);
-        }
-        else if (cacheStore.Count >= cacheSize)
-        {
-            string oldest = cacheOrder.Last!.Value;
-            cacheOrder.RemoveLast();
-            cacheStore.Remove(oldest);
-        }
-
-        cacheStore[name] = content;
-        cacheOrder.AddFirst(name);
-    }
-
-    // ── Private ──────────────────────────────────────────────────────────────────
 
     private static string BuildTranscript(IReadOnlyList<ChatMessage> history, string incomingPrompt)
     {

@@ -1,3 +1,5 @@
+using System.IO.Compression;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 
@@ -6,14 +8,20 @@ namespace ARI.Brain;
 public class BrainService
 {
     private readonly TriliumClient trilium;
-    private readonly int contentCacheSize;
+    private readonly int brainCacheSize;
+    private readonly string backupPath;
+    private readonly int maxBackups;
     private bool triliumReady = false;
 
     private Dictionary<string, string> noteIdCache   = new(StringComparer.OrdinalIgnoreCase); // title → noteId
     private readonly Dictionary<string, string> branchIdCache   = new(); // noteId → branchId
     private readonly Dictionary<string, string> noteFolderCache = new(); // noteId → folder path (e.g. "People")
 
-    // MRU content cache: keyed by note title. Front = most recently used, back = oldest.
+    // Cached flat list of all note titles. Null = dirty, rebuilt on next GetNoteTitles() call.
+    private List<string>? cachedTitles;
+
+    // MRU content cache: keyed by note title (or "\x00markdown\x00{title}"). Front = most recently used, back = oldest.
+    // Shared by all consumers — Recall, Engram, Refactor. No per-consumer caches needed.
     private readonly LinkedList<string> contentCacheOrder = new();
     private readonly Dictionary<string, string> contentCacheStore = new(StringComparer.OrdinalIgnoreCase);
 
@@ -24,7 +32,9 @@ public class BrainService
 
         BrainConfig config = BrainConfig.LoadFrom(configPath);
         trilium          = new TriliumClient(config.TriliumUrl, config.EtapiToken, config.RootNoteId);
-        contentCacheSize = config.ContentCacheSize;
+        brainCacheSize = config.BrainCacheSize;
+        backupPath       = config.BackupPath;
+        maxBackups       = config.MaxBackups;
         _ = Startup();
     }
 
@@ -32,15 +42,32 @@ public class BrainService
 
     private async Task Startup()
     {
+        int[] retryDelaysSeconds = [2, 5, 10, 15, 30];
+        foreach (int delay in retryDelaysSeconds)
+        {
+            try
+            {
+                await trilium.VerifyConnection();
+                await OnReady();
+                return;
+            }
+            catch (Exception ex)
+            {
+                Common.Logger.LogWarning("Brain could not connect to Trilium (retrying in {Delay}s): {Message}", delay, ex.Message);
+                await Task.Delay(TimeSpan.FromSeconds(delay));
+            }
+        }
+
+        // Final attempt with no further retry.
         try
         {
             await trilium.VerifyConnection();
             await OnReady();
         }
-        catch (InvalidOperationException ex)
+        catch (Exception ex)
         {
             triliumReady = false;
-            Common.Logger.LogError("Brain could not connect to Trilium: {Message}", ex.Message);
+            Common.Logger.LogError("Brain failed to connect to Trilium after all retries: {Message}", ex.Message);
         }
     }
 
@@ -54,13 +81,68 @@ public class BrainService
             noteIdCache[title]          = info.Id;
             noteFolderCache[info.Id]    = info.FolderPath;
         }
+        cachedTitles = null; // mark dirty so first call rebuilds from the new noteIdCache
         Common.Logger.LogInformation("Brain connected to Trilium. {Count} note(s) in graph.", noteIdCache.Count);
     }
 
     // ── Public API ───────────────────────────────────────────────────────────────
 
-    public Task<List<string>> GetNoteTitles()
-        => Task.FromResult(triliumReady ? noteIdCache.Keys.ToList() : new List<string>());
+    /// <summary>
+    /// Ensures that <paramref name="targetName"/> contains a [[link]] back to <paramref name="sourceName"/>.
+    /// If the link is already present, does nothing. Otherwise inserts it into an existing
+    /// ## See Also section, or creates one immediately before ## Changelog, or appends one at the end.
+    /// This is the programmatic backlink pass — no LLM call involved.
+    /// </summary>
+    public async Task AddBacklink(string targetName, string sourceName)
+    {
+        if (!triliumReady) return;
+        if (string.Equals(targetName, sourceName, StringComparison.OrdinalIgnoreCase)) return;
+
+        string? noteId = await FindNoteId(targetName);
+        if (noteId is null) return;
+
+        string? html = await trilium.GetNoteContent(noteId);
+        if (html is null) return;
+
+        string markdown = MarkdownConverter.FromHtml(html);
+
+        // Already has the backlink — nothing to do.
+        if (markdown.Contains($"[[{sourceName}]]", StringComparison.OrdinalIgnoreCase)) return;
+
+        string link = $"- [[{sourceName}]]";
+        string updated;
+
+        if (Regex.IsMatch(markdown, @"^## See Also", RegexOptions.Multiline))
+        {
+            // Insert as first bullet under existing See Also heading.
+            updated = Regex.Replace(markdown, @"(## See Also\r?\n)", $"$1{link}\n", RegexOptions.Multiline);
+        }
+        else if (Regex.IsMatch(markdown, @"^## Changelog", RegexOptions.Multiline))
+        {
+            // Insert a new See Also section before Changelog.
+            updated = Regex.Replace(markdown, @"(## Changelog)", $"## See Also\n\n{link}\n\n## Changelog", RegexOptions.Multiline);
+        }
+        else
+        {
+            updated = markdown.TrimEnd() + $"\n\n## See Also\n\n{link}\n";
+        }
+
+        string updatedHtml = MarkdownConverter.ToHtml(updated);
+        string resolved    = MarkdownConverter.ResolveLinks(updatedHtml, await ResolveLinkNames(updatedHtml));
+        await trilium.UpdateNoteContent(noteId, resolved);
+
+        string folder = noteFolderCache.TryGetValue(noteId, out string? f) ? f : string.Empty;
+        UpdateContentCache(targetName, folder, resolved);
+        Common.Logger.LogInformation("[Brain] Backlink [[{Source}]] added to '{Target}'", sourceName, targetName);
+    }
+
+    public async Task<List<string>> GetNoteTitles()
+    {
+        if (!triliumReady) await Startup();
+        if (!triliumReady) return new List<string>();
+        cachedTitles ??= noteIdCache.Keys.ToList();
+        return cachedTitles;
+    }
 
     public async Task<string?> GetNoteContent(string title)
     {
@@ -88,9 +170,88 @@ public class BrainService
 
         string folder   = noteFolderCache.TryGetValue(noteId, out string? f) ? f : "Unknown";
         string markdown = MarkdownConverter.FromHtml(html);
-        string result   = $"Path: {folder}/{noteName}\n\n{markdown}";
+        string path     = string.IsNullOrEmpty(folder) ? noteName : $"{folder}/{noteName}";
+        string result   = $"Path: {path}\n\n{markdown}";
         AddContentToCache(cacheKey, result);
         return result;
+    }
+
+    public async Task DeleteNote(string title)
+    {
+        if (!triliumReady) return;
+        string? noteId = await FindNoteId(title);
+        if (noteId is null)
+        {
+            Common.Logger.LogWarning("[Brain] Delete failed — '{Title}' not found.", title);
+            return;
+        }
+        bool deleted = await trilium.DeleteNote(noteId);
+        if (!deleted)
+        {
+            Common.Logger.LogWarning("[Brain] Delete of '{Title}' skipped — note still has children (moved notes may not have fully detached yet).", title);
+            return;
+        }
+        noteIdCache.Remove(title);
+        branchIdCache.Remove(noteId);
+        noteFolderCache.Remove(noteId);
+        cachedTitles = null;
+        InvalidateContentCache(title);
+        Common.Logger.LogInformation("deleted: {Title}", title);
+    }
+
+    public async Task<string> BackupAsync()
+    {
+        if (!triliumReady) return "Brain is not connected — backup aborted.";
+
+        // Collect every note: title, folder, and markdown content.
+        List<object> notes = new();
+        foreach (string title in noteIdCache.Keys.ToList())
+        {
+            string? content = await GetNote(title);
+            if (content is null) continue;
+            string folder = string.Empty;
+            if (noteIdCache.TryGetValue(title, out string? id) && noteFolderCache.TryGetValue(id, out string? f))
+                folder = f;
+            notes.Add(new { title, folder, content });
+        }
+
+        var payload = new
+        {
+            timestamp = DateTime.UtcNow.ToString("o"),
+            noteCount = notes.Count,
+            notes
+        };
+
+        string json     = JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
+        string dirPath  = Path.GetFullPath(backupPath);
+        Directory.CreateDirectory(dirPath);
+
+        string timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH-mm-ss");
+        string zipPath   = Path.Combine(dirPath, $"ARI-Brain-{timestamp}.zip");
+
+        using (ZipArchive zip = ZipFile.Open(zipPath, ZipArchiveMode.Create))
+        {
+            ZipArchiveEntry entry = zip.CreateEntry("brain.json", CompressionLevel.Optimal);
+            using StreamWriter writer = new(entry.Open());
+            await writer.WriteAsync(json);
+        }
+
+        // Enforce max backup limit — delete oldest files over the limit.
+        FileInfo[] existing = new DirectoryInfo(dirPath)
+            .GetFiles("ARI-Brain-*.zip")
+            .OrderBy(f => f.CreationTimeUtc)
+            .ToArray();
+
+        int deleted = 0;
+        while (existing.Length - deleted > maxBackups)
+        {
+            existing[deleted].Delete();
+            Common.Logger.LogInformation("[Brain] Deleted old backup: {Name}", existing[deleted].Name);
+            deleted++;
+        }
+
+        Common.Logger.LogInformation("[Brain] Backup saved: {Path} ({Count} note(s))", zipPath, notes.Count);
+        return $"Backup saved — {notes.Count} note(s). File: `{Path.GetFileName(zipPath)}`";
     }
 
     public async Task<int> PurgeAllNotes()
@@ -103,7 +264,7 @@ public class BrainService
         int deleted = 0;
         foreach (string noteId in noteIds)
         {
-            try { await trilium.DeleteNote(noteId); deleted++; }
+            try { if (await trilium.DeleteNote(noteId)) deleted++; }
             catch (Exception ex) { Common.Logger.LogWarning("Failed to delete note {NoteId}: {Message}", noteId, ex.Message); }
         }
 
@@ -113,6 +274,7 @@ public class BrainService
         noteIdCache.Clear();
         branchIdCache.Clear();
         noteFolderCache.Clear();
+        cachedTitles = null;
         contentCacheOrder.Clear();
         contentCacheStore.Clear();
         Common.Logger.LogInformation("Brain purged — {Deleted}/{Total} note(s) deleted.", deleted, noteIds.Count);
@@ -145,6 +307,7 @@ public class BrainService
                     noteIdCache[name]     = id;
                     branchIdCache[id]     = branchId;
                     noteFolderCache[id]   = string.Join("/", folders);
+                    cachedTitles          = null;
                 }
             }
 
@@ -189,10 +352,26 @@ public class BrainService
         string? existingId = await FindNoteId(name);
         if (existingId is not null)
         {
-            string[] folders = FolderPath(add.NoteName);
+            string[] folders     = FolderPath(add.NoteName);
+            string targetFolder  = string.Join("/", folders);
+            string currentFolder = noteFolderCache.TryGetValue(existingId, out string? cf) ? cf : string.Empty;
+
             await trilium.UpdateNoteContent(existingId, resolved);
-            noteFolderCache[existingId] = string.Join("/", folders);
-            UpdateContentCache(name, string.Join("/", folders), resolved);
+
+            if (!string.Equals(currentFolder, targetFolder, StringComparison.OrdinalIgnoreCase))
+            {
+                if (!branchIdCache.TryGetValue(existingId, out string? branchId))
+                    branchId = await trilium.GetPrimaryBranchId(existingId);
+                if (!string.IsNullOrEmpty(branchId))
+                {
+                    string newBranchId = await trilium.MoveNoteToFolderPath(branchId, existingId, folders);
+                    branchIdCache[existingId] = newBranchId;
+                    Common.Logger.LogInformation("added (moved): {From} → {To}", $"{currentFolder}/{name}", add.NoteName);
+                }
+            }
+
+            noteFolderCache[existingId] = targetFolder;
+            UpdateContentCache(name, targetFolder, resolved);
             Common.Logger.LogInformation("added (updated): {Name}", add.NoteName);
         }
         else
@@ -245,6 +424,7 @@ public class BrainService
             await trilium.RenameNote(noteId, newName);
             noteIdCache.Remove(currentName);
             noteIdCache[newName] = noteId;
+            cachedTitles = null;
             // Old name entries are now stale; new name will be populated on next read.
             InvalidateContentCache(currentName);
             Common.Logger.LogInformation("moved+renamed: {From} → {To}", edit.NoteName, edit.NewNoteName);
@@ -291,6 +471,7 @@ public class BrainService
         noteIdCache[name]      = newId;
         branchIdCache[newId]   = branchId;
         noteFolderCache[newId] = "Unknown";
+        cachedTitles           = null;
         Common.Logger.LogInformation("created stub: {Name}", name);
         return newId;
     }
@@ -299,7 +480,7 @@ public class BrainService
 
     private bool TryGetCachedContent(string key, out string? content)
     {
-        if (contentCacheSize <= 0 || !contentCacheStore.TryGetValue(key, out content))
+        if (brainCacheSize <= 0 || !contentCacheStore.TryGetValue(key, out content))
         {
             content = null;
             return false;
@@ -312,13 +493,13 @@ public class BrainService
 
     private void AddContentToCache(string key, string content)
     {
-        if (contentCacheSize <= 0) return;
+        if (brainCacheSize <= 0) return;
 
         if (contentCacheStore.ContainsKey(key))
         {
             contentCacheOrder.Remove(key);
         }
-        else if (contentCacheStore.Count >= contentCacheSize)
+        else if (contentCacheStore.Count >= brainCacheSize)
         {
             string oldest = contentCacheOrder.Last!.Value;
             contentCacheOrder.RemoveLast();
@@ -355,10 +536,15 @@ public class BrainService
         return parts.Length > 0 ? parts[^1] : path;
     }
 
-    /// <summary>Returns the folder path (all segments except the last). "People/[REDACT]" → ["People"]</summary>
+    /// <summary>
+    /// Returns the folder path (all segments except the last).
+    /// "People/[REDACT]" → ["People"]
+    /// "People"       → []   (root level — GetOrCreateFolderPath([]) returns rootNoteId)
+    /// Only EnsureNoteExists explicitly uses ["Unknown"] for truly uncategorised stubs.
+    /// </summary>
     private static string[] FolderPath(string path)
     {
         string[] parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        return parts.Length > 1 ? parts[..^1] : ["Unknown"];
+        return parts.Length > 1 ? parts[..^1] : [];
     }
 }

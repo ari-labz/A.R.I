@@ -27,6 +27,13 @@
 
             <div id="sidebar-section-label">Recents</div>
             <ul id="thread-list"></ul>
+
+            <div id="sidebar-internal-toggle">
+                <label>
+                    <input type="checkbox" id="chk-show-internal" />
+                    Show internal threads
+                </label>
+            </div>
         </div>
     </aside>
 
@@ -53,6 +60,11 @@
             </div>
         </div>
 
+        <!-- command popup (shared, moved in DOM by JS) -->
+        <div id="cmd-popup" class="hidden">
+            <ul id="cmd-list"></ul>
+        </div>
+
         <!-- conversation: shown when a thread is active -->
         <div id="conversation" class="hidden">
             <div id="messages"></div>
@@ -72,11 +84,175 @@
     </div>
 </div>
 
+@section Styles {
+<style>
+#thread-list li.pending {
+    opacity: 0.6;
+    font-style: italic;
+}
+#cmd-popup {
+    position: absolute;
+    bottom: 100%;
+    left: 0; right: 0;
+    margin-bottom: 6px;
+    background: #CADDE2;
+    border: 1px solid var(--border, #313244);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 8px 24px rgba(0,0,0,.45);
+    z-index: 200;
+}
+#cmd-popup.hidden { display: none; }
+#cmd-list {
+    list-style: none;
+    margin: 0; padding: 4px;
+}
+#cmd-list li {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 7px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.875rem;
+    transition: background 0.1s;
+}
+#cmd-list li:hover,
+#cmd-list li.active {
+    background: var(--accent-dim, rgba(137,180,250,.15));
+}
+#cmd-list li .cmd-name {
+    font-weight: 600;
+    color: var(--accent, #89b4fa);
+    white-space: nowrap;
+}
+#cmd-list li .cmd-desc {
+    color: var(--subtext, #a6adc8);
+    font-size: 0.8rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+</style>
+}
+
 @section Scripts {
 <script>
-    let activeThread    = null;
-    let isStreaming     = false;
-    let knownMsgCount   = 0;
+    // ── slash-command popup ──────────────────────────────
+    const COMMANDS = [
+        { cmd: '/engram on',       desc: 'Enable engram memory extraction' },
+        { cmd: '/engram off',      desc: 'Disable engram memory extraction' },
+        { cmd: '/engram sweep',    desc: 'Run a manual engram sweep now' },
+        { cmd: '/engram status',   desc: 'Show engram enabled/disabled state' },
+        { cmd: '/engram refactor', desc: 'Restructure the memory graph' },
+        { cmd: '/purge notes',     desc: 'Delete all notes from the brain' },
+        { cmd: '/brain backup',    desc: 'Export a backup of the brain' },
+    ];
+
+    const cmdPopup  = document.getElementById('cmd-popup');
+    const cmdList   = document.getElementById('cmd-list');
+    let cmdMatches  = [];
+    let cmdIndex    = -1;   // highlighted item (-1 = none)
+    let cmdTarget   = null; // the textarea currently driving the popup
+
+    function showCmdPopup(textarea) {
+        // Anchor the popup relative to the textarea's wrapper
+        const wrap = textarea.closest('#input-wrap, #landing-input-wrap');
+        if (!wrap) return;
+        wrap.style.position = 'relative';
+        wrap.appendChild(cmdPopup);
+        cmdPopup.classList.remove('hidden');
+    }
+
+    function hideCmdPopup() {
+        cmdPopup.classList.add('hidden');
+        cmdMatches = [];
+        cmdIndex   = -1;
+        cmdTarget  = null;
+    }
+
+    function renderCmdPopup() {
+        cmdList.innerHTML = '';
+        cmdMatches.forEach((c, i) => {
+            const li = document.createElement('li');
+            if (i === cmdIndex) li.classList.add('active');
+            li.innerHTML =
+                `<span class="cmd-name">${escHtmlCmd(c.cmd)}</span>` +
+                `<span class="cmd-desc">${escHtmlCmd(c.desc)}</span>`;
+            li.addEventListener('mousedown', e => {
+                e.preventDefault(); // don't blur textarea
+                applyCmdItem(c);
+            });
+            cmdList.appendChild(li);
+        });
+    }
+
+    function escHtmlCmd(s) {
+        return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    function applyCmdItem(c) {
+        if (!cmdTarget) return;
+        cmdTarget.value = c.cmd + ' ';
+        cmdTarget.dispatchEvent(new Event('input'));
+        hideCmdPopup();
+        cmdTarget.focus();
+    }
+
+    function updateCmdPopup(textarea) {
+        const val = textarea.value;
+        if (!val.startsWith('/')) { hideCmdPopup(); return; }
+
+        const query = val.toLowerCase();
+        cmdMatches  = COMMANDS.filter(c => c.cmd.toLowerCase().startsWith(query));
+        // exact match already typed — hide
+        if (cmdMatches.length === 0 || cmdMatches.some(c => c.cmd.toLowerCase() === query.trimEnd())) {
+            hideCmdPopup(); return;
+        }
+
+        cmdTarget = textarea;
+        if (cmdIndex >= cmdMatches.length) cmdIndex = cmdMatches.length - 1;
+        renderCmdPopup();
+        showCmdPopup(textarea);
+    }
+
+    function wireCmdPopup(textareaId) {
+        const el = document.getElementById(textareaId);
+
+        el.addEventListener('input', () => updateCmdPopup(el));
+
+        el.addEventListener('keydown', e => {
+            if (cmdPopup.classList.contains('hidden')) return;
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                cmdIndex = (cmdIndex + 1) % cmdMatches.length;
+                renderCmdPopup();
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                cmdIndex = (cmdIndex - 1 + cmdMatches.length) % cmdMatches.length;
+                renderCmdPopup();
+            } else if (e.key === 'Tab') {
+                e.preventDefault();
+                const pick = cmdIndex >= 0 ? cmdMatches[cmdIndex] : cmdMatches[0];
+                if (pick) applyCmdItem(pick);
+            } else if (e.key === 'Escape') {
+                hideCmdPopup();
+            }
+        });
+
+        el.addEventListener('blur', () => {
+            // short delay so mousedown on popup fires first
+            setTimeout(() => { if (document.activeElement !== el) hideCmdPopup(); }, 120);
+        });
+    }
+
+    wireCmdPopup('input');
+    wireCmdPopup('landing-input');
+
+    let activeThread        = null;
+    let isStreaming         = false;
+    let knownMsgCount       = 0;
+    let activeThreadInternal = false; // true when viewing an internal model thread
 
     // ── sidebar ─────────────────────────────────────────
     const sidebar   = document.getElementById('sidebar');
@@ -92,26 +268,40 @@
 
     // ── thread list ─────────────────────────────────────
     async function loadThreads() {
-        const res = await fetch('/api/threads');
-        const threads = await res.json();
-        const list = document.getElementById('thread-list');
-        list.innerHTML = '';
+        try {
+            const showInternal = document.getElementById('chk-show-internal').checked;
+            const url = showInternal ? '/api/threads?includeInternal=true' : '/api/threads';
+            const res = await fetch(url);
+            const threads = await res.json();
+            const list = document.getElementById('thread-list');
+            list.innerHTML = '';
 
-        threads.forEach(t => {
-            const li = document.createElement('li');
-            li.dataset.key = t.key;
-            if (t.key === activeThread) li.classList.add('active');
+            threads.forEach(t => {
+                const li = document.createElement('li');
+                li.dataset.key      = t.key;
+                li.dataset.internal = t.isInternal ? '1' : '0';
+                if (t.key === activeThread) li.classList.add('active');
+                if (t.isInternal) li.classList.add('internal-thread');
 
-            const label = t.key.startsWith('web-') ? 'Web chat' : 'Discord';
-            const time  = t.lastMessageAt && !t.lastMessageAt.startsWith('0001')
-                ? new Date(t.lastMessageAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                : '';
+                let label;
+                if (t.isInternal) {
+                    label = t.modelName ?? 'Internal';
+                } else {
+                    label = t.key.startsWith('web-') ? 'Web chat' : 'Discord';
+                }
 
-            li.innerHTML = `<span class="thread-time">${time}</span>${label}`;
-            li.addEventListener('click', () => openThread(t.key));
-            list.appendChild(li);
-        });
+                const time = t.lastMessageAt && !t.lastMessageAt.startsWith('0001')
+                    ? new Date(t.lastMessageAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                    : '';
+
+                li.innerHTML = `<span class="thread-time">${time}</span>${label}`;
+                li.addEventListener('click', () => openThread(t.key, t.isInternal, t.modelName));
+                list.appendChild(li);
+            });
+        } catch { /* silently ignore network hiccups during thread list refresh */ }
     }
+
+    document.getElementById('chk-show-internal').addEventListener('change', loadThreads);
 
     document.getElementById('btn-new-chat').addEventListener('click', async () => {
         const res = await fetch('/api/threads', { method: 'POST' });
@@ -121,27 +311,34 @@
     });
 
     // ── open thread ─────────────────────────────────────
-    async function openThread(key) {
-        activeThread = key;
+    async function openThread(key, isInternal = false, modelName = null) {
+        activeThread         = key;
+        activeThreadInternal = isInternal;
+
         document.querySelectorAll('#thread-list li').forEach(li =>
             li.classList.toggle('active', li.dataset.key === key));
 
-        const res  = await fetch(`/api/threads/${key}/history`);
+        const url  = isInternal ? `/api/threads/${key}/history?raw=true` : `/api/threads/${key}/history`;
+        const res  = await fetch(url);
         const msgs = await res.json();
 
         const box = document.getElementById('messages');
         box.innerHTML = '';
-        msgs.forEach(m => appendRow(m.role, m.content, m.timestamp, m.thinkingSeconds, m.recallNotes, m.contextSummary));
+        msgs.forEach(m => appendRow(m.role, m.content, m.timestamp, m.thinkingSeconds, m.recallNotes, m.contextSummary, isInternal, modelName));
         knownMsgCount = msgs.length;
 
         showConversation();
+
+        // Hide input area for internal (read-only) threads
+        document.getElementById('input-area').style.display = isInternal ? 'none' : '';
+
         scrollBottom();
-        document.getElementById('input').focus();
+        if (!isInternal) document.getElementById('input').focus();
     }
 
     // poll active thread for new messages (catches Discord replies)
     async function pollActiveThread() {
-        if (!activeThread || isStreaming) return;
+        if (!activeThread || isStreaming || activeThreadInternal) return;
         try {
             const res  = await fetch(`/api/threads/${activeThread}/history`);
             const msgs = await res.json();
@@ -163,6 +360,22 @@
     }
 
     // ── send ─────────────────────────────────────────────
+
+    // Immediately injects a pending thread entry into the sidebar so it appears
+    // as soon as the user sends — before ARI has responded.
+    function injectPendingThread(key) {
+        const list = document.getElementById('thread-list');
+        // Remove any stale pending entry for this key first
+        list.querySelector(`li[data-key="${key}"]`)?.remove();
+        const li = document.createElement('li');
+        li.dataset.key      = key;
+        li.dataset.internal = '0';
+        li.classList.add('active', 'pending');
+        li.innerHTML = `<span class="thread-time">now</span>Web chat`;
+        li.addEventListener('click', () => openThread(key));
+        list.prepend(li);
+    }
+
     async function send(prompt, fromLanding) {
         if (isStreaming || !prompt) return;
 
@@ -171,8 +384,32 @@
             const res = await fetch('/api/threads', { method: 'POST' });
             const { key } = await res.json();
             activeThread = key;
-            await loadThreads();
+            injectPendingThread(key);
             showConversation();
+        }
+
+        // Slash commands go to the command API, not the LLM stream
+        if (prompt.startsWith('/')) {
+            appendRow('user', prompt, new Date().toISOString());
+            scrollBottom();
+            showTyping();
+            try {
+                const res = await fetch('/api/commands', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ input: prompt })
+                });
+                hideTyping();
+                const data = await res.json();
+                const reply = res.ok ? (data.result ?? 'Done.') : (data.error ?? 'Command failed.');
+                appendRow('assistant', reply, new Date().toISOString());
+            } catch {
+                hideTyping();
+                appendRow('assistant', 'Command failed — could not reach ARI.', new Date().toISOString());
+            }
+            knownMsgCount += 2;
+            scrollBottom();
+            return;
         }
 
         isStreaming = true;
@@ -235,43 +472,77 @@
     });
 
     // ── helpers ──────────────────────────────────────────
-    function appendRow(role, content, timestamp, thinkingSeconds, recallNotes, contextSummary) {
+    function appendRow(role, content, timestamp, thinkingSeconds, recallNotes, contextSummary, isInternal = false, modelName = null) {
         const box = document.getElementById('messages');
         const row = document.createElement('div');
-        row.className = `msg-row ${role}`;
 
         const timeStr = timestamp
             ? new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             : '';
 
-        if (role === 'user') {
-            row.innerHTML = `<div><div class="bubble"></div><div class="msg-time">${timeStr}</div></div>`;
-        } else {
-            let thoughtHtml = '';
-            if (thinkingSeconds != null) {
-                const secs = typeof thinkingSeconds === 'number' ? thinkingSeconds.toFixed(1) : thinkingSeconds;
-                let detailParts = '';
-                if (recallNotes) {
-                    detailParts += `<h4>Recalled memories</h4>${escHtml(recallNotes)}\n`;
-                }
-                if (contextSummary) {
-                    detailParts += `<h4>Context summary</h4>${escHtml(contextSummary)}`;
-                }
-                const hasDetails = detailParts.length > 0;
-                thoughtHtml =
-                    `<details class="thought-block"${hasDetails ? '' : ' style="pointer-events:none"'}>` +
-                    `<summary>ARI thought for ${secs}s</summary>` +
-                    (hasDetails ? `<div class="thought-content">${detailParts}</div>` : '') +
+        if (isInternal) {
+            // Internal thread rendering: system/user = left, assistant = right
+            if (role === 'system') {
+                row.className = 'msg-row internal-system';
+                row.innerHTML =
+                    `<details class="system-block">` +
+                    `<summary><span class="sender">System</span><span class="msg-time">${timeStr}</span></summary>` +
+                    `<div class="bubble system-bubble"></div>` +
                     `</details>`;
+                row.querySelector('.system-bubble').textContent = content;
+            } else if (role === 'user') {
+                row.className = 'msg-row internal-prompt';
+                row.innerHTML =
+                    `<div class="sender">Prompt</div>` +
+                    `<div class="bubble"></div>` +
+                    `<div class="msg-time">${timeStr}</div>`;
+                row.querySelector('.bubble').textContent = content;
+            } else {
+                // assistant — right side, labelled by model name
+                row.className = 'msg-row assistant';
+                let thoughtHtml = '';
+                if (thinkingSeconds != null) {
+                    const secs = typeof thinkingSeconds === 'number' ? thinkingSeconds.toFixed(1) : thinkingSeconds;
+                    thoughtHtml =
+                        `<details class="thought-block" style="pointer-events:none">` +
+                        `<summary>${modelName ?? 'Model'} responded in ${secs}s</summary>` +
+                        `</details>`;
+                }
+                row.innerHTML =
+                    `<div class="sender">${escHtml(modelName ?? 'Model')}</div>` +
+                    thoughtHtml +
+                    `<div class="bubble"></div>` +
+                    `<div class="msg-time">${timeStr}</div>`;
+                row.querySelector('.bubble').textContent = content;
             }
-            row.innerHTML =
-                `<div class="sender">ARI</div>` +
-                thoughtHtml +
-                `<div class="bubble"></div>` +
-                `<div class="msg-time">${timeStr}</div>`;
+        } else {
+            // Normal dialogue rendering
+            row.className = `msg-row ${role}`;
+            if (role === 'user') {
+                row.innerHTML = `<div><div class="bubble"></div><div class="msg-time">${timeStr}</div></div>`;
+            } else {
+                let thoughtHtml = '';
+                if (thinkingSeconds != null) {
+                    const secs = typeof thinkingSeconds === 'number' ? thinkingSeconds.toFixed(1) : thinkingSeconds;
+                    let detailParts = '';
+                    if (recallNotes)    detailParts += `<h4>Recalled memories</h4>${escHtml(recallNotes)}\n`;
+                    if (contextSummary) detailParts += `<h4>Context summary</h4>${escHtml(contextSummary)}`;
+                    const hasDetails = detailParts.length > 0;
+                    thoughtHtml =
+                        `<details class="thought-block"${hasDetails ? '' : ' style="pointer-events:none"'}>` +
+                        `<summary>ARI thought for ${secs}s</summary>` +
+                        (hasDetails ? `<div class="thought-content">${detailParts}</div>` : '') +
+                        `</details>`;
+                }
+                row.innerHTML =
+                    `<div class="sender">ARI</div>` +
+                    thoughtHtml +
+                    `<div class="bubble"></div>` +
+                    `<div class="msg-time">${timeStr}</div>`;
+            }
+            row.querySelector('.bubble').textContent = content;
         }
 
-        row.querySelector('.bubble').textContent = content;
         box.appendChild(row);
         return row;
     }
@@ -376,11 +647,16 @@
 
     // ── init ─────────────────────────────────────────────
     (async () => {
-        await waitForReady();
-        const initial = '@Html.Raw(Model ?? "")';
-        if (initial) openThread(initial);
-        setInterval(loadThreads, 5000);
-        setInterval(pollActiveThread, 3000);
+        try {
+            await waitForReady();
+            const initial = '@Html.Raw(Model ?? "")';
+            if (initial) openThread(initial);
+            setInterval(loadThreads, 5000);
+            setInterval(pollActiveThread, 3000);
+        } catch (err) {
+            console.error('ARI init failed:', err);
+            setTimeout(() => location.reload(), 2000);
+        }
     })();
 </script>
 }

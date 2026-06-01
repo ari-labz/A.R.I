@@ -17,21 +17,27 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
     private LlmService? Llm => holder.Service;
 
     [HttpGet]
-    public IActionResult GetThreads()
+    public IActionResult GetThreads([FromQuery] bool includeInternal = false)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
 
         var threads = Llm.GetActiveThreadKeys()
-            .Select(key => new
-            {
+            .Select(key => new ThreadEntry(
                 key,
-                lastMessageAt = Llm.GetThreadLastMessageAt(key),
-                messageCount  = Llm.GetThreadHistory(key).Count(m => m.Role != "system")
-            })
-            .OrderByDescending(t => t.lastMessageAt)
+                ModelName:     null,
+                IsInternal:    false,
+                LastMessageAt: Llm.GetThreadLastMessageAt(key),
+                MessageCount:  Llm.GetThreadHistory(key).Count(m => m.Role != "system")))
             .ToList();
 
-        return Ok(threads);
+        if (includeInternal)
+        {
+            var internalThreads = Llm.GetInternalThreads()
+                .Select(t => new ThreadEntry(t.Key, t.ModelName, IsInternal: true, t.LastMessageAt, t.MessageCount));
+            threads.AddRange(internalThreads);
+        }
+
+        return Ok(threads.OrderByDescending(t => t.LastMessageAt).ToList());
     }
 
     [HttpPost]
@@ -44,20 +50,20 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
     }
 
     [HttpGet("{threadKey}/history")]
-    public IActionResult GetHistory(string threadKey)
+    public IActionResult GetHistory(string threadKey, [FromQuery] bool raw = false)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
 
+        // Internal threads: return raw history including system messages.
+        if (raw)
+        {
+            var internalMsgs = Llm.GetInternalThreadHistory(threadKey)
+                .Select(m => new { m.Role, m.Content, m.Timestamp, m.ThinkingSeconds, m.RecallNotes, m.ContextSummary });
+            return Ok(internalMsgs);
+        }
+
         var messages = Llm.GetThreadDisplayHistory(threadKey)
-            .Select(m => new
-            {
-                m.Role,
-                m.Content,
-                m.Timestamp,
-                m.ThinkingSeconds,
-                m.RecallNotes,
-                m.ContextSummary
-            });
+            .Select(m => new { m.Role, m.Content, m.Timestamp, m.ThinkingSeconds, m.RecallNotes, m.ContextSummary });
         return Ok(messages);
     }
 
@@ -68,7 +74,7 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
         if (string.IsNullOrWhiteSpace(req.Input)) return BadRequest("Input is required.");
 
         string? result = await Llm.HandleCommandAsync(req.Input);
-        if (result is null) return BadRequest($"Unknown command: {req.Input}");
+        if (result is null) return BadRequest(new { error = $"Unknown command: {req.Input}" });
         return Ok(new { result });
     }
 
@@ -103,3 +109,4 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
 }
 
 public record CommandRequest(string Input);
+public record ThreadEntry(string Key, string? ModelName, bool IsInternal, DateTime LastMessageAt, int MessageCount);

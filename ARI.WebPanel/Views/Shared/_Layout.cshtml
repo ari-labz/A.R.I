@@ -340,7 +340,90 @@ html, body {
 }
 .btn-send:hover:not(:disabled) { background: var(--accent-hover); }
 .btn-send:disabled { opacity: .3; cursor: default; }
+
+/* ── internal thread toggle ──────────────────────────── */
+#sidebar-internal-toggle {
+    padding: 10px 16px 14px;
+    border-top: 1px solid rgba(255,255,255,.07);
+    flex-shrink: 0;
+}
+#sidebar-internal-toggle label {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: var(--sidebar-dim);
+    cursor: pointer; user-select: none;
+}
+#sidebar-internal-toggle input[type=checkbox] {
+    accent-color: var(--sidebar-text);
+    width: 13px; height: 13px; cursor: pointer; flex-shrink: 0;
+}
+
+/* internal threads in the sidebar list */
+#thread-list li.internal-thread {
+    color: var(--sidebar-dim);
+    font-style: italic;
+}
+#thread-list li.internal-thread.active { color: #fff; }
+
+/* ── internal thread message styles ─────────────────── */
+
+/* system prompt — collapsible, full width, subtle */
+.msg-row.internal-system {
+    max-width: var(--col-max);
+    margin: 0 auto;
+    padding: 4px 0;
+}
+.system-block {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: #fafafa;
+}
+.system-block > summary {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 7px 12px;
+    cursor: pointer; user-select: none;
+    list-style: none;
+    font-size: 12px; gap: 8px;
+}
+.system-block > summary::-webkit-details-marker { display: none; }
+.system-block > summary::before {
+    content: '▶'; font-size: 9px; color: var(--text-dim);
+    transition: transform .15s; display: inline-block; flex-shrink: 0;
+}
+.system-block[open] > summary::before { transform: rotate(90deg); }
+.system-block .sender {
+    font-size: 11px; font-weight: 700; letter-spacing: .05em;
+    text-transform: uppercase; color: #9ca3af; flex: 1;
+}
+.system-block .msg-time { font-size: 11px; color: #9ca3af; flex-shrink: 0; }
+.system-bubble {
+    padding: 10px 14px;
+    font-size: 12px; line-height: 1.6;
+    white-space: pre-wrap; word-break: break-word;
+    color: #4b5563;
+    border-top: 1px solid var(--border);
+    max-height: 400px; overflow-y: auto;
+}
+
+/* prompt — left aligned, distinct from assistant */
+.msg-row.internal-prompt {
+    display: flex; flex-direction: column; align-items: flex-start;
+    gap: 4px; max-width: var(--col-max); margin: 0 auto; padding: 8px 0;
+}
+.msg-row.internal-prompt .sender {
+    font-size: 12px; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; color: #9ca3af;
+}
+.msg-row.internal-prompt .bubble {
+    font-size: 14px; line-height: 1.6;
+    white-space: pre-wrap; word-break: break-word;
+    color: var(--text-dim); max-width: 100%;
+    background: #f9fafb; border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 14px;
+}
 </style>
+    @await RenderSectionAsync("Styles", required: false)
 </head>
 <body>
     @RenderBody()

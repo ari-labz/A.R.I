@@ -9,12 +9,14 @@ namespace ARI.LLM;
 internal class CommandService
 {
     private readonly Engram? engram;
-    private readonly Func<Task<int>>? purgeNotes;
+    private readonly Func<Task<int>>?    purgeNotes;
+    private readonly Func<Task<string>>? backupBrain;
 
-    internal CommandService(Engram? engram, Func<Task<int>>? purgeNotes = null)
+    internal CommandService(Engram? engram, Func<Task<int>>? purgeNotes = null, Func<Task<string>>? backupBrain = null)
     {
-        this.engram     = engram;
-        this.purgeNotes = purgeNotes;
+        this.engram      = engram;
+        this.purgeNotes  = purgeNotes;
+        this.backupBrain = backupBrain;
     }
 
     /// <summary>
@@ -34,6 +36,7 @@ internal class CommandService
         {
             "/engram" => await HandleEngramAsync(sub),
             "/purge"  => sub == "notes" ? await HandlePurgeNotesAsync() : null,
+            "/brain"  => sub == "backup" ? await HandleBrainBackupAsync() : null,
             _         => null
         };
     }
@@ -46,11 +49,12 @@ internal class CommandService
 
         return sub switch
         {
-            "on"     => EngramEnable(),
-            "off"    => EngramDisable(),
-            "sweep"  => await EngramSweepAsync(),
-            "status" => EngramStatus(),
-            _        => "Unknown engram command. Options: `/engram on`, `/engram off`, `/engram sweep`, `/engram status`"
+            "on"      => EngramEnable(),
+            "off"     => EngramDisable(),
+            "sweep"   => await EngramSweepAsync(),
+            "status"  => EngramStatus(),
+            "refactor" => await EngramRefactorAsync(),
+            _         => "Unknown engram command. Options: `/engram on`, `/engram off`, `/engram sweep`, `/engram status`, `/engram refactor`"
         };
     }
 
@@ -75,6 +79,12 @@ internal class CommandService
     private string EngramStatus()
         => engram!.IsEnabled ? "Engram is currently **enabled**." : "Engram is currently **disabled**.";
 
+    private async Task<string> EngramRefactorAsync()
+    {
+        Common.Logger.LogInformation("[Commands] Graph refactor requested.");
+        return await engram!.RefactorAsync();
+    }
+
     // ── /purge notes ──────────────────────────────────────────────────────────────
 
     private async Task<string> HandlePurgeNotesAsync()
@@ -83,5 +93,14 @@ internal class CommandService
         Common.Logger.LogInformation("[Commands] Brain purge requested.");
         int deleted = await purgeNotes();
         return $"Purged {deleted} note(s) from the brain.";
+    }
+
+    // ── /brain backup ─────────────────────────────────────────────────────────────
+
+    private async Task<string> HandleBrainBackupAsync()
+    {
+        if (backupBrain is null) return "Brain is not available.";
+        Common.Logger.LogInformation("[Commands] Brain backup requested.");
+        return await backupBrain();
     }
 }

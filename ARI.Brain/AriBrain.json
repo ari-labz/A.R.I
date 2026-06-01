@@ -2,5 +2,7 @@
   "TriliumUrl": "http://localhost:8080",
   "EtapiToken": "[REDACTED]",
   "RootNoteId": "root",
-  "ContentCacheSize": 10
+  "BrainCacheSize": 50,
+  "BackupPath": "./Backups",
+  "MaxBackups": 5
 }
