@@ -5,10 +5,12 @@ namespace ARI.Core.Scripts;
 public class Docker
 {
     private readonly string fullComposePath;
+    private readonly string envFilePath;
 
     public Docker(string composePath)
     {
         fullComposePath = Path.GetFullPath(composePath);
+        envFilePath = Path.Combine(Path.GetDirectoryName(fullComposePath)!, ".env");
     }
 
     public async Task IsRunning()
@@ -33,8 +35,8 @@ public class Docker
             throw new Exception($"compose.yaml not found at: {fullComposePath}");
         }
 
-        // Scale Ollama container to 0 — llama-server replaces it
-        ProcessStartInfo startInfo = new("docker", $"compose -f {fullComposePath} up -d --scale ollama=0")
+        string envFileArg = File.Exists(envFilePath) ? $"--env-file \"{envFilePath}\" " : string.Empty;
+        ProcessStartInfo startInfo = new("docker", $"compose -f \"{fullComposePath}\" {envFileArg}up -d")
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -70,7 +72,7 @@ public class Docker
     {
         Common.Logger.LogInformation("Stopping containers...");
 
-        ProcessStartInfo startInfo = new("docker", $"compose -f {fullComposePath} stop")
+        ProcessStartInfo startInfo = new("docker", $"compose -f {fullComposePath} stop trilium cloudflared")
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,

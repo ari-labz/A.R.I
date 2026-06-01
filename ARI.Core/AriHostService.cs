@@ -49,7 +49,13 @@ public class AriHostService : BackgroundService
         if (config.Modules.WebPanel)
         {
             Common.Logger.LogInformation("Web panel module is enabled. Starting on port {Port}...", config.WebPanel.Port);
-            webPanelService = new WebPanelService(loggerFactory, config.WebPanel.Port);
+            webPanelService = new WebPanelService(loggerFactory, new ARI.WebPanel.WebPanelConfig
+            {
+                Port              = config.WebPanel.Port,
+                GoogleClientId    = config.WebPanel.Google.ClientId,
+                GoogleClientSecret= config.WebPanel.Google.ClientSecret,
+                AllowedEmail      = config.WebPanel.Google.AllowedEmail,
+            });
             await webPanelService.StartAsync(stoppingToken);
         }
 

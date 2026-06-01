@@ -7,10 +7,10 @@ services:
       - /Users/user/Documents/GitHub/A.R.I/Brain:/home/user/.local/share/trilium-data
     restart: unless-stopped
 
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ./External/Ollama/models:/root/.ollama
+  cloudflared:
+    image: cloudflare/cloudflared:latest
     restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+
