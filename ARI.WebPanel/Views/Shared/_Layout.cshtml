@@ -338,6 +338,7 @@ html, body {
 /* ── thought section ────────────────────────────────── */
 .thought-block {
     margin-bottom: 6px;
+    width: 100%;
 }
 
 .thought-block summary {
@@ -365,6 +366,8 @@ html, body {
 .thought-content {
     margin-top: 8px;
     padding: 10px 12px;
+    width: 100%;
+    box-sizing: border-box;
     background: #f9fafb;
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -387,6 +390,61 @@ html, body {
 }
 
 .thought-content h4:not(:first-child) { margin-top: 12px; }
+
+/* ── recall notes ───────────────────────────────────── */
+.recall-notes-section {
+    margin-bottom: 8px;
+}
+
+.recall-label {
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    color: #6b7280;
+    margin-bottom: 4px;
+}
+
+.recall-note {
+    margin-bottom: 2px;
+}
+
+.recall-note summary {
+    font-size: 12px;
+    color: var(--text-dim);
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    display: flex; align-items: center; gap: 5px;
+    padding: 1px 0;
+}
+.recall-note summary::-webkit-details-marker { display: none; }
+
+.recall-note summary::before {
+    content: '▶';
+    font-size: 9px;
+    color: var(--text-dim);
+    transition: transform .15s;
+    display: inline-block;
+}
+.recall-note[open] summary::before { transform: rotate(90deg); }
+.recall-note summary:hover { color: var(--text); }
+
+.recall-note-content {
+    margin: 4px 0 4px 16px;
+    padding: 8px 10px;
+    background: #f9fafb;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 12px;
+    color: #4b5563;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.6;
+    max-height: 200px;
+    overflow-y: auto;
+}
 
 /* ── timestamps ─────────────────────────────────────── */
 .msg-time {
