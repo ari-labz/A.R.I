@@ -2,23 +2,15 @@ using System.Text.Json.Serialization;
 
 namespace ARI.LLM;
 
+/// <summary>
+/// Wire-format message for LLM API requests.
+/// Used only by ad-hoc Engram write threads — all display history uses ThreadItem instead.
+/// </summary>
 public class ChatMessage
 {
     [JsonPropertyName("role")]
-    public string Role { get; init; }
+    public required string Role { get; init; }
 
     [JsonPropertyName("content")]
-    public string Content { get; init; }
-
-    [JsonIgnore]
-    public DateTime? Timestamp { get; init; }
-
-    [JsonIgnore]
-    public double? ThinkingSeconds { get; init; }
-
-    [JsonIgnore]
-    public string? RecallNotes { get; init; }
-
-    [JsonIgnore]
-    public string? ContextSummary { get; init; }
+    public required string Content { get; init; }
 }

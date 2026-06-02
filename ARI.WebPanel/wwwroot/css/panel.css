@@ -199,8 +199,12 @@ html, body {
     width: 100%;
     max-width: var(--col-max);
     margin: 0 auto;
-    padding: 10px 0;
+    padding: 0;
 }
+
+/* add breathing room between distinct exchanges, not between every row */
+.msg-row.user      { margin-top: 16px; }
+.msg-row.assistant { margin-bottom: 0; gap: 0; }
 
 /* user message: right-aligned pill */
 .msg-row.user {
@@ -238,7 +242,7 @@ html, body {
 .thought-label {
     font-size: 12px;
     color: var(--text-dim);
-    margin-bottom: 4px;
+    margin-bottom: 0;
     user-select: none;
 }
 .thought-block summary { list-style: none; cursor: pointer; }

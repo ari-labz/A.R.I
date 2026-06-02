@@ -81,6 +81,68 @@
 
 @section Styles {
 <style>
+.msg-row.memory-event {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+}
+.memory-block {
+    max-width: 100%;
+}
+.memory-content {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: 6px;
+}
+.memory-change {
+    font-size: 0.82rem;
+    color: var(--subtext, #a6adc8);
+    line-height: 1.4;
+}
+.memory-op {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.memory-op-created {
+    background: rgba(166,227,161,0.15);
+    color: #a6e3a1;
+}
+.memory-op-updated {
+    background: rgba(137,180,250,0.15);
+    color: #89b4fa;
+}
+.memory-summary {
+    color: var(--subtext, #a6adc8);
+    font-size: 0.8rem;
+}
+.msg-row.command-exchange {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+}
+.command-input {
+    font-family: monospace;
+    font-size: 13px;
+    color: var(--text-dim);
+}
+.command-response-block {
+    border-left: 2px solid var(--accent);
+    padding: 6px 12px;
+    background: var(--input-bg);
+    border-radius: 0 8px 8px 0;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text-dim);
+    max-width: 100%;
+}
+
 #thread-list li.pending {
     opacity: 0.6;
     font-style: italic;
@@ -269,10 +331,11 @@
 
     wireCmdPopup('input');
 
-    let activeThread        = null;
-    let isStreaming         = false;
-    let knownMsgCount       = 0;
+    let activeThread         = null;
+    let isStreaming          = false;
     let activeThreadInternal = false; // true when viewing an internal model thread
+    let activeEventSource    = null;  // prompt SSE stream connection
+    let watchEventSource     = null;  // per-thread watch connection for server push
 
     // ── sidebar ─────────────────────────────────────────
     const sidebar   = document.getElementById('sidebar');
@@ -317,7 +380,7 @@
 
                 let label;
                 if (t.isInternal) {
-                    label = t.modelName ?? 'Internal';
+                    label = t.agentName ?? 'Internal';
                 } else {
                     label = t.key.startsWith('web-') ? 'Web chat' : 'Discord';
                 }
@@ -327,7 +390,7 @@
                     : '';
 
                 li.innerHTML = `<span class="thread-time">${time}</span>${label}`;
-                li.addEventListener('click', () => openThread(t.key, t.isInternal, t.modelName));
+                li.addEventListener('click', () => openThread(t.key, t.isInternal, t.agentName));
                 list.appendChild(li);
             });
         } catch { /* silently ignore network hiccups during thread list refresh */ }
@@ -336,6 +399,8 @@
     document.getElementById('chk-show-internal').addEventListener('change', loadThreads);
 
     document.getElementById('btn-new-chat').addEventListener('click', () => {
+        if (watchEventSource)  { watchEventSource.close();  watchEventSource  = null; }
+        if (activeEventSource) { activeEventSource.close(); activeEventSource = null; isStreaming = false; }
         activeThread = null;
         resetToIdle();
         document.getElementById('input').value = '';
@@ -344,48 +409,113 @@
     });
 
     // ── open thread ─────────────────────────────────────
-    async function openThread(key, isInternal = false, modelName = null) {
+    async function openThread(key, isInternal = false, agentName = null) {
+        // Close any active prompt SSE stream.
+        if (activeEventSource) { activeEventSource.close(); activeEventSource = null; isStreaming = false; updateButtons(); }
+        // Close the previous thread's watch connection.
+        if (watchEventSource) { watchEventSource.close(); watchEventSource = null; }
+        watchHasRenderedResponse = false;
+
         activeThread         = key;
         activeThreadInternal = isInternal;
 
         document.querySelectorAll('#thread-list li').forEach(li =>
             li.classList.toggle('active', li.dataset.key === key));
 
-        const url  = isInternal ? `/api/threads/${key}/history?raw=true` : `/api/threads/${key}/history`;
-        const res  = await fetch(url);
-        const msgs = await res.json();
+        // Initial load
+        await rebuildThread(key, isInternal, agentName);
 
-        const box = document.getElementById('messages');
-        box.innerHTML = '';
-        msgs.forEach(m => appendRow(m.role, m.content, m.timestamp, m.thinkingSeconds, m.recallNotes, m.contextSummary, isInternal, modelName));
-        knownMsgCount = msgs.length;
-
-        // Skip animation if thread already has messages
-        activateChat(msgs.length > 0);
-
+        activateChat(document.getElementById('messages').children.length > 0);
         document.getElementById('input-area').style.display = isInternal ? 'none' : '';
         if (isMobile()) setSidebarCollapsed(true);
-
-        scrollBottom();
         if (!isInternal) document.getElementById('input').focus();
+
+        // For internal threads use the poll; for dialogue threads open a watch connection.
+        if (!isInternal) {
+            openWatchConnection(key, agentName);
+        }
     }
 
-    // poll active thread for new messages (catches Discord replies)
-    async function pollActiveThread() {
-        if (!activeThread || isStreaming || activeThreadInternal) return;
+    async function rebuildThread(key, isInternal = false, agentName = null) {
+        const url   = isInternal ? `/api/threads/${key}/history?raw=true` : `/api/threads/${key}/history`;
+        const res   = await fetch(url);
+        const items = await res.json();
+
+        const box = document.getElementById('messages');
+        // Preserve the typing indicator if it exists
+        const typingEl = document.getElementById('typing-indicator');
+        box.innerHTML = '';
+        items.forEach(m => renderThreadItem(m, isInternal, agentName));
+        // Re-add typing indicator after rebuild if ARI is still processing
+        if (typingEl) box.appendChild(typingEl);
+
+        scrollBottom();
+    }
+
+    // Shared flag: set to true when a watch rebuild has rendered the AriResponse,
+    // so the concurrent stream handler knows not to append a duplicate row.
+    let watchHasRenderedResponse = false;
+
+    function openWatchConnection(key, agentName = null) {
+        watchHasRenderedResponse = false;
+        const es = new EventSource(`/api/threads/${key}/watch`);
+        watchEventSource = es;
+
+        es.onmessage = async e => {
+            if (activeThread !== key) { es.close(); return; }
+            try {
+                const { isProcessing } = JSON.parse(e.data);
+                await rebuildThread(key, false, agentName);
+                // If a rebuild just rendered an AriResponse, signal the stream not to add another.
+                const hasAriResponse = document.querySelector('.msg-row.assistant .bubble') !== null;
+                if (hasAriResponse) watchHasRenderedResponse = true;
+                // Show/hide typing indicator based on server processing state.
+                if (isProcessing && !document.getElementById('typing-indicator')) showTyping();
+                else if (!isProcessing) hideTyping();
+            } catch { /* ignore malformed event */ }
+        };
+
+        es.onerror = () => {
+            if (activeThread !== key) { es.close(); return; }
+            // Connection dropped — reconnect after a short delay.
+            es.close();
+            watchEventSource = null;
+            setTimeout(() => {
+                if (activeThread === key && !activeThreadInternal)
+                    openWatchConnection(key, agentName);
+            }, 3000);
+        };
+    }
+
+    // poll for internal thread updates (no watch SSE for those)
+    async function pollInternalThread() {
+        if (!activeThread || !activeThreadInternal) return;
         try {
-            const res  = await fetch(`/api/threads/${activeThread}/history`);
-            const msgs = await res.json();
-            if (msgs.length > knownMsgCount) {
-                const box = document.getElementById('messages');
-                for (let i = knownMsgCount; i < msgs.length; i++) {
-                    const m = msgs[i];
-                    appendRow(m.role, m.content, m.timestamp, m.thinkingSeconds, m.recallNotes, m.contextSummary);
-                }
-                knownMsgCount = msgs.length;
-                scrollBottom();
-            }
-        } catch { /* silently ignore network hiccups */ }
+            await rebuildThread(activeThread, true);
+        } catch { /* silently ignore */ }
+    }
+
+    function buildMemoryBlock(changes, timeStr = '') {
+        const row = document.createElement('div');
+        row.className = 'msg-row memory-event';
+
+        const changesHtml = (changes ?? []).map(c => {
+            const titleHtml = c.url
+                ? `<a href="${escHtml(c.url)}" target="_blank" rel="noopener" class="recall-note-link">${escHtml(c.title)}</a>`
+                : escHtml(c.title);
+            const detail = c.op === 'created'
+                ? '<span class="memory-op memory-op-created">created</span>'
+                : `<span class="memory-op memory-op-updated">updated</span> <span class="memory-summary">${escHtml(c.summary)}</span>`;
+            return `<div class="memory-change">${titleHtml} — ${detail}</div>`;
+        }).join('');
+
+        row.innerHTML =
+            `<details class="thought-block memory-block">` +
+            `<summary>A·R·I will remember this</summary>` +
+            `<div class="thought-content memory-content">${changesHtml}</div>` +
+            `</details>` +
+            (timeStr ? `<div class="msg-time">${timeStr}</div>` : '');
+        return row;
     }
 
 
@@ -415,70 +545,76 @@
             activeThread = key;
             injectPendingThread(key);
             activateChat();
+            openWatchConnection(key); // sender needs a watch connection too
         }
 
-        // Slash commands go to the command API, not the LLM stream
+        // Slash commands go to the command API, not the LLM stream.
+        // The watch SSE will push the CommandExchange back to this client when stored.
         if (prompt.startsWith('/')) {
-            appendRow('user', prompt, new Date().toISOString());
-            scrollBottom();
             showTyping();
             try {
                 const res = await fetch('/api/commands', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ input: prompt })
+                    body: JSON.stringify({ threadKey: activeThread, input: prompt })
                 });
-                hideTyping();
                 const data = await res.json();
-                const reply = res.ok ? (data.result ?? 'Done.') : (data.error ?? 'Command failed.');
-                appendRow('assistant', reply, new Date().toISOString());
+                if (!res.ok) {
+                    hideTyping();
+                    renderThreadItem({ type: 'commandExchange', input: prompt,
+                        response: data.error ?? 'Command failed.', timestamp: new Date().toISOString() });
+                }
+                // On success the watch SSE will trigger a rebuild which shows the CommandExchange.
             } catch {
                 hideTyping();
-                appendRow('assistant', 'Command failed — could not reach A·R·I.', new Date().toISOString());
+                renderThreadItem({ type: 'commandExchange', input: prompt,
+                    response: 'Command failed — could not reach A·R·I.', timestamp: new Date().toISOString() });
             }
-            knownMsgCount += 2;
-            scrollBottom();
             return;
         }
 
         isStreaming = true;
         updateButtons();
-
-        appendRow('user', prompt, new Date().toISOString());
         showTyping();
-        scrollBottom();
 
+        const threadKeyForThisStream = activeThread;
         const url = `/api/threads/${activeThread}/stream?prompt=${encodeURIComponent(prompt)}`;
         const es  = new EventSource(url);
+        activeEventSource = es;
 
-        let ariRow = null;
+        let ariRow   = null;
         let bubbleEl = null;
 
         es.onmessage = e => {
+            if (activeThread !== threadKeyForThisStream) { es.close(); activeEventSource = null; return; }
             if (e.data === '[DONE]') {
-                es.close(); isStreaming = false; knownMsgCount += 2; updateButtons(); loadThreads();
-                // refresh the last ARI row to attach thought metadata
-                refreshLastAriRow();
+                es.close(); activeEventSource = null; isStreaming = false;
+                updateButtons(); loadThreads();
+                // The watch SSE will push a final rebuild with full metadata (ThinkingSeconds etc).
+                // refreshLastAriRow is no longer needed — watch handles it.
                 return;
             }
             if (e.data.startsWith('[ERROR]')) {
                 hideTyping();
-                appendRow('assistant', e.data.replace('[ERROR] ', ''), new Date().toISOString());
-                es.close(); isStreaming = false; updateButtons(); return;
+                renderThreadItem({ type: 'ariResponse', content: e.data.replace('[ERROR] ', ''), timestamp: new Date().toISOString() });
+                es.close(); activeEventSource = null; isStreaming = false; updateButtons(); return;
             }
+            // Skip stream rendering if the watch SSE already rebuilt the thread with the final response.
+            if (watchHasRenderedResponse) return;
             if (!ariRow) {
                 hideTyping();
-                ariRow   = appendRow('assistant', '', new Date().toISOString());
-                bubbleEl = ariRow.querySelector('.bubble');
+                ariRow   = renderThreadItem({ type: 'ariResponse', content: '', timestamp: new Date().toISOString() });
+                bubbleEl = ariRow?.querySelector('.bubble') ?? null;
             }
-            setBubbleMd(bubbleEl, e.data.replace(/\\n/g, '\n'));
+            if (bubbleEl) setBubbleMd(bubbleEl, e.data.replace(/\\n/g, '\n'));
             scrollBottom();
         };
 
         es.onerror = () => {
+            if (activeThread !== threadKeyForThisStream) { es.close(); activeEventSource = null; return; }
             hideTyping();
-            if (!ariRow) appendRow('assistant', '[connection error]', new Date().toISOString());
-            es.close(); isStreaming = false; updateButtons();
+            if (!ariRow) renderThreadItem({ type: 'ariResponse', content: '[connection error]', timestamp: new Date().toISOString() });
+            es.close(); activeEventSource = null; isStreaming = false; updateButtons();
         };
     }
 
@@ -490,63 +626,40 @@
         send(t);
     });
 
-    // ── helpers ──────────────────────────────────────────
-    function appendRow(role, content, timestamp, thinkingSeconds, recallNotes, contextSummary, isInternal = false, modelName = null) {
-        const box = document.getElementById('messages');
-        const row = document.createElement('div');
+    // ── Thread item rendering ────────────────────────────────────────────────────
 
-        const timeStr = timestamp
-            ? new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    function renderThreadItem(item, isInternal = false, agentName = null) {
+        const box = document.getElementById('messages');
+        const t   = item.timestamp
+            ? new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             : '';
 
-        if (isInternal) {
-            // Internal thread rendering: system/user = left, assistant = right
-            if (role === 'system') {
-                row.className = 'msg-row internal-system';
-                row.innerHTML =
-                    `<details class="system-block">` +
-                    `<summary><span class="sender">System</span><span class="msg-time">${timeStr}</span></summary>` +
-                    `<div class="bubble system-bubble"></div>` +
-                    `</details>`;
-                setBubbleMd(row.querySelector('.system-bubble'), content);
-            } else if (role === 'user') {
-                row.className = 'msg-row internal-prompt';
-                row.innerHTML =
-                    `<div class="sender">Prompt</div>` +
-                    `<div class="bubble"></div>` +
-                    `<div class="msg-time">${timeStr}</div>`;
-                setBubbleMd(row.querySelector('.bubble'), content);
-            } else {
-                // assistant — right side, labelled by model name
+        let row = document.createElement('div');
+
+        switch (item.type) {
+
+            case 'userMessage': {
+                if (isInternal) {
+                    row.className = 'msg-row internal-prompt';
+                    row.innerHTML = `<div class="sender">${escHtml(item.username)}</div><div class="bubble"></div><div class="msg-time">${t}</div>`;
+                    setBubbleMd(row.querySelector('.bubble'), item.content);
+                } else {
+                    row.className = 'msg-row user';
+                    row.innerHTML = `<div><div class="bubble"></div><div class="msg-time">${t}</div></div>`;
+                    setBubbleMd(row.querySelector('.bubble'), item.content);
+                }
+                break;
+            }
+
+            case 'ariResponse': {
                 row.className = 'msg-row assistant';
                 let thoughtHtml = '';
-                if (thinkingSeconds != null) {
-                    const secs = typeof thinkingSeconds === 'number' ? thinkingSeconds.toFixed(1) : thinkingSeconds;
-                    thoughtHtml =
-                        `<details class="thought-block" style="pointer-events:none">` +
-                        `<summary>${modelName ?? 'Model'} responded in ${secs}s</summary>` +
-                        `</details>`;
-                }
-                row.innerHTML =
-                    `<div class="sender">${escHtml(modelName ?? 'Model')}</div>` +
-                    thoughtHtml +
-                    `<div class="bubble"></div>` +
-                    `<div class="msg-time">${timeStr}</div>`;
-                setBubbleMd(row.querySelector('.bubble'), content);
-            }
-        } else {
-            // Normal dialogue rendering
-            row.className = `msg-row ${role}`;
-            if (role === 'user') {
-                row.innerHTML = `<div><div class="bubble"></div><div class="msg-time">${timeStr}</div></div>`;
-            } else {
-                let thoughtHtml = '';
-                if (thinkingSeconds != null) {
-                    const secs = typeof thinkingSeconds === 'number' ? thinkingSeconds.toFixed(1) : thinkingSeconds;
+                if (item.thinkingSeconds != null) {
+                    const secs = typeof item.thinkingSeconds === 'number'
+                        ? item.thinkingSeconds.toFixed(1) : item.thinkingSeconds;
                     let detailParts = '';
-                    if (recallNotes) {
-                        // Parse "[NoteName]\ncontent\n\n[NoteName2]\ncontent" into individual note blocks
-                        const noteBlocks = recallNotes.split(/\n(?=\[)/).map(block => {
+                    if (item.recallNotes) {
+                        const noteBlocks = item.recallNotes.split(/\n(?=\[)/).map(block => {
                             const match = block.match(/^\[([^|\]]+)(?:\|([^\]]+))?\]\n?([\s\S]*)/);
                             return match ? { name: match[1], url: match[2] || null, content: match[3].trim() } : null;
                         }).filter(Boolean);
@@ -554,57 +667,53 @@
                             const nameHtml = n.url
                                 ? `<a href="${escHtml(n.url)}" target="_blank" rel="noopener" class="recall-note-link">${escHtml(n.name)}</a>`
                                 : escHtml(n.name);
-                            return `<details class="recall-note">` +
-                                   `<summary>${nameHtml}</summary>` +
-                                   `<div class="recall-note-content">${escHtml(n.content)}</div>` +
-                                   `</details>`;
+                            return `<details class="recall-note"><summary>${nameHtml}</summary>` +
+                                   `<div class="recall-note-content">${escHtml(n.content)}</div></details>`;
                         }).join('');
                         detailParts += `<div class="recall-notes-section"><span class="recall-label">Notes Read</span>${notesHtml}</div>`;
                     }
-                    if (contextSummary) detailParts += `<h4>Context summary</h4>${escHtml(contextSummary)}`;
+                    if (item.contextSummary) detailParts += `<h4>Context summary</h4>${escHtml(item.contextSummary)}`;
                     const hasDetails = detailParts.length > 0;
                     thoughtHtml = hasDetails
-                        ? `<details class="thought-block">` +
-                          `<summary>A·R·I thought for ${secs}s</summary>` +
-                          `<div class="thought-content">${detailParts}</div>` +
-                          `</details>`
+                        ? `<details class="thought-block"><summary>A·R·I thought for ${secs}s</summary>` +
+                          `<div class="thought-content">${detailParts}</div></details>`
                         : `<div style="font-size:12px;color:#8e8ea0;margin-bottom:4px;user-select:none;">A·R·I thought for ${secs}s</div>`;
                 }
+                const senderLabel = isInternal ? escHtml(agentName ?? 'Agent') : 'A·R·I';
                 row.innerHTML =
-                    `<div class="sender">A·R·I</div>` +
+                    `<div class="sender">${senderLabel}</div>` +
                     thoughtHtml +
                     `<div class="bubble"></div>` +
-                    `<div class="msg-time">${timeStr}</div>`;
+                    `<div class="msg-time">${t}</div>`;
+                setBubbleMd(row.querySelector('.bubble'), item.content);
+                break;
             }
-            setBubbleMd(row.querySelector('.bubble'), content);
+
+            case 'commandExchange': {
+                row.className = 'msg-row command-exchange';
+                row.innerHTML =
+                    `<div class="command-input">${escHtml(item.input)}</div>` +
+                    `<div class="command-response-block"></div>` +
+                    `<div class="msg-time">${t}</div>`;
+                setBubbleMd(row.querySelector('.command-response-block'), item.response);
+                break;
+            }
+
+            case 'engramEvent': {
+                row = buildMemoryBlock(item.changes, t);
+                break;
+            }
+
+            default: {
+                // Unknown type — skip silently
+                return null;
+            }
         }
 
         box.appendChild(row);
         return row;
     }
 
-    async function refreshLastAriRow() {
-        if (!activeThread) return;
-        try {
-            const res  = await fetch(`/api/threads/${activeThread}/history`);
-            const msgs = await res.json();
-            if (!msgs.length) return;
-            const last = msgs[msgs.length - 1];
-            if (last.role !== 'assistant') return;
-            // replace the last .msg-row.assistant in the box
-            const box  = document.getElementById('messages');
-            const rows = box.querySelectorAll('.msg-row.assistant');
-            if (!rows.length) return;
-            const lastRow = rows[rows.length - 1];
-            const replacement = document.createElement('div');
-            replacement.className = 'msg-row assistant';
-            box.insertBefore(replacement, lastRow);
-            box.removeChild(lastRow);
-            // re-render into replacement
-            const tmp = appendRow(last.role, last.content, last.timestamp, last.thinkingSeconds, last.recallNotes, last.contextSummary);
-            replacement.replaceWith(tmp);
-        } catch { /* ignore */ }
-    }
 
     function escHtml(str) {
         return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -742,7 +851,7 @@
             const initial = '@Html.Raw(Model ?? "")';
             if (initial) openThread(initial);
             setInterval(loadThreads, 5000);
-            setInterval(pollActiveThread, 3000);
+            setInterval(pollInternalThread, 3000);
         } catch (err) {
             console.error('ARI init failed:', err);
             setTimeout(() => location.reload(), 2000);

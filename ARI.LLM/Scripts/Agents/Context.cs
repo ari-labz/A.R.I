@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
-internal class Context : Model
+internal class Context : Agent
 {
     private readonly HttpClient httpClient;
     private readonly Dictionary<string, string> contexts = new();

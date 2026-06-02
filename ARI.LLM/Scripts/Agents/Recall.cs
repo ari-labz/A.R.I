@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
-internal class Recall : Model
+internal class Recall : Agent
 {
     private readonly BrainService brain;
     private readonly int recallDepth;
@@ -23,7 +23,7 @@ internal class Recall : Model
     /// Runs up to <see cref="recallDepth"/> recursive fetch steps, parallelising note retrieval
     /// within each step for speed. Returns null if nothing relevant is found.
     /// </summary>
-    internal async Task<string?> FetchContextAsync(IReadOnlyList<ChatMessage> history, string incomingPrompt)
+    internal async Task<string?> FetchContextAsync(IReadOnlyList<ThreadItem> history, string incomingPrompt)
     {
         if (recallDepth <= 0) return null;
 
@@ -179,14 +179,16 @@ internal class Recall : Model
         return true;
     }
 
-    private static string BuildTranscript(IReadOnlyList<ChatMessage> history, string incomingPrompt)
+    private static string BuildTranscript(IReadOnlyList<ThreadItem> history, string incomingPrompt)
     {
         StringBuilder sb = new();
-        foreach (ChatMessage msg in history)
+        foreach (ThreadItem item in history)
         {
-            if (msg.Role == "system") continue;
-            string speaker = msg.Role == "user" ? "User" : "ARI";
-            sb.AppendLine($"{speaker}: {msg.Content}");
+            switch (item)
+            {
+                case UserMessage u: sb.AppendLine($"{u.Username}: {u.Content}"); break;
+                case AriResponse r: sb.AppendLine($"ARI: {r.Content}");          break;
+            }
         }
         sb.AppendLine($"User: {incomingPrompt}");
         return sb.ToString();
