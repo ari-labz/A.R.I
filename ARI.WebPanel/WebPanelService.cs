@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Logging;
 using System.Security.Claims;
 
@@ -37,7 +38,13 @@ public class WebPanelService : IAsyncDisposable
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        WebApplicationBuilder builder = WebApplication.CreateBuilder();
+        string exeDir = AppContext.BaseDirectory;
+        string wwwrootDir = Path.Combine(exeDir, "wwwroot");
+        WebApplicationBuilder builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            ContentRootPath = exeDir,
+            WebRootPath = wwwrootDir,
+        });
 
         builder.Logging.ClearProviders();
         builder.Logging.AddProvider(new ForwardingLoggerProvider(loggerFactory));
@@ -69,7 +76,9 @@ public class WebPanelService : IAsyncDisposable
                 string? email = ctx.Principal?.FindFirstValue(ClaimTypes.Email);
                 if (!string.Equals(email, config.AllowedEmail, StringComparison.OrdinalIgnoreCase))
                 {
-                    ctx.Fail($"Access denied: {email} is not an authorised user.");
+                    ctx.Fail($"Access denied.");
+                    ctx.HandleResponse();
+                    ctx.Response.Redirect("/auth/login?error=unauthorized");
                 }
                 return Task.CompletedTask;
             };
@@ -92,22 +101,46 @@ public class WebPanelService : IAsyncDisposable
                 "</body></html>");
         }));
 
-        app.UseStaticFiles();
+        app.UseStaticFiles(new StaticFileOptions
+        {
+            FileProvider = new PhysicalFileProvider(wwwrootDir),
+            RequestPath = "",
+        });
         app.UseRouting();
         app.UseAuthentication();
         app.UseAuthorization();
 
-        // Block all routes unless authenticated — redirect to login
+        // Block all routes unless authenticated with the whitelisted email
         app.Use(async (ctx, next) =>
         {
-            if (!ctx.User.Identity?.IsAuthenticated == true
-                && ctx.Request.Path != "/auth/login"
-                && ctx.Request.Path != "/auth/callback"
-                && !ctx.Request.Path.StartsWithSegments("/signin-google"))
+            bool isAuthPath = ctx.Request.Path == "/auth/login"
+                || ctx.Request.Path == "/auth/callback"
+                || ctx.Request.Path.StartsWithSegments("/signin-google")
+                || ctx.Request.Path.StartsWithSegments("/images")
+                || ctx.Request.Path.StartsWithSegments("/css")
+                || ctx.Request.Path.StartsWithSegments("/js")
+                || ctx.Request.Path.StartsWithSegments("/lib")
+                || ctx.Request.Path == "/favicon.ico";
+
+            if (isAuthPath) { await next(); return; }
+
+            if (ctx.User.Identity?.IsAuthenticated == true)
+            {
+                // Double-check the signed-in email matches — reject if not
+                string? email = ctx.User.FindFirstValue(ClaimTypes.Email);
+                if (!string.Equals(email, config.AllowedEmail, StringComparison.OrdinalIgnoreCase))
+                {
+                    await ctx.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+                    ctx.Response.Redirect("/auth/login?error=unauthorized");
+                    return;
+                }
+            }
+            else
             {
                 ctx.Response.Redirect("/auth/login");
                 return;
             }
+
             await next();
         });
 
