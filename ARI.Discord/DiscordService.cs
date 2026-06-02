@@ -60,7 +60,7 @@ public class DiscordService : BackgroundService
 
         IUser owner = await client.GetUserAsync(config.OwnerId);
         IDMChannel dm = await owner.CreateDMChannelAsync();
-        await dm.SendMessageAsync("A.R.I is offline.");
+        await dm.SendMessageAsync("A·R·I is offline.");
     }
 
     private async Task OnReadyAsync()
@@ -72,7 +72,7 @@ public class DiscordService : BackgroundService
         {
             IUser owner = await client.GetUserAsync(config.OwnerId);
             IDMChannel dm = await owner.CreateDMChannelAsync();
-            await dm.SendMessageAsync("A.R.I is online.");
+            await dm.SendMessageAsync("A·R·I is online.");
             Common.Logger.LogInformation("Sent online notification to owner {OwnerId}", config.OwnerId);
         }
         catch (Exception ex)
@@ -87,7 +87,7 @@ public class DiscordService : BackgroundService
         [
             new SlashCommandBuilder()
                 .WithName("engram")
-                .WithDescription("Control ARI's memory system")
+                .WithDescription("Control A·R·I's memory system")
                 .AddOption(new SlashCommandOptionBuilder().WithName("on")      .WithDescription("Enable Engram")                    .WithType(ApplicationCommandOptionType.SubCommand))
                 .AddOption(new SlashCommandOptionBuilder().WithName("off")     .WithDescription("Disable Engram")                   .WithType(ApplicationCommandOptionType.SubCommand))
                 .AddOption(new SlashCommandOptionBuilder().WithName("status")  .WithDescription("Show whether Engram is enabled")   .WithType(ApplicationCommandOptionType.SubCommand))
@@ -114,7 +114,7 @@ public class DiscordService : BackgroundService
 
             new SlashCommandBuilder()
                 .WithName("whitelist")
-                .WithDescription("Manage which users ARI responds to in servers")
+                .WithDescription("Manage which users A·R·I responds to in servers")
                 .AddOption(new SlashCommandOptionBuilder()
                     .WithName("add")
                     .WithDescription("Allow a user")
@@ -154,7 +154,7 @@ public class DiscordService : BackgroundService
         // Only the owner may use ARI's commands.
         if (cmd.User.Id != config.OwnerId)
         {
-            await cmd.RespondAsync("You are not authorised to use ARI's commands.", ephemeral: true);
+            await cmd.RespondAsync("You are not authorised to use A·R·I's commands.", ephemeral: true);
             return;
         }
 
@@ -322,13 +322,13 @@ public class DiscordService : BackgroundService
         {
             typingCts.Cancel();
             Common.Logger.LogError("LLM request failed: {Error}", ex.Message);
-            await message.Channel.SendMessageAsync("Ari is unable to respond right now.");
+            await message.Channel.SendMessageAsync("A·R·I is unable to respond right now.");
         }
         catch (ModelNotFoundException ex)
         {
             typingCts.Cancel();
             Common.Logger.LogError("Dialogue model not available: {Error}", ex.Message);
-            await message.Channel.SendMessageAsync("Ari is unable to respond right now.");
+            await message.Channel.SendMessageAsync("A·R·I is unable to respond right now.");
         }
     }
 

@@ -1,7 +1,7 @@
 @model string?
 @{
     Layout = "_Layout";
-    ViewData["Title"] = "ARI";
+    ViewData["Title"] = "A·R·I";
 }
 
 <div id="shell">
@@ -10,7 +10,7 @@
     <aside id="sidebar">
         <div id="sidebar-inner">
             <div id="sidebar-header">
-                <img id="sidebar-wordmark" src="/images/logo-white.png?v=2" alt="A.R.I" />
+                <img id="sidebar-wordmark" src="/images/logo-white.png?v=2" alt="A·R·I" />
                 <button id="btn-toggle-sidebar" title="Close sidebar">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>
@@ -49,7 +49,7 @@
 
         <!-- logo header: tall+centered in idle, compact at top when active -->
         <div id="main-header">
-            <img id="main-logo" src="/images/logo-black.png?v=2" alt="A.R.I" />
+            <img id="main-logo" src="/images/logo-black.png?v=2" alt="A·R·I" />
         </div>
 
         <!-- messages: invisible in idle, fades in when active -->
@@ -63,7 +63,7 @@
         <!-- input: always at the bottom -->
         <div id="input-area">
             <div id="input-wrap">
-                <textarea id="input" placeholder="Message ARI..." rows="1"></textarea>
+                <textarea id="input" placeholder="Message A·R·I..." rows="1"></textarea>
                 <div id="input-footer">
                     <button class="btn-send" id="btn-send" disabled title="Send">
                         <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
@@ -418,7 +418,7 @@
                 appendRow('assistant', reply, new Date().toISOString());
             } catch {
                 hideTyping();
-                appendRow('assistant', 'Command failed — could not reach ARI.', new Date().toISOString());
+                appendRow('assistant', 'Command failed — could not reach A·R·I.', new Date().toISOString());
             }
             knownMsgCount += 2;
             scrollBottom();
@@ -533,13 +533,13 @@
                     const hasDetails = detailParts.length > 0;
                     thoughtHtml = hasDetails
                         ? `<details class="thought-block">` +
-                          `<summary>ARI thought for ${secs}s</summary>` +
+                          `<summary>A·R·I thought for ${secs}s</summary>` +
                           `<div class="thought-content">${detailParts}</div>` +
                           `</details>`
-                        : `<div style="font-size:12px;color:#8e8ea0;margin-bottom:4px;user-select:none;">ARI thought for ${secs}s</div>`;
+                        : `<div style="font-size:12px;color:#8e8ea0;margin-bottom:4px;user-select:none;">A·R·I thought for ${secs}s</div>`;
                 }
                 row.innerHTML =
-                    `<div class="sender">ARI</div>` +
+                    `<div class="sender">A·R·I</div>` +
                     thoughtHtml +
                     `<div class="bubble"></div>` +
                     `<div class="msg-time">${timeStr}</div>`;
@@ -646,9 +646,9 @@
         row.className = 'msg-row assistant';
         row.id = 'typing-indicator';
         row.innerHTML =
-            `<div class="sender">ARI</div>` +
+            `<div class="sender">A·R·I</div>` +
             `<div class="typing-indicator">` +
-            `<span>A.R.I is thinking</span>` +
+            `<span>A·R·I is thinking</span>` +
             `<div class="typing-dots"><b></b><b></b><b></b></div>` +
             `</div>`;
         box.appendChild(row);
