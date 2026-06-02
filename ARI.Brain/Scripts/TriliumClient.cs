@@ -14,6 +14,10 @@ public class TriliumClient
     // Full folder path → noteId.  Keys: "People", "People/Family", etc.
     private readonly Dictionary<string, string> folderCache = new(StringComparer.OrdinalIgnoreCase);
 
+    // IDs of Unknown/ stubs that were suppressed during GetAllNoteIds because a non-Unknown
+    // note with the same title exists. Populated on each call to GetAllNoteIds.
+    private readonly List<string> suppressedStubIds = new();
+
     public TriliumClient(string baseUrl, string token, string rootNoteId)
     {
         this.rootNoteId = rootNoteId;
@@ -170,6 +174,7 @@ public class TriliumClient
 
         // Deduplicate by title: prefer notes NOT in Unknown/ over Unknown stubs that share
         // a name with a real categorised note (e.g. Unknown/People vs the real People folder).
+        suppressedStubIds.Clear();
         var result = new Dictionary<string, (string Id, string FolderPath)>(StringComparer.OrdinalIgnoreCase);
         foreach ((string id, string title, string folderPath) in all)
         {
@@ -185,11 +190,13 @@ public class TriliumClient
                 if (existingIsUnknown && !incomingIsUnknown)
                 {
                     Common.Logger.LogWarning("[Brain] Duplicate note title '{Title}' — preferring '{Incoming}' over Unknown stub.", title, folderPath.Length > 0 ? $"{folderPath}/{title}" : title);
+                    suppressedStubIds.Add(existing.Id); // old Unknown stub — schedule for deletion
                     result[title] = (id, folderPath);
                 }
                 else if (!existingIsUnknown && incomingIsUnknown)
                 {
                     Common.Logger.LogWarning("[Brain] Duplicate note title '{Title}' — keeping '{Existing}', ignoring Unknown stub.", title, existing.FolderPath.Length > 0 ? $"{existing.FolderPath}/{title}" : title);
+                    suppressedStubIds.Add(id); // incoming Unknown stub — schedule for deletion
                 }
                 else
                 {
@@ -202,6 +209,32 @@ public class TriliumClient
 
     public async Task<List<string>> GetAllNoteTitles()
         => (await GetAllNoteIds()).Keys.ToList();
+
+    /// <summary>
+    /// Deletes all Unknown/ stubs that were suppressed during the last GetAllNoteIds call
+    /// because a properly-categorised note with the same title already exists.
+    /// </summary>
+    public async Task<int> DeleteSuppressedStubsAsync()
+    {
+        if (suppressedStubIds.Count == 0) return 0;
+        int deleted = 0;
+        foreach (string id in suppressedStubIds.ToList())
+        {
+            try
+            {
+                if (await DeleteNote(id))
+                {
+                    deleted++;
+                    suppressedStubIds.Remove(id);
+                }
+            }
+            catch (Exception ex)
+            {
+                Common.Logger.LogWarning("[Brain] Failed to delete suppressed stub {Id}: {Message}", id, ex.Message);
+            }
+        }
+        return deleted;
+    }
 
     /// <summary>Deletes all known category folders (and their children) from Trilium.</summary>
     public async Task PurgeCategoryFolders()

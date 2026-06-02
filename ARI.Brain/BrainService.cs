@@ -146,6 +146,23 @@ public class BrainService
         return cachedTitles;
     }
 
+    /// <summary>
+    /// Returns full paths for every note (e.g. "People/[REDACT]'s Family/Immediate Family/[REDACT]").
+    /// Notes at the root level are returned as bare titles.
+    /// </summary>
+    public async Task<List<string>> GetNotePaths()
+    {
+        if (!triliumReady) await Startup();
+        if (!triliumReady) return new List<string>();
+        var paths = new List<string>(noteIdCache.Count);
+        foreach (var (title, id) in noteIdCache)
+        {
+            string folder = noteFolderCache.TryGetValue(id, out string? f) ? f : string.Empty;
+            paths.Add(string.IsNullOrEmpty(folder) ? title : $"{folder}/{title}");
+        }
+        return paths;
+    }
+
     public async Task<string?> GetNoteContent(string title)
     {
         if (!triliumReady) return null;
@@ -362,6 +379,23 @@ public class BrainService
     }
 
     /// <summary>
+    /// Deletes Unknown/ stubs that are duplicates of properly-categorised notes.
+    /// These are identified at startup and tracked until cleaned up.
+    /// Returns the number of stubs deleted.
+    /// </summary>
+    public async Task<int> CleanUnknownStubsAsync()
+    {
+        if (!triliumReady) return 0;
+        int deleted = await trilium.DeleteSuppressedStubsAsync();
+        if (deleted > 0)
+        {
+            Common.Logger.LogInformation("[Brain] Cleaned {Count} duplicate Unknown stub(s).", deleted);
+            cachedTitles = null;
+        }
+        return deleted;
+    }
+
+    /// <summary>
     /// Creates new notes. Pre-registers all note names before link resolution so
     /// cross-batch [[links]] resolve correctly without creating Unknown stubs.
     /// </summary>
@@ -480,33 +514,41 @@ public class BrainService
 
         if (string.IsNullOrWhiteSpace(edit.NewNoteName)) return;
 
-        string newName    = NoteName(edit.NewNoteName);
+        string newName      = NoteName(edit.NewNoteName);
         string[] newFolders = FolderPath(edit.NewNoteName);
 
         if (!branchIdCache.TryGetValue(noteId, out string? branchId))
             branchId = await trilium.GetPrimaryBranchId(noteId);
 
+        bool moved = false;
         if (!string.IsNullOrEmpty(branchId))
         {
             string newBranchId = await trilium.MoveNoteToFolderPath(branchId, noteId, newFolders);
-            branchIdCache[noteId] = newBranchId;
+            branchIdCache[noteId]   = newBranchId;
             noteFolderCache[noteId] = string.Join("/", newFolders);
+            moved = true;
+        }
+        else
+        {
+            Common.Logger.LogWarning("[Brain] Move skipped — could not resolve branch for '{Name}'.", edit.NoteName);
         }
 
-        if (!string.Equals(currentName, newName, StringComparison.OrdinalIgnoreCase))
+        bool renamed = !string.Equals(currentName, newName, StringComparison.OrdinalIgnoreCase);
+        if (renamed)
         {
             await trilium.RenameNote(noteId, newName);
             noteIdCache.Remove(currentName);
             noteIdCache[newName] = noteId;
             cachedTitles = null;
-            // Old name entries are now stale; new name will be populated on next read.
             InvalidateContentCache(currentName);
+        }
+
+        if (moved && renamed)
             Common.Logger.LogInformation("moved+renamed: {From} → {To}", edit.NoteName, edit.NewNoteName);
-        }
-        else
-        {
+        else if (moved)
             Common.Logger.LogInformation("moved: {From} → {To}", edit.NoteName, edit.NewNoteName);
-        }
+        else if (renamed)
+            Common.Logger.LogInformation("renamed: {From} → {To}", edit.NoteName, edit.NewNoteName);
     }
 
     /// <summary>Finds note IDs for all [[Name]] placeholders in html, creating Unknown stubs if needed.</summary>

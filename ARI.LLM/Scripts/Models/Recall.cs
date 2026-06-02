@@ -41,18 +41,28 @@ internal class Recall : Model
         // Include the incoming prompt so Recall can search based on what was just asked,
         // not only prior history (which may be empty on the first message of a thread).
         string transcript = BuildTranscript(history, incomingPrompt);
-        string allTitlesList     = string.Join(", ", allTitles);
+
+        // Use full paths (e.g. "People/[REDACT]'s Family/Immediate Family/[REDACT]") so the model
+        // can infer relationships and categories from the path before fetching anything.
+        // Note fetches still use bare titles — the path is for identification only.
+        List<string> allPaths    = await brain.GetNotePaths();
+        string allPathsList      = string.Join(", ", allPaths);
         string recallThreadKey   = $"recall:{Guid.NewGuid()}";
         HashSet<string> fetched  = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<string, (string Content, string? NoteId)> noteContents = new(StringComparer.OrdinalIgnoreCase);
 
         // First fetch prompt — stateless, no prior notes.
+        // Paths reveal the graph structure so the model can reason about relationships
+        // (e.g. "People/[REDACT]'s Family/Immediate Family/[REDACT]" = [REDACT]'s mum) without fetching first.
+        // Respond with bare note TITLES (not full paths) — that's what the fetch system uses.
         string firstPrompt =
             "You are recalling memories for a conversation. " +
-            "Given the conversation and the list of available notes, identify which notes are relevant.\n\n" +
+            "The available notes are shown as full paths — the path encodes meaning (category, ownership, relationship). " +
+            "Use the paths to identify which notes are relevant without needing to fetch first.\n\n" +
             $"CONVERSATION:\n{transcript}\n\n" +
-            $"AVAILABLE NOTES: {allTitlesList}\n\n" +
-            "Respond ONLY with JSON: {\"fetch\": [\"Name1\", \"Name2\"]} — or {\"fetch\": []} if nothing is relevant.";
+            $"AVAILABLE NOTES (full paths): {allPathsList}\n\n" +
+            "Respond ONLY with JSON using bare note TITLES (the last segment of the path): " +
+            "{\"fetch\": [\"[REDACT]\", \"[REDACT]'s Family\"]} — or {\"fetch\": []} if nothing is relevant.";
 
         string raw = await PromptThread(recallThreadKey, firstPrompt);
 
@@ -123,26 +133,42 @@ internal class Recall : Model
 
     // ── Private ──────────────────────────────────────────────────────────────────
 
-    // Words/phrases that signal the user is reaching into memory even without naming an entity.
+    // Explicit memory-seeking phrases — reaching back in time or referencing prior context.
     private static readonly string[] MemoryKeywords =
     [
         "remember", "last time", "before", "yesterday", "you said", "we talked",
         "earlier", "previously", "used to", "told me", "you mentioned", "we discussed"
     ];
 
+    // Personal-context indicators — possessive or relational language signals the user is
+    // asking about their own life, which is exactly what the brain stores.
+    private static readonly string[] PersonalKeywords =
+    [
+        " my ", "my ", "who is", "who's", "who are", "what is", "what's",
+        "where is", "where's", "tell me about", "what do you know"
+    ];
+
     /// <summary>
     /// Returns true if Recall can safely be skipped without any LLM call.
-    /// Skips only when ALL three conditions hold:
-    ///   1. The message is short (under 50 chars — likely a greeting or brief social exchange).
-    ///   2. No known note title appears in the message (no named entity to look up).
-    ///   3. No memory-seeking keyword is present (user isn't explicitly reaching back in time).
+    /// Skips only when ALL four conditions hold:
+    ///   1. The message is short (under 80 chars — likely a greeting or brief social exchange).
+    ///   2. No known note title appears in the message.
+    ///   3. No memory-seeking keyword is present.
+    ///   4. No personal-context indicator is present (possessive/relational language or a question).
     /// If any condition fails we fall through to the normal LLM path.
     /// </summary>
     private static bool ShouldSkip(string message, List<string> noteTitles)
     {
-        if (message.Length >= 50) return false;
+        if (message.Length >= 80) return false;
+
+        // A question mark means the user is asking something — likely needs memory.
+        if (message.Contains('?')) return false;
 
         foreach (string kw in MemoryKeywords)
+            if (message.Contains(kw, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+        foreach (string kw in PersonalKeywords)
             if (message.Contains(kw, StringComparison.OrdinalIgnoreCase))
                 return false;
 

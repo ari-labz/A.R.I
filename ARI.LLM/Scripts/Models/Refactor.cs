@@ -9,6 +9,7 @@ namespace ARI.LLM;
 internal class Refactor : Model
 {
     private readonly BrainService brain;
+    private readonly Engram?      engram;
     private readonly SemaphoreSlim runLock = new(1, 1);
 
     // How many notes to send in a single analysis call before switching to the two-pass approach.
@@ -16,9 +17,10 @@ internal class Refactor : Model
     // How many notes to include per cluster analysis call.
     private const int ClusterCallLimit = 20;
 
-    internal Refactor(ModelConfig config, BrainService brain) : base(config)
+    internal Refactor(ModelConfig config, BrainService brain, Engram? engram = null) : base(config)
     {
-        this.brain = brain;
+        this.brain  = brain;
+        this.engram = engram;
     }
 
     /// <summary>
@@ -31,6 +33,16 @@ internal class Refactor : Model
         if (!await runLock.WaitAsync(TimeSpan.FromSeconds(5)))
             return "Refactor skipped — already running.";
 
+        // Pause Engram for the duration of the refactor so a sweep mid-pass cannot
+        // write notes that conflict with the changes being applied. Restore its
+        // previous state (enabled or disabled) when done.
+        bool engramWasEnabled = engram?.IsEnabled ?? false;
+        if (engramWasEnabled)
+        {
+            engram!.Disable();
+            Common.Logger.LogInformation("[Refactor] Engram paused for refactor.");
+        }
+
         try
         {
             Common.Logger.LogInformation("[Refactor] Starting {Mode} pass.", allNotes ? "full" : "incremental");
@@ -38,6 +50,11 @@ internal class Refactor : Model
             // ── Backup ────────────────────────────────────────────────────────────
             string backupResult = await brain.BackupAsync();
             Common.Logger.LogInformation("[Refactor] {Backup}", backupResult);
+
+            // ── Clean duplicate Unknown stubs ─────────────────────────────────────
+            int stubsDeleted = await brain.CleanUnknownStubsAsync();
+            if (stubsDeleted > 0)
+                Common.Logger.LogInformation("[Refactor] Deleted {Count} duplicate Unknown stub(s).", stubsDeleted);
 
             // ── Seed ──────────────────────────────────────────────────────────────
             List<string> seedTitles = allNotes
@@ -90,26 +107,29 @@ internal class Refactor : Model
             Common.Logger.LogInformation("[Refactor] Working set: {Count} note(s) across folder(s): {Folders}.",
                 loaded.Count, string.Join(", ", touchedFolders));
 
-            // ── Strip See Also sections ───────────────────────────────────────────
+            // ── All titles (lightweight, from cache) ──────────────────────────────
+            List<string> allTitles = await brain.GetNoteTitles();
+
+            // ── Strip See Also sections + orphan link bullets ─────────────────────
             // Do this before analysis so the LLM receives clean content.
             // Collect stripped notes as edits; they'll be merged with LLM edits at apply time.
+            var knownTitlesSet = new HashSet<string>(allTitles, StringComparer.OrdinalIgnoreCase);
             var seeAlsoEdits = new Dictionary<string, EngramEdit>(StringComparer.OrdinalIgnoreCase);
             foreach (string title in loaded.Keys.ToList())
             {
-                NoteData data       = loaded[title];
-                string   stripped   = StripSeeAlsoSection(data.Markdown);
+                NoteData data     = loaded[title];
+                string stripped   = StripSeeAlsoSection(data.Markdown);
+                stripped          = StripOrphanLinkBullets(stripped, knownTitlesSet);
+                stripped          = StripChangelogLinks(stripped);
                 if (stripped == data.Markdown) continue;
 
                 loaded[title] = data with { Markdown = stripped, Links = ParseLinks(stripped) };
                 seeAlsoEdits[title] = new EngramEdit { NoteName = title, Content = stripped };
-                Common.Logger.LogInformation("[Refactor] Stripped See Also from '{Title}'.", title);
+                Common.Logger.LogInformation("[Refactor] Stripped See Also / orphan bullets from '{Title}'.", title);
             }
 
             if (seeAlsoEdits.Count > 0)
-                Common.Logger.LogInformation("[Refactor] See Also sections stripped from {Count} note(s).", seeAlsoEdits.Count);
-
-            // ── All titles (lightweight, from cache) ──────────────────────────────
-            List<string> allTitles = await brain.GetNoteTitles();
+                Common.Logger.LogInformation("[Refactor] Pre-processed {Count} note(s) (See Also strip + orphan bullet removal).", seeAlsoEdits.Count);
 
             // ── Group by top-level folder ─────────────────────────────────────────
             var hubNotes = loaded.Values
@@ -150,6 +170,32 @@ internal class Refactor : Model
                 }
             }
 
+            // ── Deduplicate across folder passes ──────────────────────────────────
+            // Multiple folder passes can emit operations for the same note. Edits take
+            // priority over adds for the same bare title; within each list last-writer-wins.
+            // An edit's effective title is its newName (if set) because that is the title
+            // the note will have after the operation — e.g. editing People/Family with
+            // newName People/[REDACT]'s Family has effective title "[REDACT]'s Family".
+            var editsByTitle = new Dictionary<string, EngramEdit>(StringComparer.OrdinalIgnoreCase);
+            foreach (EngramEdit edit in allEdits)
+            {
+                string effective = string.IsNullOrWhiteSpace(edit.NewNoteName)
+                    ? BareTitle(edit.NoteName)
+                    : BareTitle(edit.NewNoteName);
+                editsByTitle[effective] = edit; // last-writer-wins
+            }
+
+            var addsByTitle = new Dictionary<string, EngramAdd>(StringComparer.OrdinalIgnoreCase);
+            foreach (EngramAdd add in allAdds)
+                addsByTitle[BareTitle(add.NoteName)] = add; // last-writer-wins
+
+            // Remove adds whose effective title is already covered by an edit.
+            foreach (string title in editsByTitle.Keys)
+                addsByTitle.Remove(title);
+
+            allAdds  = addsByTitle.Values.ToList();
+            allEdits = editsByTitle.Values.ToList();
+
             // ── Merge and apply operations ────────────────────────────────────────
             // LLM edits take priority: they already saw stripped content, so their output
             // is a superset of the See Also removal.
@@ -184,6 +230,11 @@ internal class Refactor : Model
         }
         finally
         {
+            if (engramWasEnabled)
+            {
+                engram!.Enable();
+                Common.Logger.LogInformation("[Refactor] Engram restored.");
+            }
             runLock.Release();
         }
     }
@@ -368,21 +419,36 @@ internal class Refactor : Model
     {
         sb.AppendLine("YOUR TASKS:");
         sb.AppendLine("1. CLUSTER — identify thematic groups (family, friends, colleagues, hardware, etc.). A note can belong to multiple clusters.");
-        sb.AppendLine("2. HUBS — for each meaningful cluster, determine if a hub note should exist. Hubs reduce clutter: instead of 10 notes linking directly to [REDACT], they link to [[[REDACT]'s Family]] and the hub links to [REDACT]. Update existing hubs or create new ones.");
+        sb.AppendLine("2. HUBS — for each meaningful cluster, determine if a hub note should exist. Hubs reduce clutter: individual members link to their hub, and the hub links to each member. Update existing hubs or create new ones.");
         sb.AppendLine("3. LINK ROUTING — update note content to route links through appropriate hubs where it reduces clutter. Only change links that genuinely belong in the hub relationship.");
-        sb.AppendLine("4. BROKEN LINKS — fix any [[links]] that reference a title not in the title list: rename to the correct title, or remove if stale.");
+        sb.AppendLine("4. BROKEN LINKS — if a [[link]] target is not in the ALL EXISTING NOTE TITLES list: rename it to the correct title if an obvious match exists, or delete it. If the broken link is the sole content of a bullet point (e.g. '- [[Missing]]'), delete the entire bullet line.");
         sb.AppendLine("5. PRESERVE CONTENT — do not alter the factual content of any note. Only restructure links and add/update hub notes.");
         sb.AppendLine("6. DO NOT add links that are not supported by the note's content. DO NOT add See Also sections.");
+        sb.AppendLine("7. ONE-WAY LINKS — links are directional. Do NOT add return links from spoke notes back to the root person. Spokes point outward, not back.");
+        sb.AppendLine("8. FLATTEN SUBFOLDERS — if a note currently lives at a path like People/Family/Jake (shown in its --- header ---), move it to the standard folder depth (e.g. People/Jake) by setting newName. Do not leave notes nested deeper than one level below their category folder unless explicitly required.");
+        sb.AppendLine("9. PREFERRED NAMES — a note's title must be the everyday name (nickname, alias, preferred name), not the formal or legal name. The formal name belongs inside the note under ## Info (e.g. **Full Name:** Geoffrey). Use newName to rename. This is essential for both recall accuracy and duplicate prevention: two notes with different formal and informal names for the same person must be merged under the preferred name. Only rename when the preferred name is explicitly stated or clearly implied in the note's own content — do not guess.");
+        sb.AppendLine("10. DATED EVENTS — every entry in an ## Events section must carry a specific or approximate date. Remove or rewrite any undated event entries. Use the format '25th August 2024: ...' for known dates, '~May 2026: ...' for approximate, '2023: ...' for year-only. Never use relative time ('several years ago', 'recently') — these rot as time passes. If a date cannot be determined, move the fact into the note body as prose rather than listing it under Events.");
+        sb.AppendLine("11. CHANGELOG — every note you edit must have a ## Changelog section. Add a dated entry for what changed (e.g. '- 2026-06-02: Added employment info.'). Do NOT include [[links]] in changelog entries — plain text only.");
+        sb.AppendLine("12. EVENT NOTES — notes inside Events/ are point-in-time snapshots. They must carry a specific or approximate date. They record what happened at that moment and link outward to ongoing notes (Relationships/, People/, etc.) for the evolving story. Do not store ongoing or general facts in an event note.");
+        sb.AppendLine("13. NO DESCRIPTOR NOTES — descriptors, statuses, and labels are not notes. 'Long Distance Relationship', 'Employed', 'Estranged' belong as a field or sentence inside the relevant note (e.g. 'Current Status: Long distance' in the relationship note). If you encounter a note that is purely a descriptor with no content of its own, its information should be moved into the parent note and the descriptor note deleted (use a 'delete' op or leave it empty — do not preserve it as a standalone note).");
         sb.AppendLine();
-        sb.AppendLine("Output ONLY raw JSON — no fences:");
-        sb.AppendLine("{ \"add\": [{ \"name\": \"NoteName\", \"content\": \"full markdown\" }], \"edit\": [{ \"name\": \"CurrentPath/NoteName\", \"newName\": \"NewPath/NoteName\", \"content\": \"full markdown\" }] }");
-        sb.AppendLine("Omit newName if the note does not move. If no changes are needed: { \"add\": [], \"edit\": [] }");
+        sb.AppendLine("OUTPUT FORMAT — respond with ONLY raw JSON, starting immediately with {. No explanation, no preamble, no reasoning:");
+        sb.AppendLine("{ \"add\": [{ \"name\": \"Folder/NoteName\", \"content\": \"full markdown\" }], \"edit\": [{ \"name\": \"EXACT current path from the --- header --- above\", \"newName\": \"NewFolder/NoteName\", \"content\": \"full markdown\" }] }");
+        sb.AppendLine("Rules: (a) The 'name' field in an edit MUST exactly match the path shown in the note's --- header --- (e.g. 'People/Family/Jake', not 'People/Jake'). (b) Omit newName if the note does not move. (c) If no changes are needed: { \"add\": [], \"edit\": [] }");
+        sb.AppendLine();
+        sb.AppendLine("/no_think");
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────────
 
     private record NoteData(string Title, string Folder, string Markdown, HashSet<string> Links);
     private record ClusterPlan(string Theme, string HubName, bool HubExists, List<string> Members);
+
+    private static string BareTitle(string path)
+    {
+        int slash = path.LastIndexOf('/');
+        return slash >= 0 ? path[(slash + 1)..] : path;
+    }
 
     private static NoteData ParseNoteData(string title, string raw)
     {
@@ -403,6 +469,39 @@ internal class Refactor : Model
         if (string.IsNullOrEmpty(folder)) return string.Empty;
         int slash = folder.IndexOf('/');
         return slash >= 0 ? folder[..slash] : folder;
+    }
+
+    /// <summary>
+    /// Removes all [[wiki links]] from within a ## Changelog section, leaving the text intact.
+    /// Links in changelogs add no navigational value and create false graph edges.
+    /// </summary>
+    private static string StripChangelogLinks(string markdown)
+        => Regex.Replace(
+            markdown,
+            @"(^## Changelog\b.*?)((?=^##)|\z)",
+            m => Regex.Replace(m.Value, @"\[\[([^\]]+)\]\]", "$1"),
+            RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.Singleline);
+
+    /// <summary>
+    /// Removes bullet lines whose sole content is a [[link]] that does not exist in knownTitles.
+    /// e.g. "- [[DeletedPerson]]" is removed when DeletedPerson has no note.
+    /// Lines with other text beyond the link are left untouched.
+    /// </summary>
+    private static string StripOrphanLinkBullets(string markdown, HashSet<string> knownTitles)
+    {
+        string result = Regex.Replace(
+            markdown,
+            @"^[ \t]*[-*]\s+\[\[([^\]]+)\]\]\s*$",
+            match =>
+            {
+                string target = match.Groups[1].Value.Trim();
+                return knownTitles.Contains(target) ? match.Value : string.Empty;
+            },
+            RegexOptions.Multiline);
+
+        // Collapse any runs of blank lines left behind
+        result = Regex.Replace(result, @"\n{3,}", "\n\n");
+        return result.Trim();
     }
 
     /// <summary>

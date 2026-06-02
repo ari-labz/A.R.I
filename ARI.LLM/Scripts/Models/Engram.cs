@@ -127,8 +127,10 @@ internal class Engram : Model, IDisposable
             if (!await ClassifyConversationAsync(recentMessages, trigger)) return;
 
             // --- Phase 2: Fetch ---
-            List<string> existingNotes = await brain.GetNoteTitles();
-            string existingNotesList   = existingNotes.Count > 0 ? string.Join(", ", existingNotes) : "none";
+            // Use full paths so the model can see the graph structure (category, ownership, depth)
+            // without needing to fetch notes first. Fetch requests still use bare titles.
+            List<string> existingNotes     = await brain.GetNotePaths();
+            string existingNotesList       = existingNotes.Count > 0 ? string.Join(", ", existingNotes) : "none";
             string transcript          = BuildTranscript(history);
             string engramThreadKey     = $"engram:{Guid.NewGuid()}";
 
@@ -137,7 +139,7 @@ internal class Engram : Model, IDisposable
 
             string contextSummary = context?.GetContext(threadKey) ?? string.Empty;
 
-            Common.Logger.LogInformation("[Engram] [{ThreadKey}] phase 2 — fetch (aware of {Count} existing note(s))",
+            Common.Logger.LogInformation("[Engram] [{ThreadKey}] phase 2 — fetch (aware of {Count} existing note(s) with full paths)",
                 threadKey, existingNotes.Count);
 
             string contextBlock = string.IsNullOrWhiteSpace(contextSummary)
@@ -150,10 +152,11 @@ internal class Engram : Model, IDisposable
                 "Analyse this conversation and the list of existing notes.\n\n" +
                 contextBlock +
                 $"CONVERSATION:\n{transcript}\n\n" +
-                $"EXISTING NOTES: {existingNotesList}\n\n" +
-                "Identify any notes you want to read before extracting — to check for duplicates and to update existing notes. " +
+                $"EXISTING NOTES (full paths — the path encodes category, ownership, and relationship): {existingNotesList}\n\n" +
+                "Use the paths to understand the graph structure before fetching. " +
+                "Identify any notes you want to read — to check for duplicates and to update existing notes. " +
                 "Any note you intend to update must be fetched first.\n" +
-                "Respond ONLY with: {\"fetch\": [\"Name1\"]} — or {\"fetch\": []} to proceed straight to extraction.";
+                "Respond with bare note TITLES (the last segment of the path): {\"fetch\": [\"[REDACT]\"]} — or {\"fetch\": []} to proceed straight to extraction.";
 
             string initialRaw    = await PromptThread(engramThreadKey, initialFetchPrompt);
             List<string> toFetch = ParseFetchList(initialRaw).Where(n => !alreadyFetched.Contains(n)).ToList();
@@ -214,25 +217,80 @@ internal class Engram : Model, IDisposable
                 "Based on the conversation and the notes you have read, list every note you intend to create or edit.\n\n" +
                 "For each note provide:\n" +
                 "- op: \"add\" for a new note, \"edit\" for updating a note you have already fetched\n" +
-                "- name: the DESIRED full note path (e.g. \"People/Family/[REDACT]\") — this is where the note WILL live after the sweep\n" +
+                "- name: the DESIRED full note path — this is where the note WILL live after the sweep\n" +
                 "- summary: 1–2 sentences — the key facts, pronouns, and main links this note will contain\n" +
-                "- newName (optional): only set this when an existing note needs to MOVE to a different folder.\n" +
-                "  Set name to the CURRENT path and newName to the TARGET path.\n" +
-                "  Example: a note currently at People/Ryan that should move to People/Family/Ryan:\n" +
-                "  {\"op\": \"edit\", \"name\": \"People/Ryan\", \"newName\": \"People/Family/Ryan\", \"summary\": \"...\"}\n\n" +
-                "## HUB NOTES ABSORB LATERAL LINKS\n" +
-                "When a thematic hub note exists (e.g. a Family note, a Friends note), individual members should be linked FROM\n" +
-                "that hub — not listed individually on [REDACT]'s own note or other personal notes.\n" +
-                "- [REDACT]'s note should link to [[[REDACT]'s Family]], not to each family member individually.\n" +
-                "- The Family hub (named '[REDACT]'s Family' to avoid ambiguity) carries [[[REDACT]]], [[Peter]], [[Ryan]], etc.\n" +
-                "- If a personal note already has a flat list of family/friend/group links, replace them with a single hub link.\n\n" +
-                "## FAMILY NOTE NAMING\n" +
-                "Family hub notes must be named after the person they belong to (e.g. '[REDACT]'s Family', not just 'Family').\n" +
-                "This keeps them unambiguous when multiple people each have their own family graph.\n\n" +
-                "Include any Unknown/ notes that should be moved to a proper category (use newName for these).\n" +
+                "- newName (optional): only when an existing note needs to MOVE. Set name to the CURRENT path, newName to the TARGET path.\n\n" +
+
+                "## PATH IS TAXONOMY\n" +
+                "The path encodes full meaning before the note is even opened. Each segment should answer: what is this, whose is it, how does it relate?\n" +
+                "- A grandparent note sits at: People/[Person]'s Family/Immediate Family/Grandparents/[Name]\n" +
+                "- A cousin sits at: People/[Person]'s Family/Cousins/[Name]\n" +
+                "- A job sits at: People/[Person]/Employment/[Company]\n" +
+                "- An event sits at: Events/[Event Name]\n" +
+                "Do not flatten to two levels just for simplicity. Use as many levels as needed to place the entity correctly in the graph.\n\n" +
+
+                "## ENTITIES AS FOLDERS\n" +
+                "When a person or project has multiple distinct facets worth noting, they become both a note AND a folder root.\n" +
+                "- The person note lives at: People/[Name]\n" +
+                "- Sub-topics nest under them: People/[Name]/Employment/[Company], People/[Name]/Goals, etc.\n" +
+                "- Projects work the same: Projects/[Name] (note) + Projects/[Name]/[Sub-component] (child notes)\n\n" +
+
+                "## HUB NOTES\n" +
+                "Any grouping benefits from a hub note that indexes and summarises the notes within it. Hubs exist at every level:\n" +
+                "- A family hub at: People/[Person]'s Family\n" +
+                "- A sub-group hub at: People/[Person]'s Family/Cousins\n" +
+                "- A thematic hub that cuts across folders: Projects/[Person]'s Tech (linking Hardware + Software + Projects)\n" +
+                "Hub notes are named possessively when they belong to a person ([Person]'s Family, [Person]'s Friends).\n" +
+                "This makes them unambiguous across multiple people's graphs.\n" +
+                "Individual spokes link TO the hub; the hub links down to members — not the reverse.\n\n" +
+
+                "## RELATIONSHIPS\n" +
+                "The dynamics of a relationship between two people belong in Relationships/, not duplicated on each person's note.\n" +
+                "- Use: Relationships/[Person A] and [Person B] Relationship\n" +
+                "- Descriptors like 'long distance', 'estranged', 'close' are STATUSES — write them as a field or sentence inside the relationship note, never as a separate note.\n\n" +
+
+                "## EVENT NOTES\n" +
+                "Notes in Events/ are point-in-time snapshots. Each event note:\n" +
+                "- Must carry a specific or approximate date, either in the title or as the first prominent fact.\n" +
+                "- Records what happened at that moment: who was involved, where, what occurred, how it felt.\n" +
+                "- Links outward to ongoing notes for broader context (e.g. an event note about a first date links to the Relationships/ note for the ongoing relationship).\n" +
+                "- Does NOT carry evolving facts — those belong in the linked ongoing note.\n" +
+                "Example: 'Events/[REDACT] and [REDACT] got together' captures the date and the occasion. The ongoing story lives in 'Relationships/[REDACT] and [REDACT] Relationship'.\n\n" +
+
+                "## DO NOT CREATE NOTES FOR DESCRIPTORS\n" +
+                "A descriptor, status, or label is not a note. It belongs as a field, sentence, or section inside the relevant note.\n" +
+                "Wrong: a note titled 'Long Distance Relationship' that describes a status.\n" +
+                "Right: a 'Current Status: Long distance' field inside 'Relationships/[REDACT] and [REDACT] Relationship'.\n" +
+                "Other examples that should NOT be standalone notes: 'Employed', 'Student', 'Estranged', 'Deceased'.\n\n" +
+
+                "## NOTE TITLES ARE COMMON NAMES\n" +
+                "A note's title must be the name used in everyday speech — the nickname, alias, or preferred name — not the formal or legal name.\n" +
+                "The formal name belongs inside the note (e.g. under ## Info as **Full Name:** ...). Use newName to rename if needed.\n" +
+                "This is critical for recall: if someone is always called 'Grumpy', a note titled 'Geoffrey' will never match when that name is spoken.\n" +
+                "It also prevents duplicates: a new note 'Andi' and an existing note '[REDACT]' are the same person — catch this by checking existing notes for aliases.\n" +
+                "Only rename when the preferred name is clearly known. If uncertain, leave the title unchanged.\n\n" +
+
+                "## EVENTS MUST HAVE DATES\n" +
+                "Every entry in an Events section must carry a specific or approximate date. Never use relative time ('several years ago', 'recently', 'last year') — these rot as time passes.\n" +
+                "- Specific date: '25th August 2024: Met [REDACT] on VRChat.'\n" +
+                "- Approximate date: '~May 2026: Bought a house.'\n" +
+                "- Known year only: '2023: Started university.'\n" +
+                "If a date cannot be determined at all, describe the event inline in the note body rather than listing it under Events.\n\n" +
+
+                "## CHANGELOG\n" +
+                "Every note you create or edit must include a ## Changelog section.\n" +
+                "Add a dated entry describing what was added or changed: '- 2026-06-02: Created note. Added family and residence info.'\n" +
+                "Do NOT include [[links]] in changelog entries — plain text only. Changelog entries are a prose audit trail, not part of the graph.\n\n" +
+
+                "## LINKS MUST EXIST\n" +
+                "Only write [[links]] to notes that already exist or that you are creating in this same sweep.\n" +
+                "Do NOT write a bullet point whose only content is a [[link]] to a note that does not exist — omit the bullet entirely.\n\n" +
+
+                "Include any Unknown/ notes that should be moved to a proper category (use newName).\n" +
                 "Include the Conversations/YYYY-MM-DD note.\n\n" +
+
                 "Output ONLY:\n" +
-                "{\"plan\": [{\"op\": \"add\", \"name\": \"People/Family/[REDACT]\", \"summary\": \"[REDACT]'s mum, she/her. HR job. Links: Peter, [REDACT], Bamber Bridge.\"}]}\n" +
+                "{\"plan\": [{\"op\": \"add\", \"name\": \"People/[Person]'s Family/Immediate Family/[Name]\", \"summary\": \"...\"}]}\n" +
                 "If nothing needs to be stored: {\"plan\": []}";
 
             string planRaw = await PromptThread(engramThreadKey, planPrompt);
@@ -257,9 +315,7 @@ internal class Engram : Model, IDisposable
             // --- Phase 4: Write notes one at a time ---
             Common.Logger.LogInformation("[Engram] [{ThreadKey}] phase 4 — writing {Count} note(s)...", threadKey, plan.Count);
 
-            List<EngramAdd>  allAdds  = new();
-            List<EngramEdit> allEdits = new();
-            StringBuilder    sweepSummary = new();
+            StringBuilder sweepSummary = new();
             int successCount = 0;
             int failCount    = 0;
 
@@ -276,9 +332,15 @@ internal class Engram : Model, IDisposable
                 string writePrompt =
                     (sweepSummary.Length > 0 ? $"Notes already saved this sweep:\n{sweepSummary}\n" : "") +
                     $"Now write the note: {item.Name}.{moveInstruction}\n\n" +
+                    "Rules for this note:\n" +
+                    "- Title must be the everyday name (nickname/alias), not the formal name. Formal name goes inside under ## Info.\n" +
+                    "- Every Events entry must have a specific or approximate date (e.g. '25th August 2024:' or '~May 2026:'). Never write relative time ('recently', 'several years ago').\n" +
+                    "- Include a ## Changelog section. Add a dated entry for what was created or changed. No [[links]] in changelog — plain text only.\n" +
+                    "- Only [[link]] to notes that exist or are being created this sweep.\n\n" +
                     "Output a single JSON object in this exact format:\n" +
-                    "For a new note:    {\"add\": [{\"name\": \"Category/NoteName\", \"content\": \"markdown\"}], \"edit\": []}\n" +
+                    "For a new note:    {\"add\": [{\"name\": \"Category/SubGroup/NoteName\", \"content\": \"markdown\"}], \"edit\": []}\n" +
                     "For an update:     {\"add\": [], \"edit\": [{\"name\": \"CurrentPath\", \"newName\": \"NewPath\", \"content\": \"full markdown\"}]}\n" +
+                    "Paths may be as deep as the taxonomy requires — e.g. \"People/[REDACT]'s Family/Immediate Family/Grandparents/Geoffrey\".\n" +
                     "(Omit newName if the path is not changing. Raw JSON only — no fences, no explanation.)";
 
                 string writeRaw = await PromptAdHocThread(contextCache, writePrompt);
@@ -301,8 +363,6 @@ internal class Engram : Model, IDisposable
                     .Concat(noteEdits.Select(e => BareName(e.NewNoteName ?? e.NoteName)));
                 await brain.MarkDirty(writtenTitles);
 
-                allAdds.AddRange(noteAdds);
-                allEdits.AddRange(noteEdits);
 
                 sweepSummary.AppendLine($"- {item.Name}: {item.Summary}");
                 successCount++;
@@ -314,13 +374,6 @@ internal class Engram : Model, IDisposable
 
             Common.Logger.LogInformation("[Engram] [{ThreadKey}] phase 4 complete: {Success} saved, {Fail} failed.",
                 threadKey, successCount, failCount);
-
-            // --- Phase 5: Backlink pass ---
-            if (allAdds.Count > 0 || allEdits.Count > 0)
-            {
-                Common.Logger.LogInformation("[Engram] [{ThreadKey}] phase 5 — backlink pass...", threadKey);
-                await ApplyBacklinksAsync(allAdds, allEdits);
-            }
 
             Common.Logger.LogInformation("[Engram] [{ThreadKey}] sweep complete.", threadKey);
         }
@@ -398,44 +451,6 @@ internal class Engram : Model, IDisposable
             sb.AppendLine($"{speaker}: {msg.Content}");
         }
         return sb.ToString();
-    }
-
-    /// <summary>
-    /// Extracts every [[NoteTitle]] reference from markdown content.
-    /// </summary>
-    private static IEnumerable<string> ParseLinks(string markdown)
-        => Regex.Matches(markdown, @"\[\[([^\]]+)\]\]")
-                .Select(m => m.Groups[1].Value)
-                .Distinct(StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>
-    /// For every [[link]] written into a newly added or edited note, adds a return link
-    /// in the target note if one is not already present. Runs in parallel for speed.
-    /// </summary>
-    private async Task ApplyBacklinksAsync(List<EngramAdd> adds, List<EngramEdit> edits)
-    {
-        // Build (sourceName, targetName) pairs from all new/edited content.
-        // sourceName = the bare note title (last path segment).
-        HashSet<(string source, string target)> pairs = new();
-
-        foreach (EngramAdd add in adds)
-        {
-            string source = add.NoteName.Split('/')[^1];
-            foreach (string target in ParseLinks(add.Content))
-                pairs.Add((source, target));
-        }
-
-        foreach (EngramEdit edit in edits)
-        {
-            string source = (edit.NewNoteName ?? edit.NoteName).Split('/')[^1];
-            foreach (string target in ParseLinks(edit.Content))
-                pairs.Add((source, target));
-        }
-
-        if (pairs.Count == 0) return;
-
-        Common.Logger.LogInformation("[Engram] Backlink pass: {Count} candidate pair(s).", pairs.Count);
-        await Task.WhenAll(pairs.Select(p => brain.AddBacklink(p.target, p.source)));
     }
 
     private record EngramPlanItem(string Op, string Name, string Summary, string? NewName = null);
