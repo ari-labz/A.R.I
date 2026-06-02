@@ -10,7 +10,7 @@
     <aside id="sidebar">
         <div id="sidebar-inner">
             <div id="sidebar-header">
-                <span id="sidebar-wordmark">A.R.I</span>
+                <img id="sidebar-wordmark" src="/images/logo-white.png?v=2" alt="A.R.I" />
                 <button id="btn-toggle-sidebar" title="Close sidebar">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>
@@ -44,41 +44,33 @@
         </svg>
     </button>
 
-    <!-- main -->
+    <!-- main (unified — no page switching) -->
     <div id="main">
 
-        <!-- landing: shown when no thread is active -->
-        <div id="landing">
-            <h1 id="landing-greeting">Hey, [REDACT].</h1>
-            <div id="landing-input-wrap">
-                <textarea id="landing-input" placeholder="Message ARI..." rows="1"></textarea>
-                <div id="landing-input-footer">
-                    <button class="btn-send" id="btn-landing-send" disabled title="Send">
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
-                    </button>
-                </div>
-            </div>
+        <!-- logo header: tall+centered in idle, compact at top when active -->
+        <div id="main-header">
+            <img id="main-logo" src="/images/logo-black.png?v=2" alt="A.R.I" />
         </div>
 
-        <!-- command popup (shared, moved in DOM by JS) -->
+        <!-- messages: invisible in idle, fades in when active -->
+        <div id="messages"></div>
+
+        <!-- command popup -->
         <div id="cmd-popup" class="hidden">
             <ul id="cmd-list"></ul>
         </div>
 
-        <!-- conversation: shown when a thread is active -->
-        <div id="conversation" class="hidden">
-            <div id="messages"></div>
-            <div id="input-area">
-                <div id="input-wrap">
-                    <textarea id="input" placeholder="Message ARI..." rows="1"></textarea>
-                    <div id="input-footer">
-                        <button class="btn-send" id="btn-send" disabled title="Send">
-                            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
-                        </button>
-                    </div>
+        <!-- input: always at the bottom -->
+        <div id="input-area">
+            <div id="input-wrap">
+                <textarea id="input" placeholder="Message ARI..." rows="1"></textarea>
+                <div id="input-footer">
+                    <button class="btn-send" id="btn-send" disabled title="Send">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+                    </button>
                 </div>
-                <p id="input-hint">Enter to send &nbsp;·&nbsp; Shift+Enter for new line</p>
             </div>
+            <p id="input-hint">Enter to send &nbsp;·&nbsp; Shift+Enter for new line</p>
         </div>
 
     </div>
@@ -138,6 +130,31 @@
 
 @section Scripts {
 <script>
+    // ── activate chat (idle → active) ───────────────────
+    function activateChat(instant = false) {
+        const main = document.getElementById('main');
+        if (instant) {
+            main.classList.add('instant');
+            main.classList.add('active');
+            // Two rAFs: let 'instant' apply before removing it
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                main.classList.remove('instant');
+            }));
+        } else {
+            main.classList.add('active');
+        }
+    }
+
+    function resetToIdle() {
+        const main = document.getElementById('main');
+        main.classList.add('instant');
+        main.classList.remove('active');
+        document.getElementById('messages').innerHTML = '';
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+            main.classList.remove('instant');
+        }));
+    }
+
     // ── slash-command popup ──────────────────────────────
     const COMMANDS = [
         { cmd: '/engram on',       desc: 'Enable engram memory extraction' },
@@ -248,7 +265,6 @@
     }
 
     wireCmdPopup('input');
-    wireCmdPopup('landing-input');
 
     let activeThread        = null;
     let isStreaming         = false;
@@ -304,11 +320,12 @@
 
     document.getElementById('chk-show-internal').addEventListener('change', loadThreads);
 
-    document.getElementById('btn-new-chat').addEventListener('click', async () => {
-        const res = await fetch('/api/threads', { method: 'POST' });
-        const { key } = await res.json();
-        await loadThreads();
-        openThread(key);
+    document.getElementById('btn-new-chat').addEventListener('click', () => {
+        activeThread = null;
+        resetToIdle();
+        document.getElementById('input').value = '';
+        document.getElementById('input').style.height = 'auto';
+        updateButtons();
     });
 
     // ── open thread ─────────────────────────────────────
@@ -328,9 +345,9 @@
         msgs.forEach(m => appendRow(m.role, m.content, m.timestamp, m.thinkingSeconds, m.recallNotes, m.contextSummary, isInternal, modelName));
         knownMsgCount = msgs.length;
 
-        showConversation();
+        // Skip animation if thread already has messages
+        activateChat(msgs.length > 0);
 
-        // Hide input area for internal (read-only) threads
         document.getElementById('input-area').style.display = isInternal ? 'none' : '';
 
         scrollBottom();
@@ -355,10 +372,6 @@
         } catch { /* silently ignore network hiccups */ }
     }
 
-    function showConversation() {
-        document.getElementById('landing').classList.add('hidden');
-        document.getElementById('conversation').classList.remove('hidden');
-    }
 
     // ── send ─────────────────────────────────────────────
 
@@ -377,16 +390,15 @@
         list.prepend(li);
     }
 
-    async function send(prompt, fromLanding) {
+    async function send(prompt) {
         if (isStreaming || !prompt) return;
 
-        // if sent from landing, create a new thread first
-        if (fromLanding || !activeThread) {
+        if (!activeThread) {
             const res = await fetch('/api/threads', { method: 'POST' });
             const { key } = await res.json();
             activeThread = key;
             injectPendingThread(key);
-            showConversation();
+            activateChat();
         }
 
         // Slash commands go to the command API, not the LLM stream
@@ -454,22 +466,12 @@
         };
     }
 
-    // landing send
-    document.getElementById('btn-landing-send').addEventListener('click', () => {
-        const el = document.getElementById('landing-input');
-        const t  = el.value.trim();
-        if (!t) return;
-        el.value = ''; el.style.height = 'auto';
-        send(t, true);
-    });
-
-    // conversation send
     document.getElementById('btn-send').addEventListener('click', () => {
         const el = document.getElementById('input');
         const t  = el.value.trim();
         if (!t) return;
         el.value = ''; el.style.height = 'auto';
-        send(t, false);
+        send(t);
     });
 
     // ── helpers ──────────────────────────────────────────
@@ -600,10 +602,8 @@
     }
 
     function updateButtons() {
-        const landingText = document.getElementById('landing-input').value.trim();
-        const chatText    = document.getElementById('input').value.trim();
-        document.getElementById('btn-landing-send').disabled = isStreaming || !landingText;
-        document.getElementById('btn-send').disabled         = isStreaming || !chatText;
+        const chatText = document.getElementById('input').value.trim();
+        document.getElementById('btn-send').disabled = isStreaming || !chatText;
     }
 
     // ── auto-resize + keydown for all textareas ──────────
@@ -619,29 +619,23 @@
         });
     }
 
-    wireTextarea('landing-input', () => {
-        const el = document.getElementById('landing-input');
-        const t  = el.value.trim(); if (!t) return;
-        el.value = ''; el.style.height = 'auto'; send(t, true);
-    });
-
     wireTextarea('input', () => {
         const el = document.getElementById('input');
         const t  = el.value.trim(); if (!t) return;
-        el.value = ''; el.style.height = 'auto'; send(t, false);
+        el.value = ''; el.style.height = 'auto'; send(t);
     });
 
     // ── wait for ARI to be ready (polls /api/threads until not 503) ──
     async function waitForReady() {
-        const greeting = document.getElementById('landing-greeting');
+        const logo = document.getElementById('main-logo');
         while (true) {
             const res = await fetch('/api/threads').catch(() => null);
             if (res && res.status !== 503) {
-                if (greeting) greeting.textContent = 'Hey, [REDACT].';
+                if (logo) logo.style.opacity = '1';
                 await loadThreads();
                 return;
             }
-            if (greeting) greeting.textContent = 'A.R.I is starting up…';
+            if (logo) logo.style.opacity = '0.4';
             await new Promise(r => setTimeout(r, 2000));
         }
     }

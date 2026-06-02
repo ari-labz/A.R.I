@@ -24,6 +24,10 @@
   		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
   		<Link>AriBrain.json</Link>
   	</Content>
+  	<Content Include="..\ARI.WebPanel\wwwroot\**\*">
+  		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+  		<LinkBase>wwwroot</LinkBase>
+  	</Content>
   </ItemGroup>
 	
   <ItemGroup>

@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>@ViewData["Title"] — A.R.I</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -62,8 +63,10 @@ html, body {
 }
 
 #sidebar-wordmark {
-    font-size: 15px; font-weight: 700;
-    color: #ffffff; letter-spacing: .02em;
+    width: 100px;
+    height: auto;
+    display: block;
+    flex-shrink: 0;
 }
 
 #btn-toggle-sidebar {
@@ -130,56 +133,58 @@ html, body {
 #topbar-toggle.visible { display: flex; }
 #topbar-toggle:hover { color: var(--text); background: var(--user-bubble); }
 
-/* ── landing ─────────────────────────────────────────── */
-#landing {
-    flex: 1; display: flex; flex-direction: column;
-    align-items: center; justify-content: center;
-    padding: 0 24px 80px; gap: 28px;
-}
-#landing.hidden { display: none; }
+/* skip all transitions (used when opening existing threads) */
+#main.instant, #main.instant * { transition-duration: 0s !important; }
 
-#landing-greeting {
-    font-size: 34px; font-weight: 700;
-    color: var(--text); text-align: center;
-    letter-spacing: -.02em;
+/* ── main header (logo — idle: centered, active: top bar) */
+#main-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 0 24px 28px;
+    height: 44vh;
+    flex-shrink: 0;
+    transition: height 0.65s ease-in-out, padding 0.65s ease-in-out,
+                border-color 0.3s ease-in-out;
+    border-bottom: 1px solid transparent;
+    overflow: hidden;
 }
-
-#landing-input-wrap {
-    width: 100%; max-width: var(--col-max);
-    background: var(--input-bg);
-    border: 1px solid var(--input-border);
-    border-radius: 16px;
-    padding: 14px 14px 12px 18px;
-    display: flex; flex-direction: column; gap: 10px;
-    box-shadow: 0 1px 4px rgba(0,0,0,.06);
-    transition: border-color .15s, box-shadow .15s;
-}
-#landing-input-wrap:focus-within {
-    border-color: var(--input-focus);
-    box-shadow: 0 1px 8px rgba(0,0,0,.1);
+#main.active #main-header {
+    height: 68px;
+    border-bottom-color: var(--border);
 }
 
-#landing-input {
-    background: transparent; border: none; outline: none;
-    color: var(--text); font-family: inherit; font-size: 16px;
-    line-height: 1.55; resize: none; width: 100%;
-    max-height: 200px; min-height: 28px;
+#main-logo {
+    width: 280px; height: auto; display: block;
+    transition: width 0.65s ease-in-out;
+    flex-shrink: 0;
 }
-#landing-input::placeholder { color: #9ca3af; }
+#main.active #main-logo {
+    width: 110px;
+}
 
-#landing-input-footer { display: flex; justify-content: flex-end; }
-
-/* ── conversation ────────────────────────────────────── */
-#conversation { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-#conversation.hidden { display: none; }
-
+/* ── messages */
 #messages {
     flex: 1; overflow-y: auto;
-    padding: 36px 24px 8px;
+    padding: 16px 24px 8px;
     display: flex; flex-direction: column; gap: 0;
     scrollbar-width: thin;
     scrollbar-color: #d1d5db transparent;
+    opacity: 0;
+    pointer-events: none;
+    /* Collapse to 0 in idle so input sits right below the header */
+    max-height: 0;
+    overflow: hidden;
+    transition: opacity 0.5s ease-in-out, max-height 0.65s ease-in-out;
 }
+#main.active #messages {
+    opacity: 1;
+    pointer-events: auto;
+    max-height: 100vh;
+    overflow-y: auto;
+}
+
 
 /* centered column for every row */
 .msg-row {
