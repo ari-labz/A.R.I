@@ -52,11 +52,11 @@ public class LlmService : IDisposable
 
             if (enabled.TryGetValue("Refactor", out ModelConfig? refactorConfig))
             {
-                refactor = new Refactor(refactorConfig, brain);
+                refactor = new Refactor(refactorConfig, brain, engram);
                 Common.Logger.LogInformation("Refactor is active.");
             }
 
-            commands = new CommandService(engram, refactor, brain.PurgeAllNotes, brain.BackupAsync);
+            commands = new CommandService(engram, refactor, brain.PurgeAllNotes, brain.BackupAsync, brain.GetDirtyNotes);
         }
         else
         {

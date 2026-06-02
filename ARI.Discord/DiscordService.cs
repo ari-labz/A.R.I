@@ -60,7 +60,7 @@ public class DiscordService : BackgroundService
 
         IUser owner = await client.GetUserAsync(config.OwnerId);
         IDMChannel dm = await owner.CreateDMChannelAsync();
-        await dm.SendMessageAsync("A·R·I is offline.");
+        await dm.SendMessageAsync(AsBlockQuote("A·R·I is offline."));
     }
 
     private async Task OnReadyAsync()
@@ -72,7 +72,7 @@ public class DiscordService : BackgroundService
         {
             IUser owner = await client.GetUserAsync(config.OwnerId);
             IDMChannel dm = await owner.CreateDMChannelAsync();
-            await dm.SendMessageAsync("A·R·I is online.");
+            await dm.SendMessageAsync(AsBlockQuote("A·R·I is online."));
             Common.Logger.LogInformation("Sent online notification to owner {OwnerId}", config.OwnerId);
         }
         catch (Exception ex)
@@ -97,7 +97,13 @@ public class DiscordService : BackgroundService
             new SlashCommandBuilder()
                 .WithName("refactor")
                 .WithDescription("Rule-based graph analysis — algorithmic fixes + bounded LLM calls")
-                .AddOption(new SlashCommandOptionBuilder().WithName("all").WithDescription("Full scan of every note — use for first run or explicit rebuild").WithType(ApplicationCommandOptionType.SubCommand))
+                .AddOption(new SlashCommandOptionBuilder().WithName("dirty").WithDescription("Process only notes changed since the last refactor (default)").WithType(ApplicationCommandOptionType.SubCommand))
+                .AddOption(new SlashCommandOptionBuilder().WithName("all")  .WithDescription("Full scan of every note — use for first run or explicit rebuild") .WithType(ApplicationCommandOptionType.SubCommand))
+                .Build(),
+
+            new SlashCommandBuilder()
+                .WithName("getdirtynotes")
+                .WithDescription("List all notes currently marked dirty (changed since last refactor)")
                 .Build(),
 
             new SlashCommandBuilder()
@@ -175,7 +181,7 @@ public class DiscordService : BackgroundService
         // Defer immediately — sweep/refactor/backup can take well over 3 seconds.
         await cmd.DeferAsync(ephemeral: true);
         string result = await llmService.HandleCommandAsync(commandText) ?? $"Unknown command: {commandText}";
-        await cmd.FollowupAsync(result, ephemeral: true);
+        await cmd.FollowupAsync(AsBlockQuote(result), ephemeral: true);
     }
 
     private async Task HandleWhitelistSlashAsync(SocketSlashCommand cmd, string sub)
@@ -244,7 +250,7 @@ public class DiscordService : BackgroundService
             if (result is not null)
             {
                 Common.Logger.LogInformation("Command [{Input}] → {Result}", message.Content, result);
-                await message.Channel.SendMessageAsync(result);
+                await message.Channel.SendMessageAsync(AsBlockQuote(result));
             }
             return;
         }
@@ -322,13 +328,13 @@ public class DiscordService : BackgroundService
         {
             typingCts.Cancel();
             Common.Logger.LogError("LLM request failed: {Error}", ex.Message);
-            await message.Channel.SendMessageAsync("A·R·I is unable to respond right now.");
+            await message.Channel.SendMessageAsync(AsBlockQuote("A·R·I is unable to respond right now."));
         }
         catch (ModelNotFoundException ex)
         {
             typingCts.Cancel();
             Common.Logger.LogError("Dialogue model not available: {Error}", ex.Message);
-            await message.Channel.SendMessageAsync("A·R·I is unable to respond right now.");
+            await message.Channel.SendMessageAsync(AsBlockQuote("A·R·I is unable to respond right now."));
         }
     }
 
@@ -340,6 +346,9 @@ public class DiscordService : BackgroundService
             try { await Task.Delay(8000, ct); } catch (TaskCanceledException) { break; }
         }
     }
+
+    private static string AsBlockQuote(string text) =>
+        string.Join('\n', text.Split('\n').Select(line => $"> {line}"));
 
     private static IEnumerable<string> SplitIntoChunks(string text)
     {

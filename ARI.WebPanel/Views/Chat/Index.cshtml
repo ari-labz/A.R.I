@@ -37,6 +37,9 @@
         </div>
     </aside>
 
+    <!-- dim overlay for mobile sidebar -->
+    <div id="sidebar-overlay"></div>
+
     <!-- floating toggle when sidebar is collapsed -->
     <button id="topbar-toggle" title="Open sidebar">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -275,11 +278,23 @@
     const sidebar   = document.getElementById('sidebar');
     const floatBtn  = document.getElementById('topbar-toggle');
 
+    const overlay = document.getElementById('sidebar-overlay');
+    const isMobile = () => window.innerWidth <= 640;
+
     function setSidebarCollapsed(collapsed) {
-        sidebar.classList.toggle('collapsed', collapsed);
-        floatBtn.classList.toggle('visible', collapsed);
+        if (isMobile()) {
+            sidebar.classList.toggle('mobile-open', !collapsed);
+            overlay.classList.toggle('visible', !collapsed);
+            floatBtn.classList.toggle('visible', collapsed);
+        } else {
+            sidebar.classList.remove('mobile-open');
+            overlay.classList.remove('visible');
+            sidebar.classList.toggle('collapsed', collapsed);
+            floatBtn.classList.toggle('visible', collapsed);
+        }
     }
 
+    overlay.addEventListener('click', () => setSidebarCollapsed(true));
     document.getElementById('btn-toggle-sidebar').addEventListener('click', () => setSidebarCollapsed(true));
     floatBtn.addEventListener('click', () => setSidebarCollapsed(false));
 
@@ -349,6 +364,7 @@
         activateChat(msgs.length > 0);
 
         document.getElementById('input-area').style.display = isInternal ? 'none' : '';
+        if (isMobile()) setSidebarCollapsed(true);
 
         scrollBottom();
         if (!isInternal) document.getElementById('input').focus();

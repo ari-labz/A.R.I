@@ -5,6 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>@ViewData["Title"] — A·R·I</title>
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="A·R·I" />
+    <meta name="theme-color" content="#223742" />
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -40,7 +45,7 @@ html, body {
 }
 
 /* ── shell ───────────────────────────────────────────── */
-#shell { display: flex; height: 100vh; overflow: hidden; }
+#shell { display: flex; height: 100dvh; overflow: hidden; }
 
 /* ── sidebar ─────────────────────────────────────────── */
 #sidebar {
@@ -181,7 +186,7 @@ html, body {
 #main.active #messages {
     opacity: 1;
     pointer-events: auto;
-    max-height: 100vh;
+    max-height: 100dvh;
     overflow-y: auto;
 }
 
@@ -519,6 +524,40 @@ html, body {
 }
 #thread-list li.internal-thread.active { color: #fff; }
 
+/* ── mobile / PWA ────────────────────────────────────── */
+@@media (max-width: 640px) {
+    #sidebar {
+        position: fixed; top: 0; bottom: 0; left: 0; z-index: 200; height: 100dvh;
+        width: var(--sidebar-w) !important; min-width: var(--sidebar-w) !important;
+        transform: translateX(-100%);
+        transition: transform .25s ease, box-shadow .25s ease;
+        box-shadow: none;
+    }
+    #sidebar.mobile-open {
+        transform: translateX(0);
+        box-shadow: 4px 0 24px rgba(0,0,0,.35);
+    }
+    /* dim overlay behind the open drawer */
+    #sidebar-overlay {
+        display: none;
+        position: fixed; inset: 0; z-index: 199;
+        background: rgba(0,0,0,.4);
+    }
+    #sidebar-overlay.visible { display: block; }
+    /* sidebar collapse/expand handled by mobile-open, not width transition */
+    #sidebar.collapsed { transform: translateX(-100%); }
+    #main { width: 100%; }
+    #topbar-toggle { display: flex !important; }
+    #input-area {
+        padding-left: 16px; padding-right: 16px;
+        padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+    }
+    #input-hint { display: none; }
+    #main-logo { width: 200px; }
+    #main.active #main-logo { width: 90px; }
+    #main-header { height: 38vh; padding-bottom: 20px; }
+}
+
 /* ── internal thread message styles ─────────────────── */
 
 /* system prompt — collapsible, full width, subtle */
@@ -586,5 +625,8 @@ html, body {
 <body>
     @RenderBody()
     @await RenderSectionAsync("Scripts", required: false)
+<script>
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
+</script>
 </body>
 </html>

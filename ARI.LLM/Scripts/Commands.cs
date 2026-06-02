@@ -10,15 +10,17 @@ internal class CommandService
 {
     private readonly Engram?   engram;
     private readonly Refactor? refactor;
-    private readonly Func<Task<int>>?    purgeNotes;
-    private readonly Func<Task<string>>? backupBrain;
+    private readonly Func<Task<int>>?           purgeNotes;
+    private readonly Func<Task<string>>?        backupBrain;
+    private readonly Func<Task<List<string>>>?  getDirtyNotes;
 
-    internal CommandService(Engram? engram, Refactor? refactor = null, Func<Task<int>>? purgeNotes = null, Func<Task<string>>? backupBrain = null)
+    internal CommandService(Engram? engram, Refactor? refactor = null, Func<Task<int>>? purgeNotes = null, Func<Task<string>>? backupBrain = null, Func<Task<List<string>>>? getDirtyNotes = null)
     {
-        this.engram      = engram;
-        this.refactor    = refactor;
-        this.purgeNotes  = purgeNotes;
-        this.backupBrain = backupBrain;
+        this.engram         = engram;
+        this.refactor       = refactor;
+        this.purgeNotes     = purgeNotes;
+        this.backupBrain    = backupBrain;
+        this.getDirtyNotes  = getDirtyNotes;
     }
 
     /// <summary>
@@ -36,11 +38,12 @@ internal class CommandService
 
         return command switch
         {
-            "/engram"   => await HandleEngramAsync(sub),
-            "/refactor" => await HandleRefactorAsync(sub),
-            "/purge"    => sub == "notes" ? await HandlePurgeNotesAsync() : null,
-            "/brain"    => sub == "backup" ? await HandleBrainBackupAsync() : null,
-            _           => null
+            "/engram"        => await HandleEngramAsync(sub),
+            "/refactor"      => await HandleRefactorAsync(sub),
+            "/purge"         => sub == "notes" ? await HandlePurgeNotesAsync() : null,
+            "/brain"         => sub == "backup" ? await HandleBrainBackupAsync() : null,
+            "/getdirtynotes" => await HandleGetDirtyNotesAsync(),
+            _                => null
         };
     }
 
@@ -87,7 +90,7 @@ internal class CommandService
     {
         if (refactor is null) return "Refactor is not loaded.";
         bool allNotes = sub == "all";
-        Common.Logger.LogInformation("[Commands] Refactor requested (mode: {Mode}).", allNotes ? "all" : "incremental");
+        Common.Logger.LogInformation("[Commands] Refactor requested (mode: {Mode}).", allNotes ? "all" : "dirty");
         return await refactor.RunAsync(allNotes);
     }
 
@@ -108,5 +111,15 @@ internal class CommandService
         if (backupBrain is null) return "Brain is not available.";
         Common.Logger.LogInformation("[Commands] Brain backup requested.");
         return await backupBrain();
+    }
+
+    // ── /getdirtynotes ────────────────────────────────────────────────────────────
+
+    private async Task<string> HandleGetDirtyNotesAsync()
+    {
+        if (getDirtyNotes is null) return "Brain is not available.";
+        List<string> dirty = await getDirtyNotes();
+        if (dirty.Count == 0) return "No dirty notes — graph is clean.";
+        return $"**{dirty.Count} dirty note(s):**\n" + string.Join("\n", dirty.Select(n => $"- {n}"));
     }
 }
