@@ -39,7 +39,7 @@ public class LlmService : IDisposable
 
             if (enabled.TryGetValue("Recall", out ModelConfig? recallConfig) && recallConfig.RecursiveBrainSearchDepth > 0)
             {
-                recall = new Recall(recallConfig, brain, recallConfig.RecursiveBrainSearchDepth);
+                recall = new Recall(recallConfig, brain, recallConfig.RecursiveBrainSearchDepth, brain.BrainPublicUrl);
                 Common.Logger.LogInformation("Recall is active. Depth: {Depth}, Cache: {Cache}.",
                     recallConfig.RecursiveBrainSearchDepth, recallConfig.CacheSize > 0 ? recallConfig.CacheSize : 0);
             }
