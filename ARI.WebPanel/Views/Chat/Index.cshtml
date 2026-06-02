@@ -528,7 +528,20 @@
                 if (thinkingSeconds != null) {
                     const secs = typeof thinkingSeconds === 'number' ? thinkingSeconds.toFixed(1) : thinkingSeconds;
                     let detailParts = '';
-                    if (recallNotes)    detailParts += `<h4>Notes read</h4>${escHtml(recallNotes)}\n`;
+                    if (recallNotes) {
+                        // Parse "[NoteName]\ncontent\n\n[NoteName2]\ncontent" into individual note blocks
+                        const noteBlocks = recallNotes.split(/\n(?=\[)/).map(block => {
+                            const match = block.match(/^\[([^\]]+)\]\n?([\s\S]*)/);
+                            return match ? { name: match[1], content: match[2].trim() } : null;
+                        }).filter(Boolean);
+                        const notesHtml = noteBlocks.map(n =>
+                            `<details class="recall-note">` +
+                            `<summary>${escHtml(n.name)}</summary>` +
+                            `<div class="recall-note-content">${escHtml(n.content)}</div>` +
+                            `</details>`
+                        ).join('');
+                        detailParts += `<div class="recall-notes-section"><span class="recall-label">Notes Read</span>${notesHtml}</div>`;
+                    }
                     if (contextSummary) detailParts += `<h4>Context summary</h4>${escHtml(contextSummary)}`;
                     const hasDetails = detailParts.length > 0;
                     thoughtHtml = hasDetails
