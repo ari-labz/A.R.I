@@ -28,6 +28,9 @@ public class BrainConfig
     /// periodic or event-driven refresh for newly created notes. The BrainCacheSize limit already
     /// handles the content side of this; the title index will need a parallel TTL-bounded approach.
     /// </summary>
+    [JsonPropertyName("BrainPublicUrl")]
+    public string BrainPublicUrl { get; set; } = "https://brain.a-r-i.ai";
+
     [JsonPropertyName("BrainCacheSize")]
     public int BrainCacheSize { get; set; } = 50;
 

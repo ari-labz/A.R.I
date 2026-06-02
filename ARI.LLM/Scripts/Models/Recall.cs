@@ -9,11 +9,13 @@ internal class Recall : Model
 {
     private readonly BrainService brain;
     private readonly int recallDepth;
+    private readonly string brainPublicUrl;
 
-    internal Recall(ModelConfig config, BrainService brain, int recallDepth) : base(config)
+    internal Recall(ModelConfig config, BrainService brain, int recallDepth, string brainPublicUrl) : base(config)
     {
-        this.brain       = brain;
-        this.recallDepth = recallDepth;
+        this.brain          = brain;
+        this.recallDepth    = recallDepth;
+        this.brainPublicUrl = brainPublicUrl;
     }
 
     /// <summary>
@@ -42,7 +44,7 @@ internal class Recall : Model
         string allTitlesList     = string.Join(", ", allTitles);
         string recallThreadKey   = $"recall:{Guid.NewGuid()}";
         HashSet<string> fetched  = new(StringComparer.OrdinalIgnoreCase);
-        Dictionary<string, string> noteContents = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, (string Content, string? NoteId)> noteContents = new(StringComparer.OrdinalIgnoreCase);
 
         // First fetch prompt — stateless, no prior notes.
         string firstPrompt =
@@ -67,20 +69,21 @@ internal class Recall : Model
 
             // Fetch all requested notes in parallel. Brain handles caching internally —
             // cache hits return instantly; misses hit Trilium and are cached for next time.
-            IEnumerable<Task<(string name, string? content)>> fetchTasks = toFetch.Select(async name =>
+            IEnumerable<Task<(string name, string? content, string? noteId)>> fetchTasks = toFetch.Select(async name =>
             {
                 string? content = await brain.GetNote(name);
-                return (name, content);
+                string? noteId  = content is not null ? await brain.GetNoteId(name) : null;
+                return (name, content, noteId);
             });
 
-            IEnumerable<(string name, string? content)> results = await Task.WhenAll(fetchTasks);
+            IEnumerable<(string name, string? content, string? noteId)> results = await Task.WhenAll(fetchTasks);
 
             StringBuilder notesBlock = new();
-            foreach ((string name, string? content) in results)
+            foreach ((string name, string? content, string? noteId) in results)
             {
                 if (content is null) continue;
                 fetched.Add(name);
-                noteContents[name] = content;
+                noteContents[name] = (content, noteId);
                 notesBlock.AppendLine($"--- {name} ---");
                 notesBlock.AppendLine(content);
                 notesBlock.AppendLine("---");
@@ -102,10 +105,13 @@ internal class Recall : Model
         if (noteContents.Count == 0) return null;
 
         StringBuilder result = new();
-        foreach (KeyValuePair<string, string> kvp in noteContents)
+        foreach (KeyValuePair<string, (string Content, string? NoteId)> kvp in noteContents)
         {
-            result.AppendLine($"[{kvp.Key}]");
-            result.AppendLine(kvp.Value);
+            string header = kvp.Value.NoteId is not null
+                ? $"[{kvp.Key}|{brainPublicUrl}/#root/{kvp.Value.NoteId}]"
+                : $"[{kvp.Key}]";
+            result.AppendLine(header);
+            result.AppendLine(kvp.Value.Content);
             result.AppendLine();
         }
 

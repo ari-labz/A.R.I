@@ -11,6 +11,7 @@ public class BrainService
     private readonly int brainCacheSize;
     private readonly string backupPath;
     private readonly int maxBackups;
+    public string BrainPublicUrl { get; private set; } = string.Empty;
     private bool triliumReady = false;
 
     private Dictionary<string, string> noteIdCache   = new(StringComparer.OrdinalIgnoreCase); // title → noteId
@@ -32,9 +33,10 @@ public class BrainService
 
         BrainConfig config = BrainConfig.LoadFrom(configPath);
         trilium          = new TriliumClient(config.TriliumUrl, config.EtapiToken, config.RootNoteId);
-        brainCacheSize = config.BrainCacheSize;
+        brainCacheSize   = config.BrainCacheSize;
         backupPath       = config.BackupPath;
         maxBackups       = config.MaxBackups;
+        BrainPublicUrl   = config.BrainPublicUrl;
         _ = Startup();
     }
 
@@ -154,6 +156,9 @@ public class BrainService
         if (content is not null) AddContentToCache(title, content);
         return content;
     }
+
+    /// <summary>Returns the Trilium note ID for the given title, or null if not found.</summary>
+    public Task<string?> GetNoteId(string title) => FindNoteId(title);
 
     /// <summary>Returns the note as markdown (with [[Name]] links) for recursive fetch steps.</summary>
     public async Task<string?> GetNote(string noteName)
