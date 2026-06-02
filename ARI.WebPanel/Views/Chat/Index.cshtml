@@ -455,7 +455,7 @@
                 ariRow   = appendRow('assistant', '', new Date().toISOString());
                 bubbleEl = ariRow.querySelector('.bubble');
             }
-            bubbleEl.textContent = e.data.replace(/\\n/g, '\n');
+            setBubbleMd(bubbleEl, e.data.replace(/\\n/g, '\n'));
             scrollBottom();
         };
 
@@ -492,14 +492,14 @@
                     `<summary><span class="sender">System</span><span class="msg-time">${timeStr}</span></summary>` +
                     `<div class="bubble system-bubble"></div>` +
                     `</details>`;
-                row.querySelector('.system-bubble').textContent = content;
+                setBubbleMd(row.querySelector('.system-bubble'), content);
             } else if (role === 'user') {
                 row.className = 'msg-row internal-prompt';
                 row.innerHTML =
                     `<div class="sender">Prompt</div>` +
                     `<div class="bubble"></div>` +
                     `<div class="msg-time">${timeStr}</div>`;
-                row.querySelector('.bubble').textContent = content;
+                setBubbleMd(row.querySelector('.bubble'), content);
             } else {
                 // assistant — right side, labelled by model name
                 row.className = 'msg-row assistant';
@@ -516,7 +516,7 @@
                     thoughtHtml +
                     `<div class="bubble"></div>` +
                     `<div class="msg-time">${timeStr}</div>`;
-                row.querySelector('.bubble').textContent = content;
+                setBubbleMd(row.querySelector('.bubble'), content);
             }
         } else {
             // Normal dialogue rendering
@@ -543,7 +543,7 @@
                     `<div class="bubble"></div>` +
                     `<div class="msg-time">${timeStr}</div>`;
             }
-            row.querySelector('.bubble').textContent = content;
+            setBubbleMd(row.querySelector('.bubble'), content);
         }
 
         box.appendChild(row);
@@ -575,6 +575,68 @@
 
     function escHtml(str) {
         return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    const COPY_ICON = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+    const CHECK_ICON = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+
+    function attachCopyButtons(el) {
+        el.querySelectorAll('.code-block').forEach(wrapper => {
+            if (wrapper.querySelector('.code-header')) return;
+            const pre = wrapper.querySelector('pre');
+            if (!pre) return;
+
+            // Extract language from class e.g. "language-python"
+            const codeEl = pre.querySelector('code');
+            const langClass = codeEl?.className.match(/language-(\S+)/);
+            const lang = langClass ? langClass[1] : '';
+
+            // Syntax highlight
+            if (codeEl && lang) hljs.highlightElement(codeEl);
+
+            // Build header
+            const header = document.createElement('div');
+            header.className = 'code-header';
+
+            const langSpan = document.createElement('span');
+            langSpan.className = 'code-lang';
+            langSpan.textContent = lang || 'code';
+
+            const btn = document.createElement('button');
+            btn.className = 'code-copy-btn';
+            btn.title = 'Copy code';
+            btn.innerHTML = COPY_ICON;
+            btn.addEventListener('click', () => {
+                const text = codeEl?.innerText ?? pre.innerText;
+                navigator.clipboard.writeText(text).then(() => {
+                    btn.innerHTML = CHECK_ICON;
+                    btn.classList.add('copied');
+                    setTimeout(() => { btn.innerHTML = COPY_ICON; btn.classList.remove('copied'); }, 2000);
+                });
+            });
+
+            header.appendChild(langSpan);
+            header.appendChild(btn);
+            wrapper.insertBefore(header, pre);
+        });
+    }
+
+    function renderMd(content) {
+        const html = marked.parse(content ?? '', { breaks: true, gfm: true });
+        const tmp = document.createElement('div');
+        tmp.innerHTML = html;
+        tmp.querySelectorAll('pre').forEach(pre => {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'code-block';
+            pre.parentNode.insertBefore(wrapper, pre);
+            wrapper.appendChild(pre);
+        });
+        return tmp.innerHTML;
+    }
+
+    function setBubbleMd(el, content) {
+        el.innerHTML = renderMd(content);
+        attachCopyButtons(el);
     }
 
     function showTyping() {
