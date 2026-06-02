@@ -234,6 +234,20 @@ html, body {
     letter-spacing: .01em;
 }
 
+.thought-block summary,
+.thought-label {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+    user-select: none;
+}
+.thought-block summary { list-style: none; cursor: pointer; }
+.thought-block summary::-webkit-details-marker { display: none; }
+.thought-block summary::before { content: '▸'; font-size: 10px; margin-right: 4px; }
+.thought-block[open] summary::before { content: '▾'; }
+.thought-content { margin-top: 8px; padding: 8px 12px; background: var(--input-bg); border-radius: 8px; }
+.thought-content h4 { margin: 0 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-dimmer); }
+
 .msg-row.assistant .bubble {
     font-size: 15px;
     line-height: 1.7;

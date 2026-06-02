@@ -528,14 +528,15 @@
                 if (thinkingSeconds != null) {
                     const secs = typeof thinkingSeconds === 'number' ? thinkingSeconds.toFixed(1) : thinkingSeconds;
                     let detailParts = '';
-                    if (recallNotes)    detailParts += `<h4>Recalled memories</h4>${escHtml(recallNotes)}\n`;
+                    if (recallNotes)    detailParts += `<h4>Notes read</h4>${escHtml(recallNotes)}\n`;
                     if (contextSummary) detailParts += `<h4>Context summary</h4>${escHtml(contextSummary)}`;
                     const hasDetails = detailParts.length > 0;
-                    thoughtHtml =
-                        `<details class="thought-block"${hasDetails ? '' : ' style="pointer-events:none"'}>` +
-                        `<summary>ARI thought for ${secs}s</summary>` +
-                        (hasDetails ? `<div class="thought-content">${detailParts}</div>` : '') +
-                        `</details>`;
+                    thoughtHtml = hasDetails
+                        ? `<details class="thought-block">` +
+                          `<summary>ARI thought for ${secs}s</summary>` +
+                          `<div class="thought-content">${detailParts}</div>` +
+                          `</details>`
+                        : `<div style="font-size:12px;color:#8e8ea0;margin-bottom:4px;user-select:none;">ARI thought for ${secs}s</div>`;
                 }
                 row.innerHTML =
                     `<div class="sender">ARI</div>` +
