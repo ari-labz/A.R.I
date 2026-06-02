@@ -1,93 +1,186 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
 internal class Thread
 {
-    private const string QwenSystemPrefix = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant.\n\n";
+    private const string QwenPrefix = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant.\n\n";
 
-    // Strips Discord-injected prefix, e.g. "[31/05/2026 15:02] [xywren via DM]: "
-    private static readonly Regex DiscordPrefixPattern =
-        new(@"^\[\d{2}/\d{2}/\d{4} \d{2}:\d{2}\] \[.+?\]: ", RegexOptions.Compiled);
-
-    private readonly Model model;
-    private readonly string threadKey;
+    private readonly Agent      agent;
+    private readonly string     threadKey;
     private readonly HttpClient httpClient;
-    private readonly List<ChatMessage> shortTermMemory;
-    private readonly List<ChatMessage> displayHistory = new(); // original prompts, no augmentation
 
-    private int messageCount;
+    // ── Display mode (regular dialogue threads) ────────────────────────────────
+    private readonly List<ThreadItem>? threadHistory;
+    private readonly string?           systemContent;
+    private int  conversationTurnCount;
     private bool bufferEverFilled;
+
+    // ── AdHoc mode (Engram write threads — LLM-only, no display history) ──────
+    private readonly List<ChatMessage>? seedMessages;
 
     internal DateTime LastMessageAt { get; private set; } = DateTime.MinValue;
 
-    internal event Action<IReadOnlyList<ChatMessage>>? BufferFull;
-    internal event Action<string, string>? ExchangeCompleted; // (userMessage, assistantResponse)
+    /// <summary>Fires whenever a ThreadItem is added to this thread's history (user message, ARI response, command, engram event).</summary>
+    internal event Action? HistoryUpdated;
 
-    internal Thread(Model model, string threadKey, string? contextNote = null)
+    /// <summary>Fires when the conversation reaches the agent's memory limit. No payload — Engram re-fetches what it needs.</summary>
+    internal event Action? BufferFull;
+    internal event Action<string, string>? ExchangeCompleted;
+
+    // ── Constructors ────────────────────────────────────────────────────────────
+
+    /// <summary>Regular display thread — used by Dialogue for user-facing conversations.</summary>
+    internal Thread(Agent agent, string threadKey, string? contextNote = null)
     {
-        this.model = model;
+        this.agent     = agent;
         this.threadKey = threadKey;
-        httpClient = new HttpClient
-        {
-            Timeout = System.Threading.Timeout.InfiniteTimeSpan
-        };
+        httpClient     = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+        threadHistory  = new List<ThreadItem>();
 
-        // Qwen3.6 requires this prefix for correct behaviour.
-        // <|think_off|> disables chain-of-thought for the whole conversation.
-        string systemContent = QwenSystemPrefix +
-            (contextNote is null ? model.SystemPrompt : $"{model.SystemPrompt}\n\n{contextNote}") +
-            "\n<|think_off|>";
-
-        shortTermMemory = new List<ChatMessage>
-        {
-            new ChatMessage { Role = "system", Content = systemContent }
-        };
+        string body   = contextNote is null ? agent.SystemPrompt : $"{agent.SystemPrompt}\n\n{contextNote}";
+        systemContent = $"{QwenPrefix}{body}\n<|think_off|>";
     }
 
-    // Seeded constructor — creates a thread pre-loaded with a snapshot of another thread's messages.
-    // Used by Engram to fork a ContextCache for per-note write calls.
-    internal Thread(Model model, string threadKey, IReadOnlyList<ChatMessage> seedMessages)
+    /// <summary>
+    /// AdHoc thread — seeded from a context snapshot, LLM-only.
+    /// Used by Engram's per-note write phase so each note write starts from the same context.
+    /// </summary>
+    internal Thread(Agent agent, string threadKey, IReadOnlyList<ChatMessage> seedMessages)
     {
-        this.model = model;
-        this.threadKey = threadKey;
-        httpClient = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
-        shortTermMemory = seedMessages.ToList();
-        displayHistory  = new List<ChatMessage>();
+        this.agent        = agent;
+        this.threadKey    = threadKey;
+        httpClient        = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+        this.seedMessages = seedMessages.ToList();
     }
 
-    internal IReadOnlyList<ChatMessage> GetHistory() => shortTermMemory.AsReadOnly();
-    internal IReadOnlyList<ChatMessage> GetDisplayHistory() => displayHistory.AsReadOnly();
-    internal List<ChatMessage> GetShortTermMemoryCopy() => shortTermMemory.ToList();
+    // ── Accessors ───────────────────────────────────────────────────────────────
 
-    internal async Task<string> SendPrompt(string prompt, string? originalUserMessage = null, string? recallNotes = null, string? contextSummary = null, int maxTokensOverride = 0)
+    internal IReadOnlyList<ThreadItem> GetThreadHistory()
+        => (IReadOnlyList<ThreadItem>?)threadHistory?.AsReadOnly() ?? Array.Empty<ThreadItem>();
+
+    /// <summary>
+    /// Derives the LLM context window from thread history.
+    /// Walks backwards, collects items with a non-null Message, stops at maxMessages or maxChars.
+    /// Returns the list in chronological order (oldest first).
+    /// </summary>
+    internal List<ThreadMessage> GetChatHistory(int maxMessages, int maxChars)
+    {
+        if (threadHistory is null) return new List<ThreadMessage>();
+
+        var result    = new List<ThreadMessage>();
+        int charCount = 0;
+
+        for (int i = threadHistory.Count - 1; i >= 0; i--)
+        {
+            if (result.Count >= maxMessages) break;
+
+            ThreadItem item = threadHistory[i];
+            if (string.IsNullOrEmpty(item.Message)) continue;
+
+            string formatted = $"{item.AuthorName}: {item.Message}";
+            if (charCount + formatted.Length > maxChars) break;
+
+            charCount += formatted.Length;
+            result.Add(new ThreadMessage(
+                Role:     item.AuthorName == "ARI" ? "assistant" : "user",
+                Username: item.AuthorName,
+                Content:  formatted));
+        }
+
+        result.Reverse();
+        return result;
+    }
+
+    /// <summary>
+    /// Returns a snapshot of the current LLM context as ChatMessages for seeding Engram ad-hoc threads.
+    /// Includes the system prompt as the first entry.
+    /// </summary>
+    internal List<ChatMessage> GetSnapshotForAdHoc()
+    {
+        if (threadHistory is null) return seedMessages?.ToList() ?? new List<ChatMessage>();
+
+        int maxChars = agent.MaxContextTokens > 0 ? agent.MaxContextTokens * 2 : 12000;
+        int maxMsgs  = agent.ShortTermMemoryLimit > 0 ? agent.ShortTermMemoryLimit : 25;
+        var history  = GetChatHistory(maxMsgs, maxChars);
+
+        var snapshot = new List<ChatMessage> { new() { Role = "system", Content = systemContent! } };
+        snapshot.AddRange(history.Select(m => new ChatMessage { Role = m.Role, Content = m.Content }));
+        return snapshot;
+    }
+
+    internal void AddItem(ThreadItem item)
+    {
+        threadHistory?.Add(item);
+        LastMessageAt = DateTime.UtcNow;
+        HistoryUpdated?.Invoke();
+    }
+
+    // ── SendPrompt ──────────────────────────────────────────────────────────────
+
+    internal async Task<string> SendPrompt(
+        string  prompt,
+        string  username          = "user",
+        string? augmentedPrompt   = null,
+        string? recallNotes       = null,
+        string? contextSummary    = null,
+        int     maxTokensOverride = 0)
     {
         LastMessageAt = DateTime.UtcNow;
-        string displayText = originalUserMessage ?? prompt;
-        displayText = DiscordPrefixPattern.Replace(displayText, "");
-        displayHistory.Add(new ChatMessage { Role = "user", Content = displayText, Timestamp = DateTime.Now });
-        shortTermMemory.Add(new ChatMessage { Role = "user", Content = prompt });
+        bool isDisplayThread = threadHistory is not null;
 
-        int maxTokens = maxTokensOverride != 0 ? maxTokensOverride : model.MaxTokens;
+        // ── Build message list ──────────────────────────────────────────────────
+        List<object> messages;
+
+        if (isDisplayThread)
+        {
+            // Store the clean user message in thread history and notify watchers immediately
+            // so other connected clients see the incoming message before ARI has responded.
+            threadHistory!.Add(new UserMessage { Username = username, Content = prompt, Timestamp = DateTime.Now });
+            HistoryUpdated?.Invoke();
+
+            // Derive LLM context window from thread history.
+            int maxChars = agent.MaxContextTokens > 0 ? agent.MaxContextTokens * 2 : 12000;
+            int maxMsgs  = agent.ShortTermMemoryLimit > 0 ? agent.ShortTermMemoryLimit : 25;
+            var history  = GetChatHistory(maxMsgs, maxChars);
+
+            // If recall/context augmentation was applied, substitute it into the last (current) entry.
+            if (augmentedPrompt is not null && history.Count > 0)
+            {
+                var last = history[^1];
+                history[^1] = last with { Content = $"{last.Username}: {augmentedPrompt}" };
+            }
+
+            messages = new List<object> { new { role = "system", content = systemContent } };
+            messages.AddRange(history.Select(m => (object)new { role = m.Role, content = m.Content }));
+        }
+        else
+        {
+            // AdHoc thread: append to the pre-seeded message list directly.
+            seedMessages!.Add(new ChatMessage { Role = "user", Content = prompt });
+            messages = seedMessages.Select(m => (object)new { role = m.Role, content = m.Content }).ToList();
+        }
+
+        // ── Call LLM (streaming) ────────────────────────────────────────────────
+        int maxTokens = maxTokensOverride != 0 ? maxTokensOverride : agent.MaxTokens;
         object requestBody = new
         {
-            model = model.ModelString,
-            messages = shortTermMemory,
-            stream = true,
+            model          = agent.ModelString,
+            messages,
+            stream         = true,
             stream_options = new { include_usage = true },
-            max_tokens = maxTokens,
-            temperature = 0.7,
-            top_p = 0.80,
-            top_k = 20,
+            max_tokens     = maxTokens,
+            temperature    = 0.7,
+            top_p          = 0.80,
+            top_k          = 20,
             repeat_penalty = 1.0
         };
 
         string json = JsonSerializer.Serialize(requestBody);
-        HttpRequestMessage request = new(HttpMethod.Post, $"{model.Endpoint}/v1/chat/completions")
+        HttpRequestMessage request = new(HttpMethod.Post, $"{agent.Endpoint}/v1/chat/completions")
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
@@ -96,15 +189,14 @@ internal class Thread
         if (!response.IsSuccessStatusCode)
             throw new LlmRequestFailedException($"LLM request failed with status: {response.StatusCode}");
 
-        using Stream stream = await response.Content.ReadAsStreamAsync();
+        using Stream      stream = await response.Content.ReadAsStreamAsync();
         using StreamReader reader = new(stream);
 
         StringBuilder contentBuilder  = new();
         StringBuilder thinkingBuilder = new();
-        Stopwatch sw         = Stopwatch.StartNew();
-        bool wasThinking     = false;
-        int promptTokens     = 0;
-        int completionTokens = 0;
+        Stopwatch     sw              = Stopwatch.StartNew();
+        bool wasThinking      = false;
+        int  completionTokens = 0;
 
         string? line;
         while ((line = await reader.ReadLineAsync()) is not null)
@@ -121,19 +213,13 @@ internal class Thread
 
             using (chunk)
             {
-                // Usage chunk — sent as the final data frame before [DONE]
                 if (chunk.RootElement.TryGetProperty("usage", out JsonElement usage))
-                {
-                    promptTokens     = usage.TryGetProperty("prompt_tokens",     out JsonElement pt) ? pt.GetInt32() : 0;
                     completionTokens = usage.TryGetProperty("completion_tokens", out JsonElement ct) ? ct.GetInt32() : 0;
-                }
 
                 if (!chunk.RootElement.TryGetProperty("choices", out JsonElement choices)) continue;
                 if (choices.GetArrayLength() == 0) continue;
-
                 JsonElement delta = choices[0].GetProperty("delta");
 
-                // Thinking content — should not appear with <|think_off|> but handle gracefully
                 if (delta.TryGetProperty("reasoning_content", out JsonElement reasoning))
                 {
                     string? thinkDelta = reasoning.GetString();
@@ -141,8 +227,7 @@ internal class Thread
                     {
                         if (!wasThinking)
                         {
-                            Common.Logger.LogWarning("[{Model}] ({Thread}) thinking chain detected — <|think_off|> may not be working.",
-                                model.Name, threadKey);
+                            Common.Logger.LogWarning("[{Agent}] ({Thread}) thinking chain detected — <|think_off|> may not be working.", agent.Name, threadKey);
                             wasThinking = true;
                         }
                         thinkingBuilder.Append(thinkDelta);
@@ -152,88 +237,66 @@ internal class Thread
                 if (!delta.TryGetProperty("content", out JsonElement contentEl)) continue;
                 string? deltaText = contentEl.GetString();
                 if (string.IsNullOrEmpty(deltaText)) continue;
-
                 contentBuilder.Append(deltaText);
             }
         }
 
         sw.Stop();
         string responseText = contentBuilder.ToString();
-
         if (string.IsNullOrWhiteSpace(responseText))
             throw new LlmRequestFailedException("LLM response was empty.");
 
-        double elapsed  = sw.Elapsed.TotalSeconds;
+        double elapsed   = sw.Elapsed.TotalSeconds;
         double tokPerSec = completionTokens > 0 ? completionTokens / elapsed : 0;
 
-        Common.Logger.LogInformation("[{Model}] ({Thread}) responded in {Seconds}s ({CompTokens} tokens, {TokPerSec} t/s)",
-            model.Name, threadKey,
-            elapsed.ToString("F1"),
-            completionTokens,
-            tokPerSec.ToString("F1"));
-        Common.Logger.LogInformation("[{Model}] ({Thread}) response\n\"{Response}\"",
-            model.Name, threadKey, responseText);
+        Common.Logger.LogInformation("[{Agent}] ({Thread}) responded in {Seconds}s ({Tokens} tokens, {TokPerSec} t/s)",
+            agent.Name, threadKey, elapsed.ToString("F1"), completionTokens, tokPerSec.ToString("F1"));
+        Common.Logger.LogInformation("[{Agent}] ({Thread}) response\n\"{Response}\"",
+            agent.Name, threadKey, responseText);
 
-        shortTermMemory.Add(new ChatMessage { Role = "assistant", Content = responseText });
-        displayHistory.Add(new ChatMessage
+        // ── Store result ────────────────────────────────────────────────────────
+        if (isDisplayThread)
         {
-            Role = "assistant",
-            Content = responseText,
-            Timestamp = DateTime.Now,
-            ThinkingSeconds = elapsed,
-            RecallNotes = recallNotes,
-            ContextSummary = contextSummary
-        });
-        messageCount++;
+            threadHistory!.Add(new AriResponse
+            {
+                Content         = responseText,
+                Timestamp       = DateTime.Now,
+                ThinkingSeconds = elapsed,
+                RecallNotes     = recallNotes,
+                ContextSummary  = contextSummary
+            });
+            HistoryUpdated?.Invoke();
 
-        ExchangeCompleted?.Invoke(prompt, responseText);
+            conversationTurnCount++;
+            ExchangeCompleted?.Invoke(prompt, responseText);
 
-        // Fire BEFORE trimming so Engram sees the full history including messages about to fall off.
-        if (ShouldFireBufferFull())
-            BufferFull?.Invoke(shortTermMemory.AsReadOnly());
-
-        TrimShortTermMemory();
+            if (ShouldFireBufferFull())
+                BufferFull?.Invoke();
+        }
+        else
+        {
+            seedMessages!.Add(new ChatMessage { Role = "assistant", Content = responseText });
+        }
 
         return responseText;
     }
 
-    private void TrimShortTermMemory()
-    {
-        // Pass 1 — message-count cap.
-        if (model.ShortTermMemoryLimit > 0 && shortTermMemory.Count > model.ShortTermMemoryLimit + 1)
-        {
-            shortTermMemory.RemoveRange(1, shortTermMemory.Count - model.ShortTermMemoryLimit - 1);
-            bufferEverFilled = true;
-        }
-
-        // Pass 2 — token-budget cap (1 token ≈ 4 chars).
-        // Drops the oldest non-system messages until the estimated token count is within budget.
-        // Preserves at least the system message + the most recent exchange.
-        if (model.MaxContextTokens > 0)
-        {
-            int budgetChars = model.MaxContextTokens * 4;
-            while (shortTermMemory.Count > 3) // system + at least one user/assistant pair
-            {
-                int totalChars = shortTermMemory.Sum(m => m.Content?.Length ?? 0);
-                if (totalChars <= budgetChars) break;
-                shortTermMemory.RemoveAt(1); // drop oldest non-system message
-                bufferEverFilled = true;
-            }
-        }
-    }
+    // ── Private ─────────────────────────────────────────────────────────────────
 
     private bool ShouldFireBufferFull()
     {
-        if (model.ShortTermMemoryLimit == 0) return false;
+        int limit = agent.ShortTermMemoryLimit > 0 ? agent.ShortTermMemoryLimit : 25;
 
-        // First overflow — about to trim for the first time. Always fire.
-        bool isFirstOverflow = !bufferEverFilled && shortTermMemory.Count > model.ShortTermMemoryLimit + 1;
-        if (isFirstOverflow) return true;
+        // First time the buffer fills — fire once.
+        if (!bufferEverFilled && conversationTurnCount >= limit)
+        {
+            bufferEverFilled = true;
+            return true;
+        }
 
-        // Subsequent sweeps — fire every limit/2 messages after the buffer first filled.
+        // Subsequently — fire every limit/2 turns so Engram runs periodically.
         if (!bufferEverFilled) return false;
-        int interval = Math.Max(1, model.ShortTermMemoryLimit / 2);
-        return messageCount % interval == 0;
+        int interval = Math.Max(1, limit / 2);
+        return conversationTurnCount % interval == 0;
     }
-
 }

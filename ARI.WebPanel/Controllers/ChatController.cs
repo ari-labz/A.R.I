@@ -1,3 +1,6 @@
+using System.Security.Claims;
+using System.Text.Json;
+using System.Threading.Channels;
 using ARI.LLM;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -16,6 +19,17 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
 {
     private LlmService? Llm => holder.Service;
 
+    /// <summary>Derives a display username from the authenticated user's email (strips @domain).</summary>
+    private string GetUsername()
+    {
+        string? email = User.FindFirstValue(ClaimTypes.Email);
+        if (string.IsNullOrEmpty(email)) return "xywren";
+        int at = email.IndexOf('@');
+        string raw = at > 0 ? email[..at] : email;
+        // Capitalise first letter for display (xywren → Xywren)
+        return raw.Length > 0 ? char.ToUpper(raw[0]) + raw[1..] : raw;
+    }
+
     [HttpGet]
     public IActionResult GetThreads([FromQuery] bool includeInternal = false)
     {
@@ -24,16 +38,16 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
         var threads = Llm.GetActiveThreadKeys()
             .Select(key => new ThreadEntry(
                 key,
-                ModelName:     null,
+                AgentName:     null,
                 IsInternal:    false,
                 LastMessageAt: Llm.GetThreadLastMessageAt(key),
-                MessageCount:  Llm.GetThreadHistory(key).Count(m => m.Role != "system")))
+                MessageCount:  Llm.GetThreadItems(key).Count(m => m is UserMessage or AriResponse)))
             .ToList();
 
         if (includeInternal)
         {
             var internalThreads = Llm.GetInternalThreads()
-                .Select(t => new ThreadEntry(t.Key, t.ModelName, IsInternal: true, t.LastMessageAt, t.MessageCount));
+                .Select(t => new ThreadEntry(t.Key, t.AgentName, IsInternal: true, t.LastMessageAt, t.MessageCount));
             threads.AddRange(internalThreads);
         }
 
@@ -44,7 +58,6 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
     public IActionResult NewThread()
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
-
         string key = $"web-{Guid.NewGuid():N}";
         return Ok(new { key });
     }
@@ -54,17 +67,74 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
 
-        // Internal threads: return raw history including system messages.
-        if (raw)
+        IReadOnlyList<ThreadItem> items = raw
+            ? Llm.GetInternalThreadItems(threadKey)
+            : Llm.GetThreadItems(threadKey);
+
+        return Ok(items);
+    }
+
+    [HttpGet("{threadKey}/status")]
+    public IActionResult GetThreadStatus(string threadKey)
+    {
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        return Ok(new { isProcessing = Llm.IsThreadProcessing(threadKey) });
+    }
+
+    /// <summary>
+    /// SSE endpoint — one connection per client per thread.
+    /// Sends an update event whenever the thread's history changes, plus a keep-alive ping every 20s.
+    /// Payload: { "isProcessing": bool }
+    /// </summary>
+    [HttpGet("{threadKey}/watch")]
+    public async Task Watch(string threadKey, CancellationToken cancellationToken)
+    {
+        Response.Headers[HeaderNames.ContentType]  = "text/event-stream";
+        Response.Headers[HeaderNames.CacheControl] = "no-cache";
+        Response.Headers["X-Accel-Buffering"]      = "no";
+
+        if (Llm is null)
         {
-            var internalMsgs = Llm.GetInternalThreadHistory(threadKey)
-                .Select(m => new { m.Role, m.Content, m.Timestamp, m.ThinkingSeconds, m.RecallNotes, m.ContextSummary });
-            return Ok(internalMsgs);
+            await Response.WriteAsync("data: {\"error\":\"not ready\"}\n\n", cancellationToken);
+            return;
         }
 
-        var messages = Llm.GetThreadDisplayHistory(threadKey)
-            .Select(m => new { m.Role, m.Content, m.Timestamp, m.ThinkingSeconds, m.RecallNotes, m.ContextSummary });
-        return Ok(messages);
+        var channel = Channel.CreateUnbounded<bool>(new UnboundedChannelOptions { SingleReader = true });
+        using var watchHandle = Llm.WatchThread(threadKey, channel);
+
+        // Send initial state so the client can sync immediately on connect.
+        await SendWatchEvent(threadKey, cancellationToken);
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            // Wait up to 20s for an update; send a keep-alive ping either way.
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(20));
+
+            try
+            {
+                await channel.Reader.ReadAsync(timeoutCts.Token);
+                // Drain any further queued notifications so we send one event per batch.
+                while (channel.Reader.TryRead(out _)) { }
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // 20s timeout — send keep-alive comment so the connection stays alive through proxies.
+                await Response.WriteAsync(": ping\n\n", cancellationToken);
+                await Response.Body.FlushAsync(cancellationToken);
+                continue;
+            }
+
+            await SendWatchEvent(threadKey, cancellationToken);
+        }
+    }
+
+    private async Task SendWatchEvent(string threadKey, CancellationToken ct)
+    {
+        bool isProcessing = Llm?.IsThreadProcessing(threadKey) ?? false;
+        string payload    = JsonSerializer.Serialize(new { isProcessing });
+        await Response.WriteAsync($"data: {payload}\n\n", ct);
+        await Response.Body.FlushAsync(ct);
     }
 
     [HttpPost("~/api/commands")]
@@ -73,7 +143,7 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
         if (string.IsNullOrWhiteSpace(req.Input)) return BadRequest("Input is required.");
 
-        string? result = await Llm.HandleCommandAsync(req.Input);
+        string? result = await Llm.HandleCommandAsync(req.ThreadKey, req.Input);
         if (result is null) return BadRequest(new { error = $"Unknown command: {req.Input}" });
         return Ok(new { result });
     }
@@ -94,7 +164,8 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
 
         try
         {
-            string response = await Llm.Prompt(threadKey, prompt);
+            string username = GetUsername();
+            string response = await Llm.Prompt(threadKey, prompt, username);
             string escaped  = response.Replace("\n", "\\n").Replace("\r", "");
             await Response.WriteAsync($"data: {escaped}\n\n", cancellationToken);
             await Response.WriteAsync("data: [DONE]\n\n", cancellationToken);
@@ -108,5 +179,5 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
     }
 }
 
-public record CommandRequest(string Input);
-public record ThreadEntry(string Key, string? ModelName, bool IsInternal, DateTime LastMessageAt, int MessageCount);
+public record CommandRequest(string? ThreadKey, string Input);
+public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount);

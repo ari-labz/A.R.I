@@ -6,11 +6,12 @@ using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
-internal class Engram : Model, IDisposable
+internal class Engram : Agent, IDisposable
 {
     private readonly Dialogue dialogue;
     private readonly BrainService brain;
     private readonly Context? context;
+    private readonly string brainPublicUrl;
 
     private readonly Dictionary<string, DateTime> lastEngramRun = new();
     private readonly Dictionary<string, int> lastEngramHistoryCount = new();
@@ -20,17 +21,19 @@ internal class Engram : Model, IDisposable
     private TimeSpan sweepInterval;
     private readonly HttpClient httpClient = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
 
-    internal Engram(ModelConfig config, Dialogue dialogue, BrainService brain, Context? context, int sweepIntervalMinutes, int fetchDepth = 7) : base(config)
+
+    internal Engram(ModelConfig config, Dialogue dialogue, BrainService brain, Context? context, int sweepIntervalMinutes, int fetchDepth = 7, string brainPublicUrl = "") : base(config)
     {
-        this.dialogue   = dialogue;
-        this.brain      = brain;
-        this.context    = context;
-        this.fetchDepth = fetchDepth;
+        this.dialogue       = dialogue;
+        this.brain          = brain;
+        this.context        = context;
+        this.fetchDepth     = fetchDepth;
+        this.brainPublicUrl = brainPublicUrl;
 
         // Ignore the history snapshot passed by the event — it is pre-trim and may be larger
         // than the Dialogue short-term memory window. Re-fetch the already-trimmed buffer when
         // the task actually runs so Engram always sees the same capped view as Dialogue.
-        dialogue.ThreadBufferFull += (threadKey, ignored) =>
+        dialogue.ThreadBufferFull += threadKey =>
             _ = Task.Delay(TimeSpan.FromSeconds(5)).ContinueWith(_ => RunEngramAsync(threadKey, "chat buffer"));
 
         if (sweepIntervalMinutes > 0)
@@ -72,6 +75,7 @@ internal class Engram : Model, IDisposable
 
     internal Task<int> PurgeNotes() => brain.PurgeAllNotes();
 
+
     public void Dispose()
     {
         sweepTimer?.Dispose();
@@ -91,8 +95,8 @@ internal class Engram : Model, IDisposable
                 DateTime lastMessage = dialogue.GetThreadLastMessageAt(threadKey);
                 if (lastMessage <= lastRun) continue;
 
-                IReadOnlyList<ChatMessage> history = dialogue.GetThreadHistory(threadKey);
-                if (history.Count > 1)
+                var items = dialogue.GetThreadItems(threadKey);
+                if (items.Any(i => i is UserMessage or AriResponse))
                     await RunEngramAsync(threadKey, "sweep timer");
             }
         }
@@ -109,29 +113,29 @@ internal class Engram : Model, IDisposable
         if (!await engramLock.WaitAsync(0)) return;
         try
         {
-            // Always fetch the already-trimmed, token-capped buffer from Dialogue so Engram
-            // sees the same capped view of the conversation that ARI herself is working with.
-            IReadOnlyList<ChatMessage> history = dialogue.GetThreadHistory(threadKey);
+            // Fetch thread items — only conversation items (UserMessage/AriResponse) are used.
+            var allItems          = dialogue.GetThreadItems(threadKey);
+            var conversationItems = allItems.Where(i => i is UserMessage or AriResponse).ToList();
 
-            // Slice to messages since the last Engram run on this thread.
+            // Slice to items since the last Engram run on this thread.
             int lastCount = lastEngramHistoryCount.TryGetValue(threadKey, out int c) ? c : 0;
-            IReadOnlyList<ChatMessage> recentMessages = history.Skip(lastCount).ToList();
+            var recentItems = conversationItems.Skip(lastCount).ToList();
 
             lastEngramRun[threadKey]          = DateTime.UtcNow;
-            lastEngramHistoryCount[threadKey] = history.Count;
+            lastEngramHistoryCount[threadKey] = conversationItems.Count;
 
             Common.Logger.LogInformation("[Engram] [{ThreadKey}] sweep triggered (trigger: {Trigger})", threadKey, trigger);
 
             // --- Phase 1: Classify ---
             Common.Logger.LogInformation("[Engram] [{ThreadKey}] phase 1 — classifying conversation...", threadKey);
-            if (!await ClassifyConversationAsync(recentMessages, trigger)) return;
+            if (!await ClassifyConversationAsync(recentItems, trigger)) return;
 
             // --- Phase 2: Fetch ---
             // Use full paths so the model can see the graph structure (category, ownership, depth)
             // without needing to fetch notes first. Fetch requests still use bare titles.
-            List<string> existingNotes     = await brain.GetNotePaths();
-            string existingNotesList       = existingNotes.Count > 0 ? string.Join(", ", existingNotes) : "none";
-            string transcript          = BuildTranscript(history);
+            List<string> existingNotes = await brain.GetNotePaths();
+            string existingNotesList   = existingNotes.Count > 0 ? string.Join(", ", existingNotes) : "none";
+            string transcript          = BuildTranscript(conversationItems);
             string engramThreadKey     = $"engram:{Guid.NewGuid()}";
 
             if (context is not null)
@@ -318,6 +322,7 @@ internal class Engram : Model, IDisposable
             StringBuilder sweepSummary = new();
             int successCount = 0;
             int failCount    = 0;
+            var pendingChanges = new List<NoteChange>();
 
             for (int i = 0; i < plan.Count; i++)
             {
@@ -363,6 +368,23 @@ internal class Engram : Model, IDisposable
                     .Concat(noteEdits.Select(e => BareName(e.NewNoteName ?? e.NoteName)));
                 await brain.MarkDirty(writtenTitles);
 
+                // Queue note changes so the web panel can show a memory block.
+                foreach (EngramAdd add in noteAdds)
+                {
+                    string  title  = BareName(add.NoteName);
+                    string? noteId = await brain.GetNoteId(title);
+                    string? url    = noteId is not null && !string.IsNullOrEmpty(brainPublicUrl)
+                        ? $"{brainPublicUrl}/#root/{noteId}" : null;
+                    pendingChanges.Add(new NoteChange(title, url, "created", "created"));
+                }
+                foreach (EngramEdit edit in noteEdits)
+                {
+                    string  title  = BareName(edit.NewNoteName ?? edit.NoteName);
+                    string? noteId = await brain.GetNoteId(title);
+                    string? url    = noteId is not null && !string.IsNullOrEmpty(brainPublicUrl)
+                        ? $"{brainPublicUrl}/#root/{noteId}" : null;
+                    pendingChanges.Add(new NoteChange(title, url, "updated", item.Summary));
+                }
 
                 sweepSummary.AppendLine($"- {item.Name}: {item.Summary}");
                 successCount++;
@@ -375,6 +397,9 @@ internal class Engram : Model, IDisposable
             Common.Logger.LogInformation("[Engram] [{ThreadKey}] phase 4 complete: {Success} saved, {Fail} failed.",
                 threadKey, successCount, failCount);
 
+            if (pendingChanges.Count > 0)
+                dialogue.InjectEngramEvent(threadKey, pendingChanges);
+
             Common.Logger.LogInformation("[Engram] [{ThreadKey}] sweep complete.", threadKey);
         }
         finally
@@ -383,9 +408,9 @@ internal class Engram : Model, IDisposable
         }
     }
 
-    private async Task<bool> ClassifyConversationAsync(IReadOnlyList<ChatMessage> recentMessages, string trigger)
+    private async Task<bool> ClassifyConversationAsync(IReadOnlyList<ThreadItem> recentItems, string trigger)
     {
-        string transcript = BuildTranscript(recentMessages);
+        string transcript = BuildTranscript(recentItems);
         if (string.IsNullOrWhiteSpace(transcript))
         {
             Common.Logger.LogInformation("[Engram] [{Trigger}] no new messages to classify, skipping.", trigger);
@@ -441,14 +466,16 @@ internal class Engram : Model, IDisposable
         }
     }
 
-    private static string BuildTranscript(IReadOnlyList<ChatMessage> history)
+    private static string BuildTranscript(IEnumerable<ThreadItem> items)
     {
         StringBuilder sb = new();
-        foreach (ChatMessage msg in history)
+        foreach (ThreadItem item in items)
         {
-            if (msg.Role == "system") continue;
-            string speaker = msg.Role == "user" ? "User" : "ARI";
-            sb.AppendLine($"{speaker}: {msg.Content}");
+            switch (item)
+            {
+                case UserMessage u: sb.AppendLine($"{u.Username}: {u.Content}"); break;
+                case AriResponse r: sb.AppendLine($"ARI: {r.Content}");          break;
+            }
         }
         return sb.ToString();
     }

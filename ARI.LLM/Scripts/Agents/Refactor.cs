@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
-internal class Refactor : Model
+internal class Refactor : Agent
 {
     private readonly BrainService brain;
     private readonly Engram?      engram;

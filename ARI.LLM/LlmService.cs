@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Threading.Channels;
 using ARI.Brain;
 using Microsoft.Extensions.Logging;
 
@@ -5,12 +7,16 @@ namespace ARI.LLM;
 
 public class LlmService : IDisposable
 {
-    private readonly Dialogue?  dialogue;
-    private readonly Context?   context;
-    private readonly Recall?    recall;
-    private readonly Engram?    engram;
-    private readonly Refactor?  refactor;
+    private readonly Dialogue?   dialogue;
+    private readonly Context?    context;
+    private readonly Recall?     recall;
+    private readonly Engram?     engram;
+    private readonly Refactor?   refactor;
     private readonly CommandService commands;
+    private readonly ConcurrentDictionary<string, byte> processingThreads = new();
+
+    // Per-thread watcher channels — each connected client gets one.
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<Guid, Channel<bool>>> threadWatchers = new();
 
     public LlmService(string modelsConfigPath, string? brainConfigPath = null, ILoggerFactory? loggerFactory = null)
     {
@@ -24,7 +30,10 @@ public class LlmService : IDisposable
             .ToDictionary(m => m.Name);
 
         if (enabled.TryGetValue("Dialogue", out ModelConfig? dialogueConfig))
+        {
             dialogue = new Dialogue(dialogueConfig);
+            dialogue.ThreadHistoryUpdated += key => NotifyWatchers(key);
+        }
 
         if (enabled.TryGetValue("Context", out ModelConfig? contextConfig))
         {
@@ -46,7 +55,7 @@ public class LlmService : IDisposable
 
             if (enabled.TryGetValue("Engram", out ModelConfig? engramConfig))
             {
-                engram = new Engram(engramConfig, dialogue, brain, context, engramConfig.SweepIntervalMinutes, engramConfig.RecursiveBrainSearchDepth);
+                engram = new Engram(engramConfig, dialogue, brain, context, engramConfig.SweepIntervalMinutes, engramConfig.RecursiveBrainSearchDepth, brain.BrainPublicUrl);
                 Common.Logger.LogInformation("Engram is active. Brain connected.");
             }
 
@@ -64,76 +73,133 @@ public class LlmService : IDisposable
         }
     }
 
+    // ── Thread accessors (client-facing) ────────────────────────────────────────
+
     public IReadOnlyCollection<string> GetActiveThreadKeys()
         => dialogue?.ThreadKeys ?? Array.Empty<string>();
 
-    public IReadOnlyList<ChatMessage> GetThreadHistory(string threadKey)
-        => dialogue?.GetThreadHistory(threadKey) ?? Array.Empty<ChatMessage>();
+    /// <summary>Returns the typed ThreadItem list for a dialogue thread. This is what clients render.</summary>
+    public IReadOnlyList<ThreadItem> GetThreadItems(string threadKey)
+        => dialogue?.GetThreadItems(threadKey) ?? Array.Empty<ThreadItem>();
 
-    public IReadOnlyList<ChatMessage> GetThreadDisplayHistory(string threadKey)
-        => dialogue?.GetThreadDisplayHistory(threadKey) ?? Array.Empty<ChatMessage>();
+    /// <summary>Returns the typed ThreadItem list for an internal agent thread (Engram, Refactor, etc.).</summary>
+    public IReadOnlyList<ThreadItem> GetInternalThreadItems(string threadKey)
+    {
+        if (engram?.ThreadKeys.Contains(threadKey)   == true) return engram.GetThreadItems(threadKey);
+        if (refactor?.ThreadKeys.Contains(threadKey) == true) return refactor.GetThreadItems(threadKey);
+        if (recall?.ThreadKeys.Contains(threadKey)   == true) return recall.GetThreadItems(threadKey);
+        if (context?.ThreadKeys.Contains(threadKey)  == true) return context.GetThreadItems(threadKey);
+        return Array.Empty<ThreadItem>();
+    }
 
     public DateTime GetThreadLastMessageAt(string threadKey)
         => dialogue?.GetThreadLastMessageAt(threadKey) ?? DateTime.MinValue;
 
-    // Returns metadata for all internal model threads (Engram, Recall, Context).
-    // Context threads that share a key with a Dialogue thread are excluded to avoid duplication.
+    // Returns metadata for all internal agent threads (Engram, Recall, Context, Refactor).
+    // Threads sharing a key with a Dialogue thread are excluded to avoid duplication.
     public IReadOnlyList<InternalThreadInfo> GetInternalThreads()
     {
         var result = new List<InternalThreadInfo>();
         HashSet<string> dialogueKeys = new(dialogue?.ThreadKeys ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase);
 
-        void Add(Model? model, string modelName)
+        void Add(Agent? agent, string agentName)
         {
-            if (model is null) return;
-            foreach (string key in model.ThreadKeys)
+            if (agent is null) return;
+            foreach (string key in agent.ThreadKeys)
             {
                 if (dialogueKeys.Contains(key)) continue;
-                result.Add(new InternalThreadInfo(key, modelName,
-                    model.GetThreadLastMessageAt(key),
-                    model.GetThreadHistory(key).Count));
+                result.Add(new InternalThreadInfo(key, agentName,
+                    agent.GetThreadLastMessageAt(key),
+                    agent.GetThreadItems(key).Count));
             }
         }
 
-        Add(engram,    "Engram");
-        Add(refactor,  "Refactor");
-        Add(recall,    "Recall");
-        Add(context,   "Context");
+        Add(engram,   "Engram");
+        Add(refactor, "Refactor");
+        Add(recall,   "Recall");
+        Add(context,  "Context");
         return result;
     }
 
-    // Returns the raw message history (including system messages) for an internal thread.
-    public IReadOnlyList<ChatMessage> GetInternalThreadHistory(string threadKey)
+    public record InternalThreadInfo(string Key, string AgentName, DateTime LastMessageAt, int MessageCount);
+
+    // ── Thread watchers (server push) ───────────────────────────────────────────
+
+    /// <summary>
+    /// Subscribes a client channel to receive notifications whenever the given thread's history changes.
+    /// Dispose the returned handle to unsubscribe (called when the client disconnects).
+    /// </summary>
+    public IDisposable WatchThread(string threadKey, Channel<bool> channel)
     {
-        if (engram?.ThreadKeys.Contains(threadKey)    == true) return engram.GetThreadHistory(threadKey);
-        if (refactor?.ThreadKeys.Contains(threadKey)  == true) return refactor.GetThreadHistory(threadKey);
-        if (recall?.ThreadKeys.Contains(threadKey)    == true) return recall.GetThreadHistory(threadKey);
-        if (context?.ThreadKeys.Contains(threadKey)   == true) return context.GetThreadHistory(threadKey);
-        return Array.Empty<ChatMessage>();
+        Guid id = Guid.NewGuid();
+        threadWatchers.GetOrAdd(threadKey, _ => new())[id] = channel;
+        return new WatcherHandle(threadWatchers, threadKey, id, channel);
     }
 
-    public record InternalThreadInfo(string Key, string ModelName, DateTime LastMessageAt, int MessageCount);
+    private void NotifyWatchers(string threadKey)
+    {
+        if (!threadWatchers.TryGetValue(threadKey, out var watchers)) return;
+        foreach (Channel<bool> ch in watchers.Values)
+            ch.Writer.TryWrite(true);
+    }
 
-    public async Task<string> Prompt(string threadKey, string prompt, string? contextNote = null)
+    private sealed class WatcherHandle(
+        ConcurrentDictionary<string, ConcurrentDictionary<Guid, Channel<bool>>> registry,
+        string threadKey, Guid id, Channel<bool> channel) : IDisposable
+    {
+        public void Dispose()
+        {
+            if (registry.TryGetValue(threadKey, out var watchers))
+                watchers.TryRemove(id, out _);
+            channel.Writer.TryComplete();
+        }
+    }
+
+    // ── Processing state ────────────────────────────────────────────────────────
+
+    public bool IsThreadProcessing(string threadKey) => processingThreads.ContainsKey(threadKey);
+
+    // ── Prompting ───────────────────────────────────────────────────────────────
+
+    public async Task<string> Prompt(string threadKey, string prompt, string username, string? contextNote = null)
     {
         if (dialogue is null)
             throw new ModelNotFoundException("Dialogue model is not loaded or is not enabled.");
 
-        IReadOnlyList<ChatMessage> history = dialogue.GetThreadHistory(threadKey);
+        // Recall fetches relevant brain notes based on current history + the new prompt.
+        // It uses the existing ThreadItems to build its search context.
+        var currentItems  = dialogue.GetThreadItems(threadKey);
+        string? recallBlock = recall is not null
+            ? await recall.FetchContextAsync(currentItems, prompt)
+            : null;
+
         string? contextSummary = context?.GetContext(threadKey);
 
-        string? recallBlock = null;
-        if (recall is not null)
-            recallBlock = await recall.FetchContextAsync(history, prompt);
-
-        return await dialogue.SendPrompt(threadKey, prompt, contextNote, recallBlock, contextSummary);
+        processingThreads[threadKey] = 0;
+        try
+        {
+            return await dialogue.SendPrompt(threadKey, prompt, username, contextNote, recallBlock, contextSummary);
+        }
+        finally
+        {
+            processingThreads.TryRemove(threadKey, out _);
+            // Notify watchers so they can update the isProcessing indicator.
+            NotifyWatchers(threadKey);
+        }
     }
 
     /// <summary>
     /// Passes a slash command to the CommandService for processing.
+    /// If a threadKey is provided, the exchange is stored in the thread's display history.
     /// Returns a human-readable result, or null if the input is not a recognised command.
     /// </summary>
-    public Task<string?> HandleCommandAsync(string input) => commands.HandleAsync(input);
+    public async Task<string?> HandleCommandAsync(string? threadKey, string input)
+    {
+        string? result = await commands.HandleAsync(input);
+        if (result is not null && threadKey is not null)
+            dialogue?.InjectCommandExchange(threadKey, input, result);
+        return result;
+    }
 
     public void Dispose() => engram?.Dispose();
 }

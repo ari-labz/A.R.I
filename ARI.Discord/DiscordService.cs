@@ -180,7 +180,7 @@ public class DiscordService : BackgroundService
 
         // Defer immediately — sweep/refactor/backup can take well over 3 seconds.
         await cmd.DeferAsync(ephemeral: true);
-        string result = await llmService.HandleCommandAsync(commandText) ?? $"Unknown command: {commandText}";
+        string result = await llmService.HandleCommandAsync(null, commandText) ?? $"Unknown command: {commandText}";
         await cmd.FollowupAsync(AsBlockQuote(result), ephemeral: true);
     }
 
@@ -246,7 +246,7 @@ public class DiscordService : BackgroundService
         // commands have propagated, or if the interaction system fails.
         if (message.Content.StartsWith("/", StringComparison.OrdinalIgnoreCase))
         {
-            string? result = await llmService.HandleCommandAsync(message.Content);
+            string? result = await llmService.HandleCommandAsync(null, message.Content);
             if (result is not null)
             {
                 Common.Logger.LogInformation("Command [{Input}] → {Result}", message.Content, result);
