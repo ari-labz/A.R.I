@@ -127,6 +127,128 @@ html, body {
     overflow: hidden; background: var(--main-bg); position: relative;
 }
 
+#chat-col {
+    flex: 1; display: flex; flex-direction: column;
+    overflow: hidden; min-width: 0;
+}
+
+/* messages + thread panel share this zone — collapses in idle like #messages used to */
+#messages-wrap {
+    flex: 1; position: relative; overflow: hidden;
+    display: flex; flex-direction: column;
+    max-height: 0;
+    transition: max-height 0.65s ease-in-out;
+}
+#main.active #messages-wrap {
+    max-height: 100dvh;
+}
+
+/* ── drop overlay ───────────────────────────────────── */
+#drop-overlay {
+    position: absolute; inset: 10px; border-radius: 18px;
+    z-index: 300; pointer-events: none;
+    background: rgba(142, 192, 205, 0.30);
+    border: 2px dashed rgba(60, 122, 137, 0.55);
+    display: none;
+    align-items: center; justify-content: center;
+    flex-direction: column; gap: 10px;
+}
+#drop-overlay-inner {
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+}
+#drop-overlay-title {
+    margin: 0; font-size: 18px; font-weight: 650; letter-spacing: -.01em;
+    color: #3c7a89;
+}
+#drop-overlay-sub {
+    margin: 0; font-size: 13px; color: rgba(60, 122, 137, 0.75);
+}
+#drop-overlay svg { color: #3c7a89; }
+
+/* ── thread panel toggle button ──────────────────────── */
+#btn-open-thread-panel {
+    position: absolute; top: 14px; right: 14px; z-index: 10;
+    background: none; border: none; cursor: pointer;
+    color: var(--text-dim); padding: 5px; border-radius: 7px;
+    display: none; align-items: center;
+    transition: color .12s, background .12s;
+}
+#btn-open-thread-panel:hover { color: var(--text); background: var(--user-bubble); }
+#main.active #btn-open-thread-panel { display: flex; }
+#btn-open-thread-panel.hidden { display: none !important; }
+
+/* ── thread panel (anchored to messages-wrap) ────────── */
+#thread-panel {
+    position: absolute; top: 12px; right: 0; bottom: 28px;
+    width: 220px;
+    display: flex; flex-direction: column;
+    background: #518c9a;
+    border-left: 1px solid rgba(255,255,255,.15);
+    border-radius: 14px 0 0 14px;
+    box-shadow: -4px 0 24px rgba(0,0,0,.35);
+    overflow: hidden; z-index: 100;
+    padding: 8px 0;
+    transform: translateX(calc(100% + 4px));
+    transition: transform .3s ease-in-out;
+    pointer-events: none;
+}
+#thread-panel.open {
+    transform: translateX(0);
+    pointer-events: auto;
+}
+#thread-panel-inner { display: flex; flex-direction: column; overflow-y: auto; flex: 1; }
+
+#thread-panel-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 14px 10px;
+    font-size: 13px; font-weight: 600; color: #fff;
+    border-bottom: 1px solid rgba(255,255,255,.2);
+    flex-shrink: 0;
+}
+#btn-close-thread-panel {
+    background: transparent; border: none; cursor: pointer;
+    color: rgba(255,255,255,.6); padding: 2px;
+    display: flex; align-items: center; transition: color .15s;
+}
+#btn-close-thread-panel:hover { color: #fff; }
+
+.thread-panel-section { padding: 10px 14px 14px; }
+.thread-panel-section-label {
+    font-size: 11px; font-weight: 600; color: rgba(255,255,255,.65);
+    text-transform: uppercase; letter-spacing: .06em;
+    margin-bottom: 8px;
+    display: flex; align-items: center; justify-content: space-between;
+}
+.thread-panel-section-label button {
+    background: transparent; border: none; cursor: pointer;
+    color: rgba(255,255,255,.65); padding: 2px;
+    display: flex; align-items: center; transition: color .15s;
+}
+.thread-panel-section-label button:hover { color: #fff; }
+
+#attachment-list {
+    list-style: none; padding: 0; margin: 0;
+    display: flex; flex-direction: column; gap: 4px;
+}
+#attachment-list li {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12.5px; color: #fff;
+    border-radius: 6px; padding: 5px 6px;
+    background: rgba(255,255,255,.12);
+}
+#attachment-list li.attachment-empty {
+    color: rgba(255,255,255,.55); font-size: 12px; background: transparent;
+}
+.attachment-item-name {
+    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.attachment-item-remove {
+    flex-shrink: 0; background: transparent; border: none;
+    color: rgba(255,255,255,.55); cursor: pointer; padding: 0;
+    font-size: 15px; line-height: 1; transition: color .15s;
+}
+.attachment-item-remove:hover { color: #fff; }
+
 /* floating toggle when sidebar collapsed */
 #topbar-toggle {
     position: absolute; top: 14px; left: 14px; z-index: 10;
@@ -332,7 +454,16 @@ html, body {
 }
 #input::placeholder { color: #9ca3af; }
 
-#input-footer { display: flex; justify-content: flex-end; }
+#input-footer { display: flex; justify-content: flex-end; align-items: center; gap: 4px; }
+
+#btn-attach {
+    width: 28px; height: 28px; border-radius: 50%;
+    border: none; background: transparent;
+    color: #9ca3af; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: color .15s; flex-shrink: 0;
+}
+#btn-attach:hover { color: var(--text); }
 
 #input-hint {
     text-align: center; font-size: 12px; color: #9ca3af;
