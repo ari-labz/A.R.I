@@ -15,22 +15,27 @@ internal class Dialogue : Agent
         string  username,
         string? contextNote    = null,
         string? recallBlock    = null,
-        string? contextSummary = null)
+        string? contextSummary = null,
+        IReadOnlyList<ThreadAttachment>? attachments = null)
     {
-        string? augmented = BuildAugmentedPrompt(prompt, contextSummary, recallBlock);
+        string? augmented = BuildAugmentedPrompt(prompt, contextSummary, recallBlock, attachments);
         return PromptThread(
             threadKey,
-            prompt:         prompt,
-            username:       username,
+            prompt:          prompt,
+            username:        username,
             augmentedPrompt: augmented,
-            contextNote:    contextNote,
-            recallNotes:    recallBlock,
-            contextSummary: contextSummary);
+            contextNote:     contextNote,
+            recallNotes:     recallBlock,
+            contextSummary:  contextSummary,
+            attachments:     attachments);
     }
 
-    private static string? BuildAugmentedPrompt(string prompt, string? contextSummary, string? recallBlock)
+    private static string? BuildAugmentedPrompt(string prompt, string? contextSummary, string? recallBlock, IReadOnlyList<ThreadAttachment>? attachments)
     {
-        if (string.IsNullOrWhiteSpace(contextSummary) && string.IsNullOrWhiteSpace(recallBlock))
+        var textAttachments = attachments?.Where(a => !a.IsImage).ToList();
+        bool hasText = textAttachments?.Count > 0;
+
+        if (string.IsNullOrWhiteSpace(contextSummary) && string.IsNullOrWhiteSpace(recallBlock) && !hasText)
             return null;
 
         const string divider = "-------------------";
@@ -47,6 +52,18 @@ internal class Dialogue : Agent
         {
             sb.AppendLine("[ARI's Memories]");
             sb.AppendLine(recallBlock.Trim());
+            sb.AppendLine(divider);
+        }
+
+        if (hasText)
+        {
+            sb.AppendLine("[Attached Files]");
+            foreach (var a in textAttachments!)
+            {
+                sb.AppendLine($"--- {a.Name} ---");
+                sb.AppendLine(a.Content);
+                sb.AppendLine("---");
+            }
             sb.AppendLine(divider);
         }
 

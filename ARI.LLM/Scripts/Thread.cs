@@ -125,10 +125,14 @@ private readonly Agent      agent;
         string? augmentedPrompt   = null,
         string? recallNotes       = null,
         string? contextSummary    = null,
-        int     maxTokensOverride = 0)
+        int     maxTokensOverride = 0,
+        IReadOnlyList<ThreadAttachment>? attachments = null)
     {
         LastMessageAt = DateTime.UtcNow;
         bool isDisplayThread = threadHistory is not null;
+
+        var imageAttachments = attachments?.Where(a => a.IsImage).ToList();
+        bool hasImages = imageAttachments?.Count > 0;
 
         // ── Build message list ──────────────────────────────────────────────────
         List<object> messages;
@@ -153,7 +157,31 @@ private readonly Agent      agent;
             }
 
             messages = new List<object> { new { role = "system", content = systemContent } };
-            messages.AddRange(history.Select(m => (object)new { role = m.Role, content = m.Content }));
+
+            // For all messages except the last, use plain string content.
+            // For the last (current) message, use a content array if there are image attachments.
+            for (int i = 0; i < history.Count; i++)
+            {
+                var m = history[i];
+                if (i < history.Count - 1 || !hasImages)
+                {
+                    messages.Add(new { role = m.Role, content = m.Content });
+                }
+                else
+                {
+                    // Build multipart content: text first, then each image.
+                    var contentParts = new List<object>
+                    {
+                        new { type = "text", text = m.Content }
+                    };
+                    foreach (var img in imageAttachments!)
+                    {
+                        string dataUrl = $"data:{img.MimeType ?? "image/jpeg"};base64,{img.Content}";
+                        contentParts.Add(new { type = "image_url", image_url = new { url = dataUrl } });
+                    }
+                    messages.Add(new { role = m.Role, content = (object)contentParts });
+                }
+            }
         }
         else
         {

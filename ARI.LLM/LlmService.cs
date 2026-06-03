@@ -14,6 +14,7 @@ public class LlmService : IDisposable
     private readonly Refactor?   refactor;
     private readonly CommandService commands;
     private readonly ConcurrentDictionary<string, byte> processingThreads = new();
+    private readonly ConcurrentDictionary<string, List<ThreadAttachment>> threadAttachments = new();
 
     // Per-thread watcher channels — each connected client gets one.
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<Guid, Channel<bool>>> threadWatchers = new();
@@ -159,6 +160,26 @@ public class LlmService : IDisposable
 
     public bool IsThreadProcessing(string threadKey) => processingThreads.ContainsKey(threadKey);
 
+    // ── Attachments ─────────────────────────────────────────────────────────────
+
+    public void AddAttachment(string threadKey, ThreadAttachment attachment)
+    {
+        var list = threadAttachments.GetOrAdd(threadKey, _ => new List<ThreadAttachment>());
+        lock (list) { list.RemoveAll(a => a.Name == attachment.Name); list.Add(attachment); }
+    }
+
+    public bool RemoveAttachment(string threadKey, string name)
+    {
+        if (!threadAttachments.TryGetValue(threadKey, out var list)) return false;
+        lock (list) { return list.RemoveAll(a => a.Name == name) > 0; }
+    }
+
+    public IReadOnlyList<ThreadAttachment> GetAttachments(string threadKey)
+    {
+        if (!threadAttachments.TryGetValue(threadKey, out var list)) return Array.Empty<ThreadAttachment>();
+        lock (list) { return list.ToList().AsReadOnly(); }
+    }
+
     // ── Prompting ───────────────────────────────────────────────────────────────
 
     public async Task<string> Prompt(string threadKey, string prompt, string username, string? contextNote = null)
@@ -174,11 +195,12 @@ public class LlmService : IDisposable
             : null;
 
         string? contextSummary = context?.GetContext(threadKey);
+        var attachments = GetAttachments(threadKey);
 
         processingThreads[threadKey] = 0;
         try
         {
-            return await dialogue.SendPrompt(threadKey, prompt, username, contextNote, recallBlock, contextSummary);
+            return await dialogue.SendPrompt(threadKey, prompt, username, contextNote, recallBlock, contextSummary, attachments);
         }
         finally
         {

@@ -148,6 +148,56 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
         return Ok(new { result });
     }
 
+    // ── Attachments ─────────────────────────────────────────────────────────────
+
+    private static readonly HashSet<string> ImageMimes = new(StringComparer.OrdinalIgnoreCase)
+        { "image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp" };
+
+    [HttpPost("{threadKey}/attachments")]
+    [RequestSizeLimit(50 * 1024 * 1024)] // 50 MB
+    public async Task<IActionResult> AddAttachment(string threadKey, IFormFile file)
+    {
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        if (file is null || file.Length == 0) return BadRequest("No file provided.");
+
+        string mime = file.ContentType ?? "application/octet-stream";
+        bool isImage = ImageMimes.Contains(mime);
+
+        string content;
+        if (isImage)
+        {
+            using var ms = new MemoryStream();
+            await file.CopyToAsync(ms);
+            content = Convert.ToBase64String(ms.ToArray());
+        }
+        else
+        {
+            using var reader = new System.IO.StreamReader(file.OpenReadStream());
+            content = await reader.ReadToEndAsync();
+        }
+
+        var attachment = new ThreadAttachment(file.FileName, content, isImage, mime);
+        Llm.AddAttachment(threadKey, attachment);
+        return Ok(new { name = file.FileName, isImage });
+    }
+
+    [HttpDelete("{threadKey}/attachments/{name}")]
+    public IActionResult RemoveAttachment(string threadKey, string name)
+    {
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        Llm.RemoveAttachment(threadKey, name);
+        return Ok();
+    }
+
+    [HttpGet("{threadKey}/attachments")]
+    public IActionResult GetAttachments(string threadKey)
+    {
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        var list = Llm.GetAttachments(threadKey)
+            .Select(a => new { a.Name, a.IsImage, a.MimeType });
+        return Ok(list);
+    }
+
     [HttpGet("{threadKey}/stream")]
     public async Task Stream(string threadKey, [FromQuery] string prompt, CancellationToken cancellationToken)
     {
