@@ -276,6 +276,7 @@ html, body {
     padding: 12px 12px 10px 16px;
     display: flex; flex-direction: column; gap: 8px;
     transition: border-color .15s;
+    cursor: text;
 }
 #input-wrap:focus-within { border-color: rgba(255,255,255,.22); }
 

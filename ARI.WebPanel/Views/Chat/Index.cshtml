@@ -74,6 +74,7 @@
                 </div>
             </div>
             <p id="input-hint">Enter to send &nbsp;·&nbsp; Shift+Enter for new line</p>
+            <script>if (window.matchMedia('(pointer: coarse)').matches) { document.getElementById('input-hint').textContent = 'Enter for new line · Send button to send'; }</script>
         </div>
 
     </div>
@@ -828,9 +829,14 @@
             updateButtons();
         });
         el.addEventListener('keydown', function (e) {
-            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendFn(); }
+            const isMobile = window.matchMedia('(pointer: coarse)').matches;
+            if (e.key === 'Enter' && !e.shiftKey && !isMobile) { e.preventDefault(); sendFn(); }
         });
     }
+
+    document.getElementById('input-wrap').addEventListener('click', function (e) {
+        if (!e.target.closest('button')) document.getElementById('input').focus();
+    });
 
     wireTextarea('input', () => {
         const el = document.getElementById('input');
