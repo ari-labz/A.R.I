@@ -10,6 +10,7 @@ internal class Agent
     internal readonly int     MaxContextTokens;
     internal readonly int     MaxTokens;
     internal readonly string? ExtractionPrompt;
+    internal readonly bool    Think;
 
     private readonly Dictionary<string, Thread> threads = new();
 
@@ -26,6 +27,7 @@ internal class Agent
         MaxContextTokens     = config.MaxContextTokens;
         MaxTokens            = config.MaxTokens;
         ExtractionPrompt     = config.ExtractionPrompt;
+        Think                = config.Think;
     }
 
     // ── Thread accessors ────────────────────────────────────────────────────────

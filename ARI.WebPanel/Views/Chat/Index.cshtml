@@ -441,6 +441,10 @@
         const res   = await fetch(url);
         const items = await res.json();
 
+        // If the server has nothing yet but we're mid-stream, keep the optimistic
+        // content in place — the next watch event will have real data to replace it.
+        if (items.length === 0 && isStreaming) return;
+
         const box = document.getElementById('messages');
         // Preserve the typing indicator if it exists
         const typingEl = document.getElementById('typing-indicator');
@@ -572,6 +576,11 @@
             }
             return;
         }
+
+        // Optimistically render the user's message immediately — the watch SSE
+        // will overwrite it with the authoritative server history on first rebuild.
+        renderThreadItem({ type: 'userMessage', content: prompt, timestamp: new Date().toISOString() });
+        scrollBottom();
 
         isStreaming = true;
         updateButtons();
