@@ -12,7 +12,7 @@ if (File.Exists(logPath))
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Debug()
     .Filter.ByExcluding(e =>
-        e.Properties.TryGetValue("SourceContext", out var source) &&
+        e.Properties.TryGetValue("SourceContext", out LogEventPropertyValue? source) &&
         source.ToString().StartsWith("\"Microsoft"))
     .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss}] [{SourceContext}] {Message:lj}{NewLine}{Exception}")
     .WriteTo.File(logPath, outputTemplate: "[{Timestamp:HH:mm:ss}] [{SourceContext}] {Message:lj}{NewLine}{Exception}")

@@ -762,23 +762,52 @@
     }
 
     async function rebuildThread(key, isInternal = false, agentName = null) {
-        const url   = isInternal ? `/api/threads/${key}/history?raw=true` : `/api/threads/${key}/history`;
-        const res   = await fetch(url);
-        const items = await res.json();
+        const url = isInternal ? `/api/threads/${key}/history?raw=true` : `/api/threads/${key}/history`;
+        let items;
+        try {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            items = await res.json();
+        } catch (err) {
+            showChatError(`Failed to load thread history: ${err.message}`);
+            return;
+        }
 
         // If the server has nothing yet but we're mid-stream, keep the optimistic
         // content in place — the next watch event will have real data to replace it.
         if (items.length === 0 && isStreaming) return;
 
         const box = document.getElementById('messages');
-        // Preserve the typing indicator if it exists
         const typingEl = document.getElementById('typing-indicator');
         box.innerHTML = '';
         items.forEach(m => renderThreadItem(m, isInternal, agentName));
-        // Re-add typing indicator after rebuild if ARI is still processing
         if (typingEl) box.appendChild(typingEl);
 
         scrollBottom();
+    }
+
+    function showChatError(msg) {
+        const box = document.getElementById('messages');
+        const el  = document.createElement('div');
+        el.style.cssText = 'color:#e74c3c;font-size:13px;padding:8px 16px;';
+        el.textContent   = msg;
+        box.appendChild(el);
+    }
+
+    // Fetches the latest history and updates the last ARI row in place with full metadata
+    // (ThinkingSeconds, RecallNotes, etc.) after the stream completes.
+    async function refreshLastAriRow() {
+        try {
+            const res   = await fetch(`/api/threads/${activeThread}/history`);
+            const items = await res.json();
+            const last  = [...items].reverse().find(i => i.type === 'ariResponse');
+            if (!last) return;
+            const rows = document.querySelectorAll('.msg-row.assistant');
+            const oldRow = rows[rows.length - 1];
+            if (!oldRow) return;
+            const newRow = renderThreadItem(last); // appends to box
+            oldRow.replaceWith(newRow);            // moves newRow to correct position, removes oldRow
+        } catch (err) { showChatError(`Failed to refresh response: ${err.message}`); }
     }
 
     // Shared flag: set to true when a watch rebuild has rendered the AriResponse,
@@ -944,8 +973,7 @@
             if (e.data === '[DONE]') {
                 es.close(); activeEventSource = null; isStreaming = false;
                 updateButtons(); loadThreads();
-                // The watch SSE will push a final rebuild with full metadata (ThinkingSeconds etc).
-                // refreshLastAriRow is no longer needed — watch handles it.
+                refreshLastAriRow();
                 return;
             }
             if (e.data.startsWith('[ERROR]')) {

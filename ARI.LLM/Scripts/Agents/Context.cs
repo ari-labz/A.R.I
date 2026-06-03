@@ -25,13 +25,13 @@ internal class Context : Agent
     /// Updates the context summary after each Dialogue exchange.
     /// Fire-and-forget safe — errors are logged, never thrown.
     /// </summary>
-    internal async Task UpdateAsync(string threadKey, string userMessage, string assistantResponse)
+    internal async Task Update(string threadKey, string userMessage, string assistantResponse)
     {
         await updateLock.WaitAsync();
         try
         {
             string current = GetContext(threadKey);
-            string updated = await CallContextLlmAsync(current, userMessage, assistantResponse);
+            string updated = await CallContextLlm(current, userMessage, assistantResponse);
             if (!string.IsNullOrWhiteSpace(updated))
             {
                 contexts[threadKey] = updated;
@@ -52,14 +52,14 @@ internal class Context : Agent
     /// Rebuilds the context summary from the full conversation transcript.
     /// Called by Engram before extraction so Context has the complete untrimmed history.
     /// </summary>
-    internal async Task RebuildFromTranscriptAsync(string threadKey, string transcript)
+    internal async Task RebuildFromTranscript(string threadKey, string transcript)
     {
         await updateLock.WaitAsync();
         try
         {
             string current = GetContext(threadKey);
             Common.Logger.LogInformation("[Engram] [Context] analysing...");
-            (string updated, int tokens, double elapsed) = await CallContextFromTranscriptAsync(current, transcript);
+            (string updated, int tokens, double elapsed) = await CallContextFromTranscript(current, transcript);
 
             double tokPerSec = elapsed > 0 && tokens > 0 ? tokens / elapsed : 0;
 
@@ -87,7 +87,7 @@ internal class Context : Agent
 
     // ── Private ──────────────────────────────────────────────────────────────────
 
-    private async Task<(string content, int tokens, double elapsed)> CallContextFromTranscriptAsync(string currentContext, string transcript)
+    private async Task<(string content, int tokens, double elapsed)> CallContextFromTranscript(string currentContext, string transcript)
     {
         string contextBlock = string.IsNullOrWhiteSpace(currentContext) ? "No prior context." : currentContext;
 
@@ -137,7 +137,7 @@ internal class Context : Agent
         return (content, tokens, sw.Elapsed.TotalSeconds);
     }
 
-    private async Task<string> CallContextLlmAsync(string currentContext, string userMessage, string assistantResponse)
+    private async Task<string> CallContextLlm(string currentContext, string userMessage, string assistantResponse)
     {
         string contextBlock = string.IsNullOrWhiteSpace(currentContext)
             ? "No context yet — this is the first exchange."

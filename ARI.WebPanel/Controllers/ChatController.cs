@@ -35,7 +35,7 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
 
-        var threads = Llm.GetActiveThreadKeys()
+        List<ThreadEntry> threads = Llm.GetActiveThreadKeys()
             .Select(key => new ThreadEntry(
                 key,
                 AgentName:     null,
@@ -46,7 +46,7 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
 
         if (includeInternal)
         {
-            var internalThreads = Llm.GetInternalThreads()
+            IEnumerable<ThreadEntry> internalThreads = Llm.GetInternalThreads()
                 .Select(t => new ThreadEntry(t.Key, t.AgentName, IsInternal: true, t.LastMessageAt, t.MessageCount));
             threads.AddRange(internalThreads);
         }
@@ -99,8 +99,8 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
             return;
         }
 
-        var channel = Channel.CreateUnbounded<bool>(new UnboundedChannelOptions { SingleReader = true });
-        using var watchHandle = Llm.WatchThread(threadKey, channel);
+        Channel<bool> channel = Channel.CreateUnbounded<bool>(new UnboundedChannelOptions { SingleReader = true });
+        using IDisposable watchHandle = Llm.WatchThread(threadKey, channel);
 
         // Send initial state so the client can sync immediately on connect.
         await SendWatchEvent(threadKey, cancellationToken);
@@ -108,7 +108,7 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
         while (!cancellationToken.IsCancellationRequested)
         {
             // Wait up to 20s for an update; send a keep-alive ping either way.
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(20));
 
             try
@@ -143,7 +143,7 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
         if (string.IsNullOrWhiteSpace(req.Input)) return BadRequest("Input is required.");
 
-        string? result = await Llm.HandleCommandAsync(req.ThreadKey, req.Input);
+        string? result = await Llm.HandleCommand(req.ThreadKey, req.Input);
         if (result is null) return BadRequest(new { error = $"Unknown command: {req.Input}" });
         return Ok(new { result });
     }
@@ -178,17 +178,17 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
         string content;
         if (isImage)
         {
-            using var ms = new MemoryStream();
+            using MemoryStream ms = new();
             await file.CopyToAsync(ms);
             content = Convert.ToBase64String(ms.ToArray());
         }
         else
         {
-            using var reader = new System.IO.StreamReader(file.OpenReadStream());
+            using System.IO.StreamReader reader = new(file.OpenReadStream());
             content = await reader.ReadToEndAsync();
         }
 
-        var attachment = new Attachment { Name = file.FileName, Content = content, IsImage = isImage, MimeType = mime };
+        Attachment attachment = new Attachment { Name = file.FileName, Content = content, IsImage = isImage, MimeType = mime };
         Llm.AddAttachment(threadKey, attachment);
         return Ok(new { name = file.FileName, isImage });
     }
@@ -205,9 +205,7 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
     public IActionResult GetAttachments(string threadKey)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
-        var list = Llm.GetAttachments(threadKey)
-            .Select(a => new { a.Name, a.IsImage, a.MimeType });
-        return Ok(list);
+        return Ok(Llm.GetAttachments(threadKey).Select(a => new { a.Name, a.IsImage, a.MimeType }));
     }
 
     // ── Message Attachments (ephemeral — cleared after send) ────────────────────
@@ -228,17 +226,17 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
         string content;
         if (isImage)
         {
-            using var ms = new MemoryStream();
+            using MemoryStream ms = new();
             await file.CopyToAsync(ms);
             content = Convert.ToBase64String(ms.ToArray());
         }
         else
         {
-            using var reader = new System.IO.StreamReader(file.OpenReadStream());
+            using System.IO.StreamReader reader = new(file.OpenReadStream());
             content = await reader.ReadToEndAsync();
         }
 
-        var attachment = new Attachment { Name = file.FileName, Content = content, IsImage = isImage, MimeType = mime };
+        Attachment attachment = new Attachment { Name = file.FileName, Content = content, IsImage = isImage, MimeType = mime };
         Llm.AddMessageAttachment(threadKey, attachment);
         return Ok(new { name = file.FileName, isImage, mimeType = mime, content });
     }
@@ -255,9 +253,7 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
     public IActionResult GetMessageAttachments(string threadKey)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
-        var list = Llm.GetMessageAttachments(threadKey)
-            .Select(a => new { a.Name, a.IsImage, a.MimeType, a.Content });
-        return Ok(list);
+        return Ok(Llm.GetMessageAttachments(threadKey).Select(a => new { a.Name, a.IsImage, a.MimeType, a.Content }));
     }
 
     /// <summary>
@@ -270,11 +266,11 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
     {
         if (Llm is null) return StatusCode(503);
 
-        var items = Llm.GetThreadItems(threadKey);
-        foreach (var item in items)
+        IReadOnlyList<ThreadItem> items = Llm.GetThreadItems(threadKey);
+        foreach (ThreadItem item in items)
         {
             if (item is not UserMessage msg || msg.Attachments is null) continue;
-            var att = msg.Attachments.FirstOrDefault(a => a.Name == name);
+            Attachment? att = msg.Attachments.FirstOrDefault(a => a.Name == name);
             if (att is null) continue;
 
             if (att.IsImage)

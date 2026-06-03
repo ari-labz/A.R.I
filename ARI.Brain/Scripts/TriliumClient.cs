@@ -93,7 +93,7 @@ public class TriliumClient
     {
         string parentId = await GetOrCreateFolderPath(folderPath);
 
-        var body = new
+        object body = new
         {
             parentNoteId = parentId,
             title        = noteName,
@@ -131,7 +131,7 @@ public class TriliumClient
         // The correct approach is: delete the old branch, then create a new one.
         await http.DeleteAsync($"etapi/branches/{branchId}");
 
-        var body = new { noteId, parentNoteId = newParentId, notePosition = 0 };
+        object body = new { noteId, parentNoteId = newParentId, notePosition = 0 };
         StringContent payload = new(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
         HttpResponseMessage res = await http.PostAsync("etapi/branches", payload);
         res.EnsureSuccessStatusCode();
@@ -143,7 +143,7 @@ public class TriliumClient
     /// <summary>Renames a note. Best-effort — failures are silently ignored.</summary>
     public async Task RenameNote(string noteId, string newTitle)
     {
-        var body = new { title = newTitle };
+        object body = new { title = newTitle };
         StringContent payload = new(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
         await http.PatchAsync($"etapi/notes/{noteId}", payload);
     }
@@ -175,7 +175,7 @@ public class TriliumClient
         // Deduplicate by title: prefer notes NOT in Unknown/ over Unknown stubs that share
         // a name with a real categorised note (e.g. Unknown/People vs the real People folder).
         suppressedStubIds.Clear();
-        var result = new Dictionary<string, (string Id, string FolderPath)>(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, (string Id, string FolderPath)> result = new(StringComparer.OrdinalIgnoreCase);
         foreach ((string id, string title, string folderPath) in all)
         {
             if (!result.TryGetValue(title, out (string Id, string FolderPath) existing))
@@ -214,7 +214,7 @@ public class TriliumClient
     /// Deletes all Unknown/ stubs that were suppressed during the last GetAllNoteIds call
     /// because a properly-categorised note with the same title already exists.
     /// </summary>
-    public async Task<int> DeleteSuppressedStubsAsync()
+    public async Task<int> DeleteSuppressedStubs()
     {
         if (suppressedStubIds.Count == 0) return 0;
         int deleted = 0;
@@ -401,7 +401,7 @@ public class TriliumClient
 
     private async Task<string> CreateFolder(string title, string parentId)
     {
-        var body = new
+        object body = new
         {
             parentNoteId = parentId,
             title,
@@ -423,7 +423,7 @@ public class TriliumClient
     /// <summary>Adds a label attribute to a note. Duplicates are allowed — caller deduplicates if needed.</summary>
     public async Task CreateLabelAttribute(string noteId, string name, string value = "")
     {
-        var body = new { noteId, type = "label", name, value, isInheritable = false };
+        object body = new { noteId, type = "label", name, value, isInheritable = false };
         StringContent payload = new(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
         HttpResponseMessage res = await http.PostAsync("etapi/attributes", payload);
         res.EnsureSuccessStatusCode();
@@ -436,7 +436,7 @@ public class TriliumClient
         if (!res.IsSuccessStatusCode) return new();
 
         JsonArray arr = ParseArray(await res.Content.ReadAsStringAsync());
-        var result = new List<(string, string, string, string)>();
+        List<(string, string, string, string)> result = new();
         foreach (JsonNode? item in arr)
         {
             if (item is null) continue;
@@ -464,7 +464,7 @@ public class TriliumClient
         if (!res.IsSuccessStatusCode) return new();
 
         JsonArray arr = ParseArray(await res.Content.ReadAsStringAsync());
-        var ids = new List<string>();
+        List<string> ids = new();
         foreach (JsonNode? item in arr)
         {
             string? id = item?["noteId"]?.GetValue<string>();

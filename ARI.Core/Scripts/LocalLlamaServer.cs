@@ -23,8 +23,8 @@ public class LocalLlamaServer : IDisposable
         Directory.CreateDirectory(modelsPath);
         await InstallModelFiles(config.ModelFile);
         await InstallModelFiles(config.MmprojFile);
-        await StartServerAsync();
-        await WaitUntilReadyAsync();
+        await StartServer();
+        await WaitUntilReady();
     }
 
     public void Stop()
@@ -61,7 +61,7 @@ public class LocalLlamaServer : IDisposable
     {
         EnsureHomebrewInPath();
 
-        if (await CommandExistsAsync("brew"))
+        if (await CommandExists("brew"))
         {
             Common.Logger.LogInformation("Homebrew is installed.");
             return;
@@ -99,7 +99,7 @@ public class LocalLlamaServer : IDisposable
             if (File.Exists(scriptPath)) File.Delete(scriptPath);
 
             EnsureHomebrewInPath();
-            if (proc.ExitCode == 0 && await CommandExistsAsync("brew"))
+            if (proc.ExitCode == 0 && await CommandExists("brew"))
             {
                 Common.Logger.LogInformation("Homebrew installed successfully.");
                 return;
@@ -116,7 +116,7 @@ public class LocalLlamaServer : IDisposable
 
     private async Task InstallLlamaCpp()
     {
-        if (await CommandExistsAsync("llama-server"))
+        if (await CommandExists("llama-server"))
         {
             Common.Logger.LogInformation("llama-server is installed.");
             return;
@@ -141,7 +141,7 @@ public class LocalLlamaServer : IDisposable
 
         await process.WaitForExitAsync();
 
-        if (process.ExitCode != 0 || !await CommandExistsAsync("llama-server"))
+        if (process.ExitCode != 0 || !await CommandExists("llama-server"))
             throw new Exception(
                 "Failed to install llama.cpp via Homebrew.\n" +
                 "Please install it manually: brew install llama.cpp\n" +
@@ -163,11 +163,11 @@ public class LocalLlamaServer : IDisposable
 
         string url = $"{config.DownloadBaseUrl}/{filename}";
         Common.Logger.LogInformation("Downloading {File} — this may take a while...", filename);
-        await DownloadFileAsync(url, destPath, filename);
+        await DownloadFile(url, destPath, filename);
         Common.Logger.LogInformation("Download complete: {File}", filename);
     }
 
-    private static async Task DownloadFileAsync(string url, string destPath, string label)
+    private static async Task DownloadFile(string url, string destPath, string label)
     {
         using HttpClient httpClient = new HttpClient();
         httpClient.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
@@ -216,7 +216,7 @@ public class LocalLlamaServer : IDisposable
 
     // ── Server process ────────────────────────────────────────────────────────
 
-    private Task StartServerAsync()
+    private Task StartServer()
     {
         string modelPath  = Path.Combine(modelsPath, config.ModelFile);
         string mmprojPath = Path.Combine(modelsPath, config.MmprojFile);
@@ -248,7 +248,7 @@ public class LocalLlamaServer : IDisposable
         return Task.CompletedTask;
     }
 
-    private async Task WaitUntilReadyAsync()
+    private async Task WaitUntilReady()
     {
         Common.Logger.LogInformation("Waiting for llama-server to come online...");
 
@@ -279,7 +279,7 @@ public class LocalLlamaServer : IDisposable
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private static async Task<bool> CommandExistsAsync(string command)
+    private static async Task<bool> CommandExists(string command)
     {
         try
         {

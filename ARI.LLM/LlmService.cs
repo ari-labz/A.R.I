@@ -32,7 +32,7 @@ public class LlmService : IDisposable
         if (enabled.TryGetValue("Dialogue", out AgentConfig? dialogueConfig))
         {
             dialogue = new Dialogue(dialogueConfig);
-            dialogue.ThreadHistoryUpdated += key => NotifyWatchers(key);
+            dialogue.ThreadUpdated += key => NotifyWatchers(key);
         }
 
         if (enabled.TryGetValue("Context", out AgentConfig? contextConfig))
@@ -65,7 +65,7 @@ public class LlmService : IDisposable
                 Common.Logger.LogInformation("Refactor is active.");
             }
 
-            commands = new CommandService(engram, refactor, brain.PurgeAllNotes, brain.BackupAsync, brain.GetDirtyNotes);
+            commands = new CommandService(engram, refactor, brain.PurgeAllNotes, brain.Backup, brain.GetDirtyNotes);
         }
         else
         {
@@ -80,26 +80,26 @@ public class LlmService : IDisposable
 
     /// <summary>Returns the typed ThreadItem list for a dialogue thread. This is what clients render.</summary>
     public IReadOnlyList<ThreadItem> GetThreadItems(string threadKey)
-        => dialogue?.GetThreadItems(threadKey) ?? Array.Empty<ThreadItem>();
+        => dialogue?.GetThread(threadKey)?.History ?? [];
 
     /// <summary>Returns the typed ThreadItem list for an internal agent thread (Engram, Refactor, etc.).</summary>
     public IReadOnlyList<ThreadItem> GetInternalThreadItems(string threadKey)
     {
-        if (engram?.ThreadKeys.Contains(threadKey)   == true) return engram.GetThreadItems(threadKey);
-        if (refactor?.ThreadKeys.Contains(threadKey) == true) return refactor.GetThreadItems(threadKey);
-        if (recall?.ThreadKeys.Contains(threadKey)   == true) return recall.GetThreadItems(threadKey);
-        if (context?.ThreadKeys.Contains(threadKey)  == true) return context.GetThreadItems(threadKey);
-        return Array.Empty<ThreadItem>();
+        if (engram?.ThreadKeys.Contains(threadKey)   == true) return engram.GetThread(threadKey)?.History   ?? [];
+        if (refactor?.ThreadKeys.Contains(threadKey) == true) return refactor.GetThread(threadKey)?.History ?? [];
+        if (recall?.ThreadKeys.Contains(threadKey)   == true) return recall.GetThread(threadKey)?.History   ?? [];
+        if (context?.ThreadKeys.Contains(threadKey)  == true) return context.GetThread(threadKey)?.History  ?? [];
+        return [];
     }
 
     public DateTime GetThreadLastMessageAt(string threadKey)
-        => dialogue?.GetThreadLastMessageAt(threadKey) ?? DateTime.MinValue;
+        => dialogue?.GetThread(threadKey)?.LastMessageAt ?? DateTime.MinValue;
 
     // Returns metadata for all internal agent threads (Engram, Recall, Context, Refactor).
     // Threads sharing a key with a Dialogue thread are excluded to avoid duplication.
     public IReadOnlyList<InternalThreadInfo> GetInternalThreads()
     {
-        var result = new List<InternalThreadInfo>();
+        List<InternalThreadInfo> result = new();
         HashSet<string> dialogueKeys = new(dialogue?.ThreadKeys ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase);
 
         void Add(Agent? agent, string agentName)
@@ -108,9 +108,10 @@ public class LlmService : IDisposable
             foreach (string key in agent.ThreadKeys)
             {
                 if (dialogueKeys.Contains(key)) continue;
+                Thread? t = agent.GetThread(key);
                 result.Add(new InternalThreadInfo(key, agentName,
-                    agent.GetThreadLastMessageAt(key),
-                    agent.GetThreadItems(key).Count));
+                    t?.LastMessageAt ?? DateTime.MinValue,
+                    t?.History?.Count ?? 0));
             }
         }
 
@@ -138,7 +139,7 @@ public class LlmService : IDisposable
 
     private void NotifyWatchers(string threadKey)
     {
-        if (!threadWatchers.TryGetValue(threadKey, out var watchers)) return;
+        if (!threadWatchers.TryGetValue(threadKey, out ConcurrentDictionary<Guid, Channel<bool>>? watchers)) return;
         foreach (Channel<bool> ch in watchers.Values)
             ch.Writer.TryWrite(true);
     }
@@ -149,7 +150,7 @@ public class LlmService : IDisposable
     {
         public void Dispose()
         {
-            if (registry.TryGetValue(threadKey, out var watchers))
+            if (registry.TryGetValue(threadKey, out ConcurrentDictionary<Guid, Channel<bool>>? watchers))
                 watchers.TryRemove(id, out _);
             channel.Writer.TryComplete();
         }
@@ -183,24 +184,24 @@ public class LlmService : IDisposable
 
     // ── Prompting ───────────────────────────────────────────────────────────────
 
-    public async Task<string> Prompt(string threadKey, string prompt, string username, string? contextNote = null)
+    public async Task<string> Prompt(string threadKey, string prompt, string username, string? platformContext = null)
     {
         if (dialogue is null)
             throw new ModelNotFoundException("Dialogue model is not loaded or is not enabled.");
 
-        // Recall fetches relevant brain notes based on current history + the new prompt.
-        // It uses the existing ThreadItems to build its search context.
-        var currentItems  = dialogue.GetThreadItems(threadKey);
-        string? recallBlock = recall is not null
-            ? await recall.FetchContextAsync(currentItems, prompt)
-            : null;
-
+        string? recallBlock = null;
         string? contextSummary = context?.GetContext(threadKey);
+
+        if (recall is not null)
+        {
+            List<ThreadMessage> chatHistory = dialogue.GetThread(threadKey)?.GetChatHistory() ?? [];
+            recallBlock = await recall.GetNotes(chatHistory, prompt);
+        }
 
         processingThreads[threadKey] = 0;
         try
         {
-            return await dialogue.SendPrompt(threadKey, prompt, username, contextNote, recallBlock, contextSummary);
+            return await dialogue.SendPrompt(threadKey, prompt, username, platformContext, recallBlock, contextSummary);
         }
         finally
         {
@@ -216,11 +217,11 @@ public class LlmService : IDisposable
     /// If a threadKey is provided, the exchange is stored in the thread's display history.
     /// Returns a human-readable result, or null if the input is not a recognised command.
     /// </summary>
-    public async Task<string?> HandleCommandAsync(string? threadKey, string input)
+    public async Task<string?> HandleCommand(string? threadKey, string input)
     {
-        string? result = await commands.HandleAsync(input);
+        string? result = await commands.Handle(input);
         if (result is not null && threadKey is not null)
-            dialogue?.InjectCommandExchange(threadKey, input, result);
+            dialogue?.LogCommand(threadKey, input, result);
         return result;
     }
 

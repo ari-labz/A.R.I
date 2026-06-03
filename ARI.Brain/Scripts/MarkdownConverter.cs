@@ -11,8 +11,8 @@ public static class MarkdownConverter
     {
         if (string.IsNullOrWhiteSpace(markdown)) return string.Empty;
 
-        var lines = markdown.Replace("\r\n", "\n").Split('\n');
-        var sb = new StringBuilder();
+        string[] lines = markdown.Replace("\r\n", "\n").Split('\n');
+        StringBuilder sb = new();
         bool inList = false;
 
         foreach (string rawLine in lines)
@@ -74,7 +74,7 @@ public static class MarkdownConverter
     /// <summary>Replaces {{LINK:Name}} placeholders with Trilium anchor tags.</summary>
     public static string ResolveLinks(string html, Dictionary<string, string> noteIds)
     {
-        foreach (var (name, id) in noteIds)
+        foreach ((string name, string id) in noteIds)
         {
             string placeholder = $"{{{{LINK:{name}}}}}";
             string link = $"<a class=\"reference-link\" href=\"#root/{id}\">{HttpUtility.HtmlEncode(name)}</a>";
@@ -97,7 +97,7 @@ public static class MarkdownConverter
     private static string Inline(string text)
     {
         // Extract [[Name]] links before encoding (prevents & etc. corrupting note names)
-        var links = new List<string>();
+        List<string> links = new();
         text = Regex.Replace(text, @"\[\[([^\]]+)\]\]", m =>
         {
             links.Add(m.Groups[1].Value);
