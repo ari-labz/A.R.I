@@ -16,24 +16,32 @@ internal class Dialogue : Agent
         string? contextNote    = null,
         string? recallBlock    = null,
         string? contextSummary = null,
-        IReadOnlyList<ThreadAttachment>? attachments = null)
+        IReadOnlyList<ThreadAttachment>?      attachments        = null,
+        IReadOnlyList<MessageAttachmentInfo>? messageAttachments = null)
     {
-        string? augmented = BuildAugmentedPrompt(prompt, contextSummary, recallBlock, attachments);
+        string? augmented = BuildAugmentedPrompt(prompt, contextSummary, recallBlock, attachments, messageAttachments);
         return PromptThread(
             threadKey,
-            prompt:          prompt,
-            username:        username,
-            augmentedPrompt: augmented,
-            contextNote:     contextNote,
-            recallNotes:     recallBlock,
-            contextSummary:  contextSummary,
-            attachments:     attachments);
+            prompt:             prompt,
+            username:           username,
+            augmentedPrompt:    augmented,
+            contextNote:        contextNote,
+            recallNotes:        recallBlock,
+            contextSummary:     contextSummary,
+            attachments:        attachments,
+            messageAttachments: messageAttachments);
     }
 
-    private static string? BuildAugmentedPrompt(string prompt, string? contextSummary, string? recallBlock, IReadOnlyList<ThreadAttachment>? attachments)
+    private static string? BuildAugmentedPrompt(
+        string prompt,
+        string? contextSummary,
+        string? recallBlock,
+        IReadOnlyList<ThreadAttachment>?      attachments,
+        IReadOnlyList<MessageAttachmentInfo>? messageAttachments)
     {
-        var textAttachments = attachments?.Where(a => !a.IsImage).ToList();
-        bool hasText = textAttachments?.Count > 0;
+        var threadTextFiles  = attachments?.Where(a => !a.IsImage).ToList();
+        var messageTextFiles = messageAttachments?.Where(a => !a.IsImage).ToList();
+        bool hasText = (threadTextFiles?.Count > 0) || (messageTextFiles?.Count > 0);
 
         if (string.IsNullOrWhiteSpace(contextSummary) && string.IsNullOrWhiteSpace(recallBlock) && !hasText)
             return null;
@@ -58,7 +66,13 @@ internal class Dialogue : Agent
         if (hasText)
         {
             sb.AppendLine("[Attached Files]");
-            foreach (var a in textAttachments!)
+            foreach (var a in threadTextFiles ?? [])
+            {
+                sb.AppendLine($"--- {a.Name} ---");
+                sb.AppendLine(a.Content);
+                sb.AppendLine("---");
+            }
+            foreach (var a in messageTextFiles ?? [])
             {
                 sb.AppendLine($"--- {a.Name} ---");
                 sb.AppendLine(a.Content);

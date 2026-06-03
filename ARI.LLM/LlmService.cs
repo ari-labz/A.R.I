@@ -14,7 +14,8 @@ public class LlmService : IDisposable
     private readonly Refactor?   refactor;
     private readonly CommandService commands;
     private readonly ConcurrentDictionary<string, byte> processingThreads = new();
-    private readonly ConcurrentDictionary<string, List<ThreadAttachment>> threadAttachments = new();
+    private readonly ConcurrentDictionary<string, List<ThreadAttachment>>      threadAttachments   = new();
+    private readonly ConcurrentDictionary<string, List<MessageAttachmentInfo>> messageAttachments  = new();
 
     // Per-thread watcher channels — each connected client gets one.
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<Guid, Channel<bool>>> threadWatchers = new();
@@ -180,6 +181,32 @@ public class LlmService : IDisposable
         lock (list) { return list.ToList().AsReadOnly(); }
     }
 
+    // ── Message attachments (cleared after each Prompt call) ───────────────────
+
+    public void AddMessageAttachment(string threadKey, MessageAttachmentInfo attachment)
+    {
+        var list = messageAttachments.GetOrAdd(threadKey, _ => new List<MessageAttachmentInfo>());
+        lock (list) { list.RemoveAll(a => a.Name == attachment.Name); list.Add(attachment); }
+    }
+
+    public bool RemoveMessageAttachment(string threadKey, string name)
+    {
+        if (!messageAttachments.TryGetValue(threadKey, out var list)) return false;
+        lock (list) { return list.RemoveAll(a => a.Name == name) > 0; }
+    }
+
+    public IReadOnlyList<MessageAttachmentInfo> GetMessageAttachments(string threadKey)
+    {
+        if (!messageAttachments.TryGetValue(threadKey, out var list)) return Array.Empty<MessageAttachmentInfo>();
+        lock (list) { return list.ToList().AsReadOnly(); }
+    }
+
+    private void ClearMessageAttachments(string threadKey)
+    {
+        if (messageAttachments.TryGetValue(threadKey, out var list))
+            lock (list) { list.Clear(); }
+    }
+
     // ── Prompting ───────────────────────────────────────────────────────────────
 
     public async Task<string> Prompt(string threadKey, string prompt, string username, string? contextNote = null)
@@ -194,16 +221,19 @@ public class LlmService : IDisposable
             ? await recall.FetchContextAsync(currentItems, prompt)
             : null;
 
-        string? contextSummary = context?.GetContext(threadKey);
-        var attachments = GetAttachments(threadKey);
+        string? contextSummary    = context?.GetContext(threadKey);
+        var     threadAtts        = GetAttachments(threadKey);
+        var     msgAtts           = GetMessageAttachments(threadKey);
 
         processingThreads[threadKey] = 0;
         try
         {
-            return await dialogue.SendPrompt(threadKey, prompt, username, contextNote, recallBlock, contextSummary, attachments);
+            return await dialogue.SendPrompt(threadKey, prompt, username, contextNote, recallBlock, contextSummary,
+                attachments: threadAtts, messageAttachments: msgAtts);
         }
         finally
         {
+            ClearMessageAttachments(threadKey);
             processingThreads.TryRemove(threadKey, out _);
             // Notify watchers so they can update the isProcessing indicator.
             NotifyWatchers(threadKey);

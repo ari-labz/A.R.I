@@ -126,13 +126,19 @@ private readonly Agent      agent;
         string? recallNotes       = null,
         string? contextSummary    = null,
         int     maxTokensOverride = 0,
-        IReadOnlyList<ThreadAttachment>? attachments = null)
+        IReadOnlyList<ThreadAttachment>?      attachments        = null,
+        IReadOnlyList<MessageAttachmentInfo>? messageAttachments = null)
     {
         LastMessageAt = DateTime.UtcNow;
         bool isDisplayThread = threadHistory is not null;
 
-        var imageAttachments = attachments?.Where(a => a.IsImage).ToList();
-        bool hasImages = imageAttachments?.Count > 0;
+        // Merge thread-scoped and message-scoped image attachments for the LLM call.
+        var allImages = (attachments?.Where(a => a.IsImage)
+                            .Select(a => (a.MimeType ?? "image/jpeg", a.Content)) ?? [])
+                        .Concat(messageAttachments?.Where(a => a.IsImage && a.Content != null)
+                            .Select(a => (a.MimeType ?? "image/jpeg", a.Content)) ?? [])
+                        .ToList();
+        bool hasImages = allImages.Count > 0;
 
         // ── Build message list ──────────────────────────────────────────────────
         List<object> messages;
@@ -141,7 +147,13 @@ private readonly Agent      agent;
         {
             // Store the clean user message in thread history and notify watchers immediately
             // so other connected clients see the incoming message before ARI has responded.
-            threadHistory!.Add(new UserMessage { Username = username, Content = prompt, Timestamp = DateTime.Now });
+            threadHistory!.Add(new UserMessage
+            {
+                Username    = username,
+                Content     = prompt,
+                Timestamp   = DateTime.Now,
+                Attachments = messageAttachments?.Count > 0 ? messageAttachments.ToList() : null
+            });
             HistoryUpdated?.Invoke();
 
             // Derive LLM context window from thread history.
@@ -169,14 +181,14 @@ private readonly Agent      agent;
                 }
                 else
                 {
-                    // Build multipart content: text first, then each image.
+                    // Build multipart content: text first, then each image (thread + message).
                     var contentParts = new List<object>
                     {
                         new { type = "text", text = m.Content }
                     };
-                    foreach (var img in imageAttachments!)
+                    foreach (var (mime, b64) in allImages)
                     {
-                        string dataUrl = $"data:{img.MimeType ?? "image/jpeg"};base64,{img.Content}";
+                        string dataUrl = $"data:{mime};base64,{b64}";
                         contentParts.Add(new { type = "image_url", image_url = new { url = dataUrl } });
                     }
                     messages.Add(new { role = m.Role, content = (object)contentParts });

@@ -50,16 +50,22 @@
     <!-- main (unified — no page switching) -->
     <div id="main">
 
-        <!-- drag-drop overlay — covers the chat view, shown only while files are being dragged -->
+        <!-- drag-drop overlay — two zones, shown while files are being dragged -->
         <div id="drop-overlay" style="display:none">
-            <div id="drop-overlay-inner">
-                <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" opacity=".18" fill="currentColor" stroke="none"/>
-                    <path d="M12 16V8"/><path d="M8 12l4-4 4 4"/>
-                    <path d="M8 18h8"/>
+            <div id="drop-zone-thread" class="drop-zone">
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="17" x2="12" y2="3"/><polyline points="8 7 12 3 16 7"/>
+                    <path d="M20 21H4"/><line x1="17" y1="14" x2="17" y2="21"/><line x1="7" y1="14" x2="7" y2="21"/>
                 </svg>
-                <p id="drop-overlay-title">Drop to attach</p>
-                <p id="drop-overlay-sub">Files will be attached to this conversation</p>
+                <p class="drop-zone-title">Pin to thread</p>
+                <p class="drop-zone-sub">Always in context</p>
+            </div>
+            <div id="drop-zone-message" class="drop-zone">
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                </svg>
+                <p class="drop-zone-title">Attach to message</p>
+                <p class="drop-zone-sub">Sent with your next message</p>
             </div>
         </div>
 
@@ -111,6 +117,7 @@
             <!-- input: always at the bottom -->
             <div id="input-area">
                 <div id="input-wrap">
+                    <div id="msg-attach-preview"></div>
                     <textarea id="input" placeholder="Message A·R·I..." rows="1"></textarea>
                     <div id="input-footer">
                         <button id="btn-attach" title="Attach file" type="button">
@@ -133,6 +140,257 @@
 
 @section Styles {
 <style>
+
+/* ── Drop overlay — two zones ─────────────────────────────────────── */
+#drop-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 500;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 24px;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(4px);
+    border-radius: inherit;
+    align-items: stretch;
+    justify-content: center;
+}
+.drop-zone {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 32px 20px;
+    border: 2px dashed rgba(255,255,255,0.25);
+    border-radius: 16px;
+    color: rgba(255,255,255,0.7);
+    cursor: pointer;
+    pointer-events: all;
+    transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.drop-zone.drag-over {
+    border-color: var(--accent, #89b4fa);
+    background: rgba(137,180,250,0.14);
+    color: #fff;
+}
+.drop-zone-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin: 0;
+}
+.drop-zone-sub {
+    font-size: 0.78rem;
+    opacity: 0.65;
+    margin: 0;
+}
+
+/* ── Pre-send message attachment preview ──────────────────────────── */
+#msg-attach-preview {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 8px 0;
+}
+#msg-attach-preview:empty { display: none; }
+
+.msg-attach-chip {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--input-bg, #f0f4f8);
+    border: 1px solid var(--border, #dde3ea);
+    border-radius: 10px;
+    padding: 6px 10px 6px 8px;
+    max-width: 200px;
+    cursor: default;
+}
+.msg-attach-chip img {
+    width: 40px;
+    height: 40px;
+    object-fit: cover;
+    border-radius: 6px;
+    flex-shrink: 0;
+}
+.msg-attach-chip .chip-file-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    flex-shrink: 0;
+    background: var(--accent-dim, rgba(137,180,250,.18));
+    color: var(--accent, #89b4fa);
+}
+.msg-attach-chip .chip-name {
+    font-size: 0.78rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 120px;
+    color: var(--text, #1e1e2e);
+}
+.msg-attach-chip .chip-remove {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    font-size: 1rem;
+    line-height: 1;
+    color: var(--subtext, #a6adc8);
+    flex-shrink: 0;
+}
+.msg-attach-chip .chip-remove:hover { color: var(--text, #1e1e2e); }
+/* ── Toast ────────────────────────────────────────────────────────── */
+.toast {
+    position: fixed;
+    bottom: 80px;
+    left: 50%;
+    transform: translateX(-50%) translateY(8px);
+    background: #2a2a3a;
+    color: #f0f0f0;
+    padding: 10px 18px;
+    border-radius: 10px;
+    font-size: 0.85rem;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+    opacity: 0;
+    transition: opacity 0.2s, transform 0.2s;
+    z-index: 9999;
+    max-width: 360px;
+    text-align: center;
+    pointer-events: none;
+}
+.toast.toast-visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+.msg-attach-chip.uploading { opacity: 0.6; }
+.chip-uploading-icon { animation: chip-pulse 1s ease-in-out infinite; }
+@@keyframes chip-pulse { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
+
+/* ── Thread-pin fly animation ─────────────────────────────────────── */
+.attach-fly {
+    position: fixed;
+    z-index: 9000;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--surface, #fff);
+    border: 1.5px solid var(--accent, #89b4fa);
+    border-radius: 10px;
+    padding: 7px 13px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--text, #1e1e2e);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.18);
+    transform-origin: center;
+    animation: attach-fly-anim 0.55s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+.attach-fly svg { flex-shrink: 0; color: var(--accent, #89b4fa); }
+@@keyframes attach-fly-anim {
+    0%   { opacity: 1; transform: translate(0, 0) scale(1); }
+    65%  { opacity: 1; transform: translate(var(--fly-x), var(--fly-y)) scale(0.88); }
+    100% { opacity: 0; transform: translate(var(--fly-x), var(--fly-y)) scale(0.7); }
+}
+
+/* ── Thread panel spring peek ─────────────────────────────────────── */
+/*
+    Each segment has its own easing, like a ball bouncing sideways:
+      - ease-in  = accelerating toward the apex (ball falling)
+      - linear   = dwelling at the apex (ball at peak, clustered frames)
+      - ease-out = decelerating away from the apex (ball rising)
+*/
+@@keyframes panel-peek {
+    /* Physically derived (b₀=2.4, m=0.54, g=6). Panel=220px, right=12px → off-screen=240px.
+       40% visible=88px → translateX(144px). Peaks decay by m²=0.2916 per bounce.
+       position:fixed top is set by JS from a live measurement so it matches the open panel exactly. */
+    0%   { transform: translateX(240px); animation-timing-function: cubic-bezier(0, 0.67, 0.33, 1); } /* impact 0 */
+    27%  { transform: translateX(144px); animation-timing-function: cubic-bezier(0.67, 0, 1, 0.33); } /* apex 0  — 40% visible */
+    53%  { transform: translateX(240px); animation-timing-function: cubic-bezier(0, 0.67, 0.33, 1); } /* impact 1 */
+    68%  { transform: translateX(214px); animation-timing-function: cubic-bezier(0.67, 0, 1, 0.33); } /* apex 1  — ~12% visible */
+    82%  { transform: translateX(240px); animation-timing-function: cubic-bezier(0, 0.67, 0.33, 1); } /* impact 2 */
+    90%  { transform: translateX(232px); animation-timing-function: cubic-bezier(0.67, 0, 1, 0.33); } /* apex 2  —  ~3% visible */
+    100% { transform: translateX(240px); }                                                              /* impact 3 */
+}
+#thread-panel.panel-peek {
+    display: flex;
+    animation: panel-peek 1.05s linear forwards;
+}
+
+/* ── Pinned-to-thread notice ──────────────────────────────────────── */
+.msg-row.thread-pin-notice {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 6px 0 2px;
+    font-size: 0.78rem;
+    color: var(--subtext, #a6adc8);
+    user-select: none;
+}
+.msg-row.thread-pin-notice svg { flex-shrink: 0; opacity: 0.7; }
+
+/* ── Chat attachment bubbles ──────────────────────────────────────── */
+.msg-row.attach-image > div,
+.msg-row.attach-file  > div {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+}
+.msg-image {
+    max-width: 320px;
+    max-height: 320px;
+    width: auto;
+    height: auto;
+    border-radius: 12px;
+    display: block;
+    object-fit: cover;
+}
+.file-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--bubble-user, #e8f0fe);
+    border-radius: 12px;
+    padding: 10px 14px;
+    max-width: 260px;
+}
+.file-card-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    flex-shrink: 0;
+    background: rgba(137,180,250,.22);
+    color: var(--accent, #89b4fa);
+}
+.file-card-name {
+    font-size: 0.82rem;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 180px;
+    color: var(--text, #1e1e2e);
+}
+
 .msg-row.memory-event {
     display: flex;
     flex-direction: column;
@@ -464,6 +722,7 @@
         activeThread = null;
         resetToIdle();
         renderAttachments([]);
+        clearMsgAttachPreviews();
         document.getElementById('input').value = '';
         document.getElementById('input').style.height = 'auto';
         updateButtons();
@@ -607,16 +866,33 @@
     }
 
     async function send(prompt) {
-        if (isStreaming || !prompt) return;
+        if (isStreaming || (!prompt && pendingMsgAttachments.length === 0)) return;
         setThreadPanelOpen(false);
 
-        if (!activeThread) {
+        const needsNewThread = !activeThread;
+
+        // For a new thread: activate the chat and show feedback immediately —
+        // before the async thread-creation round trip so nothing feels sluggish.
+        if (needsNewThread && !prompt.startsWith('/')) {
+            activateChat();
+            const optimisticAttachments = pendingMsgAttachments.length ? [...pendingMsgAttachments] : undefined;
+            clearMsgAttachPreviews();
+            renderThreadItem({ type: 'userMessage', content: prompt, timestamp: new Date().toISOString(), attachments: optimisticAttachments });
+            isStreaming = true;
+            updateButtons();
+            showTyping();
+            scrollBottom();
+        }
+
+        if (needsNewThread) {
             const res = await fetch('/api/threads', { method: 'POST' });
             const { key } = await res.json();
             activeThread = key;
             injectPendingThread(key);
+            openWatchConnection(key);
+        } else if (!document.getElementById('main').classList.contains('active')) {
+            injectPendingThread(activeThread);
             activateChat();
-            openWatchConnection(key); // sender needs a watch connection too
         }
 
         // Slash commands go to the command API, not the LLM stream.
@@ -644,14 +920,16 @@
             return;
         }
 
-        // Optimistically render the user's message immediately — the watch SSE
-        // will overwrite it with the authoritative server history on first rebuild.
-        renderThreadItem({ type: 'userMessage', content: prompt, timestamp: new Date().toISOString() });
-        scrollBottom();
-
-        isStreaming = true;
-        updateButtons();
-        showTyping();
+        // For existing threads, render user message and typing now (new threads did it above).
+        if (!needsNewThread) {
+            const optimisticAttachments = pendingMsgAttachments.length ? [...pendingMsgAttachments] : undefined;
+            clearMsgAttachPreviews();
+            renderThreadItem({ type: 'userMessage', content: prompt, timestamp: new Date().toISOString(), attachments: optimisticAttachments });
+            scrollBottom();
+            isStreaming = true;
+            updateButtons();
+            showTyping();
+        }
 
         const threadKeyForThisStream = activeThread;
         const url = `/api/threads/${activeThread}/stream?prompt=${encodeURIComponent(prompt)}`;
@@ -720,9 +998,35 @@
                     row.innerHTML = `<div class="sender">${escHtml(item.username)}</div><div class="bubble"></div><div class="msg-time">${t}</div>`;
                     setBubbleMd(row.querySelector('.bubble'), item.content);
                 } else {
-                    row.className = 'msg-row user';
-                    row.innerHTML = `<div><div class="bubble"></div><div class="msg-time">${t}</div></div>`;
-                    setBubbleMd(row.querySelector('.bubble'), item.content);
+                    // Render each attachment as its own bubble before the text bubble.
+                    (item.attachments ?? []).forEach(a => {
+                        const attachRow = document.createElement('div');
+                        if (a.isImage) {
+                            // Use inline data URI for optimistic renders (content present client-side);
+                            // use the server endpoint for history renders (content stripped from JSON).
+                            const imgSrc = a.content
+                                ? `data:${a.mimeType ?? 'image/jpeg'};base64,${a.content}`
+                                : `/api/threads/${activeThread}/msg-attachment?name=${encodeURIComponent(a.name)}`;
+                            attachRow.className = 'msg-row user attach-image';
+                            attachRow.innerHTML =
+                                `<div><img class="msg-image" src="${imgSrc}" alt="${escHtml(a.name)}" /><div class="msg-time">${t}</div></div>`;
+                        } else {
+                            attachRow.className = 'msg-row user attach-file';
+                            attachRow.innerHTML =
+                                `<div><div class="file-card">` +
+                                `<div class="file-card-icon">${escHtml(fileExtLabel(a.name))}</div>` +
+                                `<div class="file-card-name" title="${escHtml(a.name)}">${escHtml(a.name)}</div>` +
+                                `</div><div class="msg-time">${t}</div></div>`;
+                        }
+                        box.appendChild(attachRow);
+                    });
+                    if (item.content) {
+                        row.className = 'msg-row user';
+                        row.innerHTML = `<div><div class="bubble"></div><div class="msg-time">${t}</div></div>`;
+                        setBubbleMd(row.querySelector('.bubble'), item.content);
+                    } else {
+                        return (item.attachments?.length ? box.lastElementChild : null);
+                    }
                 }
                 break;
             }
@@ -787,9 +1091,45 @@
         }
 
         box.appendChild(row);
+        suppressPreviousTimestamp(box, row);
         return row;
     }
 
+    // If the new row is same-side and same minute as its predecessor, hide the predecessor's timestamp.
+    function suppressPreviousTimestamp(box, newRow) {
+        const sideClass = newRow.classList.contains('user') || newRow.classList.contains('attach-image') || newRow.classList.contains('attach-file') ? 'user' : 'assistant';
+        const newTime   = newRow.querySelector('.msg-time')?.textContent?.trim();
+        if (!newTime) return;
+
+        // Walk backwards to find the previous visible message row of the same side.
+        let prev = newRow.previousElementSibling;
+        while (prev) {
+            const isUser = prev.classList.contains('user') || prev.classList.contains('attach-image') || prev.classList.contains('attach-file');
+            const isAsst = prev.classList.contains('assistant');
+            const prevSide = isUser ? 'user' : isAsst ? 'assistant' : null;
+            if (!prevSide) { prev = prev.previousElementSibling; continue; }
+            if (prevSide !== sideClass) break;
+
+            const prevTimeEl = prev.querySelector('.msg-time');
+            if (prevTimeEl && prevTimeEl.textContent.trim() === newTime)
+                prevTimeEl.style.display = 'none';
+            break;
+        }
+    }
+
+
+    // ── Toast notifications ───────────────────────────────
+    function showToast(message) {
+        const t = document.createElement('div');
+        t.className = 'toast';
+        t.textContent = message;
+        document.body.appendChild(t);
+        requestAnimationFrame(() => t.classList.add('toast-visible'));
+        setTimeout(() => {
+            t.classList.remove('toast-visible');
+            t.addEventListener('transitionend', () => t.remove());
+        }, 4000);
+    }
 
     function escHtml(str) {
         return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -883,7 +1223,7 @@
 
     function updateButtons() {
         const chatText = document.getElementById('input').value.trim();
-        document.getElementById('btn-send').disabled = isStreaming || !chatText;
+        document.getElementById('btn-send').disabled = isStreaming || (!chatText && pendingMsgAttachments.length === 0);
     }
 
     // ── auto-resize + keydown for all textareas ──────────
@@ -903,6 +1243,136 @@
     document.getElementById('input-wrap').addEventListener('click', function (e) {
         if (!e.target.closest('button')) document.getElementById('input').focus();
     });
+
+    // ── Message-scoped attachment state ──────────────────
+    let pendingMsgAttachments = []; // { name, isImage, mimeType, content }
+
+    function fileExtLabel(name) {
+        const dot = name.lastIndexOf('.');
+        return dot >= 0 ? name.slice(dot + 1).toUpperCase().slice(0, 4) : 'FILE';
+    }
+
+    function renderMsgAttachPreviews() {
+        const preview = document.getElementById('msg-attach-preview');
+        preview.innerHTML = '';
+        pendingMsgAttachments.forEach(a => {
+            const chip = document.createElement('div');
+            chip.className = 'msg-attach-chip' + (a.uploading ? ' uploading' : '');
+
+            const icon = a.uploading
+                ? `<div class="chip-file-icon chip-uploading-icon">…</div>`
+                : a.isImage
+                    ? `<img src="data:${a.mimeType};base64,${a.content}" alt="${escHtml(a.name)}">`
+                    : `<div class="chip-file-icon">${escHtml(fileExtLabel(a.name))}</div>`;
+
+            const label = a.uploading ? 'Uploading…' : a.name;
+
+            chip.innerHTML =
+                icon +
+                `<span class="chip-name" title="${escHtml(a.name)}">${escHtml(label)}</span>` +
+                (a.uploading ? '' : `<button class="chip-remove" title="Remove">×</button>`);
+
+            if (!a.uploading)
+                chip.querySelector('.chip-remove').addEventListener('click', () => removeMessageAttachment(a.name));
+            preview.appendChild(chip);
+        });
+    }
+
+    async function uploadMessageFiles(files) {
+        if (!activeThread) {
+            const res = await fetch('/api/threads', { method: 'POST' });
+            const { key } = await res.json();
+            activeThread = key;
+            openWatchConnection(key);
+        }
+        // Show uploading placeholders immediately
+        for (const file of files) {
+            pendingMsgAttachments = pendingMsgAttachments.filter(a => a.name !== file.name);
+            pendingMsgAttachments.push({ name: file.name, isImage: false, mimeType: null, content: null, uploading: true });
+        }
+        renderMsgAttachPreviews();
+        updateButtons();
+
+        for (const file of files) {
+            const fd = new FormData();
+            fd.append('file', file);
+            const res = await fetch(`/api/threads/${activeThread}/message-attachments`, { method: 'POST', body: fd });
+            if (res.ok) {
+                const data = await res.json();
+                pendingMsgAttachments = pendingMsgAttachments.filter(a => a.name !== data.name);
+                pendingMsgAttachments.push({ name: data.name, isImage: data.isImage, mimeType: data.mimeType, content: data.content, uploading: false });
+            } else {
+                pendingMsgAttachments = pendingMsgAttachments.filter(a => a.name !== file.name);
+                const err = await res.json().catch(() => null);
+                showToast(err?.error ?? `Could not attach ${file.name}.`);
+            }
+            renderMsgAttachPreviews();
+            updateButtons();
+        }
+    }
+
+    async function removeMessageAttachment(name) {
+        if (!activeThread) return;
+        await fetch(`/api/threads/${activeThread}/message-attachments/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        pendingMsgAttachments = pendingMsgAttachments.filter(a => a.name !== name);
+        renderMsgAttachPreviews();
+        updateButtons();
+    }
+
+    function clearMsgAttachPreviews() {
+        pendingMsgAttachments = [];
+        renderMsgAttachPreviews();
+    }
+
+    // ── Thread-pin animations ─────────────────────────────
+    function flyToThreadPanel(name) {
+        const btn = document.getElementById('btn-open-thread-panel');
+        const main = document.getElementById('main');
+        const startRect = main.getBoundingClientRect();
+        const endRect   = btn.getBoundingClientRect();
+
+        const startX = startRect.left + startRect.width  / 2;
+        const startY = startRect.top  + startRect.height / 2;
+        const endX   = endRect.left   + endRect.width    / 2;
+        const endY   = endRect.top    + endRect.height   / 2;
+
+        const el = document.createElement('div');
+        el.className = 'attach-fly';
+        el.innerHTML =
+            `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">` +
+            `<line x1="12" y1="17" x2="12" y2="3"/><polyline points="8 7 12 3 16 7"/>` +
+            `<path d="M20 21H4"/><line x1="17" y1="14" x2="17" y2="21"/><line x1="7" y1="14" x2="7" y2="21"/></svg>` +
+            escHtml(name.length > 28 ? name.slice(0, 26) + '…' : name);
+        el.style.left = `${startX - 80}px`;
+        el.style.top  = `${startY - 18}px`;
+        el.style.setProperty('--fly-x', `${endX - startX + 80}px`);
+        el.style.setProperty('--fly-y', `${endY - startY + 18}px`);
+        document.body.appendChild(el);
+        el.addEventListener('animationend', () => el.remove());
+    }
+
+    function bounceThreadPanel() {
+        const panel = document.getElementById('thread-panel');
+        if (panel.classList.contains('open')) return;
+        panel.classList.remove('panel-peek');
+        void panel.offsetWidth;
+        panel.classList.add('panel-peek');
+        panel.addEventListener('animationend', () => panel.classList.remove('panel-peek'), { once: true });
+    }
+
+    function renderPinNotice(name) {
+        const box = document.getElementById('messages');
+        if (!box) return;
+        const row = document.createElement('div');
+        row.className = 'msg-row thread-pin-notice';
+        row.innerHTML =
+            `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">` +
+            `<line x1="12" y1="17" x2="12" y2="3"/><polyline points="8 7 12 3 16 7"/>` +
+            `<path d="M20 21H4"/><line x1="17" y1="14" x2="17" y2="21"/><line x1="7" y1="14" x2="7" y2="21"/></svg>` +
+            `<span><strong>${escHtml(name)}</strong> added to thread context</span>`;
+        box.appendChild(row);
+        scrollBottom();
+    }
 
     // ── Thread panel (right sidebar) ──────────────────────
     const threadPanel  = document.getElementById('thread-panel');
@@ -953,23 +1423,52 @@
             activateChat();
             openWatchConnection(key);
         }
+        const succeeded = [];
         for (const file of files) {
             const fd = new FormData();
             fd.append('file', file);
-            await fetch(`/api/threads/${activeThread}/attachments`, { method: 'POST', body: fd });
+            const res = await fetch(`/api/threads/${activeThread}/attachments`, { method: 'POST', body: fd });
+            if (res.ok) {
+                succeeded.push(file.name);
+            } else {
+                const err = await res.json().catch(() => null);
+                showToast(err?.error ?? `Could not attach ${file.name}.`);
+            }
+        }
+        if (succeeded.length) {
+            succeeded.forEach((name, i) => setTimeout(() => flyToThreadPanel(name), i * 120));
+            setTimeout(() => {
+                bounceThreadPanel();
+                succeeded.forEach(name => renderPinNotice(name));
+            }, succeeded.length * 120 + 400);
         }
         await refreshAttachments();
     }
 
-    document.getElementById('btn-attach').addEventListener('click', () => fileInput.click());
+    const msgFileInput    = document.createElement('input');
+    msgFileInput.type     = 'file';
+    msgFileInput.multiple = true;
+    msgFileInput.style.display = 'none';
+    document.body.appendChild(msgFileInput);
+
+    // Paperclip in the input area → message attachment
+    document.getElementById('btn-attach').addEventListener('click', () => msgFileInput.click());
+    msgFileInput.addEventListener('change', async () => {
+        if (msgFileInput.files.length) await uploadMessageFiles([...msgFileInput.files]);
+        msgFileInput.value = '';
+    });
+
+    // Thread panel attach button → thread attachment
     document.getElementById('btn-attach-panel').addEventListener('click', () => fileInput.click());
     document.getElementById('btn-close-thread-panel').addEventListener('click', () => setThreadPanelOpen(false));
     btnOpenThreadPanel.addEventListener('click', () => setThreadPanelOpen(true));
     fileInput.addEventListener('change', () => { if (fileInput.files.length) uploadFiles([...fileInput.files]); fileInput.value = ''; });
 
     // ── Drag-drop (document-level) ────────────────────────
-    const dropOverlay = document.getElementById('drop-overlay');
-    let dragCounter   = 0;
+    const dropOverlay   = document.getElementById('drop-overlay');
+    const dropZoneMsg   = document.getElementById('drop-zone-message');
+    const dropZoneThread = document.getElementById('drop-zone-thread');
+    let dragCounter = 0;
 
     document.addEventListener('dragenter', e => {
         if (!e.dataTransfer?.types?.includes('Files')) return;
@@ -978,13 +1477,54 @@
     });
     document.addEventListener('dragleave', () => {
         dragCounter--;
-        if (dragCounter <= 0) { dragCounter = 0; dropOverlay.style.display = 'none'; }
+        if (dragCounter <= 0) {
+            dragCounter = 0;
+            dropOverlay.style.display = 'none';
+            dropZoneMsg.classList.remove('drag-over');
+            dropZoneThread.classList.remove('drag-over');
+        }
     });
-    document.addEventListener('dragover', e => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); });
-    document.addEventListener('drop', async e => {
-        e.preventDefault(); dragCounter = 0; dropOverlay.style.display = 'none';
+    document.addEventListener('dragover', e => {
+        if (e.dataTransfer?.types?.includes('Files')) e.preventDefault();
+    });
+
+    function hideDrop() {
+        dragCounter = 0;
+        dropOverlay.style.display = 'none';
+        dropZoneMsg.classList.remove('drag-over');
+        dropZoneThread.classList.remove('drag-over');
+    }
+
+    dropZoneThread.addEventListener('dragover',  e => e.preventDefault());
+    dropZoneMsg.addEventListener('dragover',     e => e.preventDefault());
+    dropZoneThread.addEventListener('dragenter', e => { e.preventDefault(); dropZoneThread.classList.add('drag-over'); dropZoneMsg.classList.remove('drag-over'); });
+    dropZoneMsg.addEventListener('dragenter',    e => { e.preventDefault(); dropZoneMsg.classList.add('drag-over'); dropZoneThread.classList.remove('drag-over'); });
+
+    dropZoneThread.addEventListener('drop', async e => {
+        e.preventDefault(); e.stopPropagation();
         const files = [...(e.dataTransfer.files ?? [])];
-        if (files.length) { await uploadFiles(files); setThreadPanelOpen(true); }
+        hideDrop();
+        if (files.length) await uploadFiles(files);
+    });
+    dropZoneMsg.addEventListener('drop', async e => {
+        e.preventDefault(); e.stopPropagation();
+        const files = [...(e.dataTransfer.files ?? [])];
+        hideDrop();
+        if (files.length) await uploadMessageFiles(files);
+    });
+    document.addEventListener('drop', e => {
+        e.preventDefault();
+        hideDrop();
+    });
+
+    // ── Paste images into textarea ────────────────────────
+    document.getElementById('input').addEventListener('paste', async e => {
+        const items = [...(e.clipboardData?.items ?? [])];
+        const imageItems = items.filter(i => i.kind === 'file' && i.type.startsWith('image/'));
+        if (!imageItems.length) return;
+        e.preventDefault();
+        const files = imageItems.map(i => i.getAsFile()).filter(Boolean);
+        if (files.length) await uploadMessageFiles(files);
     });
 
     wireTextarea('input', () => {
