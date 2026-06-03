@@ -1,3 +1,4 @@
+using System.Text;
 using ARI.LLM;
 using Discord;
 using Discord.WebSocket;
@@ -11,9 +12,13 @@ public class DiscordService : BackgroundService
     private const int MAX_MESSAGE_LENGTH = 2000;
     private const int MESSAGE_SEND_DELAY_MS = 500;
 
+    private static readonly HashSet<string> ReadableExtensions = new(StringComparer.OrdinalIgnoreCase)
+        { ".txt", ".md", ".cs", ".py", ".js", ".ts", ".json", ".yaml", ".yml", ".toml", ".xml", ".html", ".css", ".sh", ".log" };
+
     private readonly DiscordSocketClient client;
     private readonly DiscordConfig config;
     private readonly LlmService llmService;
+    private readonly HttpClient httpClient = new();
     
     
     private const string PassToken = "[PASS]";
@@ -262,6 +267,8 @@ public class DiscordService : BackgroundService
         Common.Logger.LogInformation("DM from {Username} ({UserId}): {Content}",
             message.Author.Username, message.Author.Id, message.Content);
 
+        if (message.Attachments.Count > 0)
+            await UploadDiscordAttachmentsAsync(conversationKey, message.Attachments);
         await SendLlmReplyAsync(message, conversationKey, prompt);
     }
 
@@ -296,7 +303,34 @@ public class DiscordService : BackgroundService
         Common.Logger.LogInformation("Server message from {Username} ({UserId}) in #{ChannelName}: {Content}",
             message.Author.Username, message.Author.Id, guildChannel.Name, message.Content);
 
+        if (message.Attachments.Count > 0)
+            await UploadDiscordAttachmentsAsync(conversationKey, message.Attachments);
         await SendLlmReplyAsync(message, conversationKey, prompt, ServerContextPrompt);
+    }
+
+    private async Task UploadDiscordAttachmentsAsync(string conversationKey, IReadOnlyCollection<Attachment> attachments)
+    {
+        foreach (var att in attachments)
+        {
+            string mime    = att.ContentType ?? "application/octet-stream";
+            bool   isImage = mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+            string ext     = Path.GetExtension(att.Filename);
+
+            if (!isImage && !ReadableExtensions.Contains(ext))
+            {
+                Common.Logger.LogDebug("Skipping unsupported Discord attachment: {Filename}", att.Filename);
+                continue;
+            }
+
+            byte[] bytes = await httpClient.GetByteArrayAsync(att.Url);
+
+            string content = isImage
+                ? Convert.ToBase64String(bytes)
+                : Encoding.UTF8.GetString(bytes);
+
+            llmService.AddMessageAttachment(conversationKey, new MessageAttachmentInfo(att.Filename, content, isImage, mime));
+            Common.Logger.LogDebug("Queued Discord attachment: {Filename} ({Mime})", att.Filename, mime);
+        }
     }
 
     private async Task SendLlmReplyAsync(SocketMessage message, string conversationKey, string prompt, string? contextNote = null)
