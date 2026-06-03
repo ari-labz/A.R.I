@@ -1,5 +1,5 @@
 {
-  "Models": [
+  "Agents": [
     {
       "Name": "Dialogue",
       "Endpoint": "http://localhost:8081",

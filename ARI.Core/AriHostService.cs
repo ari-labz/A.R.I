@@ -72,14 +72,14 @@ public class AriHostService : BackgroundService
         llamaServer = new LocalLlamaServer(config.LlamaServer, executableDirectory);
         await llamaServer.IsReady();
 
-        Common.Logger.LogInformation("Loading LLM models...");
+        Common.Logger.LogInformation("Loading agents...");
         string brainConfigPath = Path.Combine(executableDirectory, "AriBrain.json");
         LlmService llmService = new LlmService(
-            Path.Combine(executableDirectory, "AriModels.json"),
+            Path.Combine(executableDirectory, "AriAgents.json"),
             File.Exists(brainConfigPath) ? brainConfigPath : null,
             loggerFactory
         );
-        Common.Logger.LogInformation("LLM models loaded.");
+        Common.Logger.LogInformation("Agents loaded.");
 
         Common.Logger.LogInformation("ARI is ready.");
 

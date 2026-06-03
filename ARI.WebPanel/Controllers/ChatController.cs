@@ -188,7 +188,7 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
             content = await reader.ReadToEndAsync();
         }
 
-        var attachment = new ThreadAttachment(file.FileName, content, isImage, mime);
+        var attachment = new Attachment { Name = file.FileName, Content = content, IsImage = isImage, MimeType = mime };
         Llm.AddAttachment(threadKey, attachment);
         return Ok(new { name = file.FileName, isImage });
     }
@@ -238,7 +238,7 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
             content = await reader.ReadToEndAsync();
         }
 
-        var attachment = new MessageAttachmentInfo(file.FileName, content, isImage, mime);
+        var attachment = new Attachment { Name = file.FileName, Content = content, IsImage = isImage, MimeType = mime };
         Llm.AddMessageAttachment(threadKey, attachment);
         return Ok(new { name = file.FileName, isImage, mimeType = mime, content });
     }

@@ -22,7 +22,7 @@ internal class Engram : Agent, IDisposable
     private readonly HttpClient httpClient = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
 
 
-    internal Engram(ModelConfig config, Dialogue dialogue, BrainService brain, Context? context, int sweepIntervalMinutes, int fetchDepth = 7, string brainPublicUrl = "") : base(config)
+    internal Engram(AgentConfig config, Dialogue dialogue, BrainService brain, Context? context, int sweepIntervalMinutes, int fetchDepth = 7, string brainPublicUrl = "") : base(config)
     {
         this.dialogue       = dialogue;
         this.brain          = brain;

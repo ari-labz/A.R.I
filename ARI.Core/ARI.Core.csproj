@@ -16,9 +16,9 @@
   		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
   		<Link>.env</Link>
   	</Content>
-  	<Content Include="..\ARI.LLM\AriModels.json">
+  	<Content Include="..\ARI.LLM\AriAgents.json">
   		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-  		<Link>AriModels.json</Link>
+  		<Link>AriAgents.json</Link>
   	</Content>
   	<Content Include="..\ARI.Brain\AriBrain.json">
   		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

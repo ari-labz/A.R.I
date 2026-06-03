@@ -11,7 +11,7 @@ internal class Recall : Agent
     private readonly int recallDepth;
     private readonly string brainPublicUrl;
 
-    internal Recall(ModelConfig config, BrainService brain, int recallDepth, string brainPublicUrl) : base(config)
+    internal Recall(AgentConfig config, BrainService brain, int recallDepth, string brainPublicUrl) : base(config)
     {
         this.brain          = brain;
         this.recallDepth    = recallDepth;

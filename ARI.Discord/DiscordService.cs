@@ -2,6 +2,8 @@ using System.Text;
 using ARI.LLM;
 using Discord;
 using Discord.WebSocket;
+using DiscordAttachment = global::Discord.Attachment;
+using LlmAttachment = ARI.LLM.Attachment;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -308,7 +310,7 @@ public class DiscordService : BackgroundService
         await SendLlmReplyAsync(message, conversationKey, prompt, ServerContextPrompt);
     }
 
-    private async Task UploadDiscordAttachmentsAsync(string conversationKey, IReadOnlyCollection<Attachment> attachments)
+    private async Task UploadDiscordAttachmentsAsync(string conversationKey, IReadOnlyCollection<DiscordAttachment> attachments)
     {
         foreach (var att in attachments)
         {
@@ -328,7 +330,7 @@ public class DiscordService : BackgroundService
                 ? Convert.ToBase64String(bytes)
                 : Encoding.UTF8.GetString(bytes);
 
-            llmService.AddMessageAttachment(conversationKey, new MessageAttachmentInfo(att.Filename, content, isImage, mime));
+            llmService.AddMessageAttachment(conversationKey, new LlmAttachment { Name = att.Filename, Content = content, IsImage = isImage, MimeType = mime });
             Common.Logger.LogDebug("Queued Discord attachment: {Filename} ({Mime})", att.Filename, mime);
         }
     }
