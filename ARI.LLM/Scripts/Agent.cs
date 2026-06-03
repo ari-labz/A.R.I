@@ -65,7 +65,8 @@ internal class Agent
         string? recallNotes       = null,
         string? contextSummary    = null,
         int     maxTokensOverride = 0,
-        IReadOnlyList<ThreadAttachment>? attachments = null)
+        IReadOnlyList<ThreadAttachment>?      attachments        = null,
+        IReadOnlyList<MessageAttachmentInfo>? messageAttachments = null)
     {
         if (!threads.TryGetValue(threadKey, out Thread? thread))
         {
@@ -74,7 +75,7 @@ internal class Agent
             OnThreadCreated(threadKey, thread);
             threads[threadKey] = thread;
         }
-        return thread.SendPrompt(prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, attachments);
+        return thread.SendPrompt(prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, attachments, messageAttachments);
     }
 
     /// <summary>

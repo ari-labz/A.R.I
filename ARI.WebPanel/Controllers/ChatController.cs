@@ -153,6 +153,15 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
     private static readonly HashSet<string> ImageMimes = new(StringComparer.OrdinalIgnoreCase)
         { "image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp" };
 
+    // Mime types that are binary and cannot be read as plain text.
+    private static readonly HashSet<string> BinaryMimes = new(StringComparer.OrdinalIgnoreCase)
+        { "application/pdf", "application/zip", "application/x-zip-compressed",
+          "application/octet-stream", "application/x-rar-compressed", "application/x-7z-compressed",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "application/msword", "application/vnd.ms-excel", "application/vnd.ms-powerpoint" };
+
     [HttpPost("{threadKey}/attachments")]
     [RequestSizeLimit(50 * 1024 * 1024)] // 50 MB
     public async Task<IActionResult> AddAttachment(string threadKey, IFormFile file)
@@ -162,6 +171,9 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
 
         string mime = file.ContentType ?? "application/octet-stream";
         bool isImage = ImageMimes.Contains(mime);
+
+        if (!isImage && BinaryMimes.Contains(mime))
+            return StatusCode(415, new { error = $"{Path.GetExtension(file.FileName).TrimStart('.').ToUpper()} files cannot be attached as thread context — only images and text files are supported." });
 
         string content;
         if (isImage)
@@ -196,6 +208,84 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
         var list = Llm.GetAttachments(threadKey)
             .Select(a => new { a.Name, a.IsImage, a.MimeType });
         return Ok(list);
+    }
+
+    // ── Message Attachments (ephemeral — cleared after send) ────────────────────
+
+    [HttpPost("{threadKey}/message-attachments")]
+    [RequestSizeLimit(50 * 1024 * 1024)]
+    public async Task<IActionResult> AddMessageAttachment(string threadKey, IFormFile file)
+    {
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        if (file is null || file.Length == 0) return BadRequest("No file provided.");
+
+        string mime    = file.ContentType ?? "application/octet-stream";
+        bool   isImage = ImageMimes.Contains(mime);
+
+        if (!isImage && BinaryMimes.Contains(mime))
+            return StatusCode(415, new { error = $"{Path.GetExtension(file.FileName).TrimStart('.').ToUpper()} files are not supported — only images and plain text files can be attached to a message." });
+
+        string content;
+        if (isImage)
+        {
+            using var ms = new MemoryStream();
+            await file.CopyToAsync(ms);
+            content = Convert.ToBase64String(ms.ToArray());
+        }
+        else
+        {
+            using var reader = new System.IO.StreamReader(file.OpenReadStream());
+            content = await reader.ReadToEndAsync();
+        }
+
+        var attachment = new MessageAttachmentInfo(file.FileName, content, isImage, mime);
+        Llm.AddMessageAttachment(threadKey, attachment);
+        return Ok(new { name = file.FileName, isImage, mimeType = mime, content });
+    }
+
+    [HttpDelete("{threadKey}/message-attachments/{name}")]
+    public IActionResult RemoveMessageAttachment(string threadKey, string name)
+    {
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        Llm.RemoveMessageAttachment(threadKey, name);
+        return Ok();
+    }
+
+    [HttpGet("{threadKey}/message-attachments")]
+    public IActionResult GetMessageAttachments(string threadKey)
+    {
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        var list = Llm.GetMessageAttachments(threadKey)
+            .Select(a => new { a.Name, a.IsImage, a.MimeType, a.Content });
+        return Ok(list);
+    }
+
+    /// <summary>
+    /// Serves the raw content of an attachment that was sent with a message.
+    /// Images are returned as their native mime type; text files as plain text.
+    /// Identified by the message timestamp and filename since content is stripped from history JSON.
+    /// </summary>
+    [HttpGet("{threadKey}/msg-attachment")]
+    public IActionResult GetMessageAttachmentContent(string threadKey, [FromQuery] string name)
+    {
+        if (Llm is null) return StatusCode(503);
+
+        var items = Llm.GetThreadItems(threadKey);
+        foreach (var item in items)
+        {
+            if (item is not UserMessage msg || msg.Attachments is null) continue;
+            var att = msg.Attachments.FirstOrDefault(a => a.Name == name);
+            if (att is null) continue;
+
+            if (att.IsImage)
+            {
+                byte[] bytes = Convert.FromBase64String(att.Content);
+                return File(bytes, att.MimeType ?? "image/jpeg");
+            }
+            return Content(att.Content, "text/plain");
+        }
+
+        return NotFound();
     }
 
     [HttpGet("{threadKey}/stream")]

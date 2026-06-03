@@ -308,11 +308,11 @@ html, body {
 /* ── right thread-management panel (floating overlay) ─── */
 #thread-panel {
     display: none;
-    position: absolute;
-    top: 50%; right: 12px;
+    position: fixed;
+    top: 50vh; right: 12px;
     transform: translateY(-50%);
     width: 220px;
-    max-height: 70%;
+    max-height: 70vh;
     flex-direction: column;
     background: #1a2130;
     border: 1px solid rgba(255,255,255,.1);
