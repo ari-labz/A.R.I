@@ -1,4 +1,5 @@
-# ARI (Autonomous Remote Interface)
+<img width="1812" height="868" alt="df027e78-f791-4199-b9d0-9ea10fb47813" src="https://github.com/user-attachments/assets/7190726f-cc06-4dc8-8f17-f91a1ef6d262" />
+
 
 ### A Local-First, Graph-Native Personal AI Assistant
 
