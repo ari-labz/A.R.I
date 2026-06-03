@@ -66,4 +66,10 @@ internal class ModelConfig
     /// Tokens are estimated at 4 characters per token. 0 = no token budget enforced.
     /// </summary>
     public int MaxContextTokens { get; init; } = 0;
+
+    /// <summary>
+    /// Whether this agent is allowed to think (extended reasoning / think tokens).
+    /// When false, <|think_off|> is appended to the system prompt. Defaults to false.
+    /// </summary>
+    public bool Think { get; init; } = false;
 }

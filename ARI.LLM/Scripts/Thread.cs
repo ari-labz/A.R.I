@@ -40,7 +40,7 @@ private readonly Agent      agent;
         threadHistory  = new List<ThreadItem>();
 
         string body   = contextNote is null ? agent.SystemPrompt : $"{agent.SystemPrompt}\n\n{contextNote}";
-        systemContent = $"{body}\n<|think_off|>";
+        systemContent = agent.Think ? body : $"{body}\n<|think_off|>";
     }
 
     /// <summary>

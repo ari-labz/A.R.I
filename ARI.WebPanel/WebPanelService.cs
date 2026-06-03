@@ -50,6 +50,7 @@ public class WebPanelService : IAsyncDisposable
         builder.Logging.AddProvider(new ForwardingLoggerProvider(loggerFactory));
 
         builder.WebHost.UseUrls($"http://0.0.0.0:{config.Port}");
+        builder.WebHost.UseShutdownTimeout(TimeSpan.FromSeconds(2));
 
         builder.Services.AddSingleton(holder);
         builder.Services.AddControllersWithViews()
