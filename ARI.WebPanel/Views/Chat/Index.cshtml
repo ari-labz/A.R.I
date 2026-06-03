@@ -370,7 +370,15 @@
             const res = await fetch(url);
             const threads = await res.json();
             const list = document.getElementById('thread-list');
+
+            // Preserve pending entries that haven't landed in the API yet
+            const pendingEntries = [...list.querySelectorAll('li.pending')]
+                .filter(li => !threads.some(t => t.key === li.dataset.key));
+
             list.innerHTML = '';
+
+            // Re-inject preserved pending entries at the top
+            pendingEntries.forEach(li => list.prepend(li));
 
             threads.forEach(t => {
                 const li = document.createElement('li');

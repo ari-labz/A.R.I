@@ -145,7 +145,9 @@ internal class Recall : Agent
     private static readonly string[] PersonalKeywords =
     [
         " my ", "my ", "who is", "who's", "who are", "what is", "what's",
-        "where is", "where's", "tell me about", "what do you know"
+        "where is", "where's", "tell me about", "what do you know",
+        "about me", "who am i", "am i ", "do you know", "know about",
+        "what do i", "how do i", "what are my", "tell me"
     ];
 
     /// <summary>
