@@ -14,5 +14,5 @@ public class Attachment
 
     /// <summary>Base64 for images; UTF-8 text for documents. Excluded from history JSON — served via dedicated endpoint.</summary>
     [JsonIgnore]
-    public required string Content { get; init; }
+    public string Content { get; init; } = string.Empty;
 }

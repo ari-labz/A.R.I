@@ -25,7 +25,7 @@ public class DiscordService : BackgroundService
     
     private const string PassToken = "[PASS]";
 
-    private const string ServerContextPrompt =
+    private const string ServerPlatformContext =
         "You are present in a Discord server. Each message shows who is speaking and in which channel. " +
         "If the conversation was clearly not directed at you and you don't need to be involved, reply with only: [PASS] — nothing else. " +
         "Otherwise, reply normally.";
@@ -46,9 +46,9 @@ public class DiscordService : BackgroundService
         });
 
         client.Log             += LogAsync;
-        client.Ready           += OnReadyAsync;
-        client.MessageReceived += message => { _ = Task.Run(() => OnMessageReceivedAsync(message)); return Task.CompletedTask; };
-        client.SlashCommandExecuted += cmd => { _ = Task.Run(() => OnSlashCommandAsync(cmd)); return Task.CompletedTask; };
+        client.Ready           += OnReady;
+        client.MessageReceived += message => { _ = Task.Run(() => OnMessageReceived(message)); return Task.CompletedTask; };
+        client.SlashCommandExecuted += cmd => { _ = Task.Run(() => OnSlashCommand(cmd)); return Task.CompletedTask; };
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -61,7 +61,7 @@ public class DiscordService : BackgroundService
     }
 
 
-    public async Task NotifyOfflineAsync()
+    public async Task NotifyOffline()
     {
         Common.Logger.LogInformation("Notifying owner that ARI is going offline...");
 
@@ -70,10 +70,10 @@ public class DiscordService : BackgroundService
         await dm.SendMessageAsync(AsBlockQuote("A·R·I is offline."));
     }
 
-    private async Task OnReadyAsync()
+    private async Task OnReady()
     {
         Common.Logger.LogInformation("Discord bot is ready. Registering slash commands...");
-        await RegisterSlashCommandsAsync();
+        await RegisterSlashCommands();
 
         try
         {
@@ -88,7 +88,7 @@ public class DiscordService : BackgroundService
         }
     }
 
-    private async Task RegisterSlashCommandsAsync()
+    private async Task RegisterSlashCommands()
     {
         ApplicationCommandProperties[] commands =
         [
@@ -162,7 +162,7 @@ public class DiscordService : BackgroundService
         }
     }
 
-    private async Task OnSlashCommandAsync(SocketSlashCommand cmd)
+    private async Task OnSlashCommand(SocketSlashCommand cmd)
     {
         // Only the owner may use ARI's commands.
         if (cmd.User.Id != config.OwnerId)
@@ -176,7 +176,7 @@ public class DiscordService : BackgroundService
         // whitelist is Discord-specific — it manages Discord user IDs directly.
         if (cmd.CommandName == "whitelist")
         {
-            await HandleWhitelistSlashAsync(cmd, sub);
+            await HandleWhitelistSlash(cmd, sub);
             return;
         }
 
@@ -187,11 +187,11 @@ public class DiscordService : BackgroundService
 
         // Defer immediately — sweep/refactor/backup can take well over 3 seconds.
         await cmd.DeferAsync(ephemeral: true);
-        string result = await llmService.HandleCommandAsync(null, commandText) ?? $"Unknown command: {commandText}";
+        string result = await llmService.HandleCommand(null, commandText) ?? $"Unknown command: {commandText}";
         await cmd.FollowupAsync(AsBlockQuote(result), ephemeral: true);
     }
 
-    private async Task HandleWhitelistSlashAsync(SocketSlashCommand cmd, string sub)
+    private async Task HandleWhitelistSlash(SocketSlashCommand cmd, string sub)
     {
         SocketSlashCommandDataOption? subCmd = cmd.Data.Options.FirstOrDefault();
         IUser? target = subCmd?.Options.FirstOrDefault()?.Value as IUser;
@@ -230,17 +230,17 @@ public class DiscordService : BackgroundService
         }
     }
 
-    private async Task OnMessageReceivedAsync(SocketMessage message)
+    private async Task OnMessageReceived(SocketMessage message)
     {
         if (message.Author.IsBot) return;
 
         if (message.Channel is IDMChannel)
-            await HandleDMAsync(message);
+            await HandleDM(message);
         else if (message.Channel is SocketGuildChannel guildChannel)
-            await HandleServerMessageAsync(message, guildChannel);
+            await HandleServerMessage(message, guildChannel);
     }
 
-    private async Task HandleDMAsync(SocketMessage message)
+    private async Task HandleDM(SocketMessage message)
     {
         if (message.Author.Id != config.OwnerId)
         {
@@ -248,12 +248,12 @@ public class DiscordService : BackgroundService
             return;
         }
 
-        // Slash commands are the primary path (OnSlashCommandAsync).
+        // Slash commands are the primary path (OnSlashCommand).
         // Plain-text /commands in DMs are kept as a fallback — useful before global slash
         // commands have propagated, or if the interaction system fails.
         if (message.Content.StartsWith("/", StringComparison.OrdinalIgnoreCase))
         {
-            string? result = await llmService.HandleCommandAsync(null, message.Content);
+            string? result = await llmService.HandleCommand(null, message.Content);
             if (result is not null)
             {
                 Common.Logger.LogInformation("Command [{Input}] → {Result}", message.Content, result);
@@ -270,11 +270,11 @@ public class DiscordService : BackgroundService
             message.Author.Username, message.Author.Id, message.Content);
 
         if (message.Attachments.Count > 0)
-            await UploadDiscordAttachmentsAsync(conversationKey, message.Attachments);
-        await SendLlmReplyAsync(message, conversationKey, prompt);
+            await UploadDiscordAttachments(conversationKey, message.Attachments);
+        await SendLlmReply(message, conversationKey, prompt);
     }
 
-    private async Task HandleServerMessageAsync(SocketMessage message, SocketGuildChannel guildChannel)
+    private async Task HandleServerMessage(SocketMessage message, SocketGuildChannel guildChannel)
     {
         if (!config.WhitelistedUserIds.Contains(message.Author.Id))
         {
@@ -306,13 +306,13 @@ public class DiscordService : BackgroundService
             message.Author.Username, message.Author.Id, guildChannel.Name, message.Content);
 
         if (message.Attachments.Count > 0)
-            await UploadDiscordAttachmentsAsync(conversationKey, message.Attachments);
-        await SendLlmReplyAsync(message, conversationKey, prompt, ServerContextPrompt);
+            await UploadDiscordAttachments(conversationKey, message.Attachments);
+        await SendLlmReply(message, conversationKey, prompt, ServerPlatformContext);
     }
 
-    private async Task UploadDiscordAttachmentsAsync(string conversationKey, IReadOnlyCollection<DiscordAttachment> attachments)
+    private async Task UploadDiscordAttachments(string conversationKey, IReadOnlyCollection<DiscordAttachment> attachments)
     {
-        foreach (var att in attachments)
+        foreach (DiscordAttachment att in attachments)
         {
             string mime    = att.ContentType ?? "application/octet-stream";
             bool   isImage = mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
@@ -335,14 +335,14 @@ public class DiscordService : BackgroundService
         }
     }
 
-    private async Task SendLlmReplyAsync(SocketMessage message, string conversationKey, string prompt, string? contextNote = null)
+    private async Task SendLlmReply(SocketMessage message, string conversationKey, string prompt, string? platformContext = null)
     {
         using CancellationTokenSource typingCts = new();
-        _ = KeepTypingAsync(message.Channel, typingCts.Token);
+        _ = KeepTyping(message.Channel, typingCts.Token);
 
         try
         {
-            string response = await llmService.Prompt(conversationKey, prompt, contextNote);
+            string response = await llmService.Prompt(conversationKey, prompt, platformContext);
             typingCts.Cancel();
 
             if (response.Trim() == PassToken)
@@ -374,7 +374,7 @@ public class DiscordService : BackgroundService
         }
     }
 
-    private static async Task KeepTypingAsync(IMessageChannel channel, CancellationToken ct)
+    private static async Task KeepTyping(IMessageChannel channel, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {

@@ -27,7 +27,7 @@ internal class CommandService
     /// Parses and executes a slash command.
     /// Returns a human-readable result string, or null if the input is not a recognised command.
     /// </summary>
-    internal async Task<string?> HandleAsync(string input)
+    internal async Task<string?> Handle(string input)
     {
         if (string.IsNullOrWhiteSpace(input) || !input.StartsWith('/'))
             return null;
@@ -38,18 +38,18 @@ internal class CommandService
 
         return command switch
         {
-            "/engram"        => await HandleEngramAsync(sub),
-            "/refactor"      => await HandleRefactorAsync(sub),
-            "/purge"         => sub == "notes" ? await HandlePurgeNotesAsync() : null,
-            "/brain"         => sub == "backup" ? await HandleBrainBackupAsync() : null,
-            "/getdirtynotes" => await HandleGetDirtyNotesAsync(),
+            "/engram"        => await HandleEngram(sub),
+            "/refactor"      => await HandleRefactor(sub),
+            "/purge"         => sub == "notes" ? await HandlePurgeNotes() : null,
+            "/brain"         => sub == "backup" ? await HandleBrainBackup() : null,
+            "/getdirtynotes" => await HandleGetDirtyNotes(),
             _                => null
         };
     }
 
     // ── /engram ───────────────────────────────────────────────────────────────────
 
-    private async Task<string> HandleEngramAsync(string sub)
+    private async Task<string> HandleEngram(string sub)
     {
         if (engram is null) return "Engram is not loaded.";
 
@@ -57,7 +57,7 @@ internal class CommandService
         {
             "on"     => EngramEnable(),
             "off"    => EngramDisable(),
-            "sweep"  => await EngramSweepAsync(),
+            "sweep"  => await EngramSweep(),
             "status" => EngramStatus(),
             _        => "Unknown engram command. Options: `/engram on`, `/engram off`, `/engram sweep`, `/engram status`"
         };
@@ -75,9 +75,9 @@ internal class CommandService
         return "Engram disabled.";
     }
 
-    private async Task<string> EngramSweepAsync()
+    private async Task<string> EngramSweep()
     {
-        await engram!.ManualSweepAsync();
+        await engram!.ManualSweep();
         return engram.IsEnabled ? "Engram sweep complete." : "Engram is disabled — sweep skipped.";
     }
 
@@ -86,17 +86,17 @@ internal class CommandService
 
     // ── /refactor ─────────────────────────────────────────────────────────────────
 
-    private async Task<string> HandleRefactorAsync(string sub)
+    private async Task<string> HandleRefactor(string sub)
     {
         if (refactor is null) return "Refactor is not loaded.";
         bool allNotes = sub == "all";
         Common.Logger.LogInformation("[Commands] Refactor requested (mode: {Mode}).", allNotes ? "all" : "dirty");
-        return await refactor.RunAsync(allNotes);
+        return await refactor.Run(allNotes);
     }
 
     // ── /purge notes ──────────────────────────────────────────────────────────────
 
-    private async Task<string> HandlePurgeNotesAsync()
+    private async Task<string> HandlePurgeNotes()
     {
         if (purgeNotes is null) return "Brain is not available.";
         Common.Logger.LogInformation("[Commands] Brain purge requested.");
@@ -106,7 +106,7 @@ internal class CommandService
 
     // ── /brain backup ─────────────────────────────────────────────────────────────
 
-    private async Task<string> HandleBrainBackupAsync()
+    private async Task<string> HandleBrainBackup()
     {
         if (backupBrain is null) return "Brain is not available.";
         Common.Logger.LogInformation("[Commands] Brain backup requested.");
@@ -115,7 +115,7 @@ internal class CommandService
 
     // ── /getdirtynotes ────────────────────────────────────────────────────────────
 
-    private async Task<string> HandleGetDirtyNotesAsync()
+    private async Task<string> HandleGetDirtyNotes()
     {
         if (getDirtyNotes is null) return "Brain is not available.";
         List<string> dirty = await getDirtyNotes();

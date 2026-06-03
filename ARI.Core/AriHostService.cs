@@ -28,7 +28,7 @@ public class AriHostService : BackgroundService
     {
         try
         {
-            await StartAsync(stoppingToken);
+            await Start(stoppingToken);
         }
         catch
         {
@@ -37,7 +37,7 @@ public class AriHostService : BackgroundService
         }
     }
 
-    private async Task StartAsync(CancellationToken stoppingToken)
+    private async Task Start(CancellationToken stoppingToken)
     {
         Common.Logger.LogInformation("ARI is starting...");
 
@@ -56,7 +56,7 @@ public class AriHostService : BackgroundService
                 GoogleClientSecret= config.WebPanel.Google.ClientSecret,
                 AllowedEmail      = config.WebPanel.Google.AllowedEmail,
             });
-            await webPanelService.StartAsync(stoppingToken);
+            await webPanelService.Start(stoppingToken);
         }
 
         string fullComposePath = Path.Combine(executableDirectory, config.Docker.ComposePath);
@@ -110,10 +110,10 @@ public class AriHostService : BackgroundService
         Common.Logger.LogInformation("ARI is shutting down...");
 
         if (discordService != null)
-            await discordService.NotifyOfflineAsync();
+            await discordService.NotifyOffline();
 
         if (webPanelService is not null)
-            await webPanelService.StopAsync(cancellationToken);
+            await webPanelService.Stop(cancellationToken);
 
         llamaServer?.Stop();
 

@@ -28,7 +28,7 @@ internal class Refactor : Agent
     /// Full pass (/refactor all): processes every note in the graph.
     /// Backs up the brain first in both modes.
     /// </summary>
-    internal async Task<string> RunAsync(bool allNotes = false)
+    internal async Task<string> Run(bool allNotes = false)
     {
         if (!await runLock.WaitAsync(TimeSpan.FromSeconds(5)))
             return "Refactor skipped — already running.";
@@ -48,11 +48,11 @@ internal class Refactor : Agent
             Common.Logger.LogInformation("[Refactor] Starting {Mode} pass.", allNotes ? "full" : "incremental");
 
             // ── Backup ────────────────────────────────────────────────────────────
-            string backupResult = await brain.BackupAsync();
+            string backupResult = await brain.Backup();
             Common.Logger.LogInformation("[Refactor] {Backup}", backupResult);
 
             // ── Clean duplicate Unknown stubs ─────────────────────────────────────
-            int stubsDeleted = await brain.CleanUnknownStubsAsync();
+            int stubsDeleted = await brain.CleanUnknownStubs();
             if (stubsDeleted > 0)
                 Common.Logger.LogInformation("[Refactor] Deleted {Count} duplicate Unknown stub(s).", stubsDeleted);
 
@@ -69,7 +69,7 @@ internal class Refactor : Agent
             Common.Logger.LogInformation("[Refactor] Seed: {Count} note(s).", seedTitles.Count);
 
             // ── Load seed notes ───────────────────────────────────────────────────
-            var loaded = new Dictionary<string, NoteData>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, NoteData> loaded = new(StringComparer.OrdinalIgnoreCase);
 
             async Task Load(string title)
             {
@@ -81,7 +81,7 @@ internal class Refactor : Agent
             foreach (string t in seedTitles) await Load(t);
 
             // ── 1-hop expansion ───────────────────────────────────────────────────
-            var outbound = loaded.Values.SelectMany(d => d.Links)
+            List<string> outbound = loaded.Values.SelectMany(d => d.Links)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
             foreach (string t in outbound) await Load(t);
@@ -89,7 +89,7 @@ internal class Refactor : Agent
             // ── Expand to full folders ────────────────────────────────────────────
             // Cluster detection needs to see every note in a touched folder,
             // not just the dirty subset, so the LLM has complete context.
-            var touchedFolders = loaded.Values
+            HashSet<string> touchedFolders = loaded.Values
                 .Select(d => TopFolder(d.Folder))
                 .Where(f => !string.IsNullOrEmpty(f))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -113,8 +113,8 @@ internal class Refactor : Agent
             // ── Strip See Also sections + orphan link bullets ─────────────────────
             // Do this before analysis so the LLM receives clean content.
             // Collect stripped notes as edits; they'll be merged with LLM edits at apply time.
-            var knownTitlesSet = new HashSet<string>(allTitles, StringComparer.OrdinalIgnoreCase);
-            var seeAlsoEdits = new Dictionary<string, EngramEdit>(StringComparer.OrdinalIgnoreCase);
+            HashSet<string> knownTitlesSet = new(allTitles, StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, EngramEdit> seeAlsoEdits = new(StringComparer.OrdinalIgnoreCase);
             foreach (string title in loaded.Keys.ToList())
             {
                 NoteData data     = loaded[title];
@@ -132,20 +132,20 @@ internal class Refactor : Agent
                 Common.Logger.LogInformation("[Refactor] Pre-processed {Count} note(s) (See Also strip + orphan bullet removal).", seeAlsoEdits.Count);
 
             // ── Group by top-level folder ─────────────────────────────────────────
-            var hubNotes = loaded.Values
+            List<NoteData> hubNotes = loaded.Values
                 .Where(d => string.IsNullOrEmpty(d.Folder))
                 .ToList();
 
-            var byFolder = loaded.Values
+            Dictionary<string, List<NoteData>> byFolder = loaded.Values
                 .Where(d => !string.IsNullOrEmpty(d.Folder))
                 .GroupBy(d => TopFolder(d.Folder), StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
 
             // ── Analyse each folder ───────────────────────────────────────────────
-            var allAdds  = new List<EngramAdd>();
-            var allEdits = new List<EngramEdit>();
+            List<EngramAdd> allAdds  = new();
+            List<EngramEdit> allEdits = new();
 
-            foreach (var (folder, notes) in byFolder)
+            foreach ((string folder, List<NoteData> notes) in byFolder)
             {
                 Common.Logger.LogInformation("[Refactor] Analysing folder '{Folder}' ({Count} note(s)).", folder, notes.Count);
 
@@ -154,16 +154,16 @@ internal class Refactor : Agent
                 if (notes.Count <= SinglePassThreshold)
                 {
                     // Small folder — one call handles everything
-                    var (adds, edits) = await AnalyseFolderAsync(folder, notes, hubNotes, allTitles);
+                    (List<EngramAdd> adds, List<EngramEdit> edits) = await AnalyseFolder(folder, notes, hubNotes, allTitles);
                     results = [(adds, edits)];
                 }
                 else
                 {
                     // Large folder — detect clusters first, then analyse each cluster
-                    results = await AnalyseLargeFolderAsync(folder, notes, hubNotes, allTitles);
+                    results = await AnalyseLargeFolder(folder, notes, hubNotes, allTitles);
                 }
 
-                foreach (var (adds, edits) in results)
+                foreach ((List<EngramAdd> adds, List<EngramEdit> edits) in results)
                 {
                     allAdds.AddRange(adds);
                     allEdits.AddRange(edits);
@@ -176,7 +176,7 @@ internal class Refactor : Agent
             // An edit's effective title is its newName (if set) because that is the title
             // the note will have after the operation — e.g. editing People/Family with
             // newName People/[REDACT]'s Family has effective title "[REDACT]'s Family".
-            var editsByTitle = new Dictionary<string, EngramEdit>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, EngramEdit> editsByTitle = new(StringComparer.OrdinalIgnoreCase);
             foreach (EngramEdit edit in allEdits)
             {
                 string effective = string.IsNullOrWhiteSpace(edit.NewNoteName)
@@ -185,7 +185,7 @@ internal class Refactor : Agent
                 editsByTitle[effective] = edit; // last-writer-wins
             }
 
-            var addsByTitle = new Dictionary<string, EngramAdd>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, EngramAdd> addsByTitle = new(StringComparer.OrdinalIgnoreCase);
             foreach (EngramAdd add in allAdds)
                 addsByTitle[BareTitle(add.NoteName)] = add; // last-writer-wins
 
@@ -199,7 +199,7 @@ internal class Refactor : Agent
             // ── Merge and apply operations ────────────────────────────────────────
             // LLM edits take priority: they already saw stripped content, so their output
             // is a superset of the See Also removal.
-            var mergedEdits = new Dictionary<string, EngramEdit>(seeAlsoEdits, StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, EngramEdit> mergedEdits = new(seeAlsoEdits, StringComparer.OrdinalIgnoreCase);
             foreach (EngramEdit edit in allEdits)
                 mergedEdits[edit.NoteName] = edit;
 
@@ -245,7 +245,7 @@ internal class Refactor : Agent
     /// Single-call analysis for folders with ≤ SinglePassThreshold notes.
     /// The LLM receives all note content and existing hubs, and outputs adds + edits.
     /// </summary>
-    private async Task<(List<EngramAdd> adds, List<EngramEdit> edits)> AnalyseFolderAsync(
+    private async Task<(List<EngramAdd> adds, List<EngramEdit> edits)> AnalyseFolder(
         string folder,
         List<NoteData> notes,
         List<NoteData> hubNotes,
@@ -255,7 +255,7 @@ internal class Refactor : Agent
         string prompt    = BuildFolderPrompt(folder, notes, hubNotes, allTitles);
 
         Common.Logger.LogInformation("[Refactor] Folder '{Folder}': single-pass LLM call ({Count} notes).", folder, notes.Count);
-        string raw = await PromptThread(threadKey, prompt, maxTokensOverride: -1);
+        string raw = await Prompt(threadKey, prompt, maxTokensOverride: -1);
         return ParseAddEdit(raw);
     }
 
@@ -264,7 +264,7 @@ internal class Refactor : Agent
     /// Pass 1: summary view → cluster plan.
     /// Pass 2: one analysis call per cluster with full note content.
     /// </summary>
-    private async Task<List<(List<EngramAdd> adds, List<EngramEdit> edits)>> AnalyseLargeFolderAsync(
+    private async Task<List<(List<EngramAdd> adds, List<EngramEdit> edits)>> AnalyseLargeFolder(
         string folder,
         List<NoteData> notes,
         List<NoteData> hubNotes,
@@ -275,7 +275,7 @@ internal class Refactor : Agent
         string p1Prompt = BuildClusterDetectionPrompt(folder, notes, hubNotes);
 
         Common.Logger.LogInformation("[Refactor] Folder '{Folder}': cluster detection pass ({Count} notes).", folder, notes.Count);
-        string clusterRaw     = await PromptThread(p1Key, p1Prompt, maxTokensOverride: -1);
+        string clusterRaw     = await Prompt(p1Key, p1Prompt, maxTokensOverride: -1);
         List<ClusterPlan> clusters = ParseClusterPlan(clusterRaw);
 
         if (clusters.Count == 0)
@@ -287,12 +287,12 @@ internal class Refactor : Agent
         Common.Logger.LogInformation("[Refactor] Folder '{Folder}': {Count} cluster(s) identified.", folder, clusters.Count);
 
         // Pass 2 — One analysis call per cluster
-        var results = new List<(List<EngramAdd>, List<EngramEdit>)>();
-        var notesByTitle = notes.ToDictionary(n => n.Title, StringComparer.OrdinalIgnoreCase);
+        List<(List<EngramAdd>, List<EngramEdit>)> results = new();
+        Dictionary<string, NoteData> notesByTitle = notes.ToDictionary(n => n.Title, StringComparer.OrdinalIgnoreCase);
 
         foreach (ClusterPlan cluster in clusters)
         {
-            var clusterNotes = cluster.Members
+            List<NoteData> clusterNotes = cluster.Members
                 .Where(m => notesByTitle.ContainsKey(m))
                 .Select(m => notesByTitle[m])
                 .Take(ClusterCallLimit)
@@ -307,7 +307,7 @@ internal class Refactor : Agent
             string p2Prompt = BuildClusterAnalysisPrompt(cluster, clusterNotes, existingHub, hubNotes, allTitles);
 
             Common.Logger.LogInformation("[Refactor] Cluster '{Theme}' ({Count} notes).", cluster.Theme, clusterNotes.Count);
-            string raw = await PromptThread(p2Key, p2Prompt, maxTokensOverride: -1);
+            string raw = await Prompt(p2Key, p2Prompt, maxTokensOverride: -1);
             results.Add(ParseAddEdit(raw));
         }
 
@@ -318,7 +318,7 @@ internal class Refactor : Agent
 
     private static string BuildFolderPrompt(string folder, List<NoteData> notes, List<NoteData> hubNotes, List<string> allTitles)
     {
-        var sb = new StringBuilder();
+        StringBuilder sb = new();
 
         sb.AppendLine($"Analyse the `{folder}` folder and restructure the graph.");
         sb.AppendLine();
@@ -333,7 +333,7 @@ internal class Refactor : Agent
 
     private static string BuildClusterDetectionPrompt(string folder, List<NoteData> notes, List<NoteData> hubNotes)
     {
-        var sb = new StringBuilder();
+        StringBuilder sb = new();
 
         sb.AppendLine($"Identify thematic clusters in the `{folder}` folder.");
         sb.AppendLine();
@@ -363,7 +363,7 @@ internal class Refactor : Agent
         List<NoteData> allHubNotes,
         List<string> allTitles)
     {
-        var sb = new StringBuilder();
+        StringBuilder sb = new();
 
         sb.AppendLine($"Analyse the `{cluster.Theme}` cluster and make structural changes.");
         sb.AppendLine();
@@ -523,7 +523,7 @@ internal class Refactor : Agent
 
     private static string BuildSummary(bool allNotes, int seedCount, int loadedCount, HashSet<string> folders, int adds, int edits, int seeAlsoStripped)
     {
-        var sb = new StringBuilder();
+        StringBuilder sb = new();
         sb.AppendLine($"Refactor {(allNotes ? "full" : "incremental")} complete — {adds} added, {edits} edited.");
         if (!allNotes) sb.AppendLine($"Working set: {seedCount} dirty note(s) expanded to {loadedCount} across [{string.Join(", ", folders)}].");
         if (seeAlsoStripped > 0) sb.AppendLine($"See Also sections removed: {seeAlsoStripped}.");
@@ -586,7 +586,7 @@ internal class Refactor : Agent
             if (!doc.RootElement.TryGetProperty("clusters", out JsonElement arr) || arr.ValueKind != JsonValueKind.Array)
                 return [];
 
-            var clusters = new List<ClusterPlan>();
+            List<ClusterPlan> clusters = new();
             foreach (JsonElement el in arr.EnumerateArray())
             {
                 string? theme   = el.GetStr("theme");

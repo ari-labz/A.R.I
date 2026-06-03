@@ -2,108 +2,77 @@ namespace ARI.LLM;
 
 internal class Agent
 {
-    internal readonly string  Name;
-    internal readonly string  Endpoint;
-    internal readonly string  ModelString;
-    internal readonly string  SystemPrompt;
-    internal readonly int     ShortTermMemoryLimit;
-    internal readonly int     MaxContextTokens;
-    internal readonly int     MaxTokens;
-    internal readonly string? ExtractionPrompt;
-    internal readonly bool    Think;
+    internal readonly string Name;
+    internal readonly string Endpoint;
+    internal readonly string ModelString;
+    internal readonly string SystemPrompt;
+    internal readonly int    MaxTokens;
+    internal readonly bool   Think;
 
-    private readonly Dictionary<string, Thread> threads = new();
+    protected readonly Dictionary<string, Thread> threads = new();
 
-    /// <summary>Fires whenever a thread's history changes. Payload is the thread key.</summary>
-    internal event Action<string>? ThreadHistoryUpdated;
+    /// <summary>Fires whenever any thread's history changes. Payload is the thread key.</summary>
+    internal event Action<string>? ThreadUpdated;
 
     protected Agent(AgentConfig config)
     {
-        Name                 = config.Name;
-        Endpoint             = config.Endpoint;
-        ModelString          = config.Model;
-        SystemPrompt         = config.SystemPrompt;
-        ShortTermMemoryLimit = config.ShortTermMemoryLimit;
-        MaxContextTokens     = config.MaxContextTokens;
-        MaxTokens            = config.MaxTokens;
-        ExtractionPrompt     = config.ExtractionPrompt;
-        Think                = config.Think;
+        Name         = config.Name;
+        Endpoint     = config.Endpoint;
+        ModelString  = config.Model;
+        SystemPrompt = config.SystemPrompt;
+        MaxTokens    = config.MaxTokens;
+        Think        = config.Think;
     }
 
-    // ── Thread accessors ────────────────────────────────────────────────────────
+    // ── Threads ─────────────────────────────────────────────────────────────────
 
     internal IReadOnlyCollection<string> ThreadKeys => threads.Keys.ToList().AsReadOnly();
+
+    internal Thread? GetThread(string threadKey)
+        => threads.TryGetValue(threadKey, out Thread? t) ? t : null;
 
     internal Thread GetOrCreateThread(string threadKey)
     {
         if (!threads.TryGetValue(threadKey, out Thread? thread))
         {
-            thread = new Thread(this, threadKey);
-            thread.HistoryUpdated += () => ThreadHistoryUpdated?.Invoke(threadKey);
+            thread = new Thread(this, threadKey, shortTermMemoryLimit: GetShortTermMemoryLimit(), maxContextTokens: GetMaxContextTokens());
             OnThreadCreated(threadKey, thread);
-            threads[threadKey] = thread;
         }
         return thread;
     }
 
-    internal IReadOnlyList<ThreadItem> GetThreadItems(string threadKey)
-        => threads.TryGetValue(threadKey, out Thread? t) ? t.GetThreadHistory() : Array.Empty<ThreadItem>();
-
-    internal DateTime GetThreadLastMessageAt(string threadKey)
-        => threads.TryGetValue(threadKey, out Thread? t) ? t.LastMessageAt : DateTime.MinValue;
-
-    // ── ThreadItem injection ────────────────────────────────────────────────────
-
-    internal void InjectCommandExchange(string threadKey, string input, string response)
-    {
-        if (threads.TryGetValue(threadKey, out Thread? t))
-            t.AddItem(new CommandExchange { Input = input, Response = response, Timestamp = DateTime.Now });
-    }
-
-    internal void InjectEngramEvent(string threadKey, IReadOnlyList<NoteChange> changes)
-    {
-        if (threads.TryGetValue(threadKey, out Thread? t))
-            t.AddItem(new EngramEvent { Changes = changes, Timestamp = DateTime.Now });
-    }
-
     // ── Prompting ───────────────────────────────────────────────────────────────
 
-    protected Task<string> PromptThread(
+    protected Task<string> Prompt(
         string  threadKey,
         string  prompt,
         string  username          = "user",
         string? augmentedPrompt   = null,
-        string? contextNote       = null,
+        string? platformContext   = null,
         string? recallNotes       = null,
         string? contextSummary    = null,
         int     maxTokensOverride = 0)
     {
         if (!threads.TryGetValue(threadKey, out Thread? thread))
         {
-            thread = new Thread(this, threadKey, contextPrompt: contextNote);
-            thread.HistoryUpdated += () => ThreadHistoryUpdated?.Invoke(threadKey);
+            thread = new Thread(this, threadKey, platformContext: platformContext, shortTermMemoryLimit: GetShortTermMemoryLimit(), maxContextTokens: GetMaxContextTokens());
             OnThreadCreated(threadKey, thread);
-            threads[threadKey] = thread;
         }
         return thread.SendPrompt(prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride);
     }
 
-    /// <summary>
-    /// Returns a snapshot of the current LLM context window as ChatMessages.
-    /// Used by Engram to seed ad-hoc write threads.
-    /// </summary>
-    protected IReadOnlyList<ChatMessage> GetThreadSnapshot(string threadKey)
-        => threads.TryGetValue(threadKey, out Thread? t) ? t.GetSnapshotForAdHoc() : Array.Empty<ChatMessage>();
+    // ── Overridable ─────────────────────────────────────────────────────────────
+
+    protected virtual int GetShortTermMemoryLimit() => 0;
+    protected virtual int GetMaxContextTokens()      => 0;
 
     /// <summary>
-    /// Sends a single prompt to an ephemeral ad-hoc thread seeded from a context snapshot.
-    /// The thread is not stored — used only for Engram's per-note write calls.
+    /// Called when a new thread is created. Registers the thread and subscribes to its update event.
+    /// Subclasses should call base.OnThreadCreated before adding their own subscriptions.
     /// </summary>
-    protected Task<string> PromptAdHocThread(IReadOnlyList<ChatMessage> seedMessages, string prompt, int maxTokensOverride = 0)
+    protected virtual void OnThreadCreated(string threadKey, Thread thread)
     {
-        Thread thread = new Thread(this, $"adhoc:{Guid.NewGuid()}", seedMessages);
-        return thread.SendPrompt(prompt, maxTokensOverride: maxTokensOverride);
+        threads[threadKey] = thread;
+        thread.Updated += () => ThreadUpdated?.Invoke(threadKey);
     }
-
-    protected virtual void OnThreadCreated(string threadKey, Thread thread) { }
 }

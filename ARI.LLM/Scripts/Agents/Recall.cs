@@ -23,7 +23,7 @@ internal class Recall : Agent
     /// Runs up to <see cref="recallDepth"/> recursive fetch steps, parallelising note retrieval
     /// within each step for speed. Returns null if nothing relevant is found.
     /// </summary>
-    internal async Task<string?> FetchContextAsync(IReadOnlyList<ThreadItem> history, string incomingPrompt)
+    internal async Task<string?> GetNotes(List<ThreadMessage> chatHistory, string incomingPrompt)
     {
         if (recallDepth <= 0) return null;
 
@@ -40,7 +40,7 @@ internal class Recall : Agent
 
         // Include the incoming prompt so Recall can search based on what was just asked,
         // not only prior history (which may be empty on the first message of a thread).
-        string transcript = BuildTranscript(history, incomingPrompt);
+        string transcript = BuildTranscript(chatHistory, incomingPrompt);
 
         // Use full paths (e.g. "People/[REDACT]'s Family/Immediate Family/[REDACT]") so the model
         // can infer relationships and categories from the path before fetching anything.
@@ -64,7 +64,7 @@ internal class Recall : Agent
             "Respond ONLY with JSON using bare note TITLES (the last segment of the path): " +
             "{\"fetch\": [\"[REDACT]\", \"[REDACT]'s Family\"]} — or {\"fetch\": []} if nothing is relevant.";
 
-        string raw = await PromptThread(recallThreadKey, firstPrompt);
+        string raw = await Prompt(recallThreadKey, firstPrompt);
 
         for (int depth = 0; depth < recallDepth; depth++)
         {
@@ -109,7 +109,7 @@ internal class Recall : Agent
                 $"Do NOT re-request notes already fetched: {string.Join(", ", fetched)}.\n" +
                 "Respond ONLY with JSON: {\"fetch\": [\"Name\"]} — or {\"fetch\": []} to stop.";
 
-            raw = await PromptThread(recallThreadKey, nextPrompt);
+            raw = await Prompt(recallThreadKey, nextPrompt);
         }
 
         if (noteContents.Count == 0) return null;
@@ -181,17 +181,11 @@ internal class Recall : Agent
         return true;
     }
 
-    private static string BuildTranscript(IReadOnlyList<ThreadItem> history, string incomingPrompt)
+    private static string BuildTranscript(List<ThreadMessage> chatHistory, string incomingPrompt)
     {
         StringBuilder sb = new();
-        foreach (ThreadItem item in history)
-        {
-            switch (item)
-            {
-                case UserMessage u: sb.AppendLine($"{u.Username}: {u.Content}"); break;
-                case AriResponse r: sb.AppendLine($"ARI: {r.Content}");          break;
-            }
-        }
+        foreach (ThreadMessage msg in chatHistory)
+            sb.AppendLine($"{msg.Username}: {msg.Content}");
         sb.AppendLine($"User: {incomingPrompt}");
         return sb.ToString();
     }

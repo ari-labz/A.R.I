@@ -11,24 +11,20 @@ internal class Thread
     private readonly string     threadKey;
     private readonly HttpClient httpClient;
 
-    // ── Display mode (regular dialogue threads) ────────────────────────────────
-    private readonly List<ThreadItem>? threadHistory;
-    private int  conversationTurnCount;
-    private bool bufferEverFilled;
-
-    // ── AdHoc mode (Engram write threads — LLM-only, no display history) ──────
-    private readonly List<ChatMessage>? seedMessages;
+    internal readonly List<ThreadItem> History;
+    private readonly int shortTermMemoryLimit;
+    private readonly int maxContextTokens;
 
     // ── Attachments ────────────────────────────────────────────────────────────
     private readonly List<Attachment> attachments        = new();
     private readonly List<Attachment> pendingMessageAtts = new();
 
-    internal string? ContextPrompt { get; init; }
+    internal string? PlatformContext { get; init; }
 
     internal DateTime LastMessageAt { get; private set; } = DateTime.MinValue;
 
     /// <summary>Fires whenever a ThreadItem is added to this thread's history.</summary>
-    internal event Action? HistoryUpdated;
+    internal event Action? Updated;
 
     /// <summary>Fires when the conversation reaches the agent's memory limit.</summary>
     internal event Action? BufferFull;
@@ -37,59 +33,45 @@ internal class Thread
     // ── Constructors ────────────────────────────────────────────────────────────
 
     /// <summary>Regular display thread — used by Dialogue for user-facing conversations.</summary>
-    internal Thread(Agent agent, string threadKey, string? contextPrompt = null)
+    internal Thread(Agent agent, string threadKey, string? platformContext = null, int shortTermMemoryLimit = 0, int maxContextTokens = 0)
     {
-        this.agent     = agent;
-        this.threadKey = threadKey;
-        httpClient     = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
-        threadHistory  = new List<ThreadItem>();
-        ContextPrompt  = contextPrompt;
-    }
-
-    /// <summary>
-    /// AdHoc thread — seeded from a context snapshot, LLM-only.
-    /// Used by Engram's per-note write phase so each note write starts from the same context.
-    /// </summary>
-    internal Thread(Agent agent, string threadKey, IReadOnlyList<ChatMessage> seedMessages)
-    {
-        this.agent        = agent;
-        this.threadKey    = threadKey;
-        httpClient        = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
-        this.seedMessages = seedMessages.ToList();
+        this.agent                = agent;
+        this.threadKey            = threadKey;
+        this.shortTermMemoryLimit = shortTermMemoryLimit;
+        this.maxContextTokens     = maxContextTokens;
+        httpClient                = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+        History             = new List<ThreadItem>();
+        PlatformContext           = platformContext;
     }
 
     // ── Accessors ───────────────────────────────────────────────────────────────
-
-    internal IReadOnlyList<ThreadItem> GetThreadHistory()
-        => (IReadOnlyList<ThreadItem>?)threadHistory?.AsReadOnly() ?? Array.Empty<ThreadItem>();
 
     /// <summary>
     /// Derives the LLM context window from thread history.
     /// Walks backwards, collects items with a non-null Message, stops at maxMessages or maxChars.
     /// Returns the list in chronological order (oldest first).
     /// </summary>
-    internal List<ThreadMessage> GetChatHistory(int maxMessages, int maxChars)
-    {
-        if (threadHistory is null) return new List<ThreadMessage>();
 
-        var result    = new List<ThreadMessage>();
+    internal List<ThreadMessage> GetChatHistory(int maxMessages = 0, int maxChars = 0)
+    {
+        List<ThreadMessage> result = new();
         int charCount = 0;
 
-        for (int i = threadHistory.Count - 1; i >= 0; i--)
+        for (int i = History.Count - 1; i >= 0; i--)
         {
-            if (result.Count >= maxMessages) break;
+            if (maxMessages > 0 && result.Count >= maxMessages) break;
 
-            ThreadItem item = threadHistory[i];
+            ThreadItem item = History[i];
             if (string.IsNullOrEmpty(item.Message)) continue;
 
-            string formatted = $"{item.AuthorName}: {item.Message}";
-            if (charCount + formatted.Length > maxChars) break;
+            int itemLen = item.AuthorName.Length + 2 + item.Message.Length;
+            if (maxChars > 0 && charCount + itemLen > maxChars) break;
 
-            charCount += formatted.Length;
+            charCount += itemLen;
             result.Add(new ThreadMessage(
                 Role:     item.AuthorName == "ARI" ? "assistant" : "user",
                 Username: item.AuthorName,
-                Content:  formatted));
+                Content:  item.Message));
         }
 
         result.Reverse();
@@ -97,28 +79,35 @@ internal class Thread
     }
 
     /// <summary>
-    /// Returns a snapshot of the current LLM context as ChatMessages for seeding Engram ad-hoc threads.
-    /// Includes the system prompt as the first entry.
+    /// Returns a snapshot of the current LLM context for seeding Engram write threads.
+    /// Contains raw message content — the "Username: " prefix is applied at send time.
     /// </summary>
-    internal List<ChatMessage> GetSnapshotForAdHoc()
+    internal List<ThreadMessage> SaveContext()
     {
-        if (threadHistory is null) return seedMessages?.ToList() ?? new List<ChatMessage>();
-
-        int maxChars = agent.MaxContextTokens > 0 ? agent.MaxContextTokens * 2 : 12000;
-        int maxMsgs  = agent.ShortTermMemoryLimit > 0 ? agent.ShortTermMemoryLimit : 25;
-        var history  = GetChatHistory(maxMsgs, maxChars);
-
-        string systemBlock = BuildSystemBlock();
-        var snapshot = new List<ChatMessage> { new() { Role = "system", Content = systemBlock } };
-        snapshot.AddRange(history.Select(m => new ChatMessage { Role = m.Role, Content = m.Content }));
-        return snapshot;
+        return GetChatHistory(shortTermMemoryLimit, maxContextTokens > 0 ? maxContextTokens * 2 : 0);
     }
 
     internal void AddItem(ThreadItem item)
     {
-        threadHistory?.Add(item);
+        History.Add(item);
         LastMessageAt = DateTime.UtcNow;
-        HistoryUpdated?.Invoke();
+        Updated?.Invoke();
+    }
+
+    /// <summary>
+    /// Pre-loads a saved context snapshot into History.
+    /// Used by Engram to fork a fresh write thread from a fixed conversation state —
+    /// the snapshot is a real history so subsequent prompts build on it naturally.
+    /// </summary>
+    internal void Seed(IReadOnlyList<ThreadMessage> messages)
+    {
+        foreach (ThreadMessage m in messages)
+        {
+            if (m.Role == "assistant")
+                History.Add(new AriResponse { Content = m.Content, Timestamp = DateTime.MinValue });
+            else
+                History.Add(new UserMessage { Username = m.Username, Content = m.Content, Timestamp = DateTime.MinValue });
+        }
     }
 
     // ── Attachment management ───────────────────────────────────────────────────
@@ -169,7 +158,6 @@ internal class Thread
         int     maxTokensOverride = 0)
     {
         LastMessageAt = DateTime.UtcNow;
-        bool isDisplayThread = threadHistory is not null;
 
         List<Attachment> threadAtts;
         List<Attachment> msgAtts;
@@ -177,51 +165,33 @@ internal class Thread
         lock (pendingMessageAtts) { msgAtts    = pendingMessageAtts.ToList(); }
 
         // ── Build message list ──────────────────────────────────────────────────
-        List<object> messages;
-
-        if (isDisplayThread)
+        History.Add(new UserMessage
         {
-            // Store the clean user message in thread history and notify watchers immediately.
-            threadHistory!.Add(new UserMessage
-            {
-                Username    = username,
-                Content     = prompt,
-                Timestamp   = DateTime.Now,
-                Attachments = msgAtts.Count > 0 ? msgAtts.ToList() : null
-            });
-            HistoryUpdated?.Invoke();
+            Username    = username,
+            Content     = prompt,
+            Timestamp   = DateTime.Now,
+            Attachments = msgAtts.Count > 0 ? msgAtts.ToList() : null
+        });
+        Updated?.Invoke();
 
-            int maxChars = agent.MaxContextTokens > 0 ? agent.MaxContextTokens * 2 : 12000;
-            int maxMsgs  = agent.ShortTermMemoryLimit > 0 ? agent.ShortTermMemoryLimit : 25;
-            var history  = GetChatHistory(maxMsgs, maxChars);
+        List<ThreadMessage> history = GetChatHistory(shortTermMemoryLimit, maxContextTokens > 0 ? maxContextTokens * 2 : 0);
 
-            // Substitute augmented prompt into the last (current) history entry if provided.
-            if (augmentedPrompt is not null && history.Count > 0)
-            {
-                var last = history[^1];
-                history[^1] = last with { Content = $"{last.Username}: {augmentedPrompt}" };
-            }
+        // Substitute augmented prompt into the last (current) history entry if provided.
+        if (augmentedPrompt is not null && history.Count > 0)
+            history[^1] = history[^1] with { Content = augmentedPrompt };
 
-            messages = new List<object> { new { role = "system", content = BuildSystemBlock() } };
+        List<object> messages = new List<object> { new { role = "system", content = BuildSystemBlock() } };
 
-            // Historical messages — plain string content.
-            for (int i = 0; i < history.Count - 1; i++)
-            {
-                var m = history[i];
-                messages.Add(new { role = m.Role, content = m.Content });
-            }
-
-            // Current (last) message — prepend thread attachments and inject images as multipart.
-            if (history.Count > 0)
-            {
-                var current = history[^1];
-                messages.Add(BuildCurrentUserMessage(current.Content, threadAtts, msgAtts));
-            }
+        for (int i = 0; i < history.Count - 1; i++)
+        {
+            ThreadMessage m = history[i];
+            messages.Add(new { role = m.Role, content = $"{m.Username}: {m.Content}" });
         }
-        else
+
+        if (history.Count > 0)
         {
-            seedMessages!.Add(new ChatMessage { Role = "user", Content = prompt });
-            messages = seedMessages.Select(m => (object)new { role = m.Role, content = m.Content }).ToList();
+            ThreadMessage current = history[^1];
+            messages.Add(BuildCurrentUserMessage($"{current.Username}: {current.Content}", threadAtts, msgAtts));
         }
 
         // ── Call LLM (streaming) ────────────────────────────────────────────────
@@ -315,28 +285,20 @@ internal class Thread
             agent.Name, threadKey, responseText);
 
         // ── Store result ────────────────────────────────────────────────────────
-        if (isDisplayThread)
+        History.Add(new AriResponse
         {
-            threadHistory!.Add(new AriResponse
-            {
-                Content         = responseText,
-                Timestamp       = DateTime.Now,
-                ThinkingSeconds = elapsed,
-                RecallNotes     = recallNotes,
-                ContextSummary  = contextSummary
-            });
-            HistoryUpdated?.Invoke();
+            Content         = responseText,
+            Timestamp       = DateTime.Now,
+            ThinkingSeconds = elapsed,
+            RecallNotes     = recallNotes,
+            ContextSummary  = contextSummary
+        });
+        Updated?.Invoke();
 
-            conversationTurnCount++;
-            ExchangeCompleted?.Invoke(prompt, responseText);
+        ExchangeCompleted?.Invoke(prompt, responseText);
 
-            if (ShouldFireBufferFull())
-                BufferFull?.Invoke();
-        }
-        else
-        {
-            seedMessages!.Add(new ChatMessage { Role = "assistant", Content = responseText });
-        }
+        if (EngramDue())
+            BufferFull?.Invoke();
 
         return responseText;
     }
@@ -345,7 +307,7 @@ internal class Thread
 
     private string BuildSystemBlock()
     {
-        string body = ContextPrompt is null ? agent.SystemPrompt : $"{agent.SystemPrompt}\n\n{ContextPrompt}";
+        string body = PlatformContext is null ? agent.SystemPrompt : $"{agent.SystemPrompt}\n\n{PlatformContext}";
         return agent.Think ? body : $"{body}\n<|think_off|>";
     }
 
@@ -359,10 +321,10 @@ internal class Thread
         List<Attachment> threadAtts,
         List<Attachment> msgAtts)
     {
-        var threadImages = threadAtts.Where(a => a.IsImage).ToList();
-        var threadTexts  = threadAtts.Where(a => !a.IsImage).ToList();
-        var msgImages    = msgAtts.Where(a => a.IsImage).ToList();
-        var msgTexts     = msgAtts.Where(a => !a.IsImage).ToList();
+        List<Attachment> threadImages = threadAtts.Where(a => a.IsImage).ToList();
+        List<Attachment> threadTexts  = threadAtts.Where(a => !a.IsImage).ToList();
+        List<Attachment> msgImages    = msgAtts.Where(a => a.IsImage).ToList();
+        List<Attachment> msgTexts     = msgAtts.Where(a => !a.IsImage).ToList();
 
         bool hasThreadContent  = threadImages.Count > 0 || threadTexts.Count > 0;
         bool hasMsgContent     = msgImages.Count > 0 || msgTexts.Count > 0;
@@ -372,14 +334,14 @@ internal class Thread
             return new { role = "user", content = promptText };
 
         const string divider = "-------------------";
-        var contentParts = new List<object>();
+        List<object> contentParts = new();
 
         // Thread attachments block
         if (hasThreadContent)
         {
-            var sb = new StringBuilder();
+            StringBuilder sb = new();
             sb.AppendLine("[Files attached to this thread]");
-            foreach (var a in threadTexts)
+            foreach (Attachment a in threadTexts)
             {
                 sb.AppendLine($"--- {a.Name} ---");
                 sb.AppendLine(a.Content);
@@ -388,7 +350,7 @@ internal class Thread
             if (threadTexts.Count > 0) sb.AppendLine(divider);
             contentParts.Add(new { type = "text", text = sb.ToString().TrimEnd() });
 
-            foreach (var a in threadImages)
+            foreach (Attachment a in threadImages)
             {
                 string dataUrl = $"data:{a.MimeType ?? "image/jpeg"};base64,{a.Content}";
                 contentParts.Add(new { type = "image_url", image_url = new { url = dataUrl } });
@@ -398,9 +360,9 @@ internal class Thread
         // Message attachments block
         if (hasMsgContent)
         {
-            var sb = new StringBuilder();
+            StringBuilder sb = new();
             sb.AppendLine("[Files attached to this message]");
-            foreach (var a in msgTexts)
+            foreach (Attachment a in msgTexts)
             {
                 sb.AppendLine($"--- {a.Name} ---");
                 sb.AppendLine(a.Content);
@@ -409,7 +371,7 @@ internal class Thread
             if (msgTexts.Count > 0) sb.AppendLine(divider);
             contentParts.Add(new { type = "text", text = sb.ToString().TrimEnd() });
 
-            foreach (var a in msgImages)
+            foreach (Attachment a in msgImages)
             {
                 string dataUrl = $"data:{a.MimeType ?? "image/jpeg"};base64,{a.Content}";
                 contentParts.Add(new { type = "image_url", image_url = new { url = dataUrl } });
@@ -422,18 +384,14 @@ internal class Thread
         return new { role = "user", content = (object)contentParts };
     }
 
-    private bool ShouldFireBufferFull()
+    private bool EngramDue()
     {
-        int limit = agent.ShortTermMemoryLimit > 0 ? agent.ShortTermMemoryLimit : 25;
+        if (shortTermMemoryLimit <= 0) return false;
+        if (History.Count < shortTermMemoryLimit) return false;
 
-        if (!bufferEverFilled && conversationTurnCount >= limit)
-        {
-            bufferEverFilled = true;
-            return true;
-        }
+        if (History.Count == shortTermMemoryLimit) return true;
 
-        if (!bufferEverFilled) return false;
-        int interval = Math.Max(1, limit / 2);
-        return conversationTurnCount % interval == 0;
+        int interval = Math.Max(1, shortTermMemoryLimit / 2);
+        return History.Count % interval == 0;
     }
 }

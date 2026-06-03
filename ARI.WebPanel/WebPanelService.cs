@@ -36,7 +36,7 @@ public class WebPanelService : IAsyncDisposable
         this.config = config;
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public async Task Start(CancellationToken cancellationToken)
     {
         string exeDir = AppContext.BaseDirectory;
         string wwwrootDir = Path.Combine(exeDir, "wwwroot");
@@ -155,7 +155,7 @@ public class WebPanelService : IAsyncDisposable
         logger.LogInformation("Web panel is ready. Listening on http://0.0.0.0:{Port}", config.Port);
     }
 
-    public async Task StopAsync(CancellationToken cancellationToken)
+    public async Task Stop(CancellationToken cancellationToken)
     {
         if (app is not null)
             await app.StopAsync(cancellationToken);

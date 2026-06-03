@@ -78,7 +78,7 @@ public class BrainService
         triliumReady = true;
         Dictionary<string, (string Id, string FolderPath)> all = await trilium.GetAllNoteIds();
         noteIdCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (title, info) in all)
+        foreach ((string title, (string Id, string FolderPath) info) in all)
         {
             noteIdCache[title]          = info.Id;
             noteFolderCache[info.Id]    = info.FolderPath;
@@ -154,8 +154,8 @@ public class BrainService
     {
         if (!triliumReady) await Startup();
         if (!triliumReady) return new List<string>();
-        var paths = new List<string>(noteIdCache.Count);
-        foreach (var (title, id) in noteIdCache)
+        List<string> paths = new(noteIdCache.Count);
+        foreach ((string title, string id) in noteIdCache)
         {
             string folder = noteFolderCache.TryGetValue(id, out string? f) ? f : string.Empty;
             paths.Add(string.IsNullOrEmpty(folder) ? title : $"{folder}/{title}");
@@ -221,7 +221,7 @@ public class BrainService
         Common.Logger.LogInformation("deleted: {Title}", title);
     }
 
-    public async Task<string> BackupAsync()
+    public async Task<string> Backup()
     {
         if (!triliumReady) return "Brain is not connected — backup aborted.";
 
@@ -237,7 +237,7 @@ public class BrainService
             notes.Add(new { title, folder, content });
         }
 
-        var payload = new
+        object payload = new
         {
             timestamp = DateTime.UtcNow.ToString("o"),
             noteCount = notes.Count,
@@ -321,7 +321,7 @@ public class BrainService
             if (noteId is null) continue;
 
             // Skip if already marked
-            var attrs = await trilium.GetNoteAttributes(noteId);
+            List<(string AttributeId, string Type, string Name, string Value)> attrs = await trilium.GetNoteAttributes(noteId);
             if (attrs.Any(a => a.Type == "label" && a.Name == DirtyLabel)) continue;
 
             try { await trilium.CreateLabelAttribute(noteId, DirtyLabel); }
@@ -334,7 +334,7 @@ public class BrainService
     {
         if (!triliumReady) return new();
         List<string> noteIds = await trilium.SearchNoteIdsByLabel(DirtyLabel);
-        var titles = new List<string>();
+        List<string> titles = new();
         foreach (string id in noteIds)
         {
             string? title = noteIdCache.FirstOrDefault(kv => kv.Value == id).Key;
@@ -352,8 +352,8 @@ public class BrainService
             string? noteId = await FindNoteId(title);
             if (noteId is null) continue;
 
-            var attrs = await trilium.GetNoteAttributes(noteId);
-            foreach (var (attrId, type, name, _) in attrs)
+            List<(string, string, string, string)> attrs = await trilium.GetNoteAttributes(noteId);
+            foreach ((string attrId, string type, string name, string _) in attrs)
                 if (type == "label" && name == DirtyLabel)
                     try { await trilium.DeleteAttribute(attrId); }
                     catch (Exception ex) { Common.Logger.LogWarning("[Brain] ClearDirty failed for '{Title}': {Msg}", title, ex.Message); }
@@ -383,10 +383,10 @@ public class BrainService
     /// These are identified at startup and tracked until cleaned up.
     /// Returns the number of stubs deleted.
     /// </summary>
-    public async Task<int> CleanUnknownStubsAsync()
+    public async Task<int> CleanUnknownStubs()
     {
         if (!triliumReady) return 0;
-        int deleted = await trilium.DeleteSuppressedStubsAsync();
+        int deleted = await trilium.DeleteSuppressedStubs();
         if (deleted > 0)
         {
             Common.Logger.LogInformation("[Brain] Cleaned {Count} duplicate Unknown stub(s).", deleted);
