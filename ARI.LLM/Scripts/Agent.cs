@@ -17,7 +17,7 @@ internal class Agent
     /// <summary>Fires whenever a thread's history changes. Payload is the thread key.</summary>
     internal event Action<string>? ThreadHistoryUpdated;
 
-    protected Agent(ModelConfig config)
+    protected Agent(AgentConfig config)
     {
         Name                 = config.Name;
         Endpoint             = config.Endpoint;
@@ -33,6 +33,18 @@ internal class Agent
     // ── Thread accessors ────────────────────────────────────────────────────────
 
     internal IReadOnlyCollection<string> ThreadKeys => threads.Keys.ToList().AsReadOnly();
+
+    internal Thread GetOrCreateThread(string threadKey)
+    {
+        if (!threads.TryGetValue(threadKey, out Thread? thread))
+        {
+            thread = new Thread(this, threadKey);
+            thread.HistoryUpdated += () => ThreadHistoryUpdated?.Invoke(threadKey);
+            OnThreadCreated(threadKey, thread);
+            threads[threadKey] = thread;
+        }
+        return thread;
+    }
 
     internal IReadOnlyList<ThreadItem> GetThreadItems(string threadKey)
         => threads.TryGetValue(threadKey, out Thread? t) ? t.GetThreadHistory() : Array.Empty<ThreadItem>();
@@ -64,18 +76,16 @@ internal class Agent
         string? contextNote       = null,
         string? recallNotes       = null,
         string? contextSummary    = null,
-        int     maxTokensOverride = 0,
-        IReadOnlyList<ThreadAttachment>?      attachments        = null,
-        IReadOnlyList<MessageAttachmentInfo>? messageAttachments = null)
+        int     maxTokensOverride = 0)
     {
         if (!threads.TryGetValue(threadKey, out Thread? thread))
         {
-            thread = new Thread(this, threadKey, contextNote);
+            thread = new Thread(this, threadKey, contextPrompt: contextNote);
             thread.HistoryUpdated += () => ThreadHistoryUpdated?.Invoke(threadKey);
             OnThreadCreated(threadKey, thread);
             threads[threadKey] = thread;
         }
-        return thread.SendPrompt(prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, attachments, messageAttachments);
+        return thread.SendPrompt(prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride);
     }
 
     /// <summary>

@@ -2,29 +2,29 @@ using System.Text.Json;
 
 namespace ARI.LLM;
 
-internal class AriModelsConfig
+internal class AriAgentsConfig
 {
-    public List<ModelConfig> Models { get; init; }
+    public List<AgentConfig> Agents { get; init; }
 
-    internal static AriModelsConfig LoadFrom(string path)
+    internal static AriAgentsConfig LoadFrom(string path)
     {
         if (!File.Exists(path))
-            throw new FileNotFoundException($"AriModels.json not found at {path}");
+            throw new FileNotFoundException($"AriAgents.json not found at {path}");
 
         string json = File.ReadAllText(path);
-        AriModelsConfig result = JsonSerializer.Deserialize<AriModelsConfig>(json, new JsonSerializerOptions
+        AriAgentsConfig result = JsonSerializer.Deserialize<AriAgentsConfig>(json, new JsonSerializerOptions
         {
             PropertyNameCaseInsensitive = true
         });
 
         if (result == null)
-            throw new InvalidOperationException("Failed to deserialise AriModels.json.");
+            throw new InvalidOperationException("Failed to deserialise AriAgents.json.");
 
         return result;
     }
 }
 
-internal class ModelConfig
+internal class AgentConfig
 {
     public string Name { get; init; }
     public string Endpoint { get; init; }

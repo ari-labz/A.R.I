@@ -12,7 +12,7 @@ internal class Context : Agent
     private readonly SemaphoreSlim updateLock = new(1, 1);
     private readonly string resolvedPrompt;
 
-    internal Context(ModelConfig config, int shortTermMemoryLimit) : base(config)
+    internal Context(AgentConfig config, int shortTermMemoryLimit) : base(config)
     {
         httpClient     = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
         resolvedPrompt = config.SystemPrompt.Replace("{memoryLimit}", shortTermMemoryLimit.ToString());

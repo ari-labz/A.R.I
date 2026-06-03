@@ -7,40 +7,43 @@ namespace ARI.LLM;
 
 internal class Thread
 {
-private readonly Agent      agent;
+    private readonly Agent      agent;
     private readonly string     threadKey;
     private readonly HttpClient httpClient;
 
     // ── Display mode (regular dialogue threads) ────────────────────────────────
     private readonly List<ThreadItem>? threadHistory;
-    private readonly string?           systemContent;
     private int  conversationTurnCount;
     private bool bufferEverFilled;
 
     // ── AdHoc mode (Engram write threads — LLM-only, no display history) ──────
     private readonly List<ChatMessage>? seedMessages;
 
+    // ── Attachments ────────────────────────────────────────────────────────────
+    private readonly List<Attachment> attachments        = new();
+    private readonly List<Attachment> pendingMessageAtts = new();
+
+    internal string? ContextPrompt { get; init; }
+
     internal DateTime LastMessageAt { get; private set; } = DateTime.MinValue;
 
-    /// <summary>Fires whenever a ThreadItem is added to this thread's history (user message, ARI response, command, engram event).</summary>
+    /// <summary>Fires whenever a ThreadItem is added to this thread's history.</summary>
     internal event Action? HistoryUpdated;
 
-    /// <summary>Fires when the conversation reaches the agent's memory limit. No payload — Engram re-fetches what it needs.</summary>
+    /// <summary>Fires when the conversation reaches the agent's memory limit.</summary>
     internal event Action? BufferFull;
     internal event Action<string, string>? ExchangeCompleted;
 
     // ── Constructors ────────────────────────────────────────────────────────────
 
     /// <summary>Regular display thread — used by Dialogue for user-facing conversations.</summary>
-    internal Thread(Agent agent, string threadKey, string? contextNote = null)
+    internal Thread(Agent agent, string threadKey, string? contextPrompt = null)
     {
         this.agent     = agent;
         this.threadKey = threadKey;
         httpClient     = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
         threadHistory  = new List<ThreadItem>();
-
-        string body   = contextNote is null ? agent.SystemPrompt : $"{agent.SystemPrompt}\n\n{contextNote}";
-        systemContent = agent.Think ? body : $"{body}\n<|think_off|>";
+        ContextPrompt  = contextPrompt;
     }
 
     /// <summary>
@@ -105,7 +108,8 @@ private readonly Agent      agent;
         int maxMsgs  = agent.ShortTermMemoryLimit > 0 ? agent.ShortTermMemoryLimit : 25;
         var history  = GetChatHistory(maxMsgs, maxChars);
 
-        var snapshot = new List<ChatMessage> { new() { Role = "system", Content = systemContent! } };
+        string systemBlock = BuildSystemBlock();
+        var snapshot = new List<ChatMessage> { new() { Role = "system", Content = systemBlock } };
         snapshot.AddRange(history.Select(m => new ChatMessage { Role = m.Role, Content = m.Content }));
         return snapshot;
     }
@@ -117,6 +121,43 @@ private readonly Agent      agent;
         HistoryUpdated?.Invoke();
     }
 
+    // ── Attachment management ───────────────────────────────────────────────────
+
+    internal void AddAttachment(Attachment attachment)
+    {
+        lock (attachments) { attachments.RemoveAll(a => a.Name == attachment.Name); attachments.Add(attachment); }
+    }
+
+    internal bool RemoveAttachment(string name)
+    {
+        lock (attachments) { return attachments.RemoveAll(a => a.Name == name) > 0; }
+    }
+
+    internal IReadOnlyList<Attachment> GetAttachments()
+    {
+        lock (attachments) { return attachments.ToList().AsReadOnly(); }
+    }
+
+    internal void AddMessageAttachment(Attachment attachment)
+    {
+        lock (pendingMessageAtts) { pendingMessageAtts.RemoveAll(a => a.Name == attachment.Name); pendingMessageAtts.Add(attachment); }
+    }
+
+    internal bool RemoveMessageAttachment(string name)
+    {
+        lock (pendingMessageAtts) { return pendingMessageAtts.RemoveAll(a => a.Name == name) > 0; }
+    }
+
+    internal IReadOnlyList<Attachment> GetMessageAttachments()
+    {
+        lock (pendingMessageAtts) { return pendingMessageAtts.ToList().AsReadOnly(); }
+    }
+
+    internal void ClearMessageAttachments()
+    {
+        lock (pendingMessageAtts) { pendingMessageAtts.Clear(); }
+    }
+
     // ── SendPrompt ──────────────────────────────────────────────────────────────
 
     internal async Task<string> SendPrompt(
@@ -125,79 +166,60 @@ private readonly Agent      agent;
         string? augmentedPrompt   = null,
         string? recallNotes       = null,
         string? contextSummary    = null,
-        int     maxTokensOverride = 0,
-        IReadOnlyList<ThreadAttachment>?      attachments        = null,
-        IReadOnlyList<MessageAttachmentInfo>? messageAttachments = null)
+        int     maxTokensOverride = 0)
     {
         LastMessageAt = DateTime.UtcNow;
         bool isDisplayThread = threadHistory is not null;
 
-        // Merge thread-scoped and message-scoped image attachments for the LLM call.
-        var allImages = (attachments?.Where(a => a.IsImage)
-                            .Select(a => (a.MimeType ?? "image/jpeg", a.Content)) ?? [])
-                        .Concat(messageAttachments?.Where(a => a.IsImage && a.Content != null)
-                            .Select(a => (a.MimeType ?? "image/jpeg", a.Content)) ?? [])
-                        .ToList();
-        bool hasImages = allImages.Count > 0;
+        List<Attachment> threadAtts;
+        List<Attachment> msgAtts;
+        lock (attachments)        { threadAtts = attachments.ToList(); }
+        lock (pendingMessageAtts) { msgAtts    = pendingMessageAtts.ToList(); }
 
         // ── Build message list ──────────────────────────────────────────────────
         List<object> messages;
 
         if (isDisplayThread)
         {
-            // Store the clean user message in thread history and notify watchers immediately
-            // so other connected clients see the incoming message before ARI has responded.
+            // Store the clean user message in thread history and notify watchers immediately.
             threadHistory!.Add(new UserMessage
             {
                 Username    = username,
                 Content     = prompt,
                 Timestamp   = DateTime.Now,
-                Attachments = messageAttachments?.Count > 0 ? messageAttachments.ToList() : null
+                Attachments = msgAtts.Count > 0 ? msgAtts.ToList() : null
             });
             HistoryUpdated?.Invoke();
 
-            // Derive LLM context window from thread history.
             int maxChars = agent.MaxContextTokens > 0 ? agent.MaxContextTokens * 2 : 12000;
             int maxMsgs  = agent.ShortTermMemoryLimit > 0 ? agent.ShortTermMemoryLimit : 25;
             var history  = GetChatHistory(maxMsgs, maxChars);
 
-            // If recall/context augmentation was applied, substitute it into the last (current) entry.
+            // Substitute augmented prompt into the last (current) history entry if provided.
             if (augmentedPrompt is not null && history.Count > 0)
             {
                 var last = history[^1];
                 history[^1] = last with { Content = $"{last.Username}: {augmentedPrompt}" };
             }
 
-            messages = new List<object> { new { role = "system", content = systemContent } };
+            messages = new List<object> { new { role = "system", content = BuildSystemBlock() } };
 
-            // For all messages except the last, use plain string content.
-            // For the last (current) message, use a content array if there are image attachments.
-            for (int i = 0; i < history.Count; i++)
+            // Historical messages — plain string content.
+            for (int i = 0; i < history.Count - 1; i++)
             {
                 var m = history[i];
-                if (i < history.Count - 1 || !hasImages)
-                {
-                    messages.Add(new { role = m.Role, content = m.Content });
-                }
-                else
-                {
-                    // Build multipart content: text first, then each image (thread + message).
-                    var contentParts = new List<object>
-                    {
-                        new { type = "text", text = m.Content }
-                    };
-                    foreach (var (mime, b64) in allImages)
-                    {
-                        string dataUrl = $"data:{mime};base64,{b64}";
-                        contentParts.Add(new { type = "image_url", image_url = new { url = dataUrl } });
-                    }
-                    messages.Add(new { role = m.Role, content = (object)contentParts });
-                }
+                messages.Add(new { role = m.Role, content = m.Content });
+            }
+
+            // Current (last) message — prepend thread attachments and inject images as multipart.
+            if (history.Count > 0)
+            {
+                var current = history[^1];
+                messages.Add(BuildCurrentUserMessage(current.Content, threadAtts, msgAtts));
             }
         }
         else
         {
-            // AdHoc thread: append to the pre-seeded message list directly.
             seedMessages!.Add(new ChatMessage { Role = "user", Content = prompt });
             messages = seedMessages.Select(m => (object)new { role = m.Role, content = m.Content }).ToList();
         }
@@ -319,20 +341,97 @@ private readonly Agent      agent;
         return responseText;
     }
 
-    // ── Private ─────────────────────────────────────────────────────────────────
+    // ── Private helpers ─────────────────────────────────────────────────────────
+
+    private string BuildSystemBlock()
+    {
+        string body = ContextPrompt is null ? agent.SystemPrompt : $"{agent.SystemPrompt}\n\n{ContextPrompt}";
+        return agent.Think ? body : $"{body}\n<|think_off|>";
+    }
+
+    /// <summary>
+    /// Builds the current user turn as a multipart content block.
+    /// Prepends thread attachments (text as a labelled block, images as image_url parts),
+    /// followed by message attachments, then the prompt text.
+    /// </summary>
+    private static object BuildCurrentUserMessage(
+        string promptText,
+        List<Attachment> threadAtts,
+        List<Attachment> msgAtts)
+    {
+        var threadImages = threadAtts.Where(a => a.IsImage).ToList();
+        var threadTexts  = threadAtts.Where(a => !a.IsImage).ToList();
+        var msgImages    = msgAtts.Where(a => a.IsImage).ToList();
+        var msgTexts     = msgAtts.Where(a => !a.IsImage).ToList();
+
+        bool hasThreadContent  = threadImages.Count > 0 || threadTexts.Count > 0;
+        bool hasMsgContent     = msgImages.Count > 0 || msgTexts.Count > 0;
+        bool needsMultipart    = threadImages.Count > 0 || msgImages.Count > 0;
+
+        if (!hasThreadContent && !hasMsgContent)
+            return new { role = "user", content = promptText };
+
+        const string divider = "-------------------";
+        var contentParts = new List<object>();
+
+        // Thread attachments block
+        if (hasThreadContent)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("[Files attached to this thread]");
+            foreach (var a in threadTexts)
+            {
+                sb.AppendLine($"--- {a.Name} ---");
+                sb.AppendLine(a.Content);
+                sb.AppendLine("---");
+            }
+            if (threadTexts.Count > 0) sb.AppendLine(divider);
+            contentParts.Add(new { type = "text", text = sb.ToString().TrimEnd() });
+
+            foreach (var a in threadImages)
+            {
+                string dataUrl = $"data:{a.MimeType ?? "image/jpeg"};base64,{a.Content}";
+                contentParts.Add(new { type = "image_url", image_url = new { url = dataUrl } });
+            }
+        }
+
+        // Message attachments block
+        if (hasMsgContent)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("[Files attached to this message]");
+            foreach (var a in msgTexts)
+            {
+                sb.AppendLine($"--- {a.Name} ---");
+                sb.AppendLine(a.Content);
+                sb.AppendLine("---");
+            }
+            if (msgTexts.Count > 0) sb.AppendLine(divider);
+            contentParts.Add(new { type = "text", text = sb.ToString().TrimEnd() });
+
+            foreach (var a in msgImages)
+            {
+                string dataUrl = $"data:{a.MimeType ?? "image/jpeg"};base64,{a.Content}";
+                contentParts.Add(new { type = "image_url", image_url = new { url = dataUrl } });
+            }
+        }
+
+        // Prompt text last
+        contentParts.Add(new { type = "text", text = promptText });
+
+        return new { role = "user", content = (object)contentParts };
+    }
 
     private bool ShouldFireBufferFull()
     {
         int limit = agent.ShortTermMemoryLimit > 0 ? agent.ShortTermMemoryLimit : 25;
 
-        // First time the buffer fills — fire once.
         if (!bufferEverFilled && conversationTurnCount >= limit)
         {
             bufferEverFilled = true;
             return true;
         }
 
-        // Subsequently — fire every limit/2 turns so Engram runs periodically.
         if (!bufferEverFilled) return false;
         int interval = Math.Max(1, limit / 2);
         return conversationTurnCount % interval == 0;

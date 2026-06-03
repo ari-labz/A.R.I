@@ -7,7 +7,7 @@ internal class Dialogue : Agent
     /// <summary>Fires when a thread's conversation reaches the memory limit. Engram listens to this.</summary>
     internal event Action<string>? ThreadBufferFull;
 
-    internal Dialogue(ModelConfig config) : base(config) { }
+    internal Dialogue(AgentConfig config) : base(config) { }
 
     internal Task<string> SendPrompt(
         string  threadKey,
@@ -15,39 +15,29 @@ internal class Dialogue : Agent
         string  username,
         string? contextNote    = null,
         string? recallBlock    = null,
-        string? contextSummary = null,
-        IReadOnlyList<ThreadAttachment>?      attachments        = null,
-        IReadOnlyList<MessageAttachmentInfo>? messageAttachments = null)
+        string? contextSummary = null)
     {
-        string? augmented = BuildAugmentedPrompt(prompt, contextSummary, recallBlock, attachments, messageAttachments);
+        string? augmented = BuildAugmentedPrompt(prompt, contextSummary, recallBlock);
         return PromptThread(
             threadKey,
-            prompt:             prompt,
-            username:           username,
-            augmentedPrompt:    augmented,
-            contextNote:        contextNote,
-            recallNotes:        recallBlock,
-            contextSummary:     contextSummary,
-            attachments:        attachments,
-            messageAttachments: messageAttachments);
+            prompt:          prompt,
+            username:        username,
+            augmentedPrompt: augmented,
+            contextNote:     contextNote,
+            recallNotes:     recallBlock,
+            contextSummary:  contextSummary);
     }
 
     private static string? BuildAugmentedPrompt(
-        string prompt,
+        string  prompt,
         string? contextSummary,
-        string? recallBlock,
-        IReadOnlyList<ThreadAttachment>?      attachments,
-        IReadOnlyList<MessageAttachmentInfo>? messageAttachments)
+        string? recallBlock)
     {
-        var threadTextFiles  = attachments?.Where(a => !a.IsImage).ToList();
-        var messageTextFiles = messageAttachments?.Where(a => !a.IsImage).ToList();
-        bool hasText = (threadTextFiles?.Count > 0) || (messageTextFiles?.Count > 0);
-
-        if (string.IsNullOrWhiteSpace(contextSummary) && string.IsNullOrWhiteSpace(recallBlock) && !hasText)
+        if (string.IsNullOrWhiteSpace(contextSummary) && string.IsNullOrWhiteSpace(recallBlock))
             return null;
 
         const string divider = "-------------------";
-        StringBuilder sb = new();
+        var sb = new StringBuilder();
 
         if (!string.IsNullOrWhiteSpace(contextSummary))
         {
@@ -60,24 +50,6 @@ internal class Dialogue : Agent
         {
             sb.AppendLine("[ARI's Memories]");
             sb.AppendLine(recallBlock.Trim());
-            sb.AppendLine(divider);
-        }
-
-        if (hasText)
-        {
-            sb.AppendLine("[Attached Files]");
-            foreach (var a in threadTextFiles ?? [])
-            {
-                sb.AppendLine($"--- {a.Name} ---");
-                sb.AppendLine(a.Content);
-                sb.AppendLine("---");
-            }
-            foreach (var a in messageTextFiles ?? [])
-            {
-                sb.AppendLine($"--- {a.Name} ---");
-                sb.AppendLine(a.Content);
-                sb.AppendLine("---");
-            }
             sb.AppendLine(divider);
         }
 

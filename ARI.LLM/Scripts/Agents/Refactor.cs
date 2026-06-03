@@ -17,7 +17,7 @@ internal class Refactor : Agent
     // How many notes to include per cluster analysis call.
     private const int ClusterCallLimit = 20;
 
-    internal Refactor(ModelConfig config, BrainService brain, Engram? engram = null) : base(config)
+    internal Refactor(AgentConfig config, BrainService brain, Engram? engram = null) : base(config)
     {
         this.brain  = brain;
         this.engram = engram;

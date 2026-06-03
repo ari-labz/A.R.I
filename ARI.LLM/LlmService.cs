@@ -14,32 +14,30 @@ public class LlmService : IDisposable
     private readonly Refactor?   refactor;
     private readonly CommandService commands;
     private readonly ConcurrentDictionary<string, byte> processingThreads = new();
-    private readonly ConcurrentDictionary<string, List<ThreadAttachment>>      threadAttachments   = new();
-    private readonly ConcurrentDictionary<string, List<MessageAttachmentInfo>> messageAttachments  = new();
 
     // Per-thread watcher channels — each connected client gets one.
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<Guid, Channel<bool>>> threadWatchers = new();
 
-    public LlmService(string modelsConfigPath, string? brainConfigPath = null, ILoggerFactory? loggerFactory = null)
+    public LlmService(string agentsConfigPath, string? brainConfigPath = null, ILoggerFactory? loggerFactory = null)
     {
         if (loggerFactory is not null)
             Common.InitialiseLogger(loggerFactory);
 
-        AriModelsConfig config = AriModelsConfig.LoadFrom(modelsConfigPath);
+        AriAgentsConfig config = AriAgentsConfig.LoadFrom(agentsConfigPath);
 
-        Dictionary<string, ModelConfig> enabled = config.Models
+        Dictionary<string, AgentConfig> enabled = config.Agents
             .Where(m => m.Enabled)
             .ToDictionary(m => m.Name);
 
-        if (enabled.TryGetValue("Dialogue", out ModelConfig? dialogueConfig))
+        if (enabled.TryGetValue("Dialogue", out AgentConfig? dialogueConfig))
         {
             dialogue = new Dialogue(dialogueConfig);
             dialogue.ThreadHistoryUpdated += key => NotifyWatchers(key);
         }
 
-        if (enabled.TryGetValue("Context", out ModelConfig? contextConfig))
+        if (enabled.TryGetValue("Context", out AgentConfig? contextConfig))
         {
-            int memoryLimit = enabled.TryGetValue("Dialogue", out ModelConfig? dlgCfg) ? dlgCfg.ShortTermMemoryLimit : 25;
+            int memoryLimit = enabled.TryGetValue("Dialogue", out AgentConfig? dlgCfg) ? dlgCfg.ShortTermMemoryLimit : 25;
             context = new Context(contextConfig, memoryLimit);
             Common.Logger.LogInformation("Context tracker is active.");
         }
@@ -48,20 +46,20 @@ public class LlmService : IDisposable
         {
             BrainService brain = new BrainService(brainConfigPath, loggerFactory);
 
-            if (enabled.TryGetValue("Recall", out ModelConfig? recallConfig) && recallConfig.RecursiveBrainSearchDepth > 0)
+            if (enabled.TryGetValue("Recall", out AgentConfig? recallConfig) && recallConfig.RecursiveBrainSearchDepth > 0)
             {
                 recall = new Recall(recallConfig, brain, recallConfig.RecursiveBrainSearchDepth, brain.BrainPublicUrl);
                 Common.Logger.LogInformation("Recall is active. Depth: {Depth}, Cache: {Cache}.",
                     recallConfig.RecursiveBrainSearchDepth, recallConfig.CacheSize > 0 ? recallConfig.CacheSize : 0);
             }
 
-            if (enabled.TryGetValue("Engram", out ModelConfig? engramConfig))
+            if (enabled.TryGetValue("Engram", out AgentConfig? engramConfig))
             {
                 engram = new Engram(engramConfig, dialogue, brain, context, engramConfig.SweepIntervalMinutes, engramConfig.RecursiveBrainSearchDepth, brain.BrainPublicUrl);
                 Common.Logger.LogInformation("Engram is active. Brain connected.");
             }
 
-            if (enabled.TryGetValue("Refactor", out ModelConfig? refactorConfig))
+            if (enabled.TryGetValue("Refactor", out AgentConfig? refactorConfig))
             {
                 refactor = new Refactor(refactorConfig, brain, engram);
                 Common.Logger.LogInformation("Refactor is active.");
@@ -161,51 +159,27 @@ public class LlmService : IDisposable
 
     public bool IsThreadProcessing(string threadKey) => processingThreads.ContainsKey(threadKey);
 
-    // ── Attachments ─────────────────────────────────────────────────────────────
+    // ── Attachments (proxies to Thread) ────────────────────────────────────────
 
-    public void AddAttachment(string threadKey, ThreadAttachment attachment)
-    {
-        var list = threadAttachments.GetOrAdd(threadKey, _ => new List<ThreadAttachment>());
-        lock (list) { list.RemoveAll(a => a.Name == attachment.Name); list.Add(attachment); }
-    }
+    public void AddAttachment(string threadKey, Attachment attachment)
+        => dialogue?.GetOrCreateThread(threadKey).AddAttachment(attachment);
 
     public bool RemoveAttachment(string threadKey, string name)
-    {
-        if (!threadAttachments.TryGetValue(threadKey, out var list)) return false;
-        lock (list) { return list.RemoveAll(a => a.Name == name) > 0; }
-    }
+        => dialogue?.GetOrCreateThread(threadKey).RemoveAttachment(name) ?? false;
 
-    public IReadOnlyList<ThreadAttachment> GetAttachments(string threadKey)
-    {
-        if (!threadAttachments.TryGetValue(threadKey, out var list)) return Array.Empty<ThreadAttachment>();
-        lock (list) { return list.ToList().AsReadOnly(); }
-    }
+    public IReadOnlyList<Attachment> GetAttachments(string threadKey)
+        => dialogue?.GetOrCreateThread(threadKey).GetAttachments() ?? Array.Empty<Attachment>();
 
-    // ── Message attachments (cleared after each Prompt call) ───────────────────
+    // ── Message attachments (proxies to Thread — cleared after each Prompt) ────
 
-    public void AddMessageAttachment(string threadKey, MessageAttachmentInfo attachment)
-    {
-        var list = messageAttachments.GetOrAdd(threadKey, _ => new List<MessageAttachmentInfo>());
-        lock (list) { list.RemoveAll(a => a.Name == attachment.Name); list.Add(attachment); }
-    }
+    public void AddMessageAttachment(string threadKey, Attachment attachment)
+        => dialogue?.GetOrCreateThread(threadKey).AddMessageAttachment(attachment);
 
     public bool RemoveMessageAttachment(string threadKey, string name)
-    {
-        if (!messageAttachments.TryGetValue(threadKey, out var list)) return false;
-        lock (list) { return list.RemoveAll(a => a.Name == name) > 0; }
-    }
+        => dialogue?.GetOrCreateThread(threadKey).RemoveMessageAttachment(name) ?? false;
 
-    public IReadOnlyList<MessageAttachmentInfo> GetMessageAttachments(string threadKey)
-    {
-        if (!messageAttachments.TryGetValue(threadKey, out var list)) return Array.Empty<MessageAttachmentInfo>();
-        lock (list) { return list.ToList().AsReadOnly(); }
-    }
-
-    private void ClearMessageAttachments(string threadKey)
-    {
-        if (messageAttachments.TryGetValue(threadKey, out var list))
-            lock (list) { list.Clear(); }
-    }
+    public IReadOnlyList<Attachment> GetMessageAttachments(string threadKey)
+        => dialogue?.GetOrCreateThread(threadKey).GetMessageAttachments() ?? Array.Empty<Attachment>();
 
     // ── Prompting ───────────────────────────────────────────────────────────────
 
@@ -221,19 +195,16 @@ public class LlmService : IDisposable
             ? await recall.FetchContextAsync(currentItems, prompt)
             : null;
 
-        string? contextSummary    = context?.GetContext(threadKey);
-        var     threadAtts        = GetAttachments(threadKey);
-        var     msgAtts           = GetMessageAttachments(threadKey);
+        string? contextSummary = context?.GetContext(threadKey);
 
         processingThreads[threadKey] = 0;
         try
         {
-            return await dialogue.SendPrompt(threadKey, prompt, username, contextNote, recallBlock, contextSummary,
-                attachments: threadAtts, messageAttachments: msgAtts);
+            return await dialogue.SendPrompt(threadKey, prompt, username, contextNote, recallBlock, contextSummary);
         }
         finally
         {
-            ClearMessageAttachments(threadKey);
+            dialogue.GetOrCreateThread(threadKey).ClearMessageAttachments();
             processingThreads.TryRemove(threadKey, out _);
             // Notify watchers so they can update the isProcessing indicator.
             NotifyWatchers(threadKey);
