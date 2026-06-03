@@ -7,9 +7,7 @@ namespace ARI.LLM;
 
 internal class Thread
 {
-    private const string QwenPrefix = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant.\n\n";
-
-    private readonly Agent      agent;
+private readonly Agent      agent;
     private readonly string     threadKey;
     private readonly HttpClient httpClient;
 
@@ -42,7 +40,7 @@ internal class Thread
         threadHistory  = new List<ThreadItem>();
 
         string body   = contextNote is null ? agent.SystemPrompt : $"{agent.SystemPrompt}\n\n{contextNote}";
-        systemContent = $"{QwenPrefix}{body}\n<|think_off|>";
+        systemContent = $"{body}\n<|think_off|>";
     }
 
     /// <summary>
