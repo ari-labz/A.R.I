@@ -457,6 +457,10 @@
     opacity: 0.6;
     font-style: italic;
 }
+#thread-list li.inactive {
+    opacity: 0.45;
+    font-style: italic;
+}
 #cmd-popup {
     position: absolute;
     bottom: 100%;
@@ -695,6 +699,7 @@
                 li.dataset.internal = t.isInternal ? '1' : '0';
                 if (t.key === activeThread) li.classList.add('active');
                 if (t.isInternal) li.classList.add('internal-thread');
+                if (t.state === 'inactive' || t.state === 'dormant') li.classList.add('inactive');
 
                 let label;
                 if (t.isInternal) {
@@ -741,6 +746,7 @@
 
         document.querySelectorAll('#thread-list li').forEach(li =>
             li.classList.toggle('active', li.dataset.key === key));
+
 
         // Initial load
         await rebuildThread(key, isInternal, agentName);
@@ -822,14 +828,38 @@
         es.onmessage = async e => {
             if (activeThread !== key) { es.close(); return; }
             try {
-                const { isProcessing } = JSON.parse(e.data);
+                const data = JSON.parse(e.data);
+
+                if (data.deleted) {
+                    es.close();
+                    watchEventSource = null;
+                    activeThread = null;
+                    hideTyping();
+                    // Fade the messages out then reverse the open animation back to new-chat state
+                    const messages = document.getElementById('messages');
+                    messages.style.transition = 'opacity 0.4s ease-in-out';
+                    messages.style.opacity = '0';
+                    setTimeout(() => {
+                        document.getElementById('main').classList.remove('active');
+                        messages.style.transition = '';
+                        messages.style.opacity = '';
+                        messages.innerHTML = '';
+                        loadThreads();
+                    }, 400);
+                    return;
+                }
+
+                const { isProcessing } = data;
                 await rebuildThread(key, false, agentName);
                 // If a rebuild just rendered an AriResponse, signal the stream not to add another.
                 const hasAriResponse = document.querySelector('.msg-row.assistant .bubble') !== null;
                 if (hasAriResponse) watchHasRenderedResponse = true;
                 // Show/hide typing indicator based on server processing state.
-                if (isProcessing && !document.getElementById('typing-indicator')) showTyping();
-                else if (!isProcessing) hideTyping();
+                // Skip if a stream is active — the stream controls the indicator during its lifecycle.
+                if (!isStreaming) {
+                    if (isProcessing && !document.getElementById('typing-indicator')) showTyping();
+                    else if (!isProcessing) hideTyping();
+                }
             } catch { /* ignore malformed event */ }
         };
 
