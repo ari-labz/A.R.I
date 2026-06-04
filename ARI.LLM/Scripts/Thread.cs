@@ -5,8 +5,14 @@ using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
+internal enum ThreadState { Active, Inactive, Dormant, Deleted }
+
 internal class Thread
 {
+    private const int MIN_INACTIVITY_TIMER          = 30; // minutes
+    private const int MIN_DELETION_TIMER            = 15; // minutes
+    private const int MIN_INACTIVITY_THRESHOLD      = 1;  // minutes — adaptive threshold floor
+
     private readonly Agent      agent;
     private readonly string     threadKey;
     private readonly HttpClient httpClient;
@@ -14,6 +20,39 @@ internal class Thread
     internal readonly List<ThreadItem> History;
     private readonly int shortTermMemoryLimit;
     private readonly int maxContextTokens;
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────────
+    private ThreadState             state           = ThreadState.Active;
+    private readonly List<TimeSpan> responseSamples = new();
+    private DateTime                ariRepliedAt    = DateTime.MinValue;
+    private Timer?                  inactivityTimer;
+    private Timer?                  dormantTimer;
+
+    internal ThreadState State => state;
+
+    internal TimeSpan InactivityThreshold
+    {
+        get
+        {
+            if (responseSamples.Count < 2) return TimeSpan.FromMinutes(MIN_INACTIVITY_TIMER);
+            double mean     = responseSamples.Average(s => s.TotalSeconds);
+            double variance = responseSamples.Average(s => Math.Pow(s.TotalSeconds - mean, 2));
+            double stdDev   = Math.Sqrt(variance);
+            TimeSpan adaptive = TimeSpan.FromSeconds(mean + stdDev * 2);
+            TimeSpan floor    = TimeSpan.FromMinutes(MIN_INACTIVITY_THRESHOLD);
+            return adaptive > floor ? adaptive : floor;
+        }
+    }
+
+    internal TimeSpan DormantDuration
+    {
+        get
+        {
+            TimeSpan dormant = InactivityThreshold * 1.5;
+            TimeSpan minimum = TimeSpan.FromMinutes(MIN_DELETION_TIMER);
+            return dormant > minimum ? dormant : minimum;
+        }
+    }
 
     // ── Attachments ────────────────────────────────────────────────────────────
     private readonly List<Attachment> attachments        = new();
@@ -29,6 +68,8 @@ internal class Thread
     /// <summary>Fires when the conversation reaches the agent's memory limit.</summary>
     internal event Action? BufferFull;
     internal event Action<string, string>? ExchangeCompleted;
+    internal event Action? BecameInactive;
+    internal event Action? Deleted;
 
     // ── Constructors ────────────────────────────────────────────────────────────
 
@@ -85,6 +126,20 @@ internal class Thread
     internal List<ThreadMessage> SaveContext()
     {
         return GetChatHistory(shortTermMemoryLimit, maxContextTokens > 0 ? maxContextTokens * 2 : 0);
+    }
+
+    internal void MarkEngramProcessed()
+    {
+        state = ThreadState.Dormant;
+        Common.Logger.LogInformation("[Thread] ({ThreadKey}) dormant — scheduled for deletion in {Minutes:F1} minutes.", threadKey, DormantDuration.TotalMinutes);
+        dormantTimer = new Timer(_ =>
+        {
+            state = ThreadState.Deleted;
+            inactivityTimer?.Dispose();
+            dormantTimer?.Dispose();
+            Common.Logger.LogInformation("[Thread] ({ThreadKey}) deleted.", threadKey);
+            Deleted?.Invoke();
+        }, null, DormantDuration, Timeout.InfiniteTimeSpan);
     }
 
     internal void AddItem(ThreadItem item)
@@ -158,6 +213,26 @@ internal class Thread
         int     maxTokensOverride = 0)
     {
         LastMessageAt = DateTime.UtcNow;
+
+        // Reactivate from any non-active state when a new message arrives
+        if (state != ThreadState.Active)
+        {
+            inactivityTimer?.Dispose();
+            inactivityTimer = null;
+            dormantTimer?.Dispose();
+            dormantTimer = null;
+            state = ThreadState.Active;
+        }
+
+        // Record how long the user took to reply since ARI's last response
+        if (ariRepliedAt != DateTime.MinValue)
+        {
+            int windowSize = shortTermMemoryLimit > 0 ? shortTermMemoryLimit : 25;
+            responseSamples.Add(DateTime.UtcNow - ariRepliedAt);
+            if (responseSamples.Count > windowSize)
+                responseSamples.RemoveAt(0);
+            ariRepliedAt = DateTime.MinValue;
+        }
 
         List<Attachment> threadAtts;
         List<Attachment> msgAtts;
@@ -294,6 +369,16 @@ internal class Thread
             ContextSummary  = contextSummary
         });
         Updated?.Invoke();
+
+        // Start the inactivity countdown — ARI has replied, waiting for the user
+        ariRepliedAt = DateTime.UtcNow;
+        inactivityTimer?.Dispose();
+        inactivityTimer = new Timer(_ =>
+        {
+            if (state != ThreadState.Active) return;
+            state = ThreadState.Inactive;
+            BecameInactive?.Invoke();
+        }, null, InactivityThreshold, Timeout.InfiniteTimeSpan);
 
         ExchangeCompleted?.Invoke(prompt, responseText);
 

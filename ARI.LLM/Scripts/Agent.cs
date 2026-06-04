@@ -14,6 +14,9 @@ internal class Agent
     /// <summary>Fires whenever any thread's history changes. Payload is the thread key.</summary>
     internal event Action<string>? ThreadUpdated;
 
+    /// <summary>Fires when a thread is deleted after its dormant period. Payload is the thread key.</summary>
+    internal event Action<string>? ThreadDeleted;
+
     protected Agent(AgentConfig config)
     {
         Name         = config.Name;
@@ -73,6 +76,11 @@ internal class Agent
     protected virtual void OnThreadCreated(string threadKey, Thread thread)
     {
         threads[threadKey] = thread;
-        thread.Updated += () => ThreadUpdated?.Invoke(threadKey);
+        thread.Updated  += () => ThreadUpdated?.Invoke(threadKey);
+        thread.Deleted  += () =>
+        {
+            threads.Remove(threadKey);
+            ThreadDeleted?.Invoke(threadKey);
+        };
     }
 }
