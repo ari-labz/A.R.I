@@ -52,7 +52,6 @@ internal class Agent
         string            username             = "user",
         string?           augmentedPrompt      = null,
         string?           platformContext      = null,
-        string?           recallNotes          = null,
         string?           contextSummary       = null,
         int               maxTokensOverride    = 0,
         CancellationToken ct                   = default,
@@ -63,7 +62,7 @@ internal class Agent
             thread = new Thread(this, threadKey, platformContext: platformContext, shortTermMemoryLimit: GetShortTermMemoryLimit(), maxContextTokens: GetMaxContextTokens());
             OnThreadCreated(threadKey, thread);
         }
-        return thread.SendPrompt(prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded);
+        return thread.SendPrompt(prompt, username, augmentedPrompt, contextSummary, maxTokensOverride, ct, userMessagePreadded);
     }
 
     // ── Overridable ─────────────────────────────────────────────────────────────

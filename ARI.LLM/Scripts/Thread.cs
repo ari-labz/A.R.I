@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
@@ -9,9 +10,10 @@ internal enum ThreadState { Active, Inactive, Dormant, Deleted }
 
 internal class Thread
 {
-    private const int MIN_INACTIVITY_TIMER          = 30; // minutes - Default 30
-    private const int MIN_DELETION_TIMER            = 15; // minutes - Default 15
-    private const int MIN_INACTIVITY_THRESHOLD      = 1;  // minutes — adaptive threshold floor
+    private const int MIN_INACTIVITY_TIMER     = 30;
+    private const int MIN_DELETION_TIMER       = 15;
+    private const int MIN_INACTIVITY_THRESHOLD = 1;
+    private const int MAX_TOOL_CALLS           = 10;
 
     private readonly Agent      agent;
     private readonly string     threadKey;
@@ -20,6 +22,8 @@ internal class Thread
     internal readonly List<ThreadItem> History;
     private readonly int shortTermMemoryLimit;
     private readonly int maxContextTokens;
+
+    private readonly Dictionary<string, (object Schema, Func<string, Task<string>> Execute)> tools = new();
 
     // ── Lifecycle ──────────────────────────────────────────────────────────────
     private ThreadState             state           = ThreadState.Active;
@@ -54,7 +58,7 @@ internal class Thread
         }
     }
 
-    private readonly SemaphoreSlim sendLock    = new(1, 1);
+    private readonly SemaphoreSlim sendLock         = new(1, 1);
     internal bool                  preserveOnCancel = false;
 
     // ── Attachments ────────────────────────────────────────────────────────────
@@ -65,18 +69,14 @@ internal class Thread
 
     internal DateTime LastMessageAt { get; private set; } = DateTime.MinValue;
 
-    /// <summary>Fires whenever a ThreadItem is added to this thread's history.</summary>
     internal event Action? Updated;
-
-    /// <summary>Fires when the conversation reaches the agent's memory limit.</summary>
     internal event Action? BufferFull;
     internal event Action<string, string>? ExchangeCompleted;
     internal event Action? BecameInactive;
     internal event Action? Deleted;
 
-    // ── Constructors ────────────────────────────────────────────────────────────
+    // ── Constructor ─────────────────────────────────────────────────────────────
 
-    /// <summary>Regular display thread — used by Dialogue for user-facing conversations.</summary>
     internal Thread(Agent agent, string threadKey, string? platformContext = null, int shortTermMemoryLimit = 0, int maxContextTokens = 0)
     {
         this.agent                = agent;
@@ -84,17 +84,16 @@ internal class Thread
         this.shortTermMemoryLimit = shortTermMemoryLimit;
         this.maxContextTokens     = maxContextTokens;
         httpClient                = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
-        History             = new List<ThreadItem>();
+        History                   = new List<ThreadItem>();
         PlatformContext           = platformContext;
     }
 
-    // ── Accessors ───────────────────────────────────────────────────────────────
+    // ── Tool registration ───────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Derives the LLM context window from thread history.
-    /// Walks backwards, collects items with a non-null Message, stops at maxMessages or maxChars.
-    /// Returns the list in chronological order (oldest first).
-    /// </summary>
+    internal void RegisterTool(string name, object schema, Func<string, Task<string>> executor)
+        => tools[name] = (schema, executor);
+
+    // ── Accessors ───────────────────────────────────────────────────────────────
 
     internal List<ThreadMessage> GetChatHistory(int maxMessages = 0, int maxChars = 0)
     {
@@ -122,14 +121,8 @@ internal class Thread
         return result;
     }
 
-    /// <summary>
-    /// Returns a snapshot of the current LLM context for seeding Engram write threads.
-    /// Contains raw message content — the "Username: " prefix is applied at send time.
-    /// </summary>
     internal List<ThreadMessage> SaveContext()
-    {
-        return GetChatHistory(shortTermMemoryLimit, maxContextTokens > 0 ? maxContextTokens * 2 : 0);
-    }
+        => GetChatHistory(shortTermMemoryLimit, maxContextTokens > 0 ? maxContextTokens * 2 : 0);
 
     internal void MarkEngramProcessed()
     {
@@ -152,11 +145,6 @@ internal class Thread
         Updated?.Invoke();
     }
 
-    /// <summary>
-    /// Pre-loads a saved context snapshot into History.
-    /// Used by Engram to fork a fresh write thread from a fixed conversation state —
-    /// the snapshot is a real history so subsequent prompts build on it naturally.
-    /// </summary>
     internal void Seed(IReadOnlyList<ThreadMessage> messages)
     {
         foreach (ThreadMessage m in messages)
@@ -209,18 +197,17 @@ internal class Thread
 
     internal async Task<string> SendPrompt(
         string            prompt,
-        string            username             = "user",
-        string?           augmentedPrompt      = null,
-        string?           recallNotes          = null,
-        string?           contextSummary       = null,
-        int               maxTokensOverride    = 0,
-        CancellationToken ct                   = default,
-        bool              userMessagePreadded  = false)
+        string            username            = "user",
+        string?           augmentedPrompt     = null,
+        string?           contextSummary      = null,
+        int               maxTokensOverride   = 0,
+        CancellationToken ct                  = default,
+        bool              userMessagePreadded = false)
     {
         await sendLock.WaitAsync(ct);
         try
         {
-            return await SendPromptCore(prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded);
+            return await SendPromptCore(prompt, username, augmentedPrompt, contextSummary, maxTokensOverride, ct, userMessagePreadded);
         }
         catch (OperationCanceledException)
         {
@@ -239,7 +226,6 @@ internal class Thread
         string            prompt,
         string            username,
         string?           augmentedPrompt,
-        string?           recallNotes,
         string?           contextSummary,
         int               maxTokensOverride,
         CancellationToken ct,
@@ -247,7 +233,6 @@ internal class Thread
     {
         LastMessageAt = DateTime.UtcNow;
 
-        // Reactivate from any non-active state when a new message arrives
         if (state != ThreadState.Active)
         {
             inactivityTimer?.Dispose();
@@ -257,7 +242,6 @@ internal class Thread
             state = ThreadState.Active;
         }
 
-        // Record how long the user took to reply since ARI's last response
         if (ariRepliedAt != DateTime.MinValue)
         {
             int windowSize = shortTermMemoryLimit > 0 ? shortTermMemoryLimit : 25;
@@ -287,8 +271,6 @@ internal class Thread
 
         List<ThreadMessage> history = GetChatHistory(shortTermMemoryLimit, maxContextTokens > 0 ? maxContextTokens * 2 : 0);
 
-        // Collapse consecutive same-role entries first, then apply the augmented prompt
-        // to the final combined entry so the [Prompt] block covers all merged messages.
         List<ThreadMessage> collapsed = new();
         foreach (ThreadMessage m in history)
         {
@@ -315,81 +297,206 @@ internal class Thread
             messages.Add(BuildCurrentUserMessage($"{current.Username}: {current.Content}", threadAtts, msgAtts));
         }
 
-        // ── Call LLM (streaming) ────────────────────────────────────────────────
-        int maxTokens = maxTokensOverride != 0 ? maxTokensOverride : agent.MaxTokens;
-        object requestBody = new
+        Common.Logger.LogInformation("[{Agent}] ({Thread}) prompt\n\"{Prompt}\"", agent.Name, threadKey, prompt);
+
+        // ── Call LLM with tool loop ─────────────────────────────────────────────
+        int             maxTokens        = maxTokensOverride != 0 ? maxTokensOverride : agent.MaxTokens;
+        int             toolCallCount    = 0;
+        List<string>    toolResults      = new();
+        HashSet<string> calledKeys       = new(StringComparer.OrdinalIgnoreCase);
+        StringBuilder   contentBuilder   = new();
+        Stopwatch       sw               = Stopwatch.StartNew();
+        bool            wasThinking      = false;
+        int             completionTokens = 0;
+
+        while (true)
         {
-            model          = agent.ModelString,
-            messages,
-            stream         = true,
-            stream_options = new { include_usage = true },
-            max_tokens     = maxTokens,
-            temperature    = 0.7,
-            top_p          = 0.80,
-            top_k          = 20,
-            repeat_penalty = 1.0
-        };
+            bool      toolsExhausted = toolCallCount >= MAX_TOOL_CALLS;
+            object[]? toolSchemas    = !toolsExhausted && tools.Count > 0
+                                        ? tools.Values.Select(t => t.Schema).ToArray()
+                                        : null;
 
-        string json = JsonSerializer.Serialize(requestBody);
-        HttpRequestMessage request = new(HttpMethod.Post, $"{agent.Endpoint}/v1/chat/completions")
-        {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
-        };
-
-        HttpResponseMessage response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
-        if (!response.IsSuccessStatusCode)
-            throw new LlmRequestFailedException($"LLM request failed with status: {response.StatusCode}");
-
-        using Stream      stream = await response.Content.ReadAsStreamAsync();
-        using StreamReader reader = new(stream);
-
-        StringBuilder contentBuilder  = new();
-        StringBuilder thinkingBuilder = new();
-        Stopwatch     sw              = Stopwatch.StartNew();
-        bool wasThinking      = false;
-        int  completionTokens = 0;
-
-        string? line;
-        while ((line = await reader.ReadLineAsync(ct)) is not null)
-        {
-            if (string.IsNullOrWhiteSpace(line)) continue;
-            if (!line.StartsWith("data: ")) continue;
-
-            string payload = line["data: ".Length..];
-            if (payload == "[DONE]") break;
-
-            JsonDocument chunk;
-            try { chunk = JsonDocument.Parse(payload); }
-            catch { continue; }
-
-            using (chunk)
+            Dictionary<string, object?> body = new()
             {
-                if (chunk.RootElement.TryGetProperty("usage", out JsonElement usage))
-                    completionTokens = usage.TryGetProperty("completion_tokens", out JsonElement completionTokensEl) ? completionTokensEl.GetInt32() : 0;
+                ["model"]          = agent.ModelString,
+                ["messages"]       = messages,
+                ["stream"]         = true,
+                ["stream_options"] = new { include_usage = true },
+                ["max_tokens"]     = maxTokens,
+                ["temperature"]    = 0.7,
+                ["top_p"]          = 0.80,
+                ["top_k"]          = 20,
+                ["repeat_penalty"] = 1.0
+            };
+            if (toolSchemas is not null)
+                body["tools"] = toolSchemas;
 
-                if (!chunk.RootElement.TryGetProperty("choices", out JsonElement choices)) continue;
-                if (choices.GetArrayLength() == 0) continue;
-                JsonElement delta = choices[0].GetProperty("delta");
+            string             json    = JsonSerializer.Serialize(body);
+            HttpRequestMessage request = new(HttpMethod.Post, $"{agent.Endpoint}/v1/chat/completions")
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            };
 
-                if (delta.TryGetProperty("reasoning_content", out JsonElement reasoning))
+            HttpResponseMessage response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+            if (!response.IsSuccessStatusCode)
+                throw new LlmRequestFailedException($"LLM request failed with status: {response.StatusCode}");
+
+            using Stream      stream = await response.Content.ReadAsStreamAsync(ct);
+            using StreamReader reader = new(stream);
+
+            Dictionary<int, (string Id, string Name, StringBuilder Args)> pendingCalls = new();
+            string? finishReason = null;
+            contentBuilder.Clear();
+
+            string? line;
+            while ((line = await reader.ReadLineAsync(ct)) is not null)
+            {
+                if (string.IsNullOrWhiteSpace(line) || !line.StartsWith("data: ")) continue;
+
+                string payload = line["data: ".Length..];
+                if (payload == "[DONE]") break;
+
+                JsonDocument chunk;
+                try { chunk = JsonDocument.Parse(payload); }
+                catch { continue; }
+
+                using (chunk)
                 {
-                    string? thinkDelta = reasoning.GetString();
-                    if (!string.IsNullOrEmpty(thinkDelta))
+                    if (chunk.RootElement.TryGetProperty("usage", out JsonElement usage))
+                        completionTokens = usage.TryGetProperty("completion_tokens", out JsonElement ctEl) ? ctEl.GetInt32() : 0;
+
+                    if (!chunk.RootElement.TryGetProperty("choices", out JsonElement choices) || choices.GetArrayLength() == 0) continue;
+
+                    JsonElement choice = choices[0];
+
+                    if (choice.TryGetProperty("finish_reason", out JsonElement frEl) && frEl.ValueKind != JsonValueKind.Null)
+                        finishReason = frEl.GetString();
+
+                    JsonElement delta = choice.GetProperty("delta");
+
+                    if (delta.TryGetProperty("reasoning_content", out JsonElement reasoning))
                     {
-                        if (!wasThinking)
+                        string? thinkDelta = reasoning.GetString();
+                        if (!string.IsNullOrEmpty(thinkDelta) && !wasThinking)
                         {
                             Common.Logger.LogWarning("[{Agent}] ({Thread}) thinking chain detected — <|think_off|> may not be working.", agent.Name, threadKey);
                             wasThinking = true;
                         }
-                        thinkingBuilder.Append(thinkDelta);
                     }
+
+                    if (delta.TryGetProperty("tool_calls", out JsonElement toolCallsEl))
+                    {
+                        foreach (JsonElement tc in toolCallsEl.EnumerateArray())
+                        {
+                            int index = tc.GetProperty("index").GetInt32();
+
+                            if (tc.TryGetProperty("id", out JsonElement idEl))
+                            {
+                                string id   = idEl.GetString() ?? string.Empty;
+                                string name = tc.TryGetProperty("function", out JsonElement fn) && fn.TryGetProperty("name", out JsonElement nameEl)
+                                    ? nameEl.GetString() ?? string.Empty
+                                    : string.Empty;
+                                pendingCalls[index] = (id, name, new StringBuilder());
+                            }
+
+                            if (tc.TryGetProperty("function", out JsonElement funcEl) &&
+                                funcEl.TryGetProperty("arguments", out JsonElement argsEl))
+                            {
+                                string? argsDelta = argsEl.GetString();
+                                if (!string.IsNullOrEmpty(argsDelta) && pendingCalls.TryGetValue(index, out (string Id, string Name, StringBuilder Args) call))
+                                    call.Args.Append(argsDelta);
+                            }
+                        }
+                        continue;
+                    }
+
+                    if (!delta.TryGetProperty("content", out JsonElement contentEl)) continue;
+                    string? deltaText = contentEl.GetString();
+                    if (!string.IsNullOrEmpty(deltaText))
+                        contentBuilder.Append(deltaText);
+                }
+            }
+
+            // Fallback: model emitted tool calls as text instead of structured format
+            if (pendingCalls.Count == 0 && contentBuilder.Length > 0)
+            {
+                MatchCollection textCalls = Regex.Matches(
+                    contentBuilder.ToString(),
+                    @"<tool_call>\s*<function=(\w+)>(.*?)</function>\s*</tool_call>",
+                    RegexOptions.Singleline | RegexOptions.IgnoreCase);
+
+                if (textCalls.Count > 0)
+                {
+                    Common.Logger.LogWarning("[{Agent}] ({Thread}) model used text tool call format — parsing fallback.", agent.Name, threadKey);
+                    int fakeIndex = 0;
+                    foreach (Match m in textCalls)
+                    {
+                        string name        = m.Groups[1].Value.Trim();
+                        string callBody    = m.Groups[2].Value;
+                        StringBuilder argsBuilder = new();
+                        argsBuilder.Append('{');
+                        bool first = true;
+                        foreach (Match p in Regex.Matches(callBody, @"<parameter=(\w+)>\s*(.*?)\s*</parameter>", RegexOptions.Singleline))
+                        {
+                            if (!first) argsBuilder.Append(',');
+                            argsBuilder.Append($"\"{p.Groups[1].Value}\":\"{p.Groups[2].Value.Trim()}\"");
+                            first = false;
+                        }
+                        argsBuilder.Append('}');
+                        pendingCalls[fakeIndex++] = ($"fallback_{fakeIndex}", name, argsBuilder);
+                    }
+
+                    contentBuilder.Clear();
+                    finishReason = "tool_calls";
+                }
+            }
+
+            if (pendingCalls.Count > 0 && finishReason == "tool_calls")
+            {
+                toolCallCount += pendingCalls.Count;
+
+                messages.Add(new
+                {
+                    role       = "assistant",
+                    content    = (string?)null,
+                    tool_calls = pendingCalls
+                        .OrderBy(kv => kv.Key)
+                        .Select(kv => new
+                        {
+                            id       = kv.Value.Id,
+                            type     = "function",
+                            function = new { name = kv.Value.Name, arguments = kv.Value.Args.ToString() }
+                        })
+                        .ToArray()
+                });
+
+                foreach ((string Id, string Name, StringBuilder Args) call in pendingCalls.Values)
+                {
+                    string callKey = $"{call.Name}:{call.Args}";
+                    bool   isNew   = calledKeys.Add(callKey);
+                    string result;
+
+                    if (!isNew)
+                    {
+                        result = "Already retrieved.";
+                    }
+                    else if (tools.TryGetValue(call.Name, out (object Schema, Func<string, Task<string>> Execute) tool))
+                    {
+                        result = await tool.Execute(call.Args.ToString());
+                        toolResults.Add(result);
+                    }
+                    else
+                    {
+                        result = "Tool not found.";
+                    }
+
+                    messages.Add(new { role = "tool", tool_call_id = call.Id, content = result });
                 }
 
-                if (!delta.TryGetProperty("content", out JsonElement contentEl)) continue;
-                string? deltaText = contentEl.GetString();
-                if (string.IsNullOrEmpty(deltaText)) continue;
-                contentBuilder.Append(deltaText);
+                continue;
             }
+
+            break;
         }
 
         sw.Stop();
@@ -404,10 +511,17 @@ internal class Thread
 
         Common.Logger.LogInformation("[{Agent}] ({Thread}) responded in {Seconds}s ({Tokens} tokens, {TokPerSec} t/s)",
             agent.Name, threadKey, elapsed.ToString("F1"), completionTokens, tokPerSec.ToString("F1"));
+
+        int tokenLimit = maxTokens > 0 ? maxTokens : 0;
+        if (tokenLimit > 0 && completionTokens >= tokenLimit * 0.8)
+            Common.Logger.LogWarning("[{Agent}] ({Thread}) token usage at {Pct}% of limit ({Used}/{Max})",
+                agent.Name, threadKey, (int)(completionTokens * 100.0 / tokenLimit), completionTokens, tokenLimit);
+
         Common.Logger.LogInformation("[{Agent}] ({Thread}) response\n\"{Response}\"",
             agent.Name, threadKey, responseText);
 
-        // ── Store result ────────────────────────────────────────────────────────
+        string? recallNotes = toolResults.Count > 0 ? string.Join("\n\n", toolResults).TrimEnd() : null;
+
         History.Add(new AriResponse
         {
             Content         = responseText,
@@ -418,7 +532,6 @@ internal class Thread
         });
         Updated?.Invoke();
 
-        // Start the inactivity countdown — ARI has replied, waiting for the user
         ariRepliedAt = DateTime.UtcNow;
         inactivityTimer?.Dispose();
         inactivityTimer = new Timer(_ =>
@@ -438,20 +551,14 @@ internal class Thread
 
     // ── Private helpers ─────────────────────────────────────────────────────────
 
-
     private string BuildSystemBlock()
     {
         string body = PlatformContext is null ? agent.SystemPrompt : $"{agent.SystemPrompt}\n\n{PlatformContext}";
         return agent.Think ? body : $"{body}\n<|think_off|>";
     }
 
-    /// <summary>
-    /// Builds the current user turn as a multipart content block.
-    /// Prepends thread attachments (text as a labelled block, images as image_url parts),
-    /// followed by message attachments, then the prompt text.
-    /// </summary>
     private static object BuildCurrentUserMessage(
-        string promptText,
+        string           promptText,
         List<Attachment> threadAtts,
         List<Attachment> msgAtts)
     {
@@ -460,9 +567,8 @@ internal class Thread
         List<Attachment> msgImages    = msgAtts.Where(a => a.IsImage).ToList();
         List<Attachment> msgTexts     = msgAtts.Where(a => !a.IsImage).ToList();
 
-        bool hasThreadContent  = threadImages.Count > 0 || threadTexts.Count > 0;
-        bool hasMsgContent     = msgImages.Count > 0 || msgTexts.Count > 0;
-        bool needsMultipart    = threadImages.Count > 0 || msgImages.Count > 0;
+        bool hasThreadContent = threadImages.Count > 0 || threadTexts.Count > 0;
+        bool hasMsgContent    = msgImages.Count > 0 || msgTexts.Count > 0;
 
         if (!hasThreadContent && !hasMsgContent)
             return new { role = "user", content = promptText };
@@ -470,7 +576,6 @@ internal class Thread
         const string divider = "-------------------";
         List<object> contentParts = new();
 
-        // Thread attachments block
         if (hasThreadContent)
         {
             StringBuilder sb = new();
@@ -491,7 +596,6 @@ internal class Thread
             }
         }
 
-        // Message attachments block
         if (hasMsgContent)
         {
             StringBuilder sb = new();
@@ -512,7 +616,6 @@ internal class Thread
             }
         }
 
-        // Prompt text last
         contentParts.Add(new { type = "text", text = promptText });
 
         return new { role = "user", content = (object)contentParts };
@@ -522,7 +625,6 @@ internal class Thread
     {
         if (shortTermMemoryLimit <= 0) return false;
         if (History.Count < shortTermMemoryLimit) return false;
-
         if (History.Count == shortTermMemoryLimit) return true;
 
         int interval = Math.Max(1, shortTermMemoryLimit / 2);

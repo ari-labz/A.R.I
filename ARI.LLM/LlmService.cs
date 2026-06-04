@@ -9,7 +9,6 @@ public class LlmService : IDisposable
 {
     private readonly Dialogue?   dialogue;
     private readonly Context?    context;
-    private readonly Recall?     recall;
     private readonly Engram?     engram;
     private readonly Refactor?   refactor;
     private readonly CommandService commands;
@@ -30,9 +29,13 @@ public class LlmService : IDisposable
             .Where(m => m.Enabled)
             .ToDictionary(m => m.Name);
 
+        BrainService? brain = brainConfigPath is not null
+            ? new BrainService(brainConfigPath, loggerFactory)
+            : null;
+
         if (enabled.TryGetValue("Dialogue", out AgentConfig? dialogueConfig))
         {
-            dialogue = new Dialogue(dialogueConfig);
+            dialogue = new Dialogue(dialogueConfig, brain);
             dialogue.ThreadUpdated += key => NotifyWatchers(key);
             dialogue.ThreadDeleted += key => NotifyThreadDeleted(key);
         }
@@ -44,17 +47,8 @@ public class LlmService : IDisposable
             Common.Logger.LogInformation("Context tracker is active.");
         }
 
-        if (brainConfigPath is not null && dialogue is not null)
+        if (brain is not null && dialogue is not null)
         {
-            BrainService brain = new BrainService(brainConfigPath, loggerFactory);
-
-            if (enabled.TryGetValue("Recall", out AgentConfig? recallConfig) && recallConfig.RecursiveBrainSearchDepth > 0)
-            {
-                recall = new Recall(recallConfig, brain, recallConfig.RecursiveBrainSearchDepth, brain.BrainPublicUrl);
-                Common.Logger.LogInformation("Recall is active. Depth: {Depth}, Cache: {Cache}.",
-                    recallConfig.RecursiveBrainSearchDepth, recallConfig.CacheSize > 0 ? recallConfig.CacheSize : 0);
-            }
-
             if (enabled.TryGetValue("Engram", out AgentConfig? engramConfig))
             {
                 engram = new Engram(engramConfig, dialogue, brain, context, engramConfig.RecursiveBrainSearchDepth, brain.BrainPublicUrl);
@@ -89,7 +83,6 @@ public class LlmService : IDisposable
     {
         if (engram?.ThreadKeys.Contains(threadKey)   == true) return engram.GetThread(threadKey)?.History   ?? [];
         if (refactor?.ThreadKeys.Contains(threadKey) == true) return refactor.GetThread(threadKey)?.History ?? [];
-        if (recall?.ThreadKeys.Contains(threadKey)   == true) return recall.GetThread(threadKey)?.History   ?? [];
         if (context?.ThreadKeys.Contains(threadKey)  == true) return context.GetThread(threadKey)?.History  ?? [];
         return [];
     }
@@ -122,7 +115,6 @@ public class LlmService : IDisposable
 
         Add(engram,   "Engram");
         Add(refactor, "Refactor");
-        Add(recall,   "Recall");
         Add(context,  "Context");
         return result;
     }
@@ -239,21 +231,12 @@ public class LlmService : IDisposable
 
         try
         {
-            string? recallBlock    = null;
             string? contextSummary = context?.GetContext(threadKey);
 
-            if (recall is not null)
-            {
-                List<ThreadMessage> chatHistory = dialogueThread.GetChatHistory();
-                recallBlock = await recall.GetNotes(chatHistory, effectivePrompt, cts.Token);
-            }
-
-            return await dialogue.SendPrompt(threadKey, effectivePrompt, username, platformContext, recallBlock, contextSummary, cts.Token, userMessagePreadded: true);
+            return await dialogue.SendPrompt(threadKey, effectivePrompt, username, platformContext, contextSummary, cts.Token, userMessagePreadded: true);
         }
         catch (OperationCanceledException)
         {
-            if (!dialogueThread.preserveOnCancel && dialogueThread.History.Count > 0 && dialogueThread.History[^1] is UserMessage)
-                dialogueThread.History.RemoveAt(dialogueThread.History.Count - 1);
             dialogueThread.preserveOnCancel = false;
             throw;
         }
