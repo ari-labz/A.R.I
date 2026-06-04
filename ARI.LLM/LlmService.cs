@@ -55,7 +55,7 @@ public class LlmService : IDisposable
 
             if (enabled.TryGetValue("Engram", out AgentConfig? engramConfig))
             {
-                engram = new Engram(engramConfig, dialogue, brain, context, engramConfig.SweepIntervalMinutes, engramConfig.RecursiveBrainSearchDepth, brain.BrainPublicUrl);
+                engram = new Engram(engramConfig, dialogue, brain, context, engramConfig.RecursiveBrainSearchDepth, brain.BrainPublicUrl);
                 Common.Logger.LogInformation("Engram is active. Brain connected.");
             }
 

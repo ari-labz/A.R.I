@@ -7,6 +7,9 @@ internal class Dialogue : Agent
     /// <summary>Fires when a thread's conversation reaches the memory limit. Engram listens to this.</summary>
     internal event Action<string>? ThreadBufferFull;
 
+    /// <summary>Fires when a thread goes inactive after the adaptive silence threshold is exceeded.</summary>
+    internal event Action<string>? ThreadBecameInactive;
+
     private readonly int shortTermMemoryLimit;
     private readonly int maxContextTokens;
 
@@ -78,6 +81,7 @@ internal class Dialogue : Agent
     protected override void OnThreadCreated(string threadKey, Thread thread)
     {
         base.OnThreadCreated(threadKey, thread);
-        thread.BufferFull += () => ThreadBufferFull?.Invoke(threadKey);
+        thread.BufferFull     += () => ThreadBufferFull?.Invoke(threadKey);
+        thread.BecameInactive += () => ThreadBecameInactive?.Invoke(threadKey);
     }
 }
