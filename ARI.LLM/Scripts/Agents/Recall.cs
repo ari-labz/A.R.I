@@ -23,7 +23,7 @@ internal class Recall : Agent
     /// Runs up to <see cref="recallDepth"/> recursive fetch steps, parallelising note retrieval
     /// within each step for speed. Returns null if nothing relevant is found.
     /// </summary>
-    internal async Task<string?> GetNotes(List<ThreadMessage> chatHistory, string incomingPrompt)
+    internal async Task<string?> GetNotes(List<ThreadMessage> chatHistory, string incomingPrompt, CancellationToken ct = default)
     {
         if (recallDepth <= 0) return null;
 
@@ -64,7 +64,7 @@ internal class Recall : Agent
             "Respond ONLY with JSON using bare note TITLES (the last segment of the path): " +
             "{\"fetch\": [\"[REDACT]\", \"[REDACT]'s Family\"]} — or {\"fetch\": []} if nothing is relevant.";
 
-        string raw = await Prompt(recallThreadKey, firstPrompt);
+        string raw = await Prompt(recallThreadKey, firstPrompt, ct: ct);
 
         for (int depth = 0; depth < recallDepth; depth++)
         {
@@ -109,7 +109,7 @@ internal class Recall : Agent
                 $"Do NOT re-request notes already fetched: {string.Join(", ", fetched)}.\n" +
                 "Respond ONLY with JSON: {\"fetch\": [\"Name\"]} — or {\"fetch\": []} to stop.";
 
-            raw = await Prompt(recallThreadKey, nextPrompt);
+            raw = await Prompt(recallThreadKey, nextPrompt, ct: ct);
         }
 
         if (noteContents.Count == 0) return null;

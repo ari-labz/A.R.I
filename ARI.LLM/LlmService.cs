@@ -13,7 +13,7 @@ public class LlmService : IDisposable
     private readonly Engram?     engram;
     private readonly Refactor?   refactor;
     private readonly CommandService commands;
-    private readonly ConcurrentDictionary<string, byte> processingThreads = new();
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> processingThreads = new();
 
     // Per-thread watcher channels — each connected client gets one.
     // true = history updated, null = thread deleted.
@@ -172,6 +172,19 @@ public class LlmService : IDisposable
 
     public bool IsThreadProcessing(string threadKey) => processingThreads.ContainsKey(threadKey);
 
+    public void Cancel(string threadKey)
+    {
+        if (processingThreads.TryGetValue(threadKey, out CancellationTokenSource? cts))
+            cts.Cancel();
+    }
+
+    public void Interrupt(string threadKey)
+    {
+        Thread? thread = dialogue?.GetThread(threadKey);
+        if (thread is not null) thread.preserveOnCancel = true;
+        Cancel(threadKey);
+    }
+
     // ── Attachments (proxies to Thread) ────────────────────────────────────────
 
     public void AddAttachment(string threadKey, Attachment attachment)
@@ -201,25 +214,54 @@ public class LlmService : IDisposable
         if (dialogue is null)
             throw new ModelNotFoundException("Dialogue model is not loaded or is not enabled.");
 
-        string? recallBlock = null;
-        string? contextSummary = context?.GetContext(threadKey);
+        if (IsThreadProcessing(threadKey))
+            Interrupt(threadKey);
 
-        if (recall is not null)
+        CancellationTokenSource cts = new();
+        processingThreads[threadKey] = cts;
+
+        Thread dialogueThread = dialogue.GetOrCreateThread(threadKey);
+
+        // If the previous history item is an unanswered user message, combine it with the
+        // current prompt so the [Prompt] block (and recall) cover both questions.
+        string effectivePrompt = dialogueThread.History.Count > 0 && dialogueThread.History[^1] is UserMessage prev
+            ? prev.Content + "\n" + prompt
+            : prompt;
+
+        List<Attachment> msgAtts = dialogueThread.GetMessageAttachments().ToList();
+        dialogueThread.AddItem(new UserMessage
         {
-            List<ThreadMessage> chatHistory = dialogue.GetThread(threadKey)?.GetChatHistory() ?? [];
-            recallBlock = await recall.GetNotes(chatHistory, prompt);
-        }
+            Username    = username,
+            Content     = prompt,
+            Timestamp   = DateTime.Now,
+            Attachments = msgAtts.Count > 0 ? msgAtts : null
+        });
 
-        processingThreads[threadKey] = 0;
         try
         {
-            return await dialogue.SendPrompt(threadKey, prompt, username, platformContext, recallBlock, contextSummary);
+            string? recallBlock    = null;
+            string? contextSummary = context?.GetContext(threadKey);
+
+            if (recall is not null)
+            {
+                List<ThreadMessage> chatHistory = dialogueThread.GetChatHistory();
+                recallBlock = await recall.GetNotes(chatHistory, effectivePrompt, cts.Token);
+            }
+
+            return await dialogue.SendPrompt(threadKey, effectivePrompt, username, platformContext, recallBlock, contextSummary, cts.Token, userMessagePreadded: true);
+        }
+        catch (OperationCanceledException)
+        {
+            if (!dialogueThread.preserveOnCancel && dialogueThread.History.Count > 0 && dialogueThread.History[^1] is UserMessage)
+                dialogueThread.History.RemoveAt(dialogueThread.History.Count - 1);
+            dialogueThread.preserveOnCancel = false;
+            throw;
         }
         finally
         {
-            dialogue.GetOrCreateThread(threadKey).ClearMessageAttachments();
-            processingThreads.TryRemove(threadKey, out _);
-            // Notify watchers so they can update the isProcessing indicator.
+            dialogueThread.ClearMessageAttachments();
+            processingThreads.TryRemove(new KeyValuePair<string, CancellationTokenSource>(threadKey, cts));
+            cts.Dispose();
             NotifyWatchers(threadKey);
         }
     }

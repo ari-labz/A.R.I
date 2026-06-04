@@ -47,21 +47,23 @@ internal class Agent
     // ── Prompting ───────────────────────────────────────────────────────────────
 
     protected Task<string> Prompt(
-        string  threadKey,
-        string  prompt,
-        string  username          = "user",
-        string? augmentedPrompt   = null,
-        string? platformContext   = null,
-        string? recallNotes       = null,
-        string? contextSummary    = null,
-        int     maxTokensOverride = 0)
+        string            threadKey,
+        string            prompt,
+        string            username             = "user",
+        string?           augmentedPrompt      = null,
+        string?           platformContext      = null,
+        string?           recallNotes          = null,
+        string?           contextSummary       = null,
+        int               maxTokensOverride    = 0,
+        CancellationToken ct                   = default,
+        bool              userMessagePreadded  = false)
     {
         if (!threads.TryGetValue(threadKey, out Thread? thread))
         {
             thread = new Thread(this, threadKey, platformContext: platformContext, shortTermMemoryLimit: GetShortTermMemoryLimit(), maxContextTokens: GetMaxContextTokens());
             OnThreadCreated(threadKey, thread);
         }
-        return thread.SendPrompt(prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride);
+        return thread.SendPrompt(prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded);
     }
 
     // ── Overridable ─────────────────────────────────────────────────────────────

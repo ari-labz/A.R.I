@@ -292,6 +292,14 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
         return NotFound();
     }
 
+    [HttpDelete("{threadKey}/processing")]
+    public IActionResult CancelProcessing(string threadKey)
+    {
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        Llm.Cancel(threadKey);
+        return Ok();
+    }
+
     [HttpGet("{threadKey}/stream")]
     public async Task Stream(string threadKey, [FromQuery] string prompt, CancellationToken cancellationToken)
     {
@@ -313,6 +321,10 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
             string escaped  = response.Replace("\n", "\\n").Replace("\r", "");
             await Response.WriteAsync($"data: {escaped}\n\n", cancellationToken);
             await Response.WriteAsync("data: [DONE]\n\n", cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            await Response.WriteAsync("data: [CANCELLED]\n\n", cancellationToken);
         }
         catch (Exception ex)
         {
