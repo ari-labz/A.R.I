@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading.Channels;
 using ARI.LLM;
 using Microsoft.AspNetCore.Http;
@@ -41,7 +42,8 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
                 AgentName:     null,
                 IsInternal:    false,
                 LastMessageAt: Llm.GetThreadLastMessageAt(key),
-                MessageCount:  Llm.GetThreadItems(key).Count(m => m is UserMessage or AriResponse)))
+                MessageCount:  Llm.GetThreadItems(key).Count(m => m is UserMessage or AriResponse),
+                State:         Llm.GetThreadState(key)))
             .ToList();
 
         if (includeInternal)
@@ -99,7 +101,7 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
             return;
         }
 
-        Channel<bool> channel = Channel.CreateUnbounded<bool>(new UnboundedChannelOptions { SingleReader = true });
+        Channel<bool?> channel = Channel.CreateUnbounded<bool?>(new UnboundedChannelOptions { SingleReader = true });
         using IDisposable watchHandle = Llm.WatchThread(threadKey, channel);
 
         // Send initial state so the client can sync immediately on connect.
@@ -111,18 +113,24 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
             using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(20));
 
+            bool? signal;
             try
             {
-                await channel.Reader.ReadAsync(timeoutCts.Token);
-                // Drain any further queued notifications so we send one event per batch.
+                signal = await channel.Reader.ReadAsync(timeoutCts.Token);
                 while (channel.Reader.TryRead(out _)) { }
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                // 20s timeout — send keep-alive comment so the connection stays alive through proxies.
                 await Response.WriteAsync(": ping\n\n", cancellationToken);
                 await Response.Body.FlushAsync(cancellationToken);
                 continue;
+            }
+
+            if (signal is null)
+            {
+                await Response.WriteAsync("data: {\"deleted\":true}\n\n", cancellationToken);
+                await Response.Body.FlushAsync(cancellationToken);
+                return;
             }
 
             await SendWatchEvent(threadKey, cancellationToken);
@@ -316,4 +324,4 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
 }
 
 public record CommandRequest(string? ThreadKey, string Input);
-public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount);
+public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active");

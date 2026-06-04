@@ -9,8 +9,8 @@ internal enum ThreadState { Active, Inactive, Dormant, Deleted }
 
 internal class Thread
 {
-    private const int MIN_INACTIVITY_TIMER          = 30; // minutes
-    private const int MIN_DELETION_TIMER            = 15; // minutes
+    private const int MIN_INACTIVITY_TIMER          = 30; // minutes - Default 30
+    private const int MIN_DELETION_TIMER            = 15; // minutes - Default 15
     private const int MIN_INACTIVITY_THRESHOLD      = 1;  // minutes — adaptive threshold floor
 
     private readonly Agent      agent;

@@ -16,7 +16,8 @@ public class LlmService : IDisposable
     private readonly ConcurrentDictionary<string, byte> processingThreads = new();
 
     // Per-thread watcher channels — each connected client gets one.
-    private readonly ConcurrentDictionary<string, ConcurrentDictionary<Guid, Channel<bool>>> threadWatchers = new();
+    // true = history updated, null = thread deleted.
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<Guid, Channel<bool?>>> threadWatchers = new();
 
     public LlmService(string agentsConfigPath, string? brainConfigPath = null, ILoggerFactory? loggerFactory = null)
     {
@@ -33,6 +34,7 @@ public class LlmService : IDisposable
         {
             dialogue = new Dialogue(dialogueConfig);
             dialogue.ThreadUpdated += key => NotifyWatchers(key);
+            dialogue.ThreadDeleted += key => NotifyThreadDeleted(key);
         }
 
         if (enabled.TryGetValue("Context", out AgentConfig? contextConfig))
@@ -95,6 +97,9 @@ public class LlmService : IDisposable
     public DateTime GetThreadLastMessageAt(string threadKey)
         => dialogue?.GetThread(threadKey)?.LastMessageAt ?? DateTime.MinValue;
 
+    public string GetThreadState(string threadKey)
+        => (dialogue?.GetThread(threadKey)?.State ?? ThreadState.Active).ToString().ToLowerInvariant();
+
     // Returns metadata for all internal agent threads (Engram, Recall, Context, Refactor).
     // Threads sharing a key with a Dialogue thread are excluded to avoid duplication.
     public IReadOnlyList<InternalThreadInfo> GetInternalThreads()
@@ -130,7 +135,7 @@ public class LlmService : IDisposable
     /// Subscribes a client channel to receive notifications whenever the given thread's history changes.
     /// Dispose the returned handle to unsubscribe (called when the client disconnects).
     /// </summary>
-    public IDisposable WatchThread(string threadKey, Channel<bool> channel)
+    public IDisposable WatchThread(string threadKey, Channel<bool?> channel)
     {
         Guid id = Guid.NewGuid();
         threadWatchers.GetOrAdd(threadKey, _ => new())[id] = channel;
@@ -139,18 +144,25 @@ public class LlmService : IDisposable
 
     private void NotifyWatchers(string threadKey)
     {
-        if (!threadWatchers.TryGetValue(threadKey, out ConcurrentDictionary<Guid, Channel<bool>>? watchers)) return;
-        foreach (Channel<bool> ch in watchers.Values)
+        if (!threadWatchers.TryGetValue(threadKey, out ConcurrentDictionary<Guid, Channel<bool?>>? watchers)) return;
+        foreach (Channel<bool?> ch in watchers.Values)
             ch.Writer.TryWrite(true);
     }
 
+    private void NotifyThreadDeleted(string threadKey)
+    {
+        if (!threadWatchers.TryGetValue(threadKey, out ConcurrentDictionary<Guid, Channel<bool?>>? watchers)) return;
+        foreach (Channel<bool?> ch in watchers.Values)
+            ch.Writer.TryWrite(null);
+    }
+
     private sealed class WatcherHandle(
-        ConcurrentDictionary<string, ConcurrentDictionary<Guid, Channel<bool>>> registry,
-        string threadKey, Guid id, Channel<bool> channel) : IDisposable
+        ConcurrentDictionary<string, ConcurrentDictionary<Guid, Channel<bool?>>> registry,
+        string threadKey, Guid id, Channel<bool?> channel) : IDisposable
     {
         public void Dispose()
         {
-            if (registry.TryGetValue(threadKey, out ConcurrentDictionary<Guid, Channel<bool>>? watchers))
+            if (registry.TryGetValue(threadKey, out ConcurrentDictionary<Guid, Channel<bool?>>? watchers))
                 watchers.TryRemove(id, out _);
             channel.Writer.TryComplete();
         }
