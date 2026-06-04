@@ -54,6 +54,9 @@ internal class Thread
         }
     }
 
+    private readonly SemaphoreSlim sendLock    = new(1, 1);
+    internal bool                  preserveOnCancel = false;
+
     // ── Attachments ────────────────────────────────────────────────────────────
     private readonly List<Attachment> attachments        = new();
     private readonly List<Attachment> pendingMessageAtts = new();
@@ -205,12 +208,42 @@ internal class Thread
     // ── SendPrompt ──────────────────────────────────────────────────────────────
 
     internal async Task<string> SendPrompt(
-        string  prompt,
-        string  username          = "user",
-        string? augmentedPrompt   = null,
-        string? recallNotes       = null,
-        string? contextSummary    = null,
-        int     maxTokensOverride = 0)
+        string            prompt,
+        string            username             = "user",
+        string?           augmentedPrompt      = null,
+        string?           recallNotes          = null,
+        string?           contextSummary       = null,
+        int               maxTokensOverride    = 0,
+        CancellationToken ct                   = default,
+        bool              userMessagePreadded  = false)
+    {
+        await sendLock.WaitAsync(ct);
+        try
+        {
+            return await SendPromptCore(prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded);
+        }
+        catch (OperationCanceledException)
+        {
+            if (!preserveOnCancel && History.Count > 0 && History[^1] is UserMessage)
+                History.RemoveAt(History.Count - 1);
+            preserveOnCancel = false;
+            throw;
+        }
+        finally
+        {
+            sendLock.Release();
+        }
+    }
+
+    private async Task<string> SendPromptCore(
+        string            prompt,
+        string            username,
+        string?           augmentedPrompt,
+        string?           recallNotes,
+        string?           contextSummary,
+        int               maxTokensOverride,
+        CancellationToken ct,
+        bool              userMessagePreadded)
     {
         LastMessageAt = DateTime.UtcNow;
 
@@ -240,32 +273,45 @@ internal class Thread
         lock (pendingMessageAtts) { msgAtts    = pendingMessageAtts.ToList(); }
 
         // ── Build message list ──────────────────────────────────────────────────
-        History.Add(new UserMessage
+        if (!userMessagePreadded)
         {
-            Username    = username,
-            Content     = prompt,
-            Timestamp   = DateTime.Now,
-            Attachments = msgAtts.Count > 0 ? msgAtts.ToList() : null
-        });
-        Updated?.Invoke();
+            History.Add(new UserMessage
+            {
+                Username    = username,
+                Content     = prompt,
+                Timestamp   = DateTime.Now,
+                Attachments = msgAtts.Count > 0 ? msgAtts.ToList() : null
+            });
+            Updated?.Invoke();
+        }
 
         List<ThreadMessage> history = GetChatHistory(shortTermMemoryLimit, maxContextTokens > 0 ? maxContextTokens * 2 : 0);
 
-        // Substitute augmented prompt into the last (current) history entry if provided.
-        if (augmentedPrompt is not null && history.Count > 0)
-            history[^1] = history[^1] with { Content = augmentedPrompt };
+        // Collapse consecutive same-role entries first, then apply the augmented prompt
+        // to the final combined entry so the [Prompt] block covers all merged messages.
+        List<ThreadMessage> collapsed = new();
+        foreach (ThreadMessage m in history)
+        {
+            if (collapsed.Count > 0 && collapsed[^1].Role == m.Role)
+                collapsed[^1] = collapsed[^1] with { Content = collapsed[^1].Content + "\n" + m.Content };
+            else
+                collapsed.Add(m);
+        }
+
+        if (augmentedPrompt is not null && collapsed.Count > 0)
+            collapsed[^1] = collapsed[^1] with { Content = augmentedPrompt };
 
         List<object> messages = new List<object> { new { role = "system", content = BuildSystemBlock() } };
 
-        for (int i = 0; i < history.Count - 1; i++)
+        for (int i = 0; i < collapsed.Count - 1; i++)
         {
-            ThreadMessage m = history[i];
+            ThreadMessage m = collapsed[i];
             messages.Add(new { role = m.Role, content = $"{m.Username}: {m.Content}" });
         }
 
-        if (history.Count > 0)
+        if (collapsed.Count > 0)
         {
-            ThreadMessage current = history[^1];
+            ThreadMessage current = collapsed[^1];
             messages.Add(BuildCurrentUserMessage($"{current.Username}: {current.Content}", threadAtts, msgAtts));
         }
 
@@ -290,7 +336,7 @@ internal class Thread
             Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
 
-        HttpResponseMessage response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+        HttpResponseMessage response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         if (!response.IsSuccessStatusCode)
             throw new LlmRequestFailedException($"LLM request failed with status: {response.StatusCode}");
 
@@ -304,7 +350,7 @@ internal class Thread
         int  completionTokens = 0;
 
         string? line;
-        while ((line = await reader.ReadLineAsync()) is not null)
+        while ((line = await reader.ReadLineAsync(ct)) is not null)
         {
             if (string.IsNullOrWhiteSpace(line)) continue;
             if (!line.StartsWith("data: ")) continue;
@@ -319,7 +365,7 @@ internal class Thread
             using (chunk)
             {
                 if (chunk.RootElement.TryGetProperty("usage", out JsonElement usage))
-                    completionTokens = usage.TryGetProperty("completion_tokens", out JsonElement ct) ? ct.GetInt32() : 0;
+                    completionTokens = usage.TryGetProperty("completion_tokens", out JsonElement completionTokensEl) ? completionTokensEl.GetInt32() : 0;
 
                 if (!chunk.RootElement.TryGetProperty("choices", out JsonElement choices)) continue;
                 if (choices.GetArrayLength() == 0) continue;
@@ -391,6 +437,7 @@ internal class Thread
     }
 
     // ── Private helpers ─────────────────────────────────────────────────────────
+
 
     private string BuildSystemBlock()
     {

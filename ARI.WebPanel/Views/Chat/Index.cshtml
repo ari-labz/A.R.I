@@ -650,6 +650,8 @@
     let activeThreadInternal = false; // true when viewing an internal model thread
     let activeEventSource    = null;  // prompt SSE stream connection
     let watchEventSource     = null;  // per-thread watch connection for server push
+    let pendingPrompt        = null;  // text of the last sent message, for restore-on-cancel
+    let preSendMessageCount  = 0;     // messages box child count before optimistic render
 
     // ── sidebar ─────────────────────────────────────────
     const sidebar   = document.getElementById('sidebar');
@@ -924,8 +926,28 @@
         list.prepend(li);
     }
 
+    const STOP_WORDS = ['stop', 'wait', 'escape'];
+
+    async function cancelProcessing() {
+        if (!activeThread) return;
+        await fetch(`/api/threads/${activeThread}/processing`, { method: 'DELETE' });
+    }
+
     async function send(prompt) {
-        if (isStreaming || (!prompt && pendingMsgAttachments.length === 0)) return;
+        if (!prompt && pendingMsgAttachments.length === 0) return;
+
+        if (isStreaming && STOP_WORDS.includes(prompt.toLowerCase().trim())) {
+            await cancelProcessing();
+            return;
+        }
+
+        if (isStreaming) {
+            if (activeEventSource) { activeEventSource.close(); activeEventSource = null; }
+            hideTyping();
+            isStreaming = false;
+            pendingPrompt = null;
+        }
+
         setThreadPanelOpen(false);
 
         const needsNewThread = !activeThread;
@@ -936,6 +958,8 @@
             activateChat();
             const optimisticAttachments = pendingMsgAttachments.length ? [...pendingMsgAttachments] : undefined;
             clearMsgAttachPreviews();
+            pendingPrompt       = prompt;
+            preSendMessageCount = document.getElementById('messages').children.length;
             renderThreadItem({ type: 'userMessage', content: prompt, timestamp: new Date().toISOString(), attachments: optimisticAttachments });
             isStreaming = true;
             updateButtons();
@@ -983,6 +1007,8 @@
         if (!needsNewThread) {
             const optimisticAttachments = pendingMsgAttachments.length ? [...pendingMsgAttachments] : undefined;
             clearMsgAttachPreviews();
+            pendingPrompt       = prompt;
+            preSendMessageCount = document.getElementById('messages').children.length;
             renderThreadItem({ type: 'userMessage', content: prompt, timestamp: new Date().toISOString(), attachments: optimisticAttachments });
             scrollBottom();
             isStreaming = true;
@@ -1002,8 +1028,23 @@
             if (activeThread !== threadKeyForThisStream) { es.close(); activeEventSource = null; return; }
             if (e.data === '[DONE]') {
                 es.close(); activeEventSource = null; isStreaming = false;
+                pendingPrompt = null;
                 updateButtons(); loadThreads();
                 refreshLastAriRow();
+                return;
+            }
+            if (e.data === '[CANCELLED]') {
+                es.close(); activeEventSource = null; isStreaming = false;
+                hideTyping();
+                updateButtons();
+                const box = document.getElementById('messages');
+                while (box.children.length > preSendMessageCount) box.lastElementChild.remove();
+                if (pendingPrompt !== null) {
+                    const inputEl = document.getElementById('input');
+                    inputEl.value = pendingPrompt;
+                    inputEl.dispatchEvent(new Event('input'));
+                    pendingPrompt = null;
+                }
                 return;
             }
             if (e.data.startsWith('[ERROR]')) {
@@ -1283,6 +1324,14 @@
         const chatText = document.getElementById('input').value.trim();
         document.getElementById('btn-send').disabled = isStreaming || (!chatText && pendingMsgAttachments.length === 0);
     }
+
+    // ── Escape to cancel processing ───────────────────────
+    document.addEventListener('keydown', e => {
+        if (e.key !== 'Escape') return;
+        if (!cmdPopup.classList.contains('hidden')) return;
+        if (!isStreaming || !activeThread) return;
+        cancelProcessing();
+    });
 
     // ── auto-resize + keydown for all textareas ──────────
     function wireTextarea(id, sendFn) {

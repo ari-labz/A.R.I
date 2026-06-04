@@ -23,12 +23,14 @@ internal class Dialogue : Agent
     protected override int GetMaxContextTokens()      => maxContextTokens;
 
     internal Task<string> SendPrompt(
-        string  threadKey,
-        string  prompt,
-        string  username,
-        string? platformContext = null,
-        string? recallBlock    = null,
-        string? contextSummary = null)
+        string            threadKey,
+        string            prompt,
+        string            username,
+        string?           platformContext     = null,
+        string?           recallBlock         = null,
+        string?           contextSummary      = null,
+        CancellationToken ct                  = default,
+        bool              userMessagePreadded = false)
     {
         string? augmented = null;
 
@@ -51,19 +53,21 @@ internal class Dialogue : Agent
                 sb.AppendLine(divider);
             }
 
-            sb.AppendLine("[Prompt]");
+            sb.AppendLine(prompt.Contains('\n') ? "[Prompts — answer each one in order]" : "[Prompt]");
             sb.Append(prompt);
             augmented = sb.ToString();
         }
 
         return Prompt(
             threadKey,
-            prompt:          prompt,
-            username:        username,
-            augmentedPrompt: augmented,
-            platformContext: platformContext,
-            recallNotes:     recallBlock,
-            contextSummary:  contextSummary);
+            prompt:             prompt,
+            username:           username,
+            augmentedPrompt:    augmented,
+            platformContext:    platformContext,
+            recallNotes:        recallBlock,
+            contextSummary:     contextSummary,
+            ct:                 ct,
+            userMessagePreadded: userMessagePreadded);
     }
 
     internal void LogCommand(string threadKey, string input, string response)
