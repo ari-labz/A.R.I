@@ -348,6 +348,8 @@ internal class Thread
 
         sw.Stop();
         string responseText = contentBuilder.ToString();
+        if (responseText.StartsWith("ARI: ", StringComparison.OrdinalIgnoreCase))
+            responseText = responseText["ARI: ".Length..];
         if (string.IsNullOrWhiteSpace(responseText))
             throw new LlmRequestFailedException("LLM response was empty.");
 
