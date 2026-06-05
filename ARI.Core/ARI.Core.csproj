@@ -28,6 +28,9 @@
   		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
   		<LinkBase>wwwroot</LinkBase>
   	</Content>
+  	<Content Update="..\ARI.WebPanel\wwwroot\images\Black Code .png">
+  	  <Link>wwwroot\images\Black Code .png</Link>
+  	</Content>
   </ItemGroup>
 	
   <ItemGroup>

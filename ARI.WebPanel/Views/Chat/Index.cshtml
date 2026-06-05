@@ -77,7 +77,10 @@
 
             <!-- logo header: tall+centered in idle, compact at top when active -->
             <div id="main-header">
-                <img id="main-logo" src="/images/logo-black.png?v=2" alt="A·R·I" />
+                <div id="header-logos">
+                    <img id="main-logo" src="/images/logo-black.png?v=2" alt="A·R·I" />
+                    <img id="code-logo" src="/images/BlackCode.png" alt="Code" />
+                </div>
             </div>
 
             <!-- messages + thread panel share this zone -->
@@ -470,17 +473,25 @@
 .command-input {
     font-family: monospace;
     font-size: 13px;
-    color: var(--text-dim);
+    color: #6b7280;
+    transition: color 0.55s ease;
 }
+#main.code-mode .command-input { color: #7a8a96; }
 .command-response-block {
-    border-left: 2px solid var(--accent);
+    border-left: 2px solid #223742;
     padding: 6px 12px;
-    background: var(--input-bg);
+    background: #ffffff;
     border-radius: 0 8px 8px 0;
     font-size: 14px;
     line-height: 1.6;
-    color: var(--text-dim);
+    color: #6b7280;
     max-width: 100%;
+    transition: background-color 0.55s ease, color 0.55s ease, border-color 0.55s ease;
+}
+#main.code-mode .command-response-block {
+    background: #131d22;
+    color: #b0bec5;
+    border-left-color: #3a6070;
 }
 
 #thread-list li.pending {
@@ -565,6 +576,8 @@
 
     // ── slash-command popup ──────────────────────────────
     const COMMANDS = [
+        { cmd: '/code',            desc: 'Switch this thread to Code mode' },
+        { cmd: '/uncode',          desc: 'Switch this thread back to Dialogue mode' },
         { cmd: '/engram on',       desc: 'Enable engram memory extraction' },
         { cmd: '/engram off',      desc: 'Disable engram memory extraction' },
         { cmd: '/engram sweep',    desc: 'Run a manual engram sweep now' },
@@ -742,7 +755,7 @@
                     : '';
 
                 li.innerHTML = `<span class="thread-time">${time}</span>${label}`;
-                li.addEventListener('click', () => openThread(t.key, t.isInternal, t.agentName));
+                li.addEventListener('click', () => openThread(t.key, t.isInternal, t.agentName, t.isCodeMode));
                 list.appendChild(li);
             });
         } catch { /* silently ignore network hiccups during thread list refresh */ }
@@ -752,6 +765,10 @@ document.getElementById('btn-new-chat').addEventListener('click', () => {
         if (watchEventSource)  { watchEventSource.close();  watchEventSource  = null; }
         if (activeEventSource) { activeEventSource.close(); activeEventSource = null; isStreaming = false; }
         activeThread = null;
+        const mainEl = document.getElementById('main');
+        mainEl.classList.add('instant');
+        setCodeMode(false);
+        requestAnimationFrame(() => requestAnimationFrame(() => mainEl.classList.remove('instant')));
         resetToIdle();
         renderAttachments([]);
         clearMsgAttachPreviews();
@@ -760,8 +777,12 @@ document.getElementById('btn-new-chat').addEventListener('click', () => {
         updateButtons();
     });
 
+    function setCodeMode(enabled) {
+        document.getElementById('main').classList.toggle('code-mode', enabled);
+    }
+
     // ── open thread ─────────────────────────────────────
-    async function openThread(key, isInternal = false, agentName = null) {
+    async function openThread(key, isInternal = false, agentName = null, isCodeMode = false) {
         // Close any active prompt SSE stream.
         if (activeEventSource) { activeEventSource.close(); activeEventSource = null; isStreaming = false; updateButtons(); }
         // Close the previous thread's watch connection.
@@ -770,6 +791,7 @@ document.getElementById('btn-new-chat').addEventListener('click', () => {
 
         activeThread         = key;
         activeThreadInternal = isInternal;
+        setCodeMode(isCodeMode);
 
         document.querySelectorAll('#thread-list li').forEach(li =>
             li.classList.toggle('active', li.dataset.key === key));
@@ -877,7 +899,26 @@ document.getElementById('btn-new-chat').addEventListener('click', () => {
                 }
 
                 const { isProcessing } = data;
-                await rebuildThread(key, false, agentName);
+                const currentCodeMode = document.getElementById('main').classList.contains('code-mode');
+                let targetCodeMode = currentCodeMode;
+                try {
+                    const tRes = await fetch('/api/threads?includeInternal=false');
+                    const tList = await tRes.json();
+                    const tEntry = tList.find(t => t.key === key);
+                    if (tEntry != null) targetCodeMode = tEntry.isCodeMode;
+                } catch { /* non-critical */ }
+
+                if (targetCodeMode !== currentCodeMode) {
+                    // Mode is changing: rebuild in current mode so elements have a painted
+                    // "from" state, then flip the class after two rAFs to trigger the transition.
+                    await rebuildThread(key, false, agentName);
+                    requestAnimationFrame(() => requestAnimationFrame(() => setCodeMode(targetCodeMode)));
+                } else {
+                    // Mode unchanged: set synchronously before rebuild so new elements
+                    // render directly in the correct state without any flash.
+                    setCodeMode(targetCodeMode);
+                    await rebuildThread(key, false, agentName);
+                }
                 // If a rebuild just rendered an AriResponse, signal the stream not to add another.
                 const hasAriResponse = document.querySelector('.msg-row.assistant .bubble') !== null;
                 if (hasAriResponse) watchHasRenderedResponse = true;

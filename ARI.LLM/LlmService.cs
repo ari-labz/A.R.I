@@ -14,6 +14,7 @@ public class LlmService : IDisposable
     private readonly Refactor?   refactor;
     private readonly CommandService commands;
     private readonly ConcurrentDictionary<string, CancellationTokenSource> processingThreads = new();
+    private readonly HashSet<string> codeThreads = new(StringComparer.OrdinalIgnoreCase);
 
     // Live call tracking — keyed by threadKey, written before recall, cleared in finally.
     // Stored here (not on Thread) so the control-panel polling thread reads from a
@@ -366,12 +367,47 @@ public class LlmService : IDisposable
     /// If a threadKey is provided, the exchange is stored in the thread's display history.
     /// Returns a human-readable result, or null if the input is not a recognised command.
     /// </summary>
+    public bool IsCodeThread(string threadKey)
+    {
+        lock (codeThreads) { return codeThreads.Contains(threadKey); }
+    }
+
     public async Task<string?> HandleCommand(string? threadKey, string input)
     {
-        string? result = await commands.Handle(input);
-        if (result is not null && threadKey is not null)
-            dialogue?.LogCommand(threadKey, input, result);
-        return result;
+        string trimmed = input.Trim().ToLowerInvariant();
+
+        if (trimmed == "/code" || trimmed == "/uncode")
+        {
+            string result;
+            if (threadKey is null)
+            {
+                result = "No active thread.";
+            }
+            else
+            {
+                lock (codeThreads)
+                {
+                    if (trimmed == "/code")
+                    {
+                        codeThreads.Add(threadKey);
+                        result = "Switched to **Code** mode.";
+                    }
+                    else
+                    {
+                        codeThreads.Remove(threadKey);
+                        result = "Switched to **Dialogue** mode.";
+                    }
+                }
+            }
+            if (threadKey is not null)
+                dialogue?.LogCommand(threadKey, input, result);
+            return result;
+        }
+
+        string? cmdResult = await commands.Handle(input);
+        if (cmdResult is not null && threadKey is not null)
+            dialogue?.LogCommand(threadKey, input, cmdResult);
+        return cmdResult;
     }
 
     public void Dispose() => engram?.Dispose();

@@ -43,7 +43,8 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
                 IsInternal:    false,
                 LastMessageAt: Llm.GetThreadLastMessageAt(key),
                 MessageCount:  Llm.GetThreadItems(key).Count(m => m is UserMessage or AriResponse),
-                State:         Llm.GetThreadState(key)))
+                State:         Llm.GetThreadState(key),
+                IsCodeMode:    Llm.IsCodeThread(key)))
             .ToList();
 
         if (includeInternal)
@@ -364,4 +365,4 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
 
 public record StreamRequest(string Prompt);
 public record CommandRequest(string? ThreadKey, string Input);
-public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active");
+public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active", bool IsCodeMode = false);

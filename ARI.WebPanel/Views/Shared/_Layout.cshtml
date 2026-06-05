@@ -30,6 +30,18 @@
     --input-focus:  #9ca3af;
     --accent:       #223742;
     --accent-hover: #16262E;
+
+    /* code-mode overrides */
+    --cm-bg:          #0e0e0e;
+    --cm-text:        #dde3e8;
+    --cm-text-dim:    #7a8a96;
+    --cm-border:      #252f35;
+    --cm-bubble-user: #1a2530;
+    --cm-input-bg:    #131d22;
+    --cm-input-bdr:   #253038;
+    --cm-input-foc:   #3a5060;
+    --cm-accent:      #3a6070;
+    --cm-accent-hov:  #2d4e5e;
     --col-max:      680px;
     --sidebar-w:    240px;
 }
@@ -124,8 +136,31 @@ html, body {
 /* ── main ────────────────────────────────────────────── */
 #main {
     flex: 1; display: flex; flex-direction: column;
-    overflow: hidden; background: var(--main-bg); position: relative;
+    overflow: hidden; position: relative;
+    background: #ffffff;
 }
+/* Stripe layer sits behind all content, fades in/out via opacity */
+#main::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.55s ease;
+    background:
+        radial-gradient(ellipse 160% 130% at 50% 50%, transparent 15%, rgba(0,0,0,0.82) 100%),
+        repeating-linear-gradient(
+            to bottom,
+            #16262e 0px,
+            #16262e 4px,
+            #101618 4px,
+            #101618 8px
+        );
+}
+#main.code-mode::before { opacity: 1; }
+/* Ensure chat content sits above the pseudo-element */
+#chat-col { position: relative; z-index: 1; }
 
 #chat-col {
     flex: 1; display: flex; flex-direction: column;
@@ -272,7 +307,7 @@ html, body {
 #topbar-toggle:hover { color: var(--text); background: var(--user-bubble); }
 
 /* skip all transitions (used when opening existing threads) */
-#main.instant, #main.instant * { transition-duration: 0s !important; }
+#main.instant, #main.instant *, #main.instant::before { transition-duration: 0s !important; }
 
 /* ── main header (logo — idle: centered, active: top bar) */
 #main-header {
@@ -287,20 +322,42 @@ html, body {
                 border-color 0.3s ease-in-out;
     border-bottom: 1px solid transparent;
     overflow: hidden;
+    /* Always white regardless of mode */
+    background: #ffffff;
+    z-index: 1;
 }
 #main.active #main-header {
     height: 68px;
-    border-bottom-color: var(--border);
+    border-bottom-color: #e5e7eb;
 }
+
+#header-logos {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0;
+    transition: gap 0.55s ease;
+}
+#main.code-mode #header-logos { gap: 20px; }
 
 #main-logo {
     width: 280px; height: auto; display: block;
     transition: width 0.65s ease-in-out;
     flex-shrink: 0;
 }
-#main.active #main-logo {
-    width: 110px;
+#main.active #main-logo { width: 110px; }
+
+#code-logo {
+    width: 0; height: auto; display: block;
+    flex-shrink: 0; overflow: hidden;
+    opacity: 0;
+    transition: width 0.55s ease, opacity 0.55s ease;
 }
+/* idle + code mode */
+#main.code-mode #code-logo        { width: 280px; opacity: 1; }
+/* active + code mode */
+#main.active.code-mode #code-logo { width: 110px; }
+#main.instant #code-logo { transition-duration: 0s !important; }
 
 /* ── messages */
 #messages {
@@ -334,13 +391,15 @@ html, body {
 .msg-row.user { display: flex; justify-content: flex-end; }
 .msg-row.user > div { display: flex; flex-direction: column; align-items: flex-end; max-width: 82%; }
 .msg-row.user .bubble {
-    background: var(--user-bubble);
+    background: #f3f4f6;
     border-radius: 18px 18px 4px 18px;
     padding: 10px 16px;
     font-size: 15px; line-height: 1.6;
     word-break: break-word;
-    color: var(--text);
+    color: #1a1a1a;
+    transition: background-color 0.55s ease, color 0.55s ease;
 }
+#main.code-mode .msg-row.user .bubble { background: #1a2530; color: #dde3e8; }
 
 /* ARI: left-aligned plain text */
 .msg-row.assistant { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
@@ -348,12 +407,16 @@ html, body {
     font-size: 12px; font-weight: 700;
     letter-spacing: .04em; text-transform: uppercase;
     color: var(--sidebar-bg);
+    transition: color 0.55s ease;
 }
+#main.code-mode .msg-row.assistant .sender { color: #ffffff; }
 .msg-row.assistant .bubble {
     font-size: 15px; line-height: 1.7;
     word-break: break-word;
-    color: var(--text); max-width: 100%;
+    color: #1a1a1a; max-width: 100%;
+    transition: color 0.55s ease;
 }
+#main.code-mode .msg-row.assistant .bubble { color: #dde3e8; }
 
 /* ── markdown prose styles ───────────────────────────── */
 .bubble p { margin: 0 0 .75em; }
@@ -379,7 +442,9 @@ html, body {
     border: 1px solid #e5e7eb;
     border-radius: 4px;
     padding: 1px 5px;
+    transition: background-color 0.55s ease, border-color 0.55s ease;
 }
+#main.code-mode .bubble code { background: #1e2830; border-color: #2e3e4a; }
 .bubble .code-block {
     margin: .6em 0 .9em;
     border-radius: 8px;
@@ -435,36 +500,38 @@ html, body {
 .bubble table { border-collapse: collapse; width: 100%; margin: .6em 0; font-size: 14px; }
 .bubble th,.bubble td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
 .bubble th { background: #f9fafb; font-weight: 600; }
+#main.code-mode .bubble th { background: #182028; }
 .bubble hr { border: none; border-top: 1px solid var(--border); margin: 1em 0; }
 .bubble a { color: var(--accent); text-decoration: underline; }
 /* user bubble markdown — same rules inherit; tweak inline code bg */
 .msg-row.user .bubble code { background: rgba(0,0,0,.07); border-color: rgba(0,0,0,.1); }
 
 /* ── bottom input ────────────────────────────────────── */
-#input-area { padding: 10px 24px 20px; flex-shrink: 0; }
+#input-area { padding: 10px 24px 20px; flex-shrink: 0; background: transparent; }
 
 #input-wrap {
     max-width: var(--col-max); margin: 0 auto;
-    background: var(--input-bg);
-    border: 1px solid var(--input-border);
+    background: #ffffff;
+    border: 1px solid #d1d5db;
     border-radius: 16px;
     padding: 12px 12px 10px 16px;
     display: flex; flex-direction: column; gap: 8px;
     box-shadow: 0 1px 4px rgba(0,0,0,.06);
-    transition: border-color .15s, box-shadow .15s;
+    transition: background-color 0.55s ease, border-color 0.55s ease, box-shadow .15s;
 }
-#input-wrap:focus-within {
-    border-color: var(--input-focus);
-    box-shadow: 0 1px 8px rgba(0,0,0,.1);
-}
+#input-wrap:focus-within { border-color: #9ca3af; box-shadow: 0 1px 8px rgba(0,0,0,.1); }
+#main.code-mode #input-wrap { background: #131d22; border-color: #253038; }
+#main.code-mode #input-wrap:focus-within { border-color: #3a5060; }
 
 #input {
     background: transparent; border: none; outline: none;
-    color: var(--text); font-family: inherit; font-size: 15px;
+    color: #1a1a1a; font-family: inherit; font-size: 15px;
     line-height: 1.55; resize: none;
     max-height: 180px; min-height: 24px; width: 100%;
+    transition: color 0.55s ease;
 }
 #input::placeholder { color: #9ca3af; }
+#main.code-mode #input { color: #dde3e8; }
 
 #input-footer { display: flex; justify-content: flex-end; align-items: center; gap: 4px; }
 
@@ -481,7 +548,9 @@ html, body {
     text-align: center; font-size: 12px; color: #9ca3af;
     margin-top: 6px;
     max-width: var(--col-max); margin-left: auto; margin-right: auto;
+    transition: color 0.55s ease;
 }
+#main.code-mode #input-hint { color: #4a5568; }
 
 /* ── thought section ────────────────────────────────── */
 .thought-block {
@@ -517,7 +586,7 @@ html, body {
     width: 100%;
     box-sizing: border-box;
     background: #f9fafb;
-    border: 1px solid var(--border);
+    border: 1px solid #e5e7eb;
     border-radius: 8px;
     font-size: 12px;
     color: #4b5563;
@@ -526,7 +595,9 @@ html, body {
     line-height: 1.6;
     max-height: 300px;
     overflow-y: auto;
+    transition: background-color 0.55s ease, color 0.55s ease, border-color 0.55s ease;
 }
+#main.code-mode .thought-content { background: #131d22; color: #7a8a96; border-color: #252f35; }
 
 .thought-content h4 {
     font-size: 11px;
@@ -536,6 +607,7 @@ html, body {
     color: #6b7280;
     margin-bottom: 4px;
 }
+#main.code-mode .thought-content h4 { color: var(--cm-text-dim); }
 
 .thought-content h4:not(:first-child) { margin-top: 12px; }
 
@@ -591,7 +663,7 @@ html, body {
     margin: 4px 0 4px 16px;
     padding: 8px 10px;
     background: #f9fafb;
-    border: 1px solid var(--border);
+    border: 1px solid #e5e7eb;
     border-radius: 6px;
     font-size: 12px;
     color: #4b5563;
@@ -600,7 +672,9 @@ html, body {
     line-height: 1.6;
     max-height: 200px;
     overflow-y: auto;
+    transition: background-color 0.55s ease, color 0.55s ease, border-color 0.55s ease;
 }
+#main.code-mode .recall-note-content { background: #131d22; color: #7a8a96; border-color: #252f35; }
 
 /* ── timestamps ─────────────────────────────────────── */
 .msg-time {
@@ -617,15 +691,19 @@ html, body {
     padding: 2px 0 6px;
 }
 .typing-indicator span {
-    font-size: 13px; color: var(--text-dim);
+    font-size: 13px; color: #6b7280;
     font-style: italic;
+    transition: color 0.55s ease;
 }
+#main.code-mode .typing-indicator span { color: #b0bec5; }
 .typing-dots { display: flex; gap: 4px; align-items: center; }
 .typing-dots b {
     width: 5px; height: 5px; border-radius: 50%;
-    background: var(--text-dim); display: block;
+    background: #6b7280; display: block;
     animation: bounce 1.2s infinite ease-in-out;
+    transition: background-color 0.55s ease;
 }
+#main.code-mode .typing-dots b { background: #b0bec5; }
 .typing-dots b:nth-child(2) { animation-delay: .2s; }
 .typing-dots b:nth-child(3) { animation-delay: .4s; }
 @@keyframes bounce {
@@ -695,11 +773,13 @@ html, body {
 }
 .system-block {
     width: 100%;
-    border: 1px solid var(--border);
+    border: 1px solid #e5e7eb;
     border-radius: 8px;
     overflow: hidden;
     background: #fafafa;
+    transition: background-color 0.55s ease, border-color 0.55s ease;
 }
+#main.code-mode .system-block { background: #131d22; border-color: #252f35; }
 .system-block > summary {
     display: flex; align-items: center; justify-content: space-between;
     padding: 7px 12px;
@@ -723,9 +803,11 @@ html, body {
     font-size: 12px; line-height: 1.6;
     white-space: pre-wrap; word-break: break-word;
     color: #4b5563;
-    border-top: 1px solid var(--border);
+    border-top: 1px solid #e5e7eb;
     max-height: 400px; overflow-y: auto;
+    transition: color 0.55s ease, border-color 0.55s ease;
 }
+#main.code-mode .system-bubble { color: #7a8a96; border-top-color: #252f35; }
 
 /* prompt — left aligned, distinct from assistant */
 .msg-row.internal-prompt {
@@ -739,10 +821,12 @@ html, body {
 .msg-row.internal-prompt .bubble {
     font-size: 14px; line-height: 1.6;
     white-space: pre-wrap; word-break: break-word;
-    color: var(--text-dim); max-width: 100%;
-    background: #f9fafb; border: 1px solid var(--border);
+    color: #6b7280; max-width: 100%;
+    background: #f9fafb; border: 1px solid #e5e7eb;
     border-radius: 8px; padding: 10px 14px;
+    transition: background-color 0.55s ease, color 0.55s ease, border-color 0.55s ease;
 }
+#main.code-mode .msg-row.internal-prompt .bubble { background: #131d22; color: #7a8a96; border-color: #252f35; }
 </style>
     @await RenderSectionAsync("Styles", required: false)
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/vs2015.min.css" />
