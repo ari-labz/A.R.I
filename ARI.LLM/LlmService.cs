@@ -15,6 +15,12 @@ public class LlmService : IDisposable
     private readonly CommandService commands;
     private readonly ConcurrentDictionary<string, CancellationTokenSource> processingThreads = new();
 
+    // Live call tracking — keyed by threadKey, written before recall, cleared in finally.
+    // Stored here (not on Thread) so the control-panel polling thread reads from a
+    // ConcurrentDictionary with full memory-barrier guarantees, bypassing any Thread-level
+    // visibility issues.
+    private readonly ConcurrentDictionary<string, LiveCallInfo> dialogueLiveCalls = new();
+
     // Per-thread watcher channels — each connected client gets one.
     // true = history updated, null = thread deleted.
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<Guid, Channel<bool?>>> threadWatchers = new();
@@ -80,6 +86,72 @@ public class LlmService : IDisposable
 
     public IReadOnlyCollection<string> GetActiveThreadKeys()
         => dialogue?.ThreadKeys ?? Array.Empty<string>();
+
+    /// <summary>Returns (estimatedTokensUsed, tokenLimit) for the dialogue thread's current context window. 0 limit = unconfigured.</summary>
+    public (int Used, int Limit) GetDialogueContextStats(string threadKey)
+        => dialogue?.GetThread(threadKey)?.GetContextStats() ?? (0, 0);
+
+    /// <summary>Returns all currently-active LLM calls across every agent, for live token display.</summary>
+    public IReadOnlyList<LiveCallInfo> GetAllLiveCalls()
+    {
+        List<LiveCallInfo> result = new(dialogueLiveCalls.Values);
+        void Collect(Agent? agent) { if (agent is not null) result.AddRange(agent.GetLiveCalls()); }
+        // Dialogue is covered by dialogueLiveCalls; collect internal agents via Thread.LiveCall.
+        Collect(engram); Collect(memory); Collect(refactor); Collect(context);
+        return result;
+    }
+
+    /// <summary>Returns all recorded LLM calls with token data, across every agent, ordered by time.</summary>
+    public IReadOnlyList<LlmCallStat> GetAllCallStats()
+    {
+        List<LlmCallStat> result = new();
+
+        void Collect(Agent? agent, string agentName)
+        {
+            if (agent is null) return;
+            foreach (string key in agent.ThreadKeys)
+            {
+                Thread? t = agent.GetThread(key);
+                if (t is null) continue;
+                foreach (ThreadItem item in t.History)
+                {
+                    if (item is AriResponse resp && (resp.CompletionTokens > 0 || resp.PromptTokens > 0))
+                    {
+                        result.Add(new LlmCallStat(agentName, key, resp.Timestamp,
+                            resp.CompletionTokens, resp.OutputTokenLimit,
+                            resp.PromptTokens, resp.ContextTokenLimit,
+                            resp.HadImageAttachments, resp.EstimatedTextPromptTokens,
+                            resp.ImageTokenLimit));
+                    }
+                }
+            }
+        }
+
+        Collect(dialogue, "Dialogue");
+        Collect(engram,   "Engram");
+        Collect(memory,   "Memory");
+        Collect(refactor, "Refactor");
+        Collect(context,  "Context");
+
+        result.Sort((a, b) => a.Timestamp.CompareTo(b.Timestamp));
+        return result;
+    }
+
+    public record LlmCallStat(
+        string   AgentName,
+        string   ThreadKey,
+        DateTime Timestamp,
+        int      CompletionTokens,
+        int      OutputTokenLimit,
+        int      PromptTokens              = 0,
+        int      ContextTokenLimit         = 0,
+        bool     HadImageAttachments       = false,
+        int      EstimatedTextPromptTokens = 0,
+        int      ImageTokenLimit           = 0)
+    {
+        public int EstimatedImageTokens =>
+            HadImageAttachments ? Math.Max(0, PromptTokens - EstimatedTextPromptTokens) : 0;
+    }
 
     /// <summary>Returns the typed ThreadItem list for a dialogue thread. This is what clients render.</summary>
     public IReadOnlyList<ThreadItem> GetThreadItems(string threadKey)
@@ -236,6 +308,14 @@ public class LlmService : IDisposable
 
         Thread dialogueThread = dialogue.GetOrCreateThread(threadKey);
 
+        // Create and register the live call record NOW — before recall — so the control panel
+        // shows activity immediately. The same object is passed to the Thread so its streaming
+        // loop can update EstimatedOutputTokens in place as tokens arrive.
+        var liveCall = new LiveCallInfo("Dialogue", threadKey, 0,
+            dialogue.MaxTokens, dialogue.MaxContextTokens, dialogue.MaxImageTokens);
+        dialogueLiveCalls[threadKey] = liveCall;
+        dialogueThread.SetLiveCall(liveCall);
+
         // If the previous history item is an unanswered user message, combine it with the
         // current prompt so the [Prompt] block (and recall) cover both questions.
         string effectivePrompt = dialogueThread.History.Count > 0 && dialogueThread.History[^1] is UserMessage prev
@@ -273,6 +353,7 @@ public class LlmService : IDisposable
         }
         finally
         {
+            dialogueLiveCalls.TryRemove(threadKey, out _);
             dialogueThread.ClearMessageAttachments();
             processingThreads.TryRemove(new KeyValuePair<string, CancellationTokenSource>(threadKey, cts));
             cts.Dispose();

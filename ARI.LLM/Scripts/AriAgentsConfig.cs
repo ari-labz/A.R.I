@@ -68,6 +68,13 @@ internal class AgentConfig
     public int MaxContextTokens { get; init; } = 0;
 
     /// <summary>
+    /// Dialogue only. Maximum estimated image tokens allowed per call.
+    /// Tokens are estimated by subtracting the text-prompt estimate from total prompt tokens.
+    /// 0 = unlimited.
+    /// </summary>
+    public int MaxImageTokens { get; init; } = 0;
+
+    /// <summary>
     /// Whether this agent is allowed to think (extended reasoning / think tokens).
     /// When false, <|think_off|> is appended to the system prompt. Defaults to false.
     /// </summary>

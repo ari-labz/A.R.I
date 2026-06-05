@@ -18,6 +18,7 @@ public class WebPanelConfig
     public string GoogleClientId { get; init; } = "";
     public string GoogleClientSecret { get; init; } = "";
     public string AllowedEmail { get; init; } = "";
+    public string LogPath { get; init; } = "";
 }
 
 public class WebPanelService : IAsyncDisposable
@@ -25,15 +26,18 @@ public class WebPanelService : IAsyncDisposable
     private readonly ILoggerFactory loggerFactory;
     private readonly LlmServiceHolder holder;
     private readonly WebPanelConfig config;
+    private readonly SystemInfoHolder systemInfo;
     private WebApplication? app;
 
-    public LlmServiceHolder Holder => holder;
+    public LlmServiceHolder  Holder     => holder;
+    public SystemInfoHolder  SystemInfo => systemInfo;
 
     public WebPanelService(ILoggerFactory loggerFactory, WebPanelConfig config)
     {
         this.loggerFactory = loggerFactory;
-        this.holder = new LlmServiceHolder();
-        this.config = config;
+        this.holder        = new LlmServiceHolder();
+        this.config        = config;
+        this.systemInfo    = new SystemInfoHolder();
     }
 
     public async Task Start(CancellationToken cancellationToken)
@@ -53,6 +57,8 @@ public class WebPanelService : IAsyncDisposable
         builder.WebHost.UseShutdownTimeout(TimeSpan.FromSeconds(2));
 
         builder.Services.AddSingleton(holder);
+        builder.Services.AddSingleton(config);
+        builder.Services.AddSingleton(systemInfo);
         builder.Services.AddControllersWithViews()
             .AddApplicationPart(typeof(ChatController).Assembly);
 

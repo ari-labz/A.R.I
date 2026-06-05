@@ -7,6 +7,13 @@ public class AriResponse : ThreadItem
     public double?         ThinkingSeconds { get; init; }
     public string?         RecallNotes     { get; init; }
     public string?         ContextSummary  { get; init; }
+    public int             CompletionTokens        { get; init; }
+    public int             OutputTokenLimit        { get; init; }
+    public int             PromptTokens            { get; init; }
+    public int             ContextTokenLimit       { get; init; }
+    public bool            HadImageAttachments       { get; init; }
+    public int             EstimatedTextPromptTokens { get; init; }
+    public int             ImageTokenLimit           { get; init; }
 
     public override string? Message    => Content;
     public override string  AuthorName => "ARI";

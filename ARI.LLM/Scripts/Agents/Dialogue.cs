@@ -22,6 +22,7 @@ internal class Dialogue : Agent
 
     protected override int  GetShortTermMemoryLimit() => shortTermMemoryLimit;
     protected override int  GetMaxContextTokens()      => maxContextTokens;
+    internal override  int  MaxContextTokens           => maxContextTokens;
     internal override  bool SuppressPromptLog          => true;
 
     internal async Task<string> SendPrompt(
