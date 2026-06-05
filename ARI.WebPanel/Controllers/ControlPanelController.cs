@@ -147,7 +147,8 @@ public class ControlPanelApiController(LlmServiceHolder holder, WebPanelConfig c
                 if (used <= 0) continue;
                 contextStats.Add(new
                 {
-                    threadKey = key,
+                    threadKey  = key,
+                    agentName  = "Dialogue",
                     used,
                     limit,
                     pct = limit > 0 ? (int)(used * 100.0 / limit) : 0,

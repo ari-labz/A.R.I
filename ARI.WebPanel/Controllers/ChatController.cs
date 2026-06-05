@@ -310,9 +310,10 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
         return Ok();
     }
 
-    [HttpGet("{threadKey}/stream")]
-    public async Task Stream(string threadKey, [FromQuery] string prompt, CancellationToken cancellationToken)
+    [HttpPost("{threadKey}/stream")]
+    public async Task Stream(string threadKey, [FromBody] StreamRequest body, CancellationToken cancellationToken)
     {
+        string prompt = body?.Prompt ?? string.Empty;
         Response.Headers[HeaderNames.ContentType] = "text/event-stream";
         Response.Headers[HeaderNames.CacheControl] = "no-cache";
         Response.Headers["X-Accel-Buffering"] = "no";
@@ -320,6 +321,19 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
         if (Llm is null)
         {
             await Response.WriteAsync("data: [ERROR] ARI is not ready yet.\n\n", cancellationToken);
+            await Response.Body.FlushAsync(cancellationToken);
+            return;
+        }
+
+        // Safeguard: reject prompts that are clearly too large for the context window.
+        // Estimate at 4 chars/token; limit comes from the thread's configured MaxContextTokens (0 = unconfigured).
+        var (_, contextLimit) = Llm.GetDialogueContextStats(threadKey);
+        int effectiveLimit    = contextLimit > 0 ? contextLimit : 8000;
+        int estimatedTokens   = prompt.Length / 4;
+        if (estimatedTokens > effectiveLimit)
+        {
+            await Response.WriteAsync("data: Your message is too large for me to process. Please attach the content as a file instead.\n\n", cancellationToken);
+            await Response.WriteAsync("data: [DONE]\n\n", cancellationToken);
             await Response.Body.FlushAsync(cancellationToken);
             return;
         }
@@ -348,5 +362,6 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
     }
 }
 
+public record StreamRequest(string Prompt);
 public record CommandRequest(string? ThreadKey, string Input);
 public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active");
