@@ -8,6 +8,8 @@ public class LocalLlamaServer : IDisposable
     private readonly string modelsPath;
     private Process? serverProcess;
 
+    public int Pid { get; private set; } = -1;
+
     public LocalLlamaServer(LlamaServerConfig config, string executableDirectory)
     {
         this.config = config;
@@ -245,6 +247,7 @@ public class LocalLlamaServer : IDisposable
             ?? throw new Exception("Failed to start llama-server process.");
 
         Common.Logger.LogInformation("llama-server started (PID {Pid}).", serverProcess.Id);
+        Pid = serverProcess.Id;
         return Task.CompletedTask;
     }
 

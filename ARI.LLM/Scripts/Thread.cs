@@ -61,6 +61,24 @@ internal class Thread
     private readonly SemaphoreSlim sendLock         = new(1, 1);
     internal bool                  preserveOnCancel = false;
 
+    // Volatile so the control-panel polling thread always sees the latest value written
+    // by the streaming thread (critical on ARM / Apple Silicon where the memory model is weak).
+    private volatile LiveCallInfo? _liveCall;
+    internal LiveCallInfo? LiveCall => _liveCall;
+
+    /// <summary>
+    /// Sets a preliminary LiveCall before the actual LLM call starts (e.g. during memory recall).
+    /// SendPromptCore will replace it with a fully-populated one once messages are built.
+    /// </summary>
+    /// <summary>Called by LlmService to inject a pre-created LiveCallInfo (already stored in its ConcurrentDictionary).</summary>
+    internal void SetLiveCall(LiveCallInfo liveCall) => _liveCall = liveCall;
+
+    internal void SignalProcessingStarted()
+    {
+        if (_liveCall is null)
+            _liveCall = new LiveCallInfo(agent.Name, threadKey, 0, agent.MaxTokens, maxContextTokens, agent.MaxImageTokens);
+    }
+
     // ── Attachments ────────────────────────────────────────────────────────────
     private readonly List<Attachment> attachments        = new();
     private readonly List<Attachment> pendingMessageAtts = new();
@@ -123,6 +141,15 @@ internal class Thread
 
     internal List<ThreadMessage> SaveContext()
         => GetChatHistory(shortTermMemoryLimit, maxContextTokens > 0 ? maxContextTokens * 2 : 0);
+
+    /// <summary>Returns (estimatedTokensInContext, tokenLimit). 0 limit means unconfigured.</summary>
+    internal (int Used, int Limit) GetContextStats()
+    {
+        List<ThreadMessage> ctx = SaveContext();
+        int chars = ctx.Sum(m => (m.Username?.Length ?? 0) + 2 + (m.Content?.Length ?? 0));
+        int estimated = chars / 4;
+        return (estimated, maxContextTokens);
+    }
 
     internal void MarkEngramProcessed()
     {
@@ -213,6 +240,7 @@ internal class Thread
         }
         catch (OperationCanceledException)
         {
+            _liveCall = null;
             if (!preserveOnCancel && History.Count > 0 && History[^1] is UserMessage)
                 History.RemoveAt(History.Count - 1);
             preserveOnCancel = false;
@@ -220,6 +248,7 @@ internal class Thread
         }
         finally
         {
+            _liveCall = null;
             sendLock.Release();
         }
     }
@@ -313,6 +342,37 @@ internal class Thread
         Stopwatch       sw               = Stopwatch.StartNew();
         bool            wasThinking      = false;
         int             completionTokens = 0;
+        int             promptTokens     = 0;
+
+        bool hadImages = msgAtts.Any(a => a.IsImage) || threadAtts.Any(a => a.IsImage);
+
+        // Estimate text-only tokens from the messages already built (4 chars ≈ 1 token).
+        // Used to isolate image token cost: imageTokens ≈ promptTokens − estimatedTextTokens.
+        // Used to isolate image token cost: imageTokens ≈ promptTokens − estimatedTextTokens.
+        int estimatedTextPromptTokens = messages
+            .Sum(m =>
+            {
+                if (m is { } obj)
+                {
+                    // Anonymous object — content is a string for most messages
+                    string? content = obj.GetType().GetProperty("content")?.GetValue(obj) as string;
+                    return (content?.Length ?? 0) / 4;
+                }
+                return 0;
+            });
+
+        // Update the live call record in place so the LlmService's ConcurrentDictionary reference
+        // stays valid. If no external record was injected (e.g. internal agents), create one now.
+        if (_liveCall is { } existing)
+        {
+            existing.EstimatedInputTokens = estimatedTextPromptTokens;
+            existing.OutputTokenLimit     = maxTokens;
+            existing.HadImages            = hadImages;
+        }
+        else
+        {
+            _liveCall = new LiveCallInfo(agent.Name, threadKey, estimatedTextPromptTokens, maxTokens, maxContextTokens, agent.MaxImageTokens, hadImages);
+        }
 
         while (true)
         {
@@ -368,7 +428,10 @@ internal class Thread
                 using (chunk)
                 {
                     if (chunk.RootElement.TryGetProperty("usage", out JsonElement usage))
+                    {
                         completionTokens = usage.TryGetProperty("completion_tokens", out JsonElement ctEl) ? ctEl.GetInt32() : 0;
+                        promptTokens     = usage.TryGetProperty("prompt_tokens",     out JsonElement ptEl) ? ptEl.GetInt32() : 0;
+                    }
 
                     if (!chunk.RootElement.TryGetProperty("choices", out JsonElement choices) || choices.GetArrayLength() == 0) continue;
 
@@ -420,6 +483,7 @@ internal class Thread
                     if (!string.IsNullOrEmpty(deltaText))
                     {
                         contentBuilder.Append(deltaText);
+                        if (LiveCall is { } lc) lc.EstimatedOutputTokens = contentBuilder.Length / 4;
                         if (onDelta is not null)
                             await onDelta(contentBuilder.ToString());
                     }
@@ -543,13 +607,22 @@ internal class Thread
         if (toolResults.Count > 0)              noteParts.Add(string.Join("\n\n", toolResults).TrimEnd());
         string? combinedRecallNotes = noteParts.Count > 0 ? string.Join("\n\n", noteParts) : null;
 
+        _liveCall = null;
+
         History.Add(new AriResponse
         {
-            Content         = responseText,
-            Timestamp       = DateTime.Now,
-            ThinkingSeconds = elapsed,
-            RecallNotes     = combinedRecallNotes,
-            ContextSummary  = contextSummary
+            Content                   = responseText,
+            Timestamp                 = DateTime.Now,
+            ThinkingSeconds           = elapsed,
+            RecallNotes               = combinedRecallNotes,
+            ContextSummary            = contextSummary,
+            CompletionTokens          = completionTokens,
+            OutputTokenLimit          = maxTokens > 0 ? maxTokens : 0,
+            PromptTokens              = promptTokens,
+            ContextTokenLimit         = maxContextTokens,
+            HadImageAttachments       = hadImages,
+            EstimatedTextPromptTokens = estimatedTextPromptTokens,
+            ImageTokenLimit           = agent.MaxImageTokens,
         });
         Updated?.Invoke();
 

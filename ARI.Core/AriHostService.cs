@@ -55,6 +55,7 @@ public class AriHostService : BackgroundService
                 GoogleClientId    = config.WebPanel.Google.ClientId,
                 GoogleClientSecret= config.WebPanel.Google.ClientSecret,
                 AllowedEmail      = config.WebPanel.Google.AllowedEmail,
+                LogPath           = Path.Combine(executableDirectory, "ARI.log"),
             });
             await webPanelService.Start(stoppingToken);
         }
@@ -71,6 +72,7 @@ public class AriHostService : BackgroundService
 
         llamaServer = new LocalLlamaServer(config.LlamaServer, executableDirectory);
         await llamaServer.IsReady();
+        webPanelService?.SystemInfo.SetLlamaPid(llamaServer.Pid);
 
         Common.Logger.LogInformation("Loading agents...");
         string brainConfigPath = Path.Combine(executableDirectory, "AriBrain.json");

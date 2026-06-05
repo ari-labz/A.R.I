@@ -30,58 +30,82 @@
         </div>
     </aside>
 
-    <!-- dim overlay for mobile sidebar -->
     <div id="sidebar-overlay"></div>
 
-    <!-- floating toggle when sidebar is collapsed -->
     <button id="topbar-toggle" title="Open sidebar">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>
         </svg>
     </button>
 
-    <!-- main -->
     <div id="main" class="cp-main">
 
-        <!-- logo header — mirrors the active-thread compact header -->
         <div id="cp-header">
             <img id="cp-logo" src="/images/logo-black.png?v=2" alt="A·R·I" />
-            <span id="cp-title">Control Panel</span>
+            <span id="cp-title">Overview</span>
         </div>
 
-        <!-- content area -->
-        <div id="cp-content">
-            <div id="cp-content-inner">
+        <div id="cp-grid-wrap">
+            <link rel="stylesheet" href="/css/gridstack.min.css" />
+            <link rel="stylesheet" href="/css/gridstack-extra.min.css" />
+            <script src="/js/gridstack-all.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 
-                <section class="cp-section">
-                    <h2 class="cp-section-title">Overview</h2>
-                    <p class="cp-body">Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.</p>
-                    <p class="cp-body">Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.</p>
-                </section>
+            <div class="grid-stack">
 
-                <section class="cp-section">
-                    <h2 class="cp-section-title">Placeholder Section</h2>
-                    <p class="cp-body">Pellentesque habitant morbi tristique senectus et netus et malesuada fames ac turpis egestas. Vestibulum tortor quam, feugiat vitae, ultricies eget, tempor sit amet, ante. Donec eu libero sit amet quam egestas semper.</p>
-                    <div class="cp-card-row">
-                        <div class="cp-card">
-                            <div class="cp-card-label">Stat one</div>
-                            <div class="cp-card-value">—</div>
+                <!-- Log viewer -->
+                <div class="grid-stack-item" gs-x="0" gs-y="0" gs-w="8" gs-h="10">
+                    <div class="grid-stack-item-content cp-widget" id="widget-log">
+                        <div class="cp-widget-header">
+                            <span class="cp-widget-title">ARI.log</span>
+                            <div style="display:flex;align-items:center;gap:8px">
+                                <span class="cp-scroll-hint" id="log-scroll-hint">▼ new lines</span>
+                                <span class="cp-widget-badge" id="log-status">connecting…</span>
+                            </div>
                         </div>
-                        <div class="cp-card">
-                            <div class="cp-card-label">Stat two</div>
-                            <div class="cp-card-value">—</div>
+                        <div class="cp-widget-body log-body" id="log-lines"></div>
+                    </div>
+                </div>
+
+                <!-- Token usage per call -->
+                <div class="grid-stack-item" gs-x="8" gs-y="0" gs-w="8" gs-h="6">
+                    <div class="grid-stack-item-content cp-widget" id="widget-tokens">
+                        <div class="cp-widget-header">
+                            <span class="cp-widget-title">Token usage per call</span>
                         </div>
-                        <div class="cp-card">
-                            <div class="cp-card-label">Stat three</div>
-                            <div class="cp-card-value">—</div>
+                        <div class="cp-widget-body" style="padding:0;overflow-y:auto">
+                            <div id="live-calls-section"></div>
+                            <div id="token-rows" style="padding:8px 14px 12px">
+                                <div class="cp-placeholder">Waiting for data…</div>
+                            </div>
                         </div>
                     </div>
-                </section>
+                </div>
 
-                <section class="cp-section">
-                    <h2 class="cp-section-title">Another Placeholder</h2>
-                    <p class="cp-body">Aenean lacinia bibendum nulla sed consectetur. Cras mattis consectetur purus sit amet fermentum. Cras justo odio, dapibus ac facilisis in, egestas eget quam. Nullam quis risus eget urna mollis ornare vel eu leo.</p>
-                </section>
+                <!-- RAM line chart -->
+                <div class="grid-stack-item" gs-x="8" gs-y="6" gs-w="4" gs-h="4">
+                    <div class="grid-stack-item-content cp-widget" id="widget-ram">
+                        <div class="cp-widget-header">
+                            <span class="cp-widget-title">RAM</span>
+                            <span class="cp-widget-badge" id="ram-badge">—</span>
+                        </div>
+                        <div class="cp-widget-body cp-chart-body">
+                            <canvas id="ram-chart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Context usage -->
+                <div class="grid-stack-item" gs-x="12" gs-y="6" gs-w="4" gs-h="4">
+                    <div class="grid-stack-item-content cp-widget" id="widget-context">
+                        <div class="cp-widget-header">
+                            <span class="cp-widget-title">Context</span>
+                        </div>
+                        <div class="cp-widget-body" id="context-rows">
+                            <div class="cp-placeholder">No active threads</div>
+                        </div>
+                    </div>
+                </div>
 
             </div>
         </div>
@@ -92,22 +116,15 @@
 @section Styles {
 <style>
 
-/* ── control-panel overrides ──────────────────────────── */
-
-/* sidebar back button */
+/* ── sidebar extras ───────────────────────────────────── */
 #btn-back {
-    display: flex;
-    align-items: center;
-    gap: 9px;
+    display: flex; align-items: center; gap: 9px;
     margin: 0 10px 14px;
     padding: 9px 12px;
     border: 1px solid rgba(255,255,255,.15);
-    background: none;
-    color: var(--sidebar-text);
-    cursor: pointer;
-    border-radius: 8px;
-    font-size: 14px;
-    font-family: inherit;
+    background: none; color: var(--sidebar-text);
+    cursor: pointer; border-radius: 8px;
+    font-size: 14px; font-family: inherit;
     text-decoration: none;
     transition: background .12s, border-color .12s;
     width: calc(100% - 20px);
@@ -115,148 +132,583 @@
 #btn-back:hover { background: var(--sidebar-hover); border-color: rgba(255,255,255,.25); }
 #btn-back svg { flex-shrink: 0; opacity: .7; }
 
-/* sidebar nav items */
-#cp-sidebar-nav {
-    padding: 0 8px;
-}
+#cp-sidebar-nav { padding: 0 8px; }
 .cp-nav-item {
-    padding: 9px 12px;
-    border-radius: 7px;
-    font-size: 14px;
-    color: var(--sidebar-text);
-    cursor: pointer;
+    padding: 9px 12px; border-radius: 7px;
+    font-size: 14px; color: var(--sidebar-text); cursor: pointer;
     transition: background .1s;
 }
 .cp-nav-item:hover  { background: var(--sidebar-hover); }
 .cp-nav-item.active { background: var(--sidebar-active); color: #fff; }
 
-/* main area — no idle/active animation needed */
-#main.cp-main {
-    flex-direction: column;
-}
+/* ── main ─────────────────────────────────────────────── */
+#main.cp-main { flex-direction: column; }
 
-/* header — always in compact/active state */
 #cp-header {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 0 24px;
-    height: 68px;
-    flex-shrink: 0;
+    display: flex; align-items: center; gap: 14px;
+    padding: 0 24px; height: 68px; flex-shrink: 0;
     border-bottom: 1px solid var(--border);
 }
+#cp-logo  { width: 110px; height: auto; display: block; flex-shrink: 0; }
+#cp-title { font-size: 14px; font-weight: 600; color: var(--text-dim); letter-spacing: .01em; }
 
-#cp-logo {
-    width: 110px;
-    height: auto;
-    display: block;
+/* ── grid wrap ────────────────────────────────────────── */
+#cp-grid-wrap {
+    flex: 1; overflow: hidden; min-height: 0;
+    padding: 8px 16px 12px;
+}
+
+/* ── widgets ──────────────────────────────────────────── */
+.cp-widget {
+    display: flex; flex-direction: column;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden; height: 100%;
+    box-shadow: 0 1px 4px rgba(0,0,0,.05);
+}
+
+.cp-widget-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 11px 14px 10px;
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
 }
 
-#cp-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--text-dim);
-    letter-spacing: .01em;
+.cp-widget-title {
+    font-size: 12px; font-weight: 700;
+    letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim);
 }
 
-/* scrollable content */
-#cp-content {
-    flex: 1;
-    overflow-y: auto;
-    padding: 32px 24px 48px;
-    scrollbar-width: thin;
-    scrollbar-color: #d1d5db transparent;
+.cp-widget-badge {
+    font-size: 11px; color: var(--text-dim);
+    background: var(--user-bubble); border-radius: 20px; padding: 2px 8px;
+}
+.cp-widget-badge.live { color: #16a34a; background: #dcfce7; }
+
+.cp-widget-body {
+    flex: 1; overflow-y: auto; overflow-x: hidden;
+    padding: 10px 14px;
+    scrollbar-width: thin; scrollbar-color: #d1d5db transparent;
+    font-size: 13px;
 }
 
-#cp-content-inner {
-    max-width: var(--col-max);
-    margin: 0 auto;
-    display: flex;
-    flex-direction: column;
-    gap: 40px;
+/* ── log ──────────────────────────────────────────────── */
+.log-body {
+    font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 11.5px; line-height: 1.65; color: #374151;
+    padding: 10px 12px;
+    display: flex; flex-direction: column; gap: 0;
+}
+.log-line           { white-space: pre-wrap; word-break: break-all; }
+.log-line.log-warn  { color: #b45309; }
+.log-line.log-error { color: #dc2626; }
+.log-line.log-info  { color: #374151; }
+
+.cp-scroll-hint {
+    font-size: 11px; color: #16a34a;
+    animation: hint-pulse 1.4s ease-in-out infinite;
+    display: none;
+}
+.cp-scroll-hint.visible { display: inline; }
+@@keyframes hint-pulse { 0%,100%{opacity:.4} 50%{opacity:1} }
+
+/* ── token rows ───────────────────────────────────────── */
+#token-rows { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; }
+
+.token-row       { display: flex; flex-direction: column; gap: 3px; }
+.token-row-head  { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+.token-row-agent { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+                   color: #fff; border-radius: 4px; padding: 1px 5px; flex-shrink: 0; }
+.token-row-time  { color: var(--text-dim); font-size: 11px; }
+
+.token-half      { display: flex; align-items: center; gap: 7px; }
+.token-half-label { font-size: 10px; color: var(--text-dim); width: 14px; flex-shrink: 0; text-align: center; }
+.token-half-bar  { flex: 1; height: 5px; border-radius: 99px; background: var(--user-bubble); overflow: hidden; display: flex; }
+.token-half-fill { height: 100%; border-radius: 0; transition: width .4s ease; flex-shrink: 0; }
+.token-half-val  { font-size: 11px; font-weight: 600; color: var(--text); white-space: nowrap; flex-shrink: 0; min-width: 80px; text-align: right; }
+
+/* ── RAM chart ────────────────────────────────────────── */
+.cp-chart-body { padding: 8px 10px 6px; display: flex; align-items: stretch; }
+.cp-chart-body canvas { width: 100% !important; height: 100% !important; }
+
+/* ── context rows ─────────────────────────────────────── */
+#context-rows { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; }
+
+/* ── live call indicator ──────────────────────────────── */
+.live-dot {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: #16a34a; flex-shrink: 0;
+    animation: live-pulse 1s ease-in-out infinite;
+}
+@@keyframes live-pulse { 0%,100%{opacity:.35;transform:scale(.85)} 50%{opacity:1;transform:scale(1)} }
+
+.vision-indeterminate {
+    width: 35%;
+    animation: indeterminate-slide 1.4s ease-in-out infinite;
+}
+@@keyframes indeterminate-slide {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(400%); }
 }
 
-/* sections */
-.cp-section {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
+#live-calls-section {
+    display: flex; flex-direction: column; gap: 12px;
+    padding: 10px 14px 8px;
+    border-bottom: 1px dashed var(--border);
+    margin-bottom: 4px;
 }
+#live-calls-section:empty { display: none; }
 
-.cp-section-title {
-    font-size: 16px;
-    font-weight: 700;
-    color: var(--text);
-    letter-spacing: -.01em;
-}
-
-.cp-body {
-    font-size: 15px;
-    line-height: 1.7;
-    color: var(--text-dim);
-}
-
-/* stat cards */
-.cp-card-row {
-    display: flex;
-    gap: 12px;
-    flex-wrap: wrap;
-    margin-top: 4px;
-}
-
-.cp-card {
-    flex: 1;
-    min-width: 120px;
-    background: var(--user-bubble);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 14px 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.cp-card-label {
-    font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: .06em;
-    color: var(--text-dim);
-}
-
-.cp-card-value {
-    font-size: 22px;
-    font-weight: 700;
-    color: var(--text);
-}
+/* ── placeholder ──────────────────────────────────────── */
+.cp-placeholder { color: var(--text-dim); font-size: 13px; padding: 6px 0; font-style: italic; }
 
 </style>
 }
 
 @section Scripts {
 <script>
-    // ── sidebar toggle ───────────────────────────────────
-    const sidebar  = document.getElementById('sidebar');
-    const floatBtn = document.getElementById('topbar-toggle');
-    const overlay  = document.getElementById('sidebar-overlay');
-    const isMobile = () => window.innerWidth <= 640;
 
-    function setSidebarCollapsed(collapsed) {
-        if (isMobile()) {
-            sidebar.classList.toggle('mobile-open', !collapsed);
-            overlay.classList.toggle('visible', !collapsed);
-            floatBtn.classList.toggle('visible', collapsed);
-        } else {
-            sidebar.classList.remove('mobile-open');
-            overlay.classList.remove('visible');
-            sidebar.classList.toggle('collapsed', collapsed);
-            floatBtn.classList.toggle('visible', collapsed);
+// ── sidebar toggle ───────────────────────────────────────
+const sidebar  = document.getElementById('sidebar');
+const floatBtn = document.getElementById('topbar-toggle');
+const overlay  = document.getElementById('sidebar-overlay');
+const isMobile = () => window.innerWidth <= 640;
+
+function setSidebarCollapsed(collapsed) {
+    if (isMobile()) {
+        sidebar.classList.toggle('mobile-open', !collapsed);
+        overlay.classList.toggle('visible', !collapsed);
+        floatBtn.classList.toggle('visible', collapsed);
+    } else {
+        sidebar.classList.remove('mobile-open');
+        overlay.classList.remove('visible');
+        sidebar.classList.toggle('collapsed', collapsed);
+        floatBtn.classList.toggle('visible', collapsed);
+    }
+}
+
+overlay.addEventListener('click', () => setSidebarCollapsed(true));
+document.getElementById('btn-toggle-sidebar').addEventListener('click', () => setSidebarCollapsed(true));
+floatBtn.addEventListener('click', () => setSidebarCollapsed(false));
+
+// ── gridstack ────────────────────────────────────────────
+const LAYOUT_KEY  = 'ari-cp-layout-v2';
+const COLS        = 16;
+const ROWS        = 10;
+const MARGIN      = 8;
+
+// Default positions used on first load or when saved layout is cleared
+const DEFAULT_LAYOUT = [
+    { id: 'widget-log',     x: 0,  y: 0, w: 8, h: 10 },
+    { id: 'widget-tokens',  x: 8,  y: 0, w: 8, h: 6  },
+    { id: 'widget-ram',     x: 8,  y: 6, w: 4, h: 4  },
+    { id: 'widget-context', x: 12, y: 6, w: 4, h: 4  },
+];
+
+let savedLayout = null;
+try { savedLayout = JSON.parse(localStorage.getItem(LAYOUT_KEY)); } catch {}
+
+const gridWrap = document.getElementById('cp-grid-wrap');
+
+function calcCellHeight() {
+    const h = gridWrap.clientHeight;
+    return Math.max(60, Math.floor((h - MARGIN * (ROWS + 1)) / ROWS));
+}
+
+const grid = GridStack.init({
+    column:   COLS,
+    maxRow:   ROWS,
+    float:    false,
+    margin:   MARGIN,
+    cellHeight: calcCellHeight(),
+    animate:  false,
+});
+
+// Restore saved layout (positions/sizes only, not content)
+if (savedLayout && savedLayout.length) {
+    grid.load(savedLayout, false);
+} else {
+    grid.load(DEFAULT_LAYOUT, false);
+}
+
+// Persist on any drag/resize change
+grid.on('change', () => {
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify(grid.save(false)));
+});
+
+// Refit cell height on resize — items stay the same size and reflow naturally
+let resizeTimer;
+window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => grid.cellHeight(calcCellHeight()), 80);
+});
+
+// ── log SSE ──────────────────────────────────────────────
+const logLines    = document.getElementById('log-lines');
+const logStatus   = document.getElementById('log-status');
+const scrollHint  = document.getElementById('log-scroll-hint');
+const MAX_LOG_LINES = 300;
+
+// Track whether the user has scrolled up; if so, don't auto-scroll.
+let logUserScrolled = false;
+logLines.addEventListener('scroll', () => {
+    const atBottom = logLines.scrollHeight - logLines.scrollTop - logLines.clientHeight < 40;
+    if (atBottom) {
+        logUserScrolled = false;
+        scrollHint.classList.remove('visible');
+    } else {
+        logUserScrolled = true;
+    }
+});
+
+function classifyLog(line) {
+    const l = line.toLowerCase();
+    if (l.includes('[err') || l.includes('error') || l.includes('fatal')) return 'log-error';
+    if (l.includes('[wrn') || l.includes('warn'))  return 'log-warn';
+    return 'log-info';
+}
+
+function appendLogLine(text) {
+    const el = document.createElement('div');
+    el.className = 'log-line ' + classifyLog(text);
+    el.textContent = text;
+    logLines.appendChild(el);
+    while (logLines.children.length > MAX_LOG_LINES)
+        logLines.removeChild(logLines.firstChild);
+
+    if (!logUserScrolled) {
+        logLines.scrollTop = logLines.scrollHeight;
+    } else {
+        scrollHint.classList.add('visible');
+    }
+}
+
+(function connectLog() {
+    const es = new EventSource('/api/cp/log');
+    es.onopen    = () => { logStatus.textContent = 'live'; logStatus.classList.add('live'); };
+    es.onerror   = () => { logStatus.textContent = 'reconnecting…'; logStatus.classList.remove('live'); setTimeout(connectLog, 3000); es.close(); };
+    es.onmessage = e  => appendLogLine(e.data.replace(/↵/g, '\n'));
+})();
+
+// ── RAM line chart ────────────────────────────────────────
+const RAM_HISTORY = 1800; // points kept (1800 × 1s = 30 min)
+const ramLabels   = [];
+const ramData     = [];
+const ramBadge    = document.getElementById('ram-badge');
+
+const ramCtx  = document.getElementById('ram-chart').getContext('2d');
+const ramChart = new Chart(ramCtx, {
+    type: 'line',
+    data: {
+        labels:   ramLabels,
+        datasets: [{
+            data:            ramData,
+            borderColor:     '#518c9a',
+            backgroundColor: 'rgba(81,140,154,.10)',
+            borderWidth:     1.5,
+            pointRadius:     0,
+            fill:            true,
+            tension:         0.3,
+        }]
+    },
+    options: {
+        animation:   false,
+        responsive:  true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: {
+            callbacks: { label: ctx => fmtMb(ctx.parsed.y) + ' MB' }
+        }},
+        scales: {
+            x: {
+                display: true,
+                grid:    { display: false },
+                ticks:   {
+                    font:       { size: 9 },
+                    color:      '#9ca3af',
+                    maxRotation: 0,
+                    autoSkip:   false,
+                    // show a label every 300 points (5 min at 1s/point); hide the rest
+                    callback: function(val, idx) {
+                        return idx % 300 === 0 ? this.getLabelForValue(val) : '';
+                    }
+                }
+            },
+            y: {
+                display:   true,
+                grid:      { color: 'rgba(0,0,0,.05)' },
+                ticks:     { font: { size: 10 }, color: '#9ca3af',
+                             callback: v => fmtMbShort(v) },
+                suggestedMin: 0,
+            }
         }
     }
+});
 
-    overlay.addEventListener('click', () => setSidebarCollapsed(true));
-    document.getElementById('btn-toggle-sidebar').addEventListener('click', () => setSidebarCollapsed(true));
-    floatBtn.addEventListener('click', () => setSidebarCollapsed(false));
+// ── token rows ────────────────────────────────────────────
+const tokenRows      = document.getElementById('token-rows');
+const liveSection    = document.getElementById('live-calls-section');
+const contextRows    = document.getElementById('context-rows');
+let lastLiveJson     = '';
+let lastTokensJson   = '';
+let lastContextJson  = '';
+
+// Base agent colours — output bar uses these (shifted for thresholds), input uses lighter version
+const AGENT_COLORS = {
+    Dialogue: '#223742',
+    Engram:   '#7c3aed',
+    Memory:   '#0369a1',
+    Refactor: '#b45309',
+    Context:  '#0f766e',
+    Vision:   '#6366f1',
+};
+const AGENT_LIGHT = {
+    Dialogue: '#8fa8b3',
+    Engram:   '#c4b5fd',
+    Memory:   '#7dd3fc',
+    Refactor: '#fcd34d',
+    Context:  '#5eead4',
+    Vision:   '#a5b4fc',
+};
+
+const OUT_WARN   = '#f59e0b';
+const OUT_DANGER = '#ef4444';
+const IN_WARN    = '#fde68a';  // lighter amber
+const IN_DANGER  = '#fca5a5';  // lighter red
+
+function outputColor(agentName, pct) {
+    if (pct >= 90) return OUT_DANGER;
+    if (pct >= 75) return OUT_WARN;
+    return AGENT_COLORS[agentName] ?? '#6b7280';
+}
+function inputColor(agentName, pct) {
+    if (pct >= 90) return IN_DANGER;
+    if (pct >= 75) return IN_WARN;
+    return AGENT_LIGHT[agentName] ?? '#9ca3af';
+}
+
+function agentBadge(name) {
+    const color = AGENT_COLORS[name] ?? '#6b7280';
+    return `<span class="token-row-agent" style="background:${color}">${escHtml(name)}</span>`;
+}
+
+function renderLiveCalls(live) {
+    const json = JSON.stringify(live);
+    if (json === lastLiveJson) return;
+    lastLiveJson = json;
+    liveSection.innerHTML = '';
+    live.forEach(c => {
+        const outPct  = c.outputTokenLimit > 0 ? Math.min(c.outputPct, 100) : 0;
+        const outCol  = outputColor(c.agentName, outPct);
+        const inCol   = inputColor(c.agentName, outPct);
+
+        const hasInLimit  = c.contextTokenLimit > 0;
+        const inWidth     = hasInLimit ? Math.min(c.estimatedInputTokens / c.contextTokenLimit * 100, 100) : 100;
+        const inLimitStr  = hasInLimit
+            ? ` / ${c.contextTokenLimit.toLocaleString()} (${Math.round(inWidth)}%)`
+            : ' / ∞';
+        const outLimitStr = c.outputTokenLimit > 0
+            ? ` / ${c.outputTokenLimit.toLocaleString()} (${outPct}%)`
+            : '';
+
+        const row = document.createElement('div');
+        row.className = 'token-row';
+        row.innerHTML =
+            `<div class="token-row-head">` +
+            `<span class="live-dot"></span>` +
+            agentBadge(c.agentName) +
+            `<span class="token-row-time" style="color:#16a34a;font-weight:600">generating…</span>` +
+            `</div>` +
+            // input
+            `<div class="token-half">` +
+            `<span class="token-half-label" title="Input">↑</span>` +
+            `<div class="token-half-bar"><div class="token-half-fill" style="width:${inWidth}%;background:${inCol};transition:width .9s linear"></div></div>` +
+            `<span class="token-half-val">~${c.estimatedInputTokens.toLocaleString()}${inLimitStr} in</span>` +
+            `</div>` +
+            // output (grows each second)
+            `<div class="token-half">` +
+            `<span class="token-half-label" title="Output">↓</span>` +
+            `<div class="token-half-bar"><div class="token-half-fill" style="width:${outPct}%;background:${outCol};transition:width .9s linear"></div></div>` +
+            `<span class="token-half-val">~${c.estimatedOutputTokens.toLocaleString()}${outLimitStr} out</span>` +
+            `</div>`;
+        liveSection.appendChild(row);
+        // Vision sub-row appended below the agent row.
+        if (c.hadImages) {
+            const hasImgLimit = c.imageTokenLimit > 0;
+            const limitStr    = hasImgLimit ? ` / ${c.imageTokenLimit.toLocaleString()}` : ' / ∞';
+            const visionRow   = document.createElement('div');
+            visionRow.className = 'token-row';
+            visionRow.innerHTML =
+                `<div class="token-row-head">` +
+                `<span class="live-dot" style="background:${AGENT_COLORS.Vision}"></span>` +
+                agentBadge('Vision') +
+                `<span class="token-row-time" style="color:#16a34a;font-weight:600">processing image…</span>` +
+                `</div>` +
+                `<div class="token-half">` +
+                `<span class="token-half-label" title="Image tokens">🖼</span>` +
+                `<div class="token-half-bar"><div class="token-half-fill" style="width:100%;background:${AGENT_COLORS.Vision}"></div></div>` +
+                `<span class="token-half-val">calculating…${limitStr}</span>` +
+                `</div>`;
+            liveSection.appendChild(visionRow);
+        }
+    });
+}
+
+function renderTokens(calls) {
+    const json = JSON.stringify(calls);
+    if (json === lastTokensJson) return;
+    lastTokensJson = json;
+    if (!calls.length) { tokenRows.innerHTML = '<div class="cp-placeholder">No calls recorded yet</div>'; return; }
+    const recent = calls.slice(-14).reverse();
+    tokenRows.innerHTML = '';
+    recent.forEach(c => {
+        const time       = new Date(c.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const isVision   = c.agentName === 'Vision';
+
+        const outPct     = c.outputTokenLimit > 0 ? Math.min(c.outputPct, 100) : 0;
+        const inPct      = c.contextTokenLimit > 0 ? Math.min(c.inputPct,  100) : 0;
+        const outCol     = outputColor(c.agentName, outPct);
+        const inCol      = inputColor(c.agentName, outPct); // input shade tracks output severity
+
+        const row = document.createElement('div');
+        row.className = 'token-row';
+
+        let html = `<div class="token-row-head">${agentBadge(c.agentName)}<span class="token-row-time">${escHtml(time)}</span></div>`;
+
+        // Input row (prompt tokens) — skip for Vision since it IS the input
+        if (!isVision && c.promptTokens > 0) {
+            const hasInLimit = c.contextTokenLimit > 0;
+            const inLimitStr = hasInLimit
+                ? ` / ${c.contextTokenLimit.toLocaleString()} (${inPct}%)`
+                : ' / ∞';
+            const totalWidth = hasInLimit ? inPct : 100;
+
+            // Two-tone bar: vision (purple) + text (agent light) when images were in this call
+            let barInner;
+            if (c.hadImages && c.estimatedImageTokens > 0 && hasInLimit) {
+                const visionWidth = Math.min(c.estimatedImageTokens / c.contextTokenLimit * 100, totalWidth);
+                const textWidth   = Math.max(0, totalWidth - visionWidth);
+                barInner =
+                    `<div class="token-half-fill" style="width:${visionWidth}%;background:${AGENT_COLORS.Vision}"></div>` +
+                    `<div class="token-half-fill" style="width:${textWidth}%;background:${inCol}"></div>`;
+            } else if (c.hadImages && c.estimatedImageTokens > 0) {
+                // Unlimited — full bar: vision portion then text
+                const total = c.promptTokens || 1;
+                const visionPct = Math.min(c.estimatedImageTokens / total * 100, 100);
+                const textPct   = Math.max(0, 100 - visionPct);
+                barInner =
+                    `<div class="token-half-fill" style="width:${visionPct}%;background:${AGENT_COLORS.Vision}"></div>` +
+                    `<div class="token-half-fill" style="width:${textPct}%;background:${inCol}"></div>`;
+            } else {
+                barInner = `<div class="token-half-fill" style="width:${totalWidth}%;background:${inCol}"></div>`;
+            }
+
+            html +=
+                `<div class="token-half">` +
+                `<span class="token-half-label" title="Input">↑</span>` +
+                `<div class="token-half-bar">${barInner}</div>` +
+                `<span class="token-half-val">${c.promptTokens.toLocaleString()}${inLimitStr} in</span>` +
+                `</div>`;
+        }
+
+        // Output row (completion tokens) — Vision has no output
+        if (!isVision && c.completionTokens > 0) {
+            const outLimitStr = c.outputTokenLimit > 0
+                ? ` / ${c.outputTokenLimit.toLocaleString()} (${outPct}%)`
+                : '';
+            html +=
+                `<div class="token-half">` +
+                `<span class="token-half-label" title="Output">↓</span>` +
+                `<div class="token-half-bar"><div class="token-half-fill" style="width:${outPct}%;background:${outCol}"></div></div>` +
+                `<span class="token-half-val">${c.completionTokens.toLocaleString()}${outLimitStr} out</span>` +
+                `</div>`;
+        }
+
+        // Vision row shows image token estimate vs optional limit
+        if (isVision) {
+            const hasImgLimit = c.imageTokenLimit > 0;
+            const imgPct      = hasImgLimit ? Math.min(c.imagePct, 100) : 100;
+            const imgCol      = imgPct >= 90 && hasImgLimit ? OUT_DANGER : imgPct >= 75 && hasImgLimit ? OUT_WARN : AGENT_COLORS.Vision;
+            const limitStr    = hasImgLimit
+                ? ` / ${c.imageTokenLimit.toLocaleString()} (${imgPct}%)`
+                : ' / ∞';
+            html +=
+                `<div class="token-half">` +
+                `<span class="token-half-label" title="Image tokens">🖼</span>` +
+                `<div class="token-half-bar"><div class="token-half-fill" style="width:${imgPct}%;background:${imgCol}"></div></div>` +
+                `<span class="token-half-val">~${c.promptTokens.toLocaleString()}${limitStr}</span>` +
+                `</div>`;
+        }
+
+        row.innerHTML = html;
+        tokenRows.appendChild(row);
+    });
+}
+
+function renderContext(ctx) {
+    const json = JSON.stringify(ctx);
+    if (json === lastContextJson) return;
+    lastContextJson = json;
+    if (!ctx.length) { contextRows.innerHTML = '<div class="cp-placeholder">No active threads</div>'; return; }
+    contextRows.innerHTML = '';
+    ctx.forEach(c => {
+        const hasLimit = c.limit > 0;
+        const pct      = hasLimit ? Math.min(c.pct, 100) : 0;
+        const fill     = pct >= 90 ? 'danger' : pct >= 70 ? 'warn' : '';
+        const row = document.createElement('div');
+        row.className = 'token-row';
+        row.innerHTML =
+            `<div class="token-row-meta">` +
+            `<span class="token-row-label">${escHtml(c.threadKey.slice(0, 20))}</span>` +
+            `<span class="token-row-value">~${c.used.toLocaleString()}${hasLimit ? ' / ' + c.limit.toLocaleString() : ''} tok</span>` +
+            `</div>` +
+            (hasLimit ? `<div class="token-bar-bg"><div class="token-bar-fill ${fill}" style="width:${pct}%"></div></div>` : '');
+        contextRows.appendChild(row);
+    });
+}
+
+// ── stats polling ────────────────────────────────────────
+function fmtMb(mb)      { return mb >= 1024 ? (mb / 1024).toFixed(2) + ' GB' : mb.toFixed(0) + ' MB'; }
+function fmtMbShort(mb) { return mb >= 1024 ? (mb / 1024).toFixed(1) + 'G'  : mb.toFixed(0) + 'M';  }
+
+// RAM polls every 1 s for spike visibility; also carries live call data
+let prevLiveKeys = '';
+async function pollRam() {
+    try {
+        const res  = await fetch('/api/cp/ram');
+        const data = await res.json();
+        const now  = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        ramLabels.push(now);
+        ramData.push(data.ramMb);
+        if (ramLabels.length > RAM_HISTORY) { ramLabels.shift(); ramData.shift(); }
+        ramChart.update('none');
+        ramBadge.textContent = fmtMb(data.ramMb);
+        const live    = data.liveCalls ?? [];
+        const liveKeys = live.map(c => c.threadKey).join(',');
+        const callFinished = prevLiveKeys !== '' && live.length < prevLiveKeys.split(',').filter(Boolean).length;
+        prevLiveKeys = liveKeys;
+        renderLiveCalls(live);
+        // A call just finished — fetch completed stats immediately so there's no gap.
+        if (callFinished) pollStats();
+    } catch { /* ignore */ }
+}
+
+// Tokens + context poll every 5 s
+async function pollStats() {
+    try {
+        const res  = await fetch('/api/cp/stats');
+        const data = await res.json();
+        renderTokens(data.calls);
+        renderContext(data.context);
+    } catch { /* ignore */ }
+}
+
+function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+pollRam();
+setInterval(pollRam, 1000);
+pollStats();
+setInterval(pollStats, 5000);
+
 </script>
 }

@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+
 namespace ARI.LLM;
 
 internal class Agent
@@ -7,9 +9,11 @@ internal class Agent
     internal readonly string ModelString;
     internal readonly string SystemPrompt;
     internal readonly int    MaxTokens;
+    internal readonly int    MaxImageTokens;
     internal readonly bool   Think;
+    internal virtual  int    MaxContextTokens => 0;
 
-    protected readonly Dictionary<string, Thread> threads = new();
+    protected readonly ConcurrentDictionary<string, Thread> threads = new();
 
     /// <summary>Fires whenever any thread's history changes. Payload is the thread key.</summary>
     internal event Action<string>? ThreadUpdated;
@@ -19,12 +23,13 @@ internal class Agent
 
     protected Agent(AgentConfig config)
     {
-        Name         = config.Name;
-        Endpoint     = config.Endpoint;
-        ModelString  = config.Model;
-        SystemPrompt = config.SystemPrompt;
-        MaxTokens    = config.MaxTokens;
-        Think        = config.Think;
+        Name           = config.Name;
+        Endpoint       = config.Endpoint;
+        ModelString    = config.Model;
+        SystemPrompt   = config.SystemPrompt;
+        MaxTokens      = config.MaxTokens;
+        MaxImageTokens = config.MaxImageTokens;
+        Think          = config.Think;
     }
 
     // ── Threads ─────────────────────────────────────────────────────────────────
@@ -33,6 +38,9 @@ internal class Agent
 
     internal Thread? GetThread(string threadKey)
         => threads.TryGetValue(threadKey, out Thread? t) ? t : null;
+
+    internal IEnumerable<LiveCallInfo> GetLiveCalls()
+        => threads.Values.Select(t => t.LiveCall).Where(l => l is not null)!;
 
     internal Thread GetOrCreateThread(string threadKey)
     {
@@ -95,7 +103,7 @@ internal class Agent
         thread.Updated  += () => ThreadUpdated?.Invoke(threadKey);
         thread.Deleted  += () =>
         {
-            threads.Remove(threadKey);
+            threads.TryRemove(threadKey, out _);
             ThreadDeleted?.Invoke(threadKey);
         };
     }
