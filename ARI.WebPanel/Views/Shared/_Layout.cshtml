@@ -643,22 +643,6 @@ html, body {
 .btn-send:hover:not(:disabled) { background: var(--accent-hover); }
 .btn-send:disabled { opacity: .3; cursor: default; }
 
-/* ── internal thread toggle ──────────────────────────── */
-#sidebar-internal-toggle {
-    padding: 10px 16px 14px;
-    border-top: 1px solid rgba(255,255,255,.07);
-    flex-shrink: 0;
-}
-#sidebar-internal-toggle label {
-    display: flex; align-items: center; gap: 8px;
-    font-size: 12px; color: var(--sidebar-dim);
-    cursor: pointer; user-select: none;
-}
-#sidebar-internal-toggle input[type=checkbox] {
-    accent-color: var(--sidebar-text);
-    width: 13px; height: 13px; cursor: pointer; flex-shrink: 0;
-}
-
 /* internal threads in the sidebar list */
 #thread-list li.internal-thread {
     color: var(--sidebar-dim);

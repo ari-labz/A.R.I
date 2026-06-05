@@ -28,11 +28,14 @@
             <div id="sidebar-section-label">Recents</div>
             <ul id="thread-list"></ul>
 
-            <div id="sidebar-internal-toggle">
-                <label>
-                    <input type="checkbox" id="chk-show-internal" />
-                    Show internal threads
-                </label>
+            <div id="sidebar-footer">
+                <a id="btn-control-panel" href="/controlpanel" title="Control Panel">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                    </svg>
+                    Control Panel
+                </a>
             </div>
         </div>
     </aside>
@@ -145,6 +148,28 @@
 
 @section Styles {
 <style>
+
+/* ── Sidebar footer settings button ──────────────────────────────── */
+#sidebar-footer {
+    padding: 10px 10px 14px;
+    border-top: 1px solid rgba(255,255,255,.07);
+    flex-shrink: 0;
+}
+#btn-control-panel {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 12px;
+    border-radius: 7px;
+    font-size: 14px;
+    color: var(--sidebar-dim);
+    cursor: pointer;
+    text-decoration: none;
+    transition: background .1s, color .1s;
+    width: 100%;
+}
+#btn-control-panel:hover { background: var(--sidebar-hover); color: var(--sidebar-text); }
+#btn-control-panel svg { flex-shrink: 0; }
 
 /* ── Drop overlay — two zones ─────────────────────────────────────── */
 #drop-overlay {
@@ -684,9 +709,7 @@
     // ── thread list ─────────────────────────────────────
     async function loadThreads() {
         try {
-            const showInternal = document.getElementById('chk-show-internal').checked;
-            const url = showInternal ? '/api/threads?includeInternal=true' : '/api/threads';
-            const res = await fetch(url);
+            const res = await fetch('/api/threads');
             const threads = await res.json();
             const list = document.getElementById('thread-list');
 
@@ -725,9 +748,7 @@
         } catch { /* silently ignore network hiccups during thread list refresh */ }
     }
 
-    document.getElementById('chk-show-internal').addEventListener('change', loadThreads);
-
-    document.getElementById('btn-new-chat').addEventListener('click', () => {
+document.getElementById('btn-new-chat').addEventListener('click', () => {
         if (watchEventSource)  { watchEventSource.close();  watchEventSource  = null; }
         if (activeEventSource) { activeEventSource.close(); activeEventSource = null; isStreaming = false; }
         activeThread = null;

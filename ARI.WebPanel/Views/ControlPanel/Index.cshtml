@@ -1,0 +1,262 @@
+@{
+    Layout = "_Layout";
+    ViewData["Title"] = "Control Panel — A·R·I";
+}
+
+<div id="shell">
+
+    <!-- sidebar -->
+    <aside id="sidebar">
+        <div id="sidebar-inner">
+            <div id="sidebar-header">
+                <img id="sidebar-wordmark" src="/images/logo-white.png?v=2" alt="A·R·I" />
+                <button id="btn-toggle-sidebar" title="Close sidebar">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>
+                    </svg>
+                </button>
+            </div>
+
+            <a id="btn-back" href="/">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="15 18 9 12 15 6"/>
+                </svg>
+                Back
+            </a>
+
+            <div id="cp-sidebar-nav">
+                <div class="cp-nav-item active">Overview</div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- dim overlay for mobile sidebar -->
+    <div id="sidebar-overlay"></div>
+
+    <!-- floating toggle when sidebar is collapsed -->
+    <button id="topbar-toggle" title="Open sidebar">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>
+        </svg>
+    </button>
+
+    <!-- main -->
+    <div id="main" class="cp-main">
+
+        <!-- logo header — mirrors the active-thread compact header -->
+        <div id="cp-header">
+            <img id="cp-logo" src="/images/logo-black.png?v=2" alt="A·R·I" />
+            <span id="cp-title">Control Panel</span>
+        </div>
+
+        <!-- content area -->
+        <div id="cp-content">
+            <div id="cp-content-inner">
+
+                <section class="cp-section">
+                    <h2 class="cp-section-title">Overview</h2>
+                    <p class="cp-body">Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.</p>
+                    <p class="cp-body">Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.</p>
+                </section>
+
+                <section class="cp-section">
+                    <h2 class="cp-section-title">Placeholder Section</h2>
+                    <p class="cp-body">Pellentesque habitant morbi tristique senectus et netus et malesuada fames ac turpis egestas. Vestibulum tortor quam, feugiat vitae, ultricies eget, tempor sit amet, ante. Donec eu libero sit amet quam egestas semper.</p>
+                    <div class="cp-card-row">
+                        <div class="cp-card">
+                            <div class="cp-card-label">Stat one</div>
+                            <div class="cp-card-value">—</div>
+                        </div>
+                        <div class="cp-card">
+                            <div class="cp-card-label">Stat two</div>
+                            <div class="cp-card-value">—</div>
+                        </div>
+                        <div class="cp-card">
+                            <div class="cp-card-label">Stat three</div>
+                            <div class="cp-card-value">—</div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="cp-section">
+                    <h2 class="cp-section-title">Another Placeholder</h2>
+                    <p class="cp-body">Aenean lacinia bibendum nulla sed consectetur. Cras mattis consectetur purus sit amet fermentum. Cras justo odio, dapibus ac facilisis in, egestas eget quam. Nullam quis risus eget urna mollis ornare vel eu leo.</p>
+                </section>
+
+            </div>
+        </div>
+
+    </div>
+</div>
+
+@section Styles {
+<style>
+
+/* ── control-panel overrides ──────────────────────────── */
+
+/* sidebar back button */
+#btn-back {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 0 10px 14px;
+    padding: 9px 12px;
+    border: 1px solid rgba(255,255,255,.15);
+    background: none;
+    color: var(--sidebar-text);
+    cursor: pointer;
+    border-radius: 8px;
+    font-size: 14px;
+    font-family: inherit;
+    text-decoration: none;
+    transition: background .12s, border-color .12s;
+    width: calc(100% - 20px);
+}
+#btn-back:hover { background: var(--sidebar-hover); border-color: rgba(255,255,255,.25); }
+#btn-back svg { flex-shrink: 0; opacity: .7; }
+
+/* sidebar nav items */
+#cp-sidebar-nav {
+    padding: 0 8px;
+}
+.cp-nav-item {
+    padding: 9px 12px;
+    border-radius: 7px;
+    font-size: 14px;
+    color: var(--sidebar-text);
+    cursor: pointer;
+    transition: background .1s;
+}
+.cp-nav-item:hover  { background: var(--sidebar-hover); }
+.cp-nav-item.active { background: var(--sidebar-active); color: #fff; }
+
+/* main area — no idle/active animation needed */
+#main.cp-main {
+    flex-direction: column;
+}
+
+/* header — always in compact/active state */
+#cp-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 24px;
+    height: 68px;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border);
+}
+
+#cp-logo {
+    width: 110px;
+    height: auto;
+    display: block;
+    flex-shrink: 0;
+}
+
+#cp-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-dim);
+    letter-spacing: .01em;
+}
+
+/* scrollable content */
+#cp-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 32px 24px 48px;
+    scrollbar-width: thin;
+    scrollbar-color: #d1d5db transparent;
+}
+
+#cp-content-inner {
+    max-width: var(--col-max);
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 40px;
+}
+
+/* sections */
+.cp-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.cp-section-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: -.01em;
+}
+
+.cp-body {
+    font-size: 15px;
+    line-height: 1.7;
+    color: var(--text-dim);
+}
+
+/* stat cards */
+.cp-card-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+}
+
+.cp-card {
+    flex: 1;
+    min-width: 120px;
+    background: var(--user-bubble);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.cp-card-label {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--text-dim);
+}
+
+.cp-card-value {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text);
+}
+
+</style>
+}
+
+@section Scripts {
+<script>
+    // ── sidebar toggle ───────────────────────────────────
+    const sidebar  = document.getElementById('sidebar');
+    const floatBtn = document.getElementById('topbar-toggle');
+    const overlay  = document.getElementById('sidebar-overlay');
+    const isMobile = () => window.innerWidth <= 640;
+
+    function setSidebarCollapsed(collapsed) {
+        if (isMobile()) {
+            sidebar.classList.toggle('mobile-open', !collapsed);
+            overlay.classList.toggle('visible', !collapsed);
+            floatBtn.classList.toggle('visible', collapsed);
+        } else {
+            sidebar.classList.remove('mobile-open');
+            overlay.classList.remove('visible');
+            sidebar.classList.toggle('collapsed', collapsed);
+            floatBtn.classList.toggle('visible', collapsed);
+        }
+    }
+
+    overlay.addEventListener('click', () => setSidebarCollapsed(true));
+    document.getElementById('btn-toggle-sidebar').addEventListener('click', () => setSidebarCollapsed(true));
+    floatBtn.addEventListener('click', () => setSidebarCollapsed(false));
+</script>
+}
