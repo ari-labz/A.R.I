@@ -99,7 +99,7 @@
                 <div class="grid-stack-item" gs-x="12" gs-y="6" gs-w="4" gs-h="4">
                     <div class="grid-stack-item-content cp-widget" id="widget-context">
                         <div class="cp-widget-header">
-                            <span class="cp-widget-title">Context</span>
+                            <span class="cp-widget-title">Threads</span>
                         </div>
                         <div class="cp-widget-body" id="context-rows">
                             <div class="cp-placeholder">No active threads</div>
@@ -232,8 +232,35 @@
 .cp-chart-body { padding: 8px 10px 6px; display: flex; align-items: stretch; }
 .cp-chart-body canvas { width: 100% !important; height: 100% !important; }
 
-/* ── context rows ─────────────────────────────────────── */
-#context-rows { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; }
+/* ── thread rows ──────────────────────────────────────── */
+#context-rows { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; }
+
+.thread-row { display: flex; flex-direction: column; gap: 5px; }
+
+.thread-row-head {
+    display: flex; align-items: center; gap: 7px;
+}
+.thread-row-key {
+    font-size: 11px; color: var(--text-dim);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 1; min-width: 0;
+}
+
+.thread-bar-wrap {
+    display: flex; align-items: center; gap: 8px;
+}
+.thread-bar-bg {
+    flex: 1; height: 7px; border-radius: 4px;
+    background: #e5e7eb; overflow: hidden;
+}
+.thread-bar-fill {
+    height: 100%; border-radius: 4px;
+    transition: width .6s ease, background .3s;
+}
+.thread-bar-label {
+    font-size: 11px; color: var(--text-dim);
+    white-space: nowrap; flex-shrink: 0;
+}
 
 /* ── live call indicator ──────────────────────────────── */
 .live-dot {
@@ -652,17 +679,26 @@ function renderContext(ctx) {
     if (!ctx.length) { contextRows.innerHTML = '<div class="cp-placeholder">No active threads</div>'; return; }
     contextRows.innerHTML = '';
     ctx.forEach(c => {
-        const hasLimit = c.limit > 0;
-        const pct      = hasLimit ? Math.min(c.pct, 100) : 0;
-        const fill     = pct >= 90 ? 'danger' : pct >= 70 ? 'warn' : '';
+        const hasLimit  = c.limit > 0;
+        const pct       = hasLimit ? Math.min(c.pct, 100) : 0;
+        const agentName = c.agentName ?? 'Unknown';
+        const barColor  = pct >= 90 ? OUT_DANGER : pct >= 70 ? OUT_WARN : (AGENT_COLORS[agentName] ?? '#6b7280');
+        const limitStr  = hasLimit ? ` / ${c.limit.toLocaleString()}` : '';
+        const pctStr    = hasLimit ? ` (${pct}%)` : '';
+
         const row = document.createElement('div');
-        row.className = 'token-row';
+        row.className = 'thread-row';
         row.innerHTML =
-            `<div class="token-row-meta">` +
-            `<span class="token-row-label">${escHtml(c.threadKey.slice(0, 20))}</span>` +
-            `<span class="token-row-value">~${c.used.toLocaleString()}${hasLimit ? ' / ' + c.limit.toLocaleString() : ''} tok</span>` +
+            `<div class="thread-row-head">` +
+            agentBadge(agentName) +
+            `<span class="thread-row-key" title="${escHtml(c.threadKey)}">${escHtml(c.threadKey.slice(0, 22))}</span>` +
             `</div>` +
-            (hasLimit ? `<div class="token-bar-bg"><div class="token-bar-fill ${fill}" style="width:${pct}%"></div></div>` : '');
+            `<div class="thread-bar-wrap">` +
+            `<div class="thread-bar-bg">` +
+            `<div class="thread-bar-fill" style="width:${pct}%;background:${barColor}"></div>` +
+            `</div>` +
+            `<span class="thread-bar-label">${c.used.toLocaleString()}${limitStr} tok${pctStr}</span>` +
+            `</div>`;
         contextRows.appendChild(row);
     });
 }

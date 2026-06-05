@@ -1042,24 +1042,25 @@ document.getElementById('btn-new-chat').addEventListener('click', () => {
         }
 
         const threadKeyForThisStream = activeThread;
-        const url = `/api/threads/${activeThread}/stream?prompt=${encodeURIComponent(prompt)}`;
-        const es  = new EventSource(url);
-        activeEventSource = es;
+        const abortCtrl = new AbortController();
+        activeEventSource = { close: () => abortCtrl.abort() };
 
         let ariRow   = null;
         let bubbleEl = null;
 
-        es.onmessage = e => {
-            if (activeThread !== threadKeyForThisStream) { es.close(); activeEventSource = null; return; }
-            if (e.data === '[DONE]') {
-                es.close(); activeEventSource = null; isStreaming = false;
+        function handleSseLine(line) {
+            if (!line.startsWith('data: ')) return;
+            const data = line.slice(6);
+            if (activeThread !== threadKeyForThisStream) { abortCtrl.abort(); activeEventSource = null; return; }
+            if (data === '[DONE]') {
+                activeEventSource = null; isStreaming = false;
                 pendingPrompt = null;
                 updateButtons(); loadThreads();
                 refreshLastAriRow();
                 return;
             }
-            if (e.data === '[CANCELLED]') {
-                es.close(); activeEventSource = null; isStreaming = false;
+            if (data === '[CANCELLED]') {
+                activeEventSource = null; isStreaming = false;
                 hideTyping();
                 updateButtons();
                 const box = document.getElementById('messages');
@@ -1072,28 +1073,48 @@ document.getElementById('btn-new-chat').addEventListener('click', () => {
                 }
                 return;
             }
-            if (e.data.startsWith('[ERROR]')) {
+            if (data.startsWith('[ERROR]')) {
                 hideTyping();
-                renderThreadItem({ type: 'ariResponse', content: e.data.replace('[ERROR] ', ''), timestamp: new Date().toISOString() });
-                es.close(); activeEventSource = null; isStreaming = false; updateButtons(); return;
+                renderThreadItem({ type: 'ariResponse', content: data.replace('[ERROR] ', ''), timestamp: new Date().toISOString() });
+                activeEventSource = null; isStreaming = false; updateButtons(); return;
             }
-            // Skip stream rendering if the watch SSE already rebuilt the thread with the final response.
             if (watchHasRenderedResponse) return;
             if (!ariRow) {
                 hideTyping();
                 ariRow   = renderThreadItem({ type: 'ariResponse', content: '', timestamp: new Date().toISOString() });
                 bubbleEl = ariRow?.querySelector('.bubble') ?? null;
             }
-            if (bubbleEl) setBubbleMd(bubbleEl, e.data.replace(/\\n/g, '\n'));
+            if (bubbleEl) setBubbleMd(bubbleEl, data.replace(/\\n/g, '\n'));
             scrollBottom();
-        };
+        }
 
-        es.onerror = () => {
-            if (activeThread !== threadKeyForThisStream) { es.close(); activeEventSource = null; return; }
-            hideTyping();
-            if (!ariRow) renderThreadItem({ type: 'ariResponse', content: '[connection error]', timestamp: new Date().toISOString() });
-            es.close(); activeEventSource = null; isStreaming = false; updateButtons();
-        };
+        (async () => {
+            try {
+                const resp = await fetch(`/api/threads/${activeThread}/stream`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt }),
+                    signal: abortCtrl.signal,
+                });
+                const reader  = resp.body.getReader();
+                const decoder = new TextDecoder();
+                let buf = '';
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    buf += decoder.decode(value, { stream: true });
+                    const lines = buf.split('\n');
+                    buf = lines.pop();
+                    for (const line of lines) handleSseLine(line.trimEnd());
+                }
+                if (buf) handleSseLine(buf.trimEnd());
+            } catch (err) {
+                if (err.name === 'AbortError') return;
+                hideTyping();
+                if (!ariRow) renderThreadItem({ type: 'ariResponse', content: '[connection error]', timestamp: new Date().toISOString() });
+                activeEventSource = null; isStreaming = false; updateButtons();
+            }
+        })();
     }
 
     document.getElementById('btn-send').addEventListener('click', () => {
@@ -1656,13 +1677,29 @@ document.getElementById('btn-new-chat').addEventListener('click', () => {
     });
 
     // ── Paste images into textarea ────────────────────────
+    const PASTE_TO_FILE_THRESHOLD = 1000;
+
     document.getElementById('input').addEventListener('paste', async e => {
         const items = [...(e.clipboardData?.items ?? [])];
+
+        // Image paste — existing behaviour
         const imageItems = items.filter(i => i.kind === 'file' && i.type.startsWith('image/'));
-        if (!imageItems.length) return;
+        if (imageItems.length) {
+            e.preventDefault();
+            const files = imageItems.map(i => i.getAsFile()).filter(Boolean);
+            if (files.length) await uploadMessageFiles(files);
+            return;
+        }
+
+        // Large text paste — read synchronously via getData, which is available during the event
+        const text = e.clipboardData?.getData('text/plain') ?? '';
+        if (text.length <= PASTE_TO_FILE_THRESHOLD) return;
+
         e.preventDefault();
-        const files = imageItems.map(i => i.getAsFile()).filter(Boolean);
-        if (files.length) await uploadMessageFiles(files);
+        const blob = new Blob([text], { type: 'text/plain' });
+        const file = new File([blob], 'paste.txt', { type: 'text/plain' });
+        await uploadMessageFiles([file]);
+        showToast('Large paste added as an attachment.');
     });
 
     wireTextarea('input', () => {
