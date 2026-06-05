@@ -20,20 +20,32 @@ internal class Dialogue : Agent
         maxContextTokens     = config.MaxContextTokens;
     }
 
-    protected override int GetShortTermMemoryLimit() => shortTermMemoryLimit;
-    protected override int GetMaxContextTokens()      => maxContextTokens;
+    protected override int  GetShortTermMemoryLimit() => shortTermMemoryLimit;
+    protected override int  GetMaxContextTokens()      => maxContextTokens;
+    internal override  bool SuppressPromptLog          => true;
 
     internal async Task<string> SendPrompt(
-        string            threadKey,
-        string            prompt,
-        string            username,
-        string?           platformContext     = null,
-        string?           contextSummary      = null,
-        CancellationToken ct                  = default,
-        bool              userMessagePreadded = false)
+        string               threadKey,
+        string               prompt,
+        string               username,
+        string?              platformContext     = null,
+        string?              recallBlock         = null,
+        string?              contextSummary      = null,
+        CancellationToken    ct                  = default,
+        bool                 userMessagePreadded = false,
+        Func<string, Task>?  onDelta             = null)
     {
         const string divider = "-------------------";
         StringBuilder sb = new();
+
+        // recallBlock is non-null when the Memory agent ran:
+        //   non-empty = notes found, empty string = agent ran but found nothing → inject "none".
+        if (recallBlock is not null)
+        {
+            sb.AppendLine("[ARI's Memories]");
+            sb.AppendLine(recallBlock.Length > 0 ? recallBlock.Trim() : "none");
+            sb.AppendLine(divider);
+        }
 
         if (brain is not null)
         {
@@ -67,9 +79,11 @@ internal class Dialogue : Agent
             username:            username,
             augmentedPrompt:     augmented,
             platformContext:     platformContext,
+            recallNotes:         recallBlock,
             contextSummary:      contextSummary,
             ct:                  ct,
-            userMessagePreadded: userMessagePreadded);
+            userMessagePreadded: userMessagePreadded,
+            onDelta:             onDelta);
     }
 
     internal void LogCommand(string threadKey, string input, string response)

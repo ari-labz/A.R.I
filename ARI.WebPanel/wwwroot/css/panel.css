@@ -250,6 +250,7 @@ html, body {
     margin-bottom: 0;
     user-select: none;
 }
+.thought-block, .thought-label { margin-top: 6px; }
 .thought-block summary { list-style: none; cursor: pointer; }
 .thought-block summary::-webkit-details-marker { display: none; }
 .thought-block summary::before { content: '▸'; font-size: 10px; margin-right: 4px; }
@@ -382,6 +383,19 @@ html, body {
     transition: color .15s;
 }
 .attachment-item-remove:hover { color: var(--text); }
+
+#thread-panel-actions {
+    padding: 6px 14px 10px;
+    border-bottom: 1px solid rgba(255,255,255,.06);
+    display: flex; gap: 4px;
+}
+#btn-download-log {
+    background: transparent; border: none; cursor: pointer;
+    color: var(--text-dimmer); padding: 4px; border-radius: 6px;
+    display: flex; align-items: center;
+    transition: color .12s, background .12s;
+}
+#btn-download-log:hover { color: var(--text); background: var(--hover); }
 
 /* ── drag-drop overlay ────────────────────────────────── */
 #drop-overlay {

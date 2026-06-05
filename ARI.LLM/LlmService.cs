@@ -8,6 +8,7 @@ namespace ARI.LLM;
 public class LlmService : IDisposable
 {
     private readonly Dialogue?   dialogue;
+    private readonly Memory?     memory;
     private readonly Context?    context;
     private readonly Engram?     engram;
     private readonly Refactor?   refactor;
@@ -47,6 +48,12 @@ public class LlmService : IDisposable
             Common.Logger.LogInformation("Context tracker is active.");
         }
 
+        if (brain is not null && enabled.TryGetValue("Memory", out AgentConfig? memoryConfig) && memoryConfig.RecursiveBrainSearchDepth > 0)
+        {
+            memory = new Memory(memoryConfig, brain, memoryConfig.RecursiveBrainSearchDepth, brain.BrainPublicUrl);
+            Common.Logger.LogInformation("Memory agent is active. Depth: {Depth}.", memoryConfig.RecursiveBrainSearchDepth);
+        }
+
         if (brain is not null && dialogue is not null)
         {
             if (enabled.TryGetValue("Engram", out AgentConfig? engramConfig))
@@ -81,9 +88,10 @@ public class LlmService : IDisposable
     /// <summary>Returns the typed ThreadItem list for an internal agent thread (Engram, Refactor, etc.).</summary>
     public IReadOnlyList<ThreadItem> GetInternalThreadItems(string threadKey)
     {
-        if (engram?.ThreadKeys.Contains(threadKey)   == true) return engram.GetThread(threadKey)?.History   ?? [];
+        if (engram?.ThreadKeys.Contains(threadKey)  == true) return engram.GetThread(threadKey)?.History  ?? [];
         if (refactor?.ThreadKeys.Contains(threadKey) == true) return refactor.GetThread(threadKey)?.History ?? [];
         if (context?.ThreadKeys.Contains(threadKey)  == true) return context.GetThread(threadKey)?.History  ?? [];
+        if (memory?.ThreadKeys.Contains(threadKey)   == true) return memory.GetThread(threadKey)?.History   ?? [];
         return [];
     }
 
@@ -116,6 +124,7 @@ public class LlmService : IDisposable
         Add(engram,   "Engram");
         Add(refactor, "Refactor");
         Add(context,  "Context");
+        Add(memory,   "Memory");
         return result;
     }
 
@@ -201,7 +210,18 @@ public class LlmService : IDisposable
 
     // ── Prompting ───────────────────────────────────────────────────────────────
 
-    public async Task<string> Prompt(string threadKey, string prompt, string username, string? platformContext = null)
+    public Task<string> Prompt(string threadKey, string prompt, string username, string? platformContext = null)
+        => PromptCore(threadKey, prompt, username, platformContext, null, CancellationToken.None);
+
+    /// <summary>
+    /// Like Prompt, but calls <paramref name="onDelta"/> with the full accumulated response text
+    /// after each token so the caller can stream it to the client in real time.
+    /// The external cancellation token (e.g. HTTP disconnect) is linked to the internal CTS.
+    /// </summary>
+    public Task<string> PromptStreaming(string threadKey, string prompt, string username, string? platformContext, Func<string, Task> onDelta, CancellationToken ct = default)
+        => PromptCore(threadKey, prompt, username, platformContext, onDelta, ct);
+
+    private async Task<string> PromptCore(string threadKey, string prompt, string username, string? platformContext, Func<string, Task>? onDelta, CancellationToken externalCt)
     {
         if (dialogue is null)
             throw new ModelNotFoundException("Dialogue model is not loaded or is not enabled.");
@@ -209,7 +229,9 @@ public class LlmService : IDisposable
         if (IsThreadProcessing(threadKey))
             Interrupt(threadKey);
 
-        CancellationTokenSource cts = new();
+        CancellationTokenSource cts = externalCt.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(externalCt)
+            : new CancellationTokenSource();
         processingThreads[threadKey] = cts;
 
         Thread dialogueThread = dialogue.GetOrCreateThread(threadKey);
@@ -231,9 +253,18 @@ public class LlmService : IDisposable
 
         try
         {
+            Common.Logger.LogInformation("[Dialogue] ({Thread}) prompt\n\"{Prompt}\"", threadKey, prompt);
+
             string? contextSummary = context?.GetContext(threadKey);
 
-            return await dialogue.SendPrompt(threadKey, effectivePrompt, username, platformContext, contextSummary, cts.Token, userMessagePreadded: true);
+            string? recallBlock = null;
+            if (memory is not null)
+            {
+                List<ThreadMessage> chatHistory = dialogueThread.GetChatHistory();
+                recallBlock = await memory.GetNotes(chatHistory, effectivePrompt, cts.Token);
+            }
+
+            return await dialogue.SendPrompt(threadKey, effectivePrompt, username, platformContext, recallBlock, contextSummary, cts.Token, userMessagePreadded: true, onDelta: onDelta);
         }
         catch (OperationCanceledException)
         {

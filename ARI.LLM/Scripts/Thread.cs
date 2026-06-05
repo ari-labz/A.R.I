@@ -196,18 +196,20 @@ internal class Thread
     // ── SendPrompt ──────────────────────────────────────────────────────────────
 
     internal async Task<string> SendPrompt(
-        string            prompt,
-        string            username            = "user",
-        string?           augmentedPrompt     = null,
-        string?           contextSummary      = null,
-        int               maxTokensOverride   = 0,
-        CancellationToken ct                  = default,
-        bool              userMessagePreadded = false)
+        string               prompt,
+        string               username            = "user",
+        string?              augmentedPrompt     = null,
+        string?              recallNotes         = null,
+        string?              contextSummary      = null,
+        int                  maxTokensOverride   = 0,
+        CancellationToken    ct                  = default,
+        bool                 userMessagePreadded = false,
+        Func<string, Task>?  onDelta             = null)
     {
         await sendLock.WaitAsync(ct);
         try
         {
-            return await SendPromptCore(prompt, username, augmentedPrompt, contextSummary, maxTokensOverride, ct, userMessagePreadded);
+            return await SendPromptCore(prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded, onDelta);
         }
         catch (OperationCanceledException)
         {
@@ -223,13 +225,15 @@ internal class Thread
     }
 
     private async Task<string> SendPromptCore(
-        string            prompt,
-        string            username,
-        string?           augmentedPrompt,
-        string?           contextSummary,
-        int               maxTokensOverride,
-        CancellationToken ct,
-        bool              userMessagePreadded)
+        string               prompt,
+        string               username,
+        string?              augmentedPrompt,
+        string?              recallNotes,
+        string?              contextSummary,
+        int                  maxTokensOverride,
+        CancellationToken    ct,
+        bool                 userMessagePreadded,
+        Func<string, Task>?  onDelta = null)
     {
         LastMessageAt = DateTime.UtcNow;
 
@@ -297,7 +301,8 @@ internal class Thread
             messages.Add(BuildCurrentUserMessage($"{current.Username}: {current.Content}", threadAtts, msgAtts));
         }
 
-        Common.Logger.LogInformation("[{Agent}] ({Thread}) prompt\n\"{Prompt}\"", agent.Name, threadKey, prompt);
+        if (!agent.QuietLogging && !agent.SuppressPromptLog)
+            Common.Logger.LogInformation("[{Agent}] ({Thread}) prompt\n\"{Prompt}\"", agent.Name, threadKey, prompt);
 
         // ── Call LLM with tool loop ─────────────────────────────────────────────
         int             maxTokens        = maxTokensOverride != 0 ? maxTokensOverride : agent.MaxTokens;
@@ -413,7 +418,11 @@ internal class Thread
                     if (!delta.TryGetProperty("content", out JsonElement contentEl)) continue;
                     string? deltaText = contentEl.GetString();
                     if (!string.IsNullOrEmpty(deltaText))
+                    {
                         contentBuilder.Append(deltaText);
+                        if (onDelta is not null)
+                            await onDelta(contentBuilder.ToString());
+                    }
                 }
             }
 
@@ -453,6 +462,10 @@ internal class Thread
 
             if (pendingCalls.Count > 0 && finishReason == "tool_calls")
             {
+                // If content was streamed before tool calls were detected, reset the client bubble.
+                if (onDelta is not null && contentBuilder.Length > 0)
+                    await onDelta(string.Empty);
+
                 toolCallCount += pendingCalls.Count;
 
                 messages.Add(new
@@ -509,25 +522,33 @@ internal class Thread
         double elapsed   = sw.Elapsed.TotalSeconds;
         double tokPerSec = completionTokens > 0 ? completionTokens / elapsed : 0;
 
-        Common.Logger.LogInformation("[{Agent}] ({Thread}) responded in {Seconds}s ({Tokens} tokens, {TokPerSec} t/s)",
-            agent.Name, threadKey, elapsed.ToString("F1"), completionTokens, tokPerSec.ToString("F1"));
+        if (!agent.QuietLogging)
+        {
+            Common.Logger.LogInformation("[{Agent}] ({Thread}) responded in {Seconds}s ({Tokens} tokens, {TokPerSec} t/s)",
+                agent.Name, threadKey, elapsed.ToString("F1"), completionTokens, tokPerSec.ToString("F1"));
 
-        int tokenLimit = maxTokens > 0 ? maxTokens : 0;
-        if (tokenLimit > 0 && completionTokens >= tokenLimit * 0.8)
-            Common.Logger.LogWarning("[{Agent}] ({Thread}) token usage at {Pct}% of limit ({Used}/{Max})",
-                agent.Name, threadKey, (int)(completionTokens * 100.0 / tokenLimit), completionTokens, tokenLimit);
+            int tokenLimit = maxTokens > 0 ? maxTokens : 0;
+            if (tokenLimit > 0 && completionTokens >= tokenLimit * 0.8)
+                Common.Logger.LogWarning("[{Agent}] ({Thread}) token usage at {Pct}% of limit ({Used}/{Max})",
+                    agent.Name, threadKey, (int)(completionTokens * 100.0 / tokenLimit), completionTokens, tokenLimit);
 
-        Common.Logger.LogInformation("[{Agent}] ({Thread}) response\n\"{Response}\"",
-            agent.Name, threadKey, responseText);
+            Common.Logger.LogInformation("[{Agent}] ({Thread}) response\n\"{Response}\"",
+                agent.Name, threadKey, responseText);
+        }
 
-        string? recallNotes = toolResults.Count > 0 ? string.Join("\n\n", toolResults).TrimEnd() : null;
+        // Merge Memory-agent notes (passed in) with any search_memories tool results collected
+        // during this response. Both use the same [Title|URL]\ncontent format.
+        List<string> noteParts = new();
+        if (!string.IsNullOrEmpty(recallNotes)) noteParts.Add(recallNotes.Trim());
+        if (toolResults.Count > 0)              noteParts.Add(string.Join("\n\n", toolResults).TrimEnd());
+        string? combinedRecallNotes = noteParts.Count > 0 ? string.Join("\n\n", noteParts) : null;
 
         History.Add(new AriResponse
         {
             Content         = responseText,
             Timestamp       = DateTime.Now,
             ThinkingSeconds = elapsed,
-            RecallNotes     = recallNotes,
+            RecallNotes     = combinedRecallNotes,
             ContextSummary  = contextSummary
         });
         Updated?.Invoke();
