@@ -11,4 +11,7 @@ public class UserMessage : ThreadItem
 
     public override string? Message    => Content;
     public override string  AuthorName => Username;
+
+    public override string ToString() =>
+        $"[{Timestamp:HH:mm}] {Username}: {Content}";
 }

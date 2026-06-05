@@ -10,4 +10,18 @@ public class AriResponse : ThreadItem
 
     public override string? Message    => Content;
     public override string  AuthorName => "ARI";
+
+    public override string ToString()
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"[{Timestamp:HH:mm}] A·R·I (thought for {ThinkingSeconds:F1}s):");
+        if (RecallNotes != null)
+        {
+            var names = System.Text.RegularExpressions.Regex.Matches(RecallNotes, @"^\[([^|\]]+)", System.Text.RegularExpressions.RegexOptions.Multiline)
+                            .Select(m => $"[{m.Groups[1].Value}]");
+            sb.Append($"\n  Recalled Notes: {string.Join(", ", names)}");
+        }
+        sb.Append($"\n  {Content}");
+        return sb.ToString();
+    }
 }

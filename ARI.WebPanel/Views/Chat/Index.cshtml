@@ -101,6 +101,11 @@
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                             </button>
                         </div>
+                        <div id="thread-panel-actions">
+                            <button id="btn-download-log" title="Download chat log">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                            </button>
+                        </div>
                         <div class="thread-panel-section">
                             <div class="thread-panel-section-label">
                                 Attachments
@@ -515,7 +520,6 @@
         if (instant) {
             main.classList.add('instant');
             main.classList.add('active');
-            // Two rAFs: let 'instant' apply before removing it
             requestAnimationFrame(() => requestAnimationFrame(() => {
                 main.classList.remove('instant');
             }));
@@ -1156,13 +1160,13 @@
                     thoughtHtml = hasDetails
                         ? `<details class="thought-block"><summary>A·R·I thought for ${secs}s</summary>` +
                           `<div class="thought-content">${detailParts}</div></details>`
-                        : `<div style="font-size:12px;color:#8e8ea0;margin-bottom:4px;user-select:none;">A·R·I thought for ${secs}s</div>`;
+                        : `<div style="font-size:12px;color:#8e8ea0;margin-top:6px;user-select:none;">A·R·I thought for ${secs}s</div>`;
                 }
                 const senderLabel = isInternal ? escHtml(agentName ?? 'Agent') : 'A·R·I';
                 row.innerHTML =
                     `<div class="sender">${senderLabel}</div>` +
-                    thoughtHtml +
                     `<div class="bubble"></div>` +
+                    thoughtHtml +
                     `<div class="msg-time">${t}</div>`;
                 setBubbleMd(row.querySelector('.bubble'), item.content);
                 break;
@@ -1568,6 +1572,12 @@
     // Thread panel attach button → thread attachment
     document.getElementById('btn-attach-panel').addEventListener('click', () => fileInput.click());
     document.getElementById('btn-close-thread-panel').addEventListener('click', () => setThreadPanelOpen(false));
+    document.getElementById('btn-download-log').addEventListener('click', () => {
+        if (!activeThread) return;
+        const a = document.createElement('a');
+        a.href = `/api/threads/${activeThread}/export`;
+        a.click();
+    });
     btnOpenThreadPanel.addEventListener('click', () => setThreadPanelOpen(true));
     fileInput.addEventListener('change', () => { if (fileInput.files.length) uploadFiles([...fileInput.files]); fileInput.value = ''; });
 

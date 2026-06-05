@@ -211,6 +211,17 @@ html, body {
     display: flex; align-items: center; transition: color .15s;
 }
 #btn-close-thread-panel:hover { color: #fff; }
+#thread-panel-actions {
+    padding: 8px 14px 10px;
+    border-bottom: 1px solid rgba(255,255,255,.1);
+    display: flex; gap: 4px;
+}
+#btn-download-log {
+    background: transparent; border: none; cursor: pointer;
+    color: rgba(255,255,255,.5); padding: 4px; border-radius: 6px;
+    display: flex; align-items: center; transition: color .12s, background .12s;
+}
+#btn-download-log:hover { color: #fff; background: rgba(255,255,255,.08); }
 
 .thread-panel-section { padding: 10px 14px 14px; }
 .thread-panel-section-label {

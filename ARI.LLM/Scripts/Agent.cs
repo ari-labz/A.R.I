@@ -47,28 +47,43 @@ internal class Agent
     // ── Prompting ───────────────────────────────────────────────────────────────
 
     protected Task<string> Prompt(
-        string            threadKey,
-        string            prompt,
-        string            username             = "user",
-        string?           augmentedPrompt      = null,
-        string?           platformContext      = null,
-        string?           contextSummary       = null,
-        int               maxTokensOverride    = 0,
-        CancellationToken ct                   = default,
-        bool              userMessagePreadded  = false)
+        string               threadKey,
+        string               prompt,
+        string               username             = "user",
+        string?              augmentedPrompt      = null,
+        string?              platformContext      = null,
+        string?              recallNotes          = null,
+        string?              contextSummary       = null,
+        int                  maxTokensOverride    = 0,
+        CancellationToken    ct                   = default,
+        bool                 userMessagePreadded  = false,
+        Func<string, Task>?  onDelta              = null)
     {
         if (!threads.TryGetValue(threadKey, out Thread? thread))
         {
             thread = new Thread(this, threadKey, platformContext: platformContext, shortTermMemoryLimit: GetShortTermMemoryLimit(), maxContextTokens: GetMaxContextTokens());
             OnThreadCreated(threadKey, thread);
         }
-        return thread.SendPrompt(prompt, username, augmentedPrompt, contextSummary, maxTokensOverride, ct, userMessagePreadded);
+        return thread.SendPrompt(prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded, onDelta);
     }
 
     // ── Overridable ─────────────────────────────────────────────────────────────
 
-    protected virtual int GetShortTermMemoryLimit() => 0;
-    protected virtual int GetMaxContextTokens()      => 0;
+    protected virtual int  GetShortTermMemoryLimit() => 0;
+    protected virtual int  GetMaxContextTokens()      => 0;
+
+    /// <summary>
+    /// When true, Thread suppresses all per-call log lines (prompt, response, timing).
+    /// Used by agents that emit their own higher-level log summaries (e.g. Memory).
+    /// </summary>
+    internal virtual bool QuietLogging => false;
+
+    /// <summary>
+    /// When true, Thread suppresses only the prompt log line.
+    /// Used when the caller logs the prompt earlier in the pipeline (e.g. Dialogue, which
+    /// logs before the Memory pre-flight so the prompt appears first in the output).
+    /// </summary>
+    internal virtual bool SuppressPromptLog => false;
 
     /// <summary>
     /// Called when a new thread is created. Registers the thread and subscribes to its update event.

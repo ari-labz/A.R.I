@@ -66,9 +66,14 @@ internal static class Recall
         {
             string? content = await brain.GetNote(match);
             if (content is null) continue;
-            result.AppendLine($"--- {match} ---");
+            string? noteId  = await brain.GetNoteId(match);
+            string? url     = noteId is not null && !string.IsNullOrEmpty(brain.BrainPublicUrl)
+                                ? $"{brain.BrainPublicUrl.TrimEnd('/')}/#?note={noteId}"
+                                : null;
+            string header = url is not null ? $"[{match}|{url}]" : $"[{match}]";
+            result.AppendLine(header);
             result.AppendLine(content);
-            result.AppendLine("---");
+            result.AppendLine();
         }
 
         return result.Length > 0 ? result.ToString().TrimEnd() : $"No memories found for '{title}'.";

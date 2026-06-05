@@ -76,6 +76,16 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
         return Ok(items);
     }
 
+    [HttpGet("{threadKey}/export")]
+    public IActionResult ExportLog(string threadKey)
+    {
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        var items = Llm.GetThreadItems(threadKey);
+        var log = string.Join("\n\n", items.Select(i => i.ToString()));
+        var bytes = System.Text.Encoding.UTF8.GetBytes(log);
+        return File(bytes, "text/plain", $"ari-{threadKey}-{DateTime.Now:yyyyMMdd-HHmm}.txt");
+    }
+
     [HttpGet("{threadKey}/status")]
     public IActionResult GetThreadStatus(string threadKey)
     {
@@ -317,9 +327,12 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
         try
         {
             string username = GetUsername();
-            string response = await Llm.Prompt(threadKey, prompt, username);
-            string escaped  = response.Replace("\n", "\\n").Replace("\r", "");
-            await Response.WriteAsync($"data: {escaped}\n\n", cancellationToken);
+            await Llm.PromptStreaming(threadKey, prompt, username, null, async accumulated =>
+            {
+                string escaped = accumulated.Replace("\n", "\\n").Replace("\r", "");
+                await Response.WriteAsync($"data: {escaped}\n\n", cancellationToken);
+                await Response.Body.FlushAsync(cancellationToken);
+            }, cancellationToken);
             await Response.WriteAsync("data: [DONE]\n\n", cancellationToken);
         }
         catch (OperationCanceledException)
