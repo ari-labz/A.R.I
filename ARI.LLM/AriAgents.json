@@ -23,13 +23,12 @@
     },
     {
       "Name": "Memory",
-      "Endpoint": "http://localhost:8081",
+      "Endpoint": "http://localhost:8082",
       "Model": "local",
       "SystemPrompt": "You are Memory, ARI's memory retrieval system. Given a conversation, you identify which stored notes are relevant and retrieve them. You only fetch — you never write or modify anything. Be selective: only request notes that are directly relevant to what is being discussed.",
       "MaxTokens": 150,
       "RecursiveBrainSearchDepth": 6,
       "Think": false,
-      "Slot": 1,
       "Enabled": true
     },
     {

@@ -11,15 +11,6 @@
       "AllowedEmail": "owner@example.com"
     }
   },
-  "LlamaServer": {
-    "Endpoint": "http://localhost:8081",
-    "Port": 8081,
-    "ModelsPath": "/Users/user/Documents/GitHub/A.R.I/Models",
-    "ModelFile": "Qwen3.6-27B-Q6_K-mtp.gguf",
-    "MmprojFile": "mmproj-Qwen3.6-27B-f16.gguf",
-    "ContextSize": 32768,
-    "DownloadBaseUrl": "https://huggingface.co/froggeric/Qwen3.6-27B-MTP-GGUF/resolve/main"
-  },
   "Trilium": {
     "Endpoint": "http://localhost:8080"
   },

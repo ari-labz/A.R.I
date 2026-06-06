@@ -4,18 +4,20 @@ namespace ARI.Core.Scripts;
 
 public class LocalLlamaServer : IDisposable
 {
-    private readonly LlamaServerConfig config;
-    private readonly string modelsPath;
+    private readonly LlamaServerConfig server;
+    private readonly LlamaModelConfig  model;
+    private readonly string            modelsPath;
     private Process? serverProcess;
 
     public int Pid { get; private set; } = -1;
 
-    public LocalLlamaServer(LlamaServerConfig config, string executableDirectory)
+    public LocalLlamaServer(LlamaServerConfig server, LlamaModelConfig model, string executableDirectory)
     {
-        this.config = config;
-        modelsPath = Path.IsPathRooted(config.ModelsPath)
-            ? config.ModelsPath
-            : Path.GetFullPath(Path.Combine(executableDirectory, config.ModelsPath));
+        this.server = server;
+        this.model  = model;
+        modelsPath  = Path.IsPathRooted(model.ModelsPath)
+            ? model.ModelsPath
+            : Path.GetFullPath(Path.Combine(executableDirectory, model.ModelsPath));
     }
 
     public async Task IsReady()
@@ -23,8 +25,9 @@ public class LocalLlamaServer : IDisposable
         await InstallHomebrew();
         await InstallLlamaCpp();
         Directory.CreateDirectory(modelsPath);
-        await InstallModelFiles(config.ModelFile);
-        await InstallModelFiles(config.MmprojFile);
+        await InstallModelFiles(model.File);
+        if (!string.IsNullOrWhiteSpace(model.MmprojFile))
+            await InstallModelFiles(model.MmprojFile);
         await StartServer();
         await WaitUntilReady();
     }
@@ -163,7 +166,7 @@ public class LocalLlamaServer : IDisposable
             return;
         }
 
-        string url = $"{config.DownloadBaseUrl}/{filename}";
+        string url = $"{model.DownloadBaseUrl}/{filename}";
         Common.Logger.LogInformation("Downloading {File} — this may take a while...", filename);
         await DownloadFile(url, destPath, filename);
         Common.Logger.LogInformation("Download complete: {File}", filename);
@@ -220,21 +223,27 @@ public class LocalLlamaServer : IDisposable
 
     private Task StartServer()
     {
-        string modelPath  = Path.Combine(modelsPath, config.ModelFile);
-        string mmprojPath = Path.Combine(modelsPath, config.MmprojFile);
+        string modelPath = Path.Combine(modelsPath, model.File);
 
-        string args = string.Join(" ",
+        List<string> argParts = new()
+        {
             $"-m \"{modelPath}\"",
-            $"--mmproj \"{mmprojPath}\"",
-            "--spec-type draft-mtp --spec-draft-n-max 3",
             "--cache-type-k q8_0 --cache-type-v q8_0",
-            $"-c {config.ContextSize}",
+            $"-c {server.ContextSize}",
             "--cache-ram 0",
             "--n-predict -1",
             "--temp 0.7 --top-p 0.80 --top-k 20 --repeat-penalty 1.0",
-            $"-np 2 -ngl 99 --port {config.Port}",
+            $"-np {server.ParallelSlots} -ngl 99 --port {server.Port}",
             "--host 127.0.0.1"
-        );
+        };
+
+        if (!string.IsNullOrWhiteSpace(model.MmprojFile))
+            argParts.Insert(1, $"--mmproj \"{Path.Combine(modelsPath, model.MmprojFile)}\"");
+
+        if (model.UseMtp)
+            argParts.Insert(1, "--spec-type draft-mtp --spec-draft-n-max 3");
+
+        string args = string.Join(" ", argParts);
 
         ProcessStartInfo info = new("llama-server", args)
         {
@@ -265,7 +274,7 @@ public class LocalLlamaServer : IDisposable
 
             try
             {
-                HttpResponseMessage response = await httpClient.GetAsync($"{config.Endpoint}/health");
+                HttpResponseMessage response = await httpClient.GetAsync($"{server.Endpoint}/health");
                 if (response.IsSuccessStatusCode)
                 {
                     Common.Logger.LogInformation("llama-server is online.");

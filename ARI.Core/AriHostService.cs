@@ -12,7 +12,7 @@ public class AriHostService : BackgroundService
 {
     private readonly ILoggerFactory loggerFactory;
     private Docker? docker;
-    private LocalLlamaServer? llamaServer;
+    private readonly List<LocalLlamaServer> llamaServers = new();
     private DiscordService? discordService;
     private WebPanelService? webPanelService;
     private bool containersStarted;
@@ -70,9 +70,16 @@ public class AriHostService : BackgroundService
         await docker.StartContainers();
         containersStarted = true;
 
-        llamaServer = new LocalLlamaServer(config.LlamaServer, executableDirectory);
-        await llamaServer.IsReady();
-        webPanelService?.SystemInfo.SetLlamaPid(llamaServer.Pid);
+        AriLLMConfig llmConfig = AriLLMConfig.LoadFrom(Path.Combine(executableDirectory, "AriLLMConfig.json"));
+        foreach (LlamaModelConfig modelConfig in llmConfig.Models)
+        {
+            LlamaServerConfig serverConfig = llmConfig.Servers[modelConfig.ServerIndex];
+            LocalLlamaServer  llamaServer  = new(serverConfig, modelConfig, executableDirectory);
+            await llamaServer.IsReady();
+            llamaServers.Add(llamaServer);
+        }
+        if (llamaServers.Count > 0)
+            webPanelService?.SystemInfo.SetLlamaPid(llamaServers[0].Pid);
 
         Common.Logger.LogInformation("Loading agents...");
         string brainConfigPath = Path.Combine(executableDirectory, "AriBrain.json");
@@ -117,7 +124,8 @@ public class AriHostService : BackgroundService
         if (webPanelService is not null)
             await webPanelService.Stop(cancellationToken);
 
-        llamaServer?.Stop();
+        foreach (LocalLlamaServer s in llamaServers)
+            s.Stop();
 
         if (docker != null && containersStarted)
             await docker.StopContainers();
