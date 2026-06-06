@@ -336,6 +336,10 @@ internal class Engram : Agent, IDisposable
                 string writeRaw = await PromptWithContext(savedContext, writePrompt);
                 (List<EngramAdd> noteAdds, List<EngramEdit> noteEdits) = ParseEngramOutput(writeRaw);
 
+                string plannedName = item.Name;
+                noteAdds  = noteAdds .Where(a => a.NoteName.Equals(plannedName, StringComparison.OrdinalIgnoreCase)).ToList();
+                noteEdits = noteEdits.Where(e => e.NoteName.Equals(plannedName, StringComparison.OrdinalIgnoreCase)).ToList();
+
                 if (noteAdds.Count == 0 && noteEdits.Count == 0)
                 {
                     Common.Logger.LogError("[Engram] [{ThreadKey}] failed to parse note ({Current}/{Total}): {Name}. Raw response: {Raw}",
