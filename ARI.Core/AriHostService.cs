@@ -111,10 +111,20 @@ public class AriHostService : BackgroundService
 
         if (config.Modules.VoiceSynthesis)
         {
-            Common.Logger.LogInformation("VoiceSynthesis module is enabled. Starting RVC...");
+            Common.Logger.LogInformation("VoiceSynthesis module is enabled. Installing/verifying RVC...");
+
             string rvcPath = Path.IsPathRooted(config.VoiceSynthesis.RvcPath)
                 ? config.VoiceSynthesis.RvcPath
                 : Path.GetFullPath(Path.Combine(executableDirectory, config.VoiceSynthesis.RvcPath));
+
+            string voicesPath = Path.IsPathRooted(config.VoiceSynthesis.VoicesPath)
+                ? config.VoiceSynthesis.VoicesPath
+                : Path.GetFullPath(Path.Combine(executableDirectory, config.VoiceSynthesis.VoicesPath));
+
+            var rvcSetup = new RvcSetupService(rvcPath, voicesPath);
+            await rvcSetup.InstallAsync();
+
+            Common.Logger.LogInformation("Starting RVC...");
             voiceSynthesisService = new VoiceSynthesisService(rvcPath);
             voiceSynthesisService.Start();
             string voiceUrl = $"http://localhost:{config.VoiceSynthesis.Port}";

@@ -6,6 +6,7 @@
   },
   "VoiceSynthesis": {
     "RvcPath": "../../../../rvc",
+    "VoicesPath": "../../../../Voices",
     "Port": 7865
   },
   "WebPanel": {
