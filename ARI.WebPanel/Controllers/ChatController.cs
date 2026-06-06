@@ -150,8 +150,9 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
 
     private async Task SendWatchEvent(string threadKey, CancellationToken ct)
     {
-        bool isProcessing = Llm?.IsThreadProcessing(threadKey) ?? false;
-        string payload    = JsonSerializer.Serialize(new { isProcessing });
+        bool isProcessing  = Llm?.IsThreadProcessing(threadKey)  ?? false;
+        bool isRemembering = Llm?.IsEngramSweeping(threadKey)     ?? false;
+        string payload     = JsonSerializer.Serialize(new { isProcessing, isRemembering });
         await Response.WriteAsync($"data: {payload}\n\n", ct);
         await Response.Body.FlushAsync(ct);
     }
@@ -301,6 +302,17 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
         }
 
         return NotFound();
+    }
+
+    /// <summary>
+    /// Heartbeat sent by the web client while the user is actively composing a message.
+    /// Resets the thread's inactivity countdown so Engram doesn't sweep mid-composition.
+    /// </summary>
+    [HttpPost("{threadKey}/typing")]
+    public IActionResult NotifyTyping(string threadKey)
+    {
+        Llm?.NotifyTyping(threadKey);
+        return Ok();
     }
 
     [HttpDelete("{threadKey}/processing")]

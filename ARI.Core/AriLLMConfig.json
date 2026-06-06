@@ -15,11 +15,11 @@
   ],
   "Models": [
     {
-      "File": "Qwen3.6-27B-Q6_K-mtp.gguf",
-      "MmprojFile": "mmproj-Qwen3.6-27B-f16.gguf",
-      "UseMtp": true,
+      "File": "Qwen3.6-35B-A3B-UD-Q5_K_M.gguf",
+      "MmprojFile": "mmproj-BF16.gguf",
+      "UseMtp": false,
       "ModelsPath": "/Users/user/Documents/GitHub/A.R.I/Models",
-      "DownloadBaseUrl": "https://huggingface.co/froggeric/Qwen3.6-27B-MTP-GGUF/resolve/main",
+      "DownloadBaseUrl": "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/resolve/main",
       "ServerIndex": 0
     },
     {

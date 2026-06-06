@@ -151,6 +151,22 @@ internal class Thread
         return (estimated, maxContextTokens);
     }
 
+    /// <summary>
+    /// Resets the inactivity countdown while the user is actively typing.
+    /// Only acts when the thread is Active; a thread already Inactive/Dormant is not touched.
+    /// </summary>
+    internal void ResetInactivityTimer()
+    {
+        if (state != ThreadState.Active) return;
+        inactivityTimer?.Dispose();
+        inactivityTimer = new Timer(_ =>
+        {
+            if (state != ThreadState.Active) return;
+            state = ThreadState.Inactive;
+            BecameInactive?.Invoke();
+        }, null, InactivityThreshold, Timeout.InfiniteTimeSpan);
+    }
+
     internal void MarkEngramProcessed()
     {
         state = ThreadState.Dormant;

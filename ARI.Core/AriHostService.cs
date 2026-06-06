@@ -1,6 +1,7 @@
 using ARI.Core.Scripts;
 using ARI.Discord;
 using ARI.LLM;
+using ARI.VoiceSynthesis;
 using ARI.WebPanel;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -15,6 +16,7 @@ public class AriHostService : BackgroundService
     private readonly List<LocalLlamaServer> llamaServers = new();
     private DiscordService? discordService;
     private WebPanelService? webPanelService;
+    private VoiceSynthesisService? voiceSynthesisService;
     private bool containersStarted;
     private bool startupFailed;
 
@@ -30,9 +32,10 @@ public class AriHostService : BackgroundService
         {
             await Start(stoppingToken);
         }
-        catch
+        catch (Exception ex)
         {
             startupFailed = true;
+            Common.Logger.LogCritical("Startup failed: {Error}", ex.Message);
             throw;
         }
     }
@@ -106,10 +109,39 @@ public class AriHostService : BackgroundService
                 moduleTasks.Add(discordService.ExecuteTask);
         }
 
+        if (config.Modules.VoiceSynthesis)
+        {
+            Common.Logger.LogInformation("VoiceSynthesis module is enabled. Starting RVC...");
+            string rvcPath = Path.IsPathRooted(config.VoiceSynthesis.RvcPath)
+                ? config.VoiceSynthesis.RvcPath
+                : Path.GetFullPath(Path.Combine(executableDirectory, config.VoiceSynthesis.RvcPath));
+            voiceSynthesisService = new VoiceSynthesisService(rvcPath);
+            voiceSynthesisService.Start();
+            string voiceUrl = $"http://localhost:{config.VoiceSynthesis.Port}";
+            Common.Logger.LogInformation("Opening VoiceSynthesis UI at {Url}", voiceUrl);
+            OpenBrowser(voiceUrl);
+        }
+
         if (moduleTasks.Count > 0)
             await Task.WhenAny(moduleTasks.Concat(new[] { Task.Delay(Timeout.Infinite, stoppingToken) }));
         else
             await Task.Delay(Timeout.Infinite, stoppingToken);
+    }
+
+    private static void OpenBrowser(string url)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = url,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            Common.Logger.LogWarning("Could not open browser: {Error}", ex.Message);
+        }
     }
 
     public override async Task StopAsync(CancellationToken cancellationToken)
@@ -120,6 +152,8 @@ public class AriHostService : BackgroundService
 
         if (discordService != null)
             await discordService.NotifyOffline();
+
+        voiceSynthesisService?.Stop();
 
         if (webPanelService is not null)
             await webPanelService.Stop(cancellationToken);

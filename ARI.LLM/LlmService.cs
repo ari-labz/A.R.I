@@ -66,6 +66,7 @@ public class LlmService : IDisposable
             if (enabled.TryGetValue("Engram", out AgentConfig? engramConfig))
             {
                 engram = new Engram(engramConfig, dialogue, brain, context, engramConfig.RecursiveBrainSearchDepth, brain.BrainPublicUrl);
+                engram.SweepCompleted += key => NotifyWatchers(key);
                 Common.Logger.LogInformation("Engram is active. Brain connected.");
             }
 
@@ -246,6 +247,11 @@ public class LlmService : IDisposable
 
     public bool IsThreadProcessing(string threadKey) => processingThreads.ContainsKey(threadKey);
 
+    public bool IsEngramSweeping(string threadKey) => engram?.IsSweeping(threadKey) ?? false;
+
+    /// <summary>Called by the web panel while the user is composing a message. Resets the inactivity countdown.</summary>
+    public void NotifyTyping(string threadKey) => dialogue?.NotifyTyping(threadKey);
+
     public void Cancel(string threadKey)
     {
         if (processingThreads.TryGetValue(threadKey, out CancellationTokenSource? cts))
@@ -306,6 +312,14 @@ public class LlmService : IDisposable
             ? CancellationTokenSource.CreateLinkedTokenSource(externalCt)
             : new CancellationTokenSource();
         processingThreads[threadKey] = cts;
+
+        // If Engram is mid-sweep, hold here until it finishes so Dialogue doesn't interleave
+        // with memory consolidation. The client sees isRemembering=true via SSE during this wait.
+        if (engram?.IsSweeping(threadKey) == true)
+        {
+            Common.Logger.LogInformation("[Dialogue] ({Thread}) waiting for Engram sweep to finish before processing.", threadKey);
+            await engram.WaitForSweepAsync(threadKey, cts.Token);
+        }
 
         Thread dialogueThread = dialogue.GetOrCreateThread(threadKey);
 
