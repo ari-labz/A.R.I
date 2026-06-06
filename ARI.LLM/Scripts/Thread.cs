@@ -395,6 +395,8 @@ internal class Thread
             };
             if (toolSchemas is not null)
                 body["tools"] = toolSchemas;
+            if (agent.Slot.HasValue)
+                body["id_slot"] = agent.Slot.Value;
 
             string             json    = JsonSerializer.Serialize(body);
             HttpRequestMessage request = new(HttpMethod.Post, $"{agent.Endpoint}/v1/chat/completions")

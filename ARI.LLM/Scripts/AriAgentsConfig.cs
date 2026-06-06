@@ -79,4 +79,10 @@ internal class AgentConfig
     /// When false, <|think_off|> is appended to the system prompt. Defaults to false.
     /// </summary>
     public bool Think { get; init; } = false;
+
+    /// <summary>
+    /// llama-server slot index to request for every call this agent makes.
+    /// Null = no preference (server assigns freely).
+    /// </summary>
+    public int? Slot { get; init; } = null;
 }

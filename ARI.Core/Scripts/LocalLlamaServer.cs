@@ -232,7 +232,7 @@ public class LocalLlamaServer : IDisposable
             "--cache-ram 0",
             "--n-predict -1",
             "--temp 0.7 --top-p 0.80 --top-k 20 --repeat-penalty 1.0",
-            $"-np 1 -ngl 99 --port {config.Port}",
+            $"-np 2 -ngl 99 --port {config.Port}",
             "--host 127.0.0.1"
         );
 
