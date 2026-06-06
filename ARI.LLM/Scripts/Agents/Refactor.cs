@@ -142,20 +142,21 @@ internal class Refactor : Agent
                 .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
 
             // ── Analyse each folder ───────────────────────────────────────────────
-            List<EngramAdd> allAdds  = new();
-            List<EngramEdit> allEdits = new();
+            List<EngramAdd>    allAdds    = new();
+            List<EngramEdit>   allEdits   = new();
+            List<EngramDelete> allDeletes = new();
 
             foreach ((string folder, List<NoteData> notes) in byFolder)
             {
                 Common.Logger.LogInformation("[Refactor] Analysing folder '{Folder}' ({Count} note(s)).", folder, notes.Count);
 
-                List<(List<EngramAdd> adds, List<EngramEdit> edits)> results;
+                List<(List<EngramAdd> adds, List<EngramEdit> edits, List<EngramDelete> deletes)> results;
 
                 if (notes.Count <= SinglePassThreshold)
                 {
                     // Small folder — one call handles everything
-                    (List<EngramAdd> adds, List<EngramEdit> edits) = await AnalyseFolder(folder, notes, hubNotes, allTitles);
-                    results = [(adds, edits)];
+                    (List<EngramAdd> adds, List<EngramEdit> edits, List<EngramDelete> deletes) = await AnalyseFolder(folder, notes, hubNotes, allTitles);
+                    results = [(adds, edits, deletes)];
                 }
                 else
                 {
@@ -163,10 +164,11 @@ internal class Refactor : Agent
                     results = await AnalyseLargeFolder(folder, notes, hubNotes, allTitles);
                 }
 
-                foreach ((List<EngramAdd> adds, List<EngramEdit> edits) in results)
+                foreach ((List<EngramAdd> adds, List<EngramEdit> edits, List<EngramDelete> deletes) in results)
                 {
                     allAdds.AddRange(adds);
                     allEdits.AddRange(edits);
+                    allDeletes.AddRange(deletes);
                 }
             }
 
@@ -193,8 +195,14 @@ internal class Refactor : Agent
             foreach (string title in editsByTitle.Keys)
                 addsByTitle.Remove(title);
 
-            allAdds  = addsByTitle.Values.ToList();
-            allEdits = editsByTitle.Values.ToList();
+            // Deduplicate deletes by title (first-writer-wins is fine here).
+            Dictionary<string, EngramDelete> deletesByTitle = new(StringComparer.OrdinalIgnoreCase);
+            foreach (EngramDelete del in allDeletes)
+                deletesByTitle.TryAdd(BareTitle(del.NoteName), del);
+
+            allAdds    = addsByTitle.Values.ToList();
+            allEdits   = editsByTitle.Values.ToList();
+            allDeletes = deletesByTitle.Values.ToList();
 
             // ── Merge and apply operations ────────────────────────────────────────
             // LLM edits take priority: they already saw stripped content, so their output
@@ -218,10 +226,20 @@ internal class Refactor : Agent
                 await brain.EditNotes(finalEdits);
             }
 
+            if (allDeletes.Count > 0)
+            {
+                Common.Logger.LogInformation("[Refactor] Applying {Count} delete(s).", allDeletes.Count);
+                foreach (EngramDelete del in allDeletes)
+                {
+                    Common.Logger.LogInformation("[Refactor] Deleting '{Name}': {Reason}", del.NoteName, del.Reason);
+                    await brain.DeleteNote(del.NoteName);
+                }
+            }
+
             // ── Clear dirty flags ─────────────────────────────────────────────────
             await brain.ClearDirty(loaded.Keys);
 
-            return BuildSummary(allNotes, seedTitles.Count, loaded.Count, touchedFolders, allAdds.Count, finalEdits.Count, seeAlsoEdits.Count);
+            return BuildSummary(allNotes, seedTitles.Count, loaded.Count, touchedFolders, allAdds.Count, finalEdits.Count, seeAlsoEdits.Count, allDeletes.Count);
         }
         catch (Exception ex)
         {
@@ -243,9 +261,9 @@ internal class Refactor : Agent
 
     /// <summary>
     /// Single-call analysis for folders with ≤ SinglePassThreshold notes.
-    /// The LLM receives all note content and existing hubs, and outputs adds + edits.
+    /// The LLM receives all note content and existing hubs, and outputs adds + edits + deletes.
     /// </summary>
-    private async Task<(List<EngramAdd> adds, List<EngramEdit> edits)> AnalyseFolder(
+    private async Task<(List<EngramAdd> adds, List<EngramEdit> edits, List<EngramDelete> deletes)> AnalyseFolder(
         string folder,
         List<NoteData> notes,
         List<NoteData> hubNotes,
@@ -256,7 +274,20 @@ internal class Refactor : Agent
 
         Common.Logger.LogInformation("[Refactor] Folder '{Folder}': single-pass LLM call ({Count} notes).", folder, notes.Count);
         string raw = await Prompt(threadKey, prompt, maxTokensOverride: -1);
-        return ParseAddEdit(raw);
+        (List<EngramAdd> adds, List<EngramEdit> edits, List<EngramDelete> deletes) = ParseAddEdit(raw);
+
+        // Enforce folder scope: only accept edits for notes that live inside this folder.
+        // This prevents cross-folder edits (e.g. Relationships pass rewriting Events/ notes).
+        edits = edits.Where(e =>
+        {
+            string path = e.NoteName;
+            string editFolder = path.Contains('/') ? path[..path.LastIndexOf('/')] : string.Empty;
+            return string.IsNullOrEmpty(folder)
+                || string.Equals(editFolder, folder, StringComparison.OrdinalIgnoreCase)
+                || editFolder.StartsWith(folder + "/", StringComparison.OrdinalIgnoreCase);
+        }).ToList();
+
+        return (adds, edits, deletes);
     }
 
     /// <summary>
@@ -264,7 +295,7 @@ internal class Refactor : Agent
     /// Pass 1: summary view → cluster plan.
     /// Pass 2: one analysis call per cluster with full note content.
     /// </summary>
-    private async Task<List<(List<EngramAdd> adds, List<EngramEdit> edits)>> AnalyseLargeFolder(
+    private async Task<List<(List<EngramAdd> adds, List<EngramEdit> edits, List<EngramDelete> deletes)>> AnalyseLargeFolder(
         string folder,
         List<NoteData> notes,
         List<NoteData> hubNotes,
@@ -287,7 +318,7 @@ internal class Refactor : Agent
         Common.Logger.LogInformation("[Refactor] Folder '{Folder}': {Count} cluster(s) identified.", folder, clusters.Count);
 
         // Pass 2 — One analysis call per cluster
-        List<(List<EngramAdd>, List<EngramEdit>)> results = new();
+        List<(List<EngramAdd>, List<EngramEdit>, List<EngramDelete>)> results = new();
         Dictionary<string, NoteData> notesByTitle = notes.ToDictionary(n => n.Title, StringComparer.OrdinalIgnoreCase);
 
         foreach (ClusterPlan cluster in clusters)
@@ -308,7 +339,15 @@ internal class Refactor : Agent
 
             Common.Logger.LogInformation("[Refactor] Cluster '{Theme}' ({Count} notes).", cluster.Theme, clusterNotes.Count);
             string raw = await Prompt(p2Key, p2Prompt, maxTokensOverride: -1);
-            results.Add(ParseAddEdit(raw));
+            (List<EngramAdd> adds, List<EngramEdit> edits, List<EngramDelete> deletes) = ParseAddEdit(raw);
+
+            // Enforce cluster scope: only accept edits for notes that are members of this cluster.
+            // Adds (new hub notes) are always allowed. This prevents later cluster passes from
+            // overwriting content written by earlier passes for notes outside their scope.
+            HashSet<string> memberTitles = clusterNotes.Select(n => n.Title).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            edits = edits.Where(e => memberTitles.Contains(BareTitle(e.NoteName))).ToList();
+
+            results.Add((adds, edits, deletes));
         }
 
         return results;
@@ -425,16 +464,19 @@ internal class Refactor : Agent
         sb.AppendLine("5. PRESERVE CONTENT — do not alter the factual content of any note. Only restructure links and add/update hub notes.");
         sb.AppendLine("6. DO NOT add links that are not supported by the note's content. DO NOT add See Also sections.");
         sb.AppendLine("7. ONE-WAY LINKS — links are directional. Do NOT add return links from spoke notes back to the root person. Spokes point outward, not back.");
-        sb.AppendLine("8. FLATTEN SUBFOLDERS — if a note currently lives at a path like People/Family/Jake (shown in its --- header ---), move it to the standard folder depth (e.g. People/Jake) by setting newName. Do not leave notes nested deeper than one level below their category folder unless explicitly required.");
-        sb.AppendLine("9. PREFERRED NAMES — a note's title must be the everyday name (nickname, alias, preferred name), not the formal or legal name. The formal name belongs inside the note under ## Info (e.g. **Full Name:** Geoffrey). Use newName to rename. This is essential for both recall accuracy and duplicate prevention: two notes with different formal and informal names for the same person must be merged under the preferred name. Only rename when the preferred name is explicitly stated or clearly implied in the note's own content — do not guess.");
+        sb.AppendLine("8. USE SUBFOLDERS — subfolder depth carries meaning. A note at People/[REDACT]'s Family/Grandparents/Grumpy tells you who this is before the note is opened. Do NOT flatten notes to a shallower path. If a note is currently too shallow, move it deeper to reflect its place in the graph (e.g. People/Geoffrey → People/[REDACT]'s Family/Grandparents/Grumpy). Every path segment should answer a question: what is this, whose is it, how does it relate?");
+        sb.AppendLine("9. PREFERRED NAMES — a note's title must be the everyday name (nickname, alias, preferred name), not the formal or legal name. The formal name belongs inside the note under ## Info (e.g. **Full Name:** Geoffrey). Use newName to rename. This is essential for both recall accuracy and duplicate prevention: two notes with different formal and informal names for the same person must be merged under the preferred name. Only rename when the preferred name is explicitly stated or clearly implied in the note's own content — do not guess. Example: a note titled 'Geoffrey' whose content states 'Nickname: Grumpy' MUST be renamed to 'Grumpy' via newName.");
+        sb.AppendLine("9a. DISAMBIGUATION — when two DIFFERENT things share the EXACT same name, append a parenthetical to each to make them unambiguous, Wikipedia-style (e.g. 'Granny Squeak (person)' vs 'Granny Squeak (boat)'). Only apply this when an actual collision exists or would be created by a rename — do NOT add parentheticals to unique names that have no collision.");
         sb.AppendLine("10. DATED EVENTS — every entry in an ## Events section must carry a specific or approximate date. Remove or rewrite any undated event entries. Use the format '25th August 2024: ...' for known dates, '~May 2026: ...' for approximate, '2023: ...' for year-only. Never use relative time ('several years ago', 'recently') — these rot as time passes. If a date cannot be determined, move the fact into the note body as prose rather than listing it under Events.");
         sb.AppendLine("11. CHANGELOG — every note you edit must have a ## Changelog section. Add a dated entry for what changed (e.g. '- 2026-06-02: Added employment info.'). Do NOT include [[links]] in changelog entries — plain text only.");
         sb.AppendLine("12. EVENT NOTES — notes inside Events/ are point-in-time snapshots. They must carry a specific or approximate date. They record what happened at that moment and link outward to ongoing notes (Relationships/, People/, etc.) for the evolving story. Do not store ongoing or general facts in an event note.");
-        sb.AppendLine("13. NO DESCRIPTOR NOTES — descriptors, statuses, and labels are not notes. 'Long Distance Relationship', 'Employed', 'Estranged' belong as a field or sentence inside the relevant note (e.g. 'Current Status: Long distance' in the relationship note). If you encounter a note that is purely a descriptor with no content of its own, its information should be moved into the parent note and the descriptor note deleted (use a 'delete' op or leave it empty — do not preserve it as a standalone note).");
+        sb.AppendLine("13. NO DESCRIPTOR NOTES — descriptors, statuses, and labels are not notes. 'Long Distance Relationship', 'Employed', 'Estranged' belong as a field or sentence inside the relevant note (e.g. 'Current Status: Long distance' in the relationship note). If you encounter a note that is purely a descriptor with no content of its own, its information should be moved into the parent note and the descriptor note should be added to the 'delete' list.");
+        sb.AppendLine("14. STAY IN YOUR FOLDER — only emit edits for notes whose path begins with the folder you are analysing. Do NOT rewrite notes in other folders, even if they are referenced here. Cross-folder edits cause content loss when multiple passes run.");
+        sb.AppendLine("15. UNKNOWN FOLDER — notes in Unknown/ that have a clear home should be moved (via newName) to the correct folder. Specifically: ARI agent notes (Recall, Dialogue, Engram) belong under Projects/ARI/Agents/; place names ([REDACT], etc.) belong under Places/; empty or descriptor-only stubs should be deleted.");
         sb.AppendLine();
         sb.AppendLine("OUTPUT FORMAT — respond with ONLY raw JSON, starting immediately with {. No explanation, no preamble, no reasoning:");
-        sb.AppendLine("{ \"add\": [{ \"name\": \"Folder/NoteName\", \"content\": \"full markdown\" }], \"edit\": [{ \"name\": \"EXACT current path from the --- header --- above\", \"newName\": \"NewFolder/NoteName\", \"content\": \"full markdown\" }] }");
-        sb.AppendLine("Rules: (a) The 'name' field in an edit MUST exactly match the path shown in the note's --- header --- (e.g. 'People/Family/Jake', not 'People/Jake'). (b) Omit newName if the note does not move. (c) If no changes are needed: { \"add\": [], \"edit\": [] }");
+        sb.AppendLine("{ \"add\": [{ \"name\": \"Folder/NoteName\", \"content\": \"full markdown\" }], \"edit\": [{ \"name\": \"EXACT current path from the --- header --- above\", \"newName\": \"NewFolder/NoteName\", \"content\": \"full markdown\" }], \"delete\": [{ \"name\": \"NoteName\", \"reason\": \"brief reason\" }] }");
+        sb.AppendLine("Rules: (a) The 'name' field in an edit MUST exactly match the path shown in the note's --- header --- (e.g. 'People/Family/Jake', not 'People/Jake'). (b) Omit newName if the note does not move. (c) Use 'delete' for descriptor-only or empty notes that should be removed entirely — do NOT put them in 'edit' with empty content. (d) If no changes are needed: { \"add\": [], \"edit\": [], \"delete\": [] }");
         sb.AppendLine();
         sb.AppendLine("/no_think");
     }
@@ -521,10 +563,10 @@ internal class Refactor : Agent
         return result.Trim();
     }
 
-    private static string BuildSummary(bool allNotes, int seedCount, int loadedCount, HashSet<string> folders, int adds, int edits, int seeAlsoStripped)
+    private static string BuildSummary(bool allNotes, int seedCount, int loadedCount, HashSet<string> folders, int adds, int edits, int seeAlsoStripped, int deletes)
     {
         StringBuilder sb = new();
-        sb.AppendLine($"Refactor {(allNotes ? "full" : "incremental")} complete — {adds} added, {edits} edited.");
+        sb.AppendLine($"Refactor {(allNotes ? "full" : "incremental")} complete — {adds} added, {edits} edited, {deletes} deleted.");
         if (!allNotes) sb.AppendLine($"Working set: {seedCount} dirty note(s) expanded to {loadedCount} across [{string.Join(", ", folders)}].");
         if (seeAlsoStripped > 0) sb.AppendLine($"See Also sections removed: {seeAlsoStripped}.");
         return sb.ToString().TrimEnd();
@@ -532,11 +574,11 @@ internal class Refactor : Agent
 
     // ── JSON parsers ──────────────────────────────────────────────────────────────
 
-    private static (List<EngramAdd> adds, List<EngramEdit> edits) ParseAddEdit(string raw)
+    private static (List<EngramAdd> adds, List<EngramEdit> edits, List<EngramDelete> deletes) ParseAddEdit(string raw)
     {
         raw = StripFences(raw);
         int start = raw.IndexOf('{');
-        if (start < 0) return ([], []);
+        if (start < 0) return ([], [], []);
 
         try
         {
@@ -564,13 +606,23 @@ internal class Refactor : Agent
                         edits.Add(new EngramEdit { NoteName = name, NewNoteName = newName, Content = content });
                 }
 
-            return (adds, edits);
+            List<EngramDelete> deletes = [];
+            if (root.TryGetProperty("delete", out JsonElement delArr) && delArr.ValueKind == JsonValueKind.Array)
+                foreach (JsonElement el in delArr.EnumerateArray())
+                {
+                    string? name   = el.GetStr("name");
+                    string? reason = el.GetStr("reason") ?? string.Empty;
+                    if (!string.IsNullOrWhiteSpace(name))
+                        deletes.Add(new EngramDelete { NoteName = name, Reason = reason });
+                }
+
+            return (adds, edits, deletes);
         }
         catch (Exception ex)
         {
             Common.Logger.LogWarning("[Refactor] Failed to parse LLM output: {Error}. Raw (first 200): {Raw}",
                 ex.Message, raw.Length > 200 ? raw[..200] : raw);
-            return ([], []);
+            return ([], [], []);
         }
     }
 

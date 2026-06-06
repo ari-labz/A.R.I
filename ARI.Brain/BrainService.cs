@@ -76,12 +76,14 @@ public class BrainService
     private async Task OnReady()
     {
         triliumReady = true;
-        Dictionary<string, (string Id, string FolderPath)> all = await trilium.GetAllNoteIds();
+        Dictionary<string, (string Id, string FolderPath, string BranchId)> all = await trilium.GetAllNoteIds();
         noteIdCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach ((string title, (string Id, string FolderPath) info) in all)
+        foreach ((string title, (string Id, string FolderPath, string BranchId) info) in all)
         {
             noteIdCache[title]          = info.Id;
             noteFolderCache[info.Id]    = info.FolderPath;
+            if (!string.IsNullOrEmpty(info.BranchId))
+                branchIdCache[info.Id]  = info.BranchId;
         }
         cachedTitles = null; // mark dirty so first call rebuilds from the new noteIdCache
         Common.Logger.LogInformation("Brain connected to Trilium. {Count} note(s) in graph.", noteIdCache.Count);
@@ -201,7 +203,41 @@ public class BrainService
     public async Task DeleteNote(string title)
     {
         if (!triliumReady) return;
-        string? noteId = await FindNoteId(title);
+
+        // Support path-qualified names like "Unknown/Recall".
+        // When a path is given, find the note by bare title but verify it lives in the expected folder.
+        // This prevents accidentally deleting a same-titled note in a different folder
+        // (e.g. deleting Projects/ARI/Agents/Recall when trying to delete Unknown/Recall).
+        string? noteId = null;
+        if (title.Contains('/'))
+        {
+            string bareTitle      = title[(title.LastIndexOf('/') + 1)..];
+            string expectedFolder = title[..title.LastIndexOf('/')];
+
+            if (noteIdCache.TryGetValue(bareTitle, out string? candidate))
+            {
+                string actualFolder = noteFolderCache.TryGetValue(candidate, out string? f) ? f : string.Empty;
+                if (string.Equals(actualFolder, expectedFolder, StringComparison.OrdinalIgnoreCase))
+                    noteId = candidate;
+            }
+
+            if (noteId is null)
+            {
+                // Fallback: search Trilium — only use result if it's in the expected folder.
+                string? found = await trilium.FindNoteIdByTitleAnywhere(bareTitle);
+                if (found is not null)
+                {
+                    string actualFolder = noteFolderCache.TryGetValue(found, out string? f) ? f : string.Empty;
+                    if (string.Equals(actualFolder, expectedFolder, StringComparison.OrdinalIgnoreCase))
+                        noteId = found;
+                }
+            }
+        }
+        else
+        {
+            noteId = await FindNoteId(title);
+        }
+
         if (noteId is null)
         {
             Common.Logger.LogWarning("[Brain] Delete failed — '{Title}' not found.", title);
@@ -478,6 +514,7 @@ public class BrainService
 
             await trilium.UpdateNoteContent(existingId, resolved);
 
+            bool moved = false;
             if (!string.Equals(currentFolder, targetFolder, StringComparison.OrdinalIgnoreCase))
             {
                 if (!branchIdCache.TryGetValue(existingId, out string? branchId))
@@ -486,11 +523,19 @@ public class BrainService
                 {
                     string newBranchId = await trilium.MoveNoteToFolderPath(branchId, existingId, folders);
                     branchIdCache[existingId] = newBranchId;
+                    moved = true;
                     Common.Logger.LogInformation("added (moved): {From} → {To}", $"{currentFolder}/{name}", add.NoteName);
+                }
+                else
+                {
+                    Common.Logger.LogWarning("[Brain] Move skipped — could not resolve branch for '{Name}'.", add.NoteName);
                 }
             }
 
-            noteFolderCache[existingId] = targetFolder;
+            // Only update the folder cache if the move actually succeeded.
+            // Updating on failure would desync the cache from Trilium's actual tree.
+            if (moved || string.Equals(currentFolder, targetFolder, StringComparison.OrdinalIgnoreCase))
+                noteFolderCache[existingId] = targetFolder;
             UpdateContentCache(name, targetFolder, resolved);
             Common.Logger.LogInformation("added (updated): {Name}", add.NoteName);
         }

@@ -164,23 +164,23 @@ public class TriliumClient
     }
 
     /// <summary>
-    /// Returns title → (noteId, folderPath) for all entity notes in the tree.
+    /// Returns title → (noteId, folderPath, branchId) for all entity notes in the tree.
     /// Category folders (depth-1 children of root) are detected by depth, not by title.
     /// Also populates the internal folderCache for later path-based operations.
     /// </summary>
-    public async Task<Dictionary<string, (string Id, string FolderPath)>> GetAllNoteIds()
+    public async Task<Dictionary<string, (string Id, string FolderPath, string BranchId)>> GetAllNoteIds()
     {
-        List<(string Id, string Title, string FolderPath)> all = await TraverseTree();
+        List<(string Id, string Title, string FolderPath, string BranchId)> all = await TraverseTree();
 
         // Deduplicate by title: prefer notes NOT in Unknown/ over Unknown stubs that share
         // a name with a real categorised note (e.g. Unknown/People vs the real People folder).
         suppressedStubIds.Clear();
-        Dictionary<string, (string Id, string FolderPath)> result = new(StringComparer.OrdinalIgnoreCase);
-        foreach ((string id, string title, string folderPath) in all)
+        Dictionary<string, (string Id, string FolderPath, string BranchId)> result = new(StringComparer.OrdinalIgnoreCase);
+        foreach ((string id, string title, string folderPath, string branchId) in all)
         {
-            if (!result.TryGetValue(title, out (string Id, string FolderPath) existing))
+            if (!result.TryGetValue(title, out (string Id, string FolderPath, string BranchId) existing))
             {
-                result[title] = (id, folderPath);
+                result[title] = (id, folderPath, branchId);
             }
             else
             {
@@ -191,7 +191,7 @@ public class TriliumClient
                 {
                     Common.Logger.LogWarning("[Brain] Duplicate note title '{Title}' — preferring '{Incoming}' over Unknown stub.", title, folderPath.Length > 0 ? $"{folderPath}/{title}" : title);
                     suppressedStubIds.Add(existing.Id); // old Unknown stub — schedule for deletion
-                    result[title] = (id, folderPath);
+                    result[title] = (id, folderPath, branchId);
                 }
                 else if (!existingIsUnknown && incomingIsUnknown)
                 {
@@ -209,6 +209,13 @@ public class TriliumClient
 
     public async Task<List<string>> GetAllNoteTitles()
         => (await GetAllNoteIds()).Keys.ToList();
+
+    /// <summary>Returns the folderPath portion of a full note path (everything before the last segment).</summary>
+    private static string FolderOf(string fullPath)
+    {
+        int slash = fullPath.LastIndexOf('/');
+        return slash >= 0 ? fullPath[..slash] : string.Empty;
+    }
 
     /// <summary>
     /// Deletes all Unknown/ stubs that were suppressed during the last GetAllNoteIds call
@@ -252,7 +259,7 @@ public class TriliumClient
         HttpResponseMessage res = await http.GetAsync($"etapi/notes/{noteId}");
         if (!res.IsSuccessStatusCode) return null;
         JsonNode? node = JsonNode.Parse(await res.Content.ReadAsStringAsync());
-        JsonArray? branchIds = node?["branchIds"] as JsonArray;
+        JsonArray? branchIds = node?["parentBranchIds"] as JsonArray;
         return branchIds?.FirstOrDefault()?.GetValue<string>();
     }
 
@@ -284,21 +291,22 @@ public class TriliumClient
 
     // ── Tree traversal ──────────────────────────────────────────────────────────
 
-    private async Task<List<(string Id, string Title, string FolderPath)>> TraverseTree()
+    private async Task<List<(string Id, string Title, string FolderPath, string BranchId)>> TraverseTree()
     {
-        List<(string, string, string)> notes = new();
+        List<(string, string, string, string)> notes = new();
         HashSet<string> visited = new();
-        await Traverse(rootNoteId, notes, visited, folderPath: "", depth: 0);
+        await Traverse(rootNoteId, notes, visited, folderPath: "", depth: 0, parentBranchId: "");
         return notes;
     }
 
     // depth 0 = root  |  depth 1 = category folders  |  depth 2+ = notes
     private async Task Traverse(
         string noteId,
-        List<(string Id, string Title, string FolderPath)> notes,
+        List<(string Id, string Title, string FolderPath, string BranchId)> notes,
         HashSet<string> visited,
         string folderPath,
-        int depth)
+        int depth,
+        string parentBranchId)
     {
         if (!visited.Add(noteId)) return;
 
@@ -308,7 +316,10 @@ public class TriliumClient
         JsonNode? node = JsonNode.Parse(await res.Content.ReadAsStringAsync());
         if (node is null) return;
 
-        string? title = node["title"]?.GetValue<string>();
+        string? title    = node["title"]?.GetValue<string>();
+        // Capture the primary branch ID from parentBranchIds (Trilium ETAPI uses parentBranchIds, not branchIds).
+        JsonArray? branchArr = node["parentBranchIds"] as JsonArray;
+        string branchId  = branchArr?.FirstOrDefault()?.GetValue<string>() ?? string.Empty;
 
         if (depth == 1 && !string.IsNullOrWhiteSpace(title))
         {
@@ -316,20 +327,20 @@ public class TriliumClient
             // (so FindNoteId("People") can locate and update it), then recurse into children.
             string thisFolderPath = title;
             folderCache[thisFolderPath] = noteId;
-            notes.Add((noteId, title, "")); // empty folderPath = lives at root level
+            notes.Add((noteId, title, "", branchId)); // empty folderPath = lives at root level
 
             JsonArray? children = node["childNoteIds"] as JsonArray;
             foreach (JsonNode? child in children ?? new JsonArray())
             {
                 string? childId = child?.GetValue<string>();
                 if (!string.IsNullOrWhiteSpace(childId) && !childId.StartsWith("_"))
-                    await Traverse(childId, notes, visited, thisFolderPath, depth + 1);
+                    await Traverse(childId, notes, visited, thisFolderPath, depth + 1, branchId);
             }
             return;
         }
 
         if (depth >= 2 && !string.IsNullOrWhiteSpace(title))
-            notes.Add((noteId, title, folderPath));
+            notes.Add((noteId, title, folderPath, branchId));
 
         JsonArray? noteChildren = node["childNoteIds"] as JsonArray;
         if (noteChildren is null) return;
@@ -338,7 +349,7 @@ public class TriliumClient
         {
             string? childId = child?.GetValue<string>();
             if (string.IsNullOrWhiteSpace(childId) || childId.StartsWith("_")) continue;
-            await Traverse(childId, notes, visited, folderPath, depth + 1);
+            await Traverse(childId, notes, visited, folderPath, depth + 1, branchId);
         }
     }
 

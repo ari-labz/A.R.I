@@ -25,6 +25,8 @@ internal class Dialogue : Agent
     internal override  int  MaxContextTokens           => maxContextTokens;
     internal override  bool SuppressPromptLog          => true;
 
+    internal void NotifyTyping(string threadKey) => GetThread(threadKey)?.ResetInactivityTimer();
+
     internal async Task<string> SendPrompt(
         string               threadKey,
         string               prompt,

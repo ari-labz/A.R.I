@@ -1,7 +1,12 @@
 {
   "Modules": {
     "Discord": true,
-    "WebPanel": true
+    "WebPanel": true,
+    "VoiceSynthesis": true
+  },
+  "VoiceSynthesis": {
+    "RvcPath": "../../../../rvc",
+    "Port": 7865
   },
   "WebPanel": {
     "Port": 5074,

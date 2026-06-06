@@ -898,7 +898,7 @@ document.getElementById('btn-new-chat').addEventListener('click', () => {
                     return;
                 }
 
-                const { isProcessing } = data;
+                const { isProcessing, isRemembering } = data;
                 const currentCodeMode = document.getElementById('main').classList.contains('code-mode');
                 let targetCodeMode = currentCodeMode;
                 try {
@@ -925,8 +925,13 @@ document.getElementById('btn-new-chat').addEventListener('click', () => {
                 // Show/hide typing indicator based on server processing state.
                 // Skip if a stream is active — the stream controls the indicator during its lifecycle.
                 if (!isStreaming) {
-                    if (isProcessing && !document.getElementById('typing-indicator')) showTyping();
-                    else if (!isProcessing) hideTyping();
+                    if (isRemembering && !isProcessing) {
+                        if (!document.getElementById('typing-indicator')) showTyping('Remembering');
+                    } else if (isProcessing) {
+                        if (!document.getElementById('typing-indicator')) showTyping();
+                    } else {
+                        hideTyping();
+                    }
                 }
             } catch { /* ignore malformed event */ }
         };
@@ -1383,15 +1388,16 @@ document.getElementById('btn-new-chat').addEventListener('click', () => {
         attachCopyButtons(el);
     }
 
-    function showTyping() {
+    function showTyping(label) {
         const box = document.getElementById('messages');
         const row = document.createElement('div');
         row.className = 'msg-row assistant';
         row.id = 'typing-indicator';
+        const text = label === 'Remembering' ? 'Remembering' : 'A·R·I is thinking';
         row.innerHTML =
             `<div class="sender">A·R·I</div>` +
             `<div class="typing-indicator">` +
-            `<span>A·R·I is thinking</span>` +
+            `<span>${text}</span>` +
             `<div class="typing-dots"><b></b><b></b><b></b></div>` +
             `</div>`;
         box.appendChild(row);
@@ -1747,6 +1753,35 @@ document.getElementById('btn-new-chat').addEventListener('click', () => {
         const el = document.getElementById('input');
         const t  = el.value.trim(); if (!t) return;
         el.value = ''; el.style.height = 'auto'; send(t);
+    });
+
+    // ── Typing heartbeat — resets the server-side inactivity timer while composing ──
+    // Sends a POST every 3s while the input is focused and has content.
+    // Stops when the user blurs the field or clears it, letting the countdown resume normally.
+    let typingHeartbeatTimer = null;
+    const inputEl = document.getElementById('input');
+
+    function sendTypingHeartbeat() {
+        if (!activeThread || !inputEl.value.trim()) return;
+        fetch(`/api/threads/${activeThread}/typing`, { method: 'POST' }).catch(() => {});
+    }
+
+    function startTypingHeartbeat() {
+        if (typingHeartbeatTimer) return;
+        sendTypingHeartbeat();
+        typingHeartbeatTimer = setInterval(sendTypingHeartbeat, 3000);
+    }
+
+    function stopTypingHeartbeat() {
+        clearInterval(typingHeartbeatTimer);
+        typingHeartbeatTimer = null;
+    }
+
+    inputEl.addEventListener('focus', () => { if (inputEl.value.trim()) startTypingHeartbeat(); });
+    inputEl.addEventListener('blur',  stopTypingHeartbeat);
+    inputEl.addEventListener('input', () => {
+        if (inputEl.value.trim()) startTypingHeartbeat();
+        else stopTypingHeartbeat();
     });
 
     // ── wait for ARI to be ready (polls /api/threads until not 503) ──

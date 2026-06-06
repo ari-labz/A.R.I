@@ -26,12 +26,12 @@ public class VoiceSynthesisService
         {
             StartInfo = new ProcessStartInfo
             {
-                FileName = "python",
-                Arguments = "infer-web.py",
+                FileName = "/bin/bash",
+                Arguments = $"-c \"cd '{rvcPath}' && OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 RVC_FORCE_CPU=1 PYTORCH_ENABLE_MPS_FALLBACK=1 /opt/homebrew/bin/python3.11 infer-web.py --noautoopen\"",
                 WorkingDirectory = rvcPath,
                 UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
+                RedirectStandardOutput = false,
+                RedirectStandardError = false
             }
         };
 
@@ -54,7 +54,7 @@ public class VoiceSynthesisService
             {
                 StartInfo = new ProcessStartInfo
                 {
-                    FileName = "python",
+                    FileName = "/opt/homebrew/bin/python3.11",
                     Arguments = "--version",
                     UseShellExecute = false,
                     RedirectStandardOutput = true,

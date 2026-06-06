@@ -8,6 +8,7 @@ public class AriConfig
     public DockerConfig Docker { get; init; }
     public ModulesConfig Modules { get; init; }
     public WebPanelConfig WebPanel { get; init; } = new();
+    public VoiceSynthesisConfig VoiceSynthesis { get; init; } = new();
 
     public static AriConfig LoadFrom(string path)
     {
@@ -46,6 +47,13 @@ public class ModulesConfig
 {
     public bool Discord { get; init; }
     public bool WebPanel { get; init; }
+    public bool VoiceSynthesis { get; init; }
+}
+
+public class VoiceSynthesisConfig
+{
+    public string RvcPath { get; init; } = "";
+    public int Port { get; init; } = 7860;
 }
 
 public class WebPanelConfig

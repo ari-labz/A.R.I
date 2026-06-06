@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -14,11 +15,40 @@ internal class Engram : Agent, IDisposable
     private readonly string      brainPublicUrl;
     private readonly EngramBuffer buffer;
 
-    private readonly Dictionary<string, DateTime> lastEngramRun          = new();
-    private readonly Dictionary<string, int>      lastEngramHistoryCount = new();
-    private readonly SemaphoreSlim                engramLock             = new(1, 1);
-    private readonly int                          fetchDepth;
-    private readonly HttpClient                   httpClient             = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+    private readonly Dictionary<string, DateTime>  lastEngramRun          = new();
+    private readonly Dictionary<string, int>       lastEngramHistoryCount = new();
+    private readonly SemaphoreSlim                 engramLock             = new(1, 1);
+    private readonly ConcurrentDictionary<string, byte> sweepingThreads   = new(StringComparer.OrdinalIgnoreCase);
+    private readonly int                           fetchDepth;
+    private readonly HttpClient                    httpClient             = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+
+    internal event Action<string>? SweepCompleted;
+
+    internal bool IsSweeping(string threadKey) => sweepingThreads.ContainsKey(threadKey);
+
+    /// <summary>
+    /// Awaits until any in-progress sweep for <paramref name="threadKey"/> has finished.
+    /// Returns immediately if no sweep is running.
+    /// </summary>
+    internal async Task WaitForSweepAsync(string threadKey, CancellationToken ct)
+    {
+        if (!IsSweeping(threadKey)) return;
+
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Action<string>? handler = null;
+        handler = key =>
+        {
+            if (!key.Equals(threadKey, StringComparison.OrdinalIgnoreCase)) return;
+            SweepCompleted -= handler;
+            tcs.TrySetResult(true);
+        };
+        SweepCompleted += handler;
+        // Re-check after subscribing to close the race where the sweep finished between the first check and the subscribe.
+        if (!IsSweeping(threadKey)) { SweepCompleted -= handler; return; }
+
+        using CancellationTokenRegistration reg = ct.Register(() => { SweepCompleted -= handler; tcs.TrySetCanceled(ct); });
+        await tcs.Task;
+    }
 
 
     internal Engram(AgentConfig config, Dialogue dialogue, BrainService brain, Context? context, int fetchDepth = 7, string brainPublicUrl = "") : base(config)
@@ -96,6 +126,7 @@ internal class Engram : Agent, IDisposable
     {
         if (!IsEnabled) return;
         if (!await engramLock.WaitAsync(0)) return;
+        sweepingThreads[threadKey] = 0;
         try
         {
             // Fetch thread items — only conversation items (UserMessage/AriResponse) are used.
@@ -259,6 +290,11 @@ internal class Engram : Agent, IDisposable
                 "It also prevents duplicates: a new note 'Andi' and an existing note '[REDACT]' are the same person — catch this by checking existing notes for aliases.\n" +
                 "Only rename when the preferred name is clearly known. If uncertain, leave the title unchanged.\n\n" +
 
+                "## DISAMBIGUATION\n" +
+                "When two distinct things share the same name, append a parenthetical descriptor to each, Wikipedia-style.\n" +
+                "Example: a boat and a person both named 'Granny Squeak' become 'Granny Squeak (boat)' and 'Granny Squeak (person)'.\n" +
+                "Apply this whenever a collision exists or would be caused by a rename. The parenthetical should be the shortest phrase that makes the note unambiguous.\n\n" +
+
                 "## EVENTS MUST HAVE DATES\n" +
                 "Every entry in an Events section must carry a specific or approximate date. Never use relative time ('several years ago', 'recently', 'last year') — these rot as time passes.\n" +
                 "- Specific date: '25th August 2024: Met [REDACT] on VRChat.'\n" +
@@ -324,6 +360,7 @@ internal class Engram : Agent, IDisposable
                     $"Now write the note: {item.Name}.{moveInstruction}\n\n" +
                     "Rules for this note:\n" +
                     "- Title must be the everyday name (nickname/alias), not the formal name. Formal name goes inside under ## Info.\n" +
+                    "- If the title would collide with another note's name, append a parenthetical to disambiguate (e.g. 'Granny Squeak (person)' vs 'Granny Squeak (boat)').\n" +
                     "- Every Events entry must have a specific or approximate date (e.g. '25th August 2024:' or '~May 2026:'). Never write relative time ('recently', 'several years ago').\n" +
                     "- Include a ## Changelog section. Add a dated entry for what was created or changed. No [[links]] in changelog — plain text only.\n" +
                     "- Only [[link]] to notes that exist or are being created this sweep.\n\n" +
@@ -393,7 +430,9 @@ internal class Engram : Agent, IDisposable
         }
         finally
         {
+            sweepingThreads.TryRemove(threadKey, out _);
             engramLock.Release();
+            SweepCompleted?.Invoke(threadKey);
         }
     }
 
