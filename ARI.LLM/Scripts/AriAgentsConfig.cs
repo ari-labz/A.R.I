@@ -81,6 +81,12 @@ internal class AgentConfig
     public bool Think { get; init; } = false;
 
     /// <summary>
+    /// Maximum thinking tokens allowed per call when Think is true.
+    /// 0 = no cap (model thinks as long as it wants).
+    /// </summary>
+    public int ThinkingBudget { get; init; } = 0;
+
+    /// <summary>
     /// llama-server slot index to request for every call this agent makes.
     /// Null = no preference (server assigns freely).
     /// </summary>

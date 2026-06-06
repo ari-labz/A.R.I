@@ -378,6 +378,18 @@ public class BrainService
         return await trilium.SearchNotes(searchTerm);
     }
 
+    /// <summary>Returns the bare titles of all notes linked from the given note via [[Name]] syntax.</summary>
+    public async Task<List<string>> GetNoteLinks(string title)
+    {
+        string? markdown = await GetNote(title);
+        if (markdown is null) return new List<string>();
+        return Regex.Matches(markdown, @"\[\[([^\]]+)\]\]")
+            .Select(m => m.Groups[1].Value.Trim())
+            .Where(t => !string.IsNullOrEmpty(t))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     /// <summary>
     /// Deletes Unknown/ stubs that are duplicates of properly-categorised notes.
     /// These are identified at startup and tracked until cleaned up.

@@ -224,19 +224,20 @@ internal class Thread
 
     internal async Task<string> SendPrompt(
         string               prompt,
-        string               username            = "user",
-        string?              augmentedPrompt     = null,
-        string?              recallNotes         = null,
-        string?              contextSummary      = null,
-        int                  maxTokensOverride   = 0,
-        CancellationToken    ct                  = default,
-        bool                 userMessagePreadded = false,
-        Func<string, Task>?  onDelta             = null)
+        string               username              = "user",
+        string?              augmentedPrompt       = null,
+        string?              recallNotes           = null,
+        string?              contextSummary        = null,
+        int                  maxTokensOverride     = 0,
+        CancellationToken    ct                    = default,
+        bool                 userMessagePreadded   = false,
+        Func<string, Task>?  onDelta               = null,
+        int                  thinkingBudgetOverride = 0)
     {
         await sendLock.WaitAsync(ct);
         try
         {
-            return await SendPromptCore(prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded, onDelta);
+            return await SendPromptCore(prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded, onDelta, thinkingBudgetOverride);
         }
         catch (OperationCanceledException)
         {
@@ -262,7 +263,8 @@ internal class Thread
         int                  maxTokensOverride,
         CancellationToken    ct,
         bool                 userMessagePreadded,
-        Func<string, Task>?  onDelta = null)
+        Func<string, Task>?  onDelta               = null,
+        int                  thinkingBudgetOverride = 0)
     {
         LastMessageAt = DateTime.UtcNow;
 
@@ -393,6 +395,18 @@ internal class Thread
                 ["top_k"]          = 20,
                 ["repeat_penalty"] = 1.0
             };
+            if (!agent.Think)
+            {
+                body["thinking"]             = false;
+                body["enable_thinking"]      = false;
+                body["chat_template_kwargs"] = new { enable_thinking = false };
+            }
+            else if (agent.ThinkingBudget > 0 || thinkingBudgetOverride > 0)
+            {
+                int budget = thinkingBudgetOverride > 0 ? thinkingBudgetOverride : agent.ThinkingBudget;
+                body["thinking_budget"]      = budget;
+                body["chat_template_kwargs"] = new { enable_thinking = true, thinking_budget = budget };
+            }
             if (toolSchemas is not null)
                 body["tools"] = toolSchemas;
             if (agent.Slot.HasValue)
@@ -449,7 +463,8 @@ internal class Thread
                         string? thinkDelta = reasoning.GetString();
                         if (!string.IsNullOrEmpty(thinkDelta) && !wasThinking)
                         {
-                            Common.Logger.LogWarning("[{Agent}] ({Thread}) thinking chain detected — <|think_off|> may not be working.", agent.Name, threadKey);
+                            if (!agent.Think)
+                                Common.Logger.LogWarning("[{Agent}] ({Thread}) thinking chain detected — <|think_off|> may not be working.", agent.Name, threadKey);
                             wasThinking = true;
                         }
                     }

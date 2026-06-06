@@ -341,8 +341,18 @@ public class LlmService : IDisposable
             string? recallBlock = null;
             if (memory is not null)
             {
-                List<ThreadMessage> chatHistory = dialogueThread.GetChatHistory();
-                recallBlock = await memory.GetNotes(chatHistory, effectivePrompt, cts.Token);
+                try
+                {
+                    List<ThreadMessage> chatHistory = dialogueThread.GetChatHistory();
+                    recallBlock = await memory.GetNotes(chatHistory, effectivePrompt, contextSummary, cts.Token);
+                }
+                catch (Exception ex)
+                {
+                    Common.Logger.LogError("[Memory] Failed to retrieve memories: {Error}", ex.Message);
+                    string errorMessage = "> error retrieving memories";
+                    if (onDelta is not null) await onDelta(errorMessage);
+                    return errorMessage;
+                }
             }
 
             return await dialogue.SendPrompt(threadKey, effectivePrompt, username, platformContext, recallBlock, contextSummary, cts.Token, userMessagePreadded: true, onDelta: onDelta);

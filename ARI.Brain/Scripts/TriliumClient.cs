@@ -152,7 +152,7 @@ public class TriliumClient
     {
         string encoded = Uri.EscapeDataString(searchTerm);
         HttpResponseMessage res = await http.GetAsync($"etapi/notes?search={encoded}");
-        if (!res.IsSuccessStatusCode) return new List<string>();
+        if (!res.IsSuccessStatusCode) return [];
 
         JsonArray results = ParseArray(await res.Content.ReadAsStringAsync());
         return results
@@ -478,6 +478,9 @@ public class TriliumClient
         try
         {
             JsonNode? node = JsonNode.Parse(json);
+            // Trilium ETAPI returns {"results": [...]} — unwrap it
+            if (node is JsonObject obj && obj["results"] is JsonArray results)
+                return results;
             return node as JsonArray ?? new JsonArray();
         }
         catch
