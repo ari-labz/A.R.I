@@ -11,6 +11,7 @@ internal class Agent
     internal readonly int    MaxTokens;
     internal readonly int    MaxImageTokens;
     internal readonly bool   Think;
+    internal readonly int    ThinkingBudget;
     internal readonly int?   Slot;
     internal virtual  int    MaxContextTokens => 0;
 
@@ -31,6 +32,7 @@ internal class Agent
         MaxTokens      = config.MaxTokens;
         MaxImageTokens = config.MaxImageTokens;
         Think          = config.Think;
+        ThinkingBudget = config.ThinkingBudget;
         Slot           = config.Slot;
     }
 
@@ -59,22 +61,23 @@ internal class Agent
     protected Task<string> Prompt(
         string               threadKey,
         string               prompt,
-        string               username             = "user",
-        string?              augmentedPrompt      = null,
-        string?              platformContext      = null,
-        string?              recallNotes          = null,
-        string?              contextSummary       = null,
-        int                  maxTokensOverride    = 0,
-        CancellationToken    ct                   = default,
-        bool                 userMessagePreadded  = false,
-        Func<string, Task>?  onDelta              = null)
+        string               username              = "user",
+        string?              augmentedPrompt       = null,
+        string?              platformContext       = null,
+        string?              recallNotes           = null,
+        string?              contextSummary        = null,
+        int                  maxTokensOverride     = 0,
+        CancellationToken    ct                    = default,
+        bool                 userMessagePreadded   = false,
+        Func<string, Task>?  onDelta               = null,
+        int                  thinkingBudgetOverride = 0)
     {
         if (!threads.TryGetValue(threadKey, out Thread? thread))
         {
             thread = new Thread(this, threadKey, platformContext: platformContext, shortTermMemoryLimit: GetShortTermMemoryLimit(), maxContextTokens: GetMaxContextTokens());
             OnThreadCreated(threadKey, thread);
         }
-        return thread.SendPrompt(prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded, onDelta);
+        return thread.SendPrompt(prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded, onDelta, thinkingBudgetOverride);
     }
 
     // ── Overridable ─────────────────────────────────────────────────────────────

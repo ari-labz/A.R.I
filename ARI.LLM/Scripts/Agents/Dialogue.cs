@@ -43,21 +43,18 @@ internal class Dialogue : Agent
         //   non-empty = notes found, empty string = agent ran but found nothing → inject "none".
         if (recallBlock is not null)
         {
-            sb.AppendLine("[ARI's Memories]");
-            sb.AppendLine(recallBlock.Length > 0 ? recallBlock.Trim() : "none");
+            if (recallBlock.Length > 0)
+            {
+                sb.AppendLine("[ARI's Memories]");
+                sb.AppendLine(recallBlock.Trim());
+            }
+            else
+            {
+                sb.AppendLine("[ARI's Memories] No stored memories were found for this topic. Do not invent or guess information — say you don't have that information.");
+            }
             sb.AppendLine(divider);
         }
 
-        if (brain is not null)
-        {
-            List<string> paths = await brain.GetNotePaths();
-            if (paths.Count > 0)
-            {
-                sb.AppendLine("[Stored memories — call search_memories with the bare title to retrieve any of these]");
-                sb.AppendLine(string.Join(", ", paths));
-                sb.AppendLine(divider);
-            }
-        }
 
         if (!string.IsNullOrWhiteSpace(contextSummary))
         {
