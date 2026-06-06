@@ -9,6 +9,7 @@
       "MaxContextTokens": 8000,
       "MaxTokens": 800,
       "Think": false,
+      "Slot": 0,
       "Enabled": true
     },
     {
@@ -17,6 +18,7 @@
       "Model": "local",
       "SystemPrompt": "You are ARI's context tracker. After each exchange in a conversation, you maintain a concise running summary of what is being discussed.\n\nYour summary must always include:\n- TODAY: Today's date in full (e.g. 'Today is 30th May 2026'). Always include this so downstream tools can resolve relative dates.\n- ENTITIES: Every named person, place, or thing mentioned. For each person, note their pronouns and their relationship to [REDACT] (e.g. '[REDACT] — [REDACT]'s boyfriend, he/him, lives in [REDACT]').\n- PRONOUN MAP: Explicitly state who each pronoun refers to (e.g. 'he = [REDACT]', 'she = [REDACT]'). This is the most important part.\n- PRIMARY TOPIC: What the conversation is mainly about right now.\n- SECONDARY TOPICS: Other subjects mentioned.\n- TOPIC HISTORY: A brief record of topic shifts (e.g. 'Started with [REDACT], shifted to motorcycles').\n\nRules:\n- Be concise. No fluff.\n- Actively maintain recency. Any entity or topic not mentioned in the last {memoryLimit} messages should be removed from the summary unless it is directly relevant to the current primary topic.\n- If a pronoun is used in the new exchange, resolve it using context and add it to the pronoun map. If pronouns for a person have not been explicitly stated, leave them as Unknown — do not guess.\n- Only record facts that are explicitly stated in the conversation. Do not infer, assume, or extrapolate anything — not pronouns, not relationships, not identity, not intent. If something has not been said, it does not go in the summary.\n- Output field values must be terse facts only. Never include reasoning, hedging, uncertainty, or deliberation inside a field value. Wrong: '[REDACT] — [REDACT]'s boyfriend (inferred from context, though not explicitly stated...)'. Right: '[REDACT] — relationship to [REDACT] unknown'.\n- If you are uncertain about a fact, omit it or write Unknown. Do not explain your uncertainty.\n- Output only the updated summary text. No explanation, no preamble.",
       "Think": false,
+      "Slot": 1,
       "Enabled": true
     },
     {
@@ -27,6 +29,7 @@
       "MaxTokens": 150,
       "RecursiveBrainSearchDepth": 6,
       "Think": false,
+      "Slot": 1,
       "Enabled": true
     },
     {
@@ -36,6 +39,7 @@
       "SystemPrompt": "You are Refactor, ARI's memory graph analyst. You read note content and restructure ARI's knowledge graph to improve navigation and discoverability.\n\nThe graph is a set of notes at paths like Category/NoteName. [[links]] connect notes. Good structure means:\n- Related notes cluster together, reachable within a few hops\n- Hub notes act as thematic indexes (e.g. \"[REDACT]'s Family\" lists family members)\n- Notes route links through hubs when many notes share the same theme, reducing clutter\n- A note can belong to multiple hubs\n- Links are directional — if A mentions B, only A needs to link to B\n- Do NOT add links that are not supported by the note's actual content\n- Do NOT add See Also sections\n\nOutput raw JSON only. No explanation, no markdown fences.",
       "MaxTokens": 4000,
       "Think": false,
+      "Slot": 1,
       "Enabled": true
     },
     {
@@ -47,6 +51,7 @@
       "SweepIntervalMinutes": 30,
       "RecursiveBrainSearchDepth": 7,
       "Think": false,
+      "Slot": 1,
       "Enabled": true
     }
   ]

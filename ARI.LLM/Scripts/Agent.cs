@@ -11,6 +11,7 @@ internal class Agent
     internal readonly int    MaxTokens;
     internal readonly int    MaxImageTokens;
     internal readonly bool   Think;
+    internal readonly int?   Slot;
     internal virtual  int    MaxContextTokens => 0;
 
     protected readonly ConcurrentDictionary<string, Thread> threads = new();
@@ -30,6 +31,7 @@ internal class Agent
         MaxTokens      = config.MaxTokens;
         MaxImageTokens = config.MaxImageTokens;
         Think          = config.Think;
+        Slot           = config.Slot;
     }
 
     // ── Threads ─────────────────────────────────────────────────────────────────
