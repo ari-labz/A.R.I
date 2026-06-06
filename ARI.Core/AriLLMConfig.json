@@ -1,0 +1,34 @@
+{
+  "Servers": [
+    {
+      "Endpoint": "http://localhost:8081",
+      "Port": 8081,
+      "ContextSize": 32768,
+      "ParallelSlots": 2
+    },
+    {
+      "Endpoint": "http://localhost:8082",
+      "Port": 8082,
+      "ContextSize": 8192,
+      "ParallelSlots": 1
+    }
+  ],
+  "Models": [
+    {
+      "File": "Qwen3.6-27B-Q6_K-mtp.gguf",
+      "MmprojFile": "mmproj-Qwen3.6-27B-f16.gguf",
+      "UseMtp": true,
+      "ModelsPath": "/Users/user/Documents/GitHub/A.R.I/Models",
+      "DownloadBaseUrl": "https://huggingface.co/froggeric/Qwen3.6-27B-MTP-GGUF/resolve/main",
+      "ServerIndex": 0
+    },
+    {
+      "File": "Qwen3-1.7B-Q8_0.gguf",
+      "MmprojFile": "",
+      "UseMtp": false,
+      "ModelsPath": "/Users/user/Documents/GitHub/A.R.I/Models",
+      "DownloadBaseUrl": "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/main",
+      "ServerIndex": 1
+    }
+  ]
+}
