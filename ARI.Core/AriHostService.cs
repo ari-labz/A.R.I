@@ -100,15 +100,8 @@ public class AriHostService : BackgroundService
 
         List<Task> moduleTasks = new();
 
-        if (config.Modules.Discord)
-        {
-            Common.Logger.LogInformation("Discord module is enabled. Starting...");
-            discordService = new DiscordService(loggerFactory, llmService);
-            await discordService.StartAsync(stoppingToken);
-            if (discordService.ExecuteTask is not null)
-                moduleTasks.Add(discordService.ExecuteTask);
-        }
-
+        // VoiceSynthesis must complete its install before Discord starts so that
+        // any startup failures are caught before the bot comes online.
         if (config.Modules.VoiceSynthesis)
         {
             Common.Logger.LogInformation("VoiceSynthesis module is enabled. Installing/verifying RVC...");
@@ -130,6 +123,15 @@ public class AriHostService : BackgroundService
             string voiceUrl = $"http://localhost:{config.VoiceSynthesis.Port}";
             Common.Logger.LogInformation("Opening VoiceSynthesis UI at {Url}", voiceUrl);
             OpenBrowser(voiceUrl);
+        }
+
+        if (config.Modules.Discord)
+        {
+            Common.Logger.LogInformation("Discord module is enabled. Starting...");
+            discordService = new DiscordService(loggerFactory, llmService);
+            await discordService.StartAsync(stoppingToken);
+            if (discordService.ExecuteTask is not null)
+                moduleTasks.Add(discordService.ExecuteTask);
         }
 
         if (moduleTasks.Count > 0)
