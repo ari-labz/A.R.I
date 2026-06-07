@@ -5,7 +5,7 @@
     "VoiceSynthesis": true
   },
   "VoiceSynthesis": {
-    "RvcPath": "../../../../rvc",
+    "RvcPath": "../../../../External/RVC",
     "VoicesPath": "../../../../Voices",
     "Port": 7865
   },
