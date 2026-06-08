@@ -1,6 +1,7 @@
 using ARI.Core.Scripts;
 using ARI.Discord;
 using ARI.LLM;
+using ARI.Voice;
 using ARI.VoiceSynthesis;
 using ARI.WebPanel;
 using Microsoft.Extensions.Hosting;
@@ -16,6 +17,8 @@ public class AriHostService : BackgroundService
     private readonly List<LocalLlamaServer> llamaServers = new();
     private DiscordService? discordService;
     private WebPanelService? webPanelService;
+    private F5Synthesiser? synthesiser;
+    private SpeechQueue? speechQueue;
     private bool containersStarted;
     private bool startupFailed;
 
@@ -112,6 +115,39 @@ public class AriHostService : BackgroundService
             await setup.Install();
         }
 
+        if (config.Modules.Voice)
+        {
+            string f5Path     = ResolvePath(executableDirectory, config.VoiceSynthesis.F5Path);
+            string voicesPath = ResolvePath(executableDirectory, config.VoiceSynthesis.VoicesPath);
+            string modelName  = config.Voice.ModelName;
+            string modelPath  = Path.Combine(voicesPath, modelName, "model_last.pt");
+            string refAudio   = FindReferenceAudio(f5Path, modelName);
+
+            if (!File.Exists(modelPath))
+            {
+                Common.Logger.LogWarning("Voice module enabled but no model found at {Path} — skipping.", modelPath);
+            }
+            else if (string.IsNullOrEmpty(refAudio))
+            {
+                Common.Logger.LogWarning("Voice module enabled but no reference audio found for {Model} — skipping.", modelName);
+            }
+            else
+            {
+                ILogger voiceLogger = loggerFactory.CreateLogger("ARI.Voice");
+                synthesiser = new F5Synthesiser(f5Path, modelPath, refAudio, voiceLogger);
+                await synthesiser.Start(stoppingToken);
+
+                Common.Logger.LogInformation("Voice warming up (caching reference audio)...");
+                await synthesiser.Warmup(stoppingToken);
+
+                speechQueue = new SpeechQueue(synthesiser, voiceLogger);
+                speechQueue.AudioReady += wav => PlayAudio(wav, voiceLogger);
+
+                webPanelService?.SpeechHolder.Set(speechQueue, modelName);
+                Common.Logger.LogInformation("Voice ready.");
+            }
+        }
+
         if (config.Modules.Discord)
         {
             Common.Logger.LogInformation("Discord module is enabled. Starting...");
@@ -129,6 +165,44 @@ public class AriHostService : BackgroundService
             await Task.Delay(Timeout.Infinite, stoppingToken);
     }
 
+    private static string FindReferenceAudio(string f5Path, string modelName)
+    {
+        string audioDir = Path.Combine(f5Path, "training", modelName, "audio");
+        if (!Directory.Exists(audioDir)) return "";
+        string[] wavs = Directory.GetFiles(audioDir, "*.wav");
+        return wavs.Length > 0 ? wavs.OrderBy(f => f).First() : "";
+    }
+
+    private static void PlayAudio(byte[] wav, ILogger logger)
+    {
+        string tmp = Path.Combine(Path.GetTempPath(), $"ari_speech_{Guid.NewGuid():N}.wav");
+        File.WriteAllBytes(tmp, wav);
+        logger.LogDebug("[Voice] Playing {Bytes} bytes", wav.Length);
+
+        System.Diagnostics.Process? proc = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        {
+            FileName               = "afplay",
+            Arguments              = $"\"{tmp}\"",
+            UseShellExecute        = false,
+            RedirectStandardError  = true,
+        });
+
+        if (proc == null)
+        {
+            logger.LogError("[Voice] Failed to start afplay");
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            string stderr = await proc.StandardError.ReadToEndAsync();
+            await proc.WaitForExitAsync();
+            if (proc.ExitCode != 0)
+                logger.LogError("[Voice] afplay failed (exit {Code}): {Error}", proc.ExitCode, stderr);
+            File.Delete(tmp);
+        });
+    }
+
     private static string ResolvePath(string baseDir, string path)
     {
         if (string.IsNullOrEmpty(path)) return "";
@@ -143,6 +217,9 @@ public class AriHostService : BackgroundService
 
         if (discordService != null)
             await discordService.NotifyOffline();
+
+        speechQueue?.Dispose();
+        synthesiser?.Dispose();
 
         if (webPanelService is not null)
             await webPanelService.Stop(cancellationToken);

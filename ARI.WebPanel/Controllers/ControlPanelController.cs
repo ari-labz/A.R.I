@@ -197,6 +197,7 @@ public class ControlPanelApiController(LlmServiceHolder holder, WebPanelConfig c
 public class VoiceController(
     VoiceTrainerHolder voiceHolder,
     DiscordServiceHolder discordHolder,
+    SpeechQueueHolder speechHolder,
     WebPanelConfig config,
     ILoggerFactory loggerFactory,
     IHostApplicationLifetime lifetime) : ControllerBase
@@ -417,6 +418,24 @@ public class VoiceController(
         });
     }
 
+    [HttpPost("speak")]
+    public IActionResult Speak([FromBody] SpeakRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.Text))
+            return BadRequest(new { error = "text is required." });
+        if (!speechHolder.IsReady)
+            return StatusCode(503, new { error = "Voice module is not running." });
+        if (!string.IsNullOrEmpty(req.ModelName) && req.ModelName != speechHolder.ActiveModel)
+            return StatusCode(503, new { error = $"Model '{req.ModelName}' is not the active model. Restart ARI with Voice.ModelName set to '{req.ModelName}' in AriConfig.json." });
+
+        speechHolder.Speak(req.Text);
+        return Ok(new { model = speechHolder.ActiveModel });
+    }
+
+    [HttpGet("active")]
+    public IActionResult GetActive() =>
+        Ok(new { model = speechHolder.ActiveModel, ready = speechHolder.IsReady });
+
     [HttpGet("models")]
     public IActionResult GetModels()
     {
@@ -438,3 +457,5 @@ public record TrainRequest(
     string StagingPath,
     int    Epochs          = 100,
     int    SaveEveryNEpochs = 10);
+
+public record SpeakRequest(string Text, string? ModelName = null);

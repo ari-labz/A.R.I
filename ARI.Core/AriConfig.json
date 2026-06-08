@@ -2,7 +2,11 @@
   "Modules": {
     "Discord": true,
     "WebPanel": true,
-    "VoiceSynthesis": true
+    "VoiceSynthesis": true,
+    "Voice": true
+  },
+  "Voice": {
+    "ModelName": "Voice"
   },
   "VoiceSynthesis": {
     "F5Path": "../../../../External/F5TTS",

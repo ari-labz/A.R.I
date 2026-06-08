@@ -46,5 +46,6 @@
     <ProjectReference Include="..\ARI.LLM\ARI.LLM.csproj" />
     <ProjectReference Include="..\ARI.WebPanel\ARI.WebPanel.csproj" />
     <ProjectReference Include="..\ARI.VoiceSynthesis\ARI.VoiceSynthesis.csproj" />
+    <ProjectReference Include="..\ARI.Voice\ARI.Voice.csproj" />
   </ItemGroup>
 </Project>

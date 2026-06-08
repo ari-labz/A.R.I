@@ -35,11 +35,13 @@ public class WebPanelService : IAsyncDisposable
     private readonly WebPanelConfig config;
     private readonly SystemInfoHolder systemInfo;
     private readonly DiscordServiceHolder discordHolder;
+    private readonly SpeechQueueHolder speechHolder;
     private WebApplication? app;
 
     public LlmServiceHolder     Holder        => holder;
     public SystemInfoHolder     SystemInfo    => systemInfo;
     public DiscordServiceHolder DiscordHolder => discordHolder;
+    public SpeechQueueHolder    SpeechHolder  => speechHolder;
 
     public WebPanelService(ILoggerFactory loggerFactory, WebPanelConfig config)
     {
@@ -48,6 +50,7 @@ public class WebPanelService : IAsyncDisposable
         this.config           = config;
         this.systemInfo       = new SystemInfoHolder();
         this.discordHolder    = new DiscordServiceHolder();
+        this.speechHolder     = new SpeechQueueHolder();
     }
 
     public async Task Start(CancellationToken cancellationToken)
@@ -75,6 +78,7 @@ public class WebPanelService : IAsyncDisposable
         builder.Services.AddSingleton(systemInfo);
         builder.Services.AddSingleton(new VoiceTrainerHolder());
         builder.Services.AddSingleton(new DiscordServiceHolder());
+        builder.Services.AddSingleton(speechHolder);
 
         // Clear any stale staging folders from a previous run
         string stagingRoot = Path.Combine(Path.GetTempPath(), "ari-voice-staging");

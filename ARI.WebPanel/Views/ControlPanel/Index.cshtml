@@ -90,6 +90,24 @@
                 <button class="vs-btn-primary" id="vs-train-btn" type="button">Train</button>
             </div>
 
+            <!-- Test Voice -->
+            <div class="vs-separator"></div>
+            <div class="vs-section">
+                <div class="vs-section-title">Test Voice</div>
+                <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+                    <label class="vs-label" style="flex:1;min-width:180px">
+                        Text
+                        <input type="text" id="tv-text" class="vs-input" placeholder="Type something to say…" autocomplete="off" />
+                    </label>
+                    <label class="vs-label" style="min-width:140px">
+                        Voice model
+                        <select id="tv-model" class="vs-input"></select>
+                    </label>
+                    <button class="vs-btn-primary" id="tv-speak-btn" type="button">Speak</button>
+                </div>
+                <span id="tv-status" style="font-size:12px;color:var(--text-dim);margin-top:6px;display:block"></span>
+            </div>
+
             <!-- Progress -->
             <div id="vs-progress-section" class="vs-section" style="display:none">
                 <div class="vs-section-title">Training progress</div>
@@ -1142,6 +1160,59 @@ vsTrainBtn.addEventListener('click', async () => {
     }
 });
 
+// ── Test Voice ────────────────────────────────────────────
+const tvText     = document.getElementById('tv-text');
+const tvModel    = document.getElementById('tv-model');
+const tvSpeakBtn = document.getElementById('tv-speak-btn');
+const tvStatus   = document.getElementById('tv-status');
+
+async function loadVoiceModels() {
+    try {
+        const [modelsResp, activeResp] = await Promise.all([
+            fetch('/api/cp/voice/models'),
+            fetch('/api/cp/voice/active'),
+        ]);
+        const { models } = await modelsResp.json();
+        const { model: activeModel, ready } = await activeResp.json();
+
+        tvModel.innerHTML = models.length
+            ? models.map(m => `<option value="${escHtml(m)}"${m === activeModel ? ' selected' : ''}>${escHtml(m)}${m === activeModel ? ' ✓' : ''}</option>`).join('')
+            : '<option value="">No models found</option>';
+
+        tvStatus.textContent = ready ? `Active: ${activeModel}` : 'Voice module not running';
+    } catch {
+        tvModel.innerHTML = '<option value="">Failed to load</option>';
+    }
+}
+loadVoiceModels();
+
+tvSpeakBtn.addEventListener('click', async () => {
+    const text      = tvText.value.trim();
+    const modelName = tvModel.value;
+    if (!text) return;
+    tvSpeakBtn.disabled = true;
+    tvStatus.textContent = 'Queued…';
+    try {
+        const resp = await fetch('/api/cp/voice/speak', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text, modelName }),
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({ error: resp.statusText }));
+            tvStatus.textContent = 'Error: ' + (err.error ?? resp.statusText);
+        } else {
+            tvStatus.textContent = '✓ Synthesising — listen for audio on Mac speakers';
+            setTimeout(() => { tvStatus.textContent = `Active: ${modelName}`; }, 5000);
+        }
+    } catch (err) {
+        tvStatus.textContent = 'Error: ' + err.message;
+    } finally {
+        tvSpeakBtn.disabled = false;
+    }
+});
+
+tvText.addEventListener('keydown', e => { if (e.key === 'Enter') tvSpeakBtn.click(); });
 
 </script>
 }

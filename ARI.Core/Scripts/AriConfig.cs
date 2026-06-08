@@ -9,6 +9,7 @@ public class AriConfig
     public ModulesConfig Modules { get; init; }
     public WebPanelConfig WebPanel { get; init; } = new();
     public VoiceSynthesisConfig VoiceSynthesis { get; init; } = new();
+    public VoiceConfig Voice { get; init; } = new();
 
     public static AriConfig LoadFrom(string path)
     {
@@ -48,6 +49,12 @@ public class ModulesConfig
     public bool Discord { get; init; }
     public bool WebPanel { get; init; }
     public bool VoiceSynthesis { get; init; }
+    public bool Voice { get; init; }
+}
+
+public class VoiceConfig
+{
+    public string ModelName { get; init; } = "Voice";
 }
 
 public class VoiceSynthesisConfig

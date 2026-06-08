@@ -41,13 +41,13 @@ public class SpeechQueue : IDisposable
                 byte[] audio = await synthesiser.Speak(text, cts.Token);
                 AudioReady?.Invoke(audio);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException ex) when (ex.CancellationToken == cts.Token)
             {
                 break;
             }
             catch (Exception ex)
             {
-                logger?.LogWarning("Speech synthesis failed for text: {Error}", ex.Message);
+                logger?.LogWarning("[Voice] Synthesis failed: {Error}", ex.Message);
             }
         }
     }
