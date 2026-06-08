@@ -7,7 +7,7 @@ public class F5SetupService(string f5Path, ILogger? logger = null)
 {
     private const string PYTHON      = "/opt/homebrew/bin/python3.11";
     private const string VENV_SUBDIR = "venv";
-    private const string PACKAGES    = "f5-tts openai-whisper soundfile torch torchaudio";
+    private const string PACKAGES    = "f5-tts openai-whisper soundfile torch torchaudio flask";
 
     public async Task Install()
     {
