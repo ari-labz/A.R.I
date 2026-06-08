@@ -447,3 +447,4 @@ External/F5TTS/training/
 
 # Trained voice checkpoints — kept in Voices/, not External
 /Voices/
+/.claude
