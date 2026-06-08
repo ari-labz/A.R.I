@@ -61,6 +61,13 @@ public class DiscordService : BackgroundService
     }
 
 
+    public async Task NotifyOwner(string message)
+    {
+        IUser owner = await client.GetUserAsync(config.OwnerId);
+        IDMChannel dm = await owner.CreateDMChannelAsync();
+        await dm.SendMessageAsync(message);
+    }
+
     public async Task NotifyOffline()
     {
         Common.Logger.LogInformation("Notifying owner that ARI is going offline...");

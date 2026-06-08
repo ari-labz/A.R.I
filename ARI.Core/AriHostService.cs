@@ -52,13 +52,33 @@ public class AriHostService : BackgroundService
         if (config.Modules.WebPanel)
         {
             Common.Logger.LogInformation("Web panel module is enabled. Starting on port {Port}...", config.WebPanel.Port);
+            string rvcPathForPanel = config.Modules.VoiceSynthesis
+                ? (Path.IsPathRooted(config.VoiceSynthesis.RvcPath)
+                    ? config.VoiceSynthesis.RvcPath
+                    : Path.GetFullPath(Path.Combine(executableDirectory, config.VoiceSynthesis.RvcPath)))
+                : "";
+            string voicesPathForPanel = config.Modules.VoiceSynthesis
+                ? (Path.IsPathRooted(config.VoiceSynthesis.VoicesPath)
+                    ? config.VoiceSynthesis.VoicesPath
+                    : Path.GetFullPath(Path.Combine(executableDirectory, config.VoiceSynthesis.VoicesPath)))
+                : "";
+            string piperModelPathForPanel = config.Modules.VoiceSynthesis
+                ? (string.IsNullOrEmpty(config.VoiceSynthesis.PiperModelPath) ? "" :
+                   Path.IsPathRooted(config.VoiceSynthesis.PiperModelPath)
+                    ? config.VoiceSynthesis.PiperModelPath
+                    : Path.GetFullPath(Path.Combine(executableDirectory, config.VoiceSynthesis.PiperModelPath)))
+                : "";
+
             webPanelService = new WebPanelService(loggerFactory, new ARI.WebPanel.WebPanelConfig
             {
-                Port              = config.WebPanel.Port,
-                GoogleClientId    = config.WebPanel.Google.ClientId,
-                GoogleClientSecret= config.WebPanel.Google.ClientSecret,
-                AllowedEmail      = config.WebPanel.Google.AllowedEmail,
-                LogPath           = Path.Combine(executableDirectory, "ARI.log"),
+                Port               = config.WebPanel.Port,
+                GoogleClientId     = config.WebPanel.Google.ClientId,
+                GoogleClientSecret = config.WebPanel.Google.ClientSecret,
+                AllowedEmail       = config.WebPanel.Google.AllowedEmail,
+                LogPath            = Path.Combine(executableDirectory, "ARI.log"),
+                RvcPath            = rvcPathForPanel,
+                VoicesPath         = voicesPathForPanel,
+                PiperModelPath     = piperModelPathForPanel,
             });
             await webPanelService.Start(stoppingToken);
         }
@@ -120,9 +140,6 @@ public class AriHostService : BackgroundService
             Common.Logger.LogInformation("Starting RVC...");
             voiceSynthesisService = new VoiceSynthesisService(rvcPath);
             voiceSynthesisService.Start();
-            string voiceUrl = $"http://localhost:{config.VoiceSynthesis.Port}";
-            Common.Logger.LogInformation("Opening VoiceSynthesis UI at {Url}", voiceUrl);
-            OpenBrowser(voiceUrl);
         }
 
         if (config.Modules.Discord)
@@ -132,6 +149,9 @@ public class AriHostService : BackgroundService
             await discordService.StartAsync(stoppingToken);
             if (discordService.ExecuteTask is not null)
                 moduleTasks.Add(discordService.ExecuteTask);
+
+            // Give the web panel a Discord DM callback so voice training can notify the owner
+            webPanelService?.DiscordHolder.Set(msg => discordService.NotifyOwner(msg));
         }
 
         if (moduleTasks.Count > 0)
