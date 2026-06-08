@@ -101,29 +101,6 @@
                 <button class="vs-btn-primary" id="vs-train-btn" type="button">Train</button>
             </div>
 
-            <!-- Test Voice -->
-            <div class="vs-separator"></div>
-            <div class="vs-section">
-                <div class="vs-section-title">Test voice</div>
-                <div class="vs-form-grid" style="grid-template-columns:1fr 1fr;margin-bottom:14px">
-                    <label class="vs-label" style="grid-column:1/-1">
-                        Text
-                        <textarea id="vt-text" class="vs-input" rows="3" placeholder="Type something to say…" style="resize:vertical"></textarea>
-                    </label>
-                    <label class="vs-label">
-                        Voice model
-                        <select id="vt-model" class="vs-input">
-                            <option value="">Loading models…</option>
-                        </select>
-                    </label>
-                </div>
-                <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-                    <button class="vs-btn-primary" id="vt-speak-btn" type="button">Speak</button>
-                    <span id="vt-status" style="font-size:12px;color:var(--text-dim)"></span>
-                </div>
-                <audio id="vt-audio" controls style="margin-top:14px;width:100%;display:none"></audio>
-            </div>
-
             <!-- Progress -->
             <div id="vs-progress-section" class="vs-section" style="display:none">
                 <div class="vs-section-title">Training progress</div>
@@ -1096,23 +1073,18 @@ vsTrainBtn.addEventListener('click', async () => {
         if (!stageResp.ok) throw new Error('Stage failed: ' + (await stageResp.text()));
         const { stageId, stagingPath } = await stageResp.json();
 
-        // 2 — Upload each file in 10 MB chunks (stays under Cloudflare's 100 MB per-request limit)
-        const CHUNK = 10 * 1024 * 1024; // 10 MB
+        // 2 — Upload each file in 25 MB chunks (under Cloudflare's 100 MB limit), 4 at a time in parallel
+        const CHUNK       = 25 * 1024 * 1024; // 25 MB
+        const CONCURRENCY = 4;
         for (let fi = 0; fi < vsFiles.length; fi++) {
             const f           = vsFiles[fi];
             const totalChunks = Math.max(1, Math.ceil(f.size / CHUNK));
             vsAppendLog(`Uploading ${f.name} (${fmtBytes(f.size)}, ${totalChunks} chunk${totalChunks>1?'s':''})…`);
 
-            for (let ci = 0; ci < totalChunks; ci++) {
-                const slice    = f.slice(ci * CHUNK, Math.min((ci + 1) * CHUNK, f.size));
-                const filePct  = Math.round((ci / totalChunks) * 100);
-                vsSetProgress(
-                    `Uploading file ${fi+1} of ${vsFiles.length}`,
-                    filePct,
-                    `${f.name} — chunk ${ci+1} / ${totalChunks}`,
-                    ''
-                );
-                const url = `/api/cp/voice/upload`
+            let done = 0;
+            const uploadChunk = async (ci) => {
+                const slice = f.slice(ci * CHUNK, Math.min((ci + 1) * CHUNK, f.size));
+                const url   = `/api/cp/voice/upload`
                     + `?stageId=${encodeURIComponent(stageId)}`
                     + `&name=${encodeURIComponent(f.name)}`
                     + `&chunk=${ci}&totalChunks=${totalChunks}`;
@@ -1122,6 +1094,19 @@ vsTrainBtn.addEventListener('click', async () => {
                     headers: { 'Content-Type': 'application/octet-stream' },
                 });
                 if (!up.ok) throw new Error(`Upload of ${f.name} chunk ${ci} failed: ` + (await up.text()));
+                done++;
+                vsSetProgress(
+                    `Uploading file ${fi+1} of ${vsFiles.length}`,
+                    Math.round((done / totalChunks) * 100),
+                    `${f.name} — ${done} / ${totalChunks} chunks`,
+                    ''
+                );
+            };
+
+            // Run chunks in batches of CONCURRENCY
+            for (let ci = 0; ci < totalChunks; ci += CONCURRENCY) {
+                const batch = Array.from({ length: Math.min(CONCURRENCY, totalChunks - ci) }, (_, i) => uploadChunk(ci + i));
+                await Promise.all(batch);
             }
             vsAppendLog(`✓ ${f.name} uploaded`);
         }
@@ -1189,62 +1174,6 @@ vsTrainBtn.addEventListener('click', async () => {
     }
 });
 
-// ── Test Voice ─────────────────────────────────────────────
-const vtText     = document.getElementById('vt-text');
-const vtModel    = document.getElementById('vt-model');
-const vtSpeakBtn = document.getElementById('vt-speak-btn');
-const vtStatus   = document.getElementById('vt-status');
-const vtAudio    = document.getElementById('vt-audio');
-
-async function loadVoiceModels() {
-    try {
-        const r = await fetch('/api/cp/voice/models');
-        const d = await r.json();
-        vtModel.innerHTML = d.models.length
-            ? d.models.map(m => `<option value="${escHtml(m)}">${escHtml(m)}</option>`).join('')
-            : '<option value="">No models found</option>';
-    } catch {
-        vtModel.innerHTML = '<option value="">Failed to load</option>';
-    }
-}
-
-// Reload model list whenever the Voice Synthesis tab is opened
-navItems.forEach(n => n.addEventListener('click', () => {
-    if (n.dataset.tab === 'voice') loadVoiceModels();
-}));
-loadVoiceModels();
-
-vtSpeakBtn.addEventListener('click', async () => {
-    const text  = vtText.value.trim();
-    const model = vtModel.value;
-    if (!text)  { vtStatus.textContent = 'Enter some text first.'; return; }
-    if (!model) { vtStatus.textContent = 'Select a voice model.'; return; }
-
-    vtSpeakBtn.disabled = true;
-    vtStatus.textContent = 'Generating…';
-    vtAudio.style.display = 'none';
-
-    try {
-        const resp = await fetch('/api/cp/voice/speak', {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ modelName: model, text }),
-        });
-        if (!resp.ok) {
-            const err = await resp.json().catch(() => ({ error: resp.statusText }));
-            throw new Error(err.error ?? resp.statusText);
-        }
-        const blob = await resp.blob();
-        vtAudio.src = URL.createObjectURL(blob);
-        vtAudio.style.display = '';
-        vtAudio.play();
-        vtStatus.textContent = '';
-    } catch (err) {
-        vtStatus.textContent = 'Error: ' + err.message;
-    } finally {
-        vtSpeakBtn.disabled = false;
-    }
-});
 
 </script>
 }

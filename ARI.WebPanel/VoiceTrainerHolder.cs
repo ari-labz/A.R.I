@@ -2,30 +2,25 @@ using ARI.VoiceSynthesis;
 
 namespace ARI.WebPanel;
 
-/// <summary>
-/// Singleton that manages the currently active (or last completed) training job.
-/// Only one job runs at a time.
-/// </summary>
 public class VoiceTrainerHolder
 {
-    private readonly object _lock = new();
-    private TrainingJob? _job;
+    private readonly object lockObj = new();
+    private TrainingJob? current;
 
     public TrainingJob? Current
     {
-        get { lock (_lock) return _job; }
+        get { lock (lockObj) return current; }
     }
 
-    /// <summary>Starts a new training job. Throws if one is already running.</summary>
-    public TrainingJob Start(VoiceTrainer trainer, string modelName, CancellationToken appStopping)
+    public TrainingJob Start(F5Trainer trainer, string modelName, CancellationToken appStopping)
     {
-        lock (_lock)
+        lock (lockObj)
         {
-            if (_job?.IsRunning == true)
+            if (current?.IsRunning == true)
                 throw new InvalidOperationException("A training job is already running.");
 
-            var job = new TrainingJob(modelName, appStopping);
-            _job = job;
+            TrainingJob job = new(modelName, appStopping);
+            current = job;
             job.Run(trainer);
             return job;
         }
@@ -34,45 +29,42 @@ public class VoiceTrainerHolder
 
 public class TrainingJob
 {
-    private readonly List<TrainingProgressEvent> _events = new();
-    private readonly CancellationTokenSource _cts;
+    private readonly List<TrainingProgressEvent> events = new();
+    private readonly CancellationTokenSource cts;
 
-    public string JobId    { get; } = Guid.NewGuid().ToString("N")[..8];
-    public string ModelName { get; }
-    public bool   IsRunning { get; private set; } = true;
-    public bool   IsSuccess { get; private set; }
-    public string? Error    { get; private set; }
-    public string? PthPath  { get; private set; }
-    public string? IndexPath { get; private set; }
+    public string  JobId      { get; } = Guid.NewGuid().ToString("N")[..8];
+    public string  ModelName  { get; }
+    public bool    IsRunning  { get; private set; } = true;
+    public bool    IsSuccess  { get; private set; }
+    public string? Error      { get; private set; }
+    public string? Checkpoint { get; private set; }
 
     public IReadOnlyList<TrainingProgressEvent> Events
     {
-        get { lock (_events) return _events.ToList(); }
+        get { lock (events) return events.ToList(); }
     }
 
     internal TrainingJob(string modelName, CancellationToken appStopping)
     {
         ModelName = modelName;
-        _cts = CancellationTokenSource.CreateLinkedTokenSource(appStopping);
+        cts = CancellationTokenSource.CreateLinkedTokenSource(appStopping);
     }
 
-    internal void Run(VoiceTrainer trainer)
+    internal void Run(F5Trainer trainer)
     {
-        var progress = new Progress<TrainingProgress>(p =>
+        Progress<TrainingProgress> progress = new(p =>
         {
-            var ev = new TrainingProgressEvent(p.Step, p.Percent, p.Detail, DateTime.UtcNow);
-            lock (_events) _events.Add(ev);
+            TrainingProgressEvent ev = new(p.Step, p.Percent, p.Detail, DateTime.UtcNow);
+            lock (events) events.Add(ev);
         });
 
         _ = Task.Run(async () =>
         {
             try
             {
-                var (pth, idx) = await trainer.TrainAsync(progress, _cts.Token);
-                PthPath   = pth;
-                IndexPath = idx;
-                IsSuccess = true;
-                AddEvent("Complete", 100, $"Model saved to {Path.GetFileName(pth)}");
+                Checkpoint = await trainer.Train(progress, cts.Token);
+                IsSuccess  = true;
+                AddEvent("Complete", 100, $"Model saved to {Path.GetFileName(Checkpoint)}");
             }
             catch (OperationCanceledException)
             {
@@ -88,15 +80,15 @@ public class TrainingJob
             {
                 IsRunning = false;
             }
-        }, _cts.Token);
+        }, cts.Token);
     }
 
-    public void Cancel() => _cts.Cancel();
+    public void Cancel() => cts.Cancel();
 
     private void AddEvent(string step, int pct, string? detail)
     {
-        var ev = new TrainingProgressEvent(step, pct, detail, DateTime.UtcNow);
-        lock (_events) _events.Add(ev);
+        TrainingProgressEvent ev = new(step, pct, detail, DateTime.UtcNow);
+        lock (events) events.Add(ev);
     }
 }
 

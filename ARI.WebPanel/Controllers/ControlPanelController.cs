@@ -194,16 +194,13 @@ public class VoiceController(
     VoiceTrainerHolder voiceHolder,
     DiscordServiceHolder discordHolder,
     WebPanelConfig config,
-    ILogger<VoiceController> logger,
+    ILoggerFactory loggerFactory,
     IHostApplicationLifetime lifetime) : ControllerBase
 {
-    private static readonly string StagingRoot =
-        Path.Combine(Path.GetTempPath(), "ari-voice-staging");
+    private readonly ILogger logger = loggerFactory.CreateLogger("ARI.WebPanel");
+    private static readonly string StagingRoot = Path.Combine(Path.GetTempPath(), "ari-voice-staging");
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> assembleLocks = new();
 
-    /// <summary>
-    /// Allocates a staging folder and returns its ID.
-    /// Call once before uploading files.
-    /// </summary>
     [HttpPost("stage")]
     public IActionResult CreateStage()
     {
@@ -213,12 +210,6 @@ public class VoiceController(
         return Ok(new { stageId, stagingPath = stageDir });
     }
 
-    /// <summary>
-    /// Upload one chunk of a file as raw binary.
-    /// Files are split client-side into ≤10 MB chunks to stay under Cloudflare's 100 MB request limit.
-    /// Query params: stageId, name, chunk (0-based index), totalChunks.
-    /// When the final chunk arrives the parts are assembled into the complete file.
-    /// </summary>
     [HttpPost("upload")]
     [DisableRequestSizeLimit]
     public async Task<IActionResult> Upload(
@@ -227,6 +218,8 @@ public class VoiceController(
         [FromQuery] int chunk       = 0,
         [FromQuery] int totalChunks = 1)
     {
+        try
+        {
         if (string.IsNullOrWhiteSpace(stageId) || string.IsNullOrWhiteSpace(name))
             return BadRequest(new { error = "stageId and name are required." });
 
@@ -237,36 +230,53 @@ public class VoiceController(
         string safeName  = Path.GetFileName(name);
         string chunkPath = Path.Combine(stageDir, $"{safeName}.part{chunk}");
 
-        await using (var fs = System.IO.File.Create(chunkPath))
+        await using (System.IO.FileStream fs = System.IO.File.Create(chunkPath))
             await Request.Body.CopyToAsync(fs);
 
-        // If all chunks are on disk, assemble the final file
-        if (chunk == totalChunks - 1)
+        logger.LogInformation("[Voice] Chunk {Chunk}/{Total} written for {Name}", chunk + 1, totalChunks, safeName);
+
+        // Assemble when all chunks are present — use a per-stage lock to prevent double-assembly
+        bool allPresent = Enumerable.Range(0, totalChunks)
+            .All(i => System.IO.File.Exists(Path.Combine(stageDir, $"{safeName}.part{i}")));
+
+        if (allPresent)
         {
-            bool allPresent = Enumerable.Range(0, totalChunks)
-                .All(i => System.IO.File.Exists(Path.Combine(stageDir, $"{safeName}.part{i}")));
-
-            if (!allPresent)
-                return BadRequest(new { error = "Not all chunks present — cannot assemble." });
-
-            string dest = Path.Combine(stageDir, safeName);
-            await using (var outFs = System.IO.File.Create(dest))
+            string assembleKey = $"{stageId}:{safeName}";
+            SemaphoreSlim gate = assembleLocks.GetOrAdd(assembleKey, _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync();
+            try
             {
-                for (int i = 0; i < totalChunks; i++)
+                string dest = Path.Combine(stageDir, safeName);
+                if (!System.IO.File.Exists(dest))
                 {
-                    string part = Path.Combine(stageDir, $"{safeName}.part{i}");
-                    await using var partFs = System.IO.File.OpenRead(part);
-                    await partFs.CopyToAsync(outFs);
+                    await using (System.IO.FileStream outFs = System.IO.File.Create(dest))
+                    {
+                        for (int i = 0; i < totalChunks; i++)
+                        {
+                            string part = Path.Combine(stageDir, $"{safeName}.part{i}");
+                            await using System.IO.FileStream partFs = System.IO.File.OpenRead(part);
+                            await partFs.CopyToAsync(outFs);
+                        }
+                    }
+                    for (int i = 0; i < totalChunks; i++)
+                        System.IO.File.Delete(Path.Combine(stageDir, $"{safeName}.part{i}"));
+                    logger.LogInformation("[Voice] Assembled {Name} ({Chunks} chunks) → {Dir}", safeName, totalChunks, stageDir);
                 }
             }
-
-            for (int i = 0; i < totalChunks; i++)
-                System.IO.File.Delete(Path.Combine(stageDir, $"{safeName}.part{i}"));
-
-            logger.LogInformation("[Voice] Assembled {Name} ({Chunks} chunks) → {Dir}", safeName, totalChunks, stageDir);
+            finally
+            {
+                gate.Release();
+                assembleLocks.TryRemove(assembleKey, out _);
+            }
         }
 
         return Ok(new { stagingPath = stageDir, chunk, totalChunks });
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[Voice] Upload failed for chunk {Chunk} of {Name}", chunk, name);
+            return StatusCode(500, new { error = ex.Message });
+        }
     }
 
     /// <summary>Start a training job from a previously uploaded staging path.</summary>
@@ -277,22 +287,20 @@ public class VoiceController(
             return BadRequest(new { error = "modelName is required." });
         if (string.IsNullOrWhiteSpace(req.StagingPath) || !Directory.Exists(req.StagingPath))
             return BadRequest(new { error = "stagingPath does not exist." });
-        if (string.IsNullOrEmpty(config.RvcPath) || string.IsNullOrEmpty(config.VoicesPath))
+        if (string.IsNullOrEmpty(config.F5Path) || string.IsNullOrEmpty(config.VoicesPath))
             return StatusCode(503, new { error = "VoiceSynthesis module is not configured." });
 
         TrainingJob job;
         try
         {
-            var trainer = new VoiceTrainer(
-                rvcPath:           config.RvcPath,
-                voicesPath:        config.VoicesPath,
-                trainingAudioPath: req.StagingPath,
-                modelName:         req.ModelName,
-                epochs:            req.Epochs,
-                batchSize:         req.BatchSize,
-                saveFrequency:     req.SaveFrequency,
-                startFresh:        req.StartFresh,
-                logger:            logger);
+            F5Trainer trainer = new(
+                f5Path:    config.F5Path,
+                voicesPath: config.VoicesPath,
+                audioPath:  req.StagingPath,
+                modelName:  req.ModelName,
+                epochs:     req.Epochs,
+                batchSize:  req.BatchSize,
+                logger:     logger);
 
             job = voiceHolder.Start(trainer, req.ModelName, lifetime.ApplicationStopping);
         }
@@ -302,8 +310,8 @@ public class VoiceController(
         }
 
         logger.LogInformation(
-            "[Voice] Training started — model: {ModelName}, epochs: {Epochs}, batch: {BatchSize}",
-            req.ModelName, req.Epochs, req.BatchSize);
+            "[Voice] Training started — model: {ModelName}, epochs: {Epochs}",
+            req.ModelName, req.Epochs);
 
         // Delete staging dir and send Discord notification when job finishes
         string stagingPath = req.StagingPath;
@@ -403,65 +411,24 @@ public class VoiceController(
         });
     }
 
-    /// <summary>Check whether a model name has existing training checkpoints.</summary>
-    [HttpGet("exists")]
-    public IActionResult CheckExists([FromQuery] string modelName)
-    {
-        if (string.IsNullOrWhiteSpace(modelName) || string.IsNullOrEmpty(config.RvcPath))
-            return Ok(new { exists = false });
-
-        string expDir = Path.Combine(config.RvcPath, "logs", modelName);
-        bool exists = Directory.Exists(expDir) &&
-                      Directory.GetFiles(expDir, "G_*.pth").Length > 0;
-        return Ok(new { exists });
-    }
-
-    /// <summary>List trained voice models in the Voices directory.</summary>
     [HttpGet("models")]
     public IActionResult GetModels()
     {
         if (string.IsNullOrEmpty(config.VoicesPath) || !Directory.Exists(config.VoicesPath))
             return Ok(new { models = Array.Empty<string>() });
 
-        var models = Directory.GetFiles(config.VoicesPath, "*.pth")
-            .Select(f => Path.GetFileNameWithoutExtension(f))
+        string[] models = Directory.GetDirectories(config.VoicesPath)
+            .Select(Path.GetFileName)
+            .Where(n => n != null)
             .OrderBy(n => n)
-            .ToArray();
+            .ToArray()!;
 
         return Ok(new { models });
     }
-
-    /// <summary>Synthesise text with the given voice model and return WAV audio.</summary>
-    [HttpPost("speak")]
-    public async Task<IActionResult> Speak([FromBody] SpeakRequest req, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(req.Text))
-            return BadRequest(new { error = "text is required." });
-        if (string.IsNullOrWhiteSpace(req.ModelName))
-            return BadRequest(new { error = "modelName is required." });
-        if (string.IsNullOrEmpty(config.VoicesPath))
-            return StatusCode(503, new { error = "VoiceSynthesis module is not configured." });
-        if (string.IsNullOrEmpty(config.PiperModelPath))
-            return StatusCode(503, new { error = "PiperModelPath is not set in AriConfig.json." });
-
-        using var talk = new ARI.VoiceSynthesis.Talk(
-            voicesPath:     config.VoicesPath,
-            modelName:      req.ModelName,
-            piperModelPath: config.PiperModelPath,
-            pitchShift:     0,
-            logger:         logger);
-
-        byte[] wav = await talk.SpeakAsync(req.Text, ct);
-        return File(wav, "audio/wav");
-    }
 }
-
-public record SpeakRequest(string ModelName, string Text);
 
 public record TrainRequest(
     string ModelName,
     string StagingPath,
-    int    Epochs        = 100,
-    int    BatchSize     = 4,
-    int    SaveFrequency = 10,
-    bool   StartFresh    = false);
+    int    Epochs    = 100,
+    int    BatchSize = 2);

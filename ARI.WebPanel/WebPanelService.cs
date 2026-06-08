@@ -18,10 +18,9 @@ public class WebPanelConfig
     public string GoogleClientId { get; init; } = "";
     public string GoogleClientSecret { get; init; } = "";
     public string AllowedEmail { get; init; } = "";
-    public string LogPath { get; init; } = "";
-    public string RvcPath        { get; init; } = "";
-    public string VoicesPath     { get; init; } = "";
-    public string PiperModelPath { get; init; } = "";
+    public string LogPath    { get; init; } = "";
+    public string F5Path     { get; init; } = "";
+    public string VoicesPath { get; init; } = "";
 }
 
 public class WebPanelService : IAsyncDisposable

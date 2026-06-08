@@ -435,24 +435,15 @@ FodyWeavers.xsd
 # Downloaded model files
 /Models/
 
-# RVC source is in the repo; exclude generated/downloaded/large files only
+# F5-TTS — entire venv and downloaded base model weights (auto-installed at runtime)
+External/F5TTS/venv/
+External/F5TTS/ckpts/
 
-# Large model weights — downloaded automatically by ARI on first run (>100 MB each)
-External/RVC/assets/hubert/hubert_base.pt
-External/RVC/assets/rmvpe/rmvpe.pt
-External/RVC/assets/pretrained_v2/*.pth
-External/RVC/assets/pretrained/*.pth
-External/RVC/assets/uvr5_weights/
+# F5-TTS — dataset prep output (Arrow files, duration.json, vocab copies)
+External/F5TTS/data/
 
-# RVC training output and intermediate weights — not source, not deliverables
-External/RVC/logs/
-External/RVC/assets/weights/
+# F5-TTS — chunked audio and transcripts from training runs
+External/F5TTS/training/
 
-# RVC runtime-generated files
-External/RVC/.env
-External/RVC/.ari_installed
-External/RVC/TEMP/
-
-# Voice model files — only fully trained models in Voices/ are committed
-/Voices/*.pth
-/Voices/**/*.index
+# Trained voice checkpoints — kept in Voices/, not External
+/Voices/
