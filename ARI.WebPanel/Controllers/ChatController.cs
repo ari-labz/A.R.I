@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.IO.Compression;
 using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -20,6 +22,10 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
 {
     private LlmService? Llm => holder.Service;
 
+    // Pending attachments staged before a thread exists — flushed at send time.
+    private static readonly ConcurrentDictionary<string, List<Attachment>> pendingAttachments        = new();
+    private static readonly ConcurrentDictionary<string, List<Attachment>> pendingMessageAttachments = new();
+
     /// <summary>Derives a display username from the authenticated user's email (strips @domain).</summary>
     private string GetUsername()
     {
@@ -31,26 +37,58 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
         return raw.Length > 0 ? char.ToUpper(raw[0]) + raw[1..] : raw;
     }
 
+    // ── Thread navigation helpers ───────────────────────────────────────────────
+
+    /// <summary>Finds an existing user-facing thread (Dialogue or Code) by key.</summary>
+    private ARI.LLM.Thread? GetThread(string threadKey)
+        => Llm?.Agents.GetValueOrDefault("Dialogue")?.GetThread(threadKey)
+        ?? Llm?.Agents.GetValueOrDefault("Code")?.GetThread(threadKey);
+
+    /// <summary>Finds an existing internal agent thread (Engram, Refactor, etc.) by key.</summary>
+    private ARI.LLM.Thread? GetInternalThread(string threadKey)
+    {
+        foreach (string name in new[] { "Engram", "Refactor", "Context", "Memory" })
+        {
+            ARI.LLM.Thread? t = Llm?.Agents.GetValueOrDefault(name)?.GetThread(threadKey);
+            if (t is not null) return t;
+        }
+        return null;
+    }
+
+    /// <summary>Gets or creates the correct thread for the given key, routing to Code or Dialogue.</summary>
+    private ARI.LLM.Thread GetOrCreateThread(string threadKey)
+    {
+        string agentName = Llm!.Agents.GetValueOrDefault("Code")?.Threads.ContainsKey(threadKey) == true ? "Code" : "Dialogue";
+        return Llm.Agents[agentName].GetOrCreateThread(threadKey);
+    }
+
+    // ── Thread endpoints ────────────────────────────────────────────────────────
+
     [HttpGet]
     public IActionResult GetThreads([FromQuery] bool includeInternal = false)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
 
-        List<ThreadEntry> threads = Llm.GetActiveThreadKeys()
-            .Select(key => new ThreadEntry(
-                key,
+        Agent? dialogueAgent = Llm.Agents.GetValueOrDefault("Dialogue");
+        List<ThreadEntry> threads = dialogueAgent?.Threads
+            .Select(kvp => new ThreadEntry(
+                kvp.Key,
                 AgentName:     null,
                 IsInternal:    false,
-                LastMessageAt: Llm.GetThreadLastMessageAt(key),
-                MessageCount:  Llm.GetThreadItems(key).Count(m => m is UserMessage or AriResponse),
-                State:         Llm.GetThreadState(key),
-                IsCodeMode:    Llm.IsCodeThread(key)))
-            .ToList();
+                LastMessageAt: kvp.Value.LastMessageAt,
+                MessageCount:  kvp.Value.History.Count(m => m is UserMessage or AriResponse),
+                State:         kvp.Value.State.ToString().ToLowerInvariant(),
+                IsCodeMode:    Llm.Agents.GetValueOrDefault("Code")?.Threads.ContainsKey(kvp.Key) == true))
+            .ToList() ?? new();
 
         if (includeInternal)
         {
-            IEnumerable<ThreadEntry> internalThreads = Llm.GetInternalThreads()
-                .Select(t => new ThreadEntry(t.Key, t.AgentName, IsInternal: true, t.LastMessageAt, t.MessageCount));
+            HashSet<string> userKeys = new(dialogueAgent?.Threads.Keys ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+            IEnumerable<ThreadEntry> internalThreads = Llm.Agents
+                .Where(kvp => kvp.Key != "Dialogue" && kvp.Key != "Code")
+                .SelectMany(kvp => kvp.Value.Threads
+                    .Where(t => !userKeys.Contains(t.Key))
+                    .Select(t => new ThreadEntry(t.Key, kvp.Key, IsInternal: true, t.Value.LastMessageAt, t.Value.History.Count)));
             threads.AddRange(internalThreads);
         }
 
@@ -70,9 +108,9 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
 
-        IReadOnlyList<ThreadItem> items = raw
-            ? Llm.GetInternalThreadItems(threadKey)
-            : Llm.GetThreadItems(threadKey);
+        List<ThreadItem> items = raw
+            ? GetInternalThread(threadKey)?.History ?? new()
+            : GetThread(threadKey)?.History         ?? new();
 
         return Ok(items);
     }
@@ -81,8 +119,8 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
     public IActionResult ExportLog(string threadKey)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
-        var items = Llm.GetThreadItems(threadKey);
-        var log = string.Join("\n\n", items.Select(i => i.ToString()));
+        List<ThreadItem> items = GetThread(threadKey)?.History ?? new();
+        string log = string.Join("\n\n", items.Select(i => i.ToString()));
         var bytes = System.Text.Encoding.UTF8.GetBytes(log);
         return File(bytes, "text/plain", $"ari-{threadKey}-{DateTime.Now:yyyyMMdd-HHmm}.txt");
     }
@@ -152,7 +190,8 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
     {
         bool isProcessing  = Llm?.IsThreadProcessing(threadKey)  ?? false;
         bool isRemembering = Llm?.IsEngramSweeping(threadKey)     ?? false;
-        string payload     = JsonSerializer.Serialize(new { isProcessing, isRemembering });
+        bool isCodeMode    = Llm?.Agents.GetValueOrDefault("Code")?.Threads.ContainsKey(threadKey) == true;
+        string payload     = JsonSerializer.Serialize(new { isProcessing, isRemembering, isCodeMode });
         await Response.WriteAsync($"data: {payload}\n\n", ct);
         await Response.Body.FlushAsync(ct);
     }
@@ -183,55 +222,118 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
           "application/msword", "application/vnd.ms-excel", "application/vnd.ms-powerpoint" };
 
     [HttpPost("{threadKey}/attachments")]
-    [RequestSizeLimit(50 * 1024 * 1024)] // 50 MB
+    [DisableRequestSizeLimit]
     public async Task<IActionResult> AddAttachment(string threadKey, IFormFile file)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
         if (file is null || file.Length == 0) return BadRequest("No file provided.");
 
         string mime = file.ContentType ?? "application/octet-stream";
+        bool isZip  = mime is "application/zip" or "application/x-zip-compressed"
+                   || file.FileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
+
+        // ── Zip: extract and add each text file as a separate attachment ──────────
+        if (isZip)
+        {
+            using MemoryStream zipStream = new();
+            await file.CopyToAsync(zipStream);
+            zipStream.Position = 0;
+
+            List<string> extracted  = new();
+            List<string> skipped    = new();
+
+            using ZipArchive archive = new(zipStream, ZipArchiveMode.Read);
+            foreach (ZipArchiveEntry entry in archive.Entries)
+            {
+                // Skip directories, hidden files, and binary/build artefacts.
+                if (string.IsNullOrEmpty(entry.Name)) continue;
+                if (entry.Name.StartsWith('.'))        continue;
+                if (IsSkippedZipPath(entry.FullName))  continue;
+
+                string ext = Path.GetExtension(entry.Name).ToLowerInvariant();
+                if (!IsTextExtension(ext))
+                {
+                    skipped.Add(entry.FullName);
+                    continue;
+                }
+
+                using StreamReader reader  = new(entry.Open());
+                string             content = await reader.ReadToEndAsync();
+
+                Attachment att = new() { Name = entry.FullName, Content = content, IsImage = false, MimeType = "text/plain" };
+                pendingAttachments.GetOrAdd(threadKey, _ => new()).RemoveAll(a => a.Name == att.Name);
+                pendingAttachments[threadKey].Add(att);
+                extracted.Add(entry.FullName);
+            }
+
+            return Ok(new { zip = file.FileName, extracted, skipped });
+        }
+
+        // ── Normal single file ────────────────────────────────────────────────────
         bool isImage = ImageMimes.Contains(mime);
 
         if (!isImage && BinaryMimes.Contains(mime))
             return StatusCode(415, new { error = $"{Path.GetExtension(file.FileName).TrimStart('.').ToUpper()} files cannot be attached as thread context — only images and text files are supported." });
 
-        string content;
+        string fileContent;
         if (isImage)
         {
             using MemoryStream ms = new();
             await file.CopyToAsync(ms);
-            content = Convert.ToBase64String(ms.ToArray());
+            fileContent = Convert.ToBase64String(ms.ToArray());
         }
         else
         {
             using System.IO.StreamReader reader = new(file.OpenReadStream());
-            content = await reader.ReadToEndAsync();
+            fileContent = await reader.ReadToEndAsync();
         }
 
-        Attachment attachment = new Attachment { Name = file.FileName, Content = content, IsImage = isImage, MimeType = mime };
-        Llm.AddAttachment(threadKey, attachment);
+        Attachment attachment = new() { Name = file.FileName, Content = fileContent, IsImage = isImage, MimeType = mime };
+        List<Attachment> list = pendingAttachments.GetOrAdd(threadKey, _ => new());
+        list.RemoveAll(a => a.Name == attachment.Name);
+        list.Add(attachment);
         return Ok(new { name = file.FileName, isImage });
     }
+
+    /// <summary>Extensions treated as plain text and extracted from zips.</summary>
+    private static bool IsTextExtension(string ext) => ext is
+        ".cs" or ".ts" or ".tsx" or ".js" or ".jsx" or ".json" or ".xml" or ".yaml" or ".yml"
+        or ".md" or ".txt" or ".html" or ".css" or ".scss" or ".less" or ".razor" or ".cshtml"
+        or ".py" or ".go" or ".rs" or ".cpp" or ".c" or ".h" or ".java" or ".kt" or ".swift"
+        or ".sh" or ".bash" or ".ps1" or ".toml" or ".ini" or ".env" or ".config" or ".csproj"
+        or ".sln" or ".props" or ".targets" or ".sql" or ".graphql" or ".proto";
+
+    /// <summary>Zip paths to silently skip (build output, deps, hidden dirs).</summary>
+    private static bool IsSkippedZipPath(string fullName) =>
+        fullName.Contains("/bin/",        StringComparison.OrdinalIgnoreCase) ||
+        fullName.Contains("/obj/",        StringComparison.OrdinalIgnoreCase) ||
+        fullName.Contains("/node_modules/",StringComparison.OrdinalIgnoreCase) ||
+        fullName.Contains("/.git/",       StringComparison.OrdinalIgnoreCase) ||
+        fullName.Contains("/.vs/",        StringComparison.OrdinalIgnoreCase) ||
+        fullName.StartsWith("__MACOSX/",  StringComparison.OrdinalIgnoreCase);
 
     [HttpDelete("{threadKey}/attachments/{name}")]
     public IActionResult RemoveAttachment(string threadKey, string name)
     {
-        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
-        Llm.RemoveAttachment(threadKey, name);
+        if (pendingAttachments.TryGetValue(threadKey, out List<Attachment>? list))
+            list.RemoveAll(a => a.Name == name);
+        GetThread(threadKey)?.RemoveAttachment(name);
         return Ok();
     }
 
     [HttpGet("{threadKey}/attachments")]
     public IActionResult GetAttachments(string threadKey)
     {
-        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
-        return Ok(Llm.GetAttachments(threadKey).Select(a => new { a.Name, a.IsImage, a.MimeType }));
+        List<Attachment> staged  = pendingAttachments.TryGetValue(threadKey, out List<Attachment>? list) ? list : new();
+        List<Attachment> onThread = GetThread(threadKey)?.GetAttachments().ToList() ?? new();
+        IEnumerable<Attachment> all = staged.Concat(onThread.Where(a => staged.All(s => s.Name != a.Name)));
+        return Ok(all.Select(a => new { a.Name, a.IsImage, a.MimeType }));
     }
 
     // ── Message Attachments (ephemeral — cleared after send) ────────────────────
 
     [HttpPost("{threadKey}/message-attachments")]
-    [RequestSizeLimit(50 * 1024 * 1024)]
+    [DisableRequestSizeLimit]
     public async Task<IActionResult> AddMessageAttachment(string threadKey, IFormFile file)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
@@ -257,23 +359,25 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
         }
 
         Attachment attachment = new Attachment { Name = file.FileName, Content = content, IsImage = isImage, MimeType = mime };
-        Llm.AddMessageAttachment(threadKey, attachment);
+        List<Attachment> msgList = pendingMessageAttachments.GetOrAdd(threadKey, _ => new());
+        msgList.RemoveAll(a => a.Name == attachment.Name);
+        msgList.Add(attachment);
         return Ok(new { name = file.FileName, isImage, mimeType = mime, content });
     }
 
     [HttpDelete("{threadKey}/message-attachments/{name}")]
     public IActionResult RemoveMessageAttachment(string threadKey, string name)
     {
-        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
-        Llm.RemoveMessageAttachment(threadKey, name);
+        if (pendingMessageAttachments.TryGetValue(threadKey, out List<Attachment>? list))
+            list.RemoveAll(a => a.Name == name);
         return Ok();
     }
 
     [HttpGet("{threadKey}/message-attachments")]
     public IActionResult GetMessageAttachments(string threadKey)
     {
-        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
-        return Ok(Llm.GetMessageAttachments(threadKey).Select(a => new { a.Name, a.IsImage, a.MimeType, a.Content }));
+        List<Attachment> staged = pendingMessageAttachments.TryGetValue(threadKey, out List<Attachment>? list) ? list : new();
+        return Ok(staged.Select(a => new { a.Name, a.IsImage, a.MimeType, a.Content }));
     }
 
     /// <summary>
@@ -286,7 +390,7 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
     {
         if (Llm is null) return StatusCode(503);
 
-        IReadOnlyList<ThreadItem> items = Llm.GetThreadItems(threadKey);
+        List<ThreadItem> items = GetThread(threadKey)?.History ?? new();
         foreach (ThreadItem item in items)
         {
             if (item is not UserMessage msg || msg.Attachments is null) continue;
@@ -340,7 +444,7 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
 
         // Safeguard: reject prompts that are clearly too large for the context window.
         // Estimate at 4 chars/token; limit comes from the thread's configured MaxContextTokens (0 = unconfigured).
-        var (_, contextLimit) = Llm.GetDialogueContextStats(threadKey);
+        (int _, int contextLimit) = Llm.Agents.GetValueOrDefault("Dialogue")?.GetThread(threadKey)?.GetContextStats() ?? (0, 0);
         int effectiveLimit    = contextLimit > 0 ? contextLimit : 8000;
         int estimatedTokens   = prompt.Length / 4;
         if (estimatedTokens > effectiveLimit)
@@ -351,6 +455,9 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
             return;
         }
 
+        pendingMessageAttachments.TryRemove(threadKey, out List<Attachment>? msgAtts);
+        pendingAttachments.TryRemove(threadKey, out List<Attachment>? threadAtts);
+
         try
         {
             string username = GetUsername();
@@ -359,7 +466,7 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
                 string escaped = accumulated.Replace("\n", "\\n").Replace("\r", "");
                 await Response.WriteAsync($"data: {escaped}\n\n", cancellationToken);
                 await Response.Body.FlushAsync(cancellationToken);
-            }, cancellationToken);
+            }, cancellationToken, messageAttachments: msgAtts, threadAttachments: threadAtts);
             await Response.WriteAsync("data: [DONE]\n\n", cancellationToken);
         }
         catch (OperationCanceledException)

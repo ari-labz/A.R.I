@@ -59,6 +59,7 @@ public class AriHostService : BackgroundService
                 GoogleClientId     = config.WebPanel.Google.ClientId,
                 GoogleClientSecret = config.WebPanel.Google.ClientSecret,
                 AllowedEmail       = config.WebPanel.Google.AllowedEmail,
+                AllowedEmails      = config.WebPanel.Google.EffectiveAllowedEmails.ToList(),
                 LogPath            = Path.Combine(executableDirectory, "ARI.log"),
                 F5Path             = f5Path,
                 VoicesPath         = voicesPath,

@@ -7,24 +7,22 @@ namespace ARI.LLM;
 
 public class LlmService : IDisposable
 {
-    private readonly Dialogue?   dialogue;
-    private readonly Memory?     memory;
-    private readonly Context?    context;
-    private readonly Engram?     engram;
-    private readonly Refactor?   refactor;
+    private readonly Dialogue?    dialogue;
+    private readonly Code?        code;
+    private readonly Memory?      memory;
+    private readonly Context?     context;
+    private readonly Engram?      engram;
+    private readonly Refactor?    refactor;
+    private readonly Classifier?  classifier;
     private readonly CommandService commands;
-    private readonly ConcurrentDictionary<string, CancellationTokenSource> processingThreads = new();
-    private readonly HashSet<string> codeThreads = new(StringComparer.OrdinalIgnoreCase);
 
-    // Live call tracking — keyed by threadKey, written before recall, cleared in finally.
-    // Stored here (not on Thread) so the control-panel polling thread reads from a
-    // ConcurrentDictionary with full memory-barrier guarantees, bypassing any Thread-level
-    // visibility issues.
-    private readonly ConcurrentDictionary<string, LiveCallInfo> dialogueLiveCalls = new();
+    private readonly ConcurrentDictionary<string, CancellationTokenSource>                      processingThreads = new();
+    private readonly ConcurrentDictionary<string, LiveCallInfo>                                  liveCalls         = new();
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<Guid, Channel<bool?>>>   threadWatchers    = new();
+    private readonly Dictionary<string, Agent>                                                   agentMap          = new();
 
-    // Per-thread watcher channels — each connected client gets one.
-    // true = history updated, null = thread deleted.
-    private readonly ConcurrentDictionary<string, ConcurrentDictionary<Guid, Channel<bool?>>> threadWatchers = new();
+    /// <summary>All active agents, keyed by name. Navigate here to access threads and their data.</summary>
+    public IReadOnlyDictionary<string, Agent> Agents => agentMap;
 
     public LlmService(string agentsConfigPath, string? brainConfigPath = null, ILoggerFactory? loggerFactory = null)
     {
@@ -33,7 +31,7 @@ public class LlmService : IDisposable
 
         AriAgentsConfig config = AriAgentsConfig.LoadFrom(agentsConfigPath);
 
-        Dictionary<string, AgentConfig> enabled = config.Agents
+        Dictionary<string, AgentConfig> enabledAgents = config.Agents
             .Where(m => m.Enabled)
             .ToDictionary(m => m.Name);
 
@@ -41,38 +39,57 @@ public class LlmService : IDisposable
             ? new BrainService(brainConfigPath, loggerFactory)
             : null;
 
-        if (enabled.TryGetValue("Dialogue", out AgentConfig? dialogueConfig))
+        if (enabledAgents.TryGetValue("Dialogue", out AgentConfig? dialogueConfig))
         {
             dialogue = new Dialogue(dialogueConfig, brain);
             dialogue.ThreadUpdated += key => NotifyWatchers(key);
             dialogue.ThreadDeleted += key => NotifyThreadDeleted(key);
+            agentMap["Dialogue"] = dialogue;
         }
 
-        if (enabled.TryGetValue("Context", out AgentConfig? contextConfig))
+        if (enabledAgents.TryGetValue("Code", out AgentConfig? codeConfig))
         {
-            int memoryLimit = enabled.TryGetValue("Dialogue", out AgentConfig? dlgCfg) ? dlgCfg.ShortTermMemoryLimit : 25;
+            code = new Code(codeConfig);
+            code.ThreadUpdated += key => NotifyWatchers(key);
+            code.ThreadDeleted += key => NotifyThreadDeleted(key);
+            agentMap["Code"] = code;
+            Common.Logger.LogInformation("Code agent is active. MaxContext: {Ctx} tokens.", codeConfig.MaxContextTokens);
+        }
+
+        if (enabledAgents.TryGetValue("Classifier", out AgentConfig? classifierConfig))
+        {
+            classifier = new Classifier(classifierConfig);
+            Common.Logger.LogInformation("Classifier is active.");
+        }
+
+        if (enabledAgents.TryGetValue("Context", out AgentConfig? contextConfig))
+        {
+            int memoryLimit = enabledAgents.TryGetValue("Dialogue", out AgentConfig? dlgCfg) ? dlgCfg.ShortTermMemoryLimit : 25;
             context = new Context(contextConfig, memoryLimit);
             Common.Logger.LogInformation("Context tracker is active.");
         }
 
-        if (brain is not null && enabled.TryGetValue("Memory", out AgentConfig? memoryConfig) && memoryConfig.RecursiveBrainSearchDepth > 0)
+        if (brain is not null && enabledAgents.TryGetValue("Memory", out AgentConfig? memoryConfig) && memoryConfig.RecursiveBrainSearchDepth > 0)
         {
             memory = new Memory(memoryConfig, brain, memoryConfig.RecursiveBrainSearchDepth, brain.BrainPublicUrl);
+            agentMap["Memory"] = memory;
             Common.Logger.LogInformation("Memory agent is active. Depth: {Depth}.", memoryConfig.RecursiveBrainSearchDepth);
         }
 
         if (brain is not null && dialogue is not null)
         {
-            if (enabled.TryGetValue("Engram", out AgentConfig? engramConfig))
+            if (enabledAgents.TryGetValue("Engram", out AgentConfig? engramConfig))
             {
                 engram = new Engram(engramConfig, dialogue, brain, context, engramConfig.RecursiveBrainSearchDepth, brain.BrainPublicUrl);
                 engram.SweepCompleted += key => NotifyWatchers(key);
+                agentMap["Engram"] = engram;
                 Common.Logger.LogInformation("Engram is active. Brain connected.");
             }
 
-            if (enabled.TryGetValue("Refactor", out AgentConfig? refactorConfig))
+            if (enabledAgents.TryGetValue("Refactor", out AgentConfig? refactorConfig))
             {
                 refactor = new Refactor(refactorConfig, brain, engram);
+                agentMap["Refactor"] = refactor;
                 Common.Logger.LogInformation("Refactor is active.");
             }
 
@@ -84,266 +101,89 @@ public class LlmService : IDisposable
         }
     }
 
-    // ── Thread accessors (client-facing) ────────────────────────────────────────
-
-    public IReadOnlyCollection<string> GetActiveThreadKeys()
-        => dialogue?.ThreadKeys ?? Array.Empty<string>();
-
-    /// <summary>Returns (estimatedTokensUsed, tokenLimit) for the dialogue thread's current context window. 0 limit = unconfigured.</summary>
-    public (int Used, int Limit) GetDialogueContextStats(string threadKey)
-        => dialogue?.GetThread(threadKey)?.GetContextStats() ?? (0, 0);
-
-    /// <summary>Returns all currently-active LLM calls across every agent, for live token display.</summary>
-    public IReadOnlyList<LiveCallInfo> GetAllLiveCalls()
-    {
-        List<LiveCallInfo> result = new(dialogueLiveCalls.Values);
-        void Collect(Agent? agent) { if (agent is not null) result.AddRange(agent.GetLiveCalls()); }
-        // Dialogue is covered by dialogueLiveCalls; collect internal agents via Thread.LiveCall.
-        Collect(engram); Collect(memory); Collect(refactor); Collect(context);
-        return result;
-    }
-
-    /// <summary>Returns all recorded LLM calls with token data, across every agent, ordered by time.</summary>
-    public IReadOnlyList<LlmCallStat> GetAllCallStats()
-    {
-        List<LlmCallStat> result = new();
-
-        void Collect(Agent? agent, string agentName)
-        {
-            if (agent is null) return;
-            foreach (string key in agent.ThreadKeys)
-            {
-                Thread? t = agent.GetThread(key);
-                if (t is null) continue;
-                foreach (ThreadItem item in t.History)
-                {
-                    if (item is AriResponse resp && (resp.CompletionTokens > 0 || resp.PromptTokens > 0))
-                    {
-                        result.Add(new LlmCallStat(agentName, key, resp.Timestamp,
-                            resp.CompletionTokens, resp.OutputTokenLimit,
-                            resp.PromptTokens, resp.ContextTokenLimit,
-                            resp.HadImageAttachments, resp.EstimatedTextPromptTokens,
-                            resp.ImageTokenLimit));
-                    }
-                }
-            }
-        }
-
-        Collect(dialogue, "Dialogue");
-        Collect(engram,   "Engram");
-        Collect(memory,   "Memory");
-        Collect(refactor, "Refactor");
-        Collect(context,  "Context");
-
-        result.Sort((a, b) => a.Timestamp.CompareTo(b.Timestamp));
-        return result;
-    }
-
-    public record LlmCallStat(
-        string   AgentName,
-        string   ThreadKey,
-        DateTime Timestamp,
-        int      CompletionTokens,
-        int      OutputTokenLimit,
-        int      PromptTokens              = 0,
-        int      ContextTokenLimit         = 0,
-        bool     HadImageAttachments       = false,
-        int      EstimatedTextPromptTokens = 0,
-        int      ImageTokenLimit           = 0)
-    {
-        public int EstimatedImageTokens =>
-            HadImageAttachments ? Math.Max(0, PromptTokens - EstimatedTextPromptTokens) : 0;
-    }
-
-    /// <summary>Returns the typed ThreadItem list for a dialogue thread. This is what clients render.</summary>
-    public IReadOnlyList<ThreadItem> GetThreadItems(string threadKey)
-        => dialogue?.GetThread(threadKey)?.History ?? [];
-
-    /// <summary>Returns the typed ThreadItem list for an internal agent thread (Engram, Refactor, etc.).</summary>
-    public IReadOnlyList<ThreadItem> GetInternalThreadItems(string threadKey)
-    {
-        if (engram?.ThreadKeys.Contains(threadKey)  == true) return engram.GetThread(threadKey)?.History  ?? [];
-        if (refactor?.ThreadKeys.Contains(threadKey) == true) return refactor.GetThread(threadKey)?.History ?? [];
-        if (context?.ThreadKeys.Contains(threadKey)  == true) return context.GetThread(threadKey)?.History  ?? [];
-        if (memory?.ThreadKeys.Contains(threadKey)   == true) return memory.GetThread(threadKey)?.History   ?? [];
-        return [];
-    }
-
-    public DateTime GetThreadLastMessageAt(string threadKey)
-        => dialogue?.GetThread(threadKey)?.LastMessageAt ?? DateTime.MinValue;
-
-    public string GetThreadState(string threadKey)
-        => (dialogue?.GetThread(threadKey)?.State ?? ThreadState.Active).ToString().ToLowerInvariant();
-
-    // Returns metadata for all internal agent threads (Engram, Recall, Context, Refactor).
-    // Threads sharing a key with a Dialogue thread are excluded to avoid duplication.
-    public IReadOnlyList<InternalThreadInfo> GetInternalThreads()
-    {
-        List<InternalThreadInfo> result = new();
-        HashSet<string> dialogueKeys = new(dialogue?.ThreadKeys ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase);
-
-        void Add(Agent? agent, string agentName)
-        {
-            if (agent is null) return;
-            foreach (string key in agent.ThreadKeys)
-            {
-                if (dialogueKeys.Contains(key)) continue;
-                Thread? t = agent.GetThread(key);
-                result.Add(new InternalThreadInfo(key, agentName,
-                    t?.LastMessageAt ?? DateTime.MinValue,
-                    t?.History?.Count ?? 0));
-            }
-        }
-
-        Add(engram,   "Engram");
-        Add(refactor, "Refactor");
-        Add(context,  "Context");
-        Add(memory,   "Memory");
-        return result;
-    }
-
-    public record InternalThreadInfo(string Key, string AgentName, DateTime LastMessageAt, int MessageCount);
-
-    // ── Thread watchers (server push) ───────────────────────────────────────────
-
-    /// <summary>
-    /// Subscribes a client channel to receive notifications whenever the given thread's history changes.
-    /// Dispose the returned handle to unsubscribe (called when the client disconnects).
-    /// </summary>
-    public IDisposable WatchThread(string threadKey, Channel<bool?> channel)
-    {
-        Guid id = Guid.NewGuid();
-        threadWatchers.GetOrAdd(threadKey, _ => new())[id] = channel;
-        return new WatcherHandle(threadWatchers, threadKey, id, channel);
-    }
-
-    private void NotifyWatchers(string threadKey)
-    {
-        if (!threadWatchers.TryGetValue(threadKey, out ConcurrentDictionary<Guid, Channel<bool?>>? watchers)) return;
-        foreach (Channel<bool?> ch in watchers.Values)
-            ch.Writer.TryWrite(true);
-    }
-
-    private void NotifyThreadDeleted(string threadKey)
-    {
-        if (!threadWatchers.TryGetValue(threadKey, out ConcurrentDictionary<Guid, Channel<bool?>>? watchers)) return;
-        foreach (Channel<bool?> ch in watchers.Values)
-            ch.Writer.TryWrite(null);
-    }
-
-    private sealed class WatcherHandle(
-        ConcurrentDictionary<string, ConcurrentDictionary<Guid, Channel<bool?>>> registry,
-        string threadKey, Guid id, Channel<bool?> channel) : IDisposable
-    {
-        public void Dispose()
-        {
-            if (registry.TryGetValue(threadKey, out ConcurrentDictionary<Guid, Channel<bool?>>? watchers))
-                watchers.TryRemove(id, out _);
-            channel.Writer.TryComplete();
-        }
-    }
-
-    // ── Processing state ────────────────────────────────────────────────────────
-
-    public bool IsThreadProcessing(string threadKey) => processingThreads.ContainsKey(threadKey);
-
-    public bool IsEngramSweeping(string threadKey) => engram?.IsSweeping(threadKey) ?? false;
-
-    /// <summary>Called by the web panel while the user is composing a message. Resets the inactivity countdown.</summary>
-    public void NotifyTyping(string threadKey) => dialogue?.NotifyTyping(threadKey);
-
-    public void Cancel(string threadKey)
-    {
-        if (processingThreads.TryGetValue(threadKey, out CancellationTokenSource? cts))
-            cts.Cancel();
-    }
-
-    public void Interrupt(string threadKey)
-    {
-        Thread? thread = dialogue?.GetThread(threadKey);
-        if (thread is not null) thread.preserveOnCancel = true;
-        Cancel(threadKey);
-    }
-
-    // ── Attachments (proxies to Thread) ────────────────────────────────────────
-
-    public void AddAttachment(string threadKey, Attachment attachment)
-        => dialogue?.GetOrCreateThread(threadKey).AddAttachment(attachment);
-
-    public bool RemoveAttachment(string threadKey, string name)
-        => dialogue?.GetOrCreateThread(threadKey).RemoveAttachment(name) ?? false;
-
-    public IReadOnlyList<Attachment> GetAttachments(string threadKey)
-        => dialogue?.GetOrCreateThread(threadKey).GetAttachments() ?? Array.Empty<Attachment>();
-
-    // ── Message attachments (proxies to Thread — cleared after each Prompt) ────
-
-    public void AddMessageAttachment(string threadKey, Attachment attachment)
-        => dialogue?.GetOrCreateThread(threadKey).AddMessageAttachment(attachment);
-
-    public bool RemoveMessageAttachment(string threadKey, string name)
-        => dialogue?.GetOrCreateThread(threadKey).RemoveMessageAttachment(name) ?? false;
-
-    public IReadOnlyList<Attachment> GetMessageAttachments(string threadKey)
-        => dialogue?.GetOrCreateThread(threadKey).GetMessageAttachments() ?? Array.Empty<Attachment>();
+    public void Dispose() => engram?.Dispose();
 
     // ── Prompting ───────────────────────────────────────────────────────────────
 
-    public Task<string> Prompt(string threadKey, string prompt, string username, string? platformContext = null)
-        => PromptCore(threadKey, prompt, username, platformContext, null, CancellationToken.None);
+    public Task<string> Prompt(string threadKey, string prompt, string username, string? platformContext = null, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null)
+        => Route(threadKey, prompt, username, platformContext, null, CancellationToken.None, messageAttachments, threadAttachments);
 
-    /// <summary>
-    /// Like Prompt, but calls <paramref name="onDelta"/> with the full accumulated response text
-    /// after each token so the caller can stream it to the client in real time.
-    /// The external cancellation token (e.g. HTTP disconnect) is linked to the internal CTS.
-    /// </summary>
-    public Task<string> PromptStreaming(string threadKey, string prompt, string username, string? platformContext, Func<string, Task> onDelta, CancellationToken ct = default)
-        => PromptCore(threadKey, prompt, username, platformContext, onDelta, ct);
+    public Task<string> PromptStreaming(string threadKey, string prompt, string username, string? platformContext, Func<string, Task> onDelta, CancellationToken ct = default, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null)
+        => Route(threadKey, prompt, username, platformContext, onDelta, ct, messageAttachments, threadAttachments);
 
-    private async Task<string> PromptCore(string threadKey, string prompt, string username, string? platformContext, Func<string, Task>? onDelta, CancellationToken externalCt)
+    private async Task<string> Route(string threadKey, string prompt, string username, string? platformContext, Func<string, Task>? onDelta, CancellationToken externalCt, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null)
     {
         if (dialogue is null)
             throw new ModelNotFoundException("Dialogue model is not loaded or is not enabled.");
 
+        
+        // New prompt arrived mid-processing — cancel the previous one
         if (IsThreadProcessing(threadKey))
             Interrupt(threadKey);
 
+        // create a cancellation token in case this prompt needs cancelling later
         CancellationTokenSource cts = externalCt.CanBeCanceled
             ? CancellationTokenSource.CreateLinkedTokenSource(externalCt)
             : new CancellationTokenSource();
         processingThreads[threadKey] = cts;
 
-        // If Engram is mid-sweep, hold here until it finishes so Dialogue doesn't interleave
-        // with memory consolidation. The client sees isRemembering=true via SSE during this wait.
+        
+        // if no classifier active, default to dialogue pipeline
+        if (classifier is null)
+            return await DialoguePipeline(threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments);
+
+        // if the thread has messages it's established — find which agent owns it
+        string? agent = FindThreadAgent(threadKey);
+        bool hasMessages = agent is not null && agentMap[agent].Threads[threadKey].History.Count > 0;
+
+        // new or empty thread (may exist for attachment staging) needs classifying
+        if (!hasMessages)
+        {
+            agent = await classifier.Classify(prompt, cts.Token);
+            Common.Logger.LogInformation($"[Classifier] ({threadKey}) → {agent}");
+
+            // Pre-create the thread on the correct agent so watchers receive isCodeMode
+            // before the LLM starts responding — this triggers the animation immediately.
+            if (agent == "Code")
+                code?.GetOrCreateThread(threadKey);
+        }
+
+        switch (agent)
+        {
+            case "Code":
+                return await CodePipeline(threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments);
+            default:
+                return await DialoguePipeline(threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments);
+        }
+        
+    }
+
+    private async Task<string> DialoguePipeline(string threadKey, string prompt, string username, string? platformContext, Func<string, Task>? onDelta, CancellationTokenSource cts, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null)
+    {
         if (engram?.IsSweeping(threadKey) == true)
         {
             Common.Logger.LogInformation("[Dialogue] ({Thread}) waiting for Engram sweep to finish before processing.", threadKey);
-            await engram.WaitForSweepAsync(threadKey, cts.Token);
+            await engram.WaitForSweep(threadKey, cts.Token);
         }
 
-        Thread dialogueThread = dialogue.GetOrCreateThread(threadKey);
+        Thread dialogueThread = dialogue!.GetOrCreateThread(threadKey);
+        if (threadAttachments is { Count: > 0 })
+            foreach (Attachment a in threadAttachments) dialogueThread.AddAttachment(a);
 
-        // Create and register the live call record NOW — before recall — so the control panel
-        // shows activity immediately. The same object is passed to the Thread so its streaming
-        // loop can update EstimatedOutputTokens in place as tokens arrive.
-        var liveCall = new LiveCallInfo("Dialogue", threadKey, 0,
-            dialogue.MaxTokens, dialogue.MaxContextTokens, dialogue.MaxImageTokens);
-        dialogueLiveCalls[threadKey] = liveCall;
+        LiveCallInfo liveCall = new("Dialogue", threadKey, 0, dialogue.MaxTokens, dialogue.MaxContextTokens, dialogue.MaxImageTokens);
+        liveCalls[threadKey] = liveCall;
         dialogueThread.SetLiveCall(liveCall);
 
-        // If the previous history item is an unanswered user message, combine it with the
-        // current prompt so the [Prompt] block (and recall) cover both questions.
         string effectivePrompt = dialogueThread.History.Count > 0 && dialogueThread.History[^1] is UserMessage prev
             ? prev.Content + "\n" + prompt
             : prompt;
 
-        List<Attachment> msgAtts = dialogueThread.GetMessageAttachments().ToList();
         dialogueThread.AddItem(new UserMessage
         {
             Username    = username,
             Content     = prompt,
             Timestamp   = DateTime.Now,
-            Attachments = msgAtts.Count > 0 ? msgAtts : null
+            Attachments = messageAttachments is { Count: > 0 } ? messageAttachments : null
         });
 
         try
@@ -378,7 +218,7 @@ public class LlmService : IDisposable
         }
         finally
         {
-            dialogueLiveCalls.TryRemove(threadKey, out _);
+            liveCalls.TryRemove(threadKey, out _);
             dialogueThread.ClearMessageAttachments();
             processingThreads.TryRemove(new KeyValuePair<string, CancellationTokenSource>(threadKey, cts));
             cts.Dispose();
@@ -386,15 +226,55 @@ public class LlmService : IDisposable
         }
     }
 
-    /// <summary>
-    /// Passes a slash command to the CommandService for processing.
-    /// If a threadKey is provided, the exchange is stored in the thread's display history.
-    /// Returns a human-readable result, or null if the input is not a recognised command.
-    /// </summary>
-    public bool IsCodeThread(string threadKey)
+    private async Task<string> CodePipeline(string threadKey, string prompt, string username, string? platformContext, Func<string, Task>? onDelta, CancellationTokenSource cts, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null)
     {
-        lock (codeThreads) { return codeThreads.Contains(threadKey); }
+        if (code is null)
+        {
+            Common.Logger.LogWarning("[Code] ({Thread}) Code agent not enabled, falling back to Dialogue.", threadKey);
+            return await DialoguePipeline(threadKey, prompt, username, platformContext, onDelta, cts);
+        }
+
+        Thread codeThread = code.GetOrCreateThread(threadKey);
+        if (threadAttachments is { Count: > 0 })
+            foreach (Attachment a in threadAttachments) codeThread.AddAttachment(a);
+
+        LiveCallInfo liveCall = new("Code", threadKey, 0, code.MaxTokens, code.MaxContextTokens, 0);
+        liveCalls[threadKey] = liveCall;
+        codeThread.SetLiveCall(liveCall);
+
+        string effectivePrompt = codeThread.History.Count > 0 && codeThread.History[^1] is UserMessage prev
+            ? prev.Content + "\n" + prompt
+            : prompt;
+
+        codeThread.AddItem(new UserMessage
+        {
+            Username    = username,
+            Content     = prompt,
+            Timestamp   = DateTime.Now,
+            Attachments = messageAttachments is { Count: > 0 } ? messageAttachments : null
+        });
+
+        try
+        {
+            Common.Logger.LogInformation("[Code] ({Thread}) prompt\n\"{Prompt}\"", threadKey, prompt);
+            return await code.SendPrompt(threadKey, effectivePrompt, username, platformContext, cts.Token, userMessagePreadded: true, onDelta: onDelta);
+        }
+        catch (OperationCanceledException)
+        {
+            codeThread.preserveOnCancel = false;
+            throw;
+        }
+        finally
+        {
+            liveCalls.TryRemove(threadKey, out _);
+            codeThread.ClearMessageAttachments();
+            processingThreads.TryRemove(new KeyValuePair<string, CancellationTokenSource>(threadKey, cts));
+            cts.Dispose();
+            NotifyWatchers(threadKey);
+        }
     }
+
+    // ── Commands ────────────────────────────────────────────────────────────────
 
     public async Task<string?> HandleCommand(string? threadKey, string input)
     {
@@ -409,18 +289,15 @@ public class LlmService : IDisposable
             }
             else
             {
-                lock (codeThreads)
+                if (trimmed == "/code")
                 {
-                    if (trimmed == "/code")
-                    {
-                        codeThreads.Add(threadKey);
-                        result = "Switched to **Code** mode.";
-                    }
-                    else
-                    {
-                        codeThreads.Remove(threadKey);
-                        result = "Switched to **Dialogue** mode.";
-                    }
+                    // handle thread migration to new agent
+                    result = "Switched to **Code** mode.";
+                }
+                else
+                {
+                    // handle thread migration to new agent
+                    result = "Switched to **Dialogue** mode.";
                 }
             }
             if (threadKey is not null)
@@ -434,5 +311,132 @@ public class LlmService : IDisposable
         return cmdResult;
     }
 
-    public void Dispose() => engram?.Dispose();
+    private string? FindThreadAgent(string threadKey)
+        => agentMap.FirstOrDefault(kvp => kvp.Value.Threads.ContainsKey(threadKey)).Key;
+
+    // ── Internal watcher infrastructure ────────────────────────────────────────
+
+    private void NotifyWatchers(string threadKey)
+    {
+        if (!threadWatchers.TryGetValue(threadKey, out ConcurrentDictionary<Guid, Channel<bool?>>? watchers)) return;
+        foreach (Channel<bool?> ch in watchers.Values)
+            ch.Writer.TryWrite(true);
+    }
+
+    private void NotifyThreadDeleted(string threadKey)
+    {
+        if (!threadWatchers.TryGetValue(threadKey, out ConcurrentDictionary<Guid, Channel<bool?>>? watchers)) return;
+        foreach (Channel<bool?> ch in watchers.Values)
+            ch.Writer.TryWrite(null);
+    }
+
+    private sealed class WatcherHandle(
+        ConcurrentDictionary<string, ConcurrentDictionary<Guid, Channel<bool?>>> registry,
+        string threadKey, Guid id, Channel<bool?> channel) : IDisposable
+    {
+        public void Dispose()
+        {
+            if (registry.TryGetValue(threadKey, out ConcurrentDictionary<Guid, Channel<bool?>>? watchers))
+                watchers.TryRemove(id, out _);
+            channel.Writer.TryComplete();
+        }
+    }
+
+    // ── WEB INTEGRATION ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Real-time snapshot of every LLM call currently streaming across all agents.
+    /// Used by the control panel to show a live token counter while a response is generating.
+    /// </summary>
+    public IReadOnlyList<LiveCallInfo> LiveCalls()
+    {
+        List<LiveCallInfo> result = new(liveCalls.Values);
+        void Collect(Agent? agent) { if (agent is not null) result.AddRange(agent.GetLiveCalls()); }
+        Collect(engram); Collect(memory); Collect(refactor); Collect(context);
+        return result;
+    }
+
+    /// <summary>
+    /// Historical log of every completed LLM call across all agents, ordered by time.
+    /// Used by the control panel to render the token usage graph.
+    /// </summary>
+    public IReadOnlyList<LlmCallStat> CallStats()
+    {
+        List<LlmCallStat> result = new();
+
+        void Collect(Agent? agent, string agentName)
+        {
+            if (agent is null) return;
+            foreach (string key in agent.ThreadKeys)
+            {
+                Thread? t = agent.GetThread(key);
+                if (t is null) continue;
+                foreach (ThreadItem item in t.History)
+                {
+                    if (item is AriResponse resp && (resp.CompletionTokens > 0 || resp.PromptTokens > 0))
+                        result.Add(new LlmCallStat(agentName, key, resp.Timestamp,
+                            resp.CompletionTokens, resp.OutputTokenLimit,
+                            resp.PromptTokens, resp.ContextTokenLimit,
+                            resp.HadImageAttachments, resp.EstimatedTextPromptTokens,
+                            resp.ImageTokenLimit));
+                }
+            }
+        }
+
+        Collect(dialogue, "Dialogue");
+        Collect(code,     "Code");
+        Collect(engram,   "Engram");
+        Collect(memory,   "Memory");
+        Collect(refactor, "Refactor");
+        Collect(context,  "Context");
+
+        result.Sort((a, b) => a.Timestamp.CompareTo(b.Timestamp));
+        return result;
+    }
+
+    public IDisposable WatchThread(string threadKey, Channel<bool?> channel)
+    {
+        Guid id = Guid.NewGuid();
+        threadWatchers.GetOrAdd(threadKey, _ => new())[id] = channel;
+        return new WatcherHandle(threadWatchers, threadKey, id, channel);
+    }
+
+    public bool IsThreadProcessing(string threadKey) => processingThreads.ContainsKey(threadKey);
+
+    public bool IsEngramSweeping(string threadKey) => engram?.IsSweeping(threadKey) ?? false;
+
+    public void NotifyTyping(string threadKey) => dialogue?.NotifyTyping(threadKey);
+
+    public void Cancel(string threadKey)
+    {
+        if (processingThreads.TryGetValue(threadKey, out CancellationTokenSource? cts))
+            cts.Cancel();
+    }
+
+    public void Interrupt(string threadKey)
+    {
+        Thread? thread = dialogue?.GetThread(threadKey);
+        if (thread is not null) thread.preserveOnCancel = true;
+        Cancel(threadKey);
+    }
+
+    // ── Data types ───────────────────────────────────────────────────────────────
+
+    public record InternalThreadInfo(string Key, string AgentName, DateTime LastMessageAt, int MessageCount);
+
+    public record LlmCallStat(
+        string   AgentName,
+        string   ThreadKey,
+        DateTime Timestamp,
+        int      CompletionTokens,
+        int      OutputTokenLimit,
+        int      PromptTokens              = 0,
+        int      ContextTokenLimit         = 0,
+        bool     HadImageAttachments       = false,
+        int      EstimatedTextPromptTokens = 0,
+        int      ImageTokenLimit           = 0)
+    {
+        public int EstimatedImageTokens =>
+            HadImageAttachments ? Math.Max(0, PromptTokens - EstimatedTextPromptTokens) : 0;
+    }
 }

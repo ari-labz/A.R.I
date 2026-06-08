@@ -12,10 +12,9 @@ internal class Refactor : Agent
     private readonly Engram?      engram;
     private readonly SemaphoreSlim runLock = new(1, 1);
 
-    // How many notes to send in a single analysis call before switching to the two-pass approach.
-    private const int SinglePassThreshold = 15;
-    // How many notes to include per cluster analysis call.
-    private const int ClusterCallLimit = 20;
+    private const int SINGLE_PASS_THRESHOLD = 15;
+    private const int CLUSTER_CALL_LIMIT    = 20;
+    private const int EXCERPT_LENGTH        = 300;
 
     internal Refactor(AgentConfig config, BrainService brain, Engram? engram = null) : base(config)
     {
@@ -117,10 +116,27 @@ internal class Refactor : Agent
             Dictionary<string, EngramEdit> seeAlsoEdits = new(StringComparer.OrdinalIgnoreCase);
             foreach (string title in loaded.Keys.ToList())
             {
-                NoteData data     = loaded[title];
-                string stripped   = StripSeeAlsoSection(data.Markdown);
-                stripped          = StripOrphanLinkBullets(stripped, knownTitlesSet);
-                stripped          = StripChangelogLinks(stripped);
+                NoteData data   = loaded[title];
+                string stripped = data.Markdown;
+
+                // Remove ## See Also section
+                stripped = Regex.Replace(stripped,
+                    @"^## See Also\b.*?(?=^##|\z)", string.Empty,
+                    RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.Singleline);
+                stripped = Regex.Replace(stripped, @"\n{3,}", "\n\n").Trim();
+
+                // Remove bullet lines whose only content is a [[link]] to a non-existent note
+                stripped = Regex.Replace(stripped,
+                    @"^[ \t]*[-*]\s+\[\[([^\]]+)\]\]\s*$",
+                    match => knownTitlesSet.Contains(match.Groups[1].Value.Trim()) ? match.Value : string.Empty,
+                    RegexOptions.Multiline);
+                stripped = Regex.Replace(stripped, @"\n{3,}", "\n\n").Trim();
+
+                // Remove [[wiki links]] from inside ## Changelog sections
+                stripped = Regex.Replace(stripped,
+                    @"(^## Changelog\b.*?)((?=^##)|\z)",
+                    m => Regex.Replace(m.Value, @"\[\[([^\]]+)\]\]", "$1"),
+                    RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.Singleline);
                 if (stripped == data.Markdown) continue;
 
                 loaded[title] = data with { Markdown = stripped, Links = ParseLinks(stripped) };
@@ -152,7 +168,7 @@ internal class Refactor : Agent
 
                 List<(List<EngramAdd> adds, List<EngramEdit> edits, List<EngramDelete> deletes)> results;
 
-                if (notes.Count <= SinglePassThreshold)
+                if (notes.Count <= SINGLE_PASS_THRESHOLD)
                 {
                     // Small folder — one call handles everything
                     (List<EngramAdd> adds, List<EngramEdit> edits, List<EngramDelete> deletes) = await AnalyseFolder(folder, notes, hubNotes, allTitles);
@@ -161,7 +177,7 @@ internal class Refactor : Agent
                 else
                 {
                     // Large folder — detect clusters first, then analyse each cluster
-                    results = await AnalyseLargeFolder(folder, notes, hubNotes, allTitles);
+                    results = await AnalyseLarge(folder, notes, hubNotes, allTitles);
                 }
 
                 foreach ((List<EngramAdd> adds, List<EngramEdit> edits, List<EngramDelete> deletes) in results)
@@ -239,7 +255,11 @@ internal class Refactor : Agent
             // ── Clear dirty flags ─────────────────────────────────────────────────
             await brain.ClearDirty(loaded.Keys);
 
-            return BuildSummary(allNotes, seedTitles.Count, loaded.Count, touchedFolders, allAdds.Count, finalEdits.Count, seeAlsoEdits.Count, allDeletes.Count);
+            StringBuilder summary = new();
+            summary.AppendLine($"Refactor {(allNotes ? "full" : "incremental")} complete — {allAdds.Count} added, {finalEdits.Count} edited, {allDeletes.Count} deleted.");
+            if (!allNotes) summary.AppendLine($"Working set: {seedTitles.Count} dirty note(s) expanded to {loaded.Count} across [{string.Join(", ", touchedFolders)}].");
+            if (seeAlsoEdits.Count > 0) summary.AppendLine($"See Also sections removed: {seeAlsoEdits.Count}.");
+            return summary.ToString().TrimEnd();
         }
         catch (Exception ex)
         {
@@ -295,7 +315,7 @@ internal class Refactor : Agent
     /// Pass 1: summary view → cluster plan.
     /// Pass 2: one analysis call per cluster with full note content.
     /// </summary>
-    private async Task<List<(List<EngramAdd> adds, List<EngramEdit> edits, List<EngramDelete> deletes)>> AnalyseLargeFolder(
+    private async Task<List<(List<EngramAdd> adds, List<EngramEdit> edits, List<EngramDelete> deletes)>> AnalyseLarge(
         string folder,
         List<NoteData> notes,
         List<NoteData> hubNotes,
@@ -303,7 +323,7 @@ internal class Refactor : Agent
     {
         // Pass 1 — Cluster detection (titles + short excerpt per note)
         string p1Key    = $"refactor-clusters-{folder}:{Guid.NewGuid()}";
-        string p1Prompt = BuildClusterDetectionPrompt(folder, notes, hubNotes);
+        string p1Prompt = ClusterDetectionPrompt(folder, notes, hubNotes);
 
         Common.Logger.LogInformation("[Refactor] Folder '{Folder}': cluster detection pass ({Count} notes).", folder, notes.Count);
         string clusterRaw     = await Prompt(p1Key, p1Prompt, maxTokensOverride: -1);
@@ -326,7 +346,7 @@ internal class Refactor : Agent
             List<NoteData> clusterNotes = cluster.Members
                 .Where(m => notesByTitle.ContainsKey(m))
                 .Select(m => notesByTitle[m])
-                .Take(ClusterCallLimit)
+                .Take(CLUSTER_CALL_LIMIT)
                 .ToList();
 
             if (clusterNotes.Count == 0) continue;
@@ -335,7 +355,7 @@ internal class Refactor : Agent
                 string.Equals(h.Title, cluster.HubName, StringComparison.OrdinalIgnoreCase));
 
             string p2Key    = $"refactor-cluster-{cluster.Theme}:{Guid.NewGuid()}";
-            string p2Prompt = BuildClusterAnalysisPrompt(cluster, clusterNotes, existingHub, hubNotes, allTitles);
+            string p2Prompt = ClusterAnalysisPrompt(cluster, clusterNotes, existingHub, hubNotes, allTitles);
 
             Common.Logger.LogInformation("[Refactor] Cluster '{Theme}' ({Count} notes).", cluster.Theme, clusterNotes.Count);
             string raw = await Prompt(p2Key, p2Prompt, maxTokensOverride: -1);
@@ -370,7 +390,7 @@ internal class Refactor : Agent
         return sb.ToString();
     }
 
-    private static string BuildClusterDetectionPrompt(string folder, List<NoteData> notes, List<NoteData> hubNotes)
+    private static string ClusterDetectionPrompt(string folder, List<NoteData> notes, List<NoteData> hubNotes)
     {
         StringBuilder sb = new();
 
@@ -395,7 +415,7 @@ internal class Refactor : Agent
         return sb.ToString();
     }
 
-    private static string BuildClusterAnalysisPrompt(
+    private static string ClusterAnalysisPrompt(
         ClusterPlan cluster,
         List<NoteData> clusterNotes,
         NoteData? existingHub,
@@ -443,7 +463,7 @@ internal class Refactor : Agent
         if (full)
             sb.AppendLine(note.Markdown);
         else
-            sb.AppendLine(note.Markdown.Length > 300 ? note.Markdown[..300] + "…" : note.Markdown);
+            sb.AppendLine(note.Markdown.Length > EXCERPT_LENGTH ? note.Markdown[..EXCERPT_LENGTH] + "…" : note.Markdown);
         sb.AppendLine("---");
     }
 
@@ -511,65 +531,6 @@ internal class Refactor : Agent
         if (string.IsNullOrEmpty(folder)) return string.Empty;
         int slash = folder.IndexOf('/');
         return slash >= 0 ? folder[..slash] : folder;
-    }
-
-    /// <summary>
-    /// Removes all [[wiki links]] from within a ## Changelog section, leaving the text intact.
-    /// Links in changelogs add no navigational value and create false graph edges.
-    /// </summary>
-    private static string StripChangelogLinks(string markdown)
-        => Regex.Replace(
-            markdown,
-            @"(^## Changelog\b.*?)((?=^##)|\z)",
-            m => Regex.Replace(m.Value, @"\[\[([^\]]+)\]\]", "$1"),
-            RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.Singleline);
-
-    /// <summary>
-    /// Removes bullet lines whose sole content is a [[link]] that does not exist in knownTitles.
-    /// e.g. "- [[DeletedPerson]]" is removed when DeletedPerson has no note.
-    /// Lines with other text beyond the link are left untouched.
-    /// </summary>
-    private static string StripOrphanLinkBullets(string markdown, HashSet<string> knownTitles)
-    {
-        string result = Regex.Replace(
-            markdown,
-            @"^[ \t]*[-*]\s+\[\[([^\]]+)\]\]\s*$",
-            match =>
-            {
-                string target = match.Groups[1].Value.Trim();
-                return knownTitles.Contains(target) ? match.Value : string.Empty;
-            },
-            RegexOptions.Multiline);
-
-        // Collapse any runs of blank lines left behind
-        result = Regex.Replace(result, @"\n{3,}", "\n\n");
-        return result.Trim();
-    }
-
-    /// <summary>
-    /// Removes any "## See Also" section (and its contents) from markdown,
-    /// stopping before the next ## heading or end of string.
-    /// </summary>
-    private static string StripSeeAlsoSection(string markdown)
-    {
-        string result = Regex.Replace(
-            markdown,
-            @"^## See Also\b.*?(?=^##|\z)",
-            string.Empty,
-            RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.Singleline);
-
-        // Normalise any runs of 3+ blank lines left behind
-        result = Regex.Replace(result, @"\n{3,}", "\n\n");
-        return result.Trim();
-    }
-
-    private static string BuildSummary(bool allNotes, int seedCount, int loadedCount, HashSet<string> folders, int adds, int edits, int seeAlsoStripped, int deletes)
-    {
-        StringBuilder sb = new();
-        sb.AppendLine($"Refactor {(allNotes ? "full" : "incremental")} complete — {adds} added, {edits} edited, {deletes} deleted.");
-        if (!allNotes) sb.AppendLine($"Working set: {seedCount} dirty note(s) expanded to {loadedCount} across [{string.Join(", ", folders)}].");
-        if (seeAlsoStripped > 0) sb.AppendLine($"See Also sections removed: {seeAlsoStripped}.");
-        return sb.ToString().TrimEnd();
     }
 
     // ── JSON parsers ──────────────────────────────────────────────────────────────

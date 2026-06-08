@@ -7,6 +7,12 @@ namespace ARI.LLM;
 
 internal class Context : Agent
 {
+    private const int    CONTEXT_MAX_TOKENS = 400;
+    private const double CONTEXT_TEMPERATURE = 0.3;
+    private const double CONTEXT_TOP_P       = 0.95;
+    private const int    CONTEXT_TOP_K       = 20;
+    private const double CONTEXT_REPEAT      = 1.0;
+
     private readonly HttpClient httpClient;
     private readonly Dictionary<string, string> contexts = new();
     private readonly SemaphoreSlim updateLock = new(1, 1);
@@ -21,17 +27,51 @@ internal class Context : Agent
     internal string GetContext(string threadKey)
         => contexts.TryGetValue(threadKey, out string? ctx) ? ctx : string.Empty;
 
-    /// <summary>
-    /// Updates the context summary after each Dialogue exchange.
-    /// Fire-and-forget safe — errors are logged, never thrown.
-    /// </summary>
     internal async Task Update(string threadKey, string userMessage, string assistantResponse)
     {
         await updateLock.WaitAsync();
         try
         {
-            string current = GetContext(threadKey);
-            string updated = await CallContextLlm(current, userMessage, assistantResponse);
+            string contextBlock = string.IsNullOrWhiteSpace(contexts.GetValueOrDefault(threadKey))
+                ? "No context yet — this is the first exchange."
+                : contexts[threadKey];
+
+            object body = new
+            {
+                model    = ModelString,
+                messages = new[]
+                {
+                    new { role = "system", content = $"{resolvedPrompt}\n<|think_off|>" },
+                    new { role = "user",   content =
+                        $"TODAY: {DateTime.Now:dddd, d MMMM yyyy}\n\n" +
+                        $"CURRENT CONTEXT:\n{contextBlock}\n\n" +
+                        $"NEW EXCHANGE:\nWren: {userMessage}\nARI: {assistantResponse}\n\n" +
+                        "Update the context summary." }
+                },
+                stream         = false,
+                max_tokens     = CONTEXT_MAX_TOKENS,
+                temperature    = CONTEXT_TEMPERATURE,
+                top_p          = CONTEXT_TOP_P,
+                top_k          = CONTEXT_TOP_K,
+                repeat_penalty = CONTEXT_REPEAT
+            };
+
+            HttpRequestMessage request = new(HttpMethod.Post, $"{Endpoint}/v1/chat/completions")
+            {
+                Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json")
+            };
+
+            HttpResponseMessage response = await httpClient.SendAsync(request);
+            response.EnsureSuccessStatusCode();
+
+            string responseJson = await response.Content.ReadAsStringAsync();
+            using JsonDocument doc = JsonDocument.Parse(responseJson);
+            string updated = doc.RootElement
+                .GetProperty("choices")[0]
+                .GetProperty("message")
+                .GetProperty("content")
+                .GetString() ?? string.Empty;
+
             if (!string.IsNullOrWhiteSpace(updated))
             {
                 contexts[threadKey] = updated;
@@ -48,20 +88,60 @@ internal class Context : Agent
         }
     }
 
-    /// <summary>
-    /// Rebuilds the context summary from the full conversation transcript.
-    /// Called by Engram before extraction so Context has the complete untrimmed history.
-    /// </summary>
     internal async Task RebuildFromTranscript(string threadKey, string transcript)
     {
         await updateLock.WaitAsync();
         try
         {
-            string current = GetContext(threadKey);
-            Common.Logger.LogInformation("[Engram] [Context] analysing...");
-            (string updated, int tokens, double elapsed) = await CallContextFromTranscript(current, transcript);
+            string contextBlock = string.IsNullOrWhiteSpace(contexts.GetValueOrDefault(threadKey))
+                ? "No prior context."
+                : contexts[threadKey];
 
-            double tokPerSec = elapsed > 0 && tokens > 0 ? tokens / elapsed : 0;
+            object body = new
+            {
+                model    = ModelString,
+                messages = new[]
+                {
+                    new { role = "system", content = $"{resolvedPrompt}\n<|think_off|>" },
+                    new { role = "user",   content =
+                        $"TODAY: {DateTime.Now:dddd, d MMMM yyyy}\n\n" +
+                        $"CURRENT CONTEXT:\n{contextBlock}\n\n" +
+                        $"FULL CONVERSATION:\n{transcript}\n\n" +
+                        "Produce an updated context summary covering this full conversation." }
+                },
+                stream         = false,
+                max_tokens     = CONTEXT_MAX_TOKENS,
+                temperature    = CONTEXT_TEMPERATURE,
+                top_p          = CONTEXT_TOP_P,
+                top_k          = CONTEXT_TOP_K,
+                repeat_penalty = CONTEXT_REPEAT
+            };
+
+            HttpRequestMessage request = new(HttpMethod.Post, $"{Endpoint}/v1/chat/completions")
+            {
+                Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json")
+            };
+
+            Common.Logger.LogInformation("[Engram] [Context] analysing...");
+            Stopwatch sw = Stopwatch.StartNew();
+            HttpResponseMessage response = await httpClient.SendAsync(request);
+            sw.Stop();
+            response.EnsureSuccessStatusCode();
+
+            string responseJson = await response.Content.ReadAsStringAsync();
+            using JsonDocument doc = JsonDocument.Parse(responseJson);
+            JsonElement root = doc.RootElement;
+
+            string updated = root.GetProperty("choices")[0]
+                .GetProperty("message")
+                .GetProperty("content")
+                .GetString() ?? string.Empty;
+
+            int tokens = root.TryGetProperty("usage", out JsonElement usage) &&
+                         usage.TryGetProperty("completion_tokens", out JsonElement ct)
+                ? ct.GetInt32() : 0;
+
+            double tokPerSec = sw.Elapsed.TotalSeconds > 0 && tokens > 0 ? tokens / sw.Elapsed.TotalSeconds : 0;
 
             if (!string.IsNullOrWhiteSpace(updated))
             {
@@ -83,102 +163,5 @@ internal class Context : Agent
         {
             updateLock.Release();
         }
-    }
-
-    // ── Private ──────────────────────────────────────────────────────────────────
-
-    private async Task<(string content, int tokens, double elapsed)> CallContextFromTranscript(string currentContext, string transcript)
-    {
-        string contextBlock = string.IsNullOrWhiteSpace(currentContext) ? "No prior context." : currentContext;
-
-        object requestBody = new
-        {
-            model    = ModelString,
-            messages = new[]
-            {
-                new { role = "system", content = resolvedPrompt + "\n<|think_off|>" },
-                new { role = "user",   content =
-                    $"TODAY: {DateTime.Now:dddd, d MMMM yyyy}\n\n" +
-                    $"CURRENT CONTEXT:\n{contextBlock}\n\n" +
-                    $"FULL CONVERSATION:\n{transcript}\n\n" +
-                    "Produce an updated context summary covering this full conversation." }
-            },
-            stream         = false,
-            max_tokens     = 400,
-            temperature    = 0.3,
-            top_p          = 0.95,
-            top_k          = 20,
-            repeat_penalty = 1.0
-        };
-
-        string json = JsonSerializer.Serialize(requestBody);
-        HttpRequestMessage request = new(HttpMethod.Post, $"{Endpoint}/v1/chat/completions")
-        {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
-        };
-
-        Stopwatch sw = Stopwatch.StartNew();
-        HttpResponseMessage response = await httpClient.SendAsync(request);
-        sw.Stop();
-        response.EnsureSuccessStatusCode();
-
-        string responseJson = await response.Content.ReadAsStringAsync();
-        using JsonDocument doc = JsonDocument.Parse(responseJson);
-        JsonElement root = doc.RootElement;
-
-        string content = root.GetProperty("choices")[0]
-            .GetProperty("message")
-            .GetProperty("content")
-            .GetString() ?? string.Empty;
-
-        int tokens = root.TryGetProperty("usage", out JsonElement usage) &&
-                     usage.TryGetProperty("completion_tokens", out JsonElement ct)
-            ? ct.GetInt32() : 0;
-
-        return (content, tokens, sw.Elapsed.TotalSeconds);
-    }
-
-    private async Task<string> CallContextLlm(string currentContext, string userMessage, string assistantResponse)
-    {
-        string contextBlock = string.IsNullOrWhiteSpace(currentContext)
-            ? "No context yet — this is the first exchange."
-            : currentContext;
-
-        object requestBody = new
-        {
-            model    = ModelString,
-            messages = new[]
-            {
-                new { role = "system", content = resolvedPrompt + "\n<|think_off|>" },
-                new { role = "user",   content =
-                    $"TODAY: {DateTime.Now:dddd, d MMMM yyyy}\n\n" +
-                    $"CURRENT CONTEXT:\n{contextBlock}\n\n" +
-                    $"NEW EXCHANGE:\nWren: {userMessage}\nARI: {assistantResponse}\n\n" +
-                    "Update the context summary." }
-            },
-            stream         = false,
-            max_tokens     = 400,
-            temperature    = 0.3,
-            top_p          = 0.95,
-            top_k          = 20,
-            repeat_penalty = 1.0
-        };
-
-        string json = JsonSerializer.Serialize(requestBody);
-        HttpRequestMessage request = new(HttpMethod.Post, $"{Endpoint}/v1/chat/completions")
-        {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
-        };
-
-        HttpResponseMessage response = await httpClient.SendAsync(request);
-        response.EnsureSuccessStatusCode();
-
-        string responseJson = await response.Content.ReadAsStringAsync();
-        using JsonDocument doc = JsonDocument.Parse(responseJson);
-        return doc.RootElement
-            .GetProperty("choices")[0]
-            .GetProperty("message")
-            .GetProperty("content")
-            .GetString() ?? string.Empty;
     }
 }

@@ -898,17 +898,15 @@ document.getElementById('btn-new-chat').addEventListener('click', () => {
                     return;
                 }
 
-                const { isProcessing, isRemembering } = data;
+                const { isProcessing, isRemembering, isCodeMode: eventCodeMode } = data;
                 const currentCodeMode = document.getElementById('main').classList.contains('code-mode');
-                let targetCodeMode = currentCodeMode;
-                try {
-                    const tRes = await fetch('/api/threads?includeInternal=false');
-                    const tList = await tRes.json();
-                    const tEntry = tList.find(t => t.key === key);
-                    if (tEntry != null) targetCodeMode = tEntry.isCodeMode;
-                } catch { /* non-critical */ }
+                const targetCodeMode  = eventCodeMode ?? currentCodeMode;
 
-                if (targetCodeMode !== currentCodeMode) {
+                if (isStreaming) {
+                    // Stream is actively rendering — only apply a code mode switch for the
+                    // animation, skip the rebuild to avoid duplicating the in-progress response.
+                    if (targetCodeMode !== currentCodeMode) setCodeMode(targetCodeMode);
+                } else if (targetCodeMode !== currentCodeMode) {
                     // Mode is changing: rebuild in current mode so elements have a painted
                     // "from" state, then flip the class after two rAFs to trigger the transition.
                     await rebuildThread(key, false, agentName);
