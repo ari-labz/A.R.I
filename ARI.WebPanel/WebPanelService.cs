@@ -19,6 +19,9 @@ public class WebPanelConfig
     public string GoogleClientSecret { get; init; } = "";
     public string AllowedEmail { get; init; } = "";
     public string LogPath { get; init; } = "";
+    public string RvcPath        { get; init; } = "";
+    public string VoicesPath     { get; init; } = "";
+    public string PiperModelPath { get; init; } = "";
 }
 
 public class WebPanelService : IAsyncDisposable
@@ -27,17 +30,20 @@ public class WebPanelService : IAsyncDisposable
     private readonly LlmServiceHolder holder;
     private readonly WebPanelConfig config;
     private readonly SystemInfoHolder systemInfo;
+    private readonly DiscordServiceHolder discordHolder;
     private WebApplication? app;
 
-    public LlmServiceHolder  Holder     => holder;
-    public SystemInfoHolder  SystemInfo => systemInfo;
+    public LlmServiceHolder     Holder        => holder;
+    public SystemInfoHolder     SystemInfo    => systemInfo;
+    public DiscordServiceHolder DiscordHolder => discordHolder;
 
     public WebPanelService(ILoggerFactory loggerFactory, WebPanelConfig config)
     {
-        this.loggerFactory = loggerFactory;
-        this.holder        = new LlmServiceHolder();
-        this.config        = config;
-        this.systemInfo    = new SystemInfoHolder();
+        this.loggerFactory    = loggerFactory;
+        this.holder           = new LlmServiceHolder();
+        this.config           = config;
+        this.systemInfo       = new SystemInfoHolder();
+        this.discordHolder    = new DiscordServiceHolder();
     }
 
     public async Task Start(CancellationToken cancellationToken)
@@ -55,10 +61,23 @@ public class WebPanelService : IAsyncDisposable
 
         builder.WebHost.UseUrls($"http://0.0.0.0:{config.Port}");
         builder.WebHost.UseShutdownTimeout(TimeSpan.FromSeconds(2));
+        builder.WebHost.ConfigureKestrel(k =>
+        {
+            k.Limits.MaxRequestBodySize = 512L * 1024 * 1024; // 512 MB for voice training uploads
+        });
 
         builder.Services.AddSingleton(holder);
         builder.Services.AddSingleton(config);
         builder.Services.AddSingleton(systemInfo);
+        builder.Services.AddSingleton(new VoiceTrainerHolder());
+        builder.Services.AddSingleton(new DiscordServiceHolder());
+
+        // Clear any stale staging folders from a previous run
+        string stagingRoot = Path.Combine(Path.GetTempPath(), "ari-voice-staging");
+        if (Directory.Exists(stagingRoot))
+        {
+            try { Directory.Delete(stagingRoot, recursive: true); } catch { /* best-effort */ }
+        }
         builder.Services.AddControllersWithViews()
             .AddApplicationPart(typeof(ChatController).Assembly);
 

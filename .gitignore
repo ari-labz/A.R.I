@@ -435,9 +435,24 @@ FodyWeavers.xsd
 # Downloaded model files
 /Models/
 
-# RVC - installed automatically by ARI on first run
-/rvc/
+# RVC source is in the repo; exclude generated/downloaded/large files only
 
-# Voice model files - drop .pth and index files into Voices/ manually
+# Large model weights — downloaded automatically by ARI on first run (>100 MB each)
+External/RVC/assets/hubert/hubert_base.pt
+External/RVC/assets/rmvpe/rmvpe.pt
+External/RVC/assets/pretrained_v2/*.pth
+External/RVC/assets/pretrained/*.pth
+External/RVC/assets/uvr5_weights/
+
+# RVC training output and intermediate weights — not source, not deliverables
+External/RVC/logs/
+External/RVC/assets/weights/
+
+# RVC runtime-generated files
+External/RVC/.env
+External/RVC/.ari_installed
+External/RVC/TEMP/
+
+# Voice model files — only fully trained models in Voices/ are committed
 /Voices/*.pth
 /Voices/**/*.index
