@@ -6,43 +6,39 @@ namespace ARI.LLM;
 internal class Dialogue : Agent
 {
     private readonly BrainService? brain;
+    private readonly int           shortTermLimit;
+    private readonly int           contextTokenLimit;
+
+    internal override int  MemoryLimit       => shortTermLimit;
+    internal override int  MaxContextTokens  => contextTokenLimit;
+    internal override bool SuppressPromptLog => true;
 
     internal event Action<string>? ThreadBufferFull;
     internal event Action<string>? ThreadBecameInactive;
 
-    private readonly int shortTermMemoryLimit;
-    private readonly int maxContextTokens;
-
     internal Dialogue(AgentConfig config, BrainService? brain = null) : base(config)
     {
-        this.brain           = brain;
-        shortTermMemoryLimit = config.ShortTermMemoryLimit;
-        maxContextTokens     = config.MaxContextTokens;
+        this.brain     = brain;
+        shortTermLimit    = config.ShortTermMemoryLimit;
+        contextTokenLimit = config.MaxContextTokens;
     }
-
-    protected override int  GetShortTermMemoryLimit() => shortTermMemoryLimit;
-    protected override int  GetMaxContextTokens()      => maxContextTokens;
-    internal override  int  MaxContextTokens           => maxContextTokens;
-    internal override  bool SuppressPromptLog          => true;
 
     internal void NotifyTyping(string threadKey) => GetThread(threadKey)?.ResetInactivityTimer();
 
     internal async Task<string> SendPrompt(
-        string               threadKey,
-        string               prompt,
-        string               username,
-        string?              platformContext     = null,
-        string?              recallBlock         = null,
-        string?              contextSummary      = null,
-        CancellationToken    ct                  = default,
-        bool                 userMessagePreadded = false,
-        Func<string, Task>?  onDelta             = null)
+        string              threadKey,
+        string              prompt,
+        string              username,
+        string?             platformContext    = null,
+        string?             recallBlock        = null,
+        string?             contextSummary     = null,
+        CancellationToken   ct                 = default,
+        bool                userMessagePreadded = false,
+        Func<string, Task>? onDelta            = null)
     {
-        const string divider = "-------------------";
+        const string DIVIDER = "-------------------";
         StringBuilder sb = new();
 
-        // recallBlock is non-null when the Memory agent ran:
-        //   non-empty = notes found, empty string = agent ran but found nothing → inject "none".
         if (recallBlock is not null)
         {
             if (recallBlock.Length > 0)
@@ -54,15 +50,14 @@ internal class Dialogue : Agent
             {
                 sb.AppendLine("[ARI's Memories] No stored memories were found for this topic. Do not invent or guess information — say you don't have that information.");
             }
-            sb.AppendLine(divider);
+            sb.AppendLine(DIVIDER);
         }
-
 
         if (!string.IsNullOrWhiteSpace(contextSummary))
         {
             sb.AppendLine("[Context]");
             sb.AppendLine(contextSummary.Trim());
-            sb.AppendLine(divider);
+            sb.AppendLine(DIVIDER);
         }
 
         string? augmented = null;
@@ -75,26 +70,26 @@ internal class Dialogue : Agent
 
         return await Prompt(
             threadKey,
-            prompt:              prompt,
-            username:            username,
-            augmentedPrompt:     augmented,
-            platformContext:     platformContext,
-            recallNotes:         recallBlock,
-            contextSummary:      contextSummary,
-            ct:                  ct,
+            prompt:             prompt,
+            username:           username,
+            augmentedPrompt:    augmented,
+            platformContext:    platformContext,
+            recallNotes:        recallBlock,
+            contextSummary:     contextSummary,
+            ct:                 ct,
             userMessagePreadded: userMessagePreadded,
-            onDelta:             onDelta);
+            onDelta:            onDelta);
     }
 
     internal void LogCommand(string threadKey, string input, string response)
     {
-        if (threads.TryGetValue(threadKey, out Thread? t))
+        if (Threads.TryGetValue(threadKey, out Thread? t))
             t.AddItem(new CommandExchange { Input = input, Response = response, Timestamp = DateTime.Now });
     }
 
     internal void LogEngram(string threadKey, IReadOnlyList<NoteChange> changes)
     {
-        if (threads.TryGetValue(threadKey, out Thread? t))
+        if (Threads.TryGetValue(threadKey, out Thread? t))
             t.AddItem(new EngramEvent { Changes = changes, Timestamp = DateTime.Now });
     }
 

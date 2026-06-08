@@ -9,6 +9,12 @@ namespace ARI.LLM;
 
 internal class Memory : Agent
 {
+    private const int BASE_THINKING     = 100;
+    private const int PER_CANDIDATE     = 25;
+    private const int MAX_THINKING      = 1000;
+    private const int MIN_RECALL_LENGTH = 80;
+    private const int TRANSCRIPT_LIMIT  = 5;
+
     private readonly BrainService brain;
     private readonly int          fetchDepth;
     private readonly string       brainPublicUrl;
@@ -22,39 +28,101 @@ internal class Memory : Agent
         this.brainPublicUrl = brainPublicUrl;
     }
 
-    /// <summary>
-    /// Searches Brain for notes relevant to the current conversation and incoming prompt.
-    /// Runs up to <see cref="fetchDepth"/> recursive fetch steps, parallelising note retrieval
-    /// within each step. Returns null if nothing relevant is found, empty string if the agent
-    /// ran but found nothing (so the caller can inject "[ARI's Memories] none").
-    /// </summary>
+    private static readonly string[] MemoryKeywords =
+    [
+        "remember", "last time", "before", "yesterday", "you said", "we talked",
+        "earlier", "previously", "used to", "told me", "you mentioned", "we discussed"
+    ];
+
+    private static readonly string[] PersonalKeywords =
+    [
+        " my ", "my ", "who is", "who's", "who are", "what is", "what's",
+        "where is", "where's", "tell me about", "what do you know",
+        "about me", "who am i", "am i ", "do you know", "know about",
+        "what do i", "how do i", "what are my", "tell me"
+    ];
+
+    private static readonly HashSet<string> Stopwords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of",
+        "with", "by", "from", "up", "about", "into", "through", "is", "are", "was",
+        "were", "be", "been", "being", "have", "has", "had", "do", "does", "did",
+        "will", "would", "could", "should", "may", "might", "must", "can", "not",
+        "no", "nor", "so", "yet", "both", "either", "it", "its", "this", "that",
+        "these", "those", "what", "which", "who", "whom", "how", "when", "where",
+        "why", "all", "any", "each", "few", "more", "most", "other", "some", "such",
+        "than", "too", "very", "just", "i", "me", "my", "we", "our", "you", "your",
+        "he", "she", "his", "her", "they", "their", "them", "us", "if", "as", "then",
+        "also", "now", "here", "there", "out", "off", "over", "under", "again",
+        "once", "dont", "doesnt", "isnt", "wasnt", "cant", "wont", "ive", "im",
+        "like", "get", "got", "let", "know", "think", "want", "need", "going",
+        "said", "say", "see", "look", "come", "go", "make", "take", "hey", "ari",
+        "okay", "yes", "yep", "nope", "sure", "right", "yeah", "oh", "ok", "hi",
+        "hello", "please", "tell", "ask", "can", "could", "would", "really", "actually",
+        "maybe", "well", "bit", "lot", "one", "two", "three", "new", "old", "good",
+        "bad", "big", "little", "something", "anything", "nothing", "everything",
+        "someone", "anyone", "everyone", "thing", "things", "much", "many", "long",
+        "time", "day", "days", "way", "use", "used", "using", "put", "set", "try"
+    };
+
     internal async Task<string?> GetNotes(List<ThreadMessage> chatHistory, string incomingPrompt, string? contextSummary = null, CancellationToken ct = default)
     {
         if (fetchDepth <= 0) return null;
 
         string threadKey = $"memory:{Guid.NewGuid()}";
 
-        if (ShouldSkip(incomingPrompt))
+        // Skip for short messages with no question or memory/personal signal.
+        if (incomingPrompt.Length < MIN_RECALL_LENGTH && !incomingPrompt.Contains('?'))
         {
-            Common.Logger.LogInformation("[Memory] skipped");
-            return string.Empty;
+            bool hasSignal = MemoryKeywords.Any(kw => incomingPrompt.Contains(kw, StringComparison.OrdinalIgnoreCase))
+                          || PersonalKeywords.Any(kw => incomingPrompt.Contains(kw, StringComparison.OrdinalIgnoreCase));
+            if (!hasSignal)
+            {
+                Common.Logger.LogInformation("[Memory] skipped");
+                return string.Empty;
+            }
         }
 
-        string transcript = BuildTranscript(chatHistory);
+        // Build transcript from last N messages.
+        StringBuilder transcriptBuilder = new();
+        foreach (ThreadMessage msg in chatHistory.TakeLast(TRANSCRIPT_LIMIT))
+            transcriptBuilder.AppendLine($"{msg.Username}: {msg.Content}");
+        string transcript = transcriptBuilder.ToString();
 
-        // ── Layer 1: tokenise transcript + context summary → parallel FTS → 1-hop expansion ──
-        // Only tokenise the incoming prompt + context summary — not the full transcript.
-        // The transcript includes ARI's own previous responses which contain nouns that create
-        // noisy seeds (e.g. ARI mentions "MacBook" in a response → "MacBook" becomes a search token).
-        HashSet<string> tokens     = Tokenize(incomingPrompt, contextSummary);
-        List<string>    seeds      = await SearchAll(tokens);
-        List<string>    candidates = await ExpandOneHop(seeds);
+        // Tokenise the incoming prompt + context summary (not full transcript — avoids noisy seeds from ARI's own words).
+        string combined = string.IsNullOrWhiteSpace(contextSummary)
+            ? incomingPrompt
+            : $"{incomingPrompt} {contextSummary}";
+        HashSet<string> tokens = Regex.Split(combined, @"[^a-zA-Z0-9']+")
+            .Select(t => t.Trim('\''))
+            .Where(t => t.Length >= 3 && !Stopwords.Contains(t))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        // Split candidates into direct token matches (fetch immediately, no LLM) and indirect ones.
-        // A direct match means the user explicitly named this note — no inference needed.
-        HashSet<string> tokenLower   = tokens.Select(t => t.ToLowerInvariant()).ToHashSet();
-        List<string>    directFetch  = candidates.Where(c => tokenLower.Contains(c.ToLowerInvariant())).ToList();
-        List<string>    indirect     = candidates.Except(directFetch, StringComparer.OrdinalIgnoreCase).ToList();
+        // Parallel FTS per token → union of matching note titles.
+        List<string> seeds = new();
+        if (tokens.Count > 0)
+        {
+            List<string>[] searchResults = await Task.WhenAll(tokens.Select(t => brain.SearchNote(t)));
+            HashSet<string> seedSet = new(StringComparer.OrdinalIgnoreCase);
+            foreach (List<string> batch in searchResults)
+                foreach (string title in batch)
+                    seedSet.Add(title);
+            seeds = seedSet.ToList();
+        }
+
+        // One-hop expansion: add every note [[linked]] from each seed.
+        HashSet<string> candidates = new(seeds, StringComparer.OrdinalIgnoreCase);
+        if (seeds.Count > 0)
+        {
+            List<string>[] linkResults = await Task.WhenAll(seeds.Select(t => brain.GetNoteLinks(t)));
+            foreach (List<string> links in linkResults)
+                foreach (string link in links)
+                    candidates.Add(link);
+        }
+
+        HashSet<string> tokenLower  = tokens.Select(t => t.ToLowerInvariant()).ToHashSet();
+        List<string>    directFetch = candidates.Where(c => tokenLower.Contains(c.ToLowerInvariant())).ToList();
+        List<string>    indirect    = candidates.Except(directFetch, StringComparer.OrdinalIgnoreCase).ToList();
 
         Common.Logger.LogInformation("[Memory] tokens [{Tokens}] → {Seeds} seed(s) → {Direct} direct + {Indirect} indirect candidate(s)",
             string.Join(", ", tokens), seeds.Count, directFetch.Count, indirect.Count);
@@ -65,13 +133,10 @@ internal class Memory : Agent
             return string.Empty;
         }
 
-        string candidateList = indirect.Count > 0 ? string.Join(", ", indirect) : string.Empty;
-
-        // ── Layer 2: LLM-driven fetch on indirect candidates only ────────────────
         HashSet<string>                                       fetched      = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<string, (string Content, string? NoteId)> noteContents = new(StringComparer.OrdinalIgnoreCase);
 
-        // Pre-fetch all direct token matches without consulting the LLM.
+        // Pre-fetch direct token matches without consulting the LLM.
         if (directFetch.Count > 0)
         {
             IEnumerable<Task<(string name, string? content, string? noteId)>> directTasks = directFetch.Select(async name =>
@@ -89,6 +154,8 @@ internal class Memory : Agent
             Common.Logger.LogInformation("[Memory] Direct fetch: {Notes}", string.Join(", ", fetched.Select(n => $"[{n}]")));
         }
 
+        string candidateList = indirect.Count > 0 ? string.Join(", ", indirect) : string.Empty;
+
         string firstPrompt =
             "You are recalling memories for a conversation. " +
             "Fetch every note whose person, place, or topic is directly mentioned in the conversation.\n\n" +
@@ -101,14 +168,10 @@ internal class Memory : Agent
         double totalSeconds = 0;
         int    roundNumber  = 1;
 
-        const int BASE_THINKING    = 100;
-        const int PER_CANDIDATE    = 25;
-        const int MAX_THINKING     = 1000;
         int thinkingBudget = Math.Min(BASE_THINKING + indirect.Count * PER_CANDIDATE, MAX_THINKING);
 
         Stopwatch totalTimer = Stopwatch.StartNew();
 
-        // Only run the LLM if there are indirect candidates to reason over.
         string raw = indirect.Count > 0
             ? await Prompt(threadKey, firstPrompt, ct: ct, thinkingBudgetOverride: thinkingBudget)
             : "{\"fetch\": []}";
@@ -168,9 +231,8 @@ internal class Memory : Agent
 
         if (noteContents.Count == 0)
         {
-            double avgTokPerSec = totalSeconds > 0 ? totalTokens / totalSeconds : 0;
             Common.Logger.LogInformation("[Memory] complete {Seconds}s, {Tokens} tokens, {TokPerSec} t/s — no memories recalled",
-                totalTimer.Elapsed.TotalSeconds.ToString("F1"), totalTokens, avgTokPerSec.ToString("F1"));
+                totalTimer.Elapsed.TotalSeconds.ToString("F1"), totalTokens, totalTokPerSec.ToString("F1"));
             return string.Empty;
         }
 
@@ -189,119 +251,6 @@ internal class Memory : Agent
         Common.Logger.LogInformation("[Memory] complete {Seconds}s, {Tokens} tokens, {TokPerSec} t/s",
             totalTimer.Elapsed.TotalSeconds.ToString("F1"), totalTokens, totalTokPerSec.ToString("F1"));
         return result.ToString().TrimEnd();
-    }
-
-    // ── Private ──────────────────────────────────────────────────────────────────
-
-    private static readonly string[] MemoryKeywords =
-    [
-        "remember", "last time", "before", "yesterday", "you said", "we talked",
-        "earlier", "previously", "used to", "told me", "you mentioned", "we discussed"
-    ];
-
-    private static readonly string[] PersonalKeywords =
-    [
-        " my ", "my ", "who is", "who's", "who are", "what is", "what's",
-        "where is", "where's", "tell me about", "what do you know",
-        "about me", "who am i", "am i ", "do you know", "know about",
-        "what do i", "how do i", "what are my", "tell me"
-    ];
-
-    private static readonly HashSet<string> Stopwords = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of",
-        "with", "by", "from", "up", "about", "into", "through", "is", "are", "was",
-        "were", "be", "been", "being", "have", "has", "had", "do", "does", "did",
-        "will", "would", "could", "should", "may", "might", "must", "can", "not",
-        "no", "nor", "so", "yet", "both", "either", "it", "its", "this", "that",
-        "these", "those", "what", "which", "who", "whom", "how", "when", "where",
-        "why", "all", "any", "each", "few", "more", "most", "other", "some", "such",
-        "than", "too", "very", "just", "i", "me", "my", "we", "our", "you", "your",
-        "he", "she", "his", "her", "they", "their", "them", "us", "if", "as", "then",
-        "also", "now", "here", "there", "out", "off", "over", "under", "again",
-        "once", "dont", "doesnt", "isnt", "wasnt", "cant", "wont", "ive", "im",
-        "like", "get", "got", "let", "know", "think", "want", "need", "going",
-        "said", "say", "see", "look", "come", "go", "make", "take", "hey", "ari",
-        "okay", "yes", "yep", "nope", "sure", "right", "yeah", "oh", "ok", "hi",
-        "hello", "please", "tell", "ask", "can", "could", "would", "really", "actually",
-        "maybe", "well", "bit", "lot", "one", "two", "three", "new", "old", "good",
-        "bad", "big", "little", "something", "anything", "nothing", "everything",
-        "someone", "anyone", "everyone", "thing", "things", "much", "many", "long",
-        "time", "day", "days", "way", "use", "used", "using", "put", "set", "try"
-    };
-
-    /// <summary>
-    /// Returns true if the memory lookup can safely be skipped.
-    /// Short messages with no question mark and no memory/personal signal are skipped.
-    /// </summary>
-    private static bool ShouldSkip(string message)
-    {
-        if (message.Length >= 80) return false;
-        if (message.Contains('?')) return false;
-
-        foreach (string kw in MemoryKeywords)
-            if (message.Contains(kw, StringComparison.OrdinalIgnoreCase)) return false;
-
-        foreach (string kw in PersonalKeywords)
-            if (message.Contains(kw, StringComparison.OrdinalIgnoreCase)) return false;
-
-        return true;
-    }
-
-    /// <summary>
-    /// Splits text into significant tokens — no stopwords, min 3 chars.
-    /// Includes both the transcript and the context summary so pronouns
-    /// resolved in the summary ("boyfriend Carlos") produce searchable tokens.
-    /// </summary>
-    private static HashSet<string> Tokenize(string transcript, string? contextSummary)
-    {
-        string combined = string.IsNullOrWhiteSpace(contextSummary)
-            ? transcript
-            : transcript + " " + contextSummary;
-
-        return Regex.Split(combined, @"[^a-zA-Z0-9']+")
-            .Select(t => t.Trim('\''))
-            .Where(t => t.Length >= 3 && !Stopwords.Contains(t))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-    }
-
-    /// <summary>Fires one Trilium FTS call per token in parallel; returns the union of all matching note titles.</summary>
-    private async Task<List<string>> SearchAll(HashSet<string> tokens)
-    {
-        if (tokens.Count == 0) return [];
-
-        List<string>[] results = await Task.WhenAll(tokens.Select(t => brain.SearchNote(t)));
-
-        HashSet<string> seeds = new(StringComparer.OrdinalIgnoreCase);
-        foreach (List<string> batch in results)
-            foreach (string title in batch)
-                seeds.Add(title);
-
-        return [.. seeds];
-    }
-
-    /// <summary>Adds every note linked via [[Name]] from each seed — one hop, all in parallel.</summary>
-    private async Task<List<string>> ExpandOneHop(List<string> seeds)
-    {
-        if (seeds.Count == 0) return [];
-
-        HashSet<string> all = new(seeds, StringComparer.OrdinalIgnoreCase);
-
-        List<string>[] linkResults = await Task.WhenAll(seeds.Select(t => brain.GetNoteLinks(t)));
-        foreach (List<string> links in linkResults)
-            foreach (string link in links)
-                all.Add(link);
-
-        return [.. all];
-    }
-
-    private static string BuildTranscript(List<ThreadMessage> chatHistory)
-    {
-        const int MESSAGE_LIMIT = 5;
-        StringBuilder sb = new();
-        foreach (ThreadMessage msg in chatHistory.TakeLast(MESSAGE_LIMIT))
-            sb.AppendLine($"{msg.Username}: {msg.Content}");
-        return sb.ToString();
     }
 
     private void LogRound(string threadKey, int round, ref int totalTokens, ref double totalSeconds, List<string>? recalled)

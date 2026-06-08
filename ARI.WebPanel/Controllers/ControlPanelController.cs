@@ -69,7 +69,7 @@ public class ControlPanelApiController(LlmServiceHolder holder, WebPanelConfig c
     {
         long bytes = systemInfo.GetTotalRamBytes();
 
-        var liveCalls = Llm?.GetAllLiveCalls().Select(c => new
+        var liveCalls = Llm?.LiveCalls().Select(c => new
         {
             agentName             = c.AgentName,
             threadKey             = c.ThreadKey,
@@ -95,7 +95,7 @@ public class ControlPanelApiController(LlmServiceHolder holder, WebPanelConfig c
         List<object> callStats = new();
         if (Llm is not null)
         {
-            foreach (LlmService.LlmCallStat c in Llm.GetAllCallStats())
+            foreach (LlmService.LlmCallStat c in Llm.CallStats())
             {
                 // Emit Vision row before the agent row when image tokens were spent
                 if (c.HadImageAttachments && c.EstimatedImageTokens > 0)
@@ -145,18 +145,22 @@ public class ControlPanelApiController(LlmServiceHolder holder, WebPanelConfig c
         List<object> contextStats = new();
         if (Llm is not null)
         {
-            foreach (string key in Llm.GetActiveThreadKeys())
+            Agent? dialogueAgent = Llm.Agents.GetValueOrDefault("Dialogue");
+            if (dialogueAgent is not null)
             {
-                var (used, limit) = Llm.GetDialogueContextStats(key);
-                if (used <= 0) continue;
-                contextStats.Add(new
+                foreach (KeyValuePair<string, ARI.LLM.Thread> kvp in dialogueAgent.Threads)
                 {
-                    threadKey  = key,
-                    agentName  = "Dialogue",
-                    used,
-                    limit,
-                    pct = limit > 0 ? (int)(used * 100.0 / limit) : 0,
-                });
+                    (int used, int limit) = kvp.Value.GetContextStats();
+                    if (used <= 0) continue;
+                    contextStats.Add(new
+                    {
+                        threadKey = kvp.Key,
+                        agentName = "Dialogue",
+                        used,
+                        limit,
+                        pct = limit > 0 ? (int)(used * 100.0 / limit) : 0,
+                    });
+                }
             }
         }
 
@@ -199,6 +203,7 @@ public class VoiceController(
 {
     private readonly ILogger logger = loggerFactory.CreateLogger("ARI.WebPanel");
     private static readonly string StagingRoot = Path.Combine(Path.GetTempPath(), "ari-voice-staging");
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> chunkCounters = new();
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> assembleLocks = new();
 
     [HttpPost("stage")]
@@ -230,18 +235,18 @@ public class VoiceController(
         string safeName  = Path.GetFileName(name);
         string chunkPath = Path.Combine(stageDir, $"{safeName}.part{chunk}");
 
+        // Write chunk fully before incrementing the counter — guarantees file is closed when count is read
         await using (System.IO.FileStream fs = System.IO.File.Create(chunkPath))
             await Request.Body.CopyToAsync(fs);
 
-        logger.LogInformation("[Voice] Chunk {Chunk}/{Total} written for {Name}", chunk + 1, totalChunks, safeName);
+        string counterKey    = $"{stageId}:{safeName}";
+        int    completedCount = chunkCounters.AddOrUpdate(counterKey, 1, (_, existing) => existing + 1);
+        logger.LogInformation("[Voice] Chunk {Chunk}/{Total} written for {Name} ({Done} done)", chunk + 1, totalChunks, safeName, completedCount);
 
-        // Assemble when all chunks are present — use a per-stage lock to prevent double-assembly
-        bool allPresent = Enumerable.Range(0, totalChunks)
-            .All(i => System.IO.File.Exists(Path.Combine(stageDir, $"{safeName}.part{i}")));
-
-        if (allPresent)
+        // Only assemble once all chunks are fully written — atomic counter guarantees no partial files
+        if (completedCount == totalChunks)
         {
-            string assembleKey = $"{stageId}:{safeName}";
+            string assembleKey = $"{stageId}:{safeName}:assemble";
             SemaphoreSlim gate = assembleLocks.GetOrAdd(assembleKey, _ => new SemaphoreSlim(1, 1));
             await gate.WaitAsync();
             try
@@ -260,6 +265,7 @@ public class VoiceController(
                     }
                     for (int i = 0; i < totalChunks; i++)
                         System.IO.File.Delete(Path.Combine(stageDir, $"{safeName}.part{i}"));
+                    chunkCounters.TryRemove(counterKey, out _);
                     logger.LogInformation("[Voice] Assembled {Name} ({Chunks} chunks) → {Dir}", safeName, totalChunks, stageDir);
                 }
             }
@@ -294,13 +300,13 @@ public class VoiceController(
         try
         {
             F5Trainer trainer = new(
-                f5Path:    config.F5Path,
-                voicesPath: config.VoicesPath,
-                audioPath:  req.StagingPath,
-                modelName:  req.ModelName,
-                epochs:     req.Epochs,
-                batchSize:  req.BatchSize,
-                logger:     logger);
+                f5Path:          config.F5Path,
+                voicesPath:      config.VoicesPath,
+                audioPath:       req.StagingPath,
+                modelName:       req.ModelName,
+                epochs:          req.Epochs,
+                saveEveryNEpochs: req.SaveEveryNEpochs,
+                logger:          logger);
 
             job = voiceHolder.Start(trainer, req.ModelName, lifetime.ApplicationStopping);
         }
@@ -430,5 +436,5 @@ public class VoiceController(
 public record TrainRequest(
     string ModelName,
     string StagingPath,
-    int    Epochs    = 100,
-    int    BatchSize = 2);
+    int    Epochs          = 100,
+    int    SaveEveryNEpochs = 10);

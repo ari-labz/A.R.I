@@ -2,52 +2,42 @@ using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
-/// <summary>
-/// Central handler for all ARI slash commands.
-/// Both Discord and the web panel pass input here — this is the single source of truth for command logic.
-/// </summary>
 internal class CommandService
 {
-    private readonly Engram?   engram;
-    private readonly Refactor? refactor;
-    private readonly Func<Task<int>>?           purgeNotes;
-    private readonly Func<Task<string>>?        backupBrain;
-    private readonly Func<Task<List<string>>>?  getDirtyNotes;
+    private readonly Engram?                         engram;
+    private readonly Refactor?                       refactor;
+    private readonly Func<Task<int>>?                purgeNotes;
+    private readonly Func<Task<string>>?             backupBrain;
+    private readonly Func<Task<List<string>>>?       getDirtyNotes;
 
     internal CommandService(Engram? engram, Refactor? refactor = null, Func<Task<int>>? purgeNotes = null, Func<Task<string>>? backupBrain = null, Func<Task<List<string>>>? getDirtyNotes = null)
     {
-        this.engram         = engram;
-        this.refactor       = refactor;
-        this.purgeNotes     = purgeNotes;
-        this.backupBrain    = backupBrain;
-        this.getDirtyNotes  = getDirtyNotes;
+        this.engram        = engram;
+        this.refactor      = refactor;
+        this.purgeNotes    = purgeNotes;
+        this.backupBrain   = backupBrain;
+        this.getDirtyNotes = getDirtyNotes;
     }
 
-    /// <summary>
-    /// Parses and executes a slash command.
-    /// Returns a human-readable result string, or null if the input is not a recognised command.
-    /// </summary>
     internal async Task<string?> Handle(string input)
     {
         if (string.IsNullOrWhiteSpace(input) || !input.StartsWith('/'))
             return null;
 
-        string[] parts  = input.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        string command   = parts[0].ToLowerInvariant();
-        string sub       = parts.Length > 1 ? parts[1].ToLowerInvariant() : string.Empty;
+        string[] parts = input.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        string command  = parts[0].ToLowerInvariant();
+        string sub      = parts.Length > 1 ? parts[1].ToLowerInvariant() : string.Empty;
 
         return command switch
         {
             "/engram"        => await HandleEngram(sub),
             "/refactor"      => await HandleRefactor(sub),
-            "/purge"         => sub == "notes" ? await HandlePurgeNotes() : null,
-            "/brain"         => sub == "backup" ? await HandleBrainBackup() : null,
-            "/getdirtynotes" => await HandleGetDirtyNotes(),
+            "/purge"         => sub == "notes" ? await HandlePurge() : null,
+            "/brain"         => sub == "backup" ? await HandleBackup() : null,
+            "/getdirtynotes" => await HandleDirtyNotes(),
             _                => null
         };
     }
-
-    // ── /engram ───────────────────────────────────────────────────────────────────
 
     private async Task<string> HandleEngram(string sub)
     {
@@ -55,36 +45,34 @@ internal class CommandService
 
         return sub switch
         {
-            "on"     => EngramEnable(),
-            "off"    => EngramDisable(),
-            "sweep"  => await EngramSweep(),
-            "status" => EngramStatus(),
+            "on"     => Enable(),
+            "off"    => Disable(),
+            "sweep"  => await Sweep(),
+            "status" => Status(),
             _        => "Unknown engram command. Options: `/engram on`, `/engram off`, `/engram sweep`, `/engram status`"
         };
     }
 
-    private string EngramEnable()
+    private string Enable()
     {
         engram!.Enable();
         return "Engram enabled.";
     }
 
-    private string EngramDisable()
+    private string Disable()
     {
         engram!.Disable();
         return "Engram disabled.";
     }
 
-    private async Task<string> EngramSweep()
+    private async Task<string> Sweep()
     {
-        await engram!.ManualSweep();
+        await engram!.Sweep();
         return engram.IsEnabled ? "Engram sweep complete." : "Engram is disabled — sweep skipped.";
     }
 
-    private string EngramStatus()
+    private string Status()
         => engram!.IsEnabled ? "Engram is currently **enabled**." : "Engram is currently **disabled**.";
-
-    // ── /refactor ─────────────────────────────────────────────────────────────────
 
     private async Task<string> HandleRefactor(string sub)
     {
@@ -94,9 +82,7 @@ internal class CommandService
         return await refactor.Run(allNotes);
     }
 
-    // ── /purge notes ──────────────────────────────────────────────────────────────
-
-    private async Task<string> HandlePurgeNotes()
+    private async Task<string> HandlePurge()
     {
         if (purgeNotes is null) return "Brain is not available.";
         Common.Logger.LogInformation("[Commands] Brain purge requested.");
@@ -104,18 +90,14 @@ internal class CommandService
         return $"Purged {deleted} note(s) from the brain.";
     }
 
-    // ── /brain backup ─────────────────────────────────────────────────────────────
-
-    private async Task<string> HandleBrainBackup()
+    private async Task<string> HandleBackup()
     {
         if (backupBrain is null) return "Brain is not available.";
         Common.Logger.LogInformation("[Commands] Brain backup requested.");
         return await backupBrain();
     }
 
-    // ── /getdirtynotes ────────────────────────────────────────────────────────────
-
-    private async Task<string> HandleGetDirtyNotes()
+    private async Task<string> HandleDirtyNotes()
     {
         if (getDirtyNotes is null) return "Brain is not available.";
         List<string> dirty = await getDirtyNotes();

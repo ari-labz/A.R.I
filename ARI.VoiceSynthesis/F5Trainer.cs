@@ -11,9 +11,9 @@ public class F5Trainer(
     string   voicesPath,
     string   audioPath,
     string   modelName,
-    int      epochs    = 100,
-    int      batchSize = 2,
-    ILogger? logger    = null)
+    int      epochs          = 100,
+    int      saveEveryNEpochs = 10,
+    ILogger? logger          = null)
 {
     private const string VENV_PYTHON  = "venv/bin/python";
     private const string VENV_WHISPER = "venv/bin/whisper";
@@ -49,7 +49,8 @@ public class F5Trainer(
         progress?.Report(new TrainingProgress("Training", 30, $"Fine-tuning F5-TTS for {epochs} epochs"));
         await FineTune(outputDir, progress, ct);
 
-        string checkpoint = FindCheckpoint(outputDir);
+        progress?.Report(new TrainingProgress("Saving", 98, "Copying checkpoint to Voices folder"));
+        string checkpoint = await CopyCheckpoint(outputDir, ct);
         progress?.Report(new TrainingProgress("Complete", 100, $"Model saved to {checkpoint}"));
         return checkpoint;
     }
@@ -97,7 +98,7 @@ public class F5Trainer(
     {
         string python     = Path.Combine(f5Path, VENV_PYTHON);
         string scriptPath = Path.Combine(Path.GetTempPath(), "ari_train.py");
-        await File.WriteAllTextAsync(scriptPath, BuildTrainScript(modelName, epochs, batchSize), ct);
+        await File.WriteAllTextAsync(scriptPath, BuildTrainScript(modelName, epochs, saveEveryNEpochs), ct);
 
         ProcessStartInfo info = new()
         {
@@ -198,12 +199,29 @@ public class F5Trainer(
         return stdout;
     }
 
-    private static string FindCheckpoint(string outputDir)
+    private async Task<string> CopyCheckpoint(string outputDir, CancellationToken ct)
     {
-        string[] checkpoints = Directory.GetFiles(outputDir, "*.pt", SearchOption.AllDirectories);
-        if (checkpoints.Length == 0)
-            throw new FileNotFoundException($"No checkpoint found in {outputDir}");
-        return checkpoints.OrderByDescending(File.GetLastWriteTime).First();
+        string python     = Path.Combine(f5Path, VENV_PYTHON);
+        string scriptPath = Path.Combine(Path.GetTempPath(), "ari_find_ckpt.py");
+        await File.WriteAllTextAsync(scriptPath,
+            "from importlib.resources import files\n" +
+            $"print(str(files('f5_tts').joinpath('../../ckpts/{modelName}')))\n", ct);
+
+        string ckptsDir = (await RunPythonWithOutput(python, scriptPath, ct)).Trim();
+
+        string[] candidates = Directory.Exists(ckptsDir)
+            ? Directory.GetFiles(ckptsDir, "*.pt", SearchOption.AllDirectories)
+            : Array.Empty<string>();
+
+        if (candidates.Length == 0)
+            throw new FileNotFoundException($"No checkpoint found in {ckptsDir} — training may not have completed a save interval");
+
+        string latest = candidates.OrderByDescending(File.GetLastWriteTime).First();
+        Directory.CreateDirectory(outputDir);
+        string dest = Path.Combine(outputDir, Path.GetFileName(latest));
+        File.Copy(latest, dest, overwrite: true);
+        logger?.LogInformation("[F5-Train] Checkpoint copied: {Src} → {Dest}", latest, dest);
+        return dest;
     }
 
     private static TrainingProgress? ParseProgress(string line, int totalEpochs)
@@ -257,20 +275,19 @@ public class F5Trainer(
             "print(dataset_path)\n";
     }
 
-    private static string BuildTrainScript(string modelName, int epochs, int batchSize)
+    private static string BuildTrainScript(string modelName, int epochs, int saveEveryNEpochs)
     {
-        int warmupUpdates = Math.Min(200, epochs * 2);
-        int saveEvery     = Math.Max(50, epochs / 5);
+        int warmupUpdates = Math.Min(50, epochs);
 
         return
-            "import sys\n" +
+            "import sys, math\n" +
             "import multiprocessing\n" +
             "import torch.utils.data\n" +
+            "from importlib.resources import files\n" +
+            "from f5_tts.model.dataset import load_dataset\n" +
             "\n" +
-            "# Force fork start method so DataLoader workers don't re-import this script\n" +
             "multiprocessing.set_start_method('fork', force=True)\n" +
             "\n" +
-            "# MPS does not support pin_memory or multi-process workers\n" +
             "_orig_init = torch.utils.data.DataLoader.__init__\n" +
             "def _patched_init(self, *args, **kwargs):\n" +
             "    kwargs['num_workers'] = 0\n" +
@@ -279,17 +296,24 @@ public class F5Trainer(
             "    _orig_init(self, *args, **kwargs)\n" +
             "torch.utils.data.DataLoader.__init__ = _patched_init\n" +
             "\n" +
+            "# Estimate updates per epoch to convert epoch-based save interval to update-based\n" +
+            $"dataset = load_dataset('{modelName}')\n" +
+            $"updates_per_epoch = max(1, math.ceil(len(dataset) / 2))\n" +
+            $"save_every = max(1, updates_per_epoch * {saveEveryNEpochs})\n" +
+            $"warmup = min({warmupUpdates}, updates_per_epoch)\n" +
+            "print(f'Dataset size: {{len(dataset)}} | updates/epoch: {{updates_per_epoch}} | save every: {{save_every}} updates')\n" +
+            "\n" +
             "from f5_tts.train.finetune_cli import main\n" +
             "sys.argv = [\n" +
             "    'finetune',\n" +
             "    '--exp_name', 'F5TTS_v1_Base',\n" +
             $"    '--dataset_name', '{modelName}',\n" +
             $"    '--epochs', '{epochs}',\n" +
-            $"    '--batch_size_per_gpu', '{batchSize}',\n" +
+            "    '--batch_size_per_gpu', '2',\n" +
             "    '--batch_size_type', 'sample',\n" +
-            $"    '--num_warmup_updates', '{warmupUpdates}',\n" +
-            $"    '--save_per_updates', '{saveEvery}',\n" +
-            $"    '--last_per_updates', '{saveEvery}',\n" +
+            "    '--num_warmup_updates', str(warmup),\n" +
+            "    '--save_per_updates', str(save_every),\n" +
+            "    '--last_per_updates', str(save_every),\n" +
             "    '--finetune',\n" +
             "]\n" +
             "\n" +

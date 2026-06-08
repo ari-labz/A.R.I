@@ -24,7 +24,7 @@ public class F5SetupService(string f5Path, ILogger? logger = null)
 
         string pip = Path.Combine(venv, "bin", "pip");
         logger?.LogInformation("Installing F5-TTS dependencies (this may take several minutes)...");
-        await Run(pip, $"install --upgrade {PACKAGES}");
+        await Run(pip, $"install -q --upgrade {PACKAGES}");
 
         logger?.LogInformation("F5-TTS environment ready.");
     }
@@ -46,16 +46,16 @@ public class F5SetupService(string f5Path, ILogger? logger = null)
         Task stdoutTask = StreamLines(process.StandardOutput, line =>
         {
             if (!string.IsNullOrWhiteSpace(line))
-                logger?.LogInformation("[pip] {Line}", line);
+                logger?.LogDebug("[pip] {Line}", line);
         });
 
         Task stderrTask = StreamLines(process.StandardError, line =>
         {
             if (string.IsNullOrWhiteSpace(line)) return;
             if (line.StartsWith("WARNING", StringComparison.OrdinalIgnoreCase))
-                logger?.LogWarning("[pip] {Line}", line);
+                logger?.LogDebug("[pip] {Line}", line);
             else
-                logger?.LogError("[pip] {Line}", line);
+                logger?.LogWarning("[pip] {Line}", line);
         });
 
         await Task.WhenAll(stdoutTask, stderrTask);

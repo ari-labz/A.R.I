@@ -73,28 +73,17 @@
             <!-- Settings -->
             <div class="vs-section">
                 <div class="vs-section-title">Training settings</div>
-                <div class="vs-form-grid">
+                <div class="vs-form-grid" style="grid-template-columns:1fr 1fr 1fr;">
                     <label class="vs-label">
                         Model name
                         <input type="text" id="vs-model-name" class="vs-input" placeholder="e.g. Voice" autocomplete="off" />
-                        <div id="vs-resume-row" style="display:none;align-items:center;gap:8px;margin-top:6px">
-                            <span style="font-size:11px;color:#b45309;font-weight:600">⚠ Existing checkpoints found</span>
-                            <label class="vs-toggle-label">
-                                <input type="checkbox" id="vs-start-fresh" />
-                                <span>Start fresh</span>
-                            </label>
-                        </div>
                     </label>
                     <label class="vs-label">
                         Epochs
                         <input type="number" id="vs-epochs" class="vs-input" value="100" min="1" max="1000" />
                     </label>
                     <label class="vs-label">
-                        Batch size
-                        <input type="number" id="vs-batch-size" class="vs-input" value="4" min="1" max="40" />
-                    </label>
-                    <label class="vs-label">
-                        Save frequency
+                        Save every N epochs
                         <input type="number" id="vs-save-freq" class="vs-input" value="10" min="1" max="100" />
                     </label>
                 </div>
@@ -923,10 +912,7 @@ const vsFileCount  = document.getElementById('vs-file-count');
 const vsClearBtn   = document.getElementById('vs-clear-files');
 const vsBrowseBtn  = document.getElementById('vs-browse-btn');
 const vsModelName  = document.getElementById('vs-model-name');
-const vsResumeRow  = document.getElementById('vs-resume-row');
-const vsStartFresh = document.getElementById('vs-start-fresh');
 const vsEpochs     = document.getElementById('vs-epochs');
-const vsBatchSize  = document.getElementById('vs-batch-size');
 const vsSaveFreq   = document.getElementById('vs-save-freq');
 const vsTrainBtn   = document.getElementById('vs-train-btn');
 const vsProgSec      = document.getElementById('vs-progress-section');
@@ -981,22 +967,6 @@ function vsStopTimer() {
     vsEtaLabel.textContent = 'ETA: done';
 }
 
-// ── Model name — check for existing checkpoints ───────────
-let vsExistsTimer = null;
-vsModelName.addEventListener('input', () => {
-    clearTimeout(vsExistsTimer);
-    vsResumeRow.style.display = 'none';
-    vsStartFresh.checked = false;
-    const name = vsModelName.value.trim();
-    if (!name) return;
-    vsExistsTimer = setTimeout(async () => {
-        try {
-            const r = await fetch(`/api/cp/voice/exists?modelName=${encodeURIComponent(name)}`);
-            const d = await r.json();
-            vsResumeRow.style.display = d.exists ? 'flex' : 'none';
-        } catch { /* ignore */ }
-    }, 400);
-});
 
 // ── File selection ────────────────────────────────────────
 function fmtBytes(b) { return b > 1048576 ? (b/1048576).toFixed(1)+' MB' : (b/1024).toFixed(0)+' KB'; }
@@ -1073,8 +1043,8 @@ vsTrainBtn.addEventListener('click', async () => {
         if (!stageResp.ok) throw new Error('Stage failed: ' + (await stageResp.text()));
         const { stageId, stagingPath } = await stageResp.json();
 
-        // 2 — Upload each file in 25 MB chunks (under Cloudflare's 100 MB limit), 4 at a time in parallel
-        const CHUNK       = 25 * 1024 * 1024; // 25 MB
+        // 2 — Upload each file in 5 MB chunks, 4 at a time in parallel
+        const CHUNK       = 5 * 1024 * 1024; // 5 MB
         const CONCURRENCY = 4;
         for (let fi = 0; fi < vsFiles.length; fi++) {
             const f           = vsFiles[fi];
@@ -1122,9 +1092,7 @@ vsTrainBtn.addEventListener('click', async () => {
                 modelName,
                 stagingPath,
                 epochs:        +vsEpochs.value,
-                batchSize:     +vsBatchSize.value,
-                saveFrequency: +vsSaveFreq.value,
-                startFresh:    vsStartFresh.checked,
+                saveEveryNEpochs: +vsSaveFreq.value,
             })
         });
         if (!trainResp.ok) throw new Error('Start failed: ' + (await trainResp.text()));

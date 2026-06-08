@@ -6,33 +6,39 @@ using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
-internal enum ThreadState { Active, Inactive, Dormant, Deleted }
+public enum ThreadState { Active, Inactive, Dormant, Deleted }
 
-internal class Thread
+public class Thread
 {
-    private const int MIN_INACTIVITY_TIMER     = 30;
-    private const int MIN_DELETION_TIMER       = 15;
-    private const int MIN_INACTIVITY_THRESHOLD = 1;
-    private const int MAX_TOOL_CALLS           = 10;
+    private const int     MIN_INACTIVITY_TIMER     = 30;
+    private const int     MIN_DELETION_TIMER       = 15;
+    private const int     MIN_INACTIVITY_THRESHOLD = 1;
+    private const int     MAX_TOOL_CALLS           = 10;
+    private const int     DEFAULT_MEMORY_LIMIT     = 25;
+    private const int     CHARS_PER_TOKEN          = 4;
+    private const double  TEMPERATURE              = 0.7;
+    private const double  TOP_P                    = 0.80;
+    private const int     TOP_K                    = 20;
+    private const double  REPEAT_PENALTY           = 1.0;
+    private const double  TOKEN_WARNING_RATIO      = 0.8;
+    private const string  ATTACHMENT_DIVIDER       = "-------------------";
 
     private readonly Agent      agent;
     private readonly string     threadKey;
     private readonly HttpClient httpClient;
 
-    internal readonly List<ThreadItem> History;
-    private readonly int shortTermMemoryLimit;
-    private readonly int maxContextTokens;
+    public readonly List<ThreadItem> History = new();
 
     private readonly Dictionary<string, (object Schema, Func<string, Task<string>> Execute)> tools = new();
 
     // ── Lifecycle ──────────────────────────────────────────────────────────────
-    private ThreadState             state           = ThreadState.Active;
+    public ThreadState              State           = ThreadState.Active;
     private readonly List<TimeSpan> responseSamples = new();
     private DateTime                ariRepliedAt    = DateTime.MinValue;
     private Timer?                  inactivityTimer;
     private Timer?                  dormantTimer;
 
-    internal ThreadState State => state;
+    public DateTime    LastMessageAt { get; private set; } = DateTime.MinValue;
 
     internal TimeSpan InactivityThreshold
     {
@@ -61,22 +67,15 @@ internal class Thread
     private readonly SemaphoreSlim sendLock         = new(1, 1);
     internal bool                  preserveOnCancel = false;
 
-    // Volatile so the control-panel polling thread always sees the latest value written
-    // by the streaming thread (critical on ARM / Apple Silicon where the memory model is weak).
-    private volatile LiveCallInfo? _liveCall;
-    internal LiveCallInfo? LiveCall => _liveCall;
+    private volatile LiveCallInfo? liveCallInfo;
+    public LiveCallInfo? LiveCall => liveCallInfo;
 
-    /// <summary>
-    /// Sets a preliminary LiveCall before the actual LLM call starts (e.g. during memory recall).
-    /// SendPromptCore will replace it with a fully-populated one once messages are built.
-    /// </summary>
-    /// <summary>Called by LlmService to inject a pre-created LiveCallInfo (already stored in its ConcurrentDictionary).</summary>
-    internal void SetLiveCall(LiveCallInfo liveCall) => _liveCall = liveCall;
+    internal void SetLiveCall(LiveCallInfo liveCall) => liveCallInfo = liveCall;
 
-    internal void SignalProcessingStarted()
+    internal void SignalProcessing()
     {
-        if (_liveCall is null)
-            _liveCall = new LiveCallInfo(agent.Name, threadKey, 0, agent.MaxTokens, maxContextTokens, agent.MaxImageTokens);
+        if (liveCallInfo is null)
+            liveCallInfo = new LiveCallInfo(agent.Name, threadKey, 0, agent.MaxTokens, agent.MaxContextTokens, agent.MaxImageTokens);
     }
 
     // ── Attachments ────────────────────────────────────────────────────────────
@@ -84,8 +83,6 @@ internal class Thread
     private readonly List<Attachment> pendingMessageAtts = new();
 
     internal string? PlatformContext { get; init; }
-
-    internal DateTime LastMessageAt { get; private set; } = DateTime.MinValue;
 
     internal event Action? Updated;
     internal event Action? BufferFull;
@@ -95,23 +92,20 @@ internal class Thread
 
     // ── Constructor ─────────────────────────────────────────────────────────────
 
-    internal Thread(Agent agent, string threadKey, string? platformContext = null, int shortTermMemoryLimit = 0, int maxContextTokens = 0)
+    internal Thread(Agent agent, string threadKey, string? platformContext = null)
     {
-        this.agent                = agent;
-        this.threadKey            = threadKey;
-        this.shortTermMemoryLimit = shortTermMemoryLimit;
-        this.maxContextTokens     = maxContextTokens;
-        httpClient                = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
-        History                   = new List<ThreadItem>();
-        PlatformContext           = platformContext;
+        this.agent      = agent;
+        this.threadKey  = threadKey;
+        httpClient      = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+        PlatformContext = platformContext;
     }
 
-    // ── Tool registration ───────────────────────────────────────────────────────
+    // ── Tools ───────────────────────────────────────────────────────────────────
 
     internal void RegisterTool(string name, object schema, Func<string, Task<string>> executor)
         => tools[name] = (schema, executor);
 
-    // ── Accessors ───────────────────────────────────────────────────────────────
+    // ── History ─────────────────────────────────────────────────────────────────
 
     internal List<ThreadMessage> GetChatHistory(int maxMessages = 0, int maxChars = 0)
     {
@@ -139,41 +133,40 @@ internal class Thread
         return result;
     }
 
-    internal List<ThreadMessage> SaveContext()
-        => GetChatHistory(shortTermMemoryLimit, maxContextTokens > 0 ? maxContextTokens * 2 : 0);
-
-    /// <summary>Returns (estimatedTokensInContext, tokenLimit). 0 limit means unconfigured.</summary>
-    internal (int Used, int Limit) GetContextStats()
+    internal List<ThreadMessage> ContextSnapshot()
     {
-        List<ThreadMessage> ctx = SaveContext();
-        int chars = ctx.Sum(m => (m.Username?.Length ?? 0) + 2 + (m.Content?.Length ?? 0));
-        int estimated = chars / 4;
-        return (estimated, maxContextTokens);
+        int maxChars = agent.MaxContextTokens > 0 ? agent.MaxContextTokens * 2 : 0;
+        return GetChatHistory(agent.MemoryLimit, maxChars);
     }
 
-    /// <summary>
-    /// Resets the inactivity countdown while the user is actively typing.
-    /// Only acts when the thread is Active; a thread already Inactive/Dormant is not touched.
-    /// </summary>
+    public (int Used, int Limit) GetContextStats()
+    {
+        List<ThreadMessage> ctx = ContextSnapshot();
+        int chars               = ctx.Sum(m => (m.Username?.Length ?? 0) + 2 + (m.Content?.Length ?? 0));
+        return (chars / CHARS_PER_TOKEN, agent.MaxContextTokens);
+    }
+
+    // ── Lifecycle ───────────────────────────────────────────────────────────────
+
     internal void ResetInactivityTimer()
     {
-        if (state != ThreadState.Active) return;
+        if (State != ThreadState.Active) return;
         inactivityTimer?.Dispose();
         inactivityTimer = new Timer(_ =>
         {
-            if (state != ThreadState.Active) return;
-            state = ThreadState.Inactive;
+            if (State != ThreadState.Active) return;
+            State = ThreadState.Inactive;
             BecameInactive?.Invoke();
         }, null, InactivityThreshold, Timeout.InfiniteTimeSpan);
     }
 
     internal void MarkEngramProcessed()
     {
-        state = ThreadState.Dormant;
+        State = ThreadState.Dormant;
         Common.Logger.LogInformation("[Thread] ({ThreadKey}) dormant — scheduled for deletion in {Minutes:F1} minutes.", threadKey, DormantDuration.TotalMinutes);
         dormantTimer = new Timer(_ =>
         {
-            state = ThreadState.Deleted;
+            State = ThreadState.Deleted;
             inactivityTimer?.Dispose();
             dormantTimer?.Dispose();
             Common.Logger.LogInformation("[Thread] ({ThreadKey}) deleted.", threadKey);
@@ -199,34 +192,34 @@ internal class Thread
         }
     }
 
-    // ── Attachment management ───────────────────────────────────────────────────
+    // ── Attachments ────────────────────────────────────────────────────────────
 
-    internal void AddAttachment(Attachment attachment)
+    public void AddAttachment(Attachment attachment)
     {
         lock (attachments) { attachments.RemoveAll(a => a.Name == attachment.Name); attachments.Add(attachment); }
     }
 
-    internal bool RemoveAttachment(string name)
+    public bool RemoveAttachment(string name)
     {
         lock (attachments) { return attachments.RemoveAll(a => a.Name == name) > 0; }
     }
 
-    internal IReadOnlyList<Attachment> GetAttachments()
+    public IReadOnlyList<Attachment> GetAttachments()
     {
         lock (attachments) { return attachments.ToList().AsReadOnly(); }
     }
 
-    internal void AddMessageAttachment(Attachment attachment)
+    public void AddMessageAttachment(Attachment attachment)
     {
         lock (pendingMessageAtts) { pendingMessageAtts.RemoveAll(a => a.Name == attachment.Name); pendingMessageAtts.Add(attachment); }
     }
 
-    internal bool RemoveMessageAttachment(string name)
+    public bool RemoveMessageAttachment(string name)
     {
         lock (pendingMessageAtts) { return pendingMessageAtts.RemoveAll(a => a.Name == name) > 0; }
     }
 
-    internal IReadOnlyList<Attachment> GetMessageAttachments()
+    public IReadOnlyList<Attachment> GetMessageAttachments()
     {
         lock (pendingMessageAtts) { return pendingMessageAtts.ToList().AsReadOnly(); }
     }
@@ -239,25 +232,25 @@ internal class Thread
     // ── SendPrompt ──────────────────────────────────────────────────────────────
 
     internal async Task<string> SendPrompt(
-        string               prompt,
-        string               username              = "user",
-        string?              augmentedPrompt       = null,
-        string?              recallNotes           = null,
-        string?              contextSummary        = null,
-        int                  maxTokensOverride     = 0,
-        CancellationToken    ct                    = default,
-        bool                 userMessagePreadded   = false,
-        Func<string, Task>?  onDelta               = null,
-        int                  thinkingBudgetOverride = 0)
+        string              prompt,
+        string              username               = "user",
+        string?             augmentedPrompt        = null,
+        string?             recallNotes            = null,
+        string?             contextSummary         = null,
+        int                 maxTokensOverride      = 0,
+        CancellationToken   ct                     = default,
+        bool                userMessagePreadded    = false,
+        Func<string, Task>? onDelta                = null,
+        int                 thinkingBudgetOverride = 0)
     {
         await sendLock.WaitAsync(ct);
         try
         {
-            return await SendPromptCore(prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded, onDelta, thinkingBudgetOverride);
+            return await Send(prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded, onDelta, thinkingBudgetOverride);
         }
         catch (OperationCanceledException)
         {
-            _liveCall = null;
+            liveCallInfo = null;
             if (!preserveOnCancel && History.Count > 0 && History[^1] is UserMessage)
                 History.RemoveAt(History.Count - 1);
             preserveOnCancel = false;
@@ -265,49 +258,56 @@ internal class Thread
         }
         finally
         {
-            _liveCall = null;
+            liveCallInfo = null;
             sendLock.Release();
         }
     }
 
-    private async Task<string> SendPromptCore(
-        string               prompt,
-        string               username,
-        string?              augmentedPrompt,
-        string?              recallNotes,
-        string?              contextSummary,
-        int                  maxTokensOverride,
-        CancellationToken    ct,
-        bool                 userMessagePreadded,
-        Func<string, Task>?  onDelta               = null,
-        int                  thinkingBudgetOverride = 0)
+    private async Task<string> Send(
+        string              prompt,
+        string              username,
+        string?             augmentedPrompt,
+        string?             recallNotes,
+        string?             contextSummary,
+        int                 maxTokensOverride,
+        CancellationToken   ct,
+        bool                userMessagePreadded,
+        Func<string, Task>? onDelta               = null,
+        int                 thinkingBudgetOverride = 0)
     {
         LastMessageAt = DateTime.UtcNow;
 
-        if (state != ThreadState.Active)
+        if (State != ThreadState.Active)
         {
             inactivityTimer?.Dispose();
             inactivityTimer = null;
             dormantTimer?.Dispose();
             dormantTimer = null;
-            state = ThreadState.Active;
+            State = ThreadState.Active;
         }
 
         if (ariRepliedAt != DateTime.MinValue)
         {
-            int windowSize = shortTermMemoryLimit > 0 ? shortTermMemoryLimit : 25;
+            int sampleWindow = agent.MemoryLimit > 0 ? agent.MemoryLimit : DEFAULT_MEMORY_LIMIT;
             responseSamples.Add(DateTime.UtcNow - ariRepliedAt);
-            if (responseSamples.Count > windowSize)
+            if (responseSamples.Count > sampleWindow)
                 responseSamples.RemoveAt(0);
             ariRepliedAt = DateTime.MinValue;
         }
 
         List<Attachment> threadAtts;
         List<Attachment> msgAtts;
-        lock (attachments)        { threadAtts = attachments.ToList(); }
-        lock (pendingMessageAtts) { msgAtts    = pendingMessageAtts.ToList(); }
+        lock (attachments) { threadAtts = attachments.ToList(); }
+        if (userMessagePreadded)
+        {
+            UserMessage? lastMsg = History.OfType<UserMessage>().LastOrDefault();
+            msgAtts = lastMsg?.Attachments?.ToList() ?? new();
+        }
+        else
+        {
+            lock (pendingMessageAtts) { msgAtts = pendingMessageAtts.ToList(); }
+        }
 
-        // ── Build message list ──────────────────────────────────────────────────
         if (!userMessagePreadded)
         {
             History.Add(new UserMessage
@@ -320,10 +320,11 @@ internal class Thread
             Updated?.Invoke();
         }
 
-        List<ThreadMessage> history = GetChatHistory(shortTermMemoryLimit, maxContextTokens > 0 ? maxContextTokens * 2 : 0);
+        int maxChars = agent.MaxContextTokens > 0 ? agent.MaxContextTokens * 2 : 0;
+        List<ThreadMessage> chatHistory = GetChatHistory(agent.MemoryLimit, maxChars);
 
         List<ThreadMessage> collapsed = new();
-        foreach (ThreadMessage m in history)
+        foreach (ThreadMessage m in chatHistory)
         {
             if (collapsed.Count > 0 && collapsed[^1].Role == m.Role)
                 collapsed[^1] = collapsed[^1] with { Content = collapsed[^1].Content + "\n" + m.Content };
@@ -334,7 +335,13 @@ internal class Thread
         if (augmentedPrompt is not null && collapsed.Count > 0)
             collapsed[^1] = collapsed[^1] with { Content = augmentedPrompt };
 
-        List<object> messages = new List<object> { new { role = "system", content = BuildSystemBlock() } };
+        string systemContent = PlatformContext is null
+            ? agent.SystemPrompt
+            : $"{agent.SystemPrompt}\n\n{PlatformContext}";
+        if (!agent.Think)
+            systemContent = $"{systemContent}\n<|think_off|>";
+
+        List<object> messages = new List<object> { new { role = "system", content = systemContent } };
 
         for (int i = 0; i < collapsed.Count - 1; i++)
         {
@@ -344,52 +351,93 @@ internal class Thread
 
         if (collapsed.Count > 0)
         {
-            ThreadMessage current = collapsed[^1];
-            messages.Add(BuildCurrentUserMessage($"{current.Username}: {current.Content}", threadAtts, msgAtts));
+            ThreadMessage current  = collapsed[^1];
+            string        promptText = $"{current.Username}: {current.Content}";
+
+            List<Attachment> threadImages = threadAtts.Where(a =>  a.IsImage).ToList();
+            List<Attachment> threadTexts  = threadAtts.Where(a => !a.IsImage).ToList();
+            List<Attachment> msgImages    = msgAtts.Where(a =>  a.IsImage).ToList();
+            List<Attachment> msgTexts     = msgAtts.Where(a => !a.IsImage).ToList();
+
+            bool hasThreadContent = threadImages.Count > 0 || threadTexts.Count > 0;
+            bool hasMsgContent    = msgImages.Count > 0    || msgTexts.Count > 0;
+
+            if (!hasThreadContent && !hasMsgContent)
+            {
+                messages.Add(new { role = "user", content = promptText });
+            }
+            else
+            {
+                List<object> contentParts = new();
+
+                if (hasThreadContent)
+                {
+                    StringBuilder sb = new();
+                    sb.AppendLine("[Files attached to this thread]");
+                    foreach (Attachment a in threadTexts)
+                    {
+                        sb.AppendLine($"--- {a.Name} ---");
+                        sb.AppendLine(a.Content);
+                        sb.AppendLine("---");
+                    }
+                    if (threadTexts.Count > 0) sb.AppendLine(ATTACHMENT_DIVIDER);
+                    contentParts.Add(new { type = "text", text = sb.ToString().TrimEnd() });
+
+                    foreach (Attachment a in threadImages)
+                        contentParts.Add(new { type = "image_url", image_url = new { url = $"data:{a.MimeType ?? "image/jpeg"};base64,{a.Content}" } });
+                }
+
+                if (hasMsgContent)
+                {
+                    StringBuilder sb = new();
+                    sb.AppendLine("[Files attached to this message]");
+                    foreach (Attachment a in msgTexts)
+                    {
+                        sb.AppendLine($"--- {a.Name} ---");
+                        sb.AppendLine(a.Content);
+                        sb.AppendLine("---");
+                    }
+                    if (msgTexts.Count > 0) sb.AppendLine(ATTACHMENT_DIVIDER);
+                    contentParts.Add(new { type = "text", text = sb.ToString().TrimEnd() });
+
+                    foreach (Attachment a in msgImages)
+                        contentParts.Add(new { type = "image_url", image_url = new { url = $"data:{a.MimeType ?? "image/jpeg"};base64,{a.Content}" } });
+                }
+
+                contentParts.Add(new { type = "text", text = promptText });
+                messages.Add(new { role = "user", content = (object)contentParts });
+            }
         }
 
         if (!agent.QuietLogging && !agent.SuppressPromptLog)
             Common.Logger.LogInformation("[{Agent}] ({Thread}) prompt\n\"{Prompt}\"", agent.Name, threadKey, prompt);
 
-        // ── Call LLM with tool loop ─────────────────────────────────────────────
         int             maxTokens        = maxTokensOverride != 0 ? maxTokensOverride : agent.MaxTokens;
         int             toolCallCount    = 0;
         List<string>    toolResults      = new();
         HashSet<string> calledKeys       = new(StringComparer.OrdinalIgnoreCase);
-        StringBuilder   contentBuilder   = new();
+        StringBuilder   responseBuilder  = new();
         Stopwatch       sw               = Stopwatch.StartNew();
         bool            wasThinking      = false;
         int             completionTokens = 0;
         int             promptTokens     = 0;
+        bool            hadImages        = msgAtts.Any(a => a.IsImage) || threadAtts.Any(a => a.IsImage);
 
-        bool hadImages = msgAtts.Any(a => a.IsImage) || threadAtts.Any(a => a.IsImage);
-
-        // Estimate text-only tokens from the messages already built (4 chars ≈ 1 token).
-        // Used to isolate image token cost: imageTokens ≈ promptTokens − estimatedTextTokens.
-        // Used to isolate image token cost: imageTokens ≈ promptTokens − estimatedTextTokens.
-        int estimatedTextPromptTokens = messages
-            .Sum(m =>
-            {
-                if (m is { } obj)
-                {
-                    // Anonymous object — content is a string for most messages
-                    string? content = obj.GetType().GetProperty("content")?.GetValue(obj) as string;
-                    return (content?.Length ?? 0) / 4;
-                }
-                return 0;
-            });
-
-        // Update the live call record in place so the LlmService's ConcurrentDictionary reference
-        // stays valid. If no external record was injected (e.g. internal agents), create one now.
-        if (_liveCall is { } existing)
+        int estimatedTextTokens = messages.Sum(m =>
         {
-            existing.EstimatedInputTokens = estimatedTextPromptTokens;
+            string? content = m.GetType().GetProperty("content")?.GetValue(m) as string;
+            return (content?.Length ?? 0) / CHARS_PER_TOKEN;
+        });
+
+        if (liveCallInfo is { } existing)
+        {
+            existing.EstimatedInputTokens = estimatedTextTokens;
             existing.OutputTokenLimit     = maxTokens;
             existing.HadImages            = hadImages;
         }
         else
         {
-            _liveCall = new LiveCallInfo(agent.Name, threadKey, estimatedTextPromptTokens, maxTokens, maxContextTokens, agent.MaxImageTokens, hadImages);
+            liveCallInfo = new LiveCallInfo(agent.Name, threadKey, estimatedTextTokens, maxTokens, agent.MaxContextTokens, agent.MaxImageTokens, hadImages);
         }
 
         while (true)
@@ -406,11 +454,12 @@ internal class Thread
                 ["stream"]         = true,
                 ["stream_options"] = new { include_usage = true },
                 ["max_tokens"]     = maxTokens,
-                ["temperature"]    = 0.7,
-                ["top_p"]          = 0.80,
-                ["top_k"]          = 20,
-                ["repeat_penalty"] = 1.0
+                ["temperature"]    = TEMPERATURE,
+                ["top_p"]          = TOP_P,
+                ["top_k"]          = TOP_K,
+                ["repeat_penalty"] = REPEAT_PENALTY
             };
+
             if (!agent.Think)
             {
                 body["thinking"]             = false;
@@ -423,10 +472,9 @@ internal class Thread
                 body["thinking_budget"]      = budget;
                 body["chat_template_kwargs"] = new { enable_thinking = true, thinking_budget = budget };
             }
-            if (toolSchemas is not null)
-                body["tools"] = toolSchemas;
-            if (agent.Slot.HasValue)
-                body["id_slot"] = agent.Slot.Value;
+
+            if (toolSchemas is not null) body["tools"]   = toolSchemas;
+            if (agent.Slot.HasValue)     body["id_slot"] = agent.Slot.Value;
 
             string             json    = JsonSerializer.Serialize(body);
             HttpRequestMessage request = new(HttpMethod.Post, $"{agent.Endpoint}/v1/chat/completions")
@@ -443,7 +491,7 @@ internal class Thread
 
             Dictionary<int, (string Id, string Name, StringBuilder Args)> pendingCalls = new();
             string? finishReason = null;
-            contentBuilder.Clear();
+            responseBuilder.Clear();
 
             string? line;
             while ((line = await reader.ReadLineAsync(ct)) is not null)
@@ -515,19 +563,18 @@ internal class Thread
                     string? deltaText = contentEl.GetString();
                     if (!string.IsNullOrEmpty(deltaText))
                     {
-                        contentBuilder.Append(deltaText);
-                        if (LiveCall is { } lc) lc.EstimatedOutputTokens = contentBuilder.Length / 4;
+                        responseBuilder.Append(deltaText);
+                        if (LiveCall is { } lc) lc.EstimatedOutputTokens = responseBuilder.Length / CHARS_PER_TOKEN;
                         if (onDelta is not null)
-                            await onDelta(contentBuilder.ToString());
+                            await onDelta(responseBuilder.ToString());
                     }
                 }
             }
 
-            // Fallback: model emitted tool calls as text instead of structured format
-            if (pendingCalls.Count == 0 && contentBuilder.Length > 0)
+            if (pendingCalls.Count == 0 && responseBuilder.Length > 0)
             {
                 MatchCollection textCalls = Regex.Matches(
-                    contentBuilder.ToString(),
+                    responseBuilder.ToString(),
                     @"<tool_call>\s*<function=(\w+)>(.*?)</function>\s*</tool_call>",
                     RegexOptions.Singleline | RegexOptions.IgnoreCase);
 
@@ -537,8 +584,8 @@ internal class Thread
                     int fakeIndex = 0;
                     foreach (Match m in textCalls)
                     {
-                        string name        = m.Groups[1].Value.Trim();
-                        string callBody    = m.Groups[2].Value;
+                        string        name        = m.Groups[1].Value.Trim();
+                        string        callBody    = m.Groups[2].Value;
                         StringBuilder argsBuilder = new();
                         argsBuilder.Append('{');
                         bool first = true;
@@ -552,15 +599,14 @@ internal class Thread
                         pendingCalls[fakeIndex++] = ($"fallback_{fakeIndex}", name, argsBuilder);
                     }
 
-                    contentBuilder.Clear();
+                    responseBuilder.Clear();
                     finishReason = "tool_calls";
                 }
             }
 
             if (pendingCalls.Count > 0 && finishReason == "tool_calls")
             {
-                // If content was streamed before tool calls were detected, reset the client bubble.
-                if (onDelta is not null && contentBuilder.Length > 0)
+                if (onDelta is not null && responseBuilder.Length > 0)
                     await onDelta(string.Empty);
 
                 toolCallCount += pendingCalls.Count;
@@ -587,18 +633,14 @@ internal class Thread
                     string result;
 
                     if (!isNew)
-                    {
                         result = "Already retrieved.";
-                    }
                     else if (tools.TryGetValue(call.Name, out (object Schema, Func<string, Task<string>> Execute) tool))
                     {
                         result = await tool.Execute(call.Args.ToString());
                         toolResults.Add(result);
                     }
                     else
-                    {
                         result = "Tool not found.";
-                    }
 
                     messages.Add(new { role = "tool", tool_call_id = call.Id, content = result });
                 }
@@ -610,7 +652,7 @@ internal class Thread
         }
 
         sw.Stop();
-        string responseText = contentBuilder.ToString();
+        string responseText = responseBuilder.ToString();
         if (responseText.StartsWith("ARI: ", StringComparison.OrdinalIgnoreCase))
             responseText = responseText["ARI: ".Length..];
         if (string.IsNullOrWhiteSpace(responseText))
@@ -624,37 +666,34 @@ internal class Thread
             Common.Logger.LogInformation("[{Agent}] ({Thread}) responded in {Seconds}s ({Tokens} tokens, {TokPerSec} t/s)",
                 agent.Name, threadKey, elapsed.ToString("F1"), completionTokens, tokPerSec.ToString("F1"));
 
-            int tokenLimit = maxTokens > 0 ? maxTokens : 0;
-            if (tokenLimit > 0 && completionTokens >= tokenLimit * 0.8)
+            if (maxTokens > 0 && completionTokens >= maxTokens * TOKEN_WARNING_RATIO)
                 Common.Logger.LogWarning("[{Agent}] ({Thread}) token usage at {Pct}% of limit ({Used}/{Max})",
-                    agent.Name, threadKey, (int)(completionTokens * 100.0 / tokenLimit), completionTokens, tokenLimit);
+                    agent.Name, threadKey, (int)(completionTokens * 100.0 / maxTokens), completionTokens, maxTokens);
 
             Common.Logger.LogInformation("[{Agent}] ({Thread}) response\n\"{Response}\"",
                 agent.Name, threadKey, responseText);
         }
 
-        // Merge Memory-agent notes (passed in) with any search_memories tool results collected
-        // during this response. Both use the same [Title|URL]\ncontent format.
         List<string> noteParts = new();
         if (!string.IsNullOrEmpty(recallNotes)) noteParts.Add(recallNotes.Trim());
         if (toolResults.Count > 0)              noteParts.Add(string.Join("\n\n", toolResults).TrimEnd());
-        string? combinedRecallNotes = noteParts.Count > 0 ? string.Join("\n\n", noteParts) : null;
+        string? combinedNotes = noteParts.Count > 0 ? string.Join("\n\n", noteParts) : null;
 
-        _liveCall = null;
+        liveCallInfo = null;
 
         History.Add(new AriResponse
         {
             Content                   = responseText,
             Timestamp                 = DateTime.Now,
             ThinkingSeconds           = elapsed,
-            RecallNotes               = combinedRecallNotes,
+            RecallNotes               = combinedNotes,
             ContextSummary            = contextSummary,
             CompletionTokens          = completionTokens,
             OutputTokenLimit          = maxTokens > 0 ? maxTokens : 0,
             PromptTokens              = promptTokens,
-            ContextTokenLimit         = maxContextTokens,
+            ContextTokenLimit         = agent.MaxContextTokens,
             HadImageAttachments       = hadImages,
-            EstimatedTextPromptTokens = estimatedTextPromptTokens,
+            EstimatedTextPromptTokens = estimatedTextTokens,
             ImageTokenLimit           = agent.MaxImageTokens,
         });
         Updated?.Invoke();
@@ -663,98 +702,20 @@ internal class Thread
         inactivityTimer?.Dispose();
         inactivityTimer = new Timer(_ =>
         {
-            if (state != ThreadState.Active) return;
-            state = ThreadState.Inactive;
+            if (State != ThreadState.Active) return;
+            State = ThreadState.Inactive;
             BecameInactive?.Invoke();
         }, null, InactivityThreshold, Timeout.InfiniteTimeSpan);
 
         ExchangeCompleted?.Invoke(prompt, responseText);
 
-        if (EngramDue())
-            BufferFull?.Invoke();
+        if (agent.MemoryLimit > 0 && History.Count >= agent.MemoryLimit)
+        {
+            int engramInterval = Math.Max(1, agent.MemoryLimit / 2);
+            if (History.Count == agent.MemoryLimit || History.Count % engramInterval == 0)
+                BufferFull?.Invoke();
+        }
 
         return responseText;
-    }
-
-    // ── Private helpers ─────────────────────────────────────────────────────────
-
-    private string BuildSystemBlock()
-    {
-        string body = PlatformContext is null ? agent.SystemPrompt : $"{agent.SystemPrompt}\n\n{PlatformContext}";
-        return agent.Think ? body : $"{body}\n<|think_off|>";
-    }
-
-    private static object BuildCurrentUserMessage(
-        string           promptText,
-        List<Attachment> threadAtts,
-        List<Attachment> msgAtts)
-    {
-        List<Attachment> threadImages = threadAtts.Where(a => a.IsImage).ToList();
-        List<Attachment> threadTexts  = threadAtts.Where(a => !a.IsImage).ToList();
-        List<Attachment> msgImages    = msgAtts.Where(a => a.IsImage).ToList();
-        List<Attachment> msgTexts     = msgAtts.Where(a => !a.IsImage).ToList();
-
-        bool hasThreadContent = threadImages.Count > 0 || threadTexts.Count > 0;
-        bool hasMsgContent    = msgImages.Count > 0 || msgTexts.Count > 0;
-
-        if (!hasThreadContent && !hasMsgContent)
-            return new { role = "user", content = promptText };
-
-        const string divider = "-------------------";
-        List<object> contentParts = new();
-
-        if (hasThreadContent)
-        {
-            StringBuilder sb = new();
-            sb.AppendLine("[Files attached to this thread]");
-            foreach (Attachment a in threadTexts)
-            {
-                sb.AppendLine($"--- {a.Name} ---");
-                sb.AppendLine(a.Content);
-                sb.AppendLine("---");
-            }
-            if (threadTexts.Count > 0) sb.AppendLine(divider);
-            contentParts.Add(new { type = "text", text = sb.ToString().TrimEnd() });
-
-            foreach (Attachment a in threadImages)
-            {
-                string dataUrl = $"data:{a.MimeType ?? "image/jpeg"};base64,{a.Content}";
-                contentParts.Add(new { type = "image_url", image_url = new { url = dataUrl } });
-            }
-        }
-
-        if (hasMsgContent)
-        {
-            StringBuilder sb = new();
-            sb.AppendLine("[Files attached to this message]");
-            foreach (Attachment a in msgTexts)
-            {
-                sb.AppendLine($"--- {a.Name} ---");
-                sb.AppendLine(a.Content);
-                sb.AppendLine("---");
-            }
-            if (msgTexts.Count > 0) sb.AppendLine(divider);
-            contentParts.Add(new { type = "text", text = sb.ToString().TrimEnd() });
-
-            foreach (Attachment a in msgImages)
-            {
-                string dataUrl = $"data:{a.MimeType ?? "image/jpeg"};base64,{a.Content}";
-                contentParts.Add(new { type = "image_url", image_url = new { url = dataUrl } });
-            }
-        }
-
-        contentParts.Add(new { type = "text", text = promptText });
-
-        return new { role = "user", content = (object)contentParts };
-    }
-
-    private bool EngramDue()
-    {
-        if (shortTermMemoryLimit <= 0) return false;
-        if (History.Count < shortTermMemoryLimit) return false;
-        if (History.Count == shortTermMemoryLimit) return true;
-
-        int interval = Math.Max(1, shortTermMemoryLimit / 2);
-        return History.Count % interval == 0;
     }
 }

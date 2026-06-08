@@ -9,32 +9,30 @@ namespace ARI.LLM;
 
 internal class Engram : Agent, IDisposable
 {
+    private const int ENGRAM_TRIGGER_DELAY = 5;
+
     private readonly Dialogue    dialogue;
     private readonly BrainService brain;
     private readonly Context?    context;
     private readonly string      brainPublicUrl;
     private readonly EngramBuffer buffer;
 
-    private readonly Dictionary<string, DateTime>  lastEngramRun          = new();
-    private readonly Dictionary<string, int>       lastEngramHistoryCount = new();
-    private readonly SemaphoreSlim                 engramLock             = new(1, 1);
-    private readonly ConcurrentDictionary<string, byte> sweepingThreads   = new(StringComparer.OrdinalIgnoreCase);
-    private readonly int                           fetchDepth;
-    private readonly HttpClient                    httpClient             = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+    private readonly Dictionary<string, DateTime>       lastRun          = new();
+    private readonly Dictionary<string, int>            lastHistoryCount = new();
+    private readonly SemaphoreSlim                      engramLock       = new(1, 1);
+    private readonly ConcurrentDictionary<string, byte> sweepingThreads  = new(StringComparer.OrdinalIgnoreCase);
+    private readonly int                                fetchDepth;
+    private readonly HttpClient                         httpClient       = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
 
     internal event Action<string>? SweepCompleted;
 
     internal bool IsSweeping(string threadKey) => sweepingThreads.ContainsKey(threadKey);
 
-    /// <summary>
-    /// Awaits until any in-progress sweep for <paramref name="threadKey"/> has finished.
-    /// Returns immediately if no sweep is running.
-    /// </summary>
-    internal async Task WaitForSweepAsync(string threadKey, CancellationToken ct)
+    internal async Task WaitForSweep(string threadKey, CancellationToken ct)
     {
         if (!IsSweeping(threadKey)) return;
 
-        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<bool> tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         Action<string>? handler = null;
         handler = key =>
         {
@@ -43,13 +41,11 @@ internal class Engram : Agent, IDisposable
             tcs.TrySetResult(true);
         };
         SweepCompleted += handler;
-        // Re-check after subscribing to close the race where the sweep finished between the first check and the subscribe.
         if (!IsSweeping(threadKey)) { SweepCompleted -= handler; return; }
 
         using CancellationTokenRegistration reg = ct.Register(() => { SweepCompleted -= handler; tcs.TrySetCanceled(ct); });
         await tcs.Task;
     }
-
 
     internal Engram(AgentConfig config, Dialogue dialogue, BrainService brain, Context? context, int fetchDepth = 7, string brainPublicUrl = "") : base(config)
     {
@@ -64,13 +60,13 @@ internal class Engram : Agent, IDisposable
         dialogue.ThreadBufferFull += threadKey =>
         {
             buffer.Remove(threadKey);
-            _ = Task.Delay(TimeSpan.FromSeconds(5)).ContinueWith(_ => RunEngram(threadKey, "chat buffer"));
+            _ = Task.Delay(TimeSpan.FromSeconds(ENGRAM_TRIGGER_DELAY)).ContinueWith(_ => RunEngram(threadKey, "chat buffer"));
         };
 
         dialogue.ThreadDeleted += threadKey =>
         {
-            lastEngramRun.Remove(threadKey);
-            lastEngramHistoryCount.Remove(threadKey);
+            lastRun.Remove(threadKey);
+            lastHistoryCount.Remove(threadKey);
             buffer.Remove(threadKey);
         };
     }
@@ -89,8 +85,7 @@ internal class Engram : Agent, IDisposable
         Common.Logger.LogInformation("[Engram] Disabled.");
     }
 
-    /// <summary>Force-drains the inactivity queue regardless of whether threads are active.</summary>
-    internal async Task ManualSweep()
+    internal async Task Sweep()
     {
         if (!IsEnabled)
         {
@@ -103,23 +98,10 @@ internal class Engram : Agent, IDisposable
 
     internal Task<int> PurgeNotes() => brain.PurgeAllNotes();
 
-
     public void Dispose()
     {
         engramLock.Dispose();
         httpClient.Dispose();
-    }
-
-    // ── Private ──────────────────────────────────────────────────────────────────
-
-    private IReadOnlyList<ThreadMessage> SaveContext(string threadKey)
-        => threads.TryGetValue(threadKey, out Thread? t) ? t.SaveContext() : Array.Empty<ThreadMessage>();
-
-    private Task<string> PromptWithContext(IReadOnlyList<ThreadMessage> savedContext, string prompt, int maxTokensOverride = 0)
-    {
-        Thread thread = new Thread(this, $"adhoc:{Guid.NewGuid()}");
-        thread.Seed(savedContext);
-        return thread.SendPrompt(prompt, maxTokensOverride: maxTokensOverride);
     }
 
     internal async Task RunEngram(string threadKey, string trigger)
@@ -129,30 +111,26 @@ internal class Engram : Agent, IDisposable
         sweepingThreads[threadKey] = 0;
         try
         {
-            // Fetch thread items — only conversation items (UserMessage/AriResponse) are used.
-            List<ThreadItem> allItems          = dialogue.GetThread(threadKey)?.History ?? [];
+            List<ThreadItem> allItems = dialogue.GetThread(threadKey)?.History ?? new List<ThreadItem>();
             List<ThreadItem> conversationItems = allItems.Where(i => i is UserMessage or AriResponse).ToList();
 
-            // Slice to items since the last Engram run on this thread.
-            int lastCount = lastEngramHistoryCount.TryGetValue(threadKey, out int c) ? c : 0;
+            int lastCount = lastHistoryCount.TryGetValue(threadKey, out int c) ? c : 0;
             List<ThreadItem> recentItems = conversationItems.Skip(lastCount).ToList();
 
-            lastEngramRun[threadKey]          = DateTime.UtcNow;
-            lastEngramHistoryCount[threadKey] = conversationItems.Count;
+            lastRun[threadKey]          = DateTime.UtcNow;
+            lastHistoryCount[threadKey] = conversationItems.Count;
 
             Common.Logger.LogInformation("[Engram] [{ThreadKey}] sweep triggered (trigger: {Trigger})", threadKey, trigger);
 
             // --- Phase 1: Classify ---
             Common.Logger.LogInformation("[Engram] [{ThreadKey}] phase 1 — classifying conversation...", threadKey);
-            if (!await ClassifyConversation(recentItems, trigger)) return;
+            if (!await Classify(recentItems, trigger)) return;
 
             // --- Phase 2: Fetch ---
-            // Use full paths so the model can see the graph structure (category, ownership, depth)
-            // without needing to fetch notes first. Fetch requests still use bare titles.
-            List<string> existingNotes = await brain.GetNotePaths();
-            string existingNotesList   = existingNotes.Count > 0 ? string.Join(", ", existingNotes) : "none";
-            string transcript          = BuildTranscript(conversationItems);
-            string engramThreadKey     = $"engram:{Guid.NewGuid()}";
+            List<string> existingNotes  = await brain.GetNotePaths();
+            string existingNotesList    = existingNotes.Count > 0 ? string.Join(", ", existingNotes) : "none";
+            string transcript           = BuildTranscript(conversationItems);
+            string engramThreadKey      = $"engram:{Guid.NewGuid()}";
 
             if (context is not null)
                 await context.RebuildFromTranscript(threadKey, transcript);
@@ -224,8 +202,6 @@ internal class Engram : Agent, IDisposable
                     threadKey, alreadyFetched.Count, string.Join(", ", alreadyFetched));
 
             // --- Phase 3: Plan ---
-            // Ask the model to declare every note it intends to create or edit,
-            // with a brief summary. This becomes the manifest for the per-note write loop.
             Common.Logger.LogInformation("[Engram] [{ThreadKey}] phase 3 — planning changes...", threadKey);
 
             string contextPreamble = string.IsNullOrWhiteSpace(contextSummary)
@@ -333,9 +309,10 @@ internal class Engram : Agent, IDisposable
                         ? $"{p.Name} ({p.Op})"
                         : $"{p.Name} → {p.NewName} ({p.Op})")));
 
-            // Snapshot context here — system prompt + conversation + fetched notes + planning exchange.
-            // Each per-note write call forks from this cache so context stays constant across the loop.
-            IReadOnlyList<ThreadMessage> savedContext = SaveContext(engramThreadKey);
+            // Snapshot the engram thread's context at this point so each per-note write forks from it.
+            IReadOnlyList<ThreadMessage> savedContext = Threads.TryGetValue(engramThreadKey, out Thread? engramThread)
+                ? engramThread.ContextSnapshot()
+                : Array.Empty<ThreadMessage>();
 
             // --- Phase 4: Write notes one at a time ---
             Common.Logger.LogInformation("[Engram] [{ThreadKey}] phase 4 — writing {Count} note(s)...", threadKey, plan.Count);
@@ -370,7 +347,11 @@ internal class Engram : Agent, IDisposable
                     "Paths may be as deep as the taxonomy requires — e.g. \"People/[REDACT]'s Family/Immediate Family/Grandparents/Geoffrey\".\n" +
                     "(Omit newName if the path is not changing. Raw JSON only — no fences, no explanation.)";
 
-                string writeRaw = await PromptWithContext(savedContext, writePrompt);
+                // Fork from the saved context snapshot so each write call starts with the same base.
+                Thread writeThread = new Thread(this, $"adhoc:{Guid.NewGuid()}");
+                writeThread.Seed(savedContext);
+                string writeRaw = await writeThread.SendPrompt(writePrompt, maxTokensOverride: -1);
+
                 (List<EngramAdd> noteAdds, List<EngramEdit> noteEdits) = ParseEngramOutput(writeRaw);
 
                 string plannedName = item.Name;
@@ -388,13 +369,11 @@ internal class Engram : Agent, IDisposable
                 if (noteAdds.Count  > 0) await brain.AddNotes(noteAdds);
                 if (noteEdits.Count > 0) await brain.EditNotes(noteEdits);
 
-                // Mark written notes dirty so Refactor knows what changed.
                 static string BareName(string path) => path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
                 IEnumerable<string> writtenTitles = noteAdds.Select(a => BareName(a.NoteName))
                     .Concat(noteEdits.Select(e => BareName(e.NewNoteName ?? e.NoteName)));
                 await brain.MarkDirty(writtenTitles);
 
-                // Queue note changes so the web panel can show a memory block.
                 foreach (EngramAdd add in noteAdds)
                 {
                     string  title  = BareName(add.NoteName);
@@ -436,7 +415,7 @@ internal class Engram : Agent, IDisposable
         }
     }
 
-    private async Task<bool> ClassifyConversation(IReadOnlyList<ThreadItem> recentItems, string trigger)
+    private async Task<bool> Classify(IReadOnlyList<ThreadItem> recentItems, string trigger)
     {
         string transcript = BuildTranscript(recentItems);
         if (string.IsNullOrWhiteSpace(transcript))
@@ -463,16 +442,15 @@ internal class Engram : Agent, IDisposable
             temperature = 0.0
         };
 
-        string json = JsonSerializer.Serialize(requestBody);
-        HttpRequestMessage request = new(HttpMethod.Post, $"{Endpoint}/v1/chat/completions")
-        {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
-        };
-
         try
         {
+            HttpRequestMessage request = new(HttpMethod.Post, $"{Endpoint}/v1/chat/completions")
+            {
+                Content = new StringContent(JsonSerializer.Serialize(requestBody), Encoding.UTF8, "application/json")
+            };
             HttpResponseMessage response = await httpClient.SendAsync(request);
             response.EnsureSuccessStatusCode();
+
             string responseJson = await response.Content.ReadAsStringAsync();
             using JsonDocument doc = JsonDocument.Parse(responseJson);
             string answer = doc.RootElement
@@ -488,7 +466,6 @@ internal class Engram : Agent, IDisposable
         }
         catch (Exception ex)
         {
-            // On failure, fall through to extraction rather than silently dropping memories.
             Common.Logger.LogWarning("[Engram] Classification failed ({Error}), proceeding with extraction.", ex.Message);
             return true;
         }
@@ -607,10 +584,12 @@ internal class Engram : Agent, IDisposable
 
 internal class EngramBuffer
 {
-    private readonly Dialogue        dialogue;
-    private readonly Engram          engram;
-    private readonly Queue<string>   queue            = new();
-    private readonly HashSet<string> queuedThreadKeys = new();
+    private const int DRAIN_QUEUE_LIMIT = 10;
+
+    private readonly Dialogue      dialogue;
+    private readonly Engram        engram;
+    private readonly Queue<string> queue            = new();
+    private readonly HashSet<string> queuedKeys     = new();
 
     internal EngramBuffer(Dialogue dialogue, Engram engram)
     {
@@ -619,18 +598,18 @@ internal class EngramBuffer
 
         dialogue.ThreadBecameInactive += threadKey =>
         {
-            if (queuedThreadKeys.Contains(threadKey)) return;
+            if (queuedKeys.Contains(threadKey)) return;
             queue.Enqueue(threadKey);
-            queuedThreadKeys.Add(threadKey);
+            queuedKeys.Add(threadKey);
 
-            if (queue.Count >= 10)
+            if (queue.Count >= DRAIN_QUEUE_LIMIT)
                 _ = Task.Run(Drain);
             else if (!dialogue.ThreadKeys.Any(k => dialogue.GetThread(k)?.State == ThreadState.Active))
                 _ = Task.Run(Drain);
         };
     }
 
-    internal void Remove(string threadKey) => queuedThreadKeys.Remove(threadKey);
+    internal void Remove(string threadKey) => queuedKeys.Remove(threadKey);
 
     internal async Task Drain()
     {
@@ -638,7 +617,7 @@ internal class EngramBuffer
         {
             if (queue.Count == 0) return;
             string threadKey = queue.Dequeue();
-            queuedThreadKeys.Remove(threadKey);
+            queuedKeys.Remove(threadKey);
 
             Thread? thread = dialogue.GetThread(threadKey);
             if (thread is null || thread.State == ThreadState.Active || thread.State == ThreadState.Deleted)
@@ -647,8 +626,6 @@ internal class EngramBuffer
             await engram.RunEngram(threadKey, "inactivity");
             dialogue.GetThread(threadKey)?.MarkEngramProcessed();
 
-            // A thread became active while we were processing — pause here.
-            // Drain will be re-triggered when that thread goes inactive.
             if (dialogue.ThreadKeys.Any(k => dialogue.GetThread(k)?.State == ThreadState.Active))
                 return;
         }

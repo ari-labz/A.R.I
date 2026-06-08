@@ -276,9 +276,10 @@ public class DiscordService : BackgroundService
         Common.Logger.LogInformation("DM from {Username} ({UserId}): {Content}",
             message.Author.Username, message.Author.Id, message.Content);
 
-        if (message.Attachments.Count > 0)
-            await UploadDiscordAttachments(conversationKey, message.Attachments);
-        await SendLlmReply(message, conversationKey, prompt);
+        List<LlmAttachment>? attachments = message.Attachments.Count > 0
+            ? await UploadDiscordAttachments(message.Attachments)
+            : null;
+        await SendLlmReply(message, conversationKey, prompt, attachments: attachments);
     }
 
     private async Task HandleServerMessage(SocketMessage message, SocketGuildChannel guildChannel)
@@ -312,13 +313,15 @@ public class DiscordService : BackgroundService
         Common.Logger.LogInformation("Server message from {Username} ({UserId}) in #{ChannelName}: {Content}",
             message.Author.Username, message.Author.Id, guildChannel.Name, message.Content);
 
-        if (message.Attachments.Count > 0)
-            await UploadDiscordAttachments(conversationKey, message.Attachments);
-        await SendLlmReply(message, conversationKey, prompt, ServerPlatformContext);
+        List<LlmAttachment>? attachments = message.Attachments.Count > 0
+            ? await UploadDiscordAttachments(message.Attachments)
+            : null;
+        await SendLlmReply(message, conversationKey, prompt, ServerPlatformContext, attachments);
     }
 
-    private async Task UploadDiscordAttachments(string conversationKey, IReadOnlyCollection<DiscordAttachment> attachments)
+    private async Task<List<LlmAttachment>> UploadDiscordAttachments(IReadOnlyCollection<DiscordAttachment> attachments)
     {
+        List<LlmAttachment> result = new();
         foreach (DiscordAttachment att in attachments)
         {
             string mime    = att.ContentType ?? "application/octet-stream";
@@ -331,25 +334,23 @@ public class DiscordService : BackgroundService
                 continue;
             }
 
-            byte[] bytes = await httpClient.GetByteArrayAsync(att.Url);
+            byte[] bytes   = await httpClient.GetByteArrayAsync(att.Url);
+            string content = isImage ? Convert.ToBase64String(bytes) : Encoding.UTF8.GetString(bytes);
 
-            string content = isImage
-                ? Convert.ToBase64String(bytes)
-                : Encoding.UTF8.GetString(bytes);
-
-            llmService.AddMessageAttachment(conversationKey, new LlmAttachment { Name = att.Filename, Content = content, IsImage = isImage, MimeType = mime });
-            Common.Logger.LogDebug("Queued Discord attachment: {Filename} ({Mime})", att.Filename, mime);
+            result.Add(new LlmAttachment { Name = att.Filename, Content = content, IsImage = isImage, MimeType = mime });
+            Common.Logger.LogDebug("Loaded Discord attachment: {Filename} ({Mime})", att.Filename, mime);
         }
+        return result;
     }
 
-    private async Task SendLlmReply(SocketMessage message, string conversationKey, string prompt, string? platformContext = null)
+    private async Task SendLlmReply(SocketMessage message, string conversationKey, string prompt, string? platformContext = null, List<LlmAttachment>? attachments = null)
     {
         using CancellationTokenSource typingCts = new();
         _ = KeepTyping(message.Channel, typingCts.Token);
 
         try
         {
-            string response = await llmService.Prompt(conversationKey, prompt, platformContext);
+            string response = await llmService.Prompt(conversationKey, prompt, platformContext, messageAttachments: attachments);
             typingCts.Cancel();
 
             if (response.Trim() == PassToken)

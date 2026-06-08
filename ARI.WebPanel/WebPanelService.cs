@@ -18,6 +18,11 @@ public class WebPanelConfig
     public string GoogleClientId { get; init; } = "";
     public string GoogleClientSecret { get; init; } = "";
     public string AllowedEmail { get; init; } = "";
+    public IReadOnlyList<string> AllowedEmails { get; init; } = Array.Empty<string>();
+
+    /// <summary>Returns the effective allowlist — AllowedEmails if populated, otherwise the single AllowedEmail.</summary>
+    internal IReadOnlyList<string> EffectiveAllowedEmails =>
+        AllowedEmails.Count > 0 ? AllowedEmails : (AllowedEmail.Length > 0 ? new[] { AllowedEmail } : Array.Empty<string>());
     public string LogPath    { get; init; } = "";
     public string F5Path     { get; init; } = "";
     public string VoicesPath { get; init; } = "";
@@ -99,7 +104,7 @@ public class WebPanelService : IAsyncDisposable
             options.Events.OnTicketReceived = ctx =>
             {
                 string? email = ctx.Principal?.FindFirstValue(ClaimTypes.Email);
-                if (!string.Equals(email, config.AllowedEmail, StringComparison.OrdinalIgnoreCase))
+                if (!config.EffectiveAllowedEmails.Any(e => string.Equals(email, e, StringComparison.OrdinalIgnoreCase)))
                 {
                     ctx.Fail($"Access denied.");
                     ctx.HandleResponse();
@@ -153,7 +158,7 @@ public class WebPanelService : IAsyncDisposable
             {
                 // Double-check the signed-in email matches — reject if not
                 string? email = ctx.User.FindFirstValue(ClaimTypes.Email);
-                if (!string.Equals(email, config.AllowedEmail, StringComparison.OrdinalIgnoreCase))
+                if (!config.EffectiveAllowedEmails.Any(e => string.Equals(email, e, StringComparison.OrdinalIgnoreCase)))
                 {
                     await ctx.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
                     ctx.Response.Redirect("/auth/login?error=unauthorized");
