@@ -52,10 +52,8 @@ public class ModulesConfig
 
 public class VoiceSynthesisConfig
 {
-    public string RvcPath        { get; init; } = "";
-    public string VoicesPath     { get; init; } = "";
-    public string PiperModelPath { get; init; } = "";
-    public int    Port           { get; init; } = 7860;
+    public string F5Path    { get; init; } = "";
+    public string VoicesPath { get; init; } = "";
 }
 
 public class WebPanelConfig

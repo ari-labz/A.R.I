@@ -5,9 +5,8 @@
     "VoiceSynthesis": true
   },
   "VoiceSynthesis": {
-    "RvcPath": "../../../../External/RVC",
-    "VoicesPath": "../../../../Voices",
-    "Port": 7865
+    "F5Path": "../../../../External/F5TTS",
+    "VoicesPath": "../../../../Voices"
   },
   "WebPanel": {
     "Port": 5074,
