@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -84,6 +85,13 @@ public class ApiService : IAsyncDisposable
         {
             k.Limits.MaxRequestBodySize = 512L * 1024 * 1024; // 512 MB for voice training uploads
         });
+
+        // Persist data protection keys so auth cookies survive restarts and rebuilds
+        string keysDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "keys");
+        Directory.CreateDirectory(keysDir);
+        builder.Services.AddDataProtection()
+            .PersistKeysToFileSystem(new System.IO.DirectoryInfo(keysDir))
+            .SetApplicationName("ARI");
 
         builder.Services.AddSingleton(holder);
         builder.Services.AddSingleton(config);
