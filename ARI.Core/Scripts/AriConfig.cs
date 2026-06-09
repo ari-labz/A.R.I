@@ -50,6 +50,7 @@ public class ModulesConfig
     public bool WebPanel { get; init; }
     public bool VoiceSynthesis { get; init; }
     public bool Voice { get; init; }
+    public bool Client { get; init; } = true;
 }
 
 public class VoiceConfig

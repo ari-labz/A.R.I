@@ -407,6 +407,31 @@ public class LlmService : IDisposable
 
     public void NotifyTyping(string threadKey) => dialogue?.NotifyTyping(threadKey);
 
+    /// <summary>Returns the Code thread for a given key, creating it if needed, for tool registration.</summary>
+    public Thread GetOrCreateCodeThread(string threadKey)
+        => code?.GetOrCreateThread(threadKey) ?? throw new InvalidOperationException("Code agent not loaded");
+
+    /// <summary>Sends a prompt directly through the Code pipeline, bypassing classification.
+    /// Used by the desktop client which always needs code-aware responses.</summary>
+    public Task<string> PromptCodeStreaming(
+        string              threadKey,
+        string              prompt,
+        string              username,
+        string?             platformContext,
+        Func<string, Task>  onDelta,
+        CancellationToken   ct = default)
+    {
+        if (code is null) throw new InvalidOperationException("Code agent not loaded");
+        CancellationTokenSource cts = ct.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+            : new CancellationTokenSource();
+        processingThreads[threadKey] = cts;
+        return CodePipeline(threadKey, prompt, username, platformContext, onDelta, cts);
+    }
+
+    public (int used, int limit) GetContextStats(string threadKey)
+        => dialogue?.GetThread(threadKey)?.GetContextStats() ?? (0, 0);
+
     public void Cancel(string threadKey)
     {
         if (processingThreads.TryGetValue(threadKey, out CancellationTokenSource? cts))

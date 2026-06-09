@@ -28,7 +28,8 @@ public class SpeechQueue : IDisposable
     {
         cts.Cancel();
         queue.Writer.Complete();
-        worker.Wait();
+        try { worker.Wait(); }
+        catch (AggregateException ex) when (ex.InnerExceptions.All(e => e is OperationCanceledException)) { }
         cts.Dispose();
     }
 

@@ -1,0 +1,28 @@
+{
+  "name": "ari-app",
+  "version": "0.1.0",
+  "description": "ARI Desktop Client",
+  "private": true,
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev":   "NODE_ENV=development electron .",
+    "build": "electron-builder"
+  },
+  "dependencies": {
+    "electron-store": "^8.1.0"
+  },
+  "devDependencies": {
+    "electron":         "^31.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId":       "ai.ari.app",
+    "productName": "ARI",
+    "directories": { "output": "dist" },
+    "files": ["src/**/*", "ui/**/*"],
+    "mac":   { "target": "dmg" },
+    "win":   { "target": "nsis" },
+    "linux": { "target": "AppImage" }
+  }
+}
