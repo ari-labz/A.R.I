@@ -141,9 +141,10 @@ public class AriHostService : BackgroundService
                 await synthesiser.Warmup(stoppingToken);
 
                 speechQueue = new SpeechQueue(synthesiser, voiceLogger);
-                speechQueue.AudioReady += wav => PlayAudio(wav, voiceLogger);
+                string pythonPath = Path.Combine(f5Path, "venv", "bin", "python");
+                speechQueue.AudioReady += wav => PlayAudio(wav, pythonPath, voiceLogger);
 
-                webPanelService?.SpeechHolder.Set(speechQueue, modelName);
+                webPanelService?.SpeechHolder.Set(synthesiser, speechQueue, modelName);
                 Common.Logger.LogInformation("Voice ready.");
             }
         }
@@ -173,33 +174,37 @@ public class AriHostService : BackgroundService
         return wavs.Length > 0 ? wavs.OrderBy(f => f).First() : "";
     }
 
-    private static void PlayAudio(byte[] wav, ILogger logger)
+    private static void PlayAudio(byte[] wav, string python, ILogger logger)
     {
         string tmp = Path.Combine(Path.GetTempPath(), $"ari_speech_{Guid.NewGuid():N}.wav");
         File.WriteAllBytes(tmp, wav);
-        logger.LogDebug("[Voice] Playing {Bytes} bytes", wav.Length);
+
+        string script =
+            "import sys, sounddevice as sd, soundfile as sf\n" +
+            $"data, sr = sf.read(r'{tmp}')\n" +
+            "sd.play(data, sr, blocking=True)\n" +
+            $"import os; os.remove(r'{tmp}')\n";
+
+        string scriptPath = Path.Combine(Path.GetTempPath(), $"ari_play_{Guid.NewGuid():N}.py");
+        File.WriteAllText(scriptPath, script);
 
         System.Diagnostics.Process? proc = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
         {
-            FileName               = "afplay",
-            Arguments              = $"\"{tmp}\"",
-            UseShellExecute        = false,
-            RedirectStandardError  = true,
+            FileName              = python,
+            Arguments             = $"\"{scriptPath}\"",
+            UseShellExecute       = false,
+            RedirectStandardError = true,
         });
 
-        if (proc == null)
-        {
-            logger.LogError("[Voice] Failed to start afplay");
-            return;
-        }
+        if (proc == null) { logger.LogError("[Voice] Failed to start audio playback"); return; }
 
         _ = Task.Run(async () =>
         {
             string stderr = await proc.StandardError.ReadToEndAsync();
             await proc.WaitForExitAsync();
             if (proc.ExitCode != 0)
-                logger.LogError("[Voice] afplay failed (exit {Code}): {Error}", proc.ExitCode, stderr);
-            File.Delete(tmp);
+                logger.LogError("[Voice] Playback failed: {Error}", stderr);
+            try { File.Delete(scriptPath); } catch { }
         });
     }
 

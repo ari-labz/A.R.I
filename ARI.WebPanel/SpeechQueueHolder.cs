@@ -4,15 +4,23 @@ namespace ARI.WebPanel;
 
 public class SpeechQueueHolder
 {
-    private SpeechQueue? queue;
+    private F5Synthesiser? synthesiser;
+    private SpeechQueue?   queue;
 
-    public bool   IsReady     => queue != null;
+    public bool   IsReady     => synthesiser != null;
     public string ActiveModel { get; private set; } = "";
 
-    public void Set(SpeechQueue speechQueue, string modelName)
+    public void Set(F5Synthesiser f5, SpeechQueue speechQueue, string modelName)
     {
+        synthesiser = f5;
         queue       = speechQueue;
         ActiveModel = modelName;
+    }
+
+    public Task<byte[]> Synthesise(string text, CancellationToken ct = default)
+    {
+        if (synthesiser == null) throw new InvalidOperationException("Voice module is not running.");
+        return synthesiser.Speak(text, ct);
     }
 
     public void Speak(string text) => queue?.Enqueue(text);
