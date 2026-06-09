@@ -7,6 +7,7 @@ interface Props {
     isTyping:    boolean
     typingLabel: string
     isStreaming: boolean
+
     activeThread: string | null
     isInternal:  boolean
     agentName:   string | null
@@ -22,17 +23,11 @@ function formatTime(ts: string) {
     return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
 }
 
-// Renders markdown — or plain text during streaming to avoid garbled partial markdown
-function MdBubble({ content, className, plain }: { content: string; className: string; plain?: boolean }) {
+function MdBubble({ content, className }: { content: string; className: string }) {
     const ref = useRef<HTMLDivElement>(null)
     useEffect(() => {
-        if (!ref.current) return
-        if (plain) {
-            ref.current.textContent = content
-        } else {
-            setBubbleMd(ref.current, content)
-        }
-    }, [content, plain])
+        if (ref.current) setBubbleMd(ref.current, content)
+    }, [content])
     return <div ref={ref} className={className} />
 }
 
@@ -72,7 +67,7 @@ function UserMessage({ item, activeThread }: { item: ThreadItem; activeThread: s
     )
 }
 
-function AriResponse({ item, isInternal, agentName, plain }: { item: ThreadItem; isInternal: boolean; agentName: string | null; plain?: boolean }) {
+function AriResponse({ item, isInternal, agentName, isStreaming }: { item: ThreadItem; isInternal: boolean; agentName: string | null; isStreaming?: boolean }) {
     const t = formatTime(item.timestamp)
     const senderLabel = isInternal ? (agentName ?? "Agent") : "A·R·I"
 
@@ -99,9 +94,9 @@ function AriResponse({ item, isInternal, agentName, plain }: { item: ThreadItem;
     return (
         <div className="msg-row assistant">
             <div className="sender">{senderLabel}</div>
-            <MdBubble content={item.content} className="bubble" plain={plain} />
+            <MdBubble content={item.content} className="bubble" />
             {thoughtEl}
-            <div className="msg-time">{t}</div>
+            {!isStreaming && <div className="msg-time">{t}</div>}
         </div>
     )
 }
@@ -176,12 +171,11 @@ export default function Messages({ items, isTyping, typingLabel, isStreaming, ac
     return (
         <div id="messages">
             {items.map((item, i) => {
-                const isLastItem = i === items.length - 1
             switch (item.type) {
                     case "userMessage":
                         return <UserMessage key={i} item={item} activeThread={activeThread} />
                     case "ariResponse":
-                        return <AriResponse key={i} item={item} isInternal={isInternal} agentName={agentName} plain={isStreaming && isLastItem} />
+                        return <AriResponse key={i} item={item} isInternal={isInternal} agentName={agentName} isStreaming={isStreaming && i === items.length - 1} />
                     case "commandExchange":
                         return <CommandExchange key={i} item={item} />
                     case "engramEvent":
@@ -193,7 +187,7 @@ export default function Messages({ items, isTyping, typingLabel, isStreaming, ac
 
             {isTyping && (
                 <div className="msg-row assistant" id="typing-indicator">
-                    <div className="sender">A·R·I</div>
+                    {!isStreaming && <div className="sender">A·R·I</div>}
                     <div className="typing-indicator">
                         <span>{typingLabel}</span>
                         <div className="typing-dots"><b /><b /><b /></div>

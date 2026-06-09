@@ -7,6 +7,17 @@ export interface ThreadEntry {
     isCodeMode:   boolean
     state:        string
     lastMessageAt: string
+    projectName?: string | null
+    projectId?:   string | null
+}
+
+export interface Project {
+    id:                string
+    name:              string
+    description:       string
+    instructions:      string
+    localPath:         string | null
+    forceCodePipeline: boolean
 }
 
 export function useThreads() {
@@ -55,8 +66,12 @@ export interface Attachment {
     content:  string | null
 }
 
-export async function createThread(): Promise<string> {
-    const res = await fetch("/api/threads", { method: "POST" })
+export async function createThread(projectId?: string | null): Promise<string> {
+    const res = await fetch("/api/threads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: projectId ?? null }),
+    })
     const { key } = await res.json()
     return key
 }

@@ -20,6 +20,7 @@ public class LlmService : IDisposable
     private readonly ConcurrentDictionary<string, LiveCallInfo>                                  liveCalls         = new();
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<Guid, Channel<bool?>>>   threadWatchers    = new();
     private readonly Dictionary<string, Agent>                                                   agentMap          = new();
+    private readonly HashSet<string>                                                              forcedCodeThreads = new();
 
     /// <summary>All active agents, keyed by name. Navigate here to access threads and their data.</summary>
     public IReadOnlyDictionary<string, Agent> Agents => agentMap;
@@ -105,13 +106,23 @@ public class LlmService : IDisposable
 
     // ── Prompting ───────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Pre-marks a thread to run through the Code pipeline, bypassing the classifier.
+    /// Call before the first PromptStreaming for project threads with ForceCodePipeline enabled.
+    /// </summary>
+    public void ForceCodeThread(string threadKey)
+    {
+        forcedCodeThreads.Add(threadKey);
+        code?.GetOrCreateThread(threadKey);
+    }
+
     public Task<string> Prompt(string threadKey, string prompt, string username, string? platformContext = null, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null)
         => Route(threadKey, prompt, username, platformContext, null, CancellationToken.None, messageAttachments, threadAttachments);
 
-    public Task<string> PromptStreaming(string threadKey, string prompt, string username, string? platformContext, Func<string, Task> onDelta, CancellationToken ct = default, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null)
-        => Route(threadKey, prompt, username, platformContext, onDelta, ct, messageAttachments, threadAttachments);
+    public Task<string> PromptStreaming(string threadKey, string prompt, string username, string? platformContext, Func<string, Task> onDelta, CancellationToken ct = default, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null, string? localPath = null)
+        => Route(threadKey, prompt, username, platformContext, onDelta, ct, messageAttachments, threadAttachments, localPath);
 
-    private async Task<string> Route(string threadKey, string prompt, string username, string? platformContext, Func<string, Task>? onDelta, CancellationToken externalCt, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null)
+    private async Task<string> Route(string threadKey, string prompt, string username, string? platformContext, Func<string, Task>? onDelta, CancellationToken externalCt, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null, string? localPath = null)
     {
         if (dialogue is null)
             throw new ModelNotFoundException("Dialogue model is not loaded or is not enabled.");
@@ -139,8 +150,16 @@ public class LlmService : IDisposable
         // new or empty thread (may exist for attachment staging) needs classifying
         if (!hasMessages)
         {
-            agent = await classifier.Classify(prompt, cts.Token);
-            Common.Logger.LogInformation($"[Classifier] ({threadKey}) → {agent}");
+            if (forcedCodeThreads.Contains(threadKey))
+            {
+                agent = "Code";
+                Common.Logger.LogInformation($"[Classifier] ({threadKey}) → Code (forced by project)");
+            }
+            else
+            {
+                agent = await classifier.Classify(prompt, cts.Token);
+                Common.Logger.LogInformation($"[Classifier] ({threadKey}) → {agent}");
+            }
 
             // Pre-create the thread on the correct agent so watchers receive isCodeMode
             // before the LLM starts responding — this triggers the animation immediately.
@@ -151,7 +170,7 @@ public class LlmService : IDisposable
         switch (agent)
         {
             case "Code":
-                return await CodePipeline(threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments);
+                return await CodePipeline(threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments, localPath);
             default:
                 return await DialoguePipeline(threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments);
         }
@@ -226,7 +245,7 @@ public class LlmService : IDisposable
         }
     }
 
-    private async Task<string> CodePipeline(string threadKey, string prompt, string username, string? platformContext, Func<string, Task>? onDelta, CancellationTokenSource cts, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null)
+    private async Task<string> CodePipeline(string threadKey, string prompt, string username, string? platformContext, Func<string, Task>? onDelta, CancellationTokenSource cts, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null, string? localPath = null)
     {
         if (code is null)
         {
@@ -237,6 +256,59 @@ public class LlmService : IDisposable
         Thread codeThread = code.GetOrCreateThread(threadKey);
         if (threadAttachments is { Count: > 0 })
             foreach (Attachment a in threadAttachments) codeThread.AddAttachment(a);
+
+        if (!string.IsNullOrWhiteSpace(localPath))
+        {
+            string resolvedRoot = Path.GetFullPath(localPath);
+            codeThread.RegisterTool(
+                "read_file",
+                new
+                {
+                    type     = "function",
+                    function = new
+                    {
+                        name        = "read_file",
+                        description = "Read the contents of a source file in the project. Use this when you need to examine a specific file before answering.",
+                        parameters  = new
+                        {
+                            type       = "object",
+                            properties = new { path = new { type = "string", description = "Path to the file relative to the project root" } },
+                            required   = new[] { "path" }
+                        }
+                    }
+                },
+                async args =>
+                {
+                    try
+                    {
+                        using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(args);
+                        string relPath = doc.RootElement.GetProperty("path").GetString() ?? string.Empty;
+                        string absPath = Path.GetFullPath(Path.Combine(resolvedRoot, relPath));
+                        if (!absPath.StartsWith(resolvedRoot, StringComparison.OrdinalIgnoreCase))
+                            return "Access denied: path traversal is not allowed.";
+                        if (!File.Exists(absPath))
+                            return $"File not found: {relPath}";
+                        string content = await File.ReadAllTextAsync(absPath, cts.Token);
+                        return $"[file: \"{relPath}\"]\n```\n{content}\n```";
+                    }
+                    catch (Exception ex)
+                    {
+                        return $"Error reading file: {ex.Message}";
+                    }
+                },
+                args =>
+                {
+                    try
+                    {
+                        using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(args);
+                        string relPath   = doc.RootElement.GetProperty("path").GetString() ?? string.Empty;
+                        string fileName  = Path.GetFileName(relPath);
+                        string safe      = fileName.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+                        return $"<div class=\"tool-use\">Reading {safe}</div>\n";
+                    }
+                    catch { return "<div class=\"tool-use\">Reading file</div>\n"; }
+                });
+        }
 
         LiveCallInfo liveCall = new("Code", threadKey, 0, code.MaxTokens, code.MaxContextTokens, 0);
         liveCalls[threadKey] = liveCall;
@@ -419,14 +491,15 @@ public class LlmService : IDisposable
         string              username,
         string?             platformContext,
         Func<string, Task>  onDelta,
-        CancellationToken   ct = default)
+        CancellationToken   ct        = default,
+        string?             localPath = null)
     {
         if (code is null) throw new InvalidOperationException("Code agent not loaded");
         CancellationTokenSource cts = ct.CanBeCanceled
             ? CancellationTokenSource.CreateLinkedTokenSource(ct)
             : new CancellationTokenSource();
         processingThreads[threadKey] = cts;
-        return CodePipeline(threadKey, prompt, username, platformContext, onDelta, cts);
+        return CodePipeline(threadKey, prompt, username, platformContext, onDelta, cts, localPath: localPath);
     }
 
     public (int used, int limit) GetContextStats(string threadKey)

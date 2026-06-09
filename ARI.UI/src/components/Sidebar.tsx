@@ -1,15 +1,17 @@
 import type { ThreadEntry } from "../hooks/useThreads"
 
 interface Props {
-    threads:         ThreadEntry[]
-    activeThread:    string | null
-    onNewChat:       () => void
-    onSelectThread:  (t: ThreadEntry) => void
-    collapsed:       boolean
+    threads:          ThreadEntry[]
+    activeThread:     string | null
+    activeView:       "chat" | "projects"
+    onNewChat:        () => void
+    onOpenProjects:   () => void
+    onSelectThread:   (t: ThreadEntry) => void
+    collapsed:        boolean
     onToggleCollapse: () => void
 }
 
-export default function Sidebar({ threads, activeThread, onNewChat, onSelectThread, collapsed, onToggleCollapse }: Props) {
+export default function Sidebar({ threads, activeThread, activeView, onNewChat, onOpenProjects, onSelectThread, collapsed, onToggleCollapse }: Props) {
     return (
         <aside id="sidebar" className={collapsed ? "collapsed" : ""}>
             <div id="sidebar-inner">
@@ -29,10 +31,21 @@ export default function Sidebar({ threads, activeThread, onNewChat, onSelectThre
                     New chat
                 </button>
 
+                <button
+                    id="btn-projects"
+                    className={activeView === "projects" ? "active" : ""}
+                    onClick={onOpenProjects}
+                >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                    </svg>
+                    Projects
+                </button>
+
                 <div id="sidebar-section-label">Recents</div>
                 <ul id="thread-list">
                     {threads.map(t => {
-                        const label = t.isInternal
+                        const baseName = t.isInternal
                             ? (t.agentName ?? "Internal")
                             : t.key.startsWith("web-") ? "Web chat" : "Discord"
                         const time = t.lastMessageAt && !t.lastMessageAt.startsWith("0001")
@@ -45,8 +58,20 @@ export default function Sidebar({ threads, activeThread, onNewChat, onSelectThre
                         ].filter(Boolean).join(" ")
                         return (
                             <li key={t.key} className={classes} onClick={() => onSelectThread(t)}>
-                                <span className="thread-name">{label}</span>
-                                <span className="thread-time">{time}</span>
+                                <span className="thread-name">
+                                    {t.projectName && (
+                                        <span className="thread-project">{t.projectName}/</span>
+                                    )}
+                                    {baseName}
+                                </span>
+                                <span className="thread-meta">
+                                    {t.isCodeMode && (
+                                        <svg className="thread-code-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                            <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+                                        </svg>
+                                    )}
+                                    <span className="thread-time">{time}</span>
+                                </span>
                             </li>
                         )
                     })}

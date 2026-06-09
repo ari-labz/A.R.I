@@ -1,15 +1,19 @@
 import { useRef, useEffect, useState, type KeyboardEvent } from "react"
 import type { PendingAttachment } from "../App"
+import type { Project } from "../hooks/useThreads"
 
 interface Command { cmd: string; desc: string }
 
 interface Props {
-    isStreaming:   boolean
-    pendingAttach: PendingAttachment[]
-    commands:      Command[]
-    onSend:        (text: string) => void
-    onUploadFiles: (files: File[]) => void
-    onRemoveAttach: (name: string) => void
+    isStreaming:      boolean
+    pendingAttach:    PendingAttachment[]
+    commands:         Command[]
+    projects:         Project[]
+    selectedProject:  string | null
+    onProjectChange:  (id: string | null) => void
+    onSend:           (text: string) => void
+    onUploadFiles:    (files: File[]) => void
+    onRemoveAttach:   (name: string) => void
     onHeartbeatStart: () => void
     onHeartbeatStop:  () => void
 }
@@ -21,6 +25,7 @@ function fileExtLabel(name: string) {
 
 export default function InputArea({
     isStreaming, pendingAttach, commands,
+    projects, selectedProject, onProjectChange,
     onSend, onUploadFiles, onRemoveAttach,
     onHeartbeatStart, onHeartbeatStop,
 }: Props) {
@@ -96,7 +101,10 @@ export default function InputArea({
 
     return (
         <div id="input-area">
-            <div id="input-wrap" ref={wrapRef} onClick={() => textareaRef.current?.focus()}>
+            <div id="input-wrap" ref={wrapRef} onClick={e => {
+                const tag = (e.target as HTMLElement).tagName
+                if (tag !== "SELECT" && tag !== "BUTTON" && tag !== "INPUT") textareaRef.current?.focus()
+            }}>
                 {/* pre-send attachment chips */}
                 <div id="msg-attach-preview">
                     {pendingAttach.map(a => (
@@ -141,29 +149,46 @@ export default function InputArea({
                     onInput={() => { if (input.trim()) onHeartbeatStart(); else onHeartbeatStop() }}
                 />
                 <div id="input-footer">
-                    <button id="btn-attach" title="Attach file" onClick={() => fileInputRef.current?.click()}>
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+                    <div id="input-project-row">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
                         </svg>
-                    </button>
-                    <input
-                        ref={fileInputRef} type="file" multiple
-                        style={{ display: "none" }}
-                        onChange={e => {
-                            if (e.target.files?.length) onUploadFiles([...e.target.files])
-                            e.target.value = ""
-                        }}
-                    />
-                    <button
-                        className="btn-send"
-                        disabled={isStreaming || (!input.trim() && pendingAttach.length === 0)}
-                        onClick={submit}
-                        title="Send"
-                    >
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
-                            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
-                        </svg>
-                    </button>
+                        <select
+                            id="input-project-select"
+                            value={selectedProject ?? ""}
+                            onChange={e => onProjectChange(e.target.value || null)}
+                        >
+                            <option value="">No project</option>
+                            {projects.map(p => (
+                                <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div id="input-actions">
+                        <button id="btn-attach" title="Attach file" onClick={() => fileInputRef.current?.click()}>
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+                            </svg>
+                        </button>
+                        <input
+                            ref={fileInputRef} type="file" multiple
+                            style={{ display: "none" }}
+                            onChange={e => {
+                                if (e.target.files?.length) onUploadFiles([...e.target.files])
+                                e.target.value = ""
+                            }}
+                        />
+                        <button
+                            className="btn-send"
+                            disabled={isStreaming || (!input.trim() && pendingAttach.length === 0)}
+                            onClick={submit}
+                            title="Send"
+                        >
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                            </svg>
+                        </button>
+                    </div>
                 </div>
             </div>
             <p id="input-hint">Enter to send &nbsp;·&nbsp; Shift+Enter for new line</p>
