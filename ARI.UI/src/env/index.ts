@@ -17,6 +17,7 @@ declare global {
       getFileTree(root: string): Promise<string[]>
       getEndpoint(): string
       setEndpoint(url: string): void
+      moveWindowBy(dx: number, dy: number): void
     }
   }
 }

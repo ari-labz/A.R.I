@@ -62,7 +62,8 @@ async function createWindow() {
         height:      800,
         minWidth:    800,
         minHeight:   600,
-        titleBarStyle: "hiddenInset",
+        titleBarStyle: "hidden",
+        trafficLightPosition: { x: 12, y: 16 },
         show: false,
         webPreferences: {
             preload:          path.join(__dirname, "preload.js"),
@@ -105,5 +106,11 @@ ipcMain.handle("fs:pick-folder", async () => {
 ipcMain.handle("fs:tree", (_e, root) => getFileTree(root))
 
 // ── IPC: config ───────────────────────────────────────────
-ipcMain.handle("cfg:get-endpoint", ()       => store.get("endpoint", ""))
-ipcMain.handle("cfg:set-endpoint", (_e, url) => store.set("endpoint", url))
+ipcMain.handle("cfg:get-endpoint",  ()        => store.get("endpoint", ""))
+ipcMain.handle("cfg:set-endpoint",  (_e, url) => store.set("endpoint", url))
+
+// ── IPC: window movement ──────────────────────────────────
+ipcMain.handle("window:move-by", (_e, dx, dy) => {
+    const [x, y] = win.getPosition()
+    win.setPosition(x + Math.round(dx), y + Math.round(dy))
+})
