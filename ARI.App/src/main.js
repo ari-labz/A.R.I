@@ -60,12 +60,13 @@ async function restoreAuthCookie(endpoint) {
     try {
         const url  = new URL(endpoint)
         const base = `${url.protocol}//${url.host}`
+        const isHttps = url.protocol === "https:"
         await session.defaultSession.cookies.set({
             url,
             name:           AUTH_COOKIE,
             value:          saved.value,
             httpOnly:       true,
-            secure:         false,
+            secure:         isHttps,
             expirationDate: saved.expirationDate,
             sameSite:       "lax",
         })
@@ -86,7 +87,7 @@ async function saveAuthCookie(endpoint) {
 }
 
 async function createWindow() {
-    const endpoint = isDev ? "http://localhost:5074" : store.get("endpoint", "http://localhost:5074")
+    const endpoint = isDev ? "http://localhost:5074" : store.get("endpoint", "https://a-r-i.ai")
 
     createSplash()
     await restoreAuthCookie(endpoint)
