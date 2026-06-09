@@ -29,7 +29,7 @@ public class Thread
 
     public readonly List<ThreadItem> History = new();
 
-    private readonly Dictionary<string, (object Schema, Func<string, Task<string>> Execute)> tools = new();
+    private readonly Dictionary<string, (object Schema, Func<string, Task<string>> Execute, Func<string, string>? Display)> tools = new();
 
     // ── Lifecycle ──────────────────────────────────────────────────────────────
     public ThreadState              State           = ThreadState.Active;
@@ -102,8 +102,8 @@ public class Thread
 
     // ── Tools ───────────────────────────────────────────────────────────────────
 
-    public void RegisterTool(string name, object schema, Func<string, Task<string>> executor)
-        => tools[name] = (schema, executor);
+    public void RegisterTool(string name, object schema, Func<string, Task<string>> executor, Func<string, string>? displayFormatter = null)
+        => tools[name] = (schema, executor, displayFormatter);
 
     public void UnregisterTool(string name)
         => tools.Remove(name);
@@ -420,6 +420,7 @@ public class Thread
         List<string>    toolResults      = new();
         HashSet<string> calledKeys       = new(StringComparer.OrdinalIgnoreCase);
         StringBuilder   responseBuilder  = new();
+        StringBuilder   contentBuilder   = new(); // accumulates text + tool indicators across all iterations
         Stopwatch       sw               = Stopwatch.StartNew();
         bool            wasThinking      = false;
         int             completionTokens = 0;
@@ -569,7 +570,7 @@ public class Thread
                         responseBuilder.Append(deltaText);
                         if (LiveCall is { } lc) lc.EstimatedOutputTokens = responseBuilder.Length / CHARS_PER_TOKEN;
                         if (onDelta is not null)
-                            await onDelta(responseBuilder.ToString());
+                            await onDelta(contentBuilder.ToString() + responseBuilder.ToString());
                     }
                 }
             }
@@ -609,25 +610,27 @@ public class Thread
 
             if (pendingCalls.Count > 0 && finishReason == "tool_calls")
             {
-                if (onDelta is not null && responseBuilder.Length > 0)
-                    await onDelta(string.Empty);
+                // Preserve any partial response text that streamed before the tool call
+                if (responseBuilder.Length > 0)
+                    contentBuilder.Append(responseBuilder);
 
                 toolCallCount += pendingCalls.Count;
 
-                messages.Add(new
-                {
-                    role       = "assistant",
-                    content    = (string?)null,
-                    tool_calls = pendingCalls
-                        .OrderBy(kv => kv.Key)
-                        .Select(kv => new
-                        {
-                            id       = kv.Value.Id,
-                            type     = "function",
-                            function = new { name = kv.Value.Name, arguments = kv.Value.Args.ToString() }
-                        })
-                        .ToArray()
-                });
+                // Build assistant message — omit content when empty to avoid BadRequest
+                var toolCallList = pendingCalls
+                    .OrderBy(kv => kv.Key)
+                    .Select(kv => new
+                    {
+                        id       = kv.Value.Id,
+                        type     = "function",
+                        function = new { name = kv.Value.Name, arguments = kv.Value.Args.ToString() }
+                    })
+                    .ToArray();
+
+                if (responseBuilder.Length > 0)
+                    messages.Add(new { role = "assistant", content = responseBuilder.ToString(), tool_calls = toolCallList });
+                else
+                    messages.Add(new { role = "assistant", tool_calls = toolCallList });
 
                 foreach ((string Id, string Name, StringBuilder Args) call in pendingCalls.Values)
                 {
@@ -636,16 +639,26 @@ public class Thread
                     string result;
 
                     if (!isNew)
-                        result = "Already retrieved.";
-                    else if (tools.TryGetValue(call.Name, out (object Schema, Func<string, Task<string>> Execute) tool))
                     {
+                        result = "Already retrieved.";
+                    }
+                    else if (tools.TryGetValue(call.Name, out var tool))
+                    {
+                        if (tool.Display is not null)
+                        {
+                            contentBuilder.Append(tool.Display(call.Args.ToString()));
+                            if (onDelta is not null)
+                                await onDelta(contentBuilder.ToString());
+                        }
                         result = await tool.Execute(call.Args.ToString());
                         toolResults.Add(result);
                     }
                     else
+                    {
                         result = "Tool not found.";
+                    }
 
-                    messages.Add(new { role = "tool", tool_call_id = call.Id, content = result });
+                    messages.Add(new { role = "tool", tool_call_id = call.Id, name = call.Name, content = result });
                 }
 
                 continue;
@@ -655,7 +668,9 @@ public class Thread
         }
 
         sw.Stop();
-        string responseText = responseBuilder.ToString();
+        string responseText = contentBuilder.Length > 0
+            ? contentBuilder.ToString() + responseBuilder.ToString()
+            : responseBuilder.ToString();
         if (responseText.StartsWith("ARI: ", StringComparison.OrdinalIgnoreCase))
             responseText = responseText["ARI: ".Length..];
         if (string.IsNullOrWhiteSpace(responseText))

@@ -8,4 +8,5 @@ contextBridge.exposeInMainWorld("electronBridge", {
     getEndpoint:  ()                    => ipcRenderer.invoke("cfg:get-endpoint"),
     setEndpoint:  (url)                 => ipcRenderer.invoke("cfg:set-endpoint", url),
     moveWindowBy: (dx, dy)              => ipcRenderer.invoke("window:move-by", dx, dy),
+    markReady:    ()                    => ipcRenderer.invoke("app:ready"),
 })

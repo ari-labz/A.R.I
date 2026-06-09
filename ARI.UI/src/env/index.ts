@@ -18,6 +18,7 @@ declare global {
       getEndpoint(): string
       setEndpoint(url: string): void
       moveWindowBy(dx: number, dy: number): void
+      markReady(): void
     }
   }
 }

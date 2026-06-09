@@ -95,6 +95,7 @@ public class ApiService : IAsyncDisposable
 
         builder.Services.AddSingleton(holder);
         builder.Services.AddSingleton(config);
+        builder.Services.AddSingleton<ProjectStore>();
         builder.Services.AddSingleton(systemInfo);
         builder.Services.AddSingleton(new VoiceTrainerHolder());
         builder.Services.AddSingleton(new DiscordServiceHolder());
@@ -119,6 +120,12 @@ public class ApiService : IAsyncDisposable
             options.LoginPath = "/auth/login";
             options.ExpireTimeSpan = TimeSpan.FromDays(30);
             options.SlidingExpiration = true;
+            // Always write a persistent cookie so it survives browser/Electron restarts
+            options.Events.OnSigningIn = ctx =>
+            {
+                ctx.Properties.IsPersistent = true;
+                return Task.CompletedTask;
+            };
         })
         .AddGoogle(options =>
         {

@@ -4,6 +4,7 @@ using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Channels;
+using ARI.API;
 using ARI.LLM;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -14,9 +15,20 @@ namespace ARI.API.Controllers;
 
 [Route("api/threads")]
 [ApiController]
-public class ThreadsController(LlmServiceHolder holder) : ControllerBase
+public class ThreadsController(LlmServiceHolder holder, ProjectStore projectStore) : ControllerBase
 {
     private LlmService? Llm => holder.Service;
+
+    // Maps threadKey → projectId — backed by a persistent JSON file so it survives rebuilds
+    private static ConcurrentDictionary<string, string>? _threadProjects;
+    private static ConcurrentDictionary<string, string> GetThreadProjects(ProjectStore store)
+    {
+        if (_threadProjects is not null) return _threadProjects;
+        _threadProjects = new ConcurrentDictionary<string, string>(store.LoadThreadMap());
+        return _threadProjects;
+    }
+    private ConcurrentDictionary<string, string> ThreadProjects => GetThreadProjects(projectStore);
+    private void PersistThreadProjects() => projectStore.SaveThreadMap(new Dictionary<string, string>(ThreadProjects));
 
     // Pending attachments staged before a thread exists — flushed at send time.
     private static readonly ConcurrentDictionary<string, List<Attachment>> pendingAttachments        = new();
@@ -66,16 +78,41 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
 
         Agent? dialogueAgent = Llm.Agents.GetValueOrDefault("Dialogue");
-        List<ThreadEntry> threads = dialogueAgent?.Threads
-            .Select(kvp => new ThreadEntry(
-                kvp.Key,
-                AgentName:     null,
-                IsInternal:    false,
-                LastMessageAt: kvp.Value.LastMessageAt,
-                MessageCount:  kvp.Value.History.Count(m => m is UserMessage or AriResponse),
-                State:         kvp.Value.State.ToString().ToLowerInvariant(),
-                IsCodeMode:    Llm.Agents.GetValueOrDefault("Code")?.Threads.ContainsKey(kvp.Key) == true))
-            .ToList() ?? new();
+        Agent? codeAgent     = Llm.Agents.GetValueOrDefault("Code");
+
+        // Collect all user-facing thread keys from both agents, deduped
+        var allKeys = new Dictionary<string, (DateTime lastMessageAt, int count, string state, bool isCode)>();
+
+        if (dialogueAgent is not null)
+        {
+            foreach (var kvp in dialogueAgent.Threads)
+            {
+                bool isCode = codeAgent?.Threads.ContainsKey(kvp.Key) == true;
+                allKeys[kvp.Key] = (kvp.Value.LastMessageAt, kvp.Value.History.Count(m => m is UserMessage or AriResponse),
+                    kvp.Value.State.ToString().ToLowerInvariant(), isCode);
+            }
+        }
+        if (codeAgent is not null)
+        {
+            foreach (var kvp in codeAgent.Threads)
+            {
+                if (!allKeys.ContainsKey(kvp.Key))
+                    allKeys[kvp.Key] = (kvp.Value.LastMessageAt, kvp.Value.History.Count(m => m is UserMessage or AriResponse),
+                        kvp.Value.State.ToString().ToLowerInvariant(), true);
+            }
+        }
+
+        List<ThreadEntry> threads = allKeys
+            .Select(kvp =>
+            {
+                string? projectId   = ThreadProjects.TryGetValue(kvp.Key, out string? pid) ? pid : null;
+                string? projectName = projectId is not null ? projectStore.Get(projectId)?.Name : null;
+                return new ThreadEntry(kvp.Key, AgentName: null, IsInternal: false,
+                    LastMessageAt: kvp.Value.lastMessageAt, MessageCount: kvp.Value.count,
+                    State: kvp.Value.state, IsCodeMode: kvp.Value.isCode,
+                    ProjectName: projectName, ProjectId: projectId);
+            })
+            .ToList();
 
         if (includeInternal)
         {
@@ -92,10 +129,15 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
     }
 
     [HttpPost]
-    public IActionResult NewThread()
+    public IActionResult NewThread([FromBody] NewThreadRequest? req = null)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
         string key = $"web-{Guid.NewGuid():N}";
+        if (!string.IsNullOrWhiteSpace(req?.ProjectId) && projectStore.Get(req.ProjectId) is not null)
+        {
+            ThreadProjects[key] = req.ProjectId;
+            PersistThreadProjects();
+        }
         return Ok(new { key });
     }
 
@@ -408,6 +450,35 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
     /// Heartbeat sent by the web client while the user is actively composing a message.
     /// Resets the thread's inactivity countdown so Engram doesn't sweep mid-composition.
     /// </summary>
+    /// <summary>
+    /// Injects a named text attachment into an existing thread (or stages it if the thread
+    /// hasn't been created yet). Used by the Electron client to supply the project file tree
+    /// and file read results without routing through a user message.
+    /// </summary>
+    [HttpPost("{threadKey}/inject-context")]
+    public IActionResult InjectContext(string threadKey, [FromBody] InjectContextRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.Name) || req.Content is null)
+            return BadRequest("Name and Content are required.");
+
+        Attachment att = new() { Name = req.Name, Content = req.Content, IsImage = false, MimeType = "text/plain" };
+
+        // If the thread already exists in an agent, add directly so it persists permanently
+        ARI.LLM.Thread? thread = GetThread(threadKey);
+        if (thread is not null)
+        {
+            thread.AddAttachment(att);
+        }
+        else
+        {
+            // Thread not yet initialised — stage in pending attachments (flushed on first send)
+            pendingAttachments.GetOrAdd(threadKey, _ => new()).RemoveAll(a => a.Name == att.Name);
+            pendingAttachments[threadKey].Add(att);
+        }
+
+        return Ok();
+    }
+
     [HttpPost("{threadKey}/typing")]
     public IActionResult NotifyTyping(string threadKey)
     {
@@ -454,15 +525,63 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
         pendingMessageAttachments.TryRemove(threadKey, out List<Attachment>? msgAtts);
         pendingAttachments.TryRemove(threadKey, out List<Attachment>? threadAtts);
 
+        string? platformContext = null;
+        if (ThreadProjects.TryGetValue(threadKey, out string? pid))
+        {
+            Project? project = projectStore.Get(pid);
+            if (project is not null)
+            {
+                var ctx = new System.Text.StringBuilder();
+                ctx.AppendLine($"Project: {project.Name}");
+                if (!string.IsNullOrWhiteSpace(project.Instructions))
+                    ctx.AppendLine().AppendLine(project.Instructions);
+                if (!string.IsNullOrWhiteSpace(project.LocalPath))
+                {
+                    ctx.AppendLine().AppendLine("The complete project file tree is provided in the context attachment `_project_tree.txt`. Use the `read_file` tool to read specific files whenever you need to examine their contents.");
+                }
+                platformContext = ctx.ToString().TrimEnd();
+
+                // Force code pipeline before the classifier runs (first message only)
+                bool isFirstMessage = GetThread(threadKey)?.History.Count is null or 0;
+                if (isFirstMessage && project.ForceCodePipeline)
+                    Llm.ForceCodeThread(threadKey);
+
+                // On the first message, inject project-level attachments as thread attachments
+                if (isFirstMessage)
+                {
+                    List<string> attachmentNames = projectStore.GetAttachmentNames(pid);
+                    if (attachmentNames.Count > 0)
+                    {
+                        threadAtts ??= new();
+                        foreach (string name in attachmentNames)
+                        {
+                            byte[]? data = projectStore.ReadAttachment(pid, name);
+                            if (data is null) continue;
+                            string ext  = Path.GetExtension(name).ToLowerInvariant();
+                            bool isImg  = ext is ".jpg" or ".jpeg" or ".png" or ".gif" or ".webp" or ".bmp";
+                            string mime = isImg ? $"image/{ext.TrimStart('.')}" : "text/plain";
+                            string content = isImg
+                                ? Convert.ToBase64String(data)
+                                : System.Text.Encoding.UTF8.GetString(data);
+                            threadAtts.Add(new Attachment { Name = name, Content = content, IsImage = isImg, MimeType = mime });
+                        }
+                    }
+                }
+            }
+        }
+
         try
         {
-            string username = GetUsername();
-            await Llm.PromptStreaming(threadKey, prompt, username, null, async accumulated =>
+            string username  = GetUsername();
+            string? localPath = ThreadProjects.TryGetValue(threadKey, out string? lpPid)
+                ? projectStore.Get(lpPid)?.LocalPath
+                : null;
+            await Llm.PromptStreaming(threadKey, prompt, username, platformContext, async accumulated =>
             {
                 string escaped = accumulated.Replace("\n", "\\n").Replace("\r", "");
                 await Response.WriteAsync($"data: {escaped}\n\n", cancellationToken);
                 await Response.Body.FlushAsync(cancellationToken);
-            }, cancellationToken, messageAttachments: msgAtts, threadAttachments: threadAtts);
+            }, cancellationToken, messageAttachments: msgAtts, threadAttachments: threadAtts, localPath: localPath);
             await Response.WriteAsync("data: [DONE]\n\n", cancellationToken);
         }
         catch (OperationCanceledException)
@@ -480,4 +599,6 @@ public class ThreadsController(LlmServiceHolder holder) : ControllerBase
 
 public record StreamRequest(string Prompt);
 public record CommandRequest(string? ThreadKey, string Input);
-public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active", bool IsCodeMode = false);
+public record NewThreadRequest(string? ProjectId);
+public record InjectContextRequest(string Name, string Content);
+public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active", bool IsCodeMode = false, string? ProjectName = null, string? ProjectId = null);

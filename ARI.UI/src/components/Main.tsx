@@ -4,7 +4,7 @@ import InputArea from "./InputArea"
 import ThreadPanel from "./ThreadPanel"
 import DropOverlay from "./DropOverlay"
 import type { AppMode, PendingAttachment } from "../App"
-import type { ThreadItem, Attachment } from "../hooks/useThreads"
+import type { ThreadItem, Attachment, Project } from "../hooks/useThreads"
 
 interface Command { cmd: string; desc: string }
 
@@ -29,7 +29,10 @@ interface Props {
     onRemoveMessageAttach: (name: string) => void
     onHeartbeatStart: () => void
     onHeartbeatStop:  () => void
-    commands:      Command[]
+    commands:         Command[]
+    projects:         Project[]
+    selectedProject:  string | null
+    onProjectChange:  (id: string | null) => void
 }
 
 export default function Main({
@@ -40,6 +43,7 @@ export default function Main({
     onSend, onUploadThreadFiles, onUploadMessageFiles,
     onRemoveThreadAttach, onRemoveMessageAttach,
     onHeartbeatStart, onHeartbeatStop, commands,
+    projects, selectedProject, onProjectChange,
 }: Props) {
     const [threadPanelOpen, setThreadPanelOpen] = useState(false)
     const [dropVisible,     setDropVisible]     = useState(false)
@@ -223,6 +227,9 @@ export default function Main({
                         isStreaming={isStreaming}
                         pendingAttach={pendingAttach}
                         commands={commands}
+                        projects={projects}
+                        selectedProject={selectedProject}
+                        onProjectChange={onProjectChange}
                         onSend={onSend}
                         onUploadFiles={onUploadMessageFiles}
                         onRemoveAttach={onRemoveMessageAttach}

@@ -3,7 +3,7 @@
     {
       "Endpoint": "http://localhost:8081",
       "Port": 8081,
-      "ContextSize": 32768,
+      "ContextSize": 131072,
       "ParallelSlots": 2
     },
     {

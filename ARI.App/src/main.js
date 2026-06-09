@@ -17,15 +17,18 @@ if (needsInstall) {
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
-const { app, BrowserWindow, ipcMain, dialog } = require("electron")
+const { app, BrowserWindow, ipcMain, dialog, session } = require("electron")
 const Store = require("electron-store")
 const { readFile, writeFile, getFileTree } = require("./fs")
 
 const store = new Store()
 const isDev = process.env.NODE_ENV === "development"
+const AUTH_COOKIE = ".AspNetCore.Cookies"
 
 let win
 let splash
+let appReadyResolve
+const appReady = new Promise(resolve => { appReadyResolve = resolve })
 
 function createSplash() {
     splash = new BrowserWindow({
@@ -51,10 +54,42 @@ async function waitForAri(endpoint) {
     }
 }
 
+async function restoreAuthCookie(endpoint) {
+    const saved = store.get("savedAuthCookie")
+    if (!saved) return
+    try {
+        const url  = new URL(endpoint)
+        const base = `${url.protocol}//${url.host}`
+        await session.defaultSession.cookies.set({
+            url,
+            name:           AUTH_COOKIE,
+            value:          saved.value,
+            httpOnly:       true,
+            secure:         false,
+            expirationDate: saved.expirationDate,
+            sameSite:       "lax",
+        })
+    } catch { /* best-effort */ }
+}
+
+async function saveAuthCookie(endpoint) {
+    try {
+        const url     = new URL(endpoint)
+        const cookies = await session.defaultSession.cookies.get({ url: endpoint, name: AUTH_COOKIE })
+        if (cookies.length > 0) {
+            store.set("savedAuthCookie", {
+                value:          cookies[0].value,
+                expirationDate: cookies[0].expirationDate,
+            })
+        }
+    } catch { /* best-effort */ }
+}
+
 async function createWindow() {
     const endpoint = isDev ? "http://localhost:5074" : store.get("endpoint", "http://localhost:5074")
 
     createSplash()
+    await restoreAuthCookie(endpoint)
     await waitForAri(endpoint)
 
     win = new BrowserWindow({
@@ -74,13 +109,19 @@ async function createWindow() {
 
     win.loadURL(endpoint)
 
-    win.once("ready-to-show", () => {
+    win.webContents.on("did-finish-load", () => saveAuthCookie(endpoint))
+
+    // Show window and dismiss splash only once the React app signals it's fully ready
+    appReady.then(() => {
+        win.show()
         if (splash && !splash.isDestroyed()) {
             splash.destroy()
             splash = null
         }
-        win.show()
     })
+
+    // Fallback: if the app never signals ready (e.g. auth redirect loop), show after 15s
+    setTimeout(() => appReadyResolve(), 15_000)
 }
 
 app.whenReady().then(() => {
@@ -110,6 +151,8 @@ ipcMain.handle("cfg:get-endpoint",  ()        => store.get("endpoint", ""))
 ipcMain.handle("cfg:set-endpoint",  (_e, url) => store.set("endpoint", url))
 
 // ── IPC: window movement ──────────────────────────────────
+ipcMain.handle("app:ready", () => appReadyResolve())
+
 ipcMain.handle("window:move-by", (_e, dx, dy) => {
     const [x, y] = win.getPosition()
     win.setPosition(x + Math.round(dx), y + Math.round(dy))
