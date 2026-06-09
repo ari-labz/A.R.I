@@ -3,7 +3,7 @@ using ARI.Discord;
 using ARI.LLM;
 using ARI.Voice;
 using ARI.VoiceSynthesis;
-using ARI.WebPanel;
+using ARI.API;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Common = ARI.Core.Scripts.Common;
@@ -16,11 +16,12 @@ public class AriHostService : BackgroundService
     private Docker? docker;
     private readonly List<LocalLlamaServer> llamaServers = new();
     private DiscordService? discordService;
-    private WebPanelService? webPanelService;
+    private ApiService? webPanelService;
     private F5Synthesiser? synthesiser;
     private SpeechQueue? speechQueue;
     private bool containersStarted;
     private bool startupFailed;
+    private static System.Diagnostics.Process? clientProcess;
 
     public AriHostService(ILoggerFactory loggerFactory)
     {
@@ -56,7 +57,7 @@ public class AriHostService : BackgroundService
             string f5Path     = ResolvePath(executableDirectory, config.Modules.VoiceSynthesis ? config.VoiceSynthesis.F5Path : "");
             string voicesPath = ResolvePath(executableDirectory, config.Modules.VoiceSynthesis ? config.VoiceSynthesis.VoicesPath : "");
 
-            webPanelService = new WebPanelService(loggerFactory, new ARI.WebPanel.WebPanelConfig
+            webPanelService = new ApiService(loggerFactory, new ARI.API.WebPanelConfig
             {
                 Port               = config.WebPanel.Port,
                 GoogleClientId     = config.WebPanel.Google.ClientId,
@@ -103,6 +104,9 @@ public class AriHostService : BackgroundService
         Common.Logger.LogInformation("ARI is ready.");
 
         webPanelService?.Holder.Set(llmService);
+
+        if (config.Modules.Client)
+            LaunchClient(executableDirectory, config.WebPanel.Port);
 
         List<Task> moduleTasks = new();
 
@@ -208,6 +212,71 @@ public class AriHostService : BackgroundService
         });
     }
 
+    private static void LaunchClient(string executableDirectory, int port)
+    {
+        // Walk up from the executable directory until we find ARI.Client/ari-client.sh
+        string? scriptPath = null;
+        DirectoryInfo? dir = new DirectoryInfo(executableDirectory);
+        while (dir is not null)
+        {
+            string candidate = Path.Combine(dir.FullName, "ARI.Client", "setup.sh");
+            if (File.Exists(candidate)) { scriptPath = candidate; break; }
+            dir = dir.Parent;
+        }
+
+        if (scriptPath is null)
+        {
+            Common.Logger.LogWarning("[Client] setup.sh not found — skipping client launch.");
+            return;
+        }
+
+        // Kill any previous client process before launching a new one
+        try
+        {
+            if (clientProcess is not null && !clientProcess.HasExited)
+            {
+                Common.Logger.LogInformation("[Client] Stopping previous client instance (PID {Pid})...", clientProcess.Id);
+                clientProcess.Kill(entireProcessTree: true);
+                clientProcess.WaitForExit(3000);
+            }
+        }
+        catch { /* process may have already exited */ }
+        clientProcess = null;
+
+        Common.Logger.LogInformation("[Client] Launching ARI.Client...");
+
+        // ARI_BASE_URL is read by setup.sh → passed into the Tauri app
+        Environment.SetEnvironmentVariable("ARI_BASE_URL", $"http://localhost:{port}");
+
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName               = "/bin/bash",
+            Arguments              = $"\"{scriptPath}\"",
+            UseShellExecute        = true,
+            CreateNoWindow         = false,
+        };
+
+        // On macOS open in a new Terminal window
+        if (OperatingSystem.IsMacOS())
+        {
+            psi = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName        = "open",
+                Arguments       = $"-a Terminal \"{scriptPath}\"",
+                UseShellExecute = false,
+            };
+        }
+
+        try
+        {
+            clientProcess = System.Diagnostics.Process.Start(psi);
+        }
+        catch (Exception ex)
+        {
+            Common.Logger.LogWarning("[Client] Failed to launch client: {Error}", ex.Message);
+        }
+    }
+
     private static string ResolvePath(string baseDir, string path)
     {
         if (string.IsNullOrEmpty(path)) return "";
@@ -219,6 +288,17 @@ public class AriHostService : BackgroundService
         if (startupFailed) return;
 
         Common.Logger.LogInformation("ARI is shutting down...");
+
+        try
+        {
+            if (clientProcess is not null && !clientProcess.HasExited)
+            {
+                Common.Logger.LogInformation("[Client] Stopping client process...");
+                clientProcess.Kill(entireProcessTree: true);
+            }
+        }
+        catch { }
+        clientProcess = null;
 
         if (discordService != null)
             await discordService.NotifyOffline();

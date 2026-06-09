@@ -102,8 +102,11 @@ public class Thread
 
     // ── Tools ───────────────────────────────────────────────────────────────────
 
-    internal void RegisterTool(string name, object schema, Func<string, Task<string>> executor)
+    public void RegisterTool(string name, object schema, Func<string, Task<string>> executor)
         => tools[name] = (schema, executor);
+
+    public void UnregisterTool(string name)
+        => tools.Remove(name);
 
     // ── History ─────────────────────────────────────────────────────────────────
 
