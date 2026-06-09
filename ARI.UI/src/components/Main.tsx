@@ -120,6 +120,27 @@ export default function Main({
         if (files.length) onUploadMessageFiles(files)
     }
 
+    function handleTitlebarDrag(e: React.MouseEvent) {
+        if (!window.electronBridge) return
+        e.preventDefault()
+        let lastX = e.screenX
+        let lastY = e.screenY
+
+        function onMove(ev: MouseEvent) {
+            const dx = ev.screenX - lastX
+            const dy = ev.screenY - lastY
+            lastX = ev.screenX
+            lastY = ev.screenY
+            window.electronBridge!.moveWindowBy(dx, dy)
+        }
+        function onUp() {
+            document.removeEventListener("mousemove", onMove)
+            document.removeEventListener("mouseup", onUp)
+        }
+        document.addEventListener("mousemove", onMove)
+        document.addEventListener("mouseup", onUp)
+    }
+
     const mainClasses = [
         mode === "active" ? "active" : "",
         codeMode ? "code-mode" : "",
@@ -127,6 +148,7 @@ export default function Main({
 
     return (
         <div id="main" className={mainClasses}>
+            <div id="titlebar-drag" onMouseDown={handleTitlebarDrag} />
             {/* floating toggle when sidebar collapsed */}
             <button
                 id="topbar-toggle"
