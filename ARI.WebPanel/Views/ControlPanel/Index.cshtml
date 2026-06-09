@@ -1190,8 +1190,12 @@ tvSpeakBtn.addEventListener('click', async () => {
     const text      = tvText.value.trim();
     const modelName = tvModel.value;
     if (!text) return;
-    tvSpeakBtn.disabled = true;
-    tvStatus.textContent = 'Queued…';
+    tvSpeakBtn.disabled  = true;
+    tvStatus.textContent = 'Synthesising…';
+
+    // Create AudioContext during the click gesture so playback is unlocked after the async fetch
+    const audioCtx = new AudioContext();
+
     try {
         const resp = await fetch('/api/cp/voice/speak', {
             method: 'POST',
@@ -1202,8 +1206,13 @@ tvSpeakBtn.addEventListener('click', async () => {
             const err = await resp.json().catch(() => ({ error: resp.statusText }));
             tvStatus.textContent = 'Error: ' + (err.error ?? resp.statusText);
         } else {
-            tvStatus.textContent = '✓ Synthesising — listen for audio on Mac speakers';
-            setTimeout(() => { tvStatus.textContent = `Active: ${modelName}`; }, 5000);
+            const arrayBuffer = await resp.arrayBuffer();
+            const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+            const source      = audioCtx.createBufferSource();
+            source.buffer     = audioBuffer;
+            source.connect(audioCtx.destination);
+            source.start();
+            tvStatus.textContent = '';
         }
     } catch (err) {
         tvStatus.textContent = 'Error: ' + err.message;

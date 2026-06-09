@@ -419,17 +419,15 @@ public class VoiceController(
     }
 
     [HttpPost("speak")]
-    public IActionResult Speak([FromBody] SpeakRequest req)
+    public async Task<IActionResult> Speak([FromBody] SpeakRequest req, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(req.Text))
             return BadRequest(new { error = "text is required." });
         if (!speechHolder.IsReady)
             return StatusCode(503, new { error = "Voice module is not running." });
-        if (!string.IsNullOrEmpty(req.ModelName) && req.ModelName != speechHolder.ActiveModel)
-            return StatusCode(503, new { error = $"Model '{req.ModelName}' is not the active model. Restart ARI with Voice.ModelName set to '{req.ModelName}' in AriConfig.json." });
 
-        speechHolder.Speak(req.Text);
-        return Ok(new { model = speechHolder.ActiveModel });
+        byte[] wav = await speechHolder.Synthesise(req.Text, ct);
+        return File(wav, "audio/wav");
     }
 
     [HttpGet("active")]
