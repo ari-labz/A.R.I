@@ -326,19 +326,19 @@ export default function App() {
                     if (watchRenderedRef.current) return
 
                     setIsTyping(false)
+                    const text = data.replace(/\\n/g, "\n")
                     if (!streamingItemAdded) {
                         streamingItemAdded = true
                         setItems(prev => [...prev, {
-                            type: "ariResponse", content: data.replace(/\\n/g, "\n"),
+                            type: "ariResponse", content: text,
                             timestamp: new Date().toISOString(),
                         }])
                     } else {
+                        // Each SSE event carries the full accumulated response — replace, don't append
                         setItems(prev => {
                             const last = prev[prev.length - 1]
                             if (!last || last.type !== "ariResponse") return prev
-                            return [...prev.slice(0, -1), {
-                                ...last, content: last.content + data.replace(/\\n/g, "\n"),
-                            }]
+                            return [...prev.slice(0, -1), { ...last, content: text }]
                         })
                     }
                 }
