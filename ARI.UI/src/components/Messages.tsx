@@ -3,14 +3,11 @@ import type { ThreadItem, Attachment } from "../hooks/useThreads"
 import { setBubbleMd } from "../hooks/useMarkdown"
 
 interface Props {
-    items:       ThreadItem[]
-    isTyping:    boolean
-    typingLabel: string
-    isStreaming: boolean
-
+    items:        ThreadItem[]
+    isRemembering: boolean
     activeThread: string | null
-    isInternal:  boolean
-    agentName:   string | null
+    isInternal:   boolean
+    agentName:    string | null
 }
 
 function fileExtLabel(name: string) {
@@ -67,15 +64,16 @@ function UserMessage({ item, activeThread }: { item: ThreadItem; activeThread: s
     )
 }
 
-function AriResponse({ item, isInternal, agentName, isStreaming }: { item: ThreadItem; isInternal: boolean; agentName: string | null; isStreaming?: boolean }) {
+function AriResponse({ item, isInternal, agentName }: { item: ThreadItem; isInternal: boolean; agentName: string | null }) {
+    const streaming = item.isStreaming ?? false
     const t = formatTime(item.timestamp)
     const senderLabel = isInternal ? (agentName ?? "Agent") : "A·R·I"
 
     let thoughtEl: React.ReactNode = null
-    if (item.thinkingSeconds != null) {
+    if (!streaming && item.thinkingSeconds != null) {
         const secs = typeof item.thinkingSeconds === "number"
             ? item.thinkingSeconds.toFixed(1) : item.thinkingSeconds
-        let hasDetails = !!(item.recallNotes || item.contextSummary)
+        const hasDetails = !!(item.recallNotes || item.contextSummary)
         if (hasDetails) {
             thoughtEl = (
                 <details className="thought-block">
@@ -94,9 +92,15 @@ function AriResponse({ item, isInternal, agentName, isStreaming }: { item: Threa
     return (
         <div className="msg-row assistant">
             <div className="sender">{senderLabel}</div>
-            <MdBubble content={item.content} className="bubble" />
+            {item.content && <MdBubble content={item.content} className="bubble" />}
+            {streaming && (
+                <div className="typing-indicator">
+                    <span>A·R·I is thinking</span>
+                    <div className="typing-dots"><b /><b /><b /></div>
+                </div>
+            )}
             {thoughtEl}
-            {!isStreaming && <div className="msg-time">{t}</div>}
+            {!streaming && <div className="msg-time">{t}</div>}
         </div>
     )
 }
@@ -161,21 +165,21 @@ function MemoryEvent({ item }: { item: ThreadItem }) {
     )
 }
 
-export default function Messages({ items, isTyping, typingLabel, isStreaming, activeThread, isInternal, agentName }: Props) {
+export default function Messages({ items, isRemembering, activeThread, isInternal, agentName }: Props) {
     const bottomRef = useRef<HTMLDivElement>(null)
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: "smooth" })
-    }, [items, isTyping])
+    }, [items, isRemembering])
 
     return (
         <div id="messages">
             {items.map((item, i) => {
-            switch (item.type) {
+                switch (item.type) {
                     case "userMessage":
                         return <UserMessage key={i} item={item} activeThread={activeThread} />
                     case "ariResponse":
-                        return <AriResponse key={i} item={item} isInternal={isInternal} agentName={agentName} isStreaming={isStreaming && i === items.length - 1} />
+                        return <AriResponse key={i} item={item} isInternal={isInternal} agentName={agentName} />
                     case "commandExchange":
                         return <CommandExchange key={i} item={item} />
                     case "engramEvent":
@@ -185,11 +189,11 @@ export default function Messages({ items, isTyping, typingLabel, isStreaming, ac
                 }
             })}
 
-            {isTyping && (
+            {isRemembering && (
                 <div className="msg-row assistant" id="typing-indicator">
-                    {!isStreaming && <div className="sender">A·R·I</div>}
+                    <div className="sender">A·R·I</div>
                     <div className="typing-indicator">
-                        <span>{typingLabel}</span>
+                        <span>Remembering</span>
                         <div className="typing-dots"><b /><b /><b /></div>
                     </div>
                 </div>

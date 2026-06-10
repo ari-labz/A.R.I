@@ -210,7 +210,7 @@ public class ApiService : IAsyncDisposable
 
                 var ws = await ctx.WebSockets.AcceptWebSocketAsync();
                 var log = ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("ARI.Client");
-                await ClientWebSocket.HandleAsync(ws, holder.Service, log);
+                await ClientWebSocket.HandleAsync(ws, ctx, holder.Service, log);
                 return; // don't call next — request is fully handled
             }
 

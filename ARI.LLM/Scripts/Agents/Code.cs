@@ -37,6 +37,13 @@ internal class Code : Agent
             onDelta:            onDelta);
     }
 
+    protected override void OnThreadCreated(string threadKey, Thread thread)
+    {
+        base.OnThreadCreated(threadKey, thread);
+        // Code threads have no Engram step — delete directly when they go inactive
+        thread.BecameInactive += () => thread.MarkEngramProcessed();
+    }
+
     internal void LogCommand(string threadKey, string input, string response)
     {
         if (Threads.TryGetValue(threadKey, out Thread? t))

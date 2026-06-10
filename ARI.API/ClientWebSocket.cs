@@ -3,6 +3,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using ARI.LLM;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 
 namespace ARI.API;
@@ -11,11 +12,17 @@ public static class ClientWebSocket
 {
     private static readonly ConcurrentDictionary<string, TaskCompletionSource<string>> pendingFileCalls = new();
 
-    public static async Task HandleAsync(WebSocket ws, LlmService llm, ILogger log)
+    public static async Task HandleAsync(WebSocket ws, HttpContext ctx, LlmService llm, ILogger log)
     {
-        string threadKey = $"client-{Guid.NewGuid():N}";
-        var fileTree     = new List<string>();
-        var state        = new ConnectionState();
+        // Use the threadKey from the query string if provided (binds tools to the active web-* thread)
+        string threadKey = ctx.Request.Query.TryGetValue("threadKey", out var tkv) && !string.IsNullOrWhiteSpace(tkv)
+            ? tkv.ToString()
+            : $"client-{Guid.NewGuid():N}";
+
+        log.LogInformation("[Client] Incoming WebSocket  threadKey={Key}", threadKey);
+
+        var fileTree = new List<string>();
+        var state    = new ConnectionState();
 
         ARI.LLM.Thread codeThread;
         try
@@ -25,45 +32,12 @@ public static class ClientWebSocket
         }
         catch (Exception ex)
         {
-            log.LogError(ex, "[Client] Failed to get code thread — is Code agent configured?");
+            log.LogError(ex, "[Client] Failed to get code thread");
             await ws.CloseAsync(WebSocketCloseStatus.InternalServerError, ex.Message, CancellationToken.None);
             return;
         }
 
-        codeThread.RegisterTool(
-            "read_file",
-            new
-            {
-                type = "function",
-                function = new
-                {
-                    name        = "read_file",
-                    description = "Read a file from the user's project on their local machine.",
-                    parameters  = new
-                    {
-                        type       = "object",
-                        properties = new { path = new { type = "string", description = "File path relative to project root" } },
-                        required   = new[] { "path" },
-                    },
-                },
-            },
-            async (argsJson) =>
-            {
-                using var doc = JsonDocument.Parse(argsJson);
-                string path   = doc.RootElement.GetProperty("path").GetString() ?? "";
-                string callId = Guid.NewGuid().ToString("N");
-
-                var tcs = new TaskCompletionSource<string>();
-                pendingFileCalls[callId] = tcs;
-
-                await Send(ws, new { type = "read_file", call_id = callId, path });
-
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                cts.Token.Register(() => tcs.TrySetCanceled());
-                try   { return await tcs.Task; }
-                catch { return $"[Error: read_file({path}) timed out]"; }
-                finally { pendingFileCalls.TryRemove(callId, out _); }
-            });
+        RegisterTools(codeThread, ws, log);
 
         try
         {
@@ -76,110 +50,204 @@ public static class ClientWebSocket
         }
         finally
         {
-            codeThread.UnregisterTool("read_file");
+            foreach (string tool in new[] { "read_file", "list_directory", "search_files", "edit_file", "write_file" })
+                codeThread.UnregisterTool(tool);
             log.LogInformation("[Client] Session ended ({Thread})", threadKey);
         }
+    }
+
+    private static void RegisterTools(ARI.LLM.Thread thread, WebSocket ws, ILogger log)
+    {
+        RegisterTool(thread, ws, log,
+            name: "read_file",
+            description: "Read the contents of a file from the user's project.",
+            parameters: new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" } }, required = new[] { "path" } },
+            displayVerb: "Reading", displayDoneVerb: "Read",
+            labelField: "path");
+
+        RegisterTool(thread, ws, log,
+            name: "list_directory",
+            description: "List files and subdirectories at a path within the project.",
+            parameters: new { type = "object", properties = new { path = new { type = "string", description = "Directory path relative to project root. Defaults to root." } }, required = Array.Empty<string>() },
+            displayVerb: "Listing directory", displayDoneVerb: "Listed directory",
+            labelField: "path");
+
+        RegisterTool(thread, ws, log,
+            name: "search_files",
+            description: "Search for a string across files in the project. Returns matching lines with file path and line number.",
+            parameters: new { type = "object", properties = new { pattern = new { type = "string", description = "Text to search for (case-insensitive)" }, path = new { type = "string", description = "Directory to search in, relative to project root." }, glob = new { type = "string", description = "File filter e.g. '*.cs'. Defaults to all files." } }, required = new[] { "pattern" } },
+            displayVerb: "Searching", displayDoneVerb: "Searched",
+            labelField: "pattern");
+
+        RegisterTool(thread, ws, log,
+            name: "edit_file",
+            description: "Make a targeted find-and-replace edit to an existing file. old_string must match exactly once.",
+            parameters: new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" }, old_string = new { type = "string", description = "Exact text to find (must appear exactly once)" }, new_string = new { type = "string", description = "Replacement text" } }, required = new[] { "path", "old_string", "new_string" } },
+            displayVerb: "Editing", displayDoneVerb: "Edited",
+            labelField: "path");
+
+        RegisterTool(thread, ws, log,
+            name: "write_file",
+            description: "Write or create a file. Overwrites if it exists. Prefer edit_file for targeted changes.",
+            parameters: new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" }, content = new { type = "string", description = "Full content to write" } }, required = new[] { "path", "content" } },
+            displayVerb: "Writing", displayDoneVerb: "Written",
+            labelField: "path");
+    }
+
+    private static void RegisterTool(
+        ARI.LLM.Thread thread, WebSocket ws, ILogger log,
+        string name, string description, object parameters,
+        string displayVerb, string displayDoneVerb, string labelField)
+    {
+        Func<string, string> MakeDisplay(string verb, string markerType) => argsJson =>
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(argsJson);
+                string label = doc.RootElement.TryGetProperty(labelField, out var el) ? el.GetString() ?? verb : verb;
+                label = System.IO.Path.GetFileName(label).Replace("--", "&#45;&#45;");
+                if (string.IsNullOrWhiteSpace(label)) label = verb;
+                return $"<!--ari-tool-{markerType}:{name}:{label}-->";
+            }
+            catch { return $"<!--ari-tool-{markerType}:{name}:{verb}-->"; }
+        };
+
+        thread.RegisterTool(
+            name,
+            new { type = "function", function = new { name, description, parameters } },
+            async argsJson =>
+            {
+                string callId = Guid.NewGuid().ToString("N");
+                var tcs = new TaskCompletionSource<string>();
+                pendingFileCalls[callId] = tcs;
+
+                log.LogInformation("[Client] → {Tool}  callId={CallId}", name, callId);
+                await Send(ws, new { type = name, callId, args = argsJson });
+
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                cts.Token.Register(() => tcs.TrySetCanceled());
+                try
+                {
+                    string result = await tcs.Task;
+                    log.LogInformation("[Client] ← {Tool}  callId={CallId}  bytes={Bytes}", name, callId, result.Length);
+                    return result;
+                }
+                catch (OperationCanceledException)
+                {
+                    log.LogWarning("[Client] ← {Tool} TIMEOUT  callId={CallId}", name, callId);
+                    return $"[Error: client did not respond to {name} within 30s]";
+                }
+                finally { pendingFileCalls.TryRemove(callId, out _); }
+            },
+            MakeDisplay(displayVerb, "start"),
+            MakeDisplay(displayDoneVerb, "end"));
     }
 
     private sealed class ConnectionState { public string Root { get; set; } = ""; }
 
     private static async Task ReceiveLoop(
-        WebSocket ws, LlmService llm, ARI.LLM.Thread codeThread,
-        string threadKey, List<string> fileTree, ConnectionState state, ILogger log)
+        WebSocket ws, LlmService llm, ARI.LLM.Thread initialThread,
+        string initialThreadKey, List<string> fileTree, ConnectionState state, ILogger log)
     {
+        ARI.LLM.Thread codeThread = initialThread;
+        string         threadKey  = initialThreadKey;
         var buffer = new byte[64 * 1024];
 
-        while (ws.State == WebSocketState.Open)
+        try { await Inner(); }
+        finally
         {
-            using var ms = new MemoryStream();
-            WebSocketReceiveResult result;
-            do
+            foreach (string tool in new[] { "read_file", "list_directory", "search_files", "edit_file", "write_file" })
+                codeThread.UnregisterTool(tool);
+        }
+        return;
+
+        async Task Inner()
+        {
+            while (ws.State == WebSocketState.Open)
             {
-                result = await ws.ReceiveAsync(buffer, CancellationToken.None);
-                if (result.MessageType == WebSocketMessageType.Close) return;
-                ms.Write(buffer, 0, result.Count);
-            }
-            while (!result.EndOfMessage);
-
-            string json = Encoding.UTF8.GetString(ms.ToArray());
-            log.LogInformation("[Client] Received message type from JSON (len={Len})", json.Length);
-
-            JsonDocument doc;
-            try   { doc = JsonDocument.Parse(json); }
-            catch (Exception ex) { log.LogError(ex, "[Client] Failed to parse JSON"); continue; }
-
-            using (doc)
-            {
-                string type = doc.RootElement.TryGetProperty("type", out var typeEl)
-                    ? typeEl.GetString() ?? "" : "";
-                log.LogInformation("[Client] Message type: {Type}", type);
-
-                switch (type)
+                using var ms = new MemoryStream();
+                WebSocketReceiveResult result;
+                do
                 {
-                    case "tree":
-                        state.Root = doc.RootElement.TryGetProperty("root", out var rootEl)
-                            ? rootEl.GetString() ?? "" : "";
-                        if (doc.RootElement.TryGetProperty("tree", out var treeEl))
-                        {
-                            fileTree.Clear();
-                            foreach (var f in treeEl.EnumerateArray())
+                    result = await ws.ReceiveAsync(buffer, CancellationToken.None);
+                    if (result.MessageType == WebSocketMessageType.Close) return;
+                    ms.Write(buffer, 0, result.Count);
+                }
+                while (!result.EndOfMessage);
+
+                string json = Encoding.UTF8.GetString(ms.ToArray());
+                JsonDocument doc;
+                try   { doc = JsonDocument.Parse(json); }
+                catch (Exception ex) { log.LogError(ex, "[Client] Failed to parse JSON"); continue; }
+
+                using (doc)
+                {
+                    string type = doc.RootElement.TryGetProperty("type", out var typeEl) ? typeEl.GetString() ?? "" : "";
+                    log.LogInformation("[Client] Message type: {Type}", type);
+
+                    switch (type)
+                    {
+                        case "tree":
+                            state.Root = doc.RootElement.TryGetProperty("root", out var rootEl) ? rootEl.GetString() ?? "" : "";
+                            if (doc.RootElement.TryGetProperty("tree", out var treeEl))
                             {
-                                var p = f.GetString();
-                                if (p is not null) fileTree.Add(p);
+                                fileTree.Clear();
+                                foreach (var f in treeEl.EnumerateArray())
+                                {
+                                    var p = f.GetString();
+                                    if (p is not null) fileTree.Add(p);
+                                }
                             }
-                        }
-                        log.LogInformation("[Client] Tree received: {Count} files from {Root}", fileTree.Count, state.Root);
-                        await Send(ws, new { type = "tree_ack", count = fileTree.Count });
-                        break;
 
-                    case "chat":
-                        string prompt = doc.RootElement.TryGetProperty("prompt", out var promptEl)
-                            ? promptEl.GetString() ?? "" : "";
-                        if (string.IsNullOrWhiteSpace(prompt)) break;
-
-                        string? ctx = fileTree.Count > 0
-                            ? $"The user has opened a project at `{state.Root}`. File tree:\n```\n{string.Join("\n", fileTree)}\n```\n\n" +
-                              "Use the `read_file` tool to read files before answering code questions."
-                            : null;
-
-                        _ = Task.Run(async () =>
-                        {
-                            try
+                            // If the tree body specifies a different threadKey, rebind tools to that thread
+                            if (doc.RootElement.TryGetProperty("threadKey", out var bindKeyEl))
                             {
-                                await llm.PromptCodeStreaming(
-                                    threadKey, prompt, "user", ctx,
-                                    async delta =>
-                                    {
-                                        log.LogDebug("[Client] delta: {Len} chars", delta.Length);
-                                        await Send(ws, new { type = "delta", text = delta });
-                                    });
-                                await Send(ws, new { type = "done" });
+                                string bindKey = bindKeyEl.GetString() ?? "";
+                                if (!string.IsNullOrWhiteSpace(bindKey) && bindKey != threadKey)
+                                {
+                                    log.LogInformation("[Client] Rebinding tools from {Old} → {New}", threadKey, bindKey);
+                                    foreach (string tool in new[] { "read_file", "list_directory", "search_files", "edit_file", "write_file" })
+                                        codeThread.UnregisterTool(tool);
+                                    codeThread = llm.GetOrCreateCodeThread(bindKey);
+                                    RegisterTools(codeThread, ws, log);
+                                    threadKey = bindKey;
+                                }
                             }
-                            catch (Exception ex)
+
+                            log.LogInformation("[Client] Tree received: {Count} files, bound to thread {Key}", fileTree.Count, threadKey);
+                            await Send(ws, new { type = "tree_ack", count = fileTree.Count });
+                            break;
+
+                        case "file_content":
+                            if ((doc.RootElement.TryGetProperty("callId", out var cidEl) || doc.RootElement.TryGetProperty("call_id", out cidEl))
+                                && doc.RootElement.TryGetProperty("content", out var contentEl))
                             {
-                                log.LogError(ex, "[Client] Prompt error");
-                                await Send(ws, new { type = "error", message = ex.Message });
+                                string callId  = cidEl.GetString()     ?? "";
+                                string content = contentEl.GetString() ?? "";
+                                log.LogInformation("[Client] ← file_content  callId={CallId}  bytes={Bytes}  pending={Pending}", callId, content.Length, pendingFileCalls.ContainsKey(callId));
+                                if (pendingFileCalls.TryGetValue(callId, out var tcs))
+                                    tcs.TrySetResult(content);
+                                else
+                                    log.LogWarning("[Client] ← file_content  callId={CallId}  NO PENDING CALL", callId);
                             }
-                        });
-                        break;
+                            break;
 
-                    case "file_content":
-                        if ((doc.RootElement.TryGetProperty("call_id", out var cidEl) || doc.RootElement.TryGetProperty("callId", out cidEl)) &&
-                            doc.RootElement.TryGetProperty("content", out var contentEl) &&
-                            pendingFileCalls.TryGetValue(cidEl.GetString() ?? "", out var tcs1))
-                            tcs1.TrySetResult(contentEl.GetString() ?? "");
-                        break;
+                        case "file_error":
+                            if ((doc.RootElement.TryGetProperty("callId", out var ecidEl) || doc.RootElement.TryGetProperty("call_id", out ecidEl))
+                                && doc.RootElement.TryGetProperty("error", out var errEl))
+                            {
+                                string callId = ecidEl.GetString() ?? "";
+                                string error  = errEl.GetString()  ?? "";
+                                log.LogWarning("[Client] ← file_error  callId={CallId}  error={Error}", callId, error);
+                                if (pendingFileCalls.TryGetValue(callId, out var tcs))
+                                    tcs.TrySetResult($"[Error: {error}]");
+                            }
+                            break;
 
-                    case "file_error":
-                        if ((doc.RootElement.TryGetProperty("call_id", out var ecidEl) || doc.RootElement.TryGetProperty("callId", out ecidEl)) &&
-                            doc.RootElement.TryGetProperty("error", out var errEl) &&
-                            pendingFileCalls.TryGetValue(ecidEl.GetString() ?? "", out var tcs2))
-                            tcs2.TrySetResult($"[Error: {errEl.GetString()}]");
-                        break;
-
-                    default:
-                        log.LogWarning("[Client] Unknown message type: {Type}", type);
-                        break;
+                        default:
+                            log.LogWarning("[Client] Unknown message type: {Type}", type);
+                            break;
+                    }
                 }
             }
         }

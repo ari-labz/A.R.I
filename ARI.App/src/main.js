@@ -19,7 +19,7 @@ if (needsInstall) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 const { app, BrowserWindow, ipcMain, dialog, session } = require("electron")
 const Store = require("electron-store")
-const { readFile, writeFile, getFileTree } = require("./fs")
+const { readFile, writeFile, getFileTree, listDirectory, searchFiles, editFile } = require("./fs")
 const { init: initLogger, makeLogger, getLogPath } = require("./logger")
 
 const store = new Store()
@@ -249,6 +249,21 @@ ipcMain.handle("fs:pick-folder", async () => {
 ipcMain.handle("fs:tree", (_e, root) => {
     log.info(`fs:tree  root=${root}`)
     return getFileTree(root)
+})
+
+ipcMain.handle("fs:list-dir", (_e, root, dirPath) => {
+    log.info(`fs:list-dir  root=${root}  path=${dirPath ?? "."}`)
+    return listDirectory(root, dirPath)
+})
+
+ipcMain.handle("fs:search", (_e, root, pattern, searchPath, glob) => {
+    log.info(`fs:search  root=${root}  pattern=${pattern}  path=${searchPath ?? "."}  glob=${glob ?? "*"}`)
+    return searchFiles(root, pattern, searchPath, glob)
+})
+
+ipcMain.handle("fs:edit", (_e, root, filePath, oldString, newString) => {
+    log.info(`fs:edit  root=${root}  path=${filePath}`)
+    return editFile(root, filePath, oldString, newString)
 })
 
 // ── IPC: config ───────────────────────────────────────────

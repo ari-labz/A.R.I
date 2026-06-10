@@ -12,8 +12,7 @@ interface Props {
     mode:          AppMode
     codeMode:      boolean
     items:         ThreadItem[]
-    isTyping:      boolean
-    typingLabel:   string
+    isRemembering: boolean
     isStreaming:   boolean
     activeThread:  string | null
     isInternal:    boolean
@@ -36,7 +35,7 @@ interface Props {
 }
 
 export default function Main({
-    mode, codeMode, items, isTyping, typingLabel, isStreaming,
+    mode, codeMode, items, isRemembering, isStreaming,
     activeThread, isInternal, agentName,
     sidebarCollapsed, onOpenSidebar,
     pendingAttach, threadAttach,
@@ -211,9 +210,7 @@ export default function Main({
 
                     <Messages
                         items={items}
-                        isTyping={isTyping}
-                        typingLabel={typingLabel}
-                        isStreaming={isStreaming}
+                        isRemembering={isRemembering}
                         activeThread={activeThread}
                         isInternal={isInternal}
                         agentName={agentName}

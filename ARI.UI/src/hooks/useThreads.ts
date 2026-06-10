@@ -49,6 +49,7 @@ export interface ThreadItem {
     isImage?:        boolean
     mimeType?:       string
     name?:           string
+    isStreaming?:    boolean
 }
 
 export interface MemoryChange {

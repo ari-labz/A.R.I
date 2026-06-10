@@ -47,7 +47,11 @@ public class ClientController : ControllerBase
         using WebSocket ws = await HttpContext.WebSockets.AcceptWebSocketAsync();
         logger.LogInformation("[Client] WebSocket accepted from {Remote}", HttpContext.Connection.RemoteIpAddress);
 
-        string threadKey = $"client-{Guid.NewGuid():N}";
+        // Allow the UI to bind tools to an existing thread (e.g. the active web-* thread)
+        string threadKey = HttpContext.Request.Query.TryGetValue("threadKey", out Microsoft.Extensions.Primitives.StringValues tkv)
+            && !string.IsNullOrWhiteSpace(tkv)
+            ? tkv.ToString()
+            : $"client-{Guid.NewGuid():N}";
         List<string> fileTree = new();
 
         ARI.LLM.Thread codeThread;
@@ -90,6 +94,7 @@ public class ClientController : ControllerBase
                 TaskCompletionSource<string> tcs = new();
                 pendingFileCalls[callId] = tcs;
 
+                logger.LogInformation("[Client] → read_file  path={Path}  callId={CallId}", path, callId);
                 await SendJson(ws, new { type = "read_file", callId, path });
 
                 // Wait up to 30 s for the client to return the file
@@ -97,33 +102,62 @@ public class ClientController : ControllerBase
                 cts.Token.Register(() => tcs.TrySetCanceled());
                 try
                 {
-                    return await tcs.Task;
+                    string result = await tcs.Task;
+                    logger.LogInformation("[Client] ← read_file  callId={CallId}  bytes={Bytes}", callId, result.Length);
+                    return result;
                 }
                 catch (OperationCanceledException)
                 {
+                    logger.LogWarning("[Client] ← read_file TIMEOUT  callId={CallId}  path={Path}", callId, path);
                     return $"[Error: client did not respond to read_file({path}) within 30s]";
                 }
                 finally
                 {
                     pendingFileCalls.TryRemove(callId, out _);
                 }
+            },
+            argsJson =>
+            {
+                try
+                {
+                    using JsonDocument doc = JsonDocument.Parse(argsJson);
+                    string label = System.IO.Path.GetFileName(doc.RootElement.GetProperty("path").GetString() ?? "file");
+                    label = label.Replace("--", "&#45;&#45;");
+                    return $"<!--ari-tool-start:read_file:{label}-->";
+                }
+                catch { return "<!--ari-tool-start:read_file:file-->"; }
+            },
+            argsJson =>
+            {
+                try
+                {
+                    using JsonDocument doc = JsonDocument.Parse(argsJson);
+                    string label = System.IO.Path.GetFileName(doc.RootElement.GetProperty("path").GetString() ?? "file");
+                    label = label.Replace("--", "&#45;&#45;");
+                    return $"<!--ari-tool-end:read_file:{label}-->";
+                }
+                catch { return "<!--ari-tool-end:read_file:file-->"; }
             });
 
         RegisterClientTool(codeThread, ws, "list_directory",
             "List the files and subdirectories at a path within the project.",
-            new { type = "object", properties = new { path = new { type = "string", description = "Directory path relative to project root. Defaults to project root if omitted." } }, required = Array.Empty<string>() });
+            new { type = "object", properties = new { path = new { type = "string", description = "Directory path relative to project root. Defaults to project root if omitted." } }, required = Array.Empty<string>() },
+            displayVerb: "Listing directory", displayDoneVerb: "Listed directory");
 
         RegisterClientTool(codeThread, ws, "search_files",
             "Search for a string across files in the project. Returns matching lines with file path and line number.",
-            new { type = "object", properties = new { pattern = new { type = "string", description = "Text to search for (case-insensitive)" }, path = new { type = "string", description = "Directory to search in, relative to project root." }, glob = new { type = "string", description = "File filter e.g. '*.cs'. Defaults to all files." } }, required = new[] { "pattern" } });
+            new { type = "object", properties = new { pattern = new { type = "string", description = "Text to search for (case-insensitive)" }, path = new { type = "string", description = "Directory to search in, relative to project root." }, glob = new { type = "string", description = "File filter e.g. '*.cs'. Defaults to all files." } }, required = new[] { "pattern" } },
+            displayVerb: "Searching files", displayDoneVerb: "Searched files");
 
         RegisterClientTool(codeThread, ws, "edit_file",
             "Make a targeted find-and-replace edit to an existing file. old_string must match exactly once. Use write_file for full rewrites.",
-            new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" }, old_string = new { type = "string", description = "Exact text to find (must appear exactly once)" }, new_string = new { type = "string", description = "Replacement text" } }, required = new[] { "path", "old_string", "new_string" } });
+            new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" }, old_string = new { type = "string", description = "Exact text to find (must appear exactly once)" }, new_string = new { type = "string", description = "Replacement text" } }, required = new[] { "path", "old_string", "new_string" } },
+            displayVerb: "Editing", displayDoneVerb: "Edited");
 
         RegisterClientTool(codeThread, ws, "write_file",
             "Write or create a file. Overwrites if it exists. Creates missing parent directories. Prefer edit_file for targeted changes.",
-            new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" }, content = new { type = "string", description = "Full content to write" } }, required = new[] { "path", "content" } });
+            new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" }, content = new { type = "string", description = "Full content to write" } }, required = new[] { "path", "content" } },
+            displayVerb: "Writing", displayDoneVerb: "Written");
 
         var state = new ConnectionState { ProjectRoot = "" };
 
@@ -136,16 +170,26 @@ public class ClientController : ControllerBase
         {
             logger.LogError(ex, "[Client] Receive loop error");
         }
-        finally
-        {
-            foreach (string tool in new[] { "read_file", "list_directory", "search_files", "edit_file", "write_file" })
-                codeThread.UnregisterTool(tool);
-            logger.LogInformation("[Client] Session ended ({Thread})", threadKey);
-        }
     }
 
-    private void RegisterClientTool(ARI.LLM.Thread thread, WebSocket ws, string name, string description, object parameters)
+    private void RegisterClientTool(ARI.LLM.Thread thread, WebSocket ws, string name, string description, object parameters, string? displayVerb = null, string? displayDoneVerb = null)
     {
+        Func<string, string>? MakeDisplay(string? verb, string markerType) => verb is null ? null : (argsJson =>
+        {
+            try
+            {
+                using JsonDocument doc = JsonDocument.Parse(argsJson);
+                string label = verb;
+                if (doc.RootElement.TryGetProperty("path", out JsonElement pathEl))
+                    label = System.IO.Path.GetFileName(pathEl.GetString() ?? verb);
+                else if (doc.RootElement.TryGetProperty("pattern", out JsonElement patEl))
+                    label = patEl.GetString() ?? verb;
+                label = label.Replace("--", "&#45;&#45;");
+                return $"<!--ari-tool-{markerType}:{name}:{label}-->";
+            }
+            catch { return $"<!--ari-tool-{markerType}:{name}:{verb}-->"; }
+        });
+
         thread.RegisterTool(
             name,
             new { type = "function", function = new { name, description, parameters } },
@@ -155,14 +199,26 @@ public class ClientController : ControllerBase
                 TaskCompletionSource<string> tcs = new();
                 pendingFileCalls[callId] = tcs;
 
+                logger.LogInformation("[Client] → {Tool}  callId={CallId}", name, callId);
                 await SendJson(ws, new { type = name, callId, args = argsJson });
 
                 using CancellationTokenSource cts = new(TimeSpan.FromSeconds(30));
                 cts.Token.Register(() => tcs.TrySetCanceled());
-                try   { return await tcs.Task; }
-                catch (OperationCanceledException) { return $"[Error: client did not respond to {name} within 30s]"; }
+                try
+                {
+                    string result = await tcs.Task;
+                    logger.LogInformation("[Client] ← {Tool}  callId={CallId}  bytes={Bytes}", name, callId, result.Length);
+                    return result;
+                }
+                catch (OperationCanceledException)
+                {
+                    logger.LogWarning("[Client] ← {Tool} TIMEOUT  callId={CallId}", name, callId);
+                    return $"[Error: client did not respond to {name} within 30s]";
+                }
                 finally { pendingFileCalls.TryRemove(callId, out _); }
-            });
+            },
+            MakeDisplay(displayVerb, "start"),
+            MakeDisplay(displayDoneVerb ?? displayVerb, "end"));
     }
 
     private sealed class ConnectionState { public string ProjectRoot { get; set; } = ""; }
@@ -170,14 +226,27 @@ public class ClientController : ControllerBase
     private async Task ReceiveLoop(
         WebSocket ws,
         LlmService llm,
-        ARI.LLM.Thread codeThread,
-        string threadKey,
+        ARI.LLM.Thread initialThread,
+        string initialThreadKey,
         List<string> fileTree,
         ConnectionState state)
     {
+        // These may be reassigned when the client sends a tree message with a threadKey to bind to
+        ARI.LLM.Thread codeThread = initialThread;
+        string         threadKey  = initialThreadKey;
         byte[] buffer = new byte[1024 * 64];
 
-        while (ws.State == WebSocketState.Open)
+        try { await ReceiveLoopInner(); }
+        finally
+        {
+            foreach (string tool in new[] { "read_file", "list_directory", "search_files", "edit_file", "write_file" })
+                codeThread.UnregisterTool(tool);
+            logger.LogInformation("[Client] Session ended ({Thread})", threadKey);
+        }
+        return;
+
+        async Task ReceiveLoopInner()
+        { while (ws.State == WebSocketState.Open)
         {
             WebSocketReceiveResult result;
             using MemoryStream ms = new();
@@ -209,7 +278,48 @@ public class ClientController : ControllerBase
                             if (p is not null) fileTree.Add(p);
                         }
                     }
-                    logger.LogInformation("[Client] Tree received: {Count} files from {Root}", fileTree.Count, state.ProjectRoot);
+                    // If the UI tells us which existing thread to bind tools to, re-register there
+                    if (doc.RootElement.TryGetProperty("threadKey", out JsonElement bindKeyEl))
+                    {
+                        string bindKey = bindKeyEl.GetString() ?? "";
+                        if (!string.IsNullOrWhiteSpace(bindKey) && bindKey != threadKey)
+                        {
+                            logger.LogInformation("[Client] Binding tools to existing thread {BindKey}", bindKey);
+                            ARI.LLM.Thread targetThread = llm.GetOrCreateCodeThread(bindKey);
+                            // Move tool registrations from the client-* thread to the target web-* thread
+                            foreach (string tool in new[] { "read_file", "list_directory", "search_files", "edit_file", "write_file" })
+                                codeThread.UnregisterTool(tool);
+
+                            RegisterClientTool(targetThread, ws, "read_file",
+                                "Read the contents of a file from the user's project.",
+                                new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" } }, required = new[] { "path" } },
+                                displayVerb: "Reading", displayDoneVerb: "Read");
+
+                            RegisterClientTool(targetThread, ws, "list_directory",
+                                "List files and subdirectories at a path within the project.",
+                                new { type = "object", properties = new { path = new { type = "string", description = "Directory path relative to project root. Omit for root." } }, required = Array.Empty<string>() },
+                                displayVerb: "Listing directory", displayDoneVerb: "Listed directory");
+
+                            RegisterClientTool(targetThread, ws, "search_files",
+                                "Search for a string across project files. Returns matching lines with file path and line number.",
+                                new { type = "object", properties = new { pattern = new { type = "string", description = "Text to search for" }, path = new { type = "string", description = "Directory to search. Defaults to root." }, glob = new { type = "string", description = "File filter e.g. '*.cs'" } }, required = new[] { "pattern" } },
+                                displayVerb: "Searching files", displayDoneVerb: "Searched files");
+
+                            RegisterClientTool(targetThread, ws, "edit_file",
+                                "Targeted find-and-replace on an existing file. old_string must match exactly once. Use write_file for full rewrites or new files.",
+                                new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" }, old_string = new { type = "string", description = "Exact text to find (must appear once)" }, new_string = new { type = "string", description = "Replacement text" } }, required = new[] { "path", "old_string", "new_string" } },
+                                displayVerb: "Editing", displayDoneVerb: "Edited");
+
+                            RegisterClientTool(targetThread, ws, "write_file",
+                                "Write or create a file. Overwrites if it exists. Prefer edit_file for targeted changes.",
+                                new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" }, content = new { type = "string", description = "Full content to write" } }, required = new[] { "path", "content" } },
+                                displayVerb: "Writing", displayDoneVerb: "Written");
+                            // Update threadKey and codeThread for unregister on close
+                            threadKey  = bindKey;
+                            codeThread = targetThread;
+                        }
+                    }
+                    logger.LogInformation("[Client] Tree received: {Count} files, bound to thread {Key}", fileTree.Count, threadKey);
                     await SendJson(ws, new { type = "tree_ack", count = fileTree.Count });
                     break;
 
@@ -256,8 +366,11 @@ public class ClientController : ControllerBase
                     {
                         string callId  = cidEl.GetString()    ?? "";
                         string content = contentEl.GetString() ?? "";
+                        logger.LogInformation("[Client] ← file_content  callId={CallId}  bytes={Bytes}  pending={Pending}", callId, content.Length, pendingFileCalls.ContainsKey(callId));
                         if (pendingFileCalls.TryGetValue(callId, out TaskCompletionSource<string>? tcs))
                             tcs.TrySetResult(content);
+                        else
+                            logger.LogWarning("[Client] ← file_content  callId={CallId}  NO PENDING CALL (too late?)", callId);
                     }
                     break;
 
@@ -267,12 +380,13 @@ public class ClientController : ControllerBase
                     {
                         string callId = ecidEl.GetString() ?? "";
                         string error  = errEl.GetString()  ?? "";
+                        logger.LogWarning("[Client] ← file_error  callId={CallId}  error={Error}", callId, error);
                         if (pendingFileCalls.TryGetValue(callId, out TaskCompletionSource<string>? tcs))
                             tcs.TrySetResult($"[Error reading file: {error}]");
                     }
                     break;
             }
-        }
+        } }
     }
 
     private static async Task SendJson(WebSocket ws, object payload)

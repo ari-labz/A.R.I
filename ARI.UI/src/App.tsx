@@ -45,8 +45,7 @@ export default function App() {
     const [mode,             setMode]              = useState<AppMode>("idle")
     const [items,            setItems]             = useState<ThreadItem[]>([])
     const [isStreaming,      setIsStreaming]        = useState(false)
-    const [isTyping,         setIsTyping]          = useState(false)
-    const [typingLabel,      setTypingLabel]        = useState("A·R·I is thinking")
+    const [isRemembering,    setIsRemembering]      = useState(false)
     const [sidebarCollapsed, setSidebarCollapsed]  = useState(false)
     const [pendingAttach,    setPendingAttach]      = useState<PendingAttachment[]>([])
     const [threadAttach,     setThreadAttach]       = useState<Attachment[]>([])
@@ -62,8 +61,10 @@ export default function App() {
     const watchRenderedRef = useRef(false)
     const activeThreadRef   = useRef<string | null>(null)
     const streamingRef      = useRef(false)
-    const activeProjectRef  = useRef<string | null>(null)   // projectId of current thread
-    const treeInjectedRef   = useRef<Set<string>>(new Set()) // threadKeys whose tree was already injected
+    const activeProjectRef  = useRef<string | null>(null)
+    const treeInjectedRef   = useRef<Set<string>>(new Set())
+    const toolSocketRef     = useRef<WebSocket | null>(null)
+    const toolSocketKeyRef  = useRef<string | null>(null)   // threadKey the socket is bound to
 
     // Keep refs in sync
     useEffect(() => { activeThreadRef.current = activeThread }, [activeThread])
@@ -134,7 +135,7 @@ export default function App() {
                 if (data.deleted) {
                     es.close(); watchEsRef.current = null
                     setActiveThread(null)
-                    setIsTyping(false)
+                    setIsRemembering(false)
                     setMode("idle")
                     setItems([])
                     await loadThreads()
@@ -149,13 +150,7 @@ export default function App() {
                         const hasResponse = hist.some(i => i.type === "ariResponse")
                         if (hasResponse) watchRenderedRef.current = true
                     }
-                    if (data.isRemembering && !data.isProcessing) {
-                        setIsTyping(true); setTypingLabel("Remembering")
-                    } else if (data.isProcessing) {
-                        setIsTyping(true); setTypingLabel("A·R·I is thinking")
-                    } else {
-                        setIsTyping(false)
-                    }
+                    setIsRemembering(!!(data.isRemembering && !data.isProcessing))
                 }
             },
             () => {
@@ -184,60 +179,138 @@ export default function App() {
             let tree: string[] = await window.electronBridge.getFileTree(localPath)
             const MAX_PATHS = 800
             let truncated = false
-            if (tree.length > MAX_PATHS) {
-                tree = tree.slice(0, MAX_PATHS)
-                truncated = true
-            }
+            if (tree.length > MAX_PATHS) { tree = tree.slice(0, MAX_PATHS); truncated = true }
             const header = `Project: ${project.name}\nRoot: ${localPath}\nFiles (${tree.length}${truncated ? "+" : ""}):\n`
             const content = header + tree.join("\n") + (truncated ? "\n... (truncated)" : "")
-            console.log(`[FileTree] Injecting ${tree.length} paths for thread ${threadKey}`)
             const res = await fetch(`/api/threads/${threadKey}/inject-context`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ name: "_project_tree.txt", content }),
             })
-            if (res.ok) {
-                treeInjectedRef.current.add(threadKey)
-                console.log(`[FileTree] Injected successfully`)
-            } else {
-                console.warn(`[FileTree] inject-context returned ${res.status}`)
-            }
+            if (res.ok) treeInjectedRef.current.add(threadKey)
         } catch (e) { console.error("[FileTree] Error:", e) }
     }, [projects])
 
-    const handleFileToolCalls = useCallback(async (threadKey: string, responseText: string) => {
-        if (!window.electronBridge) return
-        const projectId = activeProjectRef.current
-        if (!projectId) return
+    // Open a WebSocket to /api/client?threadKey=... so the server registers file tools
+    // on the active thread. Handles all incoming tool-call messages from the server.
+    const openToolSocket = useCallback(async (threadKey: string, projectId: string) => {
+        console.warn(`[ToolSocket] openToolSocket called  threadKey=${threadKey}  projectId=${projectId}  currentBound=${toolSocketKeyRef.current ?? "none"}`)
+
+        // Already bound to this thread
+        if (toolSocketKeyRef.current === threadKey) {
+            console.warn(`[ToolSocket] Already bound to ${threadKey} — skipping`)
+            return
+        }
+
+        // Close any previous socket
+        toolSocketRef.current?.close()
+        toolSocketRef.current  = null
+        toolSocketKeyRef.current = null
+
+        if (!window.electronBridge) { console.warn("[ToolSocket] No electronBridge — aborting"); return }
         const localPath = await env.getLocalPath(projectId)
-        if (!localPath) return
+        if (!localPath) { console.warn(`[ToolSocket] No local path for project ${projectId} — aborting`); return }
 
-        const pattern = /\[read_file:\s*"([^"]+)"\]/g
-        const matches = [...responseText.matchAll(pattern)]
-        if (!matches.length) return
+        const wsProto = window.location.protocol === "https:" ? "wss" : "ws"
+        const wsUrl = `${wsProto}://${window.location.host}/api/client?threadKey=${encodeURIComponent(threadKey)}`
+        console.warn(`[ToolSocket] Opening WebSocket  url=${wsUrl}`)
+        const ws = new WebSocket(wsUrl)
+        toolSocketRef.current    = ws
+        toolSocketKeyRef.current = threadKey
 
-        const parts: string[] = []
-        for (const match of matches) {
-            const relPath = match[1]
+        // Resolves when the server acknowledges the tree (tools are bound and ready)
+        let resolveReady: () => void
+        const ready = new Promise<void>(r => { resolveReady = r })
+
+        ws.onopen = async () => {
+            console.warn(`[ToolSocket] WebSocket open  threadKey=${threadKey}  localPath=${localPath}`)
             try {
-                const content = await window.electronBridge.readFile(localPath, relPath)
-                parts.push(`[file: "${relPath}"]\n\`\`\`\n${content}\n\`\`\``)
-            } catch {
-                parts.push(`[file: "${relPath}"]\n(File not found or unreadable)`)
+                const tree = await window.electronBridge!.getFileTree(localPath)
+                console.warn(`[ToolSocket] Sending tree  files=${tree.length}  threadKey=${threadKey}`)
+                // Include threadKey so the server rebinds tools to the active web-* thread
+                ws.send(JSON.stringify({ type: "tree", root: localPath, tree, threadKey }))
+            } catch (e) {
+                console.error("[ToolSocket] Failed to send tree:", e)
+                resolveReady!()
             }
         }
-        if (parts.length) {
-            // Slight delay so the response fully renders before the follow-up arrives
-            await new Promise(r => setTimeout(r, 300))
-            // Send file contents as a continuation — use the existing send path
-            const payload = parts.join("\n\n")
-            await fetch(`/api/threads/${threadKey}/stream`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ prompt: payload }),
-            })
+
+        ws.onmessage = async (evt) => {
+            let msg: { type: string; callId?: string; args?: string; count?: number }
+            try { msg = JSON.parse(evt.data) } catch { return }
+
+            if (msg.type === "tree_ack") {
+                console.warn(`[ToolSocket] tree_ack received  count=${msg.count}  threadKey=${threadKey}  tools ready`)
+                resolveReady!()
+                return
+            }
+
+            const { type, callId, args } = msg
+            if (!callId) return
+
+            console.warn(`[ToolSocket] ← Tool request  type=${type}  callId=${callId}`)
+
+            // Parse args JSON (all tools send their params as a JSON string in "args")
+            let params: Record<string, string> = {}
+            try { if (args) params = JSON.parse(args) } catch { return }
+
+            try {
+                let result: string
+
+                if (type === "read_file") {
+                    const content = await window.electronBridge!.readFile(localPath, params.path ?? "")
+                    result = `[file: "${params.path}"]\n\`\`\`\n${content}\n\`\`\``
+                    console.warn(`[ToolSocket] → file_content  callId=${callId}  bytes=${result.length}`)
+                    ws.send(JSON.stringify({ type: "file_content", callId, content: result }))
+
+                } else if (type === "list_directory") {
+                    const entries = await window.electronBridge!.listDirectory(localPath, params.path)
+                    result = `[directory: "${params.path ?? "."}"]\n${entries.join("\n")}`
+                    console.warn(`[ToolSocket] → file_content (list_directory)  callId=${callId}`)
+                    ws.send(JSON.stringify({ type: "file_content", callId, content: result }))
+
+                } else if (type === "search_files") {
+                    const matches = await window.electronBridge!.searchFiles(localPath, params.pattern, params.path, params.glob)
+                    result = matches.length === 0
+                        ? `No matches found for "${params.pattern}".`
+                        : `[search: "${params.pattern}"]\n${matches.join("\n")}`
+                    console.warn(`[ToolSocket] → file_content (search_files)  callId=${callId}  matches=${matches.length}`)
+                    ws.send(JSON.stringify({ type: "file_content", callId, content: result }))
+
+                } else if (type === "edit_file") {
+                    const res = await window.electronBridge!.editFile(localPath, params.path, params.old_string, params.new_string)
+                    if (res.ok) {
+                        console.warn(`[ToolSocket] → file_content (edit_file)  callId=${callId}  path=${params.path}`)
+                        ws.send(JSON.stringify({ type: "file_content", callId, content: `Successfully edited ${params.path}.` }))
+                    } else {
+                        console.warn(`[ToolSocket] → file_error (edit_file)  callId=${callId}  error=${res.error}`)
+                        ws.send(JSON.stringify({ type: "file_error", callId, error: res.error ?? "Edit failed." }))
+                    }
+
+                } else if (type === "write_file") {
+                    await window.electronBridge!.writeFile(localPath, params.path, params.content ?? "")
+                    console.warn(`[ToolSocket] → file_content (write_file)  callId=${callId}  path=${params.path}`)
+                    ws.send(JSON.stringify({ type: "file_content", callId, content: `Successfully wrote ${params.path}.` }))
+                }
+            } catch (e: unknown) {
+                const msg = e instanceof Error ? e.message : String(e)
+                console.warn(`[ToolSocket] → file_error  callId=${callId}  error=${msg}`)
+                ws.send(JSON.stringify({ type: "file_error", callId, error: msg }))
+            }
         }
-    }, [projects])
+
+        ws.onerror = (e) => { console.warn(`[ToolSocket] WebSocket error  threadKey=${threadKey}`, e); resolveReady!() }
+
+        ws.onclose = () => {
+            console.warn(`[ToolSocket] WebSocket closed  threadKey=${threadKey}`)
+            if (toolSocketKeyRef.current === threadKey) {
+                toolSocketRef.current    = null
+                toolSocketKeyRef.current = null
+            }
+        }
+
+        return ready
+    }, [])
 
     const openThread = useCallback(async (
         key: string, internal = false, agName: string | null = null, isCode = false,
@@ -252,7 +325,7 @@ export default function App() {
         setAgentName(agName)
         setCodeMode(isCode)
         setIsStreaming(false)
-        setIsTyping(false)
+        setIsRemembering(false)
         activeProjectRef.current = projectId
 
         const hist = await loadHistory(key, internal).catch(() => [])
@@ -262,16 +335,20 @@ export default function App() {
         if (!internal) {
             openWatch(key, agName)
             await refreshThreadAttach(key)
-            if (isCode && projectId) injectFileTree(key, projectId)
+            if (projectId) {
+                await injectFileTree(key, projectId)
+                await openToolSocket(key, projectId)
+            }
         }
-    }, [openWatch, refreshThreadAttach, injectFileTree])
+    }, [openWatch, refreshThreadAttach, injectFileTree, openToolSocket])
 
     // ── new chat ──────────────────────────────────────────
     function newChat() {
         abortRef.current?.abort(); abortRef.current = null
         watchEsRef.current?.close(); watchEsRef.current = null
+        toolSocketRef.current?.close(); toolSocketRef.current = null; toolSocketKeyRef.current = null
         setActiveThread(null); setIsInternal(false); setAgentName(null)
-        setCodeMode(false); setIsStreaming(false); setIsTyping(false)
+        setCodeMode(false); setIsStreaming(false); setIsRemembering(false)
         setPendingAttach([]); setThreadAttach([])
         setActiveView("chat")
         resetToIdle()
@@ -288,7 +365,7 @@ export default function App() {
         }
         if (isStreaming) {
             abortRef.current?.abort(); abortRef.current = null
-            setIsStreaming(false); setIsTyping(false)
+            setIsStreaming(false)
             pendingMsgRef.current = null
         }
 
@@ -305,9 +382,12 @@ export default function App() {
                 timestamp: new Date().toISOString(),
                 attachments: optimisticAttach as Attachment[] | undefined,
             }
-            setItems(prev => [...prev, userItem])
+            setItems(prev => [...prev, userItem, {
+                type: "ariResponse", content: "",
+                timestamp: new Date().toISOString(),
+                isStreaming: true,
+            }])
             setIsStreaming(true)
-            setIsTyping(true); setTypingLabel("A·R·I is thinking")
         }
 
         let key = activeThreadRef.current
@@ -316,14 +396,21 @@ export default function App() {
             setActiveThread(key)
             activeProjectRef.current = selectedProject
             openWatch(key, null)
-            // Await the injection so the file tree is in pendingAttachments before the stream flushes them
-            if (selectedProject) await injectFileTree(key, selectedProject)
+            if (selectedProject) {
+                await injectFileTree(key, selectedProject)
+            }
         } else if (mode === "idle") {
             activate()
         }
 
+        // Always ensure tools are bound before sending — covers both new threads and
+        // existing threads opened after a server restart (openToolSocket no-ops if already bound)
+        const project = selectedProject ?? activeProjectRef.current
+        if (project) {
+            await openToolSocket(key!, project)
+        }
+
         if (prompt.startsWith("/")) {
-            setIsTyping(true)
             try {
                 const res = await fetch("/api/commands", {
                     method: "POST",
@@ -332,7 +419,6 @@ export default function App() {
                 })
                 if (!res.ok) {
                     const data = await res.json()
-                    setIsTyping(false)
                     setItems(prev => [...prev, {
                         type: "commandExchange", input: prompt,
                         response: data.error ?? "Command failed.",
@@ -340,7 +426,6 @@ export default function App() {
                     }])
                 }
             } catch {
-                setIsTyping(false)
                 setItems(prev => [...prev, {
                     type: "commandExchange", input: prompt,
                     response: "Command failed — could not reach A·R·I.",
@@ -353,22 +438,27 @@ export default function App() {
         if (!needsNew) {
             const optimisticAttach = pendingAttach.length ? [...pendingAttach] : undefined
             setPendingAttach([])
-            pendingMsgRef.current = prompt
+            pendingMsgRef.current = null
             preSendCountRef.current = items.length
-            setItems(prev => [...prev, {
-                type: "userMessage", content: prompt,
-                timestamp: new Date().toISOString(),
-                attachments: optimisticAttach as Attachment[] | undefined,
-            }])
+            setItems(prev => [...prev,
+                {
+                    type: "userMessage", content: prompt,
+                    timestamp: new Date().toISOString(),
+                    attachments: optimisticAttach as Attachment[] | undefined,
+                },
+                {
+                    type: "ariResponse", content: "",
+                    timestamp: new Date().toISOString(),
+                    isStreaming: true,
+                },
+            ])
             setIsStreaming(true)
-            setIsTyping(true); setTypingLabel("A·R·I is thinking")
+            watchRenderedRef.current = false
         }
 
         const ctrl = new AbortController()
         abortRef.current = ctrl
         const keyForStream = key!
-
-        let streamingItemAdded = false
 
         async function runStream() {
             try {
@@ -390,50 +480,40 @@ export default function App() {
 
                     if (data === "[DONE]") {
                         abortRef.current = null
-                        setIsStreaming(false); setIsTyping(false)
-                        pendingMsgRef.current = null
+                        setIsStreaming(false)
                         loadThreads()
-                        // Refresh with full metadata, then scan for file tool calls
+                        // Replace the optimistic streaming item with the finalized server history
                         loadHistory(keyForStream).then(hist => {
                             setItems(hist)
-                            const lastResponse = [...hist].reverse().find(i => i.type === "ariResponse")
-                            if (lastResponse) handleFileToolCalls(keyForStream, lastResponse.content)
                         }).catch(() => {})
                         return
                     }
                     if (data === "[CANCELLED]") {
                         abortRef.current = null
-                        setIsStreaming(false); setIsTyping(false)
+                        setIsStreaming(false)
                         setItems(prev => prev.slice(0, preSendCountRef.current))
-                        pendingMsgRef.current = null
                         return
                     }
                     if (data.startsWith("[ERROR]")) {
-                        setIsTyping(false)
-                        setItems(prev => [...prev, {
-                            type: "ariResponse", content: data.replace("[ERROR] ", ""),
-                            timestamp: new Date().toISOString(),
-                        }])
+                        setItems(prev => {
+                            const last = prev[prev.length - 1]
+                            if (last?.type === "ariResponse" && last.isStreaming)
+                                return [...prev.slice(0, -1), { ...last, content: data.replace("[ERROR] ", ""), isStreaming: false }]
+                            return [...prev, { type: "ariResponse", content: data.replace("[ERROR] ", ""), timestamp: new Date().toISOString() }]
+                        })
                         abortRef.current = null; setIsStreaming(false)
                         return
                     }
                     if (watchRenderedRef.current) return
 
                     const text = data.replace(/\\n/g, "\n")
-                    if (!streamingItemAdded) {
-                        streamingItemAdded = true
-                        setItems(prev => [...prev, {
-                            type: "ariResponse", content: text,
-                            timestamp: new Date().toISOString(),
-                        }])
-                    } else {
-                        // Each SSE event carries the full accumulated response — replace, don't append
-                        setItems(prev => {
-                            const last = prev[prev.length - 1]
-                            if (!last || last.type !== "ariResponse") return prev
-                            return [...prev.slice(0, -1), { ...last, content: text }]
-                        })
-                    }
+
+                    // Update the last ariResponse item in place (it was pre-added with isStreaming: true)
+                    setItems(prev => {
+                        const last = prev[prev.length - 1]
+                        if (!last || last.type !== "ariResponse") return prev
+                        return [...prev.slice(0, -1), { ...last, content: text, isStreaming: true }]
+                    })
                 }
 
                 while (true) {
@@ -447,17 +527,18 @@ export default function App() {
                 if (buf) handleLine(buf.trimEnd())
             } catch (err: unknown) {
                 if (err instanceof Error && err.name === "AbortError") return
-                setIsTyping(false)
-                setItems(prev => [...prev, {
-                    type: "ariResponse", content: "[connection error]",
-                    timestamp: new Date().toISOString(),
-                }])
+                setItems(prev => {
+                    const last = prev[prev.length - 1]
+                    if (last?.type === "ariResponse" && last.isStreaming)
+                        return [...prev.slice(0, -1), { ...last, content: "[connection error]", isStreaming: false }]
+                    return [...prev, { type: "ariResponse", content: "[connection error]", timestamp: new Date().toISOString() }]
+                })
                 abortRef.current = null; setIsStreaming(false)
             }
         }
 
         runStream()
-    }, [isStreaming, pendingAttach, items.length, mode, openWatch, loadThreads, selectedProject, injectFileTree, handleFileToolCalls])
+    }, [isStreaming, pendingAttach, items.length, mode, openWatch, loadThreads, selectedProject, injectFileTree, openToolSocket])
 
     // ── upload thread attachment ──────────────────────────
     const uploadThreadFiles = useCallback(async (files: File[]) => {
@@ -540,8 +621,7 @@ export default function App() {
                     mode={mode}
                     codeMode={codeMode}
                     items={items}
-                    isTyping={isTyping}
-                    typingLabel={typingLabel}
+                    isRemembering={isRemembering}
                     isStreaming={isStreaming}
                     activeThread={activeThread}
                     isInternal={isInternal}

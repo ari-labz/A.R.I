@@ -82,19 +82,19 @@ public class ProjectStore
     private void Save(List<Project> projects)
         => File.WriteAllText(_filePath, JsonSerializer.Serialize(projects, JsonOpts));
 
-    // ── Thread → Project mapping (persisted so it survives restarts) ─────────────
+    // ── Thread → Project mapping (in-memory only — threads don't survive restarts) ──
 
     public Dictionary<string, string> LoadThreadMap()
     {
-        if (!File.Exists(_threadMapPath)) return new();
-        try   { return JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(_threadMapPath), JsonOpts) ?? new(); }
-        catch { return new(); }
+        // Threads are in-memory only. Any persisted map is stale — ignore it.
+        if (File.Exists(_threadMapPath))
+            try { File.Delete(_threadMapPath); } catch { /* best-effort */ }
+        return new();
     }
 
     public void SaveThreadMap(Dictionary<string, string> map)
     {
-        try { File.WriteAllText(_threadMapPath, JsonSerializer.Serialize(map, JsonOpts)); }
-        catch { /* best-effort */ }
+        // No-op — thread→project mappings are not persisted across restarts.
     }
 
     // ── Project attachments ───────────────────────────────────────────────────────
