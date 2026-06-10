@@ -91,13 +91,21 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
         } catch { /* ignore */ }
     }
 
+    // Local path saves immediately — independent of the server Save button
     async function pickEditFolder() {
+        if (!selected) return
         const path = await env.pickFolder()
-        if (path) setEditPath(path)
+        if (!path) return
+        setEditPath(path)
+        await env.setLocalPath(selected.id, path)
+        setLocalPaths(prev => ({ ...prev, [selected.id]: path }))
     }
 
     async function clearEditFolder() {
+        if (!selected) return
         setEditPath(null)
+        await env.setLocalPath(selected.id, null)
+        setLocalPaths(prev => ({ ...prev, [selected.id]: null }))
     }
 
     async function handleSave(e: React.FormEvent) {
@@ -111,9 +119,6 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                 body: JSON.stringify({ name: editName.trim(), description: editDescription.trim(), instructions: editInstructions.trim(), forceCodePipeline: editForceCode }),
             })
             if (!res.ok) { setEditError((await res.json().catch(() => null))?.error ?? "Failed to save."); return }
-            // Save local path to this machine's electron-store
-            await env.setLocalPath(selected.id, editPath)
-            setLocalPaths(prev => ({ ...prev, [selected.id]: editPath }))
             setSelected(await res.json())
             onProjectCreated()
         } catch { setEditError("Could not reach ARI.") }
@@ -165,77 +170,94 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                     <button className="btn-danger" onClick={handleDelete}>Delete project</button>
                 </div>
 
-                <form id="project-form" onSubmit={handleSave}>
-                    <label>
-                        Name
-                        <input type="text" value={editName} onChange={e => setEditName(e.target.value)} required />
-                    </label>
-                    <label>
-                        Description <span className="field-optional">(optional)</span>
-                        <input type="text" value={editDescription} onChange={e => setEditDescription(e.target.value)} placeholder="Short description for your own reference" />
-                    </label>
-                    <label>
-                        Instructions <span className="field-optional">(injected into every conversation)</span>
-                        <textarea value={editInstructions} onChange={e => setEditInstructions(e.target.value)} rows={5}
-                            placeholder={"Coding standards or preferences injected into every conversation."} />
-                    </label>
-                    <div className="toggle-row">
-                        <div className="toggle-label">
-                            <span>Force Code pipeline</span>
-                            <span className="field-optional">Skip classification — always route to Code agent</span>
+                {/* ── Project settings (server) ── */}
+                <div className="project-section">
+                    <div className="project-section-header">
+                        <h2>Project settings</h2>
+                        <span className="field-optional">Stored on the server — shared across all devices</span>
+                    </div>
+                    <form id="project-form" onSubmit={handleSave}>
+                        <label>
+                            Name
+                            <input type="text" value={editName} onChange={e => setEditName(e.target.value)} required />
+                        </label>
+                        <label>
+                            Description <span className="field-optional">(optional)</span>
+                            <input type="text" value={editDescription} onChange={e => setEditDescription(e.target.value)} placeholder="Short description for your own reference" />
+                        </label>
+                        <label>
+                            Instructions <span className="field-optional">(injected into every conversation)</span>
+                            <textarea value={editInstructions} onChange={e => setEditInstructions(e.target.value)} rows={5}
+                                placeholder={"Coding standards or preferences injected into every conversation."} />
+                        </label>
+                        <div className="toggle-row">
+                            <div className="toggle-label">
+                                <span>Force Code pipeline</span>
+                                <span className="field-optional">Skip classification — always route to Code agent</span>
+                            </div>
+                            <button
+                                type="button"
+                                className={`ios-toggle${editForceCode ? " on" : ""}`}
+                                onClick={() => setEditForceCode(v => !v)}
+                                aria-pressed={editForceCode}
+                            />
                         </div>
+
+                        <div className="project-section-header" style={{ marginTop: "20px" }}>
+                            <h2>Attachments</h2>
+                            <span className="field-optional">Attached to every new thread in this project</span>
+                        </div>
+                        {attachments.length > 0 && (
+                            <ul className="project-att-list">
+                                {attachments.map(a => (
+                                    <li key={a.name} className="project-att-item">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
+                                        </svg>
+                                        <span>{a.name}</span>
+                                        <button className="att-remove" onClick={() => handleRemoveAttachment(a.name)}>×</button>
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
                         <button
                             type="button"
-                            className={`ios-toggle${editForceCode ? " on" : ""}`}
-                            onClick={() => setEditForceCode(v => !v)}
-                            aria-pressed={editForceCode}
-                        />
-                    </div>
-                    {isElectron && (
+                            className="btn-secondary btn-add-att"
+                            disabled={attUploading}
+                            onClick={() => fileInputRef.current?.click()}
+                        >
+                            {attUploading ? "Uploading…" : "+ Add file"}
+                        </button>
+                        <input ref={fileInputRef} type="file" multiple style={{ display: "none" }} onChange={handleAttachFile} />
+
+                        {editError && <p className="form-error">{editError}</p>}
+                        <div className="form-actions">
+                            <button type="submit" className="btn-primary" disabled={editSaving || !editName.trim()}>
+                                {editSaving ? "Saving…" : "Save changes"}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                {/* ── App settings (local, Electron only) ── */}
+                {isElectron && (
+                    <div className="project-section">
+                        <div className="project-section-header">
+                            <h2>App settings</h2>
+                            <span className="field-optional">Stored on this device only — not synced</span>
+                        </div>
                         <label>
-                            Local path <span className="field-optional">(stored on this machine only)</span>
+                            Local path
                             <div className="folder-picker-row">
-                                <span className="folder-picker-path">{editPath ?? "Not available on this machine"}</span>
+                                <span className="folder-picker-path">
+                                    {editPath ?? <span className="project-unavailable">Not available on this machine</span>}
+                                </span>
                                 <button type="button" className="btn-secondary btn-pick-folder" onClick={pickEditFolder}>Browse…</button>
                                 {editPath && <button type="button" className="btn-secondary btn-pick-folder" onClick={clearEditFolder}>Clear</button>}
                             </div>
                         </label>
-                    )}
-                    {editError && <p className="form-error">{editError}</p>}
-                    <div className="form-actions">
-                        <button type="submit" className="btn-primary" disabled={editSaving || !editName.trim()}>
-                            {editSaving ? "Saving…" : "Save changes"}
-                        </button>
                     </div>
-                </form>
-
-                <div id="project-attachments">
-                    <div className="project-attachments-header">
-                        <h2>Attachments</h2>
-                        <span className="field-optional">Attached to every new thread in this project</span>
-                    </div>
-                    {attachments.length > 0 && (
-                        <ul className="project-att-list">
-                            {attachments.map(a => (
-                                <li key={a.name} className="project-att-item">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
-                                    </svg>
-                                    <span>{a.name}</span>
-                                    <button className="att-remove" onClick={() => handleRemoveAttachment(a.name)}>×</button>
-                                </li>
-                            ))}
-                        </ul>
-                    )}
-                    <button
-                        className="btn-secondary btn-add-att"
-                        disabled={attUploading}
-                        onClick={() => fileInputRef.current?.click()}
-                    >
-                        {attUploading ? "Uploading…" : "+ Add file"}
-                    </button>
-                    <input ref={fileInputRef} type="file" multiple style={{ display: "none" }} onChange={handleAttachFile} />
-                </div>
+                )}
             </div>
         )
     }
@@ -316,7 +338,12 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                                 {isElectron && (
                                     localPaths[p.id]
                                         ? <span className="project-card-path">{localPaths[p.id]}</span>
-                                        : <span className="project-card-path project-card-path--unavailable">Not available on this machine</span>
+                                        : <span className="project-card-path project-card-path--unavailable">
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{display:"inline",verticalAlign:"middle",marginRight:"4px",marginTop:"-1px"}}>
+                                                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                                            </svg>
+                                            Not available on this device
+                                          </span>
                                 )}
                             </div>
                             <svg className="project-card-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

@@ -535,7 +535,9 @@ public class ThreadsController(LlmServiceHolder holder, ProjectStore projectStor
                 ctx.AppendLine($"Project: {project.Name}");
                 if (!string.IsNullOrWhiteSpace(project.Instructions))
                     ctx.AppendLine().AppendLine(project.Instructions);
-                if (!string.IsNullOrWhiteSpace(project.LocalPath))
+                // If the client injected a file tree for this thread, tell the LLM about it
+                bool hasTree = threadAtts?.Any(a => a.Name == "_project_tree.txt") == true;
+                if (hasTree)
                 {
                     ctx.AppendLine().AppendLine("The complete project file tree is provided in the context attachment `_project_tree.txt`. Use the `read_file` tool to read specific files whenever you need to examine their contents.");
                 }
@@ -572,16 +574,13 @@ public class ThreadsController(LlmServiceHolder holder, ProjectStore projectStor
 
         try
         {
-            string username  = GetUsername();
-            string? localPath = ThreadProjects.TryGetValue(threadKey, out string? lpPid)
-                ? projectStore.Get(lpPid)?.LocalPath
-                : null;
+            string username = GetUsername();
             await Llm.PromptStreaming(threadKey, prompt, username, platformContext, async accumulated =>
             {
                 string escaped = accumulated.Replace("\n", "\\n").Replace("\r", "");
                 await Response.WriteAsync($"data: {escaped}\n\n", cancellationToken);
                 await Response.Body.FlushAsync(cancellationToken);
-            }, cancellationToken, messageAttachments: msgAtts, threadAttachments: threadAtts, localPath: localPath);
+            }, cancellationToken, messageAttachments: msgAtts, threadAttachments: threadAtts);
             await Response.WriteAsync("data: [DONE]\n\n", cancellationToken);
         }
         catch (OperationCanceledException)
