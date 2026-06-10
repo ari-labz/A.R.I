@@ -29,7 +29,7 @@ public class Thread
 
     public readonly List<ThreadItem> History = new();
 
-    private readonly Dictionary<string, (object Schema, Func<string, Task<string>> Execute, Func<string, string>? Display)> tools = new();
+    private readonly Dictionary<string, (object Schema, Func<string, Task<string>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter)> tools = new();
 
     // ── Lifecycle ──────────────────────────────────────────────────────────────
     public ThreadState              State           = ThreadState.Active;
@@ -102,8 +102,8 @@ public class Thread
 
     // ── Tools ───────────────────────────────────────────────────────────────────
 
-    public void RegisterTool(string name, object schema, Func<string, Task<string>> executor, Func<string, string>? displayFormatter = null)
-        => tools[name] = (schema, executor, displayFormatter);
+    public void RegisterTool(string name, object schema, Func<string, Task<string>> executor, Func<string, string>? displayFormatter = null, Func<string, string>? displayAfterFormatter = null)
+        => tools[name] = (schema, executor, displayFormatter, displayAfterFormatter);
 
     public void UnregisterTool(string name)
         => tools.Remove(name);
@@ -451,6 +451,11 @@ public class Thread
                                         ? tools.Values.Select(t => t.Schema).ToArray()
                                         : null;
 
+            if (!agent.QuietLogging && toolCallCount == 0)
+                Common.Logger.LogInformation("[{Agent}] ({Thread}) {Tools}",
+                    agent.Name, threadKey,
+                    toolSchemas is not null ? $"{toolSchemas.Length} tool(s) available: {string.Join(", ", tools.Keys)}" : "no tools registered");
+
             Dictionary<string, object?> body = new()
             {
                 ["model"]          = agent.ModelString,
@@ -495,6 +500,7 @@ public class Thread
 
             Dictionary<int, (string Id, string Name, StringBuilder Args)> pendingCalls = new();
             string? finishReason = null;
+            string? xmlFallbackOriginalText = null;
             responseBuilder.Clear();
 
             string? line;
@@ -539,6 +545,20 @@ public class Thread
 
                     if (delta.TryGetProperty("tool_calls", out JsonElement toolCallsEl))
                     {
+                        // Native tool call detected. Move any pre-tool text (e.g. acknowledgment sentence)
+                        // into contentBuilder so it survives the reset. Discard only if it looks like
+                        // the model was leaking a text-format tool call before the native one.
+                        if (responseBuilder.Length > 0)
+                        {
+                            string preText = responseBuilder.ToString().TrimEnd();
+                            bool isLeakedToolCall = preText.Contains("<tool_call>") || preText.Contains("<function=")
+                                || tools.Keys.Any(k => preText.StartsWith(k, StringComparison.OrdinalIgnoreCase));
+                            if (!isLeakedToolCall && preText.Length > 0)
+                                contentBuilder.Append(preText + "\n");
+                            responseBuilder.Clear();
+                            if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                        }
+
                         foreach (JsonElement tc in toolCallsEl.EnumerateArray())
                         {
                             int index = tc.GetProperty("index").GetInt32();
@@ -567,6 +587,9 @@ public class Thread
                     string? deltaText = contentEl.GetString();
                     if (!string.IsNullOrEmpty(deltaText))
                     {
+                        // Strip Qwen3 thinking control tokens before accumulating
+                        deltaText = deltaText.Replace("<|think_off|>", "").Replace("<|think_on|>", "");
+                        if (string.IsNullOrEmpty(deltaText)) continue;
                         responseBuilder.Append(deltaText);
                         if (LiveCall is { } lc) lc.EstimatedOutputTokens = responseBuilder.Length / CHARS_PER_TOKEN;
                         if (onDelta is not null)
@@ -606,31 +629,85 @@ public class Thread
                     responseBuilder.Clear();
                     finishReason = "tool_calls";
                 }
+
+                // Qwen3 XML tool call format: <tool_name><param>value</param>...</tool_name>
+                if (pendingCalls.Count == 0 && tools.Count > 0)
+                {
+                    string toolNamePattern = string.Join("|", tools.Keys.Select(Regex.Escape));
+                    MatchCollection xmlCalls = Regex.Matches(
+                        responseBuilder.ToString(),
+                        $@"<({toolNamePattern})>\s*(.*?)\s*</\1>",
+                        RegexOptions.Singleline | RegexOptions.IgnoreCase);
+
+                    if (xmlCalls.Count > 0)
+                    {
+                        Common.Logger.LogWarning("[{Agent}] ({Thread}) model used Qwen3 XML tool call format — parsing fallback.", agent.Name, threadKey);
+
+                        // Preserve the full original response (with XML) as the assistant turn
+                        xmlFallbackOriginalText = responseBuilder.ToString();
+
+                        // Extract any text before the first tool call for display
+                        int firstCallIndex = xmlCalls[0].Index;
+                        if (firstCallIndex > 0)
+                            contentBuilder.Append(xmlFallbackOriginalText[..firstCallIndex].TrimEnd());
+
+                        int fakeIndex = 0;
+                        foreach (Match m in xmlCalls)
+                        {
+                            string toolName = m.Groups[1].Value.Trim().ToLowerInvariant();
+                            string inner    = m.Groups[2].Value;
+
+                            Dictionary<string, string> argsDict = new(StringComparer.OrdinalIgnoreCase);
+                            foreach (Match p in Regex.Matches(inner, @"<(\w+)>\s*(.*?)\s*</\1>", RegexOptions.Singleline))
+                            {
+                                string paramName = p.Groups[1].Value.Trim();
+                                if (paramName.Equals("file_path", StringComparison.OrdinalIgnoreCase)) paramName = "path";
+                                argsDict[paramName] = p.Groups[2].Value.Trim();
+                            }
+
+                            string argsJson = JsonSerializer.Serialize(argsDict);
+                            pendingCalls[fakeIndex++] = ($"fallback_xml_{fakeIndex}", toolName, new StringBuilder(argsJson));
+                        }
+
+                        responseBuilder.Clear();
+                        finishReason = "tool_calls";
+                    }
+                }
             }
 
             if (pendingCalls.Count > 0 && finishReason == "tool_calls")
             {
-                // Preserve any partial response text that streamed before the tool call
-                if (responseBuilder.Length > 0)
-                    contentBuilder.Append(responseBuilder);
+                bool isXmlFallback = pendingCalls.Values.Any(c => c.Id.StartsWith("fallback_xml_"));
 
                 toolCallCount += pendingCalls.Count;
 
-                // Build assistant message — omit content when empty to avoid BadRequest
-                var toolCallList = pendingCalls
-                    .OrderBy(kv => kv.Key)
-                    .Select(kv => new
-                    {
-                        id       = kv.Value.Id,
-                        type     = "function",
-                        function = new { name = kv.Value.Name, arguments = kv.Value.Args.ToString() }
-                    })
-                    .ToArray();
-
-                if (responseBuilder.Length > 0)
-                    messages.Add(new { role = "assistant", content = responseBuilder.ToString(), tool_calls = toolCallList });
+                if (isXmlFallback)
+                {
+                    // XML fallback: model generated XML in content — it won't recognise role:tool.
+                    // Keep the original XML as the assistant turn, inject results as role:user.
+                    messages.Add(new { role = "assistant", content = xmlFallbackOriginalText ?? "" });
+                }
                 else
+                {
+                    // Native tool_calls: use standard OpenAI format — the model and llama-server
+                    // both understand role:tool for this path (same as Dialogue/Recall).
+                    var toolCallList = pendingCalls
+                        .OrderBy(kv => kv.Key)
+                        .Select(kv => new
+                        {
+                            id       = kv.Value.Id,
+                            type     = "function",
+                            function = new { name = kv.Value.Name, arguments = kv.Value.Args.ToString() }
+                        })
+                        .ToArray();
+
                     messages.Add(new { role = "assistant", tool_calls = toolCallList });
+                }
+
+                // Execute each tool, emit display markers, collect results
+                StringBuilder? xmlResultsMsg = isXmlFallback
+                    ? new StringBuilder("Here are the results of the tool calls you made:\n\n")
+                    : null;
 
                 foreach ((string Id, string Name, StringBuilder Args) call in pendingCalls.Values)
                 {
@@ -647,19 +724,44 @@ public class Thread
                         if (tool.Display is not null)
                         {
                             contentBuilder.Append(tool.Display(call.Args.ToString()));
-                            if (onDelta is not null)
-                                await onDelta(contentBuilder.ToString());
+                            if (onDelta is not null) await onDelta(contentBuilder.ToString());
                         }
                         result = await tool.Execute(call.Args.ToString());
+                        if (IsToolError(result))
+                        {
+                            Common.Logger.LogError("[{Agent}] ({Thread}) Tool '{Tool}' failed: {Error}", agent.Name, threadKey, call.Name, result);
+                            contentBuilder.Append($"<!--ari-tool-error:{call.Name}:{EscapeMarkerLabel(result)}-->");
+                            if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                        }
+                        else if (tool.DisplayAfter is not null)
+                        {
+                            contentBuilder.Append(tool.DisplayAfter(call.Args.ToString()));
+                            if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                        }
                         toolResults.Add(result);
                     }
                     else
                     {
-                        result = "Tool not found.";
+                        result = $"[Error: tool '{call.Name}' is not registered]";
+                        Common.Logger.LogError("[{Agent}] ({Thread}) Model called unknown tool '{Tool}'", agent.Name, threadKey, call.Name);
+                        contentBuilder.Append($"<!--ari-tool-error:{call.Name}:{EscapeMarkerLabel(result)}-->");
+                        if (onDelta is not null) await onDelta(contentBuilder.ToString());
                     }
 
-                    messages.Add(new { role = "tool", tool_call_id = call.Id, name = call.Name, content = result });
+                    if (isXmlFallback)
+                    {
+                        xmlResultsMsg!.AppendLine($"--- {call.Name} ---");
+                        xmlResultsMsg.AppendLine(result);
+                        xmlResultsMsg.AppendLine();
+                    }
+                    else
+                    {
+                        messages.Add(new { role = "tool", tool_call_id = call.Id, name = call.Name, content = result });
+                    }
                 }
+
+                if (isXmlFallback)
+                    messages.Add(new { role = "user", content = xmlResultsMsg!.ToString().TrimEnd() });
 
                 continue;
             }
@@ -673,6 +775,11 @@ public class Thread
             : responseBuilder.ToString();
         if (responseText.StartsWith("ARI: ", StringComparison.OrdinalIgnoreCase))
             responseText = responseText["ARI: ".Length..];
+        // Strip Qwen3 thinking control tokens that leak through llama-server
+        responseText = responseText
+            .Replace("<|think_off|>", "")
+            .Replace("<|think_on|>", "")
+            .Trim();
         if (string.IsNullOrWhiteSpace(responseText))
             throw new LlmRequestFailedException("LLM response was empty.");
 
@@ -736,4 +843,11 @@ public class Thread
 
         return responseText;
     }
+
+    private static bool IsToolError(string result) =>
+        result.StartsWith("[Error:", StringComparison.OrdinalIgnoreCase) ||
+        result.StartsWith("Error:", StringComparison.OrdinalIgnoreCase);
+
+    private static string EscapeMarkerLabel(string s) =>
+        s.Replace("--", "&#45;&#45;").Replace(">", "&gt;");
 }

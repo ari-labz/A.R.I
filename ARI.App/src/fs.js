@@ -71,4 +71,64 @@ function getFileTree(root) {
     return buildTree(path.resolve(root), path.resolve(root))
 }
 
-module.exports = { readFile, writeFile, getFileTree }
+function listDirectory(root, dirPath) {
+    const abs = path.resolve(root, dirPath ?? ".")
+    if (!abs.startsWith(path.resolve(root))) throw new Error("Path traversal denied")
+    let entries
+    try { entries = fs.readdirSync(abs, { withFileTypes: true }) }
+    catch (e) { throw new Error(`Directory not found: ${dirPath}`) }
+    return entries
+        .filter(e => !e.name.startsWith(".") || e.name === ".env")
+        .map(e => e.name + (e.isDirectory() ? "/" : ""))
+        .sort()
+}
+
+function searchFiles(root, pattern, searchPath, glob) {
+    const absRoot   = path.resolve(root)
+    const absSearch = path.resolve(root, searchPath ?? ".")
+    if (!absSearch.startsWith(absRoot)) throw new Error("Path traversal denied")
+
+    const results = []
+    const globExt = (glob && glob !== "*" && glob.startsWith("*.")) ? glob.slice(1) : null
+
+    function search(dir) {
+        if (results.length >= 200) return
+        let entries
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+        for (const entry of entries) {
+            if (results.length >= 200) return
+            if (entry.name.startsWith(".") && entry.name !== ".env") continue
+            if (IGNORED_DIRS.has(entry.name)) continue
+            const abs = path.join(dir, entry.name)
+            if (entry.isDirectory()) {
+                search(abs)
+            } else {
+                if (globExt && !entry.name.endsWith(globExt)) continue
+                try {
+                    const lines = fs.readFileSync(abs, "utf8").split("\n")
+                    for (let i = 0; i < lines.length && results.length < 200; i++) {
+                        if (lines[i].toLowerCase().includes(pattern.toLowerCase())) {
+                            results.push(`${path.relative(absRoot, abs)}:${i + 1}: ${lines[i].trim()}`)
+                        }
+                    }
+                } catch { /* skip unreadable */ }
+            }
+        }
+    }
+    search(absSearch)
+    return results
+}
+
+function editFile(root, filePath, oldString, newString) {
+    const abs = path.resolve(root, filePath)
+    if (!abs.startsWith(path.resolve(root))) throw new Error("Path traversal denied")
+    const content = fs.readFileSync(abs, "utf8")
+    let count = 0, idx = 0
+    while ((idx = content.indexOf(oldString, idx)) !== -1) { count++; idx += oldString.length }
+    if (count === 0) return { ok: false, error: `old_string not found in ${filePath}. No changes made.` }
+    if (count > 1)  return { ok: false, error: `old_string matches ${count} locations in ${filePath}. Add more surrounding context to make it unique.` }
+    fs.writeFileSync(abs, content.replace(oldString, newString), "utf8")
+    return { ok: true }
+}
+
+module.exports = { readFile, writeFile, getFileTree, listDirectory, searchFiles, editFile }

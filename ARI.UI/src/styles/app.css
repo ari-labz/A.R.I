@@ -794,6 +794,27 @@ html, body {
 .msg-row.user .msg-time { text-align: right; }
 .msg-row.assistant .msg-time { text-align: left; }
 
+/* ── tool cards (inline in response bubble) ─────────────── */
+.tool-card {
+    display: flex; align-items: center; gap: 6px;
+    width: fit-content;
+    padding: 3px 10px; margin: 3px 0;
+    border-radius: 6px; border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.04);
+    font-size: 12px; font-style: italic; color: #6b7280;
+    user-select: none;
+}
+.tool-card--done { opacity: 0.6; }
+.tool-card--active { color: #9ca3af; }
+.tool-card--error { color: #f87171; border-color: #7f1d1d; background: rgba(127,29,29,0.15); }
+.tool-card .typing-dots { display: flex; gap: 3px; align-items: center; }
+.tool-card .typing-dots b {
+    width: 4px; height: 4px; border-radius: 50%; background: #6b7280; display: block;
+    animation: bounce 1.2s infinite ease-in-out;
+}
+.tool-card .typing-dots b:nth-child(2) { animation-delay: .2s; }
+.tool-card .typing-dots b:nth-child(3) { animation-delay: .4s; }
+
 /* ── typing indicator ───────────────────────────────────── */
 .typing-indicator { display: flex; align-items: center; gap: 5px; padding: 2px 0 6px; }
 .typing-indicator span { font-size: 13px; color: #6b7280; font-style: italic; transition: color 0.55s ease; }

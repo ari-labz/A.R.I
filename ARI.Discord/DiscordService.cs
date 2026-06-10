@@ -77,8 +77,11 @@ public class DiscordService : BackgroundService
         await dm.SendMessageAsync(AsBlockQuote("A·R·I is offline."));
     }
 
+    private DateTimeOffset botOnlineSince = DateTimeOffset.UtcNow;
+
     private async Task OnReady()
     {
+        botOnlineSince = DateTimeOffset.UtcNow;
         Common.Logger.LogInformation("Discord bot is ready. Registering slash commands...");
         await RegisterSlashCommands();
 
@@ -240,6 +243,14 @@ public class DiscordService : BackgroundService
     private async Task OnMessageReceived(SocketMessage message)
     {
         if (message.Author.IsBot) return;
+        if (client.CurrentUser is not null && message.Author.Id == client.CurrentUser.Id) return;
+        // Discard messages sent before the bot came online — Discord.Net replays missed messages on reconnect
+        if (message.Timestamp < botOnlineSince)
+        {
+            Common.Logger.LogDebug("Discarding stale message from {Username} sent at {Timestamp} (bot online since {OnlineSince})",
+                message.Author.Username, message.Timestamp, botOnlineSince);
+            return;
+        }
 
         if (message.Channel is IDMChannel)
             await HandleDM(message);

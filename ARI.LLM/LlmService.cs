@@ -139,8 +139,10 @@ public class LlmService : IDisposable
         processingThreads[threadKey] = cts;
 
         
-        // if no classifier active, default to dialogue pipeline
-        if (classifier is null)
+        // Discord threads always use Dialogue — never run them through the Classifier
+        bool isDiscordThread = threadKey.StartsWith("dm:", StringComparison.OrdinalIgnoreCase)
+                            || threadKey.StartsWith("guild:", StringComparison.OrdinalIgnoreCase);
+        if (isDiscordThread || classifier is null)
             return await DialoguePipeline(threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments);
 
         // if the thread has messages it's established — find which agent owns it
