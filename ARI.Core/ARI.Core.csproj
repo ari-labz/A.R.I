@@ -7,6 +7,22 @@
     <UserSecretsId>dotnet-ARI.Core-f9caf1c1-b2ea-4e29-bcc9-19eb3eb245aa</UserSecretsId>
   </PropertyGroup>
 	
+  <!-- Build the React UI and sync it into wwwroot before compiling -->
+  <Target Name="BuildUI" BeforeTargets="Build">
+    <PropertyGroup>
+      <UiDir>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\ARI.UI'))</UiDir>
+      <WwwrootDir>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\ARI.API\wwwroot'))</WwwrootDir>
+    </PropertyGroup>
+    <Exec Command="bun run build" WorkingDirectory="$(UiDir)" />
+    <ItemGroup>
+      <UiDistFiles Include="$(UiDir)\dist\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(UiDistFiles)"
+          DestinationFiles="@(UiDistFiles->'$(WwwrootDir)\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Message Text="UI built and synced to wwwroot" Importance="high" />
+  </Target>
+
   <ItemGroup>
   	<Content Include="..\compose.yaml">
   		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

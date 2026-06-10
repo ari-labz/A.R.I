@@ -23,7 +23,6 @@ public class ProjectsController(ProjectStore store) : ControllerBase
             Description:       req.Description?.Trim() ?? "",
             Instructions:      req.Instructions?.Trim() ?? "",
             CreatedAt:         DateTime.UtcNow,
-            LocalPath:         string.IsNullOrWhiteSpace(req.LocalPath) ? null : req.LocalPath.Trim(),
             ForceCodePipeline: req.ForceCodePipeline ?? true);
 
         store.Add(project);
@@ -43,7 +42,6 @@ public class ProjectsController(ProjectStore store) : ControllerBase
             Name              = req.Name.Trim(),
             Description       = req.Description?.Trim() ?? "",
             Instructions      = req.Instructions?.Trim() ?? "",
-            LocalPath         = string.IsNullOrWhiteSpace(req.LocalPath) ? null : req.LocalPath.Trim(),
             ForceCodePipeline = req.ForceCodePipeline ?? existing.ForceCodePipeline,
         };
         store.Update(updated);
@@ -89,4 +87,4 @@ public class ProjectsController(ProjectStore store) : ControllerBase
     }
 }
 
-public record CreateProjectRequest(string Name, string? Description, string? Instructions, string? LocalPath, bool? ForceCodePipeline);
+public record CreateProjectRequest(string Name, string? Description, string? Instructions, bool? ForceCodePipeline);
