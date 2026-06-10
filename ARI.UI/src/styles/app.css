@@ -545,7 +545,25 @@ html, body {
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .project-card-path--unavailable {
-    font-family: inherit; font-style: italic; opacity: 0.5;
+    font-family: inherit; color: #d97706; opacity: 0.9;
+}
+.project-unavailable {
+    font-style: italic; opacity: 0.45;
+}
+.project-section {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px 24px;
+    margin-bottom: 16px;
+}
+.project-section-header {
+    display: flex; align-items: baseline; gap: 10px;
+    margin-bottom: 16px;
+}
+.project-section-header h2 {
+    font-size: 13px; font-weight: 600;
+    color: var(--text); margin: 0;
+    text-transform: uppercase; letter-spacing: 0.04em;
 }
 .project-card-instructions {
     font-size: 12px; color: var(--text-dim); opacity: 0.7;

@@ -13,7 +13,10 @@
       <UiDir>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\ARI.UI'))</UiDir>
       <WwwrootDir>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\ARI.API\wwwroot'))</WwwrootDir>
     </PropertyGroup>
-    <Exec Command="bun run build" WorkingDirectory="$(UiDir)" />
+    <Exec Command="&quot;$(UserProfile)/.bun/bin/bun&quot; run build" WorkingDirectory="$(UiDir)"
+          Condition="'$(OS)' == 'Windows_NT'" />
+    <Exec Command="&quot;$(HOME)/.bun/bin/bun&quot; run build" WorkingDirectory="$(UiDir)"
+          Condition="'$(OS)' != 'Windows_NT'" />
     <ItemGroup>
       <UiDistFiles Include="$(UiDir)\dist\**\*" />
     </ItemGroup>
