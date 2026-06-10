@@ -22,7 +22,7 @@ public class ClientController : ControllerBase
         this.logger    = logger;
     }
 
-    // Pending read_file calls: callId → TaskCompletionSource<string>
+    // Pending tool calls: callId → TaskCompletionSource<string>
     private static readonly ConcurrentDictionary<string, TaskCompletionSource<string>> pendingFileCalls = new();
 
     [HttpGet]
@@ -109,6 +109,22 @@ public class ClientController : ControllerBase
                 }
             });
 
+        RegisterClientTool(codeThread, ws, "list_directory",
+            "List the files and subdirectories at a path within the project.",
+            new { type = "object", properties = new { path = new { type = "string", description = "Directory path relative to project root. Defaults to project root if omitted." } }, required = Array.Empty<string>() });
+
+        RegisterClientTool(codeThread, ws, "search_files",
+            "Search for a string across files in the project. Returns matching lines with file path and line number.",
+            new { type = "object", properties = new { pattern = new { type = "string", description = "Text to search for (case-insensitive)" }, path = new { type = "string", description = "Directory to search in, relative to project root." }, glob = new { type = "string", description = "File filter e.g. '*.cs'. Defaults to all files." } }, required = new[] { "pattern" } });
+
+        RegisterClientTool(codeThread, ws, "edit_file",
+            "Make a targeted find-and-replace edit to an existing file. old_string must match exactly once. Use write_file for full rewrites.",
+            new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" }, old_string = new { type = "string", description = "Exact text to find (must appear exactly once)" }, new_string = new { type = "string", description = "Replacement text" } }, required = new[] { "path", "old_string", "new_string" } });
+
+        RegisterClientTool(codeThread, ws, "write_file",
+            "Write or create a file. Overwrites if it exists. Creates missing parent directories. Prefer edit_file for targeted changes.",
+            new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" }, content = new { type = "string", description = "Full content to write" } }, required = new[] { "path", "content" } });
+
         var state = new ConnectionState { ProjectRoot = "" };
 
         try
@@ -122,9 +138,31 @@ public class ClientController : ControllerBase
         }
         finally
         {
-            codeThread.UnregisterTool("read_file");
+            foreach (string tool in new[] { "read_file", "list_directory", "search_files", "edit_file", "write_file" })
+                codeThread.UnregisterTool(tool);
             logger.LogInformation("[Client] Session ended ({Thread})", threadKey);
         }
+    }
+
+    private void RegisterClientTool(ARI.LLM.Thread thread, WebSocket ws, string name, string description, object parameters)
+    {
+        thread.RegisterTool(
+            name,
+            new { type = "function", function = new { name, description, parameters } },
+            async argsJson =>
+            {
+                string callId = Guid.NewGuid().ToString("N");
+                TaskCompletionSource<string> tcs = new();
+                pendingFileCalls[callId] = tcs;
+
+                await SendJson(ws, new { type = name, callId, args = argsJson });
+
+                using CancellationTokenSource cts = new(TimeSpan.FromSeconds(30));
+                cts.Token.Register(() => tcs.TrySetCanceled());
+                try   { return await tcs.Task; }
+                catch (OperationCanceledException) { return $"[Error: client did not respond to {name} within 30s]"; }
+                finally { pendingFileCalls.TryRemove(callId, out _); }
+            });
     }
 
     private sealed class ConnectionState { public string ProjectRoot { get; set; } = ""; }
@@ -182,8 +220,12 @@ public class ClientController : ControllerBase
 
                     string platformContext = fileTree.Count > 0
                         ? $"The user has connected a project at `{state.ProjectRoot}`. File tree:\n```\n{string.Join("\n", fileTree)}\n```\n\n" +
-                          "You have a `read_file` tool — use it to read any file before answering questions about code. " +
-                          "Only read files that are relevant to the question."
+                          "You have file system tools available — always use them rather than making assumptions about file contents:\n" +
+                          "- `read_file` — read a file before answering any question about it\n" +
+                          "- `list_directory` — explore a directory's contents\n" +
+                          "- `search_files` — find a symbol, string, or pattern across the project\n" +
+                          "- `edit_file` — make a targeted find-and-replace change to an existing file\n" +
+                          "- `write_file` — create a new file or fully rewrite an existing one"
                         : null!;
 
                     _ = Task.Run(async () =>

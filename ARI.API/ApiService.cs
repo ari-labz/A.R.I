@@ -170,6 +170,22 @@ public class ApiService : IAsyncDisposable
         {
             FileProvider = new PhysicalFileProvider(wwwrootDir),
             RequestPath = "",
+            OnPrepareResponse = ctx =>
+            {
+                // Never cache index.html or the service worker — always fetch fresh
+                string file = ctx.File.Name;
+                if (file == "index.html" || file == "sw.js")
+                {
+                    ctx.Context.Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
+                    ctx.Context.Response.Headers["Pragma"]        = "no-cache";
+                    ctx.Context.Response.Headers["Expires"]       = "0";
+                }
+                else
+                {
+                    // Hashed assets (JS/CSS bundles) are immutable — cache forever
+                    ctx.Context.Response.Headers["Cache-Control"] = "public, max-age=31536000, immutable";
+                }
+            },
         });
 
         // ── Desktop client WebSocket — MUST be before UseRouting so it
