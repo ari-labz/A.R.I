@@ -308,6 +308,229 @@ public class LlmService : IDisposable
                     }
                     catch { return "<div class=\"tool-use\">Reading file</div>\n"; }
                 });
+
+            codeThread.RegisterTool(
+                "list_directory",
+                new
+                {
+                    type     = "function",
+                    function = new
+                    {
+                        name        = "list_directory",
+                        description = "List the files and subdirectories at a path within the project.",
+                        parameters  = new
+                        {
+                            type       = "object",
+                            properties = new { path = new { type = "string", description = "Directory path relative to project root. Defaults to project root if omitted." } },
+                            required   = Array.Empty<string>()
+                        }
+                    }
+                },
+                async args =>
+                {
+                    try
+                    {
+                        using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(args);
+                        string relPath = doc.RootElement.TryGetProperty("path", out System.Text.Json.JsonElement pathEl)
+                            ? pathEl.GetString() ?? "." : ".";
+                        string absPath = Path.GetFullPath(Path.Combine(resolvedRoot, relPath));
+                        if (!absPath.StartsWith(resolvedRoot, StringComparison.OrdinalIgnoreCase))
+                            return "Access denied: path traversal is not allowed.";
+                        if (!Directory.Exists(absPath))
+                            return $"Directory not found: {relPath}";
+                        IEnumerable<string> entries = Directory.GetFileSystemEntries(absPath)
+                            .Select(e => Path.GetRelativePath(resolvedRoot, e) + (Directory.Exists(e) ? "/" : ""))
+                            .OrderBy(e => e);
+                        return $"[directory: \"{relPath}\"]\n{string.Join("\n", entries)}";
+                    }
+                    catch (Exception ex) { return $"Error listing directory: {ex.Message}"; }
+                },
+                args =>
+                {
+                    try
+                    {
+                        using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(args);
+                        string p = doc.RootElement.TryGetProperty("path", out System.Text.Json.JsonElement pe) ? pe.GetString() ?? "." : ".";
+                        return $"<div class=\"tool-use\">Listing {p.Replace("&", "&amp;").Replace("<", "&lt;")}</div>\n";
+                    }
+                    catch { return "<div class=\"tool-use\">Listing directory</div>\n"; }
+                });
+
+            codeThread.RegisterTool(
+                "search_files",
+                new
+                {
+                    type     = "function",
+                    function = new
+                    {
+                        name        = "search_files",
+                        description = "Search for a string across files in the project. Returns matching lines with file path and line number.",
+                        parameters  = new
+                        {
+                            type       = "object",
+                            properties = new
+                            {
+                                pattern = new { type = "string", description = "Text to search for (case-insensitive)" },
+                                path    = new { type = "string", description = "Directory to search in, relative to project root. Defaults to project root." },
+                                glob    = new { type = "string", description = "File filter pattern e.g. '*.cs', '*.json'. Defaults to all files." }
+                            },
+                            required = new[] { "pattern" }
+                        }
+                    }
+                },
+                async args =>
+                {
+                    try
+                    {
+                        using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(args);
+                        string pattern = doc.RootElement.GetProperty("pattern").GetString() ?? "";
+                        string relDir  = doc.RootElement.TryGetProperty("path", out System.Text.Json.JsonElement pathEl)  ? pathEl.GetString()  ?? "." : ".";
+                        string glob    = doc.RootElement.TryGetProperty("glob", out System.Text.Json.JsonElement globEl)  ? globEl.GetString()  ?? "*" : "*";
+                        string absDir  = Path.GetFullPath(Path.Combine(resolvedRoot, relDir));
+                        if (!absDir.StartsWith(resolvedRoot, StringComparison.OrdinalIgnoreCase))
+                            return "Access denied: path traversal is not allowed.";
+                        if (!Directory.Exists(absDir))
+                            return $"Directory not found: {relDir}";
+                        var results = new System.Collections.Generic.List<string>();
+                        foreach (string file in Directory.EnumerateFiles(absDir, glob, SearchOption.AllDirectories))
+                        {
+                            if (!file.StartsWith(resolvedRoot, StringComparison.OrdinalIgnoreCase)) continue;
+                            try
+                            {
+                                string[] lines = await File.ReadAllLinesAsync(file, cts.Token);
+                                for (int i = 0; i < lines.Length; i++)
+                                {
+                                    if (lines[i].Contains(pattern, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        string rel = Path.GetRelativePath(resolvedRoot, file);
+                                        results.Add($"{rel}:{i + 1}: {lines[i].Trim()}");
+                                    }
+                                }
+                            }
+                            catch { /* skip unreadable files */ }
+                            if (results.Count >= 200) break;
+                        }
+                        return results.Count == 0
+                            ? $"No matches found for \"{pattern}\"."
+                            : $"[search: \"{pattern}\"]\n{string.Join("\n", results)}";
+                    }
+                    catch (Exception ex) { return $"Error searching files: {ex.Message}"; }
+                },
+                args =>
+                {
+                    try
+                    {
+                        using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(args);
+                        string p = doc.RootElement.GetProperty("pattern").GetString() ?? "";
+                        return $"<div class=\"tool-use\">Searching for {p.Replace("&", "&amp;").Replace("<", "&lt;")}</div>\n";
+                    }
+                    catch { return "<div class=\"tool-use\">Searching files</div>\n"; }
+                });
+
+            codeThread.RegisterTool(
+                "edit_file",
+                new
+                {
+                    type     = "function",
+                    function = new
+                    {
+                        name        = "edit_file",
+                        description = "Make a targeted find-and-replace edit to an existing file. old_string must match exactly once in the file — provide more surrounding context if needed to make it unique. Use write_file to create a new file or do a full rewrite.",
+                        parameters  = new
+                        {
+                            type       = "object",
+                            properties = new
+                            {
+                                path       = new { type = "string", description = "File path relative to project root" },
+                                old_string = new { type = "string", description = "The exact text to find. Must appear exactly once in the file." },
+                                new_string = new { type = "string", description = "The text to replace it with" }
+                            },
+                            required = new[] { "path", "old_string", "new_string" }
+                        }
+                    }
+                },
+                async args =>
+                {
+                    try
+                    {
+                        using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(args);
+                        string relPath = doc.RootElement.GetProperty("path").GetString()       ?? "";
+                        string oldStr  = doc.RootElement.GetProperty("old_string").GetString() ?? "";
+                        string newStr  = doc.RootElement.GetProperty("new_string").GetString() ?? "";
+                        string absPath = Path.GetFullPath(Path.Combine(resolvedRoot, relPath));
+                        if (!absPath.StartsWith(resolvedRoot, StringComparison.OrdinalIgnoreCase))
+                            return "Access denied: path traversal is not allowed.";
+                        if (!File.Exists(absPath))
+                            return $"File not found: {relPath}";
+                        string content = await File.ReadAllTextAsync(absPath, cts.Token);
+                        int count = 0, idx = 0;
+                        while ((idx = content.IndexOf(oldStr, idx, StringComparison.Ordinal)) >= 0) { count++; idx += oldStr.Length; }
+                        if (count == 0) return $"old_string not found in {relPath}. No changes made.";
+                        if (count > 1)  return $"old_string matches {count} locations in {relPath}. Add more surrounding context to make it unique.";
+                        await File.WriteAllTextAsync(absPath, content.Replace(oldStr, newStr, StringComparison.Ordinal), cts.Token);
+                        return $"Successfully edited {relPath}.";
+                    }
+                    catch (Exception ex) { return $"Error editing file: {ex.Message}"; }
+                },
+                args =>
+                {
+                    try
+                    {
+                        using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(args);
+                        string p = doc.RootElement.GetProperty("path").GetString() ?? "";
+                        return $"<div class=\"tool-use\">Editing {p.Replace("&", "&amp;").Replace("<", "&lt;")}</div>\n";
+                    }
+                    catch { return "<div class=\"tool-use\">Editing file</div>\n"; }
+                });
+
+            codeThread.RegisterTool(
+                "write_file",
+                new
+                {
+                    type     = "function",
+                    function = new
+                    {
+                        name        = "write_file",
+                        description = "Write or create a file. Overwrites the file if it already exists and creates any missing parent directories. Prefer edit_file for targeted changes to existing files.",
+                        parameters  = new
+                        {
+                            type       = "object",
+                            properties = new
+                            {
+                                path    = new { type = "string", description = "File path relative to project root" },
+                                content = new { type = "string", description = "The full content to write to the file" }
+                            },
+                            required = new[] { "path", "content" }
+                        }
+                    }
+                },
+                async args =>
+                {
+                    try
+                    {
+                        using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(args);
+                        string relPath = doc.RootElement.GetProperty("path").GetString()    ?? "";
+                        string content = doc.RootElement.GetProperty("content").GetString() ?? "";
+                        string absPath = Path.GetFullPath(Path.Combine(resolvedRoot, relPath));
+                        if (!absPath.StartsWith(resolvedRoot, StringComparison.OrdinalIgnoreCase))
+                            return "Access denied: path traversal is not allowed.";
+                        string? dir = Path.GetDirectoryName(absPath);
+                        if (dir is not null) Directory.CreateDirectory(dir);
+                        await File.WriteAllTextAsync(absPath, content, cts.Token);
+                        return $"Successfully wrote {relPath}.";
+                    }
+                    catch (Exception ex) { return $"Error writing file: {ex.Message}"; }
+                },
+                args =>
+                {
+                    try
+                    {
+                        using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(args);
+                        string p = doc.RootElement.GetProperty("path").GetString() ?? "";
+                        return $"<div class=\"tool-use\">Writing {p.Replace("&", "&amp;").Replace("<", "&lt;")}</div>\n";
+                    }
+                    catch { return "<div class=\"tool-use\">Writing file</div>\n"; }
+                });
         }
 
         LiveCallInfo liveCall = new("Code", threadKey, 0, code.MaxTokens, code.MaxContextTokens, 0);
