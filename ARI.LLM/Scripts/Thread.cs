@@ -763,6 +763,11 @@ public class Thread
                 if (isXmlFallback)
                     messages.Add(new { role = "user", content = xmlResultsMsg!.ToString().TrimEnd() });
 
+                // Mark end of this tool batch so the UI can keep cards as "Reading" within a
+                // batch but flip them to "Read" once a new batch or text follows.
+                contentBuilder.Append("<!--ari-batch-end-->");
+                if (onDelta is not null) await onDelta(contentBuilder.ToString());
+
                 continue;
             }
 

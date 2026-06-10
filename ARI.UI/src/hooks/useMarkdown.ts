@@ -21,8 +21,20 @@ const TOOL_VERBS: Record<string, { active: string; done: string }> = {
 
 function preprocessToolCards(content: string): string {
     const done = new Set<string>()
-    for (const m of content.matchAll(TOOL_END_RE)) done.add(`${m[1]}:${m[2]}`)
-    let out = content.replace(TOOL_END_RE, "")
+    // A tool flips from "Reading" → "Read" once its batch has ended AND something
+    // (more tool calls, or response text) appears after the batch-end marker.
+    // Tools within the same active batch all stay "Reading".
+    const BATCH_END = "<!--ari-batch-end-->"
+    const END_RE_G = new RegExp(TOOL_END_RE.source, "g")
+    for (const m of content.matchAll(END_RE_G)) {
+        const after = m.index! + m[0].length
+        const batchEndIdx = content.indexOf(BATCH_END, after)
+        if (batchEndIdx < 0) continue
+        const tail = content.slice(batchEndIdx + BATCH_END.length)
+        if (/\S/.test(tail)) done.add(`${m[1]}:${m[2]}`)
+    }
+    let out = content.split(BATCH_END).join("")
+    out = out.replace(TOOL_END_RE, "")
     out = out.replace(TOOL_ERROR_RE, (_, _name, label) => {
         const msg = label.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">")
         return `\n\n<div class="tool-card tool-card--error"><span>Error: ${msg}</span></div>\n\n`
