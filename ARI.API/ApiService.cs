@@ -151,6 +151,10 @@ public class ApiService : IAsyncDisposable
 
         app.UseExceptionHandler(errorApp => errorApp.Run(async ctx =>
         {
+            var ex = ctx.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
+            var log = ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("ARI.API");
+            log.LogError(ex, "Unhandled exception on {Method} {Path}", ctx.Request.Method, ctx.Request.Path);
+
             ctx.Response.StatusCode  = 500;
             ctx.Response.ContentType = "text/html";
             await ctx.Response.WriteAsync(

@@ -7,6 +7,7 @@ import {
     useTypingHeartbeat,
     type ThreadItem, type ThreadEntry, type WatchEvent, type Attachment, type Project,
 } from "./hooks/useThreads"
+import { env } from "./env"
 import "./styles/app.css"
 
 export type AppMode = "idle" | "active"
@@ -176,16 +177,18 @@ export default function App() {
         if (!window.electronBridge) return
         if (treeInjectedRef.current.has(threadKey)) return
         const project = projects.find(p => p.id === projectId)
-        if (!project?.localPath) return
+        if (!project) return
+        const localPath = await env.getLocalPath(projectId)
+        if (!localPath) return
         try {
-            let tree: string[] = await window.electronBridge.getFileTree(project.localPath)
+            let tree: string[] = await window.electronBridge.getFileTree(localPath)
             const MAX_PATHS = 800
             let truncated = false
             if (tree.length > MAX_PATHS) {
                 tree = tree.slice(0, MAX_PATHS)
                 truncated = true
             }
-            const header = `Project: ${project.name}\nRoot: ${project.localPath}\nFiles (${tree.length}${truncated ? "+" : ""}):\n`
+            const header = `Project: ${project.name}\nRoot: ${localPath}\nFiles (${tree.length}${truncated ? "+" : ""}):\n`
             const content = header + tree.join("\n") + (truncated ? "\n... (truncated)" : "")
             console.log(`[FileTree] Injecting ${tree.length} paths for thread ${threadKey}`)
             const res = await fetch(`/api/threads/${threadKey}/inject-context`, {
@@ -206,8 +209,8 @@ export default function App() {
         if (!window.electronBridge) return
         const projectId = activeProjectRef.current
         if (!projectId) return
-        const project = projects.find(p => p.id === projectId)
-        if (!project?.localPath) return
+        const localPath = await env.getLocalPath(projectId)
+        if (!localPath) return
 
         const pattern = /\[read_file:\s*"([^"]+)"\]/g
         const matches = [...responseText.matchAll(pattern)]
@@ -217,7 +220,7 @@ export default function App() {
         for (const match of matches) {
             const relPath = match[1]
             try {
-                const content = await window.electronBridge.readFile(project.localPath, relPath)
+                const content = await window.electronBridge.readFile(localPath, relPath)
                 parts.push(`[file: "${relPath}"]\n\`\`\`\n${content}\n\`\`\``)
             } catch {
                 parts.push(`[file: "${relPath}"]\n(File not found or unreadable)`)

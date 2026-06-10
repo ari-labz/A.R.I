@@ -1,6 +1,6 @@
 {
   "name": "ari-app",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "ARI Desktop Client",
   "author": "Xywren",
   "private": true,
@@ -22,7 +22,7 @@
     "appId":       "ai.ari.app",
     "productName": "ARI",
     "directories": { "output": "dist" },
-    "files": ["src/**/*", "ui/**/*"],
+    "files": ["src/**/*", "assets/**/*"],
     "mac":   { "target": "dmg" },
     "win":   { "target": "zip" },
     "linux": { "target": "zip" }

@@ -16,7 +16,6 @@ export interface Project {
     name:              string
     description:       string
     instructions:      string
-    localPath:         string | null
     forceCodePipeline: boolean
 }
 

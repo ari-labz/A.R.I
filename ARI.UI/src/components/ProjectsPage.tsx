@@ -1,4 +1,4 @@
-import { useState, useRef } from "react"
+import { useState, useRef, useEffect } from "react"
 import type { Project } from "../hooks/useThreads"
 import { env } from "../env"
 
@@ -14,7 +14,6 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
     const [name,              setName]              = useState("")
     const [description,       setDescription]       = useState("")
     const [instructions,      setInstructions]      = useState("")
-    const [localPath,         setLocalPath]         = useState<string | null>(null)
     const [forceCode,         setForceCode]         = useState(true)
     const [saving,            setSaving]            = useState(false)
     const [error,             setError]             = useState<string | null>(null)
@@ -23,22 +22,31 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
     const [editName,          setEditName]          = useState("")
     const [editDescription,   setEditDescription]   = useState("")
     const [editInstructions,  setEditInstructions]  = useState("")
-    const [editPath,          setEditPath]          = useState<string | null>(null)
     const [editForceCode,     setEditForceCode]     = useState(true)
     const [editSaving,        setEditSaving]        = useState(false)
     const [editError,         setEditError]         = useState<string | null>(null)
-    const [attachments,      setAttachments]      = useState<AttachmentEntry[]>([])
-    const [attUploading,     setAttUploading]     = useState(false)
+    const [attachments,       setAttachments]       = useState<AttachmentEntry[]>([])
+    const [attUploading,      setAttUploading]      = useState(false)
+
+    // Local paths are stored per-machine in Electron, never on the server
+    const [localPaths,        setLocalPaths]        = useState<Record<string, string | null>>({})
+    const [editPath,          setEditPath]          = useState<string | null>(null)
 
     const fileInputRef = useRef<HTMLInputElement>(null)
     const isElectron   = !!window.electronBridge
 
-    // ── Create form ───────────────────────────────────────────────────────────────
+    // Load local paths for all projects from this machine's electron-store
+    useEffect(() => {
+        if (!isElectron) return
+        Promise.all(projects.map(p => env.getLocalPath(p.id).then(path => ({ id: p.id, path }))))
+            .then(results => {
+                const map: Record<string, string | null> = {}
+                results.forEach(r => { map[r.id] = r.path })
+                setLocalPaths(map)
+            })
+    }, [projects, isElectron])
 
-    async function pickCreateFolder() {
-        const path = await env.pickFolder()
-        if (path) setLocalPath(path)
-    }
+    // ── Create form ───────────────────────────────────────────────────────────────
 
     async function handleCreate(e: React.FormEvent) {
         e.preventDefault()
@@ -48,10 +56,10 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
             const res = await fetch("/api/projects", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name: name.trim(), description: description.trim(), instructions: instructions.trim(), localPath, forceCodePipeline: forceCode }),
+                body: JSON.stringify({ name: name.trim(), description: description.trim(), instructions: instructions.trim(), forceCodePipeline: forceCode }),
             })
             if (!res.ok) { setError((await res.json().catch(() => null))?.error ?? "Failed to create project."); return }
-            setName(""); setDescription(""); setInstructions(""); setLocalPath(null); setForceCode(true)
+            setName(""); setDescription(""); setInstructions(""); setForceCode(true)
             setShowForm(false)
             onProjectCreated()
         } catch { setError("Could not reach ARI.") }
@@ -60,7 +68,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
 
     function handleCancelCreate() {
         setShowForm(false)
-        setName(""); setDescription(""); setInstructions(""); setLocalPath(null); setForceCode(true); setError(null)
+        setName(""); setDescription(""); setInstructions(""); setForceCode(true); setError(null)
     }
 
     // ── Project detail ────────────────────────────────────────────────────────────
@@ -70,7 +78,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
         setEditName(p.name)
         setEditDescription(p.description)
         setEditInstructions(p.instructions)
-        setEditPath(p.localPath ?? null)
+        setEditPath(localPaths[p.id] ?? null)
         setEditForceCode(p.forceCodePipeline)
         setEditError(null)
         await loadAttachments(p.id)
@@ -88,6 +96,10 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
         if (path) setEditPath(path)
     }
 
+    async function clearEditFolder() {
+        setEditPath(null)
+    }
+
     async function handleSave(e: React.FormEvent) {
         e.preventDefault()
         if (!selected || !editName.trim()) return
@@ -96,9 +108,12 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
             const res = await fetch(`/api/projects/${selected.id}`, {
                 method: "PUT",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name: editName.trim(), description: editDescription.trim(), instructions: editInstructions.trim(), localPath: editPath, forceCodePipeline: editForceCode }),
+                body: JSON.stringify({ name: editName.trim(), description: editDescription.trim(), instructions: editInstructions.trim(), forceCodePipeline: editForceCode }),
             })
             if (!res.ok) { setEditError((await res.json().catch(() => null))?.error ?? "Failed to save."); return }
+            // Save local path to this machine's electron-store
+            await env.setLocalPath(selected.id, editPath)
+            setLocalPaths(prev => ({ ...prev, [selected.id]: editPath }))
             setSelected(await res.json())
             onProjectCreated()
         } catch { setEditError("Could not reach ARI.") }
@@ -178,10 +193,11 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                     </div>
                     {isElectron && (
                         <label>
-                            Local path <span className="field-optional">(optional)</span>
+                            Local path <span className="field-optional">(stored on this machine only)</span>
                             <div className="folder-picker-row">
-                                <span className="folder-picker-path">{editPath ?? "No folder selected"}</span>
+                                <span className="folder-picker-path">{editPath ?? "Not available on this machine"}</span>
                                 <button type="button" className="btn-secondary btn-pick-folder" onClick={pickEditFolder}>Browse…</button>
+                                {editPath && <button type="button" className="btn-secondary btn-pick-folder" onClick={clearEditFolder}>Clear</button>}
                             </div>
                         </label>
                     )}
@@ -267,15 +283,6 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                             aria-pressed={forceCode}
                         />
                     </div>
-                    {isElectron && (
-                        <label>
-                            Local path <span className="field-optional">(optional)</span>
-                            <div className="folder-picker-row">
-                                <span className="folder-picker-path">{localPath ?? "No folder selected"}</span>
-                                <button type="button" className="btn-secondary btn-pick-folder" onClick={pickCreateFolder}>Browse…</button>
-                            </div>
-                        </label>
-                    )}
                     {error && <p className="form-error">{error}</p>}
                     <div className="form-actions">
                         <button type="button" className="btn-secondary" onClick={handleCancelCreate} disabled={saving}>Cancel</button>
@@ -306,8 +313,11 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                             <div className="project-card-body">
                                 <span className="project-card-name">{p.name}</span>
                                 {p.description && <span className="project-card-desc">{p.description}</span>}
-                                {p.localPath   && <span className="project-card-path">{p.localPath}</span>}
-                                {p.instructions && <span className="project-card-instructions">{p.instructions}</span>}
+                                {isElectron && (
+                                    localPaths[p.id]
+                                        ? <span className="project-card-path">{localPaths[p.id]}</span>
+                                        : <span className="project-card-path project-card-path--unavailable">Not available on this machine</span>
+                                )}
                             </div>
                             <svg className="project-card-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                 <path d="M9 18l6-6-6-6"/>

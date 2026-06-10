@@ -8,9 +8,8 @@ public record Project(
     string       Description,
     string       Instructions,
     DateTime     CreatedAt,
-    string?      LocalPath          = null,
-    List<string>? Attachments       = null,
-    bool         ForceCodePipeline  = true);
+    List<string>? Attachments      = null,
+    bool         ForceCodePipeline = true);
 
 public class ProjectStore
 {
