@@ -12,6 +12,12 @@ import "./styles/app.css"
 
 export type AppMode = "idle" | "active"
 
+function buildSafetyDiff(oldStr: string, newStr: string): string {
+    const removed = oldStr.split("\n").map(l => `- ${l}`).join("\n")
+    const added   = newStr.split("\n").map(l => `+ ${l}`).join("\n")
+    return `\`\`\`diff\n${removed}\n${added}\n\`\`\``
+}
+
 export interface PendingAttachment {
     name:      string
     isImage:   boolean
@@ -54,6 +60,9 @@ export default function App() {
     const [projects,         setProjects]          = useState<Project[]>([])
     const [selectedProject,  setSelectedProject]   = useState<string | null>(null)
 
+    const [safetyMode, setSafetyMode] = useState(false)
+    const safetyModeRef = useRef(false)
+
     const watchEsRef  = useRef<EventSource | null>(null)
     const abortRef    = useRef<AbortController | null>(null)
     const pendingMsgRef    = useRef<string | null>(null)
@@ -69,6 +78,7 @@ export default function App() {
     // Keep refs in sync
     useEffect(() => { activeThreadRef.current = activeThread }, [activeThread])
     useEffect(() => { streamingRef.current = isStreaming }, [isStreaming])
+    useEffect(() => { safetyModeRef.current = safetyMode }, [safetyMode])
 
     const heartbeat = useTypingHeartbeat(() => activeThreadRef.current)
 
@@ -254,6 +264,9 @@ export default function App() {
             let params: Record<string, string> = {}
             try { if (args) params = JSON.parse(args) } catch { return }
 
+            // Strip surrounding quotes the model sometimes wraps around path values
+            if (params.path) params.path = params.path.replace(/^["']+|["']+$/g, "").trim()
+
             try {
                 let result: string
 
@@ -278,19 +291,31 @@ export default function App() {
                     ws.send(JSON.stringify({ type: "file_content", callId, content: result }))
 
                 } else if (type === "edit_file") {
-                    const res = await window.electronBridge!.editFile(localPath, params.path, params.old_string, params.new_string)
-                    if (res.ok) {
-                        console.warn(`[ToolSocket] → file_content (edit_file)  callId=${callId}  path=${params.path}`)
-                        ws.send(JSON.stringify({ type: "file_content", callId, content: `Successfully edited ${params.path}.` }))
+                    if (safetyModeRef.current) {
+                        const diff = buildSafetyDiff(params.old_string ?? "", params.new_string ?? "")
+                        console.warn(`[ToolSocket] → file_content (edit_file BLOCKED by safety)  callId=${callId}`)
+                        ws.send(JSON.stringify({ type: "file_content", callId, content: `[Safety mode is enabled — the file was NOT modified. Explain the required changes and show a diff instead of applying them directly.\n\nProposed diff for ${params.path}:\n\n${diff}]` }))
                     } else {
-                        console.warn(`[ToolSocket] → file_error (edit_file)  callId=${callId}  error=${res.error}`)
-                        ws.send(JSON.stringify({ type: "file_error", callId, error: res.error ?? "Edit failed." }))
+                        const res = await window.electronBridge!.editFile(localPath, params.path, params.old_string, params.new_string)
+                        if (res.ok) {
+                            console.warn(`[ToolSocket] → file_content (edit_file)  callId=${callId}  path=${params.path}`)
+                            ws.send(JSON.stringify({ type: "file_content", callId, content: `Successfully edited ${params.path}.` }))
+                        } else {
+                            console.warn(`[ToolSocket] → file_error (edit_file)  callId=${callId}  error=${res.error}`)
+                            ws.send(JSON.stringify({ type: "file_error", callId, error: res.error ?? "Edit failed." }))
+                        }
                     }
 
                 } else if (type === "write_file") {
-                    await window.electronBridge!.writeFile(localPath, params.path, params.content ?? "")
-                    console.warn(`[ToolSocket] → file_content (write_file)  callId=${callId}  path=${params.path}`)
-                    ws.send(JSON.stringify({ type: "file_content", callId, content: `Successfully wrote ${params.path}.` }))
+                    if (safetyModeRef.current) {
+                        const lines = (params.content ?? "").split("\n")
+                        console.warn(`[ToolSocket] → file_content (write_file BLOCKED by safety)  callId=${callId}`)
+                        ws.send(JSON.stringify({ type: "file_content", callId, content: `[Safety mode is enabled — the file was NOT written. Explain the required changes instead of applying them.\n\nProposed content for ${params.path} (${lines.length} lines):\n\n\`\`\`\n${params.content ?? ""}\n\`\`\`]` }))
+                    } else {
+                        await window.electronBridge!.writeFile(localPath, params.path, params.content ?? "")
+                        console.warn(`[ToolSocket] → file_content (write_file)  callId=${callId}  path=${params.path}`)
+                        ws.send(JSON.stringify({ type: "file_content", callId, content: `Successfully wrote ${params.path}.` }))
+                    }
                 }
             } catch (e: unknown) {
                 const msg = e instanceof Error ? e.message : String(e)
@@ -637,6 +662,8 @@ export default function App() {
                     onRemoveMessageAttach={removeMessageAttachment}
                     onHeartbeatStart={heartbeat.start}
                     onHeartbeatStop={heartbeat.stop}
+                    safetyMode={safetyMode}
+                    onToggleSafety={() => setSafetyMode(m => !m)}
                     commands={COMMANDS}
                     projects={projects}
                     selectedProject={selectedProject}

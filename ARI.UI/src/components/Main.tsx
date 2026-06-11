@@ -26,8 +26,10 @@ interface Props {
     onUploadMessageFiles: (files: File[]) => void
     onRemoveThreadAttach: (name: string) => void
     onRemoveMessageAttach: (name: string) => void
-    onHeartbeatStart: () => void
-    onHeartbeatStop:  () => void
+    onHeartbeatStart:  () => void
+    onHeartbeatStop:   () => void
+    safetyMode:        boolean
+    onToggleSafety:    () => void
     commands:         Command[]
     projects:         Project[]
     selectedProject:  string | null
@@ -43,6 +45,7 @@ export default function Main({
     onRemoveThreadAttach, onRemoveMessageAttach,
     onHeartbeatStart, onHeartbeatStop, commands,
     projects, selectedProject, onProjectChange,
+    safetyMode, onToggleSafety,
 }: Props) {
     const [threadPanelOpen, setThreadPanelOpen] = useState(false)
     const [dropVisible,     setDropVisible]     = useState(false)
@@ -247,6 +250,9 @@ export default function Main({
                         onRemoveAttach={onRemoveMessageAttach}
                         onHeartbeatStart={onHeartbeatStart}
                         onHeartbeatStop={onHeartbeatStop}
+                        codeMode={codeMode}
+                        safetyMode={safetyMode}
+                        onToggleSafety={onToggleSafety}
                     />
                 )}
             </div>

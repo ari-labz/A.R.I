@@ -11,6 +11,10 @@ const TOOL_START_RE = /<!--ari-tool-start:([^:]+):([^>]*?)-->/g
 const TOOL_END_RE   = /<!--ari-tool-end:([^:]+):([^>]*?)-->/g
 const TOOL_ERROR_RE = /<!--ari-tool-error:([^:]+):([^>]*?)-->/g
 
+function escHtml(s: string): string {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+}
+
 const TOOL_VERBS: Record<string, { active: string; done: string }> = {
     read_file:      { active: "Reading",          done: "Read" },
     list_directory: { active: "Listing",           done: "Listed" },
@@ -19,31 +23,75 @@ const TOOL_VERBS: Record<string, { active: string; done: string }> = {
     write_file:     { active: "Writing",           done: "Written" },
 }
 
+function parseDiffLabel(rawLabel: string): { fileLabel: string; added: number; removed: number; patch: string } | null {
+    const parts = rawLabel.split("|")
+    if (parts.length < 2) return null
+    const fileLabel = parts[0]
+    let added = 0, removed = 0, encoded = ""
+    if (parts[1]?.startsWith("+") && parts[2]?.startsWith("-")) {
+        added   = parseInt(parts[1].slice(1)) || 0
+        removed = parseInt(parts[2].slice(1)) || 0
+        encoded = parts[3] ?? ""
+    } else if (parts[1]?.startsWith("+")) {
+        added   = parseInt(parts[1].slice(1)) || 0
+        encoded = parts[2] ?? ""
+    } else {
+        return null
+    }
+    let patch = ""
+    if (encoded) { try { patch = atob(encoded) } catch { /* ignore */ } }
+    return { fileLabel, added, removed, patch }
+}
+
 function preprocessToolCards(content: string): string {
+    // Step 1: collect diff data from enriched end markers before stripping them,
+    // and normalise enriched markers to plain ones so the done-set logic works.
+    const diffData = new Map<string, { added: number; removed: number; patch: string }>()
+    let normalized = content.replace(TOOL_END_RE, (full, name, rawLabel) => {
+        const parsed = parseDiffLabel(rawLabel)
+        if (!parsed) return full
+        diffData.set(`${name}:${parsed.fileLabel}`, parsed)
+        return `<!--ari-tool-end:${name}:${parsed.fileLabel}-->`
+    })
+
+    // Step 2: determine which tools are "done" (end marker followed by content past batch-end)
     const done = new Set<string>()
-    // A tool flips from "Reading" → "Read" once its batch has ended AND something
-    // (more tool calls, or response text) appears after the batch-end marker.
-    // Tools within the same active batch all stay "Reading".
     const BATCH_END = "<!--ari-batch-end-->"
     const END_RE_G = new RegExp(TOOL_END_RE.source, "g")
-    for (const m of content.matchAll(END_RE_G)) {
+    for (const m of normalized.matchAll(END_RE_G)) {
         const after = m.index! + m[0].length
-        const batchEndIdx = content.indexOf(BATCH_END, after)
+        const batchEndIdx = normalized.indexOf(BATCH_END, after)
         if (batchEndIdx < 0) continue
-        const tail = content.slice(batchEndIdx + BATCH_END.length)
+        const tail = normalized.slice(batchEndIdx + BATCH_END.length)
         if (/\S/.test(tail)) done.add(`${m[1]}:${m[2]}`)
     }
-    let out = content.split(BATCH_END).join("")
+
+    let out = normalized.split(BATCH_END).join("")
     out = out.replace(TOOL_END_RE, "")
     out = out.replace(TOOL_ERROR_RE, (_, _name, label) => {
         const msg = label.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">")
         return `\n\n<div class="tool-card tool-card--error"><span>Error: ${msg}</span></div>\n\n`
     })
     out = out.replace(TOOL_START_RE, (_, name, label) => {
-        const file    = label.replace(/&#45;&#45;/g, "--")
-        const verbs   = TOOL_VERBS[name] ?? { active: name, done: name }
-        const key     = `${name}:${label}`
+        const file  = label.replace(/&#45;&#45;/g, "--")
+        const verbs = TOOL_VERBS[name] ?? { active: name, done: name }
+        const key   = `${name}:${label}`
         if (done.has(key)) {
+            const diff = diffData.get(key)
+            if (diff) {
+                const addBadge = diff.added   > 0 ? `<span class="diff-badge diff-badge--add">+${diff.added}</span>`   : ""
+                const delBadge = diff.removed > 0 ? `<span class="diff-badge diff-badge--del">-${diff.removed}</span>` : ""
+                const badges = addBadge + delBadge
+                if (diff.patch) {
+                    const lines = diff.patch.split("\n").map(l => {
+                        if (l.startsWith("+")) return `<div class="diff-line diff-line--add">${escHtml(l)}</div>`
+                        if (l.startsWith("-")) return `<div class="diff-line diff-line--del">${escHtml(l)}</div>`
+                        return `<div class="diff-line">${escHtml(l)}</div>`
+                    }).join("")
+                    return `\n\n<details class="tool-card tool-card--done tool-card--diff"><summary><span>${verbs.done} ${escHtml(file)}</span>${badges}</summary><div class="tool-card-diff">${lines}</div></details>\n\n`
+                }
+                return `\n\n<div class="tool-card tool-card--done">${badges}<span>${verbs.done} ${escHtml(file)}</span></div>\n\n`
+            }
             return `\n\n<div class="tool-card tool-card--done"><span>${verbs.done} ${file}</span></div>\n\n`
         }
         return `\n\n<div class="tool-card tool-card--active"><span>${verbs.active} ${file}</span><div class="typing-dots"><b></b><b></b><b></b></div></div>\n\n`

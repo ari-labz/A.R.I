@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Linq;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -84,33 +85,82 @@ public static class ClientWebSocket
             description: "Make a targeted find-and-replace edit to an existing file. old_string must match exactly once.",
             parameters: new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" }, old_string = new { type = "string", description = "Exact text to find (must appear exactly once)" }, new_string = new { type = "string", description = "Replacement text" } }, required = new[] { "path", "old_string", "new_string" } },
             displayVerb: "Editing", displayDoneVerb: "Edited",
-            labelField: "path");
+            labelField: "path",
+            customDisplayDone: argsJson =>
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(argsJson);
+                    string path    = doc.RootElement.TryGetProperty("path",       out var pe) ? pe.GetString() ?? "" : "";
+                    string oldStr  = doc.RootElement.TryGetProperty("old_string", out var oe) ? oe.GetString() ?? "" : "";
+                    string newStr  = doc.RootElement.TryGetProperty("new_string", out var ne) ? ne.GetString() ?? "" : "";
+                    string label   = System.IO.Path.GetFileName(path).Replace("--", "&#45;&#45;");
+                    int removed    = oldStr.Split('\n').Length;
+                    int added      = newStr.Split('\n').Length;
+                    string patch   = BuildPatch(oldStr, newStr);
+                    string encoded = patch.Length <= 10_000
+                        ? Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(patch))
+                        : "";
+                    return $"<!--ari-tool-end:edit_file:{label}|+{added}|-{removed}|{encoded}-->";
+                }
+                catch { return "<!--ari-tool-end:edit_file:file-->"; }
+            });
 
         RegisterTool(thread, ws, log,
             name: "write_file",
             description: "Write or create a file. Overwrites if it exists. Prefer edit_file for targeted changes.",
             parameters: new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" }, content = new { type = "string", description = "Full content to write" } }, required = new[] { "path", "content" } },
             displayVerb: "Writing", displayDoneVerb: "Written",
-            labelField: "path");
+            labelField: "path",
+            customDisplayDone: argsJson =>
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(argsJson);
+                    string path    = doc.RootElement.TryGetProperty("path",    out var pe) ? pe.GetString() ?? "" : "";
+                    string content = doc.RootElement.TryGetProperty("content", out var ce) ? ce.GetString() ?? "" : "";
+                    string label   = System.IO.Path.GetFileName(path).Replace("--", "&#45;&#45;");
+                    int added      = content.Split('\n').Length;
+                    string patch   = string.Join("\n", content.Split('\n').Select(l => "+" + l));
+                    string encoded = patch.Length <= 10_000
+                        ? Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(patch))
+                        : "";
+                    return $"<!--ari-tool-end:write_file:{label}|+{added}|{encoded}-->";
+                }
+                catch { return "<!--ari-tool-end:write_file:file-->"; }
+            });
+    }
+
+    private static string BuildPatch(string oldStr, string newStr)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var line in oldStr.Split('\n'))
+            sb.Append('-').AppendLine(line);
+        foreach (var line in newStr.Split('\n'))
+            sb.Append('+').AppendLine(line);
+        return sb.ToString();
     }
 
     private static void RegisterTool(
         ARI.LLM.Thread thread, WebSocket ws, ILogger log,
         string name, string description, object parameters,
-        string displayVerb, string displayDoneVerb, string labelField)
+        string displayVerb, string displayDoneVerb, string labelField,
+        Func<string, string>? customDisplayDone = null)
     {
         Func<string, string> MakeDisplay(string verb, string markerType) => argsJson =>
         {
             try
             {
                 using var doc = JsonDocument.Parse(argsJson);
-                string label = doc.RootElement.TryGetProperty(labelField, out var el) ? el.GetString() ?? verb : verb;
+                string label = doc.RootElement.TryGetProperty(labelField, out var el) ? el.GetString() ?? "" : "";
                 label = System.IO.Path.GetFileName(label).Replace("--", "&#45;&#45;");
-                if (string.IsNullOrWhiteSpace(label)) label = verb;
+                if (string.IsNullOrWhiteSpace(label)) label = "file";
                 return $"<!--ari-tool-{markerType}:{name}:{label}-->";
             }
-            catch { return $"<!--ari-tool-{markerType}:{name}:{verb}-->"; }
+            catch { return $"<!--ari-tool-{markerType}:{name}:file-->"; }
         };
+
+        var displayDoneFn = customDisplayDone ?? MakeDisplay(displayDoneVerb, "end");
 
         thread.RegisterTool(
             name,
@@ -124,7 +174,9 @@ public static class ClientWebSocket
                 log.LogInformation("[Client] → {Tool}  callId={CallId}", name, callId);
                 await Send(ws, new { type = name, callId, args = argsJson });
 
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                // Write/edit operations on large files can take longer to round-trip through the bridge
+                int timeoutSeconds = name is "write_file" or "edit_file" ? 90 : 30;
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
                 cts.Token.Register(() => tcs.TrySetCanceled());
                 try
                 {
@@ -140,7 +192,7 @@ public static class ClientWebSocket
                 finally { pendingFileCalls.TryRemove(callId, out _); }
             },
             MakeDisplay(displayVerb, "start"),
-            MakeDisplay(displayDoneVerb, "end"));
+            displayDoneFn);
     }
 
     private sealed class ConnectionState { public string Root { get; set; } = ""; }

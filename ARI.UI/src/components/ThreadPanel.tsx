@@ -1,12 +1,12 @@
 import type { Attachment } from "../hooks/useThreads"
 
 interface Props {
-    open:          boolean
-    attachments:   Attachment[]
-    activeThread:  string | null
-    onClose:       () => void
-    onAttach:      () => void
-    onRemove:      (name: string) => void
+    open:         boolean
+    attachments:  Attachment[]
+    activeThread: string | null
+    onClose:      () => void
+    onAttach:     () => void
+    onRemove:     (name: string) => void
 }
 
 export default function ThreadPanel({ open, attachments, activeThread, onClose, onAttach, onRemove }: Props) {

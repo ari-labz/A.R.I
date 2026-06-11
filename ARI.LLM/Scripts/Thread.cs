@@ -493,7 +493,27 @@ public class Thread
 
             HttpResponseMessage response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
             if (!response.IsSuccessStatusCode)
-                throw new LlmRequestFailedException($"LLM request failed with status: {response.StatusCode}");
+            {
+                string errBody = "";
+                try { errBody = await response.Content.ReadAsStringAsync(ct); } catch { /* ignore */ }
+
+                // llama-server rejects tool calls whose arguments contain unescaped characters
+                // (e.g. writing XAML/XML with embedded double-quotes). Treat this as a recoverable
+                // tool error so the model can retry with properly escaped content rather than
+                // crashing the entire pipeline.
+                if (response.StatusCode == System.Net.HttpStatusCode.InternalServerError
+                    && errBody.Contains("Failed to parse tool call arguments", StringComparison.OrdinalIgnoreCase))
+                {
+                    Common.Logger.LogWarning("[{Agent}] ({Thread}) Tool call JSON parse failure — injecting recovery hint.", agent.Name, threadKey);
+                    string hint = "One of your tool call arguments contained characters (such as unescaped double-quotes in XML/XAML content) that made the JSON invalid. " +
+                                  "Please retry: escape all double-quotes inside string values as \\\" and avoid raw newlines inside JSON strings.";
+                    // Inject as a user-turn recovery message so the model sees it and can retry
+                    messages.Add(new { role = "user", content = hint });
+                    continue;
+                }
+
+                throw new LlmRequestFailedException($"LLM request failed with status: {response.StatusCode}" + (errBody.Length > 0 ? $" — {errBody[..Math.Min(errBody.Length, 300)]}" : ""));
+            }
 
             using Stream      stream = await response.Content.ReadAsStreamAsync(ct);
             using StreamReader reader = new(stream);
@@ -691,13 +711,14 @@ public class Thread
                 {
                     // Native tool_calls: use standard OpenAI format — the model and llama-server
                     // both understand role:tool for this path (same as Dialogue/Recall).
+                    // Strip large content fields from write_file/edit_file args to avoid context bloat.
                     var toolCallList = pendingCalls
                         .OrderBy(kv => kv.Key)
                         .Select(kv => new
                         {
                             id       = kv.Value.Id,
                             type     = "function",
-                            function = new { name = kv.Value.Name, arguments = kv.Value.Args.ToString() }
+                            function = new { name = kv.Value.Name, arguments = TrimToolArgs(kv.Value.Name, kv.Value.Args.ToString()) }
                         })
                         .ToArray();
 
@@ -847,6 +868,30 @@ public class Thread
         }
 
         return responseText;
+    }
+
+    // Strip large content fields from write_file / edit_file args before they go into the
+    // messages array, so they don't bloat the context window on subsequent LLM turns.
+    private static string TrimToolArgs(string toolName, string argsJson)
+    {
+        if (toolName is not ("write_file" or "edit_file")) return argsJson;
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            var root = doc.RootElement;
+            var trimmed = new Dictionary<string, object?>();
+            foreach (JsonProperty prop in root.EnumerateObject())
+            {
+                if (toolName == "write_file" && prop.Name == "content")
+                    trimmed[prop.Name] = "[content omitted]";
+                else if (toolName == "edit_file" && prop.Name is "old_string" or "new_string")
+                    trimmed[prop.Name] = "[omitted]";
+                else
+                    trimmed[prop.Name] = prop.Value.GetRawText();
+            }
+            return JsonSerializer.Serialize(trimmed);
+        }
+        catch { return argsJson; }
     }
 
     private static bool IsToolError(string result) =>
