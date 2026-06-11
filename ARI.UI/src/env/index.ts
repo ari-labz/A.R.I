@@ -28,6 +28,8 @@ declare global {
       setEndpoint(url: string): void
       moveWindowBy(dx: number, dy: number): void
       closeWindow(): void
+      minimizeWindow(): void
+      maximizeWindow(): void
       markReady(): void
       getLocalPath(projectId: string): Promise<string | null>
       setLocalPath(projectId: string, path: string | null): Promise<void>

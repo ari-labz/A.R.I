@@ -154,6 +154,7 @@ async function createWindow() {
         minHeight:   600,
         titleBarStyle: "hidden",
         trafficLightPosition: { x: 12, y: 16 },
+        icon: path.join(__dirname, "../assets/icon.png"),
         show: false,
         webPreferences: {
             preload:          path.join(__dirname, "preload.js"),
@@ -297,6 +298,17 @@ ipcMain.handle("project:set-path", (_e, projectId, path) => {
 ipcMain.handle("window:close", () => {
     log.info("IPC window:close received")
     win?.close()
+})
+
+ipcMain.handle("window:minimize", () => {
+    log.info("IPC window:minimize received")
+    win?.minimize()
+})
+
+ipcMain.handle("window:maximize", () => {
+    if (!win) return
+    if (win.isMaximized()) { log.info("IPC window:maximize — restoring"); win.unmaximize() }
+    else                   { log.info("IPC window:maximize — maximizing"); win.maximize() }
 })
 
 ipcMain.handle("app:ready", () => {

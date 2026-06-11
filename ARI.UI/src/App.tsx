@@ -294,7 +294,7 @@ export default function App() {
                     if (safetyModeRef.current) {
                         const diff = buildSafetyDiff(params.old_string ?? "", params.new_string ?? "")
                         console.warn(`[ToolSocket] → file_content (edit_file BLOCKED by safety)  callId=${callId}`)
-                        ws.send(JSON.stringify({ type: "file_content", callId, content: `[Safety mode is enabled — the file was NOT modified. Explain the required changes and show a diff instead of applying them directly.\n\nProposed diff for ${params.path}:\n\n${diff}]` }))
+                        ws.send(JSON.stringify({ type: "file_error", callId, error: `SAFETY MODE — file was NOT modified. Do not call edit_file or write_file again. Respond to the user now: tell them safety mode is on, show the proposed changes as a code block, and say they can disable safety mode (shield icon) to apply them.\n\nProposed diff for ${params.path}:\n\n${diff}` }))
                     } else {
                         const res = await window.electronBridge!.editFile(localPath, params.path, params.old_string, params.new_string)
                         if (res.ok) {
@@ -310,7 +310,7 @@ export default function App() {
                     if (safetyModeRef.current) {
                         const lines = (params.content ?? "").split("\n")
                         console.warn(`[ToolSocket] → file_content (write_file BLOCKED by safety)  callId=${callId}`)
-                        ws.send(JSON.stringify({ type: "file_content", callId, content: `[Safety mode is enabled — the file was NOT written. Explain the required changes instead of applying them.\n\nProposed content for ${params.path} (${lines.length} lines):\n\n\`\`\`\n${params.content ?? ""}\n\`\`\`]` }))
+                        ws.send(JSON.stringify({ type: "file_error", callId, error: `SAFETY MODE — file was NOT written. Do not call edit_file or write_file again. Respond to the user now: tell them safety mode is on, show the proposed content as a code block, and say they can disable safety mode (shield icon) to apply it.\n\nProposed content for ${params.path} (${lines.length} lines):\n\n\`\`\`\n${params.content ?? ""}\n\`\`\`` }))
                     } else {
                         await window.electronBridge!.writeFile(localPath, params.path, params.content ?? "")
                         console.warn(`[ToolSocket] → file_content (write_file)  callId=${callId}  path=${params.path}`)
@@ -352,6 +352,7 @@ export default function App() {
         setIsStreaming(false)
         setIsRemembering(false)
         activeProjectRef.current = projectId
+        setSelectedProject(projectId)
 
         const hist = await loadHistory(key, internal).catch(() => [])
         setItems(hist)
@@ -375,6 +376,10 @@ export default function App() {
         setActiveThread(null); setIsInternal(false); setAgentName(null)
         setCodeMode(false); setIsStreaming(false); setIsRemembering(false)
         setPendingAttach([]); setThreadAttach([])
+        // Preserve selectedProject so repeated new chats on the same project
+        // don't require re-selecting it each time.
+        setSelectedProject(activeProjectRef.current)
+        activeProjectRef.current = null
         setActiveView("chat")
         resetToIdle()
     }
@@ -623,8 +628,27 @@ export default function App() {
         setPendingAttach(prev => prev.filter(a => a.name !== name))
     }, [])
 
+    const isWin32 = window.electronBridge?.platform === "win32"
+
     return (
         <div id="shell">
+            {window.electronBridge && (
+                <div id="titlebar-drag">
+                    {isWin32 && (
+                        <div id="win-controls">
+                            <button id="win-minimize-btn" title="Minimise" onMouseDown={e => e.stopPropagation()} onClick={() => window.electronBridge!.minimizeWindow()}>
+                                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><line x1="1" y1="5" x2="9" y2="5"/></svg>
+                            </button>
+                            <button id="win-maximize-btn" title="Maximise" onMouseDown={e => e.stopPropagation()} onClick={() => window.electronBridge!.maximizeWindow()}>
+                                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="1" y="1" width="8" height="8" rx="1"/></svg>
+                            </button>
+                            <button id="win-close-btn" title="Close" onMouseDown={e => e.stopPropagation()} onClick={() => window.electronBridge!.closeWindow()}>
+                                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><line x1="1" y1="1" x2="9" y2="9"/><line x1="9" y1="1" x2="1" y2="9"/></svg>
+                            </button>
+                        </div>
+                    )}
+                </div>
+            )}
             <Sidebar
                 threads={threads}
                 activeThread={activeThread}

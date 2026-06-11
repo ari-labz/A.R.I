@@ -373,6 +373,8 @@ public class Thread
             {
                 List<object> contentParts = new();
 
+                bool hasTools = tools.Count > 0;
+
                 if (hasThreadContent)
                 {
                     StringBuilder sb = new();
@@ -383,7 +385,11 @@ public class Thread
                         sb.AppendLine(a.Content);
                         sb.AppendLine("---");
                     }
-                    if (threadTexts.Count > 0) sb.AppendLine(ATTACHMENT_DIVIDER);
+                    if (threadTexts.Count > 0)
+                    {
+                        if (hasTools) sb.AppendLine("(The above files are already provided inline — do not call read_file for them.)");
+                        sb.AppendLine(ATTACHMENT_DIVIDER);
+                    }
                     contentParts.Add(new { type = "text", text = sb.ToString().TrimEnd() });
 
                     foreach (Attachment a in threadImages)
@@ -400,7 +406,11 @@ public class Thread
                         sb.AppendLine(a.Content);
                         sb.AppendLine("---");
                     }
-                    if (msgTexts.Count > 0) sb.AppendLine(ATTACHMENT_DIVIDER);
+                    if (msgTexts.Count > 0)
+                    {
+                        if (hasTools) sb.AppendLine("(The above files are already provided inline — do not call read_file for them.)");
+                        sb.AppendLine(ATTACHMENT_DIVIDER);
+                    }
                     contentParts.Add(new { type = "text", text = sb.ToString().TrimEnd() });
 
                     foreach (Attachment a in msgImages)
