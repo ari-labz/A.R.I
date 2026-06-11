@@ -150,12 +150,12 @@ public class ClientController : ControllerBase
             displayVerb: "Searching files", displayDoneVerb: "Searched files");
 
         RegisterClientTool(codeThread, ws, "edit_file",
-            "Make a targeted find-and-replace edit to an existing file. old_string must match exactly once. Use write_file for full rewrites.",
+            "Make a targeted find-and-replace edit to an existing file. old_string must match exactly once. Always prefer this over write_file for existing files — even for large deletions, use multiple edit_file calls rather than rewriting the whole file.",
             new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" }, old_string = new { type = "string", description = "Exact text to find (must appear exactly once)" }, new_string = new { type = "string", description = "Replacement text" } }, required = new[] { "path", "old_string", "new_string" } },
             displayVerb: "Editing", displayDoneVerb: "Edited");
 
         RegisterClientTool(codeThread, ws, "write_file",
-            "Write or create a file. Overwrites if it exists. Creates missing parent directories. Prefer edit_file for targeted changes.",
+            "Create a new file or overwrite an existing one with entirely new content. Only use this for new files or when the file must be completely replaced. Never use this to remove or modify parts of an existing file — use edit_file instead.",
             new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" }, content = new { type = "string", description = "Full content to write" } }, required = new[] { "path", "content" } },
             displayVerb: "Writing", displayDoneVerb: "Written");
 
@@ -306,12 +306,12 @@ public class ClientController : ControllerBase
                                 displayVerb: "Searching files", displayDoneVerb: "Searched files");
 
                             RegisterClientTool(targetThread, ws, "edit_file",
-                                "Targeted find-and-replace on an existing file. old_string must match exactly once. Use write_file for full rewrites or new files.",
+                                "Make a targeted find-and-replace edit to an existing file. old_string must match exactly once. Always prefer this over write_file for existing files — even for large deletions, use multiple edit_file calls rather than rewriting the whole file.",
                                 new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" }, old_string = new { type = "string", description = "Exact text to find (must appear once)" }, new_string = new { type = "string", description = "Replacement text" } }, required = new[] { "path", "old_string", "new_string" } },
                                 displayVerb: "Editing", displayDoneVerb: "Edited");
 
                             RegisterClientTool(targetThread, ws, "write_file",
-                                "Write or create a file. Overwrites if it exists. Prefer edit_file for targeted changes.",
+                                "Create a new file or overwrite an existing one with entirely new content. Only use this for new files or when the file must be completely replaced. Never use this to remove or modify parts of an existing file — use edit_file instead.",
                                 new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" }, content = new { type = "string", description = "Full content to write" } }, required = new[] { "path", "content" } },
                                 displayVerb: "Writing", displayDoneVerb: "Written");
                             // Update threadKey and codeThread for unregister on close
@@ -334,8 +334,8 @@ public class ClientController : ControllerBase
                           "- `read_file` — read a file before answering any question about it\n" +
                           "- `list_directory` — explore a directory's contents\n" +
                           "- `search_files` — find a symbol, string, or pattern across the project\n" +
-                          "- `edit_file` — make a targeted find-and-replace change to an existing file\n" +
-                          "- `write_file` — create a new file or fully rewrite an existing one"
+                          "- `edit_file` — targeted find-and-replace on an existing file; always prefer this over write_file\n" +
+                          "- `write_file` — create a new file only; never use to modify an existing file"
                         : null!;
 
                     _ = Task.Run(async () =>

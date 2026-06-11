@@ -1,6 +1,6 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="ARI" type="CompoundRunConfigurationType">
-    <toRun name="ARI.Core" type="DotNetProjectRunConfigurationType" />
+    <toRun name="ARI.Core" type="LaunchSettings" />
     <toRun name="ARI.App Dev" type="ShConfigurationType" />
     <method v="2" />
   </configuration>
