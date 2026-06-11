@@ -316,6 +316,8 @@ ipcMain.handle("app:ready", () => {
     appReadyResolve()
 })
 
+ipcMain.handle("app:version", () => app.getVersion())
+
 ipcMain.handle("window:move-by", (_e, dx, dy) => {
     const [x, y] = win.getPosition()
     win.setPosition(x + Math.round(dx), y + Math.round(dy))
