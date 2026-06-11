@@ -24,7 +24,7 @@
     "icon":        "assets/icon.png",
     "directories": { "output": "dist" },
     "files": ["src/**/*", "assets/**/*"],
-    "mac":   { "target": "dmg", "artifactName": "ARI-${version}-mac.${ext}" },
+    "mac":   { "target": "dmg", "icon": "assets/icon.icns", "artifactName": "ARI-${version}-mac.${ext}" },
     "win":   { "target": "zip", "artifactName": "ARI-${version}-win.${ext}" },
     "linux": { "target": "zip", "artifactName": "ARI-${version}-linux.${ext}" }
   }

@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>dotnet-ARI.Core-f9caf1c1-b2ea-4e29-bcc9-19eb3eb245aa</UserSecretsId>
+    <ApplicationIcon>ari.icns</ApplicationIcon>
   </PropertyGroup>
 	
   <!-- Build the React UI and sync it into wwwroot before compiling -->
