@@ -717,7 +717,7 @@ public class Thread
                 }
             }
 
-            if (pendingCalls.Count > 0 && finishReason == "tool_calls")
+            if (pendingCalls.Count > 0 && (finishReason == "tool_calls" || finishReason == "stop" || finishReason == null))
             {
                 // Repair any unescaped quotes in tool call args emitted by the model.
                 // Must happen before args are used for display, execution, or sent back to llama-server.

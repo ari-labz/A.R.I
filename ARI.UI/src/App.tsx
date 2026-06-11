@@ -147,6 +147,7 @@ export default function App() {
                     setActiveThread(null)
                     setIsRemembering(false)
                     setMode("idle")
+                    setCodeMode(false)
                     setItems([])
                     await loadThreads()
                     return
