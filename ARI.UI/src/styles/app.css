@@ -460,12 +460,26 @@ html, body {
 #input-area { padding: 10px 24px 20px; flex-shrink: 0; background: transparent; }
 
 #input-wrap {
-    max-width: var(--col-max); margin: 0 auto;
+    max-width: var(--col-max); margin: 0 auto; position: relative;
     background: #ffffff; border: 1px solid #d1d5db; border-radius: 16px;
     padding: 12px 12px 10px 16px; display: flex; flex-direction: column; gap: 8px;
     box-shadow: 0 1px 4px rgba(0,0,0,.06);
     transition: background-color 0.55s ease, border-color 0.55s ease, box-shadow .15s;
 }
+
+#btn-safety-toggle {
+    position: absolute; top: 8px; right: 10px;
+    background: transparent; border: none; cursor: pointer; padding: 4px; border-radius: 6px;
+    color: rgba(120,120,120,.5); display: flex; align-items: center;
+    transition: color .12s, background .12s;
+}
+#btn-safety-toggle:hover { color: rgba(120,120,120,.9); background: rgba(0,0,0,.05); }
+#btn-safety-toggle.active { color: #16a34a; }
+#btn-safety-toggle.active:hover { color: #15803d; background: rgba(22,163,74,.08); }
+#main.code-mode #btn-safety-toggle { color: rgba(255,255,255,.25); }
+#main.code-mode #btn-safety-toggle:hover { color: rgba(255,255,255,.6); background: rgba(255,255,255,.06); }
+#main.code-mode #btn-safety-toggle.active { color: #4ade80; }
+#main.code-mode #btn-safety-toggle.active:hover { color: #86efac; background: rgba(74,222,128,.08); }
 #input-wrap:focus-within { border-color: #9ca3af; box-shadow: 0 1px 8px rgba(0,0,0,.1); }
 #main.code-mode #input-wrap { background: #131d22; border-color: #253038; }
 #main.code-mode #input-wrap:focus-within { border-color: #3a5060; }
@@ -799,21 +813,45 @@ html, body {
     display: flex; align-items: center; gap: 6px;
     width: fit-content;
     padding: 3px 10px; margin: 3px 0;
-    border-radius: 6px; border: 1px solid rgba(255,255,255,0.08);
-    background: rgba(255,255,255,0.04);
-    font-size: 12px; font-style: italic; color: #6b7280;
+    border-radius: 6px; border: 1px solid rgba(255,255,255,0.2);
+    background: rgba(60,60,70,0.9);
+    font-size: 12px; font-style: italic; color: #ffffff;
     user-select: none;
 }
-.tool-card--done { opacity: 0.6; }
-.tool-card--active { color: #9ca3af; }
-.tool-card--error { color: #f87171; border-color: #7f1d1d; background: rgba(127,29,29,0.15); }
+.tool-card--done { opacity: 0.75; }
+.tool-card--active { color: #e5e7eb; }
+.tool-card--error { color: #fca5a5; border-color: #7f1d1d; background: rgba(127,29,29,0.85); }
 .tool-card .typing-dots { display: flex; gap: 3px; align-items: center; }
 .tool-card .typing-dots b {
-    width: 4px; height: 4px; border-radius: 50%; background: #6b7280; display: block;
+    width: 4px; height: 4px; border-radius: 50%; background: #d1d5db; display: block;
     animation: bounce 1.2s infinite ease-in-out;
 }
 .tool-card .typing-dots b:nth-child(2) { animation-delay: .2s; }
 .tool-card .typing-dots b:nth-child(3) { animation-delay: .4s; }
+
+/* diff badges on edit/write cards */
+.diff-badge {
+    font-size: 11px; font-weight: 600; font-style: normal;
+    padding: 0 5px; border-radius: 4px; line-height: 18px;
+}
+.diff-badge--add { color: #4ade80; background: rgba(74,222,128,.12); }
+.diff-badge--del { color: #f87171; background: rgba(248,113,113,.12); }
+
+/* expandable diff tool card */
+details.tool-card { display: block; width: fit-content; cursor: pointer; }
+details.tool-card summary {
+    display: flex; align-items: center; gap: 6px;
+    list-style: none; cursor: pointer;
+}
+details.tool-card summary::-webkit-details-marker { display: none; }
+.tool-card-diff {
+    margin-top: 6px; border-radius: 5px; overflow: hidden;
+    font-family: monospace; font-size: 11px; font-style: normal;
+    border: 1px solid rgba(255,255,255,.1); max-height: 320px; overflow-y: auto;
+}
+.diff-line { padding: 1px 8px; white-space: pre; }
+.diff-line--add { background: rgba(74,222,128,.12); color: #4ade80; }
+.diff-line--del { background: rgba(248,113,113,.12); color: #f87171; }
 
 /* ── typing indicator ───────────────────────────────────── */
 .typing-indicator { display: flex; align-items: center; gap: 5px; padding: 2px 0 6px; }

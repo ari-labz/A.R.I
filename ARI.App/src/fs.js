@@ -123,11 +123,25 @@ function editFile(root, filePath, oldString, newString) {
     const abs = path.resolve(root, filePath)
     if (!abs.startsWith(path.resolve(root))) throw new Error("Path traversal denied")
     const content = fs.readFileSync(abs, "utf8")
+
+    // Exact match
     let count = 0, idx = 0
     while ((idx = content.indexOf(oldString, idx)) !== -1) { count++; idx += oldString.length }
-    if (count === 0) return { ok: false, error: `old_string not found in ${filePath}. No changes made.` }
-    if (count > 1)  return { ok: false, error: `old_string matches ${count} locations in ${filePath}. Add more surrounding context to make it unique.` }
-    fs.writeFileSync(abs, content.replace(oldString, newString), "utf8")
+    if (count === 1) {
+        fs.writeFileSync(abs, content.replace(oldString, newString), "utf8")
+        return { ok: true }
+    }
+    if (count > 1) return { ok: false, error: `old_string matches ${count} locations in ${filePath}. Add more surrounding context to make it unique.` }
+
+    // Fallback: normalize CRLF → LF on both sides (LLM often drops \r when generating old_string)
+    const normContent = content.replace(/\r\n/g, "\n")
+    const normOld     = oldString.replace(/\r\n/g, "\n")
+    const normNew     = newString.replace(/\r\n/g, "\n")
+    let normCount = 0, normIdx = 0
+    while ((normIdx = normContent.indexOf(normOld, normIdx)) !== -1) { normCount++; normIdx += normOld.length }
+    if (normCount === 0) return { ok: false, error: `old_string not found in ${filePath}. No changes made.` }
+    if (normCount > 1)  return { ok: false, error: `old_string matches ${normCount} locations in ${filePath}. Add more surrounding context to make it unique.` }
+    fs.writeFileSync(abs, normContent.replace(normOld, normNew), "utf8")
     return { ok: true }
 }
 

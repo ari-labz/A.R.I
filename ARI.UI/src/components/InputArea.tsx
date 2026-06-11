@@ -16,6 +16,9 @@ interface Props {
     onRemoveAttach:   (name: string) => void
     onHeartbeatStart: () => void
     onHeartbeatStop:  () => void
+    codeMode:         boolean
+    safetyMode:       boolean
+    onToggleSafety:   () => void
 }
 
 function fileExtLabel(name: string) {
@@ -28,6 +31,7 @@ export default function InputArea({
     projects, selectedProject, onProjectChange,
     onSend, onUploadFiles, onRemoveAttach,
     onHeartbeatStart, onHeartbeatStop,
+    codeMode, safetyMode, onToggleSafety,
 }: Props) {
     const [input, setInput]         = useState("")
     const [cmdMatches, setCmdMatches] = useState<Command[]>([])
@@ -105,6 +109,18 @@ export default function InputArea({
                 const tag = (e.target as HTMLElement).tagName
                 if (tag !== "SELECT" && tag !== "BUTTON" && tag !== "INPUT") textareaRef.current?.focus()
             }}>
+                {codeMode && (
+                    <button
+                        id="btn-safety-toggle"
+                        className={safetyMode ? "active" : ""}
+                        title={safetyMode ? "Safety on — ARI will not modify files" : "Safety off — ARI can modify files"}
+                        onClick={e => { e.stopPropagation(); onToggleSafety() }}
+                    >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill={safetyMode ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                        </svg>
+                    </button>
+                )}
                 {/* pre-send attachment chips */}
                 <div id="msg-attach-preview">
                     {pendingAttach.map(a => (

@@ -145,11 +145,35 @@ public class ControlPanelApiController(LlmServiceHolder holder, WebPanelConfig c
         List<object> contextStats = new();
         if (Llm is not null)
         {
+            // Collect all user-facing threads across Dialogue and Code, deduped by key.
+            // For threads present in both agents, prefer the Code label.
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            Agent? codeAgent = Llm.Agents.GetValueOrDefault("Code");
+            if (codeAgent is not null)
+            {
+                foreach (KeyValuePair<string, ARI.LLM.Thread> kvp in codeAgent.Threads)
+                {
+                    (int used, int limit) = kvp.Value.GetContextStats();
+                    if (used <= 0) continue;
+                    seen.Add(kvp.Key);
+                    contextStats.Add(new
+                    {
+                        threadKey = kvp.Key,
+                        agentName = "Code",
+                        used,
+                        limit,
+                        pct = limit > 0 ? (int)(used * 100.0 / limit) : 0,
+                    });
+                }
+            }
+
             Agent? dialogueAgent = Llm.Agents.GetValueOrDefault("Dialogue");
             if (dialogueAgent is not null)
             {
                 foreach (KeyValuePair<string, ARI.LLM.Thread> kvp in dialogueAgent.Threads)
                 {
+                    if (seen.Contains(kvp.Key)) continue;  // already listed under Code
                     (int used, int limit) = kvp.Value.GetContextStats();
                     if (used <= 0) continue;
                     contextStats.Add(new
