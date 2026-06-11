@@ -91,4 +91,16 @@ internal class AgentConfig
     /// Null = no preference (server assigns freely).
     /// </summary>
     public int? Slot { get; init; } = null;
+
+    /// <summary>
+    /// Optional per-agent sampling temperature override.
+    /// Null = use the global default in Thread.cs.
+    /// </summary>
+    public double? Temperature { get; init; } = null;
+
+    /// <summary>
+    /// Optional per-agent nucleus sampling (top_p) override.
+    /// Null = use the global default in Thread.cs.
+    /// </summary>
+    public double? TopP { get; init; } = null;
 }
