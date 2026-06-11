@@ -157,7 +157,7 @@ public static class ClientWebSocket
                 if (string.IsNullOrWhiteSpace(label)) label = "file";
                 return $"<!--ari-tool-{markerType}:{name}:{label}-->";
             }
-            catch { return $"<!--ari-tool-{markerType}:{name}:file-->"; }
+            catch { return $"<!--ari-tool-error:{name}:failed to parse tool args (malformed JSON)-->"; }
         };
 
         var displayDoneFn = customDisplayDone ?? MakeDisplay(displayDoneVerb, "end");

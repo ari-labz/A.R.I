@@ -427,6 +427,7 @@ public class Thread
 
         int             maxTokens        = maxTokensOverride != 0 ? maxTokensOverride : agent.MaxTokens;
         int             toolCallCount    = 0;
+        int             parseFailures    = 0;
         List<string>    toolResults      = new();
         HashSet<string> calledKeys       = new(StringComparer.OrdinalIgnoreCase);
         StringBuilder   responseBuilder  = new();
@@ -514,10 +515,13 @@ public class Thread
                 if (response.StatusCode == System.Net.HttpStatusCode.InternalServerError
                     && errBody.Contains("Failed to parse tool call arguments", StringComparison.OrdinalIgnoreCase))
                 {
+                    parseFailures++;
+                    if (parseFailures > 2)
+                        throw new LlmRequestFailedException($"Tool call JSON parse failed {parseFailures} times in a row — aborting to prevent infinite loop.");
+
                     Common.Logger.LogWarning("[{Agent}] ({Thread}) Tool call JSON parse failure — injecting recovery hint.", agent.Name, threadKey);
                     string hint = "One of your tool call arguments contained characters (such as unescaped double-quotes in XML/XAML content) that made the JSON invalid. " +
                                   "Please retry: escape all double-quotes inside string values as \\\" and avoid raw newlines inside JSON strings.";
-                    // Inject as a user-turn recovery message so the model sees it and can retry
                     messages.Add(new { role = "user", content = hint });
                     continue;
                 }
@@ -623,7 +627,15 @@ public class Thread
                         responseBuilder.Append(deltaText);
                         if (LiveCall is { } lc) lc.EstimatedOutputTokens = responseBuilder.Length / CHARS_PER_TOKEN;
                         if (onDelta is not null)
-                            await onDelta(contentBuilder.ToString() + responseBuilder.ToString());
+                        {
+                            // Suppress "ARI: " prefix while it's still arriving; emit stripped text once confirmed absent or past it
+                            const string AriPrefix = "ARI: ";
+                            string accumulated = responseBuilder.ToString();
+                            string visible = accumulated.Length < AriPrefix.Length
+                                ? (accumulated.StartsWith(AriPrefix[..accumulated.Length], StringComparison.OrdinalIgnoreCase) ? "" : accumulated)
+                                : (accumulated.StartsWith(AriPrefix, StringComparison.OrdinalIgnoreCase) ? accumulated[AriPrefix.Length..] : accumulated);
+                            await onDelta(contentBuilder.ToString() + visible);
+                        }
                     }
                 }
             }
@@ -707,6 +719,19 @@ public class Thread
 
             if (pendingCalls.Count > 0 && finishReason == "tool_calls")
             {
+                // Repair any unescaped quotes in tool call args emitted by the model.
+                // Must happen before args are used for display, execution, or sent back to llama-server.
+                foreach (var key in pendingCalls.Keys)
+                {
+                    var (id, name, args) = pendingCalls[key];
+                    string repaired = RepairToolArgsJson(args.ToString());
+                    if (repaired != args.ToString())
+                    {
+                        Common.Logger.LogWarning("[{Agent}] ({Thread}) Repaired malformed JSON args for tool '{Tool}'.", agent.Name, threadKey, name);
+                        pendingCalls[key] = (id, name, new StringBuilder(repaired));
+                    }
+                }
+
                 bool isXmlFallback = pendingCalls.Values.Any(c => c.Id.StartsWith("fallback_xml_"));
 
                 toolCallCount += pendingCalls.Count;
@@ -788,11 +813,16 @@ public class Thread
                     else
                     {
                         messages.Add(new { role = "tool", tool_call_id = call.Id, name = call.Name, content = result });
+                        if (liveCallInfo is { } lc) lc.EstimatedInputTokens += result.Length / CHARS_PER_TOKEN;
                     }
                 }
 
                 if (isXmlFallback)
-                    messages.Add(new { role = "user", content = xmlResultsMsg!.ToString().TrimEnd() });
+                {
+                    string xmlMsg = xmlResultsMsg!.ToString().TrimEnd();
+                    messages.Add(new { role = "user", content = xmlMsg });
+                    if (liveCallInfo is { } lc) lc.EstimatedInputTokens += xmlMsg.Length / CHARS_PER_TOKEN;
+                }
 
                 // Mark end of this tool batch so the UI can keep cards as "Reading" within a
                 // batch but flip them to "Read" once a new batch or text follows.
@@ -882,6 +912,67 @@ public class Thread
 
     // Strip large content fields from write_file / edit_file args before they go into the
     // messages array, so they don't bloat the context window on subsequent LLM turns.
+    private static string RepairToolArgsJson(string argsJson)
+    {
+        // Walk the JSON character-by-character and escape any bare double-quotes
+        // that appear inside string values. The model (especially quantized local
+        // models) occasionally emits {"key": "val"ue"} instead of {"key": "val\"ue"}.
+        var sb     = new StringBuilder(argsJson.Length);
+        bool inStr = false;   // are we inside a JSON string value?
+        bool escape = false;  // was the previous character a backslash?
+
+        for (int i = 0; i < argsJson.Length; i++)
+        {
+            char c = argsJson[i];
+
+            if (escape)
+            {
+                sb.Append(c);
+                escape = false;
+                continue;
+            }
+
+            if (c == '\\')
+            {
+                sb.Append(c);
+                escape = true;
+                continue;
+            }
+
+            if (c == '"')
+            {
+                if (!inStr)
+                {
+                    inStr = true;
+                    sb.Append(c);
+                    continue;
+                }
+
+                // Peek ahead: if the next non-whitespace char is : , } ] then this
+                // quote legitimately closes the string. Otherwise it's an unescaped
+                // quote inside the value and must be escaped.
+                int j = i + 1;
+                while (j < argsJson.Length && argsJson[j] == ' ') j++;
+                char next = j < argsJson.Length ? argsJson[j] : '\0';
+
+                if (next is ':' or ',' or '}' or ']' or '\0')
+                {
+                    inStr = false;
+                    sb.Append(c);
+                }
+                else
+                {
+                    sb.Append("\\\"");
+                }
+                continue;
+            }
+
+            sb.Append(c);
+        }
+
+        return sb.ToString();
+    }
+
     private static string TrimToolArgs(string toolName, string argsJson)
     {
         if (toolName is not ("write_file" or "edit_file")) return argsJson;
