@@ -106,13 +106,19 @@ export default function App() {
         waitAndInit()
         const pollId = setInterval(loadThreads, 5000)
 
-        env.getVersion().then(async ver => {
-            if (!ver) return
-            setClientVersion(ver)
+        async function checkVersion(ver: string) {
             const res = await fetch("/api/info/version").catch(() => null)
             if (!res?.ok) return
             const { requiredClientVersion } = await res.json()
-            if (requiredClientVersion && requiredClientVersion !== ver) setOutdated(true)
+            setOutdated(!!requiredClientVersion && requiredClientVersion !== ver)
+        }
+
+        env.getVersion().then(async ver => {
+            if (!ver) return
+            setClientVersion(ver)
+            await checkVersion(ver)
+            const versionPollId = setInterval(() => checkVersion(ver), 5 * 60 * 1000)
+            return () => clearInterval(versionPollId)
         })
 
         return () => clearInterval(pollId)
