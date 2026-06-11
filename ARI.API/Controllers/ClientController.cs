@@ -125,7 +125,7 @@ public class ClientController : ControllerBase
                     label = label.Replace("--", "&#45;&#45;");
                     return $"<!--ari-tool-start:read_file:{label}-->";
                 }
-                catch { return "<!--ari-tool-start:read_file:file-->"; }
+                catch { return "<!--ari-tool-error:read_file:failed to parse tool args (malformed JSON)-->"; }
             },
             argsJson =>
             {
@@ -136,7 +136,7 @@ public class ClientController : ControllerBase
                     label = label.Replace("--", "&#45;&#45;");
                     return $"<!--ari-tool-end:read_file:{label}-->";
                 }
-                catch { return "<!--ari-tool-end:read_file:file-->"; }
+                catch { return "<!--ari-tool-error:read_file:failed to parse tool args (malformed JSON)-->"; }
             });
 
         RegisterClientTool(codeThread, ws, "list_directory",
@@ -187,7 +187,7 @@ public class ClientController : ControllerBase
                 label = label.Replace("--", "&#45;&#45;");
                 return $"<!--ari-tool-{markerType}:{name}:{label}-->";
             }
-            catch { return $"<!--ari-tool-{markerType}:{name}:{verb}-->"; }
+            catch { return $"<!--ari-tool-error:{name}:failed to parse tool args (malformed JSON)-->"; }
         });
 
         thread.RegisterTool(
