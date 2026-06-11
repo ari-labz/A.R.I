@@ -13,6 +13,8 @@ public class Agent
     internal  readonly bool   Think;
     internal  readonly int    ThinkingBudget;
     internal  readonly int?   Slot;
+    internal  readonly double? Temperature;
+    internal  readonly double? TopP;
 
     // 0 = unlimited. Overridden by agents that enforce a context window.
     internal virtual int MaxContextTokens => 0;
@@ -39,6 +41,8 @@ public class Agent
         Think          = config.Think;
         ThinkingBudget = config.ThinkingBudget;
         Slot           = config.Slot;
+        Temperature    = config.Temperature;
+        TopP           = config.TopP;
     }
 
     internal IReadOnlyCollection<string> ThreadKeys => Threads.Keys.ToList().AsReadOnly();

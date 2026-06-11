@@ -228,7 +228,7 @@ public class LocalLlamaServer : IDisposable
         List<string> argParts = new()
         {
             $"-m \"{modelPath}\"",
-            "--cache-type-k q8_0 --cache-type-v q8_0",
+            "--cache-type-k q4_0 --cache-type-v q4_0",
             $"-c {server.ContextSize}",
             "--cache-ram 0",
             "--n-predict -1",

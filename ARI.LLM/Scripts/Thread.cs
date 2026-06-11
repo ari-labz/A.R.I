@@ -463,8 +463,8 @@ public class Thread
                 ["stream"]         = true,
                 ["stream_options"] = new { include_usage = true },
                 ["max_tokens"]     = maxTokens,
-                ["temperature"]    = TEMPERATURE,
-                ["top_p"]          = TOP_P,
+                ["temperature"]    = agent.Temperature ?? TEMPERATURE,
+                ["top_p"]          = agent.TopP        ?? TOP_P,
                 ["top_k"]          = TOP_K,
                 ["repeat_penalty"] = REPEAT_PENALTY
             };

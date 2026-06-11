@@ -3,14 +3,8 @@
     {
       "Endpoint": "http://localhost:8081",
       "Port": 8081,
-      "ContextSize": 131072,
-      "ParallelSlots": 2
-    },
-    {
-      "Endpoint": "http://localhost:8082",
-      "Port": 8082,
-      "ContextSize": 8192,
-      "ParallelSlots": 1
+      "ContextSize": 614400,
+      "ParallelSlots": 3
     }
   ],
   "Models": [
@@ -21,14 +15,6 @@
       "ModelsPath": "/Users/user/Documents/GitHub/A.R.I/Models",
       "DownloadBaseUrl": "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/resolve/main",
       "ServerIndex": 0
-    },
-    {
-      "File": "Qwen3-1.7B-Q8_0.gguf",
-      "MmprojFile": "",
-      "UseMtp": false,
-      "ModelsPath": "/Users/user/Documents/GitHub/A.R.I/Models",
-      "DownloadBaseUrl": "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/main",
-      "ServerIndex": 1
     }
   ]
 }
