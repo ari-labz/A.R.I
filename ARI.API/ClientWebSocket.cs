@@ -86,6 +86,21 @@ public static class ClientWebSocket
             parameters: new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" }, old_string = new { type = "string", description = "Exact text to find (must appear exactly once)" }, new_string = new { type = "string", description = "Replacement text" } }, required = new[] { "path", "old_string", "new_string" } },
             displayVerb: "Editing", displayDoneVerb: "Edited",
             labelField: "path",
+            customDisplay: argsJson =>
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(argsJson);
+                    string path   = doc.RootElement.TryGetProperty("path",       out var pe) ? pe.GetString() ?? "" : "";
+                    string oldStr = doc.RootElement.TryGetProperty("old_string", out var oe) ? oe.GetString() ?? "" : "";
+                    string newStr = doc.RootElement.TryGetProperty("new_string", out var ne) ? ne.GetString() ?? "" : "";
+                    string label  = System.IO.Path.GetFileName(path).Replace("--", "&#45;&#45;");
+                    int removed   = oldStr.Split('\n').Length;
+                    int added     = newStr.Split('\n').Length;
+                    return $"<!--ari-tool-start:edit_file:{label}|+{added}|-{removed}-->";
+                }
+                catch { return "<!--ari-tool-start:edit_file:file-->"; }
+            },
             customDisplayDone: argsJson =>
             {
                 try
@@ -112,6 +127,19 @@ public static class ClientWebSocket
             parameters: new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" }, content = new { type = "string", description = "Full content to write" } }, required = new[] { "path", "content" } },
             displayVerb: "Writing", displayDoneVerb: "Written",
             labelField: "path",
+            customDisplay: argsJson =>
+            {
+                try
+                {
+                    using var doc  = JsonDocument.Parse(argsJson);
+                    string path    = doc.RootElement.TryGetProperty("path",    out var pe) ? pe.GetString() ?? "" : "";
+                    string content = doc.RootElement.TryGetProperty("content", out var ce) ? ce.GetString() ?? "" : "";
+                    string label   = System.IO.Path.GetFileName(path).Replace("--", "&#45;&#45;");
+                    int added      = content.Split('\n').Length;
+                    return $"<!--ari-tool-start:write_file:{label}|+{added}-->";
+                }
+                catch { return "<!--ari-tool-start:write_file:file-->"; }
+            },
             customDisplayDone: argsJson =>
             {
                 try
@@ -145,6 +173,7 @@ public static class ClientWebSocket
         ARI.LLM.Thread thread, WebSocket ws, ILogger log,
         string name, string description, object parameters,
         string displayVerb, string displayDoneVerb, string labelField,
+        Func<string, string>? customDisplay     = null,
         Func<string, string>? customDisplayDone = null)
     {
         Func<string, string> MakeDisplay(string verb, string markerType) => argsJson =>
@@ -160,6 +189,7 @@ public static class ClientWebSocket
             catch { return $"<!--ari-tool-error:{name}:failed to parse tool args (malformed JSON)-->"; }
         };
 
+        var displayFn     = customDisplay     ?? MakeDisplay(displayVerb,     "start");
         var displayDoneFn = customDisplayDone ?? MakeDisplay(displayDoneVerb, "end");
 
         thread.RegisterTool(
@@ -191,7 +221,7 @@ public static class ClientWebSocket
                 }
                 finally { pendingFileCalls.TryRemove(callId, out _); }
             },
-            MakeDisplay(displayVerb, "start"),
+            displayFn,
             displayDoneFn);
     }
 

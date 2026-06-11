@@ -79,28 +79,37 @@ function preprocessToolCards(content: string): string {
         return `\n\n<div class="tool-card tool-card--error"><span>Error: ${msg}</span></div>\n\n`
     })
     out = out.replace(TOOL_START_RE, (_, name, label) => {
-        const file  = label.replace(/&#45;&#45;/g, "--")
+        const file      = label.replace(/&#45;&#45;/g, "--")
+        const cleanFile = file.replace(/\|\+\d+(?:\|-\d+)?$/, "")
         const verbs = TOOL_VERBS[name] ?? { active: name, done: name }
-        const key   = `${name}:${label}`
+        const key   = `${name}:${cleanFile}`
         if (done.has(key)) {
             const diff = diffData.get(key)
             if (diff) {
-                const addBadge = diff.added   > 0 ? `<span class="diff-badge diff-badge--add">+${diff.added}</span>`   : ""
-                const delBadge = diff.removed > 0 ? `<span class="diff-badge diff-badge--del">-${diff.removed}</span>` : ""
-                const badges = addBadge + delBadge
+                const addBadge = diff.added   > 0 ? `<span class="diff-badge diff-badge--add" data-target="${diff.added}" data-dir="up">+<span class="badge-digits">0</span></span>`   : ""
+                const delBadge = diff.removed > 0 ? `<span class="diff-badge diff-badge--del" data-target="${diff.removed}" data-dir="down">-<span class="badge-digits">0</span></span>` : ""
+                const badges = `<span class="diff-badges">${addBadge}${delBadge}</span>`
                 if (diff.patch) {
                     const lines = diff.patch.split("\n").map(l => {
                         if (l.startsWith("+")) return `<div class="diff-line diff-line--add">${escHtml(l)}</div>`
                         if (l.startsWith("-")) return `<div class="diff-line diff-line--del">${escHtml(l)}</div>`
                         return `<div class="diff-line">${escHtml(l)}</div>`
                     }).join("")
-                    return `\n\n<details class="tool-card tool-card--done tool-card--diff"><summary><span>${verbs.done} ${escHtml(file)}</span>${badges}</summary><div class="tool-card-diff">${lines}</div></details>\n\n`
+                    return `\n\n<details class="tool-card tool-card--done tool-card--diff"><summary><span>${verbs.done} ${escHtml(cleanFile)}</span>${badges}</summary><div class="tool-card-diff">${lines}</div></details>\n\n`
                 }
-                return `\n\n<div class="tool-card tool-card--done">${badges}<span>${verbs.done} ${escHtml(file)}</span></div>\n\n`
+                // Has diff stats but no patch — too large to encode. Still expandable.
+                return `\n\n<details class="tool-card tool-card--done tool-card--diff"><summary><span>${verbs.done} ${escHtml(cleanFile)}</span>${badges}</summary><div class="tool-card-diff tool-card-diff--too-large">Diff is too large to display</div></details>\n\n`
             }
-            return `\n\n<div class="tool-card tool-card--done"><span>${verbs.done} ${file}</span></div>\n\n`
+            return `\n\n<div class="tool-card tool-card--done"><span>${verbs.done} ${escHtml(cleanFile)}</span></div>\n\n`
         }
-        return `\n\n<div class="tool-card tool-card--active"><span>${verbs.active} ${file}</span><div class="typing-dots"><b></b><b></b><b></b></div></div>\n\n`
+        // Parse optional counts from start marker label (e.g. "File.cs|+12|-5")
+        const countMatch = label.match(/\|\+(\d+)(?:\|-(\d+))?$/)
+        const addCount = countMatch ? parseInt(countMatch[1]) : 0
+        const delCount = countMatch ? parseInt(countMatch[2] ?? "0") : 0
+        const addBadgeLive = addCount > 0 ? `<span class="diff-badge diff-badge--add" data-target="${addCount}" data-dir="up">+<span class="badge-digits">0</span></span>` : ""
+        const delBadgeLive = delCount > 0 ? `<span class="diff-badge diff-badge--del" data-target="${delCount}" data-dir="down">-<span class="badge-digits">0</span></span>` : ""
+        const liveBadges = (addBadgeLive || delBadgeLive) ? `<span class="diff-badges">${addBadgeLive}${delBadgeLive}</span>` : `<div class="typing-dots"><b></b><b></b><b></b></div>`
+        return `\n\n<div class="tool-card tool-card--active"><span>${verbs.active} ${escHtml(cleanFile)}</span>${liveBadges}</div>\n\n`
     })
     return out
 }

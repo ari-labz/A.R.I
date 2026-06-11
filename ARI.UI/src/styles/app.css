@@ -855,13 +855,25 @@ html, body {
 .tool-card .typing-dots b:nth-child(2) { animation-delay: .2s; }
 .tool-card .typing-dots b:nth-child(3) { animation-delay: .4s; }
 
-/* diff badges on edit/write cards */
+/* diff badges on edit/write cards — always on the right */
+details.tool-card summary,
+.tool-card { justify-content: space-between; }
+
+.diff-badges { display: flex; gap: 4px; margin-left: auto; }
+
 .diff-badge {
     font-size: 11px; font-weight: 600; font-style: normal;
     padding: 0 5px; border-radius: 4px; line-height: 18px;
+    overflow: hidden; position: relative;
 }
 .diff-badge--add { color: #4ade80; background: rgba(74,222,128,.12); }
 .diff-badge--del { color: #f87171; background: rgba(248,113,113,.12); }
+
+/* slot-machine count animation */
+.diff-badge .badge-digits {
+    display: inline-flex; flex-direction: column;
+    transition: transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
 
 /* expandable diff tool card */
 details.tool-card { display: block; width: fit-content; cursor: pointer; }
@@ -878,6 +890,10 @@ details.tool-card summary::-webkit-details-marker { display: none; }
 .diff-line { padding: 1px 8px; white-space: pre; }
 .diff-line--add { background: rgba(74,222,128,.12); color: #4ade80; }
 .diff-line--del { background: rgba(248,113,113,.12); color: #f87171; }
+.tool-card-diff--too-large {
+    padding: 6px 10px; color: rgba(255,255,255,0.4);
+    font-style: italic; font-size: 11px;
+}
 
 /* ── typing indicator ───────────────────────────────────── */
 .typing-indicator { display: flex; align-items: center; gap: 5px; padding: 2px 0 6px; }
