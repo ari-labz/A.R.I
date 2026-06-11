@@ -1,6 +1,6 @@
 {
   "name": "ari-app",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "ARI Desktop Client",
   "author": "Xywren",
   "private": true,
@@ -24,8 +24,8 @@
     "icon":        "assets/icon.png",
     "directories": { "output": "dist" },
     "files": ["src/**/*", "assets/**/*"],
-    "mac":   { "target": "dmg" },
-    "win":   { "target": "zip" },
-    "linux": { "target": "zip" }
+    "mac":   { "target": "dmg", "artifactName": "ARI-${version}-mac.${ext}" },
+    "win":   { "target": "zip", "artifactName": "ARI-${version}-win.${ext}" },
+    "linux": { "target": "zip", "artifactName": "ARI-${version}-linux.${ext}" }
   }
 }
