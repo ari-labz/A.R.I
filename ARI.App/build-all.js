@@ -12,6 +12,19 @@ const eb         = path.join(__dirname, "node_modules", ".bin", "electron-builde
 fs.mkdirSync(versionDir, { recursive: true })
 fs.mkdirSync(tmpDir,     { recursive: true })
 
+// ── Bump RequiredClientVersion in InfoController ──────────────────────────────
+
+const infoController = path.join(repoRoot, "ARI.API", "Controllers", "InfoController.cs")
+const infoSrc = fs.readFileSync(infoController, "utf8")
+const updatedInfo = infoSrc.replace(
+    /private const string RequiredClientVersion = "[^"]+";/,
+    `private const string RequiredClientVersion = "${version}";`
+)
+if (updatedInfo !== infoSrc) {
+    fs.writeFileSync(infoController, updatedInfo, "utf8")
+    console.log(`\n── Bumped RequiredClientVersion to ${version}\n`)
+}
+
 // ── Electron builds ───────────────────────────────────────────────────────────
 
 const platforms = [
@@ -36,22 +49,30 @@ for (const { flag, zip } of platforms) {
 
 // ── Launcher builds ───────────────────────────────────────────────────────────
 
-const launcherProject = path.join(repoRoot, "ARI.Launcher", "ARI.Launcher.csproj")
+const launcherDir = path.join(repoRoot, "ARI.Launcher")
+const launcherEb  = path.join(launcherDir, "node_modules", ".bin", "electron-builder")
 
-const launchers = [
-    { rid: "win-x64",   name: "ARILauncher-win.exe" },
-    { rid: "linux-x64", name: "ARILauncher-linux"    },
-    { rid: "osx-arm64", name: "ARILauncher-mac"      },
+// Ensure launcher deps are installed
+if (!fs.existsSync(launcherEb)) {
+    console.log("\n── Installing launcher dependencies\n")
+    execSync(`bun install`, { stdio: "inherit", cwd: launcherDir })
+}
+
+const launcherPlatforms = [
+    { flag: "--win   --x64", zip: "ARILauncher-win.zip"   },
+    { flag: "--linux --x64", zip: "ARILauncher-linux.zip" },
+    { flag: "--mac",         zip: "ARILauncher-mac.zip"   },
 ]
 
-for (const { rid, name } of launchers) {
-    console.log(`\n── Building Launcher ${rid}\n`)
-    execSync(
-        `dotnet publish "${launcherProject}" -c Release -r ${rid} --self-contained true -p:PublishSingleFile=true -o "${tmpDir}"`,
-        { stdio: "inherit" }
-    )
-    const srcName = rid.startsWith("win") ? "ARILauncher.exe" : "ARILauncher"
-    fs.renameSync(path.join(tmpDir, srcName), path.join(versionDir, name))
+for (const { flag, zip } of launcherPlatforms) {
+    console.log(`\n── Building Launcher ${zip}\n`)
+    execSync(`"${launcherEb}" ${flag} --config.directories.output="${tmpDir}"`, {
+        stdio: "inherit",
+        cwd:   launcherDir,
+    })
+    const built = fs.readdirSync(tmpDir).find(f => f.endsWith(".zip"))
+    if (!built) throw new Error(`No zip found after building launcher ${zip}`)
+    fs.renameSync(path.join(tmpDir, built), path.join(versionDir, zip))
     fs.rmSync(tmpDir, { recursive: true, force: true })
     fs.mkdirSync(tmpDir, { recursive: true })
 }

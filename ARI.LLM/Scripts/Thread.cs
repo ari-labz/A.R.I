@@ -427,7 +427,8 @@ public class Thread
 
         int             maxTokens        = maxTokensOverride != 0 ? maxTokensOverride : agent.MaxTokens;
         int             toolCallCount    = 0;
-        int             parseFailures    = 0;
+        int             parseFailures        = 0;
+        int             consecutiveFallbacks = 0;
         List<string>    toolResults      = new();
         HashSet<string> calledKeys       = new(StringComparer.OrdinalIgnoreCase);
         StringBuilder   responseBuilder  = new();
@@ -604,6 +605,7 @@ public class Thread
                                     ? nameEl.GetString() ?? string.Empty
                                     : string.Empty;
                                 pendingCalls[index] = (id, name, new StringBuilder());
+                                consecutiveFallbacks = 0;
                             }
 
                             if (tc.TryGetProperty("function", out JsonElement funcEl) &&
@@ -621,8 +623,13 @@ public class Thread
                     string? deltaText = contentEl.GetString();
                     if (!string.IsNullOrEmpty(deltaText))
                     {
-                        // Strip Qwen3 thinking control tokens before accumulating
-                        deltaText = deltaText.Replace("<|think_off|>", "").Replace("<|think_on|>", "");
+                        // Strip Qwen3 control tokens before accumulating
+                        deltaText = deltaText
+                            .Replace("<|think_off|>", "")
+                            .Replace("<|think_on|>",  "")
+                            .Replace("<|tool_code_start|>", "")
+                            .Replace("<|tool_code_end|>",   "")
+                            .Replace("<|tool_call|>",       "");
                         if (string.IsNullOrEmpty(deltaText)) continue;
                         responseBuilder.Append(deltaText);
                         if (LiveCall is { } lc) lc.EstimatedOutputTokens = responseBuilder.Length / CHARS_PER_TOKEN;
@@ -642,6 +649,22 @@ public class Thread
 
             if (pendingCalls.Count == 0 && responseBuilder.Length > 0)
             {
+                // Detect Qwen3 <|tool_code_start|> / <|tool_call|> fragments — these are stripped
+                // from the display stream above, but if they appear it means the model tried to
+                // emit a tool call in an unsupported format with no parseable arguments.
+                string rawResponse = responseBuilder.ToString();
+                if (rawResponse.Contains("<|tool_code_start|>") || rawResponse.Contains("<|tool_call|>"))
+                {
+                    consecutiveFallbacks++;
+                    if (consecutiveFallbacks > 3)
+                        throw new LlmRequestFailedException($"Model stuck in tool_code_start fallback loop ({consecutiveFallbacks} consecutive) — aborting.");
+                    Common.Logger.LogWarning("[{Agent}] ({Thread}) model used <|tool_code_start|> format — cannot parse, injecting correction.", agent.Name, threadKey);
+                    messages.Add(new { role = "assistant", content = rawResponse.Replace("<|tool_code_start|>", "").Replace("<|tool_code_end|>", "").Replace("<|tool_call|>", "").Trim() });
+                    messages.Add(new { role = "user", content = "[System: Your last response contained tool call markers (<|tool_code_start|> or <|tool_call|>) with no parseable arguments. Do not use these markers. Issue tool calls using only the proper JSON function-call format.]" });
+                    responseBuilder.Clear();
+                    continue;
+                }
+
                 MatchCollection textCalls = Regex.Matches(
                     responseBuilder.ToString(),
                     @"<tool_call>\s*<function=(\w+)>(.*?)</function>\s*</tool_call>",
@@ -649,6 +672,9 @@ public class Thread
 
                 if (textCalls.Count > 0)
                 {
+                    consecutiveFallbacks++;
+                    if (consecutiveFallbacks > 3)
+                        throw new LlmRequestFailedException($"Model stuck in text tool call fallback loop ({consecutiveFallbacks} consecutive) — aborting.");
                     Common.Logger.LogWarning("[{Agent}] ({Thread}) model used text tool call format — parsing fallback.", agent.Name, threadKey);
                     int fakeIndex = 0;
                     foreach (Match m in textCalls)
@@ -683,6 +709,9 @@ public class Thread
 
                     if (xmlCalls.Count > 0)
                     {
+                        consecutiveFallbacks++;
+                        if (consecutiveFallbacks > 3)
+                            throw new LlmRequestFailedException($"Model stuck in XML tool call fallback loop ({consecutiveFallbacks} consecutive) — aborting.");
                         Common.Logger.LogWarning("[{Agent}] ({Thread}) model used Qwen3 XML tool call format — parsing fallback.", agent.Name, threadKey);
 
                         // Preserve the full original response (with XML) as the assistant turn
@@ -789,10 +818,14 @@ public class Thread
                             contentBuilder.Append($"<!--ari-tool-error:{call.Name}:{EscapeMarkerLabel(result)}-->");
                             if (onDelta is not null) await onDelta(contentBuilder.ToString());
                         }
-                        else if (tool.DisplayAfter is not null)
+                        else
                         {
-                            contentBuilder.Append(tool.DisplayAfter(call.Args.ToString()));
-                            if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                            // edit hint is injected as a user message after the batch instead
+                            if (tool.DisplayAfter is not null)
+                            {
+                                contentBuilder.Append(tool.DisplayAfter(call.Args.ToString()));
+                                if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                            }
                         }
                         toolResults.Add(result);
                     }
@@ -828,6 +861,26 @@ public class Thread
                 // batch but flip them to "Read" once a new batch or text follows.
                 contentBuilder.Append("<!--ari-batch-end-->");
                 if (onDelta is not null) await onDelta(contentBuilder.ToString());
+
+                // If this iteration used a fallback format, inject a correction hint so the
+                // model has a chance to self-correct on the next turn rather than repeating.
+                // After a successful edit/write, tell the model not to re-read to verify.
+                // This is a user-role message so the model pays more attention to it than tool content.
+                bool hadWriteOp = pendingCalls.Values.Any(c => c.Name is "edit_file" or "write_file")
+                                  && !pendingCalls.Values.Any(c => IsToolError(toolResults.LastOrDefault() ?? ""));
+                if (hadWriteOp)
+                    messages.Add(new { role = "user", content = "[System: The edits were applied successfully. Do not re-read the file to verify — trust the result and move on to the next step.]" });
+
+                // If this iteration used a fallback format, inject a correction hint.
+                bool wasFallback = pendingCalls.Values.Any(c => c.Id.StartsWith("fallback_"));
+                if (wasFallback)
+                {
+                    string correctionHint =
+                        $"[System: Your previous tool calls ({string.Join(", ", pendingCalls.Values.Select(c => c.Name))}) were emitted as plain text instead of " +
+                        "the required JSON function-call format. The results have been provided above. " +
+                        "Please continue using only the proper JSON function-call format for any further tool calls.]";
+                    messages.Add(new { role = "user", content = correctionHint });
+                }
 
                 continue;
             }
