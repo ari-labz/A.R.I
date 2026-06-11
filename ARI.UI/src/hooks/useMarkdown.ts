@@ -43,7 +43,13 @@ function parseDiffLabel(rawLabel: string): { fileLabel: string; added: number; r
     return { fileLabel, added, removed, patch }
 }
 
+// Strips leftover <tool_call>/<function=...>/<parameter=...> XML that the fallback
+// parser leaves behind when it can only partially consume a text-format tool call.
+const TOOL_CALL_XML_RE = /<tool_call>[\s\S]*?<\/tool_call>|<tool_call>[\s\S]*$|<\/function[^>]*>|<function=[^>]*>[\s\S]*?<\/function[^>]*>|<function=[^>]*>[\s\S]*$|<parameter=[^>]*>[\s\S]*?<\/parameter>|<\/parameter>/g
+
 function preprocessToolCards(content: string): string {
+    content = content.replace(TOOL_CALL_XML_RE, "")
+
     // Step 1: collect diff data from enriched end markers before stripping them,
     // and normalise enriched markers to plain ones so the done-set logic works.
     const diffData = new Map<string, { added: number; removed: number; patch: string }>()

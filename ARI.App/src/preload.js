@@ -13,7 +13,9 @@ contextBridge.exposeInMainWorld("electronBridge", {
     listDirectory: (root, dirPath)                   => ipcRenderer.invoke("fs:list-dir",        root, dirPath),
     searchFiles:   (root, pattern, searchPath, glob) => ipcRenderer.invoke("fs:search",          root, pattern, searchPath, glob),
     editFile:      (root, filePath, oldStr, newStr)  => ipcRenderer.invoke("fs:edit",            root, filePath, oldStr, newStr),
-    moveWindowBy:  (dx, dy)                          => ipcRenderer.invoke("window:move-by",     dx, dy),
-    closeWindow:  ()                    => ipcRenderer.invoke("window:close"),
+    moveWindowBy:   (dx, dy) => ipcRenderer.invoke("window:move-by",  dx, dy),
+    closeWindow:    ()       => ipcRenderer.invoke("window:close"),
+    minimizeWindow: ()       => ipcRenderer.invoke("window:minimize"),
+    maximizeWindow: ()       => ipcRenderer.invoke("window:maximize"),
     markReady:    ()                    => ipcRenderer.invoke("app:ready"),
 })

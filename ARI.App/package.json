@@ -21,6 +21,7 @@
   "build": {
     "appId":       "ai.ari.app",
     "productName": "ARI",
+    "icon":        "assets/icon.png",
     "directories": { "output": "dist" },
     "files": ["src/**/*", "assets/**/*"],
     "mac":   { "target": "dmg" },

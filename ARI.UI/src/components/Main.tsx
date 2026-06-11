@@ -126,27 +126,6 @@ export default function Main({
         if (files.length) onUploadMessageFiles(files)
     }
 
-    function handleTitlebarDrag(e: React.MouseEvent) {
-        if (!window.electronBridge) return
-        e.preventDefault()
-        let lastX = e.screenX
-        let lastY = e.screenY
-
-        function onMove(ev: MouseEvent) {
-            const dx = ev.screenX - lastX
-            const dy = ev.screenY - lastY
-            lastX = ev.screenX
-            lastY = ev.screenY
-            window.electronBridge!.moveWindowBy(dx, dy)
-        }
-        function onUp() {
-            document.removeEventListener("mousemove", onMove)
-            document.removeEventListener("mouseup", onUp)
-        }
-        document.addEventListener("mousemove", onMove)
-        document.addEventListener("mouseup", onUp)
-    }
-
     const mainClasses = [
         mode === "active" ? "active" : "",
         codeMode ? "code-mode" : "",
@@ -154,22 +133,6 @@ export default function Main({
 
     return (
         <div id="main" className={mainClasses}>
-            <div id="titlebar-drag" onMouseDown={handleTitlebarDrag}>
-                {window.electronBridge?.platform === "win32" && (
-                    <button
-                        id="win-close-btn"
-                        onMouseDown={e => e.stopPropagation()}
-                        onClick={() => window.electronBridge!.closeWindow()}
-                        title="Close"
-                        aria-label="Close window"
-                    >
-                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                            <line x1="1" y1="1" x2="9" y2="9"/>
-                            <line x1="9" y1="1" x2="1" y2="9"/>
-                        </svg>
-                    </button>
-                )}
-            </div>
             {/* floating toggle when sidebar collapsed */}
             <button
                 id="topbar-toggle"
@@ -245,6 +208,7 @@ export default function Main({
                         projects={projects}
                         selectedProject={selectedProject}
                         onProjectChange={onProjectChange}
+                        threadLocked={activeThread !== null}
                         onSend={onSend}
                         onUploadFiles={onUploadMessageFiles}
                         onRemoveAttach={onRemoveMessageAttach}

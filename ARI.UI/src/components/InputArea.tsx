@@ -11,6 +11,7 @@ interface Props {
     projects:         Project[]
     selectedProject:  string | null
     onProjectChange:  (id: string | null) => void
+    threadLocked:     boolean
     onSend:           (text: string) => void
     onUploadFiles:    (files: File[]) => void
     onRemoveAttach:   (name: string) => void
@@ -28,7 +29,7 @@ function fileExtLabel(name: string) {
 
 export default function InputArea({
     isStreaming, pendingAttach, commands,
-    projects, selectedProject, onProjectChange,
+    projects, selectedProject, onProjectChange, threadLocked,
     onSend, onUploadFiles, onRemoveAttach,
     onHeartbeatStart, onHeartbeatStop,
     codeMode, safetyMode, onToggleSafety,
@@ -173,6 +174,7 @@ export default function InputArea({
                             id="input-project-select"
                             value={selectedProject ?? ""}
                             onChange={e => onProjectChange(e.target.value || null)}
+                            disabled={threadLocked}
                         >
                             <option value="">No project</option>
                             {projects.map(p => (
