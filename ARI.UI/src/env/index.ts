@@ -11,6 +11,7 @@ export interface AriEnvironment {
   setEndpoint(url: string): void
   getLocalPath(projectId: string): Promise<string | null>
   setLocalPath(projectId: string, path: string | null): Promise<void>
+  getVersion(): Promise<string | null>
 }
 
 declare global {
@@ -33,6 +34,7 @@ declare global {
       markReady(): void
       getLocalPath(projectId: string): Promise<string | null>
       setLocalPath(projectId: string, path: string | null): Promise<void>
+      getVersion(): Promise<string>
     }
   }
 }
@@ -50,6 +52,7 @@ const browserEnv: AriEnvironment = {
   setEndpoint:   () => {},
   getLocalPath:  () => Promise.resolve(null),
   setLocalPath:  () => Promise.resolve(),
+  getVersion:    () => Promise.resolve(null),
 }
 
 const electronEnv: AriEnvironment = {
@@ -65,6 +68,7 @@ const electronEnv: AriEnvironment = {
   setEndpoint:   (url)                               => window.electronBridge!.setEndpoint(url),
   getLocalPath:  (projectId)                         => window.electronBridge!.getLocalPath(projectId),
   setLocalPath:  (projectId, path)                   => window.electronBridge!.setLocalPath(projectId, path),
+  getVersion:    ()                                  => window.electronBridge!.getVersion(),
 }
 
 export const env: AriEnvironment = window.electronBridge ? electronEnv : browserEnv

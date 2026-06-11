@@ -60,8 +60,11 @@ export default function App() {
     const [projects,         setProjects]          = useState<Project[]>([])
     const [selectedProject,  setSelectedProject]   = useState<string | null>(null)
 
-    const [safetyMode, setSafetyMode] = useState(false)
+    const [safetyMode,     setSafetyMode]     = useState(false)
     const safetyModeRef = useRef(false)
+
+    const [clientVersion,  setClientVersion]  = useState<string | null>(null)
+    const [outdated,       setOutdated]       = useState(false)
 
     const watchEsRef  = useRef<EventSource | null>(null)
     const abortRef    = useRef<AbortController | null>(null)
@@ -102,6 +105,16 @@ export default function App() {
         }
         waitAndInit()
         const pollId = setInterval(loadThreads, 5000)
+
+        env.getVersion().then(async ver => {
+            if (!ver) return
+            setClientVersion(ver)
+            const res = await fetch("/api/info/version").catch(() => null)
+            if (!res?.ok) return
+            const { requiredClientVersion } = await res.json()
+            if (requiredClientVersion && requiredClientVersion !== ver) setOutdated(true)
+        })
+
         return () => clearInterval(pollId)
     }, [loadThreads, loadProjects])
 
@@ -659,6 +672,8 @@ export default function App() {
                 onSelectThread={(t: ThreadEntry) => { setActiveView("chat"); openThread(t.key, t.isInternal, t.agentName, t.isCodeMode, t.projectId ?? null) }}
                 collapsed={sidebarCollapsed}
                 onToggleCollapse={() => setSidebarCollapsed(c => !c)}
+                clientVersion={clientVersion}
+                outdated={outdated}
             />
             <div id="sidebar-overlay"
                 className={sidebarCollapsed ? "" : ""}
