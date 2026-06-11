@@ -20,11 +20,11 @@ function formatTime(ts: string) {
     return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
 }
 
-function MdBubble({ content, className }: { content: string; className: string }) {
+function MdBubble({ content, className, msgIndex = 0 }: { content: string; className: string; msgIndex?: number }) {
     const ref = useRef<HTMLDivElement>(null)
     useEffect(() => {
-        if (ref.current) setBubbleMd(ref.current, content)
-    }, [content])
+        if (ref.current) setBubbleMd(ref.current, content, msgIndex)
+    }, [content, msgIndex])
     return <div ref={ref} className={className} />
 }
 
@@ -64,7 +64,7 @@ function UserMessage({ item, activeThread }: { item: ThreadItem; activeThread: s
     )
 }
 
-function AriResponse({ item, isInternal, agentName }: { item: ThreadItem; isInternal: boolean; agentName: string | null }) {
+function AriResponse({ item, isInternal, agentName, msgIndex }: { item: ThreadItem; isInternal: boolean; agentName: string | null; msgIndex: number }) {
     const streaming = item.isStreaming ?? false
     const t = formatTime(item.timestamp)
     const senderLabel = isInternal ? (agentName ?? "Agent") : "A·R·I"
@@ -92,7 +92,7 @@ function AriResponse({ item, isInternal, agentName }: { item: ThreadItem; isInte
     return (
         <div className="msg-row assistant">
             <div className="sender">{senderLabel}</div>
-            {item.content && <MdBubble content={item.content} className="bubble" />}
+            {item.content && <MdBubble content={item.content} className="bubble" msgIndex={msgIndex} />}
             {streaming && (
                 <div className="typing-indicator">
                     <span>A·R·I is thinking</span>
@@ -165,90 +165,120 @@ function MemoryEvent({ item }: { item: ThreadItem }) {
     )
 }
 
-function buildDigitColumn(digitsEl: HTMLElement, nums: number[]) {
-    digitsEl.textContent = ""
-    nums.forEach(n => {
-        const s = document.createElement("span")
-        s.style.display = "block"
-        s.textContent = String(n)
-        digitsEl.appendChild(s)
-    })
+// Guards done-card badges from re-animating across React re-renders.
+const animatedDoneBadges = new Set<string>()
+// Tracks the last CUMULATIVE value each active badge was animated TO.
+// e.g. if edit 1 removed 44 lines and edit 2 is streaming, this holds 44+streaming_count.
+const activeBadgeValues = new Map<string, number>()   // badgeId → last displayed cumulative value
+// The cumulative total BEFORE the current streaming edit started (= runningTotals at that moment).
+// Needed to convert each streaming delta (0→N) into cumulative (prevTotal→prevTotal+N).
+const activeBadgeBases  = new Map<string, number>()   // badgeId → base total at edit start
+// Running totals per file+direction so sequential done cards chain correctly.
+// "edit_file:File.cs:add" → cumulative count after all COMPLETED edits
+const runningTotals = new Map<string, number>()
+
+// Strip message index + occurrence to get the stable per-file key.
+// "edit_file:File.cs:5:0:add" → "edit_file:File.cs:add"
+function fileKeyFromBadgeId(badgeId: string): string {
+    return badgeId.replace(/:\d+:\d+:(add|del)$/, ":$1")
+}
+
+function animateBadge(badge: HTMLElement, d: HTMLElement, from: number, to: number, dir: string) {
+    const lineH = 16
+    d.style.lineHeight  = `${lineH}px`
+    badge.style.height   = `${lineH}px`
+    badge.style.overflow = "hidden"
+    d.style.minWidth     = `${Math.max(String(from).length, String(to).length)}ch`
+    // Mark the element with the value it will display so that animateDiffBadges can detect
+    // when a freshly-created DOM node (which always starts at "0") needs to be initialised.
+    d.dataset.current = String(to)
+
+    if (from === to) {
+        d.textContent = ""
+        const s = document.createElement("span"); s.textContent = String(to); d.appendChild(s)
+        return
+    }
+
+    const steps = Math.min(Math.abs(to - from), 20)
+    const raw: number[] = []
+    for (let i = 0; i <= steps; i++) raw.push(Math.round(from + (to - from) * (i / steps)))
+    const col = raw.filter((n, i) => i === 0 || n !== raw[i - 1])
+
+    d.textContent = ""
+    if (dir === "down") {
+        const rev = [...col].reverse()
+        rev.forEach(n => { const s = document.createElement("span"); s.textContent = String(n); d.appendChild(s) })
+        d.style.transition = "none"
+        d.style.transform  = `translateY(-${(rev.length - 1) * lineH}px)`
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+            d.style.transition = "transform 0.6s cubic-bezier(0.22,1,0.36,1)"
+            d.style.transform  = "translateY(0)"
+        }))
+    } else {
+        col.forEach(n => { const s = document.createElement("span"); s.textContent = String(n); d.appendChild(s) })
+        d.style.transition = "none"
+        d.style.transform  = "translateY(0)"
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+            d.style.transition = "transform 0.6s cubic-bezier(0.22,1,0.36,1)"
+            d.style.transform  = `translateY(-${(col.length - 1) * lineH}px)`
+        }))
+    }
 }
 
 function animateDiffBadges(root: HTMLElement) {
     root.querySelectorAll<HTMLElement>(".diff-badge[data-target]").forEach(badge => {
         const target  = parseInt(badge.dataset.target ?? "0", 10)
         const dir     = badge.dataset.dir ?? "up"
-        const isLive  = !!badge.closest(".tool-card--active")
-        if (!target || badge.dataset.animated) return
-        badge.dataset.animated = "1"
+        const isDone  = !!badge.closest(".tool-card--done")
+        const badgeId = badge.dataset.badgeId ?? ""
 
-        const digitsEl = badge.querySelector<HTMLElement>(".badge-digits")
-        if (!digitsEl) return
-        const d = digitsEl
+        const d = badge.querySelector<HTMLElement>(".badge-digits")
+        if (!d) return
 
-        const lineH = 16
-        digitsEl.style.lineHeight = `${lineH}px`
-        badge.style.height        = `${lineH}px`
-        badge.style.overflow      = "hidden"
+        if (isDone) {
+            // Done card: animate once from wherever the active card left off → actual cumulative.
+            const doneKey = `done:${badgeId}`
+            const fileKey = fileKeyFromBadgeId(badgeId)
+            const base = activeBadgeBases.get(badgeId) ?? (runningTotals.get(fileKey) ?? 0)
+            const to   = base + target   // base (before this edit) + actual count = correct cumulative
 
-        if (isLive) {
-            // Continuous rolling animation while editing is in progress.
-            // Counts from 0 up to target repeatedly with a smooth scroll, direction based on dir.
-            const steps = Math.min(target, 20)
-            const nums: number[] = []
-            for (let i = 0; i <= steps; i++) nums.push(Math.round((i / steps) * target))
-
-            // For "down" direction, reverse the visual order so it scrolls the other way
-            const col = dir === "down" ? [...nums].reverse() : nums
-            buildDigitColumn(d, [...col, ...col]) // doubled for seamless loop
-
-            const totalH = col.length * lineH
-            d.style.transition = "none"
-            d.style.transform  = "translateY(0)"
-
-            let running = true
-            badge.dataset.liveStop = "0"
-
-            function roll() {
-                if (!running) return
-                d.style.transition = `transform ${0.6 + Math.random() * 0.3}s cubic-bezier(0.22,1,0.36,1)`
-                d.style.transform  = `translateY(-${totalH}px)`
-                const t = setTimeout(() => {
-                    if (!running) return
-                    d.style.transition = "none"
-                    d.style.transform  = "translateY(0)"
-                    requestAnimationFrame(() => requestAnimationFrame(roll))
-                }, 900 + Math.random() * 200)
-                badge.dataset.liveTimer = String(t)
+            if (animatedDoneBadges.has(doneKey)) {
+                // Already animated once — but innerHTML replacement creates a fresh element
+                // that shows "0".  Re-set it directly without re-animating.
+                // Use runningTotals (the value stored when the badge was first animated)
+                // rather than re-computing base+target, because activeBadgeBases has already
+                // been deleted and runningTotals already includes this edit's contribution.
+                const storedTo = runningTotals.get(fileKey) ?? to
+                if (d.dataset.current !== String(storedTo)) animateBadge(badge, d, storedTo, storedTo, dir)
+                return
             }
-            requestAnimationFrame(() => requestAnimationFrame(roll))
+            animatedDoneBadges.add(doneKey)
+            runningTotals.set(fileKey, to)
 
-            // Stop rolling when the card transitions to done (active class removed)
-            const obs = new MutationObserver(() => {
-                if (!badge.closest(".tool-card--active")) {
-                    running = false
-                    clearTimeout(Number(badge.dataset.liveTimer))
-                    obs.disconnect()
-                    // Snap to final value — let the done-card re-render handle the end animation
-                }
-            })
-            const card = badge.closest(".tool-card")
-            if (card) obs.observe(card, { attributes: true, attributeFilter: ["class"] })
-
+            const from = activeBadgeValues.get(badgeId) ?? base
+            activeBadgeValues.delete(badgeId)
+            activeBadgeBases.delete(badgeId)
+            animateBadge(badge, d, from, to, dir)
         } else {
-            // Done card: single sweep from 0 → target
-            const steps = Math.min(target, 20)
-            const nums: number[] = []
-            for (let i = 0; i <= steps; i++) nums.push(Math.round((i / steps) * target))
+            // Active card: each streaming update grows target (delta for THIS edit, not cumulative).
+            // Convert to cumulative using the base total captured when this edit started.
+            const fileKey = fileKeyFromBadgeId(badgeId)
 
-            const col = dir === "down" ? [...nums].reverse() : nums
-            buildDigitColumn(d, col)
+            // Capture base total once per edit (first time this badgeId is seen).
+            if (!activeBadgeBases.has(badgeId))
+                activeBadgeBases.set(badgeId, runningTotals.get(fileKey) ?? 0)
 
-            d.style.transform = "translateY(0)"
-            requestAnimationFrame(() => requestAnimationFrame(() => {
-                d.style.transform = `translateY(-${(col.length - 1) * lineH}px)`
-            }))
+            const base       = activeBadgeBases.get(badgeId)!
+            const cumulative = base + target   // what we should display now
+            // Guard: skip if the DOM element already shows the correct value.
+            // We use d.dataset.current (set by animateBadge) rather than activeBadgeValues alone,
+            // because innerHTML replacement creates fresh elements that start at "0" regardless
+            // of what activeBadgeValues says — we must not skip those.
+            if (d.dataset.current === String(cumulative)) return
+
+            const from = activeBadgeValues.get(badgeId) ?? base
+            activeBadgeValues.set(badgeId, cumulative)
+            animateBadge(badge, d, from, cumulative, dir)
         }
     })
 }
@@ -279,7 +309,7 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
                     case "userMessage":
                         return <UserMessage key={i} item={item} activeThread={activeThread} />
                     case "ariResponse":
-                        return <AriResponse key={i} item={item} isInternal={isInternal} agentName={agentName} />
+                        return <AriResponse key={i} item={item} isInternal={isInternal} agentName={agentName} msgIndex={i} />
                     case "commandExchange":
                         return <CommandExchange key={i} item={item} />
                     case "engramEvent":

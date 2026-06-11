@@ -47,21 +47,22 @@ function parseDiffLabel(rawLabel: string): { fileLabel: string; added: number; r
 // parser leaves behind when it can only partially consume a text-format tool call.
 const TOOL_CALL_XML_RE = /<tool_call>[\s\S]*?<\/tool_call>|<tool_call>[\s\S]*$|<\/function[^>]*>|<function=[^>]*>[\s\S]*?<\/function[^>]*>|<function=[^>]*>[\s\S]*$|<parameter=[^>]*>[\s\S]*?<\/parameter>|<\/parameter>/g
 
-function preprocessToolCards(content: string): string {
+function preprocessToolCards(content: string, msgIndex = 0): string {
     content = content.replace(TOOL_CALL_XML_RE, "")
 
-    // Step 1: collect diff data from enriched end markers before stripping them,
-    // and normalise enriched markers to plain ones so the done-set logic works.
-    const diffData = new Map<string, { added: number; removed: number; patch: string }>()
+    // Step 1: collect diff data from enriched end markers as an ordered queue.
+    // Using a queue (not a map) so multiple edits to the same file each get their own data,
+    // matched in order with start markers.
+    const diffQueue: Array<{ key: string; added: number; removed: number; patch: string }> = []
     let normalized = content.replace(TOOL_END_RE, (full, name, rawLabel) => {
         const parsed = parseDiffLabel(rawLabel)
         if (!parsed) return full
-        diffData.set(`${name}:${parsed.fileLabel}`, parsed)
+        diffQueue.push({ key: `${name}:${parsed.fileLabel}`, added: parsed.added, removed: parsed.removed, patch: parsed.patch })
         return `<!--ari-tool-end:${name}:${parsed.fileLabel}-->`
     })
 
-    // Step 2: determine which tools are "done" (end marker followed by content past batch-end)
-    const done = new Set<string>()
+    // Step 2: count done signals per key (multiset) so multiple edits to the same file each match.
+    const doneCount = new Map<string, number>()
     const BATCH_END = "<!--ari-batch-end-->"
     const END_RE_G = new RegExp(TOOL_END_RE.source, "g")
     for (const m of normalized.matchAll(END_RE_G)) {
@@ -69,8 +70,14 @@ function preprocessToolCards(content: string): string {
         const batchEndIdx = normalized.indexOf(BATCH_END, after)
         if (batchEndIdx < 0) continue
         const tail = normalized.slice(batchEndIdx + BATCH_END.length)
-        if (/\S/.test(tail)) done.add(`${m[1]}:${m[2]}`)
+        if (/\S/.test(tail)) {
+            const k = `${m[1]}:${m[2]}`
+            doneCount.set(k, (doneCount.get(k) ?? 0) + 1)
+        }
     }
+
+    // Occurrence counter so multiple edits to the same file get unique badge IDs.
+    const occurrence = new Map<string, number>()
 
     let out = normalized.split(BATCH_END).join("")
     out = out.replace(TOOL_END_RE, "")
@@ -83,11 +90,18 @@ function preprocessToolCards(content: string): string {
         const cleanFile = file.replace(/\|\+\d+(?:\|-\d+)?$/, "")
         const verbs = TOOL_VERBS[name] ?? { active: name, done: name }
         const key   = `${name}:${cleanFile}`
-        if (done.has(key)) {
-            const diff = diffData.get(key)
+        const occ   = occurrence.get(key) ?? 0
+        occurrence.set(key, occ + 1)
+        const badgeKey = `${key}:${msgIndex}:${occ}`
+        const remaining = doneCount.get(key) ?? 0
+        if (remaining > 0) {
+            doneCount.set(key, remaining - 1)
+            // Dequeue the first diff entry matching this key (preserves order for same-file edits).
+            const idx = diffQueue.findIndex(item => item.key === key)
+            const diff = idx >= 0 ? diffQueue.splice(idx, 1)[0] : null
             if (diff) {
-                const addBadge = diff.added   > 0 ? `<span class="diff-badge diff-badge--add" data-target="${diff.added}" data-dir="up">+<span class="badge-digits">0</span></span>`   : ""
-                const delBadge = diff.removed > 0 ? `<span class="diff-badge diff-badge--del" data-target="${diff.removed}" data-dir="down">-<span class="badge-digits">0</span></span>` : ""
+                const addBadge = diff.added   > 0 ? `<span class="diff-badge diff-badge--add" data-target="${diff.added}" data-dir="up" data-badge-id="${badgeKey}:add">+<span class="badge-digits">0</span></span>`   : ""
+                const delBadge = diff.removed > 0 ? `<span class="diff-badge diff-badge--del" data-target="${diff.removed}" data-dir="down" data-badge-id="${badgeKey}:del">-<span class="badge-digits">0</span></span>` : ""
                 const badges = `<span class="diff-badges">${addBadge}${delBadge}</span>`
                 if (diff.patch) {
                     const lines = diff.patch.split("\n").map(l => {
@@ -106,16 +120,16 @@ function preprocessToolCards(content: string): string {
         const countMatch = label.match(/\|\+(\d+)(?:\|-(\d+))?$/)
         const addCount = countMatch ? parseInt(countMatch[1]) : 0
         const delCount = countMatch ? parseInt(countMatch[2] ?? "0") : 0
-        const addBadgeLive = addCount > 0 ? `<span class="diff-badge diff-badge--add" data-target="${addCount}" data-dir="up">+<span class="badge-digits">0</span></span>` : ""
-        const delBadgeLive = delCount > 0 ? `<span class="diff-badge diff-badge--del" data-target="${delCount}" data-dir="down">-<span class="badge-digits">0</span></span>` : ""
+        const addBadgeLive = addCount > 0 ? `<span class="diff-badge diff-badge--add" data-target="${addCount}" data-dir="up" data-badge-id="${badgeKey}:add">+<span class="badge-digits">0</span></span>` : ""
+        const delBadgeLive = delCount > 0 ? `<span class="diff-badge diff-badge--del" data-target="${delCount}" data-dir="down" data-badge-id="${badgeKey}:del">-<span class="badge-digits">0</span></span>` : ""
         const liveBadges = (addBadgeLive || delBadgeLive) ? `<span class="diff-badges">${addBadgeLive}${delBadgeLive}</span>` : `<div class="typing-dots"><b></b><b></b><b></b></div>`
         return `\n\n<div class="tool-card tool-card--active"><span>${verbs.active} ${escHtml(cleanFile)}</span>${liveBadges}</div>\n\n`
     })
     return out
 }
 
-export function renderMd(content: string): string {
-    const html = marked.parse(preprocessToolCards(content ?? ""), { async: false }) as string
+export function renderMd(content: string, msgIndex = 0): string {
+    const html = marked.parse(preprocessToolCards(content ?? "", msgIndex), { async: false }) as string
     const tmp = document.createElement("div")
     tmp.innerHTML = html
     tmp.querySelectorAll("pre").forEach(pre => {
@@ -165,7 +179,7 @@ export function attachCopyButtons(el: HTMLElement) {
     })
 }
 
-export function setBubbleMd(el: HTMLElement, content: string) {
-    el.innerHTML = renderMd(content)
+export function setBubbleMd(el: HTMLElement, content: string, msgIndex = 0) {
+    el.innerHTML = renderMd(content, msgIndex)
     attachCopyButtons(el)
 }

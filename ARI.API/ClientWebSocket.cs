@@ -192,6 +192,28 @@ public static class ClientWebSocket
         var displayFn     = customDisplay     ?? MakeDisplay(displayVerb,     "start");
         var displayDoneFn = customDisplayDone ?? MakeDisplay(displayDoneVerb, "end");
 
+        // Streaming display: emits a live start marker during arg streaming so the UI can
+        // show and animate line counts as old_string / new_string / content arrive token-by-token.
+        Func<string, string?>? streamingDisplayFn = (name is "edit_file" or "write_file")
+            ? partialJson =>
+            {
+                string path = PartialJsonExtractString(partialJson, "path");
+                if (string.IsNullOrEmpty(path)) return null; // wait until path is known
+                string label = System.IO.Path.GetFileName(path).Replace("--", "&#45;&#45;");
+                if (name == "edit_file")
+                {
+                    int added   = PartialJsonCountNewlines(partialJson, "new_string");
+                    int removed = PartialJsonCountNewlines(partialJson, "old_string");
+                    return $"<!--ari-tool-start:edit_file:{label}|+{added}|-{removed}-->";
+                }
+                else // write_file
+                {
+                    int added = PartialJsonCountNewlines(partialJson, "content");
+                    return $"<!--ari-tool-start:write_file:{label}|+{added}-->";
+                }
+            }
+            : null;
+
         thread.RegisterTool(
             name,
             new { type = "function", function = new { name, description, parameters } },
@@ -222,7 +244,63 @@ public static class ClientWebSocket
                 finally { pendingFileCalls.TryRemove(callId, out _); }
             },
             displayFn,
-            displayDoneFn);
+            displayDoneFn,
+            streamingDisplayFn);
+    }
+
+    /// <summary>
+    /// Scans partial (streaming) JSON text for the value of a string field.
+    /// Stops at the closing quote of the value, handling escape sequences.
+    /// Returns empty string if the field has not started arriving yet.
+    /// </summary>
+    private static string PartialJsonExtractString(string partial, string fieldName)
+    {
+        int pos = FindJsonFieldValue(partial, fieldName);
+        if (pos < 0) return "";
+        var sb = new System.Text.StringBuilder();
+        bool esc = false;
+        for (int i = pos; i < partial.Length; i++)
+        {
+            char c = partial[i];
+            if (esc) { sb.Append(c == 'n' ? '\n' : c == 't' ? '\t' : c == 'r' ? '\r' : c); esc = false; }
+            else if (c == '\\') esc = true;
+            else if (c == '"') break;
+            else sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Counts newlines (\n escape sequences) in a streaming JSON string field.
+    /// Counts actual characters as they arrive — one \n escape = one newline.
+    /// Returns 0 if the field has not started arriving yet.
+    /// </summary>
+    private static int PartialJsonCountNewlines(string partial, string fieldName)
+    {
+        int pos = FindJsonFieldValue(partial, fieldName);
+        if (pos < 0) return 0;
+        int count = 0;
+        bool esc = false;
+        for (int i = pos; i < partial.Length; i++)
+        {
+            char c = partial[i];
+            if (esc) { if (c == 'n') count++; esc = false; }
+            else if (c == '\\') esc = true;
+            else if (c == '"') break;
+        }
+        return count;
+    }
+
+    /// <summary>Returns the index of the first character inside the string value of a JSON field, or -1.</summary>
+    private static int FindJsonFieldValue(string partial, string fieldName)
+    {
+        // Try both "field": " and "field" : " (with space around colon)
+        foreach (string pattern in new[] { $"\"{fieldName}\":\"", $"\"{fieldName}\": \"" })
+        {
+            int idx = partial.IndexOf(pattern, StringComparison.Ordinal);
+            if (idx >= 0) return idx + pattern.Length;
+        }
+        return -1;
     }
 
     private sealed class ConnectionState { public string Root { get; set; } = ""; }

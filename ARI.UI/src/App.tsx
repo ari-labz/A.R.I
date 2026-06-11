@@ -117,7 +117,7 @@ export default function App() {
             if (!ver) return
             setClientVersion(ver)
             await checkVersion(ver)
-            const versionPollId = setInterval(() => checkVersion(ver), 5 * 60 * 1000)
+            const versionPollId = setInterval(() => checkVersion(ver), 60 * 1000)
             return () => clearInterval(versionPollId)
         })
 
