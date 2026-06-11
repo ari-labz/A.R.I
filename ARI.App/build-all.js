@@ -1,24 +1,64 @@
 const { execSync } = require("child_process")
+const fs           = require("fs")
 const path         = require("path")
 const { version }  = require("./package.json")
 
-const buildsDir = path.join(__dirname, "..", "Builds")
+const repoRoot   = path.join(__dirname, "..")
+const buildsDir  = path.join(repoRoot, "Builds")
 const versionDir = path.join(buildsDir, `v${version}`)
-const eb = path.join(__dirname, "node_modules", ".bin", "electron-builder")
+const tmpDir     = path.join(versionDir, ".tmp")
+const eb         = path.join(__dirname, "node_modules", ".bin", "electron-builder")
+
+fs.mkdirSync(versionDir, { recursive: true })
+fs.mkdirSync(tmpDir,     { recursive: true })
+
+// ── Electron builds ───────────────────────────────────────────────────────────
 
 const platforms = [
-    { flag: "--win   --x64", dir: "Windows" },
-    { flag: "--linux --x64", dir: "Linux"   },
-    { flag: "--mac",         dir: "macOS"   },
+    { flag: "--win   --x64", zip: `ARI-${version}-win.zip`   },
+    { flag: "--linux --x64", zip: `ARI-${version}-linux.zip` },
+    { flag: "--mac",         zip: `ARI-${version}-mac.zip`   },
 ]
 
-for (const { flag, dir } of platforms) {
-    const out = path.join(versionDir, dir)
-    console.log(`\n── Building ${dir} → ${out}\n`)
-    execSync(`"${eb}" ${flag} --config.directories.output="${out}"`, {
+for (const { flag, zip } of platforms) {
+    console.log(`\n── Building ARI ${zip}\n`)
+    execSync(`"${eb}" ${flag} --config.directories.output="${tmpDir}"`, {
         stdio: "inherit",
         cwd:   __dirname,
     })
+    // Move just the zip to versionDir, discard everything else
+    const built = fs.readdirSync(tmpDir).find(f => f.endsWith(".zip"))
+    if (!built) throw new Error(`No zip found after building ${zip}`)
+    fs.renameSync(path.join(tmpDir, built), path.join(versionDir, zip))
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+    fs.mkdirSync(tmpDir, { recursive: true })
 }
 
+// ── Launcher builds ───────────────────────────────────────────────────────────
+
+const launcherProject = path.join(repoRoot, "ARI.Launcher", "ARI.Launcher.csproj")
+
+const launchers = [
+    { rid: "win-x64",   name: "ARILauncher-win.exe" },
+    { rid: "linux-x64", name: "ARILauncher-linux"    },
+    { rid: "osx-arm64", name: "ARILauncher-mac"      },
+]
+
+for (const { rid, name } of launchers) {
+    console.log(`\n── Building Launcher ${rid}\n`)
+    execSync(
+        `dotnet publish "${launcherProject}" -c Release -r ${rid} --self-contained true -p:PublishSingleFile=true -o "${tmpDir}"`,
+        { stdio: "inherit" }
+    )
+    const srcName = rid.startsWith("win") ? "ARILauncher.exe" : "ARILauncher"
+    fs.renameSync(path.join(tmpDir, srcName), path.join(versionDir, name))
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+    fs.mkdirSync(tmpDir, { recursive: true })
+}
+
+// ── Cleanup ───────────────────────────────────────────────────────────────────
+
+fs.rmSync(tmpDir, { recursive: true, force: true })
+
 console.log(`\n✓ All builds complete → Builds/v${version}/`)
+fs.readdirSync(versionDir).forEach(f => console.log(`  ${f}`))
