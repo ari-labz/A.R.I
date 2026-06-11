@@ -29,7 +29,7 @@ public class Thread
 
     public readonly List<ThreadItem> History = new();
 
-    private readonly Dictionary<string, (object Schema, Func<string, Task<string>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter)> tools = new();
+    private readonly Dictionary<string, (object Schema, Func<string, Task<string>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter, Func<string, string?>? StreamingDisplay)> tools = new();
 
     // ── Lifecycle ──────────────────────────────────────────────────────────────
     public ThreadState              State           = ThreadState.Active;
@@ -102,8 +102,8 @@ public class Thread
 
     // ── Tools ───────────────────────────────────────────────────────────────────
 
-    public void RegisterTool(string name, object schema, Func<string, Task<string>> executor, Func<string, string>? displayFormatter = null, Func<string, string>? displayAfterFormatter = null)
-        => tools[name] = (schema, executor, displayFormatter, displayAfterFormatter);
+    public void RegisterTool(string name, object schema, Func<string, Task<string>> executor, Func<string, string>? displayFormatter = null, Func<string, string>? displayAfterFormatter = null, Func<string, string?>? streamingDisplayFormatter = null)
+        => tools[name] = (schema, executor, displayFormatter, displayAfterFormatter, streamingDisplayFormatter);
 
     public void UnregisterTool(string name)
         => tools.Remove(name);
@@ -534,6 +534,9 @@ public class Thread
             using StreamReader reader = new(stream);
 
             Dictionary<int, (string Id, string Name, StringBuilder Args)> pendingCalls = new();
+            // Tracks the most recently emitted streaming start marker per tool-call index.
+            // Used to replace (not duplicate) the marker as line counts grow during streaming.
+            Dictionary<int, string> streamingMarkers = new();
             string? finishReason = null;
             string? xmlFallbackOriginalText = null;
             responseBuilder.Clear();
@@ -613,7 +616,33 @@ public class Thread
                             {
                                 string? argsDelta = argsEl.GetString();
                                 if (!string.IsNullOrEmpty(argsDelta) && pendingCalls.TryGetValue(index, out (string Id, string Name, StringBuilder Args) call))
+                                {
                                     call.Args.Append(argsDelta);
+
+                                    // Live streaming start marker: update counts as args stream in.
+                                    if (tools.TryGetValue(call.Name, out var liveTool) && liveTool.StreamingDisplay is not null)
+                                    {
+                                        string? newMarker = liveTool.StreamingDisplay(call.Args.ToString());
+                                        if (newMarker != null)
+                                        {
+                                            if (streamingMarkers.TryGetValue(index, out string? prevMarker))
+                                            {
+                                                if (newMarker != prevMarker)
+                                                {
+                                                    ReplaceInBuilder(contentBuilder, prevMarker, newMarker);
+                                                    streamingMarkers[index] = newMarker;
+                                                    if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                                                }
+                                            }
+                                            else
+                                            {
+                                                contentBuilder.Append(newMarker);
+                                                streamingMarkers[index] = newMarker;
+                                                if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                         continue;
@@ -794,7 +823,7 @@ public class Thread
                     ? new StringBuilder("Here are the results of the tool calls you made:\n\n")
                     : null;
 
-                foreach ((string Id, string Name, StringBuilder Args) call in pendingCalls.Values)
+                foreach (var (callIndex, call) in pendingCalls)
                 {
                     string callKey = $"{call.Name}:{call.Args}";
                     bool   isNew   = calledKeys.Add(callKey);
@@ -808,7 +837,12 @@ public class Thread
                     {
                         if (tool.Display is not null)
                         {
-                            contentBuilder.Append(tool.Display(call.Args.ToString()));
+                            string finalMarker = tool.Display(call.Args.ToString());
+                            if (streamingMarkers.TryGetValue(callIndex, out string? prevStreamMarker))
+                                // Streaming already emitted a start marker — replace it with final counts.
+                                ReplaceInBuilder(contentBuilder, prevStreamMarker, finalMarker);
+                            else
+                                contentBuilder.Append(finalMarker);
                             if (onDelta is not null) await onDelta(contentBuilder.ToString());
                         }
                         result = await tool.Execute(call.Args.ToString());
@@ -1024,6 +1058,15 @@ public class Thread
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>Finds the last occurrence of <paramref name="oldText"/> in <paramref name="sb"/> and replaces it with <paramref name="newText"/>.</summary>
+    private static void ReplaceInBuilder(StringBuilder sb, string oldText, string newText)
+    {
+        string s = sb.ToString();
+        int pos = s.LastIndexOf(oldText, StringComparison.Ordinal);
+        if (pos < 0) return;
+        sb.Remove(pos, oldText.Length).Insert(pos, newText);
     }
 
     private static string TrimToolArgs(string toolName, string argsJson)
