@@ -165,15 +165,115 @@ function MemoryEvent({ item }: { item: ThreadItem }) {
     )
 }
 
+function buildDigitColumn(digitsEl: HTMLElement, nums: number[]) {
+    digitsEl.textContent = ""
+    nums.forEach(n => {
+        const s = document.createElement("span")
+        s.style.display = "block"
+        s.textContent = String(n)
+        digitsEl.appendChild(s)
+    })
+}
+
+function animateDiffBadges(root: HTMLElement) {
+    root.querySelectorAll<HTMLElement>(".diff-badge[data-target]").forEach(badge => {
+        const target  = parseInt(badge.dataset.target ?? "0", 10)
+        const dir     = badge.dataset.dir ?? "up"
+        const isLive  = !!badge.closest(".tool-card--active")
+        if (!target || badge.dataset.animated) return
+        badge.dataset.animated = "1"
+
+        const digitsEl = badge.querySelector<HTMLElement>(".badge-digits")
+        if (!digitsEl) return
+        const d = digitsEl
+
+        const lineH = 16
+        digitsEl.style.lineHeight = `${lineH}px`
+        badge.style.height        = `${lineH}px`
+        badge.style.overflow      = "hidden"
+
+        if (isLive) {
+            // Continuous rolling animation while editing is in progress.
+            // Counts from 0 up to target repeatedly with a smooth scroll, direction based on dir.
+            const steps = Math.min(target, 20)
+            const nums: number[] = []
+            for (let i = 0; i <= steps; i++) nums.push(Math.round((i / steps) * target))
+
+            // For "down" direction, reverse the visual order so it scrolls the other way
+            const col = dir === "down" ? [...nums].reverse() : nums
+            buildDigitColumn(d, [...col, ...col]) // doubled for seamless loop
+
+            const totalH = col.length * lineH
+            d.style.transition = "none"
+            d.style.transform  = "translateY(0)"
+
+            let running = true
+            badge.dataset.liveStop = "0"
+
+            function roll() {
+                if (!running) return
+                d.style.transition = `transform ${0.6 + Math.random() * 0.3}s cubic-bezier(0.22,1,0.36,1)`
+                d.style.transform  = `translateY(-${totalH}px)`
+                const t = setTimeout(() => {
+                    if (!running) return
+                    d.style.transition = "none"
+                    d.style.transform  = "translateY(0)"
+                    requestAnimationFrame(() => requestAnimationFrame(roll))
+                }, 900 + Math.random() * 200)
+                badge.dataset.liveTimer = String(t)
+            }
+            requestAnimationFrame(() => requestAnimationFrame(roll))
+
+            // Stop rolling when the card transitions to done (active class removed)
+            const obs = new MutationObserver(() => {
+                if (!badge.closest(".tool-card--active")) {
+                    running = false
+                    clearTimeout(Number(badge.dataset.liveTimer))
+                    obs.disconnect()
+                    // Snap to final value — let the done-card re-render handle the end animation
+                }
+            })
+            const card = badge.closest(".tool-card")
+            if (card) obs.observe(card, { attributes: true, attributeFilter: ["class"] })
+
+        } else {
+            // Done card: single sweep from 0 → target
+            const steps = Math.min(target, 20)
+            const nums: number[] = []
+            for (let i = 0; i <= steps; i++) nums.push(Math.round((i / steps) * target))
+
+            const col = dir === "down" ? [...nums].reverse() : nums
+            buildDigitColumn(d, col)
+
+            d.style.transform = "translateY(0)"
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                d.style.transform = `translateY(-${(col.length - 1) * lineH}px)`
+            }))
+        }
+    })
+}
+
 export default function Messages({ items, isRemembering, activeThread, isInternal, agentName }: Props) {
-    const bottomRef = useRef<HTMLDivElement>(null)
+    const bottomRef  = useRef<HTMLDivElement>(null)
+    const messagesEl = useRef<HTMLDivElement>(null)
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: "smooth" })
     }, [items, isRemembering])
 
+    useEffect(() => {
+        const el = messagesEl.current
+        if (!el) return
+        // Animate any badges already present
+        animateDiffBadges(el)
+        // Watch for new ones as streaming adds tool cards
+        const observer = new MutationObserver(() => animateDiffBadges(el))
+        observer.observe(el, { childList: true, subtree: true })
+        return () => observer.disconnect()
+    }, [])
+
     return (
-        <div id="messages">
+        <div id="messages" ref={messagesEl}>
             {items.map((item, i) => {
                 switch (item.type) {
                     case "userMessage":
