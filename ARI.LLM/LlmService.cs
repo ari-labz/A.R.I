@@ -324,37 +324,31 @@ public class LlmService : IDisposable
 
     public async Task<string?> HandleCommand(string? threadKey, string input)
     {
+        // Show the input straight away to acknowledge the command, then run it.
+        if (threadKey is not null)
+            dialogue?.AddCommandInput(threadKey, input);
+
         string trimmed = input.Trim().ToLowerInvariant();
 
+        string? result;
         if (trimmed == "/code" || trimmed == "/uncode")
         {
-            string result;
-            if (threadKey is null)
-            {
-                result = "No active thread.";
-            }
-            else
-            {
-                if (trimmed == "/code")
-                {
-                    // handle thread migration to new agent
-                    result = "Switched to **Code** mode.";
-                }
-                else
-                {
-                    // handle thread migration to new agent
-                    result = "Switched to **Dialogue** mode.";
-                }
-            }
-            if (threadKey is not null)
-                dialogue?.LogCommand(threadKey, input, result);
-            return result;
+            // handle thread migration to new agent
+            result = threadKey is null      ? "No active thread."
+                   : trimmed == "/code"     ? "Switched to **Code** mode."
+                   :                          "Switched to **Dialogue** mode.";
+        }
+        else
+        {
+            result = await commands.Handle(input);
         }
 
-        string? cmdResult = await commands.Handle(input);
-        if (cmdResult is not null && threadKey is not null)
-            dialogue?.LogCommand(threadKey, input, cmdResult);
-        return cmdResult;
+        if (threadKey is not null)
+        {
+            if (result is not null) dialogue?.AddCommandResponse(threadKey, result);
+            else                    dialogue?.DropCommandInput(threadKey);   // unrecognised — undo the input
+        }
+        return result;
     }
 
     // ── Internal watcher infrastructure ────────────────────────────────────────

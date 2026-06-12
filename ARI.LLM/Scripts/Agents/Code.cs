@@ -45,10 +45,4 @@ internal class Code : Agent
         // Code threads have no Engram step — delete directly when they go inactive
         thread.BecameInactive += () => thread.MarkEngramProcessed();
     }
-
-    internal void LogCommand(string threadKey, string input, string response)
-    {
-        if (Threads.TryGetValue(threadKey, out Thread? t))
-            t.AddItem(new CommandExchange { Input = input, Response = response, Timestamp = DateTime.Now });
-    }
 }
