@@ -32,19 +32,17 @@ public class LlmService : IDisposable
     /// <summary>Every thread across all pipelines, keyed by thread key. Each carries its <see cref="ThreadType"/>.</summary>
     public IReadOnlyDictionary<string, Thread> Threads => threads;
 
-    public LlmService(string agentsConfigPath, string? brainConfigPath = null, ILoggerFactory? loggerFactory = null)
+    public LlmService(IReadOnlyList<AgentConfig> agents, BrainConfig? brainConfig = null, ILoggerFactory? loggerFactory = null)
     {
         if (loggerFactory is not null)
             Common.InitialiseLogger(loggerFactory);
 
-        AriAgentsConfig config = AriAgentsConfig.LoadFrom(agentsConfigPath);
-
-        Dictionary<string, AgentConfig> enabledAgents = config.Agents
+        Dictionary<string, AgentConfig> enabledAgents = agents
             .Where(m => m.Enabled)
             .ToDictionary(m => m.Name);
 
-        BrainService? brain = brainConfigPath is not null
-            ? new BrainService(brainConfigPath, loggerFactory)
+        BrainService? brain = brainConfig is not null
+            ? new BrainService(brainConfig, loggerFactory)
             : null;
 
         if (enabledAgents.TryGetValue("Dialogue", out AgentConfig? dialogueConfig))

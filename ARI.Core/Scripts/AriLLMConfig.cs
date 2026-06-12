@@ -1,5 +1,3 @@
-using System.Text.Json;
-
 namespace ARI.Core.Scripts;
 
 public class AriLLMConfig
@@ -7,25 +5,15 @@ public class AriLLMConfig
     public List<LlamaServerConfig> Servers { get; init; } = new();
     public List<LlamaModelConfig>  Models  { get; init; } = new();
 
-    public static AriLLMConfig LoadFrom(string path)
+    /// <summary>Verifies every model points at a server that exists.</summary>
+    internal void Validate()
     {
-        if (!File.Exists(path))
-            throw new FileNotFoundException($"AriLLMConfig.json not found at {path}");
-
-        string json = File.ReadAllText(path);
-        AriLLMConfig result = JsonSerializer.Deserialize<AriLLMConfig>(json, new JsonSerializerOptions
+        foreach (LlamaModelConfig model in Models)
         {
-            PropertyNameCaseInsensitive = true
-        }) ?? throw new InvalidOperationException("Failed to deserialise AriLLMConfig.json.");
-
-        foreach (LlamaModelConfig model in result.Models)
-        {
-            if (model.ServerIndex < 0 || model.ServerIndex >= result.Servers.Count)
+            if (model.ServerIndex < 0 || model.ServerIndex >= Servers.Count)
                 throw new InvalidOperationException(
-                    $"Model '{model.File}' references ServerIndex {model.ServerIndex} but only {result.Servers.Count} server(s) are configured.");
+                    $"Model '{model.File}' references ServerIndex {model.ServerIndex} but only {Servers.Count} server(s) are configured.");
         }
-
-        return result;
     }
 }
 

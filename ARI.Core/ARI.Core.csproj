@@ -35,14 +35,6 @@
   		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
   		<Link>.env</Link>
   	</Content>
-  	<Content Include="..\ARI.LLM\AriAgents.json">
-  		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-  		<Link>AriAgents.json</Link>
-  	</Content>
-  	<Content Include="..\ARI.Brain\AriBrain.json">
-  		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-  		<Link>AriBrain.json</Link>
-  	</Content>
   	<Content Include="..\ARI.API\wwwroot\**\*">
   		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
   		<LinkBase>wwwroot</LinkBase>

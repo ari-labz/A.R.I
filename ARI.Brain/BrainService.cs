@@ -26,12 +26,11 @@ public class BrainService
     private readonly LinkedList<string> contentCacheOrder = new();
     private readonly Dictionary<string, string> contentCacheStore = new(StringComparer.OrdinalIgnoreCase);
 
-    public BrainService(string configPath, ILoggerFactory? loggerFactory = null)
+    public BrainService(BrainConfig config, ILoggerFactory? loggerFactory = null)
     {
         if (loggerFactory is not null)
             Common.InitialiseLogger(loggerFactory);
 
-        BrainConfig config = BrainConfig.LoadFrom(configPath);
         trilium          = new TriliumClient(config.TriliumUrl, config.EtapiToken, config.RootNoteId);
         brainCacheSize   = config.BrainCacheSize;
         backupPath       = config.BackupPath;

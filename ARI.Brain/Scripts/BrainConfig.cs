@@ -1,4 +1,3 @@
-using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace ARI.Brain;
@@ -41,11 +40,4 @@ public class BrainConfig
     /// <summary>Maximum number of backup files to keep. Oldest is deleted when this limit is exceeded. Default 5.</summary>
     [JsonPropertyName("MaxBackups")]
     public int MaxBackups { get; set; } = 5;
-
-    public static BrainConfig LoadFrom(string path)
-    {
-        string json = File.ReadAllText(path);
-        return JsonSerializer.Deserialize<BrainConfig>(json)
-               ?? throw new InvalidOperationException("Failed to deserialise AriBrain.json");
-    }
 }
