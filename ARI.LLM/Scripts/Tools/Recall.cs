@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
-internal static class Recall
+internal sealed class Recall : Tool
 {
     private const int MAX_RESULTS = 5;
 
@@ -13,7 +13,13 @@ internal static class Recall
 
     private record Query(string query);
 
-    internal static readonly object schema = new
+    private readonly BrainService brain;
+
+    internal Recall(BrainService brain) => this.brain = brain;
+
+    internal override string Name => "search_memories";
+
+    internal override object Schema => new
     {
         type     = "function",
         function = new
@@ -36,7 +42,7 @@ internal static class Recall
         }
     };
 
-    internal static async Task<string> Execute(BrainService brain, string argsJson)
+    internal override async Task<string> Execute(string argsJson)
     {
         Query? parsed = JsonSerializer.Deserialize<Query>(argsJson, caseInsensitive);
         string raw    = parsed?.query ?? string.Empty;
