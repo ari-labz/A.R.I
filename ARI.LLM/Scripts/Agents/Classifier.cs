@@ -4,6 +4,8 @@ internal class Classifier : Agent
 {
     internal Classifier(AgentConfig config) : base(config) { }
 
+    internal override ThreadType Type => ThreadType.Classifier;
+
     internal async Task<string> Classify(string message, CancellationToken ct = default)
     {
         string ephemeralKey = $"__classify_{Guid.NewGuid():N}";
@@ -14,7 +16,7 @@ internal class Classifier : Agent
         }
         finally
         {
-            Threads.TryRemove(ephemeralKey, out _);
+            RemoveThread(ephemeralKey);
         }
     }
 }

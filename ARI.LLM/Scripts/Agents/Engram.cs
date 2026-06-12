@@ -47,6 +47,8 @@ internal class Engram : Agent, IDisposable
         await tcs.Task;
     }
 
+    internal override ThreadType Type => ThreadType.Engram;
+
     internal Engram(AgentConfig config, Dialogue dialogue, BrainService brain, Context? context, int fetchDepth = 7, string brainPublicUrl = "") : base(config)
     {
         this.dialogue       = dialogue;
@@ -311,7 +313,7 @@ internal class Engram : Agent, IDisposable
 
             // Snapshot the engram thread's context at this point so each per-note write forks from it.
             IReadOnlyList<ThreadMessage> savedContext = Threads.TryGetValue(engramThreadKey, out Thread? engramThread)
-                ? engramThread.ContextSnapshot()
+                ? ContextSnapshot(engramThread)
                 : Array.Empty<ThreadMessage>();
 
             // --- Phase 4: Write notes one at a time ---
@@ -348,9 +350,9 @@ internal class Engram : Agent, IDisposable
                     "(Omit newName if the path is not changing. Raw JSON only — no fences, no explanation.)";
 
                 // Fork from the saved context snapshot so each write call starts with the same base.
-                Thread writeThread = new Thread(this, $"adhoc:{Guid.NewGuid()}");
+                Thread writeThread = new Thread(Type, $"adhoc:{Guid.NewGuid()}");
                 writeThread.Seed(savedContext);
-                string writeRaw = await writeThread.SendPrompt(writePrompt, maxTokensOverride: -1);
+                string writeRaw = await writeThread.SendPrompt(this, writePrompt, maxTokensOverride: -1);
 
                 (List<EngramAdd> noteAdds, List<EngramEdit> noteEdits) = ParseEngramOutput(writeRaw);
 
@@ -479,7 +481,7 @@ internal class Engram : Agent, IDisposable
             switch (item)
             {
                 case UserMessage u: sb.AppendLine($"{u.Username}: {u.Content}"); break;
-                case AriResponse r: sb.AppendLine($"ARI: {r.Content}");          break;
+                case AriResponse r: sb.AppendLine($"ARI: {r.ContentText}");      break;
             }
         }
         return sb.ToString();
@@ -604,7 +606,7 @@ internal class EngramBuffer
 
             if (queue.Count >= DRAIN_QUEUE_LIMIT)
                 _ = Task.Run(Drain);
-            else if (!dialogue.ThreadKeys.Any(k => dialogue.GetThread(k)?.State == ThreadState.Active))
+            else if (!dialogue.OwnThreads.Any(t => t.State == ThreadState.Active))
                 _ = Task.Run(Drain);
         };
     }
@@ -626,7 +628,7 @@ internal class EngramBuffer
             await engram.RunEngram(threadKey, "inactivity");
             dialogue.GetThread(threadKey)?.MarkEngramProcessed();
 
-            if (dialogue.ThreadKeys.Any(k => dialogue.GetThread(k)?.State == ThreadState.Active))
+            if (dialogue.OwnThreads.Any(t => t.State == ThreadState.Active))
                 return;
         }
     }

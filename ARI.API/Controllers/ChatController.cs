@@ -146,9 +146,13 @@ public class ThreadsController(LlmServiceHolder holder, ProjectStore projectStor
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
 
+        // Hidden states (a still-streaming response, or one superseded by a newer prompt) are
+        // never shown in the normal thread view; the raw/internal view keeps everything.
         List<ThreadItem> items = raw
             ? GetInternalThread(threadKey)?.History ?? new()
-            : GetThread(threadKey)?.History         ?? new();
+            : (GetThread(threadKey)?.History ?? new())
+                .Where(i => i is not AriResponse { State: AriResponseState.Streaming or AriResponseState.Cancelled })
+                .ToList();
 
         return Ok(items);
     }
@@ -511,7 +515,8 @@ public class ThreadsController(LlmServiceHolder holder, ProjectStore projectStor
 
         // Safeguard: reject prompts that are clearly too large for the context window.
         // Estimate at 4 chars/token; limit comes from the thread's configured MaxContextTokens (0 = unconfigured).
-        (int _, int contextLimit) = Llm.Agents.GetValueOrDefault("Dialogue")?.GetThread(threadKey)?.GetContextStats() ?? (0, 0);
+        Agent? dialogueAgent = Llm.Agents.GetValueOrDefault("Dialogue");
+        (int _, int contextLimit) = dialogueAgent?.GetContextStats(dialogueAgent.GetThread(threadKey)) ?? (0, 0);
         int effectiveLimit    = contextLimit > 0 ? contextLimit : 8000;
         int estimatedTokens   = prompt.Length / 4;
         if (estimatedTokens > effectiveLimit)

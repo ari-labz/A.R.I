@@ -1,4 +1,8 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using ARI.Brain;
+using ARI.Discord;
+using ARI.LLM;
 
 namespace ARI.Core.Scripts;
 
@@ -11,6 +15,14 @@ public class AriConfig
     public VoiceSynthesisConfig VoiceSynthesis { get; init; } = new();
     public VoiceConfig Voice { get; init; } = new();
 
+    // Sections absorbed from the former standalone config files.
+    public AriLLMConfig      Llm     { get; init; } = new();
+    public List<AgentConfig> Agents  { get; init; } = new();
+    public BrainConfig?      Brain   { get; init; }
+    public DiscordConfig?    Discord { get; init; }
+
+    private string filePath = "";
+
     public static AriConfig LoadFrom(string path)
     {
         if (!File.Exists(path))
@@ -20,17 +32,32 @@ public class AriConfig
         }
 
         string json = File.ReadAllText(path);
-        AriConfig result = JsonSerializer.Deserialize<AriConfig>(json, new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true
-        });
+        AriConfig result = JsonSerializer.Deserialize<AriConfig>(json, ReadOptions);
         if (result == null)
         {
             Common.Logger.LogCritical("Failed to deserialise AriConfig.json.");
             throw new Exception("Failed to deserialise AriConfig.json.");
         }
+
+        result.filePath = path;
+        result.Llm.Validate();
+
+        // The Discord section persists runtime edits by rewriting the whole combined file.
+        if (result.Discord is not null)
+            result.Discord.OnSave = result.Save;
+
         return result;
     }
+
+    /// <summary>Persists the whole config back to disk. Used for runtime changes like Discord whitelist edits.</summary>
+    public void Save() => File.WriteAllText(filePath, JsonSerializer.Serialize(this, WriteOptions));
+
+    private static readonly JsonSerializerOptions ReadOptions = new() { PropertyNameCaseInsensitive = true };
+    private static readonly JsonSerializerOptions WriteOptions = new()
+    {
+        WriteIndented          = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
 }
 
 
@@ -81,8 +108,7 @@ public class GoogleAuthConfig
     public List<string> AllowedEmails { get; init; } = new();
 
     /// <summary>Returns the effective allowlist — AllowedEmails if populated, otherwise the single AllowedEmail.</summary>
+    [JsonIgnore]
     public IReadOnlyList<string> EffectiveAllowedEmails =>
         AllowedEmails.Count > 0 ? AllowedEmails : (AllowedEmail.Length > 0 ? new List<string> { AllowedEmail } : new List<string>());
 }
-
-
