@@ -18,6 +18,8 @@ internal class Context : Agent
     private readonly SemaphoreSlim updateLock = new(1, 1);
     private readonly string resolvedPrompt;
 
+    internal override ThreadType Type => ThreadType.Context;
+
     internal Context(AgentConfig config, int shortTermMemoryLimit) : base(config)
     {
         httpClient     = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };

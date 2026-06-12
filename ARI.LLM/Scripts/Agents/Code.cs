@@ -9,6 +9,8 @@ internal class Code : Agent
     internal override int  MaxContextTokens => contextTokenLimit;
     internal override bool SuppressPromptLog => true;
 
+    internal override ThreadType Type => ThreadType.Code;
+
     internal Code(AgentConfig config) : base(config)
     {
         shortTermLimit    = config.ShortTermMemoryLimit;

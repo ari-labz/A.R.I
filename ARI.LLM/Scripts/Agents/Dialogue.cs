@@ -13,6 +13,8 @@ internal class Dialogue : Agent
     internal override int  MaxContextTokens  => contextTokenLimit;
     internal override bool SuppressPromptLog => true;
 
+    internal override ThreadType Type => ThreadType.Dialogue;
+
     internal event Action<string>? ThreadBufferFull;
     internal event Action<string>? ThreadBecameInactive;
 
@@ -99,8 +101,7 @@ internal class Dialogue : Agent
 
         if (brain is not null)
         {
-            BrainService brainRef = brain;
-            thread.RegisterTool("search_memories", Recall.schema, argsJson => Recall.Execute(brainRef, argsJson));
+            new Recall(brain).Register(thread);
         }
 
         thread.BufferFull     += () => ThreadBufferFull?.Invoke(threadKey);
