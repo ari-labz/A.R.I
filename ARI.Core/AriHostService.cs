@@ -81,10 +81,9 @@ public class AriHostService : BackgroundService
         await docker.StartContainers();
         containersStarted = true;
 
-        AriLLMConfig llmConfig = AriLLMConfig.LoadFrom(Path.Combine(executableDirectory, "AriLLMConfig.json"));
-        foreach (LlamaModelConfig modelConfig in llmConfig.Models)
+        foreach (LlamaModelConfig modelConfig in config.Llm.Models)
         {
-            LlamaServerConfig serverConfig = llmConfig.Servers[modelConfig.ServerIndex];
+            LlamaServerConfig serverConfig = config.Llm.Servers[modelConfig.ServerIndex];
             LocalLlamaServer  llamaServer  = new(serverConfig, modelConfig, executableDirectory);
             await llamaServer.IsReady();
             llamaServers.Add(llamaServer);
@@ -93,12 +92,7 @@ public class AriHostService : BackgroundService
             webPanelService?.SystemInfo.SetLlamaPid(llamaServers[0].Pid);
 
         Common.Logger.LogInformation("Loading agents...");
-        string brainConfigPath = Path.Combine(executableDirectory, "AriBrain.json");
-        LlmService llmService = new LlmService(
-            Path.Combine(executableDirectory, "AriAgents.json"),
-            File.Exists(brainConfigPath) ? brainConfigPath : null,
-            loggerFactory
-        );
+        LlmService llmService = new LlmService(config.Agents, config.Brain, loggerFactory);
         Common.Logger.LogInformation("Agents loaded.");
 
         Common.Logger.LogInformation("ARI is ready.");
@@ -153,10 +147,10 @@ public class AriHostService : BackgroundService
             }
         }
 
-        if (config.Modules.Discord)
+        if (config.Modules.Discord && config.Discord is not null)
         {
             Common.Logger.LogInformation("Discord module is enabled. Starting...");
-            discordService = new DiscordService(loggerFactory, llmService);
+            discordService = new DiscordService(loggerFactory, llmService, config.Discord);
             await discordService.StartAsync(stoppingToken);
             if (discordService.ExecuteTask is not null)
                 moduleTasks.Add(discordService.ExecuteTask);
