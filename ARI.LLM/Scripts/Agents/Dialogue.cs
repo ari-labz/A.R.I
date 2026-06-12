@@ -83,12 +83,6 @@ internal class Dialogue : Agent
             onDelta:            onDelta);
     }
 
-    internal void LogCommand(string threadKey, string input, string response)
-    {
-        if (Threads.TryGetValue(threadKey, out Thread? t))
-            t.AddItem(new CommandExchange { Input = input, Response = response, Timestamp = DateTime.Now });
-    }
-
     internal void LogEngram(string threadKey, IReadOnlyList<NoteChange> changes)
     {
         if (Threads.TryGetValue(threadKey, out Thread? t))

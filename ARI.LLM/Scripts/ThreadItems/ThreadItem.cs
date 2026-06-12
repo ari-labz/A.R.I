@@ -10,7 +10,8 @@ namespace ARI.LLM;
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
 [JsonDerivedType(typeof(UserMessage),     "userMessage")]
 [JsonDerivedType(typeof(AriResponse),     "ariResponse")]
-[JsonDerivedType(typeof(CommandExchange), "commandExchange")]
+[JsonDerivedType(typeof(CommandInput),    "commandInput")]
+[JsonDerivedType(typeof(CommandResponse), "commandResponse")]
 [JsonDerivedType(typeof(EngramEvent),     "engramEvent")]
 public abstract class ThreadItem
 {

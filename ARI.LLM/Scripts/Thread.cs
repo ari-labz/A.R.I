@@ -7,6 +7,9 @@ namespace ARI.LLM;
 
 public enum ThreadState { Active, Inactive, Dormant, Deleted }
 
+/// <summary>The pipeline a thread belongs to. Determines how its prompts are processed.</summary>
+public enum ThreadType { Dialogue, Code, Memory, Engram, Context, Refactor, Classifier }
+
 public class Thread
 {
     private const int     MIN_INACTIVITY_TIMER     = 30;
@@ -170,6 +173,16 @@ public class Thread
         History.Add(item);
         LastMessageAt = DateTime.UtcNow;
         Updated?.Invoke();
+    }
+
+    /// <summary>Removes a just-added command input when the command turned out to be unrecognised.</summary>
+    internal void DropLastCommandInput()
+    {
+        if (History.Count > 0 && History[^1] is CommandInput)
+        {
+            History.RemoveAt(History.Count - 1);
+            Updated?.Invoke();
+        }
     }
 
     internal void Seed(IReadOnlyList<ThreadMessage> messages)

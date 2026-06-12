@@ -469,18 +469,16 @@ export default function App() {
                 })
                 if (!res.ok) {
                     const data = await res.json()
-                    setItems(prev => [...prev, {
-                        type: "commandExchange", input: prompt,
-                        response: data.error ?? "Command failed.",
-                        timestamp: new Date().toISOString(), content: "",
-                    }])
+                    setItems(prev => [...prev,
+                        { type: "commandInput", input: prompt, timestamp: new Date().toISOString(), content: "" },
+                        { type: "commandResponse", response: data.error ?? "Command failed.", timestamp: new Date().toISOString(), content: "" },
+                    ])
                 }
             } catch {
-                setItems(prev => [...prev, {
-                    type: "commandExchange", input: prompt,
-                    response: "Command failed — could not reach A·R·I.",
-                    timestamp: new Date().toISOString(), content: "",
-                }])
+                setItems(prev => [...prev,
+                    { type: "commandInput", input: prompt, timestamp: new Date().toISOString(), content: "" },
+                    { type: "commandResponse", response: "Command failed — could not reach A·R·I.", timestamp: new Date().toISOString(), content: "" },
+                ])
             }
             return
         }

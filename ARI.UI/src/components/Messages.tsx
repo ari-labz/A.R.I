@@ -128,11 +128,20 @@ function RecallNotes({ raw }: { raw: string }) {
     )
 }
 
-function CommandExchange({ item }: { item: ThreadItem }) {
+function CommandInput({ item }: { item: ThreadItem }) {
     const t = formatTime(item.timestamp)
     return (
         <div className="msg-row command-exchange">
             <div className="command-input">{item.input}</div>
+            <div className="msg-time">{t}</div>
+        </div>
+    )
+}
+
+function CommandResponse({ item }: { item: ThreadItem }) {
+    const t = formatTime(item.timestamp)
+    return (
+        <div className="msg-row command-exchange">
             <MdBubble content={item.response ?? ""} className="command-response-block" />
             <div className="msg-time">{t}</div>
         </div>
@@ -310,8 +319,10 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
                         return <UserMessage key={i} item={item} activeThread={activeThread} />
                     case "ariResponse":
                         return <AriResponse key={i} item={item} isInternal={isInternal} agentName={agentName} msgIndex={i} />
-                    case "commandExchange":
-                        return <CommandExchange key={i} item={item} />
+                    case "commandInput":
+                        return <CommandInput key={i} item={item} />
+                    case "commandResponse":
+                        return <CommandResponse key={i} item={item} />
                     case "engramEvent":
                         return <MemoryEvent key={i} item={item} />
                     default:

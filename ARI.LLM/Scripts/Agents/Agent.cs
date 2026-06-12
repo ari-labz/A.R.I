@@ -64,6 +64,25 @@ public abstract class Agent
 
     protected void RemoveThread(string threadKey) => registry.TryRemove(threadKey, out _);
 
+    // ── Command logging ──────────────────────────────────────────────────────────
+    // A command's input is shown immediately to acknowledge it; its response follows
+    // once the command finishes (which can be minutes later).
+
+    internal void AddCommandInput(string threadKey, string input)
+    {
+        if (GetThread(threadKey) is { } t) t.AddItem(new CommandInput { Input = input, Timestamp = DateTime.Now });
+    }
+
+    internal void AddCommandResponse(string threadKey, string response)
+    {
+        if (GetThread(threadKey) is { } t) t.AddItem(new CommandResponse { Response = response, Timestamp = DateTime.Now });
+    }
+
+    internal void DropCommandInput(string threadKey)
+    {
+        if (GetThread(threadKey) is { } t) t.DropLastCommandInput();
+    }
+
     public Thread GetOrCreateThread(string threadKey)
     {
         Thread? thread = GetThread(threadKey);
