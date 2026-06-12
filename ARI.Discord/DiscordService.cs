@@ -30,15 +30,13 @@ public class DiscordService : BackgroundService
         "If the conversation was clearly not directed at you and you don't need to be involved, reply with only: [PASS] — nothing else. " +
         "Otherwise, reply normally.";
 
-    public DiscordService(ILoggerFactory loggerFactory, LlmService llmService)
+    public DiscordService(ILoggerFactory loggerFactory, LlmService llmService, DiscordConfig config)
     {
         Common.InitialiseLogger(loggerFactory);
         Common.Logger.LogInformation("Initialising Discord...");
 
         this.llmService = llmService;
-
-        string executableDirectory = AppDomain.CurrentDomain.BaseDirectory;
-        config = DiscordConfig.LoadFrom(Path.Combine(executableDirectory, "DiscordConfig.json"));
+        this.config     = config;
 
         client = new DiscordSocketClient(new DiscordSocketConfig
         {

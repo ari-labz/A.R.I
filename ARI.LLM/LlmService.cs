@@ -22,27 +22,33 @@ public class LlmService : IDisposable
     private readonly Dictionary<string, Agent>                                                   agentMap          = new();
     private readonly HashSet<string>                                                              forcedCodeThreads = new();
 
+    // The single flat registry of every thread, across all pipelines. Agents hold a reference to
+    // this and expose type-filtered views; the service navigates it directly.
+    private readonly ConcurrentDictionary<string, Thread>                                         threads           = new();
+
     /// <summary>All active agents, keyed by name. Navigate here to access threads and their data.</summary>
     public IReadOnlyDictionary<string, Agent> Agents => agentMap;
 
-    public LlmService(string agentsConfigPath, string? brainConfigPath = null, ILoggerFactory? loggerFactory = null)
+    /// <summary>Every thread across all pipelines, keyed by thread key. Each carries its <see cref="ThreadType"/>.</summary>
+    public IReadOnlyDictionary<string, Thread> Threads => threads;
+
+    public LlmService(IReadOnlyList<AgentConfig> agents, BrainConfig? brainConfig = null, ILoggerFactory? loggerFactory = null)
     {
         if (loggerFactory is not null)
             Common.InitialiseLogger(loggerFactory);
 
-        AriAgentsConfig config = AriAgentsConfig.LoadFrom(agentsConfigPath);
-
-        Dictionary<string, AgentConfig> enabledAgents = config.Agents
+        Dictionary<string, AgentConfig> enabledAgents = agents
             .Where(m => m.Enabled)
             .ToDictionary(m => m.Name);
 
-        BrainService? brain = brainConfigPath is not null
-            ? new BrainService(brainConfigPath, loggerFactory)
+        BrainService? brain = brainConfig is not null
+            ? new BrainService(brainConfig, loggerFactory)
             : null;
 
         if (enabledAgents.TryGetValue("Dialogue", out AgentConfig? dialogueConfig))
         {
             dialogue = new Dialogue(dialogueConfig, brain);
+            dialogue.AttachRegistry(threads);
             dialogue.ThreadUpdated += key => NotifyWatchers(key);
             dialogue.ThreadDeleted += key => NotifyThreadDeleted(key);
             agentMap["Dialogue"] = dialogue;
@@ -51,6 +57,7 @@ public class LlmService : IDisposable
         if (enabledAgents.TryGetValue("Code", out AgentConfig? codeConfig))
         {
             code = new Code(codeConfig);
+            code.AttachRegistry(threads);
             code.ThreadUpdated += key => NotifyWatchers(key);
             code.ThreadDeleted += key => NotifyThreadDeleted(key);
             agentMap["Code"] = code;
@@ -60,6 +67,7 @@ public class LlmService : IDisposable
         if (enabledAgents.TryGetValue("Classifier", out AgentConfig? classifierConfig))
         {
             classifier = new Classifier(classifierConfig);
+            classifier.AttachRegistry(threads);
             Common.Logger.LogInformation("Classifier is active.");
         }
 
@@ -67,12 +75,14 @@ public class LlmService : IDisposable
         {
             int memoryLimit = enabledAgents.TryGetValue("Dialogue", out AgentConfig? dlgCfg) ? dlgCfg.ShortTermMemoryLimit : 25;
             context = new Context(contextConfig, memoryLimit);
+            context.AttachRegistry(threads);
             Common.Logger.LogInformation("Context tracker is active.");
         }
 
         if (brain is not null && enabledAgents.TryGetValue("Memory", out AgentConfig? memoryConfig) && memoryConfig.RecursiveBrainSearchDepth > 0)
         {
             memory = new Memory(memoryConfig, brain, memoryConfig.RecursiveBrainSearchDepth, brain.BrainPublicUrl);
+            memory.AttachRegistry(threads);
             agentMap["Memory"] = memory;
             Common.Logger.LogInformation("Memory agent is active. Depth: {Depth}.", memoryConfig.RecursiveBrainSearchDepth);
         }
@@ -82,6 +92,7 @@ public class LlmService : IDisposable
             if (enabledAgents.TryGetValue("Engram", out AgentConfig? engramConfig))
             {
                 engram = new Engram(engramConfig, dialogue, brain, context, engramConfig.RecursiveBrainSearchDepth, brain.BrainPublicUrl);
+                engram.AttachRegistry(threads);
                 engram.SweepCompleted += key => NotifyWatchers(key);
                 agentMap["Engram"] = engram;
                 Common.Logger.LogInformation("Engram is active. Brain connected.");
@@ -90,6 +101,7 @@ public class LlmService : IDisposable
             if (enabledAgents.TryGetValue("Refactor", out AgentConfig? refactorConfig))
             {
                 refactor = new Refactor(refactorConfig, brain, engram);
+                refactor.AttachRegistry(threads);
                 agentMap["Refactor"] = refactor;
                 Common.Logger.LogInformation("Refactor is active.");
             }
@@ -145,9 +157,10 @@ public class LlmService : IDisposable
         if (isDiscordThread || classifier is null)
             return await DialoguePipeline(threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments);
 
-        // if the thread has messages it's established — find which agent owns it
-        string? agent = FindThreadAgent(threadKey);
-        bool hasMessages = agent is not null && agentMap[agent].Threads[threadKey].History.Count > 0;
+        // if the thread already exists, its type tells us which pipeline owns it
+        threads.TryGetValue(threadKey, out Thread? existing);
+        string? agent = existing?.Type.ToString();
+        bool hasMessages = existing is { History.Count: > 0 };
 
         // new or empty thread (may exist for attachment staging) needs classifying
         if (!hasMessages)
@@ -262,277 +275,11 @@ public class LlmService : IDisposable
         if (!string.IsNullOrWhiteSpace(localPath))
         {
             string resolvedRoot = Path.GetFullPath(localPath);
-            codeThread.RegisterTool(
-                "read_file",
-                new
-                {
-                    type     = "function",
-                    function = new
-                    {
-                        name        = "read_file",
-                        description = "Read the contents of a source file in the project. Use this when you need to examine a specific file before answering.",
-                        parameters  = new
-                        {
-                            type       = "object",
-                            properties = new { path = new { type = "string", description = "Path to the file relative to the project root" } },
-                            required   = new[] { "path" }
-                        }
-                    }
-                },
-                async args =>
-                {
-                    try
-                    {
-                        using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(args);
-                        string relPath = doc.RootElement.GetProperty("path").GetString() ?? string.Empty;
-                        string absPath = Path.GetFullPath(Path.Combine(resolvedRoot, relPath));
-                        if (!absPath.StartsWith(resolvedRoot, StringComparison.OrdinalIgnoreCase))
-                            return "Access denied: path traversal is not allowed.";
-                        if (!File.Exists(absPath))
-                            return $"File not found: {relPath}";
-                        string content = await File.ReadAllTextAsync(absPath, cts.Token);
-                        return $"[file: \"{relPath}\"]\n```\n{content}\n```";
-                    }
-                    catch (Exception ex)
-                    {
-                        return $"Error reading file: {ex.Message}";
-                    }
-                },
-                args =>
-                {
-                    try
-                    {
-                        using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(args);
-                        string relPath   = doc.RootElement.GetProperty("path").GetString() ?? string.Empty;
-                        string fileName  = Path.GetFileName(relPath);
-                        string safe      = fileName.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
-                        return $"<div class=\"tool-use\">Reading {safe}</div>\n";
-                    }
-                    catch { return "<div class=\"tool-use\">Reading file</div>\n"; }
-                });
-
-            codeThread.RegisterTool(
-                "list_directory",
-                new
-                {
-                    type     = "function",
-                    function = new
-                    {
-                        name        = "list_directory",
-                        description = "List the files and subdirectories at a path within the project.",
-                        parameters  = new
-                        {
-                            type       = "object",
-                            properties = new { path = new { type = "string", description = "Directory path relative to project root. Defaults to project root if omitted." } },
-                            required   = Array.Empty<string>()
-                        }
-                    }
-                },
-                async args =>
-                {
-                    try
-                    {
-                        using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(args);
-                        string relPath = doc.RootElement.TryGetProperty("path", out System.Text.Json.JsonElement pathEl)
-                            ? pathEl.GetString() ?? "." : ".";
-                        string absPath = Path.GetFullPath(Path.Combine(resolvedRoot, relPath));
-                        if (!absPath.StartsWith(resolvedRoot, StringComparison.OrdinalIgnoreCase))
-                            return "Access denied: path traversal is not allowed.";
-                        if (!Directory.Exists(absPath))
-                            return $"Directory not found: {relPath}";
-                        IEnumerable<string> entries = Directory.GetFileSystemEntries(absPath)
-                            .Select(e => Path.GetRelativePath(resolvedRoot, e) + (Directory.Exists(e) ? "/" : ""))
-                            .OrderBy(e => e);
-                        return $"[directory: \"{relPath}\"]\n{string.Join("\n", entries)}";
-                    }
-                    catch (Exception ex) { return $"Error listing directory: {ex.Message}"; }
-                },
-                args =>
-                {
-                    try
-                    {
-                        using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(args);
-                        string p = doc.RootElement.TryGetProperty("path", out System.Text.Json.JsonElement pe) ? pe.GetString() ?? "." : ".";
-                        return $"<div class=\"tool-use\">Listing {p.Replace("&", "&amp;").Replace("<", "&lt;")}</div>\n";
-                    }
-                    catch { return "<div class=\"tool-use\">Listing directory</div>\n"; }
-                });
-
-            codeThread.RegisterTool(
-                "search_files",
-                new
-                {
-                    type     = "function",
-                    function = new
-                    {
-                        name        = "search_files",
-                        description = "Search for a string across files in the project. Returns matching lines with file path and line number.",
-                        parameters  = new
-                        {
-                            type       = "object",
-                            properties = new
-                            {
-                                pattern = new { type = "string", description = "Text to search for (case-insensitive)" },
-                                path    = new { type = "string", description = "Directory to search in, relative to project root. Defaults to project root." },
-                                glob    = new { type = "string", description = "File filter pattern e.g. '*.cs', '*.json'. Defaults to all files." }
-                            },
-                            required = new[] { "pattern" }
-                        }
-                    }
-                },
-                async args =>
-                {
-                    try
-                    {
-                        using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(args);
-                        string pattern = doc.RootElement.GetProperty("pattern").GetString() ?? "";
-                        string relDir  = doc.RootElement.TryGetProperty("path", out System.Text.Json.JsonElement pathEl)  ? pathEl.GetString()  ?? "." : ".";
-                        string glob    = doc.RootElement.TryGetProperty("glob", out System.Text.Json.JsonElement globEl)  ? globEl.GetString()  ?? "*" : "*";
-                        string absDir  = Path.GetFullPath(Path.Combine(resolvedRoot, relDir));
-                        if (!absDir.StartsWith(resolvedRoot, StringComparison.OrdinalIgnoreCase))
-                            return "Access denied: path traversal is not allowed.";
-                        if (!Directory.Exists(absDir))
-                            return $"Directory not found: {relDir}";
-                        var results = new System.Collections.Generic.List<string>();
-                        foreach (string file in Directory.EnumerateFiles(absDir, glob, SearchOption.AllDirectories))
-                        {
-                            if (!file.StartsWith(resolvedRoot, StringComparison.OrdinalIgnoreCase)) continue;
-                            try
-                            {
-                                string[] lines = await File.ReadAllLinesAsync(file, cts.Token);
-                                for (int i = 0; i < lines.Length; i++)
-                                {
-                                    if (lines[i].Contains(pattern, StringComparison.OrdinalIgnoreCase))
-                                    {
-                                        string rel = Path.GetRelativePath(resolvedRoot, file);
-                                        results.Add($"{rel}:{i + 1}: {lines[i].Trim()}");
-                                    }
-                                }
-                            }
-                            catch { /* skip unreadable files */ }
-                            if (results.Count >= 200) break;
-                        }
-                        return results.Count == 0
-                            ? $"No matches found for \"{pattern}\"."
-                            : $"[search: \"{pattern}\"]\n{string.Join("\n", results)}";
-                    }
-                    catch (Exception ex) { return $"Error searching files: {ex.Message}"; }
-                },
-                args =>
-                {
-                    try
-                    {
-                        using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(args);
-                        string p = doc.RootElement.GetProperty("pattern").GetString() ?? "";
-                        return $"<div class=\"tool-use\">Searching for {p.Replace("&", "&amp;").Replace("<", "&lt;")}</div>\n";
-                    }
-                    catch { return "<div class=\"tool-use\">Searching files</div>\n"; }
-                });
-
-            codeThread.RegisterTool(
-                "edit_file",
-                new
-                {
-                    type     = "function",
-                    function = new
-                    {
-                        name        = "edit_file",
-                        description = "Make a targeted find-and-replace edit to an existing file. old_string must match exactly once in the file — provide more surrounding context if needed to make it unique. Use write_file to create a new file or do a full rewrite.",
-                        parameters  = new
-                        {
-                            type       = "object",
-                            properties = new
-                            {
-                                path       = new { type = "string", description = "File path relative to project root" },
-                                old_string = new { type = "string", description = "The exact text to find. Must appear exactly once in the file." },
-                                new_string = new { type = "string", description = "The text to replace it with" }
-                            },
-                            required = new[] { "path", "old_string", "new_string" }
-                        }
-                    }
-                },
-                async args =>
-                {
-                    try
-                    {
-                        using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(args);
-                        string relPath = doc.RootElement.GetProperty("path").GetString()       ?? "";
-                        string oldStr  = doc.RootElement.GetProperty("old_string").GetString() ?? "";
-                        string newStr  = doc.RootElement.GetProperty("new_string").GetString() ?? "";
-                        string absPath = Path.GetFullPath(Path.Combine(resolvedRoot, relPath));
-                        if (!absPath.StartsWith(resolvedRoot, StringComparison.OrdinalIgnoreCase))
-                            return "Access denied: path traversal is not allowed.";
-                        if (!File.Exists(absPath))
-                            return $"File not found: {relPath}";
-                        string content = await File.ReadAllTextAsync(absPath, cts.Token);
-                        int count = 0, idx = 0;
-                        while ((idx = content.IndexOf(oldStr, idx, StringComparison.Ordinal)) >= 0) { count++; idx += oldStr.Length; }
-                        if (count == 0) return $"old_string not found in {relPath}. No changes made.";
-                        if (count > 1)  return $"old_string matches {count} locations in {relPath}. Add more surrounding context to make it unique.";
-                        await File.WriteAllTextAsync(absPath, content.Replace(oldStr, newStr, StringComparison.Ordinal), cts.Token);
-                        return $"Successfully edited {relPath}.";
-                    }
-                    catch (Exception ex) { return $"Error editing file: {ex.Message}"; }
-                },
-                args =>
-                {
-                    try
-                    {
-                        using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(args);
-                        string p = doc.RootElement.GetProperty("path").GetString() ?? "";
-                        return $"<div class=\"tool-use\">Editing {p.Replace("&", "&amp;").Replace("<", "&lt;")}</div>\n";
-                    }
-                    catch { return "<div class=\"tool-use\">Editing file</div>\n"; }
-                });
-
-            codeThread.RegisterTool(
-                "write_file",
-                new
-                {
-                    type     = "function",
-                    function = new
-                    {
-                        name        = "write_file",
-                        description = "Write or create a file. Overwrites the file if it already exists and creates any missing parent directories. Prefer edit_file for targeted changes to existing files.",
-                        parameters  = new
-                        {
-                            type       = "object",
-                            properties = new
-                            {
-                                path    = new { type = "string", description = "File path relative to project root" },
-                                content = new { type = "string", description = "The full content to write to the file" }
-                            },
-                            required = new[] { "path", "content" }
-                        }
-                    }
-                },
-                async args =>
-                {
-                    try
-                    {
-                        using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(args);
-                        string relPath = doc.RootElement.GetProperty("path").GetString()    ?? "";
-                        string content = doc.RootElement.GetProperty("content").GetString() ?? "";
-                        string absPath = Path.GetFullPath(Path.Combine(resolvedRoot, relPath));
-                        if (!absPath.StartsWith(resolvedRoot, StringComparison.OrdinalIgnoreCase))
-                            return "Access denied: path traversal is not allowed.";
-                        string? dir = Path.GetDirectoryName(absPath);
-                        if (dir is not null) Directory.CreateDirectory(dir);
-                        await File.WriteAllTextAsync(absPath, content, cts.Token);
-                        return $"Successfully wrote {relPath}.";
-                    }
-                    catch (Exception ex) { return $"Error writing file: {ex.Message}"; }
-                },
-                args =>
-                {
-                    try
-                    {
-                        using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(args);
-                        string p = doc.RootElement.GetProperty("path").GetString() ?? "";
-                        return $"<div class=\"tool-use\">Writing {p.Replace("&", "&amp;").Replace("<", "&lt;")}</div>\n";
-                    }
-                    catch { return "<div class=\"tool-use\">Writing file</div>\n"; }
-                });
+            new ReadFile(resolvedRoot, cts.Token).Register(codeThread);
+            new ListDirectory(resolvedRoot, cts.Token).Register(codeThread);
+            new SearchFiles(resolvedRoot, cts.Token).Register(codeThread);
+            new EditFile(resolvedRoot, cts.Token).Register(codeThread);
+            new WriteFile(resolvedRoot, cts.Token).Register(codeThread);
         }
 
         LiveCallInfo liveCall = new("Code", threadKey, 0, code.MaxTokens, code.MaxContextTokens, 0);
@@ -575,41 +322,32 @@ public class LlmService : IDisposable
 
     public async Task<string?> HandleCommand(string? threadKey, string input)
     {
+        // Show the input straight away to acknowledge the command, then run it.
+        if (threadKey is not null)
+            dialogue?.AddCommandInput(threadKey, input);
+
         string trimmed = input.Trim().ToLowerInvariant();
 
+        string? result;
         if (trimmed == "/code" || trimmed == "/uncode")
         {
-            string result;
-            if (threadKey is null)
-            {
-                result = "No active thread.";
-            }
-            else
-            {
-                if (trimmed == "/code")
-                {
-                    // handle thread migration to new agent
-                    result = "Switched to **Code** mode.";
-                }
-                else
-                {
-                    // handle thread migration to new agent
-                    result = "Switched to **Dialogue** mode.";
-                }
-            }
-            if (threadKey is not null)
-                dialogue?.LogCommand(threadKey, input, result);
-            return result;
+            // handle thread migration to new agent
+            result = threadKey is null      ? "No active thread."
+                   : trimmed == "/code"     ? "Switched to **Code** mode."
+                   :                          "Switched to **Dialogue** mode.";
+        }
+        else
+        {
+            result = await commands.Handle(input);
         }
 
-        string? cmdResult = await commands.Handle(input);
-        if (cmdResult is not null && threadKey is not null)
-            dialogue?.LogCommand(threadKey, input, cmdResult);
-        return cmdResult;
+        if (threadKey is not null)
+        {
+            if (result is not null) dialogue?.AddCommandResponse(threadKey, result);
+            else                    dialogue?.DropCommandInput(threadKey);   // unrecognised — undo the input
+        }
+        return result;
     }
-
-    private string? FindThreadAgent(string threadKey)
-        => agentMap.FirstOrDefault(kvp => kvp.Value.Threads.ContainsKey(threadKey)).Key;
 
     // ── Internal watcher infrastructure ────────────────────────────────────────
 
@@ -648,8 +386,7 @@ public class LlmService : IDisposable
     public IReadOnlyList<LiveCallInfo> LiveCalls()
     {
         List<LiveCallInfo> result = new(liveCalls.Values);
-        void Collect(Agent? agent) { if (agent is not null) result.AddRange(agent.GetLiveCalls()); }
-        Collect(engram); Collect(memory); Collect(refactor); Collect(context);
+        result.AddRange(threads.Values.Where(t => t.Internal).Select(t => t.LiveCall).Where(l => l is not null)!);
         return result;
     }
 
@@ -661,31 +398,16 @@ public class LlmService : IDisposable
     {
         List<LlmCallStat> result = new();
 
-        void Collect(Agent? agent, string agentName)
-        {
-            if (agent is null) return;
-            foreach (string key in agent.ThreadKeys)
+        foreach (KeyValuePair<string, Thread> entry in threads)
+            foreach (ThreadItem item in entry.Value.History)
             {
-                Thread? t = agent.GetThread(key);
-                if (t is null) continue;
-                foreach (ThreadItem item in t.History)
-                {
-                    if (item is AriResponse resp && (resp.CompletionTokens > 0 || resp.PromptTokens > 0))
-                        result.Add(new LlmCallStat(agentName, key, resp.Timestamp,
-                            resp.CompletionTokens, resp.OutputTokenLimit,
-                            resp.PromptTokens, resp.ContextTokenLimit,
-                            resp.HadImageAttachments, resp.EstimatedTextPromptTokens,
-                            resp.ImageTokenLimit));
-                }
+                if (item is AriResponse resp && (resp.CompletionTokens > 0 || resp.PromptTokens > 0))
+                    result.Add(new LlmCallStat(entry.Value.Type.ToString(), entry.Key, resp.Timestamp,
+                        resp.CompletionTokens, resp.OutputTokenLimit,
+                        resp.PromptTokens, resp.ContextTokenLimit,
+                        resp.HadImageAttachments, resp.EstimatedTextPromptTokens,
+                        resp.ImageTokenLimit));
             }
-        }
-
-        Collect(dialogue, "Dialogue");
-        Collect(code,     "Code");
-        Collect(engram,   "Engram");
-        Collect(memory,   "Memory");
-        Collect(refactor, "Refactor");
-        Collect(context,  "Context");
 
         result.Sort((a, b) => a.Timestamp.CompareTo(b.Timestamp));
         return result;
@@ -728,7 +450,7 @@ public class LlmService : IDisposable
     }
 
     public (int used, int limit) GetContextStats(string threadKey)
-        => dialogue?.GetThread(threadKey)?.GetContextStats() ?? (0, 0);
+        => dialogue?.GetContextStats(dialogue.GetThread(threadKey)) ?? (0, 0);
 
     public void Cancel(string threadKey)
     {

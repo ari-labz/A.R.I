@@ -1,4 +1,3 @@
-using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace ARI.Discord;
@@ -11,43 +10,12 @@ public class DiscordConfig
     public List<ulong> WatchedChannelIds { get; init; } = [];
     public List<ulong> AllowedGuildIds { get; init; } = [];
 
+    /// <summary>
+    /// Persists runtime changes (e.g. whitelist edits). Wired by the host to rewrite the
+    /// combined config file, since this is now a section of AriConfig rather than its own file.
+    /// </summary>
     [JsonIgnore]
-    private string? filePath;
+    public Action? OnSave { get; set; }
 
-    public static DiscordConfig LoadFrom(string path)
-    {
-        if (!File.Exists(path))
-        {
-            Common.Logger.LogCritical($"DiscordConfig.json not found at {path}");
-            throw new Exception($"DiscordConfig.json not found at {path}");
-        }
-
-        Common.Logger.LogInformation($"DiscordConfig.json found at {path}");
-
-        string json = File.ReadAllText(path);
-        DiscordConfig result = JsonSerializer.Deserialize<DiscordConfig>(json, new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true
-        });
-        if (result == null)
-        {
-            Common.Logger.LogCritical("Failed to deserialise DiscordConfig.json.");
-            throw new Exception("Failed to deserialise DiscordConfig.json.");
-        }
-
-        result.filePath = path;
-        return result;
-    }
-
-    public void Save()
-    {
-        if (filePath is null)
-            throw new InvalidOperationException("Cannot save DiscordConfig: file path is unknown.");
-
-        string json = JsonSerializer.Serialize(this, new JsonSerializerOptions
-        {
-            WriteIndented = true
-        });
-        File.WriteAllText(filePath, json);
-    }
+    public void Save() => OnSave?.Invoke();
 }

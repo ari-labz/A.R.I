@@ -1,12 +1,14 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
 public enum ThreadState { Active, Inactive, Dormant, Deleted }
+
+/// <summary>The pipeline a thread belongs to. Determines how its prompts are processed.</summary>
+public enum ThreadType { Dialogue, Code, Memory, Engram, Context, Refactor, Classifier }
 
 public class Thread
 {
@@ -23,9 +25,13 @@ public class Thread
     private const double  TOKEN_WARNING_RATIO      = 0.8;
     private const string  ATTACHMENT_DIVIDER       = "-------------------";
 
-    private readonly Agent      agent;
     private readonly string     threadKey;
     private readonly HttpClient httpClient;
+
+    /// <summary>The pipeline this thread runs on.</summary>
+    public ThreadType Type { get; }
+    /// <summary>Whether this is an internal working thread, hidden from the user.</summary>
+    public bool Internal => Type is not (ThreadType.Dialogue or ThreadType.Code);
 
     public readonly List<ThreadItem> History = new();
 
@@ -70,13 +76,11 @@ public class Thread
     private volatile LiveCallInfo? liveCallInfo;
     public LiveCallInfo? LiveCall => liveCallInfo;
 
-    internal void SetLiveCall(LiveCallInfo liveCall) => liveCallInfo = liveCall;
+    // The response currently being streamed into History, so cancel/error handling can finalise it.
+    private AriResponse? streamingResponse;
+    private string       streamedText = "";
 
-    internal void SignalProcessing()
-    {
-        if (liveCallInfo is null)
-            liveCallInfo = new LiveCallInfo(agent.Name, threadKey, 0, agent.MaxTokens, agent.MaxContextTokens, agent.MaxImageTokens);
-    }
+    internal void SetLiveCall(LiveCallInfo liveCall) => liveCallInfo = liveCall;
 
     // ── Attachments ────────────────────────────────────────────────────────────
     private readonly List<Attachment> attachments        = new();
@@ -92,9 +96,9 @@ public class Thread
 
     // ── Constructor ─────────────────────────────────────────────────────────────
 
-    internal Thread(Agent agent, string threadKey, string? platformContext = null)
+    internal Thread(ThreadType type, string threadKey, string? platformContext = null)
     {
-        this.agent      = agent;
+        Type            = type;
         this.threadKey  = threadKey;
         httpClient      = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
         PlatformContext = platformContext;
@@ -136,19 +140,6 @@ public class Thread
         return result;
     }
 
-    internal List<ThreadMessage> ContextSnapshot()
-    {
-        int maxChars = agent.MaxContextTokens > 0 ? agent.MaxContextTokens * 2 : 0;
-        return GetChatHistory(agent.MemoryLimit, maxChars);
-    }
-
-    public (int Used, int Limit) GetContextStats()
-    {
-        List<ThreadMessage> ctx = ContextSnapshot();
-        int chars               = ctx.Sum(m => (m.Username?.Length ?? 0) + 2 + (m.Content?.Length ?? 0));
-        return (chars / CHARS_PER_TOKEN, agent.MaxContextTokens);
-    }
-
     // ── Lifecycle ───────────────────────────────────────────────────────────────
 
     internal void ResetInactivityTimer()
@@ -184,12 +175,22 @@ public class Thread
         Updated?.Invoke();
     }
 
+    /// <summary>Removes a just-added command input when the command turned out to be unrecognised.</summary>
+    internal void DropLastCommandInput()
+    {
+        if (History.Count > 0 && History[^1] is CommandInput)
+        {
+            History.RemoveAt(History.Count - 1);
+            Updated?.Invoke();
+        }
+    }
+
     internal void Seed(IReadOnlyList<ThreadMessage> messages)
     {
         foreach (ThreadMessage m in messages)
         {
             if (m.Role == "assistant")
-                History.Add(new AriResponse { Content = m.Content, Timestamp = DateTime.MinValue });
+                History.Add(new AriResponse { Content = AriContentBlock.Parse(m.Content), Timestamp = DateTime.MinValue, State = AriResponseState.Complete });
             else
                 History.Add(new UserMessage { Username = m.Username, Content = m.Content, Timestamp = DateTime.MinValue });
         }
@@ -235,6 +236,7 @@ public class Thread
     // ── SendPrompt ──────────────────────────────────────────────────────────────
 
     internal async Task<string> SendPrompt(
+        Agent               agent,
         string              prompt,
         string              username               = "user",
         string?             augmentedPrompt        = null,
@@ -249,14 +251,42 @@ public class Thread
         await sendLock.WaitAsync(ct);
         try
         {
-            return await Send(prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded, onDelta, thinkingBudgetOverride);
+            return await Send(agent, prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded, onDelta, thinkingBudgetOverride);
         }
         catch (OperationCanceledException)
         {
             liveCallInfo = null;
-            if (!preserveOnCancel && History.Count > 0 && History[^1] is UserMessage)
-                History.RemoveAt(History.Count - 1);
-            preserveOnCancel = false;
+            if (!preserveOnCancel)
+            {
+                // Explicit cancel: revert as if the prompt never happened.
+                if (streamingResponse is not null) History.Remove(streamingResponse);
+                if (History.Count > 0 && History[^1] is UserMessage) History.RemoveAt(History.Count - 1);
+            }
+            else if (streamingResponse is not null)
+            {
+                // Superseded by a new prompt: keep the partial in the list, hidden, out of context.
+                streamingResponse.Content = AriContentBlock.Parse(streamedText);
+                streamingResponse.State   = AriResponseState.Cancelled;
+            }
+            preserveOnCancel  = false;
+            streamingResponse = null;
+            throw;
+        }
+        catch
+        {
+            // Any other failure: keep a non-empty partial visible as an errored response;
+            // if nothing streamed, drop it so no empty bubble appears.
+            if (streamingResponse is not null)
+            {
+                if (string.IsNullOrWhiteSpace(streamedText))
+                    History.Remove(streamingResponse);
+                else
+                {
+                    streamingResponse.Content = AriContentBlock.Parse(streamedText);
+                    streamingResponse.State   = AriResponseState.Error;
+                }
+            }
+            streamingResponse = null;
             throw;
         }
         finally
@@ -267,6 +297,7 @@ public class Thread
     }
 
     private async Task<string> Send(
+        Agent               agent,
         string              prompt,
         string              username,
         string?             augmentedPrompt,
@@ -455,6 +486,15 @@ public class Thread
         {
             liveCallInfo = new LiveCallInfo(agent.Name, threadKey, estimatedTextTokens, maxTokens, agent.MaxContextTokens, agent.MaxImageTokens, hadImages);
         }
+
+        // The response lives in History from the moment generation starts, so partial output
+        // survives an error or interruption. The model streams into it via the wrapped onDelta.
+        AriResponse ariResponse = new() { Timestamp = DateTime.Now };
+        History.Add(ariResponse);
+        streamingResponse = ariResponse;
+        streamedText      = "";
+        Func<string, Task>? userDelta = onDelta;
+        onDelta = async text => { streamedText = text; if (userDelta is not null) await userDelta(text); };
 
         while (true)
         {
@@ -694,34 +734,16 @@ public class Thread
                     continue;
                 }
 
-                MatchCollection textCalls = Regex.Matches(
-                    responseBuilder.ToString(),
-                    @"<tool_call>\s*<function=(\w+)>(.*?)</function>\s*</tool_call>",
-                    RegexOptions.Singleline | RegexOptions.IgnoreCase);
-
-                if (textCalls.Count > 0)
+                List<ToolCallParser.Call>? textCalls = ToolCallParser.ParseTextCalls(responseBuilder.ToString());
+                if (textCalls is not null)
                 {
                     consecutiveFallbacks++;
                     if (consecutiveFallbacks > 3)
                         throw new LlmRequestFailedException($"Model stuck in text tool call fallback loop ({consecutiveFallbacks} consecutive) — aborting.");
                     Common.Logger.LogWarning("[{Agent}] ({Thread}) model used text tool call format — parsing fallback.", agent.Name, threadKey);
                     int fakeIndex = 0;
-                    foreach (Match m in textCalls)
-                    {
-                        string        name        = m.Groups[1].Value.Trim();
-                        string        callBody    = m.Groups[2].Value;
-                        StringBuilder argsBuilder = new();
-                        argsBuilder.Append('{');
-                        bool first = true;
-                        foreach (Match p in Regex.Matches(callBody, @"<parameter=(\w+)>\s*(.*?)\s*</parameter>", RegexOptions.Singleline))
-                        {
-                            if (!first) argsBuilder.Append(',');
-                            argsBuilder.Append($"\"{p.Groups[1].Value}\":\"{p.Groups[2].Value.Trim()}\"");
-                            first = false;
-                        }
-                        argsBuilder.Append('}');
-                        pendingCalls[fakeIndex++] = ($"fallback_{fakeIndex}", name, argsBuilder);
-                    }
+                    foreach (ToolCallParser.Call c in textCalls)
+                        pendingCalls[fakeIndex++] = (c.Id, c.Name, new StringBuilder(c.Args));
 
                     responseBuilder.Clear();
                     finishReason = "tool_calls";
@@ -730,13 +752,8 @@ public class Thread
                 // Qwen3 XML tool call format: <tool_name><param>value</param>...</tool_name>
                 if (pendingCalls.Count == 0 && tools.Count > 0)
                 {
-                    string toolNamePattern = string.Join("|", tools.Keys.Select(Regex.Escape));
-                    MatchCollection xmlCalls = Regex.Matches(
-                        responseBuilder.ToString(),
-                        $@"<({toolNamePattern})>\s*(.*?)\s*</\1>",
-                        RegexOptions.Singleline | RegexOptions.IgnoreCase);
-
-                    if (xmlCalls.Count > 0)
+                    ToolCallParser.XmlParse? xml = ToolCallParser.ParseXmlCalls(responseBuilder.ToString(), tools.Keys);
+                    if (xml is not null)
                     {
                         consecutiveFallbacks++;
                         if (consecutiveFallbacks > 3)
@@ -747,27 +764,12 @@ public class Thread
                         xmlFallbackOriginalText = responseBuilder.ToString();
 
                         // Extract any text before the first tool call for display
-                        int firstCallIndex = xmlCalls[0].Index;
-                        if (firstCallIndex > 0)
-                            contentBuilder.Append(xmlFallbackOriginalText[..firstCallIndex].TrimEnd());
+                        if (xml.FirstIndex > 0)
+                            contentBuilder.Append(xmlFallbackOriginalText[..xml.FirstIndex].TrimEnd());
 
                         int fakeIndex = 0;
-                        foreach (Match m in xmlCalls)
-                        {
-                            string toolName = m.Groups[1].Value.Trim().ToLowerInvariant();
-                            string inner    = m.Groups[2].Value;
-
-                            Dictionary<string, string> argsDict = new(StringComparer.OrdinalIgnoreCase);
-                            foreach (Match p in Regex.Matches(inner, @"<(\w+)>\s*(.*?)\s*</\1>", RegexOptions.Singleline))
-                            {
-                                string paramName = p.Groups[1].Value.Trim();
-                                if (paramName.Equals("file_path", StringComparison.OrdinalIgnoreCase)) paramName = "path";
-                                argsDict[paramName] = p.Groups[2].Value.Trim();
-                            }
-
-                            string argsJson = JsonSerializer.Serialize(argsDict);
-                            pendingCalls[fakeIndex++] = ($"fallback_xml_{fakeIndex}", toolName, new StringBuilder(argsJson));
-                        }
+                        foreach (ToolCallParser.Call c in xml.Calls)
+                            pendingCalls[fakeIndex++] = (c.Id, c.Name, new StringBuilder(c.Args));
 
                         responseBuilder.Clear();
                         finishReason = "tool_calls";
@@ -782,7 +784,7 @@ public class Thread
                 foreach (var key in pendingCalls.Keys)
                 {
                     var (id, name, args) = pendingCalls[key];
-                    string repaired = RepairToolArgsJson(args.ToString());
+                    string repaired = ToolCallParser.RepairArgs(args.ToString());
                     if (repaired != args.ToString())
                     {
                         Common.Logger.LogWarning("[{Agent}] ({Thread}) Repaired malformed JSON args for tool '{Tool}'.", agent.Name, threadKey, name);
@@ -811,7 +813,7 @@ public class Thread
                         {
                             id       = kv.Value.Id,
                             type     = "function",
-                            function = new { name = kv.Value.Name, arguments = TrimToolArgs(kv.Value.Name, kv.Value.Args.ToString()) }
+                            function = new { name = kv.Value.Name, arguments = ToolCallParser.TrimArgs(kv.Value.Name, kv.Value.Args.ToString()) }
                         })
                         .ToArray();
 
@@ -846,10 +848,10 @@ public class Thread
                             if (onDelta is not null) await onDelta(contentBuilder.ToString());
                         }
                         result = await tool.Execute(call.Args.ToString());
-                        if (IsToolError(result))
+                        if (ToolCallParser.IsError(result))
                         {
                             Common.Logger.LogError("[{Agent}] ({Thread}) Tool '{Tool}' failed: {Error}", agent.Name, threadKey, call.Name, result);
-                            contentBuilder.Append($"<!--ari-tool-error:{call.Name}:{EscapeMarkerLabel(result)}-->");
+                            contentBuilder.Append($"<!--ari-tool-error:{call.Name}:{ToolCallParser.EscapeLabel(result)}-->");
                             if (onDelta is not null) await onDelta(contentBuilder.ToString());
                         }
                         else
@@ -867,7 +869,7 @@ public class Thread
                     {
                         result = $"[Error: tool '{call.Name}' is not registered]";
                         Common.Logger.LogError("[{Agent}] ({Thread}) Model called unknown tool '{Tool}'", agent.Name, threadKey, call.Name);
-                        contentBuilder.Append($"<!--ari-tool-error:{call.Name}:{EscapeMarkerLabel(result)}-->");
+                        contentBuilder.Append($"<!--ari-tool-error:{call.Name}:{ToolCallParser.EscapeLabel(result)}-->");
                         if (onDelta is not null) await onDelta(contentBuilder.ToString());
                     }
 
@@ -901,7 +903,7 @@ public class Thread
                 // After a successful edit/write, tell the model not to re-read to verify.
                 // This is a user-role message so the model pays more attention to it than tool content.
                 bool hadWriteOp = pendingCalls.Values.Any(c => c.Name is "edit_file" or "write_file")
-                                  && !pendingCalls.Values.Any(c => IsToolError(toolResults.LastOrDefault() ?? ""));
+                                  && !pendingCalls.Values.Any(c => ToolCallParser.IsError(toolResults.LastOrDefault() ?? ""));
                 if (hadWriteOp)
                     messages.Add(new { role = "user", content = "[System: The edits were applied successfully. Do not re-read the file to verify — trust the result and move on to the next step.]" });
 
@@ -959,21 +961,19 @@ public class Thread
 
         liveCallInfo = null;
 
-        History.Add(new AriResponse
-        {
-            Content                   = responseText,
-            Timestamp                 = DateTime.Now,
-            ThinkingSeconds           = elapsed,
-            RecallNotes               = combinedNotes,
-            ContextSummary            = contextSummary,
-            CompletionTokens          = completionTokens,
-            OutputTokenLimit          = maxTokens > 0 ? maxTokens : 0,
-            PromptTokens              = promptTokens,
-            ContextTokenLimit         = agent.MaxContextTokens,
-            HadImageAttachments       = hadImages,
-            EstimatedTextPromptTokens = estimatedTextTokens,
-            ImageTokenLimit           = agent.MaxImageTokens,
-        });
+        ariResponse.Content                   = AriContentBlock.Parse(responseText);
+        ariResponse.ThinkingSeconds           = elapsed;
+        ariResponse.RecallNotes               = combinedNotes;
+        ariResponse.ContextSummary            = contextSummary;
+        ariResponse.CompletionTokens          = completionTokens;
+        ariResponse.OutputTokenLimit          = maxTokens > 0 ? maxTokens : 0;
+        ariResponse.PromptTokens              = promptTokens;
+        ariResponse.ContextTokenLimit         = agent.MaxContextTokens;
+        ariResponse.HadImageAttachments       = hadImages;
+        ariResponse.EstimatedTextPromptTokens = estimatedTextTokens;
+        ariResponse.ImageTokenLimit           = agent.MaxImageTokens;
+        ariResponse.State                     = AriResponseState.Complete;
+        streamingResponse                     = null;
         Updated?.Invoke();
 
         ariRepliedAt = DateTime.UtcNow;
@@ -997,69 +997,6 @@ public class Thread
         return responseText;
     }
 
-    // Strip large content fields from write_file / edit_file args before they go into the
-    // messages array, so they don't bloat the context window on subsequent LLM turns.
-    private static string RepairToolArgsJson(string argsJson)
-    {
-        // Walk the JSON character-by-character and escape any bare double-quotes
-        // that appear inside string values. The model (especially quantized local
-        // models) occasionally emits {"key": "val"ue"} instead of {"key": "val\"ue"}.
-        var sb     = new StringBuilder(argsJson.Length);
-        bool inStr = false;   // are we inside a JSON string value?
-        bool escape = false;  // was the previous character a backslash?
-
-        for (int i = 0; i < argsJson.Length; i++)
-        {
-            char c = argsJson[i];
-
-            if (escape)
-            {
-                sb.Append(c);
-                escape = false;
-                continue;
-            }
-
-            if (c == '\\')
-            {
-                sb.Append(c);
-                escape = true;
-                continue;
-            }
-
-            if (c == '"')
-            {
-                if (!inStr)
-                {
-                    inStr = true;
-                    sb.Append(c);
-                    continue;
-                }
-
-                // Peek ahead: if the next non-whitespace char is : , } ] then this
-                // quote legitimately closes the string. Otherwise it's an unescaped
-                // quote inside the value and must be escaped.
-                int j = i + 1;
-                while (j < argsJson.Length && argsJson[j] == ' ') j++;
-                char next = j < argsJson.Length ? argsJson[j] : '\0';
-
-                if (next is ':' or ',' or '}' or ']' or '\0')
-                {
-                    inStr = false;
-                    sb.Append(c);
-                }
-                else
-                {
-                    sb.Append("\\\"");
-                }
-                continue;
-            }
-
-            sb.Append(c);
-        }
-
-        return sb.ToString();
-    }
-
     /// <summary>Finds the last occurrence of <paramref name="oldText"/> in <paramref name="sb"/> and replaces it with <paramref name="newText"/>.</summary>
     private static void ReplaceInBuilder(StringBuilder sb, string oldText, string newText)
     {
@@ -1068,33 +1005,4 @@ public class Thread
         if (pos < 0) return;
         sb.Remove(pos, oldText.Length).Insert(pos, newText);
     }
-
-    private static string TrimToolArgs(string toolName, string argsJson)
-    {
-        if (toolName is not ("write_file" or "edit_file")) return argsJson;
-        try
-        {
-            using JsonDocument doc = JsonDocument.Parse(argsJson);
-            var root = doc.RootElement;
-            var trimmed = new Dictionary<string, object?>();
-            foreach (JsonProperty prop in root.EnumerateObject())
-            {
-                if (toolName == "write_file" && prop.Name == "content")
-                    trimmed[prop.Name] = "[content omitted]";
-                else if (toolName == "edit_file" && prop.Name is "old_string" or "new_string")
-                    trimmed[prop.Name] = "[omitted]";
-                else
-                    trimmed[prop.Name] = prop.Value.GetRawText();
-            }
-            return JsonSerializer.Serialize(trimmed);
-        }
-        catch { return argsJson; }
-    }
-
-    private static bool IsToolError(string result) =>
-        result.StartsWith("[Error:", StringComparison.OrdinalIgnoreCase) ||
-        result.StartsWith("Error:", StringComparison.OrdinalIgnoreCase);
-
-    private static string EscapeMarkerLabel(string s) =>
-        s.Replace("--", "&#45;&#45;").Replace(">", "&gt;");
 }

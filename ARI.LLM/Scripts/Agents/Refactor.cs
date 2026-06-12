@@ -16,6 +16,8 @@ internal class Refactor : Agent
     private const int CLUSTER_CALL_LIMIT    = 20;
     private const int EXCERPT_LENGTH        = 300;
 
+    internal override ThreadType Type => ThreadType.Refactor;
+
     internal Refactor(AgentConfig config, BrainService brain, Engram? engram = null) : base(config)
     {
         this.brain  = brain;

@@ -21,6 +21,8 @@ internal class Memory : Agent
 
     internal override bool QuietLogging => true;
 
+    internal override ThreadType Type => ThreadType.Memory;
+
     internal Memory(AgentConfig config, BrainService brain, int fetchDepth, string brainPublicUrl) : base(config)
     {
         this.brain          = brain;

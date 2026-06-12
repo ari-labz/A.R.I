@@ -154,7 +154,7 @@ public class ControlPanelApiController(LlmServiceHolder holder, WebPanelConfig c
             {
                 foreach (KeyValuePair<string, ARI.LLM.Thread> kvp in codeAgent.Threads)
                 {
-                    (int used, int limit) = kvp.Value.GetContextStats();
+                    (int used, int limit) = codeAgent.GetContextStats(kvp.Value);
                     if (used <= 0) continue;
                     seen.Add(kvp.Key);
                     contextStats.Add(new
@@ -174,7 +174,7 @@ public class ControlPanelApiController(LlmServiceHolder holder, WebPanelConfig c
                 foreach (KeyValuePair<string, ARI.LLM.Thread> kvp in dialogueAgent.Threads)
                 {
                     if (seen.Contains(kvp.Key)) continue;  // already listed under Code
-                    (int used, int limit) = kvp.Value.GetContextStats();
+                    (int used, int limit) = dialogueAgent.GetContextStats(kvp.Value);
                     if (used <= 0) continue;
                     contextStats.Add(new
                     {
