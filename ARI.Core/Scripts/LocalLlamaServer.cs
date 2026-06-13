@@ -232,7 +232,8 @@ public class LocalLlamaServer : IDisposable
             $"-c {server.ContextSize}",
             "--cache-ram 0",
             "--n-predict -1",
-            "--temp 0.7 --top-p 0.80 --top-k 20 --repeat-penalty 1.0",
+            "--temp 0.7 --top-p 0.95 --top-k 40 --min-p 0.0 --repeat-penalty 1.0",
+            "--jinja",  // use the model's embedded Jinja template (Unsloth build has patches for tool-call formatting and enable_thinking)
             $"-np {server.ParallelSlots} -ngl 99 --port {server.Port}",
             "--host 127.0.0.1"
         };

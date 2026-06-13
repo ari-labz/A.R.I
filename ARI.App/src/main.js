@@ -19,7 +19,16 @@ if (needsInstall) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 const { app, BrowserWindow, ipcMain, dialog, session } = require("electron")
 const Store = require("electron-store")
-const { readFile, writeFile, getFileTree, listDirectory, searchFiles, editFile } = require("./fs")
+const { readFile, writeFile, getFileTree, listDirectory, searchFiles, editFile, runCommand } = require("./fs")
+
+// Commands the code agent may run without asking. The user can extend this at runtime via the
+// "Whitelist" option on the command-confirmation prompt. Entries match a command if it equals the
+// entry or begins with the entry followed by a space (so "dotnet build" covers "dotnet build -c Release").
+const DEFAULT_COMMAND_ALLOWLIST = [
+    "dotnet build", "dotnet test", "dotnet restore", "dotnet format",
+    "git status", "git diff", "git log", "git show", "git branch",
+    "npm run build", "npm run test", "npm test", "npm run lint",
+]
 const { init: initLogger, makeLogger, getLogPath } = require("./logger")
 
 const store = new Store()
@@ -265,6 +274,23 @@ ipcMain.handle("fs:search", (_e, root, pattern, searchPath, glob) => {
 ipcMain.handle("fs:edit", (_e, root, filePath, oldString, newString) => {
     log.info(`fs:edit  root=${root}  path=${filePath}`)
     return editFile(root, filePath, oldString, newString)
+})
+
+ipcMain.handle("fs:run", (_e, root, command) => {
+    log.info(`fs:run  root=${root}  command=${command}`)
+    return runCommand(root, command)
+})
+
+// ── IPC: command allowlist (persisted per-machine) ────────────────────────────
+ipcMain.handle("cmd:get-allowlist", () => {
+    const list = store.get("commandAllowlist", DEFAULT_COMMAND_ALLOWLIST)
+    return Array.isArray(list) ? list : DEFAULT_COMMAND_ALLOWLIST
+})
+ipcMain.handle("cmd:set-allowlist", (_e, list) => {
+    if (Array.isArray(list)) {
+        store.set("commandAllowlist", list)
+        log.info(`cmd:set-allowlist → ${list.length} entr${list.length === 1 ? "y" : "ies"}`)
+    }
 })
 
 // ── IPC: config ───────────────────────────────────────────

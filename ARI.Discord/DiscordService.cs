@@ -220,7 +220,6 @@ public class DiscordService : BackgroundService
                 return;
             }
             config.WhitelistedUserIds.Add(userId);
-            config.Save();
             Common.Logger.LogInformation("Owner added {UserId} to whitelist", userId);
             await cmd.RespondAsync($"`{target.Username}` added to whitelist.", ephemeral: true);
         }
@@ -232,7 +231,6 @@ public class DiscordService : BackgroundService
                 return;
             }
             config.WhitelistedUserIds.Remove(userId);
-            config.Save();
             Common.Logger.LogInformation("Owner removed {UserId} from whitelist", userId);
             await cmd.RespondAsync($"`{target.Username}` removed from whitelist.", ephemeral: true);
         }

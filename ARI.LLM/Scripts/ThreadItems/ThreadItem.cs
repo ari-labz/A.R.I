@@ -25,6 +25,15 @@ public abstract class ThreadItem
     public virtual string? Message => null;
 
     /// <summary>
+    /// The text this item contributes to the LLM context window on *subsequent* turns,
+    /// with any UI-only display markup removed. Defaults to <see cref="Message"/>; types
+    /// that embed render markers (e.g. tool-use cards) override this to strip them so the
+    /// model never sees — and never learns to imitate — the markup.
+    /// </summary>
+    [JsonIgnore]
+    public virtual string? ContextText => Message;
+
+    /// <summary>
     /// The speaker name used when formatting this item for the LLM.
     /// e.g. "xywren" for a user, "ARI" for a response.
     /// </summary>

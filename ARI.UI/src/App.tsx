@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useRef, type CSSProperties } from "react"
 import Sidebar from "./components/Sidebar"
 import Main from "./components/Main"
 import ProjectsPage from "./components/ProjectsPage"
@@ -41,6 +41,43 @@ const COMMANDS = [
 
 export { COMMANDS }
 
+// ── run_command authorization ─────────────────────────────────────────────────
+type CommandDecision = "deny" | "allow" | "whitelist"
+
+// Shell control characters that enable chaining/redirection. Their presence forces user
+// confirmation even if a prefix matches the allowlist, so "git status && rm -rf x" can't slip
+// through on the back of an allowlisted "git status".
+const SHELL_OPS = /[;&|`$<>(){}\n]/
+
+function commandIsAllowed(command: string, allowlist: string[]): boolean {
+    const cmd = command.trim()
+    if (!cmd || SHELL_OPS.test(cmd)) return false
+    return allowlist.some(entry => {
+        const e = entry.trim()
+        return e.length > 0 && (cmd === e || cmd.startsWith(e + " "))
+    })
+}
+
+// Formats a finished command for the model: exit code first, then output, tail-biased on
+// truncation since compiler/test errors tend to land at the end.
+function formatCommandResult(command: string, res: { code: number; stdout: string; stderr: string; timedOut: boolean }): string {
+    const MAX = 6000
+    const clip = (s: string) => s.length > MAX ? "…(earlier output truncated)…\n" + s.slice(s.length - MAX) : s
+    const parts = [`$ ${command}`, `exit code: ${res.code}${res.timedOut ? " (timed out)" : ""}`]
+    if (res.stdout.trim()) parts.push("--- stdout ---\n" + clip(res.stdout.trimEnd()))
+    if (res.stderr.trim()) parts.push("--- stderr ---\n" + clip(res.stderr.trimEnd()))
+    if (!res.stdout.trim() && !res.stderr.trim()) parts.push("(no output)")
+    return parts.join("\n\n")
+}
+
+const cmdOverlayStyle: CSSProperties = { position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000 }
+const cmdModalStyle:   CSSProperties = { background: "#1e1e22", border: "1px solid #3a3a40", borderRadius: 10, padding: "20px 22px", width: "min(560px, 90vw)", boxShadow: "0 12px 40px rgba(0,0,0,0.5)", color: "#e8e8ea" }
+const cmdTitleStyle:   CSSProperties = { fontSize: 15, fontWeight: 600, marginBottom: 4 }
+const cmdSubStyle:     CSSProperties = { fontSize: 12.5, opacity: 0.7, marginBottom: 12 }
+const cmdCodeStyle:    CSSProperties = { background: "#111114", border: "1px solid #34343a", borderRadius: 6, padding: "10px 12px", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-all", margin: 0, marginBottom: 16 }
+const cmdActionsStyle: CSSProperties = { display: "flex", gap: 8, justifyContent: "flex-end" }
+const cmdBtnBase:      CSSProperties = { padding: "7px 14px", borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: "pointer", border: "1px solid transparent" }
+
 export default function App() {
     const { threads, load: loadThreads } = useThreads()
 
@@ -63,6 +100,11 @@ export default function App() {
     const [safetyMode,     setSafetyMode]     = useState(false)
     const safetyModeRef = useRef(false)
 
+    // run_command confirmation: pending prompt awaiting a deny/allow/whitelist decision, plus the
+    // in-memory allowlist (loaded from the persisted store, extended live by "Whitelist").
+    const [pendingCommand, setPendingCommand] = useState<{ command: string; resolve: (d: CommandDecision) => void } | null>(null)
+    const commandAllowlistRef = useRef<string[]>([])
+
     const [clientVersion,  setClientVersion]  = useState<string | null>(null)
     const [outdated,       setOutdated]       = useState(false)
 
@@ -82,6 +124,10 @@ export default function App() {
     useEffect(() => { activeThreadRef.current = activeThread }, [activeThread])
     useEffect(() => { streamingRef.current = isStreaming }, [isStreaming])
     useEffect(() => { safetyModeRef.current = safetyMode }, [safetyMode])
+
+    useEffect(() => {
+        env.getCommandAllowlist().then(list => { commandAllowlistRef.current = Array.isArray(list) ? list : [] }).catch(() => {})
+    }, [])
 
     const heartbeat = useTypingHeartbeat(() => activeThreadRef.current)
 
@@ -292,7 +338,12 @@ export default function App() {
 
                 if (type === "read_file") {
                     const content = await window.electronBridge!.readFile(localPath, params.path ?? "")
-                    result = `[file: "${params.path}"]\n\`\`\`\n${content}\n\`\`\``
+                    // Number every line (1-indexed) so the model can build precise old_strings and
+                    // line up with the numbered snippets edit_file returns. Split on "\n" without
+                    // trimming so these numbers match fs.editFile's hint/snippet numbering exactly.
+                    const lines    = content.split("\n")
+                    const numbered = lines.map((l, i) => `${String(i + 1).padStart(6)}: ${l}`).join("\n")
+                    result = `[file: "${params.path}" (${lines.length} lines)]\n\`\`\`\n${numbered}\n\`\`\``
                     console.warn(`[ToolSocket] → file_content  callId=${callId}  bytes=${result.length}`)
                     ws.send(JSON.stringify({ type: "file_content", callId, content: result }))
 
@@ -318,8 +369,10 @@ export default function App() {
                     } else {
                         const res = await window.electronBridge!.editFile(localPath, params.path, params.old_string, params.new_string)
                         if (res.ok) {
+                            // fs.editFile returns a full message with a numbered snippet around the
+                            // edit, so the model sees the new state without re-reading the file.
                             console.warn(`[ToolSocket] → file_content (edit_file)  callId=${callId}  path=${params.path}`)
-                            ws.send(JSON.stringify({ type: "file_content", callId, content: `Successfully edited ${params.path}.` }))
+                            ws.send(JSON.stringify({ type: "file_content", callId, content: res.message ?? `Successfully edited ${params.path}.` }))
                         } else {
                             console.warn(`[ToolSocket] → file_error (edit_file)  callId=${callId}  error=${res.error}`)
                             ws.send(JSON.stringify({ type: "file_error", callId, error: res.error ?? "Edit failed." }))
@@ -333,8 +386,36 @@ export default function App() {
                         ws.send(JSON.stringify({ type: "file_error", callId, error: `SAFETY MODE — file was NOT written. Do not call edit_file or write_file again. Respond to the user now: tell them safety mode is on, show the proposed content as a code block, and say they can disable safety mode (shield icon) to apply it.\n\nProposed content for ${params.path} (${lines.length} lines):\n\n\`\`\`\n${params.content ?? ""}\n\`\`\`` }))
                     } else {
                         await window.electronBridge!.writeFile(localPath, params.path, params.content ?? "")
+                        const writtenLines = (params.content ?? "").split("\n").length
                         console.warn(`[ToolSocket] → file_content (write_file)  callId=${callId}  path=${params.path}`)
-                        ws.send(JSON.stringify({ type: "file_content", callId, content: `Successfully wrote ${params.path}.` }))
+                        ws.send(JSON.stringify({ type: "file_content", callId, content: `Successfully wrote ${params.path} (${writtenLines} lines).` }))
+                    }
+
+                } else if (type === "run_command") {
+                    const command = (params.command ?? "").trim()
+                    if (!command) {
+                        ws.send(JSON.stringify({ type: "file_error", callId, error: "No command provided." }))
+                    } else {
+                        // Auto-run if allowlisted; otherwise ask the user (deny / allow once / whitelist).
+                        let decision: CommandDecision = "allow"
+                        if (!commandIsAllowed(command, commandAllowlistRef.current)) {
+                            console.warn(`[ToolSocket] run_command needs confirmation  callId=${callId}  cmd=${command}`)
+                            decision = await new Promise<CommandDecision>(resolve => setPendingCommand({ command, resolve }))
+                        }
+
+                        if (decision === "deny") {
+                            console.warn(`[ToolSocket] → file_error (run_command DENIED)  callId=${callId}`)
+                            ws.send(JSON.stringify({ type: "file_error", callId, error: `The user denied permission to run \`${command}\`. Do not try to run it again. Continue without it, or ask the user how they would like to proceed.` }))
+                        } else {
+                            if (decision === "whitelist" && !commandAllowlistRef.current.includes(command)) {
+                                const next = [...commandAllowlistRef.current, command]
+                                commandAllowlistRef.current = next
+                                try { await env.setCommandAllowlist(next) } catch { /* ignore persist failure */ }
+                            }
+                            console.warn(`[ToolSocket] → run_command EXEC  callId=${callId}  cmd=${command}`)
+                            const cmdRes = await window.electronBridge!.runCommand(localPath, command)
+                            ws.send(JSON.stringify({ type: "file_content", callId, content: formatCommandResult(command, cmdRes) }))
+                        }
                     }
                 }
             } catch (e: unknown) {
@@ -717,6 +798,24 @@ export default function App() {
             {toasts.map(t => (
                 <div key={t.id} className="toast toast-visible">{t.msg}</div>
             ))}
+            {pendingCommand && (
+                <div style={cmdOverlayStyle}
+                     onClick={() => { pendingCommand.resolve("deny"); setPendingCommand(null) }}>
+                    <div style={cmdModalStyle} onClick={e => e.stopPropagation()}>
+                        <div style={cmdTitleStyle}>Run this command?</div>
+                        <div style={cmdSubStyle}>ARI wants to run a command that isn't on the allow list.</div>
+                        <pre style={cmdCodeStyle}>{pendingCommand.command}</pre>
+                        <div style={cmdActionsStyle}>
+                            <button style={{ ...cmdBtnBase, background: "transparent", borderColor: "#5a5a62", color: "#e8e8ea" }}
+                                    onClick={() => { pendingCommand.resolve("deny"); setPendingCommand(null) }}>Deny</button>
+                            <button style={{ ...cmdBtnBase, background: "#2d6cdf", color: "#fff" }}
+                                    onClick={() => { pendingCommand.resolve("allow"); setPendingCommand(null) }}>Allow once</button>
+                            <button style={{ ...cmdBtnBase, background: "#1f9d57", color: "#fff" }}
+                                    onClick={() => { pendingCommand.resolve("whitelist"); setPendingCommand(null) }}>Whitelist</button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     )
 }

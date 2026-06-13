@@ -15,12 +15,12 @@ public class Thread
     private const int     MIN_INACTIVITY_TIMER     = 30;
     private const int     MIN_DELETION_TIMER       = 15;
     private const int     MIN_INACTIVITY_THRESHOLD = 1;
-    private const int     MAX_TOOL_CALLS           = 10;
     private const int     DEFAULT_MEMORY_LIMIT     = 25;
     private const int     CHARS_PER_TOKEN          = 4;
-    private const double  TEMPERATURE              = 0.7;
-    private const double  TOP_P                    = 0.80;
-    private const int     TOP_K                    = 20;
+    private const double  TEMPERATURE              = 0.7;   // Qwen3 recommendation for non-thinking mode
+    private const double  TOP_P                    = 0.95;  // Qwen3 recommendation
+    private const int     TOP_K                    = 20;    // Qwen3 recommendation; tighter tail = steadier structured output
+    private const double  MIN_P                    = 0.05;  // cut the low-probability tail that derails tool-call JSON
     private const double  REPEAT_PENALTY           = 1.0;
     private const double  TOKEN_WARNING_RATIO      = 0.8;
     private const string  ATTACHMENT_DIVIDER       = "-------------------";
@@ -124,16 +124,19 @@ public class Thread
             if (maxMessages > 0 && result.Count >= maxMessages) break;
 
             ThreadItem item = History[i];
-            if (string.IsNullOrEmpty(item.Message)) continue;
+            // ContextText is the marker-stripped projection sent to the model; for most items
+            // it is identical to Message, but AriResponse strips its UI-only tool-use markup.
+            string? content = item.ContextText;
+            if (string.IsNullOrEmpty(content)) continue;
 
-            int itemLen = item.AuthorName.Length + 2 + item.Message.Length;
+            int itemLen = item.AuthorName.Length + 2 + content.Length;
             if (maxChars > 0 && charCount + itemLen > maxChars) break;
 
             charCount += itemLen;
             result.Add(new ThreadMessage(
                 Role:     item.AuthorName == "ARI" ? "assistant" : "user",
                 Username: item.AuthorName,
-                Content:  item.Message));
+                Content:  content));
         }
 
         result.Reverse();
@@ -461,7 +464,22 @@ public class Thread
         int             parseFailures        = 0;
         int             consecutiveFallbacks = 0;
         List<string>    toolResults      = new();
-        HashSet<string> calledKeys       = new(StringComparer.OrdinalIgnoreCase);
+        // Soft re-read guard: counts how many times each file has been read this turn.
+        // Capped at 3 to prevent spiral loops; model is told to proceed rather than keep re-reading.
+        Dictionary<string, int> readCounts  = new(StringComparer.OrdinalIgnoreCase);
+        // Tracks files edited this turn so stale old_string errors include a re-read hint.
+        HashSet<string>         editedFiles = new(StringComparer.OrdinalIgnoreCase);
+        // Counts consecutive failed edit attempts per file this turn, to escalate guidance and
+        // ultimately cut off tool access rather than letting the model spiral on the same edit.
+        Dictionary<string, int> editFailStreak = new(StringComparer.OrdinalIgnoreCase);
+        // Counts write_file calls per file this turn. Rewriting the same file repeatedly is a
+        // spiral (the model distrusts its own successful write and regenerates the whole file).
+        Dictionary<string, int> writeCounts = new(StringComparer.OrdinalIgnoreCase);
+        bool                    forceNoMoreTools = false;
+        // Context hygiene: tracks the messages-array slot holding the most recent read_file result
+        // for each file this turn, so an earlier copy can be stubbed when the file is re-read or
+        // changed. Keeps exactly one live copy of any file and drops outdated snapshots entirely.
+        Dictionary<string, (int Index, string CallId)> liveReads = new(StringComparer.OrdinalIgnoreCase);
         StringBuilder   responseBuilder  = new();
         StringBuilder   contentBuilder   = new(); // accumulates text + tool indicators across all iterations
         Stopwatch       sw               = Stopwatch.StartNew();
@@ -498,7 +516,7 @@ public class Thread
 
         while (true)
         {
-            bool      toolsExhausted = toolCallCount >= MAX_TOOL_CALLS;
+            bool      toolsExhausted = forceNoMoreTools || (agent.MaxToolCalls > 0 && toolCallCount >= agent.MaxToolCalls);
             object[]? toolSchemas    = !toolsExhausted && tools.Count > 0
                                         ? tools.Values.Select(t => t.Schema).ToArray()
                                         : null;
@@ -518,6 +536,7 @@ public class Thread
                 ["temperature"]    = agent.Temperature ?? TEMPERATURE,
                 ["top_p"]          = agent.TopP        ?? TOP_P,
                 ["top_k"]          = TOP_K,
+                ["min_p"]          = MIN_P,
                 ["repeat_penalty"] = REPEAT_PENALTY
             };
 
@@ -632,7 +651,11 @@ public class Thread
                             bool isLeakedToolCall = preText.Contains("<tool_call>") || preText.Contains("<function=")
                                 || tools.Keys.Any(k => preText.StartsWith(k, StringComparison.OrdinalIgnoreCase));
                             if (!isLeakedToolCall && preText.Length > 0)
+                            {
                                 contentBuilder.Append(preText + "\n");
+                                if (!agent.QuietLogging)
+                                    Common.Logger.LogInformation("[{Agent}] ({Thread}) \"{Text}\"", agent.Name, threadKey, preText);
+                            }
                             responseBuilder.Clear();
                             if (onDelta is not null) await onDelta(contentBuilder.ToString());
                         }
@@ -779,17 +802,22 @@ public class Thread
 
             if (pendingCalls.Count > 0 && (finishReason == "tool_calls" || finishReason == "stop" || finishReason == null))
             {
-                // Repair any unescaped quotes in tool call args emitted by the model.
-                // Must happen before args are used for display, execution, or sent back to llama-server.
+                // Strip any <think>...</think> leakage then repair unescaped quotes in tool call args.
+                // Both must happen before args are used for display, execution, or sent back to llama-server.
                 foreach (var key in pendingCalls.Keys)
                 {
                     var (id, name, args) = pendingCalls[key];
-                    string repaired = ToolCallParser.RepairArgs(args.ToString());
-                    if (repaired != args.ToString())
-                    {
+                    string raw      = args.ToString();
+                    string stripped = ToolCallParser.StripThinkLeaks(raw);
+                    string repaired = ToolCallParser.RepairArgs(stripped);
+
+                    if (stripped != raw)
+                        Common.Logger.LogWarning("[{Agent}] ({Thread}) Stripped <think> leakage from args for tool '{Tool}'.", agent.Name, threadKey, name);
+                    if (repaired != stripped)
                         Common.Logger.LogWarning("[{Agent}] ({Thread}) Repaired malformed JSON args for tool '{Tool}'.", agent.Name, threadKey, name);
+
+                    if (repaired != raw)
                         pendingCalls[key] = (id, name, new StringBuilder(repaired));
-                    }
                 }
 
                 bool isXmlFallback = pendingCalls.Values.Any(c => c.Id.StartsWith("fallback_xml_"));
@@ -827,15 +855,39 @@ public class Thread
 
                 foreach (var (callIndex, call) in pendingCalls)
                 {
-                    string callKey = $"{call.Name}:{call.Args}";
-                    bool   isNew   = calledKeys.Add(callKey);
                     string result;
 
-                    if (!isNew)
+                    // Soft re-read guard: if the model reads the same file more than 3 times
+                    // in one turn it's looping. Return a nudge instead of the file content again.
+                    if (call.Name is "read_file")
                     {
-                        result = "Already retrieved.";
+                        try
+                        {
+                            using JsonDocument rdoc = JsonDocument.Parse(call.Args.ToString());
+                            string rpath = rdoc.RootElement.GetProperty("path").GetString() ?? "";
+                            readCounts.TryGetValue(rpath, out int rc);
+                            readCounts[rpath] = rc + 1;
+                            if (rc >= 3)
+                            {
+                                result = $"[System: You have already read {rpath} {rc + 1} times this turn. The content has not changed. Use the content you already have to proceed — make an edit or write the file rather than reading it again.]";
+                                if (isXmlFallback)
+                                {
+                                    xmlResultsMsg!.AppendLine($"--- {call.Name} ---");
+                                    xmlResultsMsg.AppendLine(result);
+                                    xmlResultsMsg.AppendLine();
+                                }
+                                else
+                                {
+                                    messages.Add(new { role = "tool", tool_call_id = call.Id, name = call.Name, content = result });
+                                    if (liveCallInfo is { } lc) lc.EstimatedInputTokens += result.Length / CHARS_PER_TOKEN;
+                                }
+                                continue;
+                            }
+                        }
+                        catch { /* ignore — proceed normally */ }
                     }
-                    else if (tools.TryGetValue(call.Name, out var tool))
+
+                    if (tools.TryGetValue(call.Name, out var tool))
                     {
                         if (tool.Display is not null)
                         {
@@ -848,20 +900,87 @@ public class Thread
                             if (onDelta is not null) await onDelta(contentBuilder.ToString());
                         }
                         result = await tool.Execute(call.Args.ToString());
+
+                        // Track edits and enrich stale old_string errors with a re-read hint.
+                        if (call.Name == "edit_file")
+                        {
+                            try
+                            {
+                                using JsonDocument argDoc = JsonDocument.Parse(call.Args.ToString());
+                                string editPath = (argDoc.RootElement.GetProperty("path").GetString() ?? "").Trim('"', '\'', ' ');
+                                // Contains (not StartsWith): the web-panel path wraps errors as
+                                // "[Error: old_string not found ...]", so StartsWith would miss them.
+                                bool edited   = result.Contains("Successfully edited");
+                                bool notFound = result.Contains("old_string not found");
+                                if (edited)
+                                {
+                                    editedFiles.Add(editPath);
+                                    editFailStreak.Remove(editPath);
+                                }
+                                else if (notFound)
+                                {
+                                    editFailStreak.TryGetValue(editPath, out int streak);
+                                    editFailStreak[editPath] = ++streak;
+
+                                    if (editedFiles.Contains(editPath))
+                                        result += " This file was already edited earlier this turn — re-read it to see the current content before retrying.";
+                                    if (streak >= 3)
+                                        result += $" edit_file has now failed {streak} times on this file. Re-read it, then make ONE edit with a larger exact block copied verbatim from the read output. Only if the change is too extensive for one edit, use write_file ONCE with the complete corrected file — then stop; do not write the same file repeatedly.";
+                                    if (streak >= 5)
+                                    {
+                                        // Hard stop the spiral: deny further tool calls so the next turn
+                                        // is forced to produce a text answer instead of a sixth failed edit.
+                                        forceNoMoreTools = true;
+                                        result += " Too many failed edit attempts on this file. No further tool calls will be accepted this turn — tell the user what change is needed and show the exact corrected code.";
+                                        Common.Logger.LogWarning("[{Agent}] ({Thread}) edit_file failed {Streak}x on '{File}' — cutting off tools for this turn.", agent.Name, threadKey, streak, editPath);
+                                    }
+                                }
+                            }
+                            catch { /* ignore */ }
+                        }
+
+                        // Guard against the rewrite spiral: a model that distrusts its own successful
+                        // write_file regenerates the whole file over and over (minutes each). Nudge on
+                        // the second write, cut off tools on the third.
+                        if (call.Name == "write_file" && result.Contains("Successfully wrote"))
+                        {
+                            try
+                            {
+                                using JsonDocument argDoc = JsonDocument.Parse(call.Args.ToString());
+                                string writePath = (argDoc.RootElement.GetProperty("path").GetString() ?? "").Trim('"', '\'', ' ');
+                                writeCounts.TryGetValue(writePath, out int wc);
+                                writeCounts[writePath] = ++wc;
+                                if (wc == 2)
+                                    result += " You have already written this file this turn and that write succeeded. Do NOT write it again unless you have a further, distinct change. If you are unsure the content is correct, use read_file to verify — do not rewrite it blindly.";
+                                else if (wc >= 3)
+                                {
+                                    forceNoMoreTools = true;
+                                    result += " This file has been written too many times this turn. No further tool calls will be accepted — tell the user the file has been updated and stop.";
+                                    Common.Logger.LogWarning("[{Agent}] ({Thread}) write_file called {Count}x on '{File}' — cutting off tools for this turn.", agent.Name, threadKey, wc, writePath);
+                                }
+                            }
+                            catch { /* ignore */ }
+                        }
+
                         if (ToolCallParser.IsError(result))
                         {
                             Common.Logger.LogError("[{Agent}] ({Thread}) Tool '{Tool}' failed: {Error}", agent.Name, threadKey, call.Name, result);
-                            contentBuilder.Append($"<!--ari-tool-error:{call.Name}:{ToolCallParser.EscapeLabel(result)}-->");
+                            string errLabel = "";
+                            try
+                            {
+                                using JsonDocument argDoc = JsonDocument.Parse(call.Args.ToString());
+                                string p = argDoc.RootElement.TryGetProperty("path",    out var pe)  ? pe.GetString()  ?? "" :
+                                           argDoc.RootElement.TryGetProperty("pattern", out var pte) ? pte.GetString() ?? "" : "";
+                                errLabel = System.IO.Path.GetFileName(p.Trim('"', '\'', ' ', '\\'));
+                            }
+                            catch { /* ignore */ }
+                            contentBuilder.Append($"<!--ari-tool-error:{call.Name}:{errLabel}:{ToolCallParser.EscapeLabel(result)}-->");
                             if (onDelta is not null) await onDelta(contentBuilder.ToString());
                         }
-                        else
+                        else if (tool.DisplayAfter is not null)
                         {
-                            // edit hint is injected as a user message after the batch instead
-                            if (tool.DisplayAfter is not null)
-                            {
-                                contentBuilder.Append(tool.DisplayAfter(call.Args.ToString()));
-                                if (onDelta is not null) await onDelta(contentBuilder.ToString());
-                            }
+                            contentBuilder.Append(tool.DisplayAfter(call.Args.ToString()));
+                            if (onDelta is not null) await onDelta(contentBuilder.ToString());
                         }
                         toolResults.Add(result);
                     }
@@ -881,8 +1000,42 @@ public class Thread
                     }
                     else
                     {
+                        int addedIndex = messages.Count;
                         messages.Add(new { role = "tool", tool_call_id = call.Id, name = call.Name, content = result });
                         if (liveCallInfo is { } lc) lc.EstimatedInputTokens += result.Length / CHARS_PER_TOKEN;
+
+                        // Keep only the newest snapshot of any file in context.
+                        //  - a fresh read_file supersedes the previous read of that path
+                        //  - a successful edit_file / write_file makes the prior read stale
+                        // In both cases the earlier full-content message is replaced with a short stub.
+                        try
+                        {
+                            using JsonDocument hdoc = JsonDocument.Parse(call.Args.ToString());
+                            string hpath = hdoc.RootElement.TryGetProperty("path", out var hpe)
+                                ? (hpe.GetString() ?? "").Trim('"', '\'', ' ', '\\') : "";
+                            if (!string.IsNullOrEmpty(hpath))
+                            {
+                                if (call.Name == "read_file")
+                                {
+                                    if (liveReads.TryGetValue(hpath, out var prev))
+                                        StubRead(messages, prev.Index, prev.CallId, hpath);
+                                    // Only the actual content read counts as the live copy, not the
+                                    // re-read guard's nudge (which never reaches this branch).
+                                    if (!result.StartsWith("[System:"))
+                                        liveReads[hpath] = (addedIndex, call.Id);
+                                }
+                                else if (call.Name is "edit_file" or "write_file"
+                                         && (result.Contains("Successfully edited") || result.Contains("Successfully wrote")))
+                                {
+                                    if (liveReads.TryGetValue(hpath, out var prev))
+                                    {
+                                        StubRead(messages, prev.Index, prev.CallId, hpath);
+                                        liveReads.Remove(hpath);
+                                    }
+                                }
+                            }
+                        }
+                        catch { /* ignore — leave context as-is */ }
                     }
                 }
 
@@ -897,15 +1050,6 @@ public class Thread
                 // batch but flip them to "Read" once a new batch or text follows.
                 contentBuilder.Append("<!--ari-batch-end-->");
                 if (onDelta is not null) await onDelta(contentBuilder.ToString());
-
-                // If this iteration used a fallback format, inject a correction hint so the
-                // model has a chance to self-correct on the next turn rather than repeating.
-                // After a successful edit/write, tell the model not to re-read to verify.
-                // This is a user-role message so the model pays more attention to it than tool content.
-                bool hadWriteOp = pendingCalls.Values.Any(c => c.Name is "edit_file" or "write_file")
-                                  && !pendingCalls.Values.Any(c => ToolCallParser.IsError(toolResults.LastOrDefault() ?? ""));
-                if (hadWriteOp)
-                    messages.Add(new { role = "user", content = "[System: The edits were applied successfully. Do not re-read the file to verify — trust the result and move on to the next step.]" });
 
                 // If this iteration used a fallback format, inject a correction hint.
                 bool wasFallback = pendingCalls.Values.Any(c => c.Id.StartsWith("fallback_"));
@@ -951,7 +1095,7 @@ public class Thread
                     agent.Name, threadKey, (int)(completionTokens * 100.0 / maxTokens), completionTokens, maxTokens);
 
             Common.Logger.LogInformation("[{Agent}] ({Thread}) response\n\"{Response}\"",
-                agent.Name, threadKey, responseText);
+                agent.Name, threadKey, ExtractLogText(responseText));
         }
 
         List<string> noteParts = new();
@@ -995,6 +1139,28 @@ public class Thread
         }
 
         return responseText;
+    }
+
+    /// <summary>Strips tool-use markers from a response string, returning only the prose text.</summary>
+    private static string ExtractLogText(string content) =>
+        string.Concat(AriContentBlock.Parse(content).OfType<TextBlock>().Select(b => b.Text))
+            .Replace("<!--ari-batch-end-->", "")
+            .Trim();
+
+    /// <summary>
+    /// Replaces a stale read_file tool-result in the messages array with a short stub, preserving
+    /// the tool_call_id/role/name so the assistant↔tool pairing stays valid for llama-server.
+    /// </summary>
+    private static void StubRead(List<object> messages, int index, string callId, string path)
+    {
+        if (index < 0 || index >= messages.Count) return;
+        messages[index] = new
+        {
+            role         = "tool",
+            tool_call_id = callId,
+            name         = "read_file",
+            content      = $"[Earlier contents of {path} omitted — superseded by a later read or change this turn. Re-read the file if you need its current contents.]"
+        };
     }
 
     /// <summary>Finds the last occurrence of <paramref name="oldText"/> in <paramref name="sb"/> and replaces it with <paramref name="newText"/>.</summary>

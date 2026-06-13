@@ -15,6 +15,7 @@ public abstract class Agent
     internal  readonly int?   Slot;
     internal  readonly double? Temperature;
     internal  readonly double? TopP;
+    internal  readonly int     MaxToolCalls;
 
     // 0 = unlimited. Overridden by agents that enforce a context window.
     internal virtual int MaxContextTokens => 0;
@@ -54,6 +55,7 @@ public abstract class Agent
         Slot           = config.Slot;
         Temperature    = config.Temperature;
         TopP           = config.TopP;
+        MaxToolCalls   = config.MaxToolCalls;
     }
 
     /// <summary>This agent's own threads as live objects (unfiltered enumeration of the type view).</summary>
