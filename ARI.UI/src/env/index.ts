@@ -4,7 +4,10 @@ export interface AriEnvironment {
   writeFile(root: string, path: string, content: string): Promise<void>
   listDirectory(root: string, dirPath?: string): Promise<string[]>
   searchFiles(root: string, pattern: string, searchPath?: string, glob?: string): Promise<string[]>
-  editFile(root: string, filePath: string, oldString: string, newString: string): Promise<{ ok: boolean; error?: string }>
+  editFile(root: string, filePath: string, oldString: string, newString: string): Promise<{ ok: boolean; error?: string; message?: string }>
+  runCommand(root: string, command: string): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }>
+  getCommandAllowlist(): Promise<string[]>
+  setCommandAllowlist(list: string[]): Promise<void>
   pickFolder(): Promise<string | null>
   getFileTree(root: string): Promise<string[]>
   getEndpoint(): string
@@ -22,7 +25,10 @@ declare global {
       writeFile(root: string, path: string, content: string): Promise<void>
       listDirectory(root: string, dirPath?: string): Promise<string[]>
       searchFiles(root: string, pattern: string, searchPath?: string, glob?: string): Promise<string[]>
-      editFile(root: string, filePath: string, oldString: string, newString: string): Promise<{ ok: boolean; error?: string }>
+      editFile(root: string, filePath: string, oldString: string, newString: string): Promise<{ ok: boolean; error?: string; message?: string }>
+      runCommand(root: string, command: string): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }>
+      getCommandAllowlist(): Promise<string[]>
+      setCommandAllowlist(list: string[]): Promise<void>
       pickFolder(): Promise<string | null>
       getFileTree(root: string): Promise<string[]>
       getEndpoint(): string
@@ -46,6 +52,9 @@ const browserEnv: AriEnvironment = {
   listDirectory: () => Promise.reject(new Error("No local filesystem in browser")),
   searchFiles:   () => Promise.reject(new Error("No local filesystem in browser")),
   editFile:      () => Promise.reject(new Error("No local filesystem in browser")),
+  runCommand:          () => Promise.reject(new Error("No local shell in browser")),
+  getCommandAllowlist: () => Promise.resolve([]),
+  setCommandAllowlist: () => Promise.resolve(),
   pickFolder:    () => Promise.resolve(null),
   getFileTree:   () => Promise.resolve([]),
   getEndpoint:   () => "",
@@ -62,6 +71,9 @@ const electronEnv: AriEnvironment = {
   listDirectory: (root, dirPath)                     => window.electronBridge!.listDirectory(root, dirPath),
   searchFiles:   (root, pattern, searchPath, glob)   => window.electronBridge!.searchFiles(root, pattern, searchPath, glob),
   editFile:      (root, filePath, oldStr, newStr)    => window.electronBridge!.editFile(root, filePath, oldStr, newStr),
+  runCommand:          (root, command)               => window.electronBridge!.runCommand(root, command),
+  getCommandAllowlist: ()                            => window.electronBridge!.getCommandAllowlist(),
+  setCommandAllowlist: (list)                        => window.electronBridge!.setCommandAllowlist(list),
   pickFolder:    ()                                  => window.electronBridge!.pickFolder(),
   getFileTree:   (root)                              => window.electronBridge!.getFileTree(root),
   getEndpoint:   ()                                  => window.electronBridge!.getEndpoint(),

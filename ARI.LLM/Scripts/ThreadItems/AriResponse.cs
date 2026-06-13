@@ -34,6 +34,15 @@ public class AriResponse : ThreadItem
     public override string? Message    => State == AriResponseState.Complete ? ContentText : null;
     public override string  AuthorName => "ARI";
 
+    // What re-enters the model's context on later turns: prose only. The tool-use cards and
+    // batch markers are UI display markup — feeding them back wastes tokens and teaches the
+    // model to imitate angle-bracket pseudo-markup (a source of tool-call format drift).
+    public override string? ContextText => State == AriResponseState.Complete
+        ? string.Concat(Content.OfType<TextBlock>().Select(b => b.Text))
+              .Replace("<!--ari-batch-end-->", "")
+              .Trim()
+        : null;
+
     public override string ToString()
     {
         var sb = new System.Text.StringBuilder();

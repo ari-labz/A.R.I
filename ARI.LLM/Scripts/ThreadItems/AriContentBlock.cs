@@ -75,6 +75,7 @@ public abstract class AriContentBlock
         "search_files"   => new Searching(),
         "edit_file"      => new Editing(),
         "write_file"     => new Writing(),
+        "run_command"    => new Running(),
         _                => null
     };
 
@@ -85,6 +86,7 @@ public abstract class AriContentBlock
         "Searching" => new Searching(),
         "Editing"   => new Editing(),
         "Writing"   => new Writing(),
+        "Running"   => new Running(),
         _           => null
     };
 }
@@ -126,6 +128,12 @@ public sealed class Searching : Card
 {
     public string Pattern { get; set; } = "";
     protected internal override void Fill(string label) => Pattern = label;
+}
+
+public sealed class Running : Card
+{
+    public string Command { get; set; } = "";
+    protected internal override void Fill(string label) => Command = label;
 }
 
 /// <summary>A card that carries diff stats and an optional patch (edit/write).</summary>

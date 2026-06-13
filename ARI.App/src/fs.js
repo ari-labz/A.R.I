@@ -1,5 +1,6 @@
 const fs   = require("fs")
 const path = require("path")
+const { exec } = require("child_process")
 
 const IGNORED_DIRS = new Set([
     "node_modules", ".git", "bin", "obj", "dist", "build",
@@ -119,30 +120,152 @@ function searchFiles(root, pattern, searchPath, glob) {
     return results
 }
 
+const padLine = n => String(n).padStart(6)
+
+// read_file numbers each line as "  42: code". A weaker model sometimes copies those prefixes
+// into old_string. If every non-empty line carries a uniform "<n>: " prefix, strip it so the
+// text matches the real file content. Returns null when the prefix isn't uniformly present.
+function stripLineNumberPrefix(s) {
+    const re       = /^\s*\d+:\s?/
+    const lines    = s.split("\n")
+    const nonEmpty = lines.filter(l => l.trim().length > 0)
+    if (nonEmpty.length === 0 || !nonEmpty.every(l => re.test(l))) return null
+    return lines.map(l => l.replace(re, "")).join("\n")
+}
+
+// When no match is found, return the file region most similar to old_string, with line numbers,
+// so the model can copy the exact bytes instead of guessing again. Uses token-overlap scoring
+// (not exact line equality) so it still returns a useful region when old_string was paraphrased
+// or reconstructed from memory — the common case when the model's mental model has drifted.
+const tokenize = s => (s.toLowerCase().match(/[a-z0-9_]+/g) || [])
+
+function closestRegionHint(content, old) {
+    const cLines  = content.split("\n")
+    const oLines  = old.split("\n")
+    const k       = Math.min(oLines.length, cLines.length)
+    if (k === 0 || cLines.length === 0)
+        return " Re-read the file to get the exact current text, then retry with a matching old_string."
+
+    const oTokens = oLines.map(tokenize)
+
+    // Slide a window the size of old_string and score it by per-line token overlap against the
+    // aligned old line. bestScore starts below zero so the loop always selects a region.
+    let bestStart = 0, bestScore = -1
+    for (let w = 0; w + k <= cLines.length; w++) {
+        let score = 0
+        for (let i = 0; i < k; i++) {
+            const ct = tokenize(cLines[w + i])
+            const ot = oTokens[Math.min(i, oTokens.length - 1)]
+            if (ot.length === 0 || ct.length === 0) continue
+            const setC = new Set(ct)
+            let shared = 0
+            for (const t of ot) if (setC.has(t)) shared++
+            score += shared / Math.max(ot.length, ct.length)
+        }
+        if (score > bestScore) { bestScore = score; bestStart = w }
+    }
+
+    const to     = Math.min(cLines.length - 1, bestStart + k - 1)
+    const region = cLines.slice(bestStart, to + 1).map((l, i) => `${padLine(bestStart + i + 1)}: ${l}`).join("\n")
+    return ` The closest matching region is lines ${bestStart + 1}–${to + 1}:\n\`\`\`\n${region}\n\`\`\`\n` +
+           `Copy that text exactly (including indentation) into old_string if it is the code you meant to edit.`
+}
+
 function editFile(root, filePath, oldString, newString) {
     const abs = path.resolve(root, filePath)
     if (!abs.startsWith(path.resolve(root))) throw new Error("Path traversal denied")
     const content = fs.readFileSync(abs, "utf8")
+    if (!oldString) return { ok: false, error: `old_string is empty. Provide the exact text to replace in ${filePath}.` }
 
-    // Exact match
-    let count = 0, idx = 0
-    while ((idx = content.indexOf(oldString, idx)) !== -1) { count++; idx += oldString.length }
-    if (count === 1) {
-        fs.writeFileSync(abs, content.replace(oldString, newString), "utf8")
-        return { ok: true }
+    // Match in normalized-LF space (tolerates CRLF/CR + indentation drift); re-emit on the
+    // file's dominant line ending. A looser tier is only accepted when the match is unique.
+    const nl          = content.includes("\r\n") ? "\r\n" : "\n"
+    const norm        = s => s.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+    const normContent = norm(content)
+    // Strip line-number prefixes the model may have copied from read_file output — independently
+    // for old and new, so we never match against (or write back) a stray "  42: " prefix.
+    const rawOld      = norm(oldString)
+    const rawNew      = norm(newString)
+    const strippedOld = stripLineNumberPrefix(rawOld)
+    const strippedNew = stripLineNumberPrefix(rawNew)
+    const normOld     = strippedOld !== null ? strippedOld : rawOld
+    const normNew     = strippedNew !== null ? strippedNew : rawNew
+    const prefixed    = strippedOld !== null || strippedNew !== null
+
+    let start = -1, len = 0, fuzzy = false
+
+    // Tier 1 — exact substring.
+    {
+        let c = 0, i = 0, first = -1
+        while ((i = normContent.indexOf(normOld, i)) !== -1) { if (first < 0) first = i; c++; i += normOld.length }
+        if (c > 1) return { ok: false, error: `old_string matches ${c} locations in ${filePath}. Add more surrounding context to make it unique.` }
+        if (c === 1) { start = first; len = normOld.length }
     }
-    if (count > 1) return { ok: false, error: `old_string matches ${count} locations in ${filePath}. Add more surrounding context to make it unique.` }
 
-    // Fallback: normalize CRLF → LF on both sides (LLM often drops \r when generating old_string)
-    const normContent = content.replace(/\r\n/g, "\n")
-    const normOld     = oldString.replace(/\r\n/g, "\n")
-    const normNew     = newString.replace(/\r\n/g, "\n")
-    let normCount = 0, normIdx = 0
-    while ((normIdx = normContent.indexOf(normOld, normIdx)) !== -1) { normCount++; normIdx += normOld.length }
-    if (normCount === 0) return { ok: false, error: `old_string not found in ${filePath}. No changes made.` }
-    if (normCount > 1)  return { ok: false, error: `old_string matches ${normCount} locations in ${filePath}. Add more surrounding context to make it unique.` }
-    fs.writeFileSync(abs, normContent.replace(normOld, normNew), "utf8")
-    return { ok: true }
+    // Tier 2 — leading-whitespace-insensitive, contiguous line-block match.
+    if (start < 0) {
+        const cLines = normContent.split("\n")
+        const oLines = normOld.split("\n")
+        const oTrim  = oLines.map(l => l.trimStart())
+        const k      = oLines.length
+        if (k <= cLines.length) {
+            let matchStart = -1, matches = 0
+            for (let w = 0; w + k <= cLines.length; w++) {
+                let all = true
+                for (let i = 0; i < k; i++) if (cLines[w + i].trimStart() !== oTrim[i]) { all = false; break }
+                if (all) { matches++; if (matchStart < 0) matchStart = w }
+            }
+            if (matches > 1) return { ok: false, error: `old_string matches ${matches} locations in ${filePath} (ignoring indentation). Add more surrounding context to make it unique.` }
+            if (matches === 1) {
+                start = 0
+                for (let i = 0; i < matchStart; i++) start += cLines[i].length + 1
+                len = 0
+                for (let i = 0; i < k; i++) len += cLines[matchStart + i].length + (i < k - 1 ? 1 : 0)
+                fuzzy = true
+            }
+        }
+    }
+
+    if (start < 0)
+        return { ok: false, error: `old_string not found in ${filePath}. No changes made.${closestRegionHint(normContent, normOld)}` }
+
+    const updated = normContent.slice(0, start) + normNew + normContent.slice(start + len)
+    fs.writeFileSync(abs, updated.split("\n").join(nl), "utf8")
+
+    // Return a numbered snippet around the edit so the model has current context without re-reading.
+    const editLine = normContent.slice(0, start).split("\n").length - 1
+    const uLines   = updated.split("\n")
+    const newCount = normNew.length === 0 ? 1 : normNew.split("\n").length
+    const from     = Math.max(0, editLine - 5)
+    const to       = Math.min(uLines.length - 1, editLine + newCount + 4)
+    const snippet  = uLines.slice(from, to + 1).map((l, i) => `${padLine(from + i + 1)}: ${l}`).join("\n")
+    const tags     = []
+    if (prefixed) tags.push("stripped line-number prefixes")
+    if (fuzzy)    tags.push("matched ignoring indentation/line-ending differences")
+    const note     = tags.length ? ` (${tags.join("; ")})` : ""
+    return {
+        ok: true,
+        message: `Successfully edited ${filePath}.${note} File is now ${uLines.length} lines.\n\n` +
+                 `[Updated context — lines ${from + 1}–${to + 1}]\n\`\`\`\n${snippet}\n\`\`\``
+    }
 }
 
-module.exports = { readFile, writeFile, getFileTree, listDirectory, searchFiles, editFile }
+// Runs a shell command with the project root as cwd. Always resolves (never throws) with the
+// exit code and captured output, so the caller can hand failures back to the model as text.
+// Authorization (allowlist / user confirmation) is enforced upstream in the renderer.
+function runCommand(root, command, timeoutMs = 120000) {
+    const cwd = path.resolve(root)
+    return new Promise((resolve) => {
+        exec(command, { cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, windowsHide: true },
+            (err, stdout, stderr) => {
+                resolve({
+                    code:     err && typeof err.code === "number" ? err.code : (err ? 1 : 0),
+                    stdout:   stdout ?? "",
+                    stderr:   stderr ?? "",
+                    timedOut: !!(err && err.killed),
+                })
+            })
+    })
+}
+
+module.exports = { readFile, writeFile, getFileTree, listDirectory, searchFiles, editFile, runCommand }

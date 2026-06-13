@@ -117,9 +117,12 @@ public class AriHostService : BackgroundService
         {
             string f5Path     = ResolvePath(executableDirectory, config.VoiceSynthesis.F5Path);
             string voicesPath = ResolvePath(executableDirectory, config.VoiceSynthesis.VoicesPath);
-            string modelName  = config.Voice.ModelName;
-            string modelPath  = Path.Combine(voicesPath, modelName, "model_last.pt");
-            string refAudio   = FindReferenceAudio(f5Path, modelName);
+            string modelName     = config.Voice.ModelName;
+            string modelDir      = Path.Combine(voicesPath, modelName);
+            string fp16Path      = Path.Combine(modelDir, "model_infer_fp16.pt");
+            string trainingPath  = Path.Combine(modelDir, "model_last.pt");
+            string modelPath     = File.Exists(fp16Path) ? fp16Path : trainingPath;
+            string refAudio      = FindReferenceAudio(f5Path, modelName);
 
             if (!File.Exists(modelPath))
             {
@@ -132,6 +135,7 @@ public class AriHostService : BackgroundService
             else
             {
                 ILogger voiceLogger = loggerFactory.CreateLogger("ARI.Voice");
+                Common.Logger.LogInformation("Voice loading model: {Path}", Path.GetFileName(modelPath));
                 synthesiser = new F5Synthesiser(f5Path, modelPath, refAudio, voiceLogger);
                 await synthesiser.Start(stoppingToken);
 

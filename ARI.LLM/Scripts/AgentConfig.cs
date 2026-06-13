@@ -8,14 +8,14 @@ public class AgentConfig
     public string SystemPrompt { get; init; }
     public bool Enabled { get; init; }
 
-    /// <summary>Only applies to Dialogue. Number of past messages to include in each prompt.</summary>
+    /// <summary>Only applies to Dialogue. Number of past messages to include in each prompt. 0 = no limit (use MaxContextTokens only).</summary>
     public int ShortTermMemoryLimit { get; init; }
 
     /// <summary>Maximum tokens to generate per response. -1 = unlimited.</summary>
     public int MaxTokens { get; init; } = -1;
 
-    /// <summary>Optional prompt sent as the final extraction step in Engram.</summary>
-    public string? ExtractionPrompt { get; init; }
+    /// <summary>Maximum number of tool calls allowed per response. 0 = unlimited.</summary>
+    public int MaxToolCalls { get; init; } = 0;
 
     /// <summary>
     /// Engram only. How often (in minutes) to sweep threads for new activity.

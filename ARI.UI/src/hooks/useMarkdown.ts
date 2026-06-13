@@ -9,7 +9,7 @@ const CHECK_ICON = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" 
 
 const TOOL_START_RE = /<!--ari-tool-start:([^:]+):([^>]*?)-->/g
 const TOOL_END_RE   = /<!--ari-tool-end:([^:]+):([^>]*?)-->/g
-const TOOL_ERROR_RE = /<!--ari-tool-error:([^:]+):([^>]*?)-->/g
+const TOOL_ERROR_RE = /<!--ari-tool-error:([^:]+):([^:]*):([^>]*?)-->/g
 
 function escHtml(s: string): string {
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -21,6 +21,7 @@ const TOOL_VERBS: Record<string, { active: string; done: string }> = {
     search_files:   { active: "Searching",         done: "Searched" },
     edit_file:      { active: "Editing",           done: "Edited" },
     write_file:     { active: "Writing",           done: "Written" },
+    run_command:    { active: "Running",           done: "Ran" },
 }
 
 function parseDiffLabel(rawLabel: string): { fileLabel: string; added: number; removed: number; patch: string } | null {
@@ -61,9 +62,15 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
         return `<!--ari-tool-end:${name}:${parsed.fileLabel}-->`
     })
 
-    // Step 2: count done signals per key (multiset) so multiple edits to the same file each match.
-    const doneCount = new Map<string, number>()
+    // Step 2: count done/error signals per key (multiset) so multiple calls to the same file each match.
+    const doneCount  = new Map<string, number>()
+    const errorCount = new Map<string, number>()
     const BATCH_END = "<!--ari-batch-end-->"
+    const ERROR_RE_G = new RegExp(TOOL_ERROR_RE.source, "g")
+    for (const m of normalized.matchAll(ERROR_RE_G)) {
+        const k = `${m[1]}:${m[2]}`
+        errorCount.set(k, (errorCount.get(k) ?? 0) + 1)
+    }
     const END_RE_G = new RegExp(TOOL_END_RE.source, "g")
     for (const m of normalized.matchAll(END_RE_G)) {
         const after = m.index! + m[0].length
@@ -81,9 +88,11 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
 
     let out = normalized.split(BATCH_END).join("")
     out = out.replace(TOOL_END_RE, "")
-    out = out.replace(TOOL_ERROR_RE, (_, _name, label) => {
-        const msg = label.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">")
-        return `\n\n<div class="tool-card tool-card--error"><span>Error: ${msg}</span></div>\n\n`
+    out = out.replace(TOOL_ERROR_RE, (_, name, rawFile, rawMsg) => {
+        const verbs = TOOL_VERBS[name] ?? { active: name, done: name }
+        const file  = rawFile.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">")
+        const msg   = rawMsg.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">")
+        return `\n\n<div class="tool-card tool-card--error"><span>${verbs.active} ${escHtml(file)}</span><span class="tool-card-error-msg">${escHtml(msg)}</span></div>\n\n`
     })
     out = out.replace(TOOL_START_RE, (_, name, label) => {
         const file      = label.replace(/&#45;&#45;/g, "--")
@@ -93,6 +102,12 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
         const occ   = occurrence.get(key) ?? 0
         occurrence.set(key, occ + 1)
         const badgeKey = `${key}:${msgIndex}:${occ}`
+        // If there's a matching error, suppress the start card — the error card renders at the error position.
+        const errRemaining = errorCount.get(key) ?? 0
+        if (errRemaining > 0) {
+            errorCount.set(key, errRemaining - 1)
+            return ""
+        }
         const remaining = doneCount.get(key) ?? 0
         if (remaining > 0) {
             doneCount.set(key, remaining - 1)
