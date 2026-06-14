@@ -278,8 +278,12 @@ public class LlmService : IDisposable
             new ReadFile(resolvedRoot, cts.Token).Register(codeThread);
             new ListDirectory(resolvedRoot, cts.Token).Register(codeThread);
             new SearchFiles(resolvedRoot, cts.Token).Register(codeThread);
+            new FindFiles(resolvedRoot, cts.Token).Register(codeThread);
             new EditFile(resolvedRoot, cts.Token).Register(codeThread);
             new WriteFile(resolvedRoot, cts.Token).Register(codeThread);
+            new DeleteFile(resolvedRoot, cts.Token).Register(codeThread);
+            new MoveFile(resolvedRoot, cts.Token).Register(codeThread);
+            new UpdateTodos(codeThread).Register(codeThread);
         }
 
         LiveCallInfo liveCall = new("Code", threadKey, 0, code.MaxTokens, code.MaxContextTokens, 0);

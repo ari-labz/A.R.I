@@ -180,7 +180,7 @@ internal static class ToolCallParser
             {
                 if (toolName == "write_file" && prop.Name == "content")
                     trimmed[prop.Name] = "[content omitted]";
-                else if (toolName == "edit_file" && prop.Name is "old_string" or "new_string")
+                else if (toolName == "edit_file" && prop.Name is "old_string" or "new_string" or "edits")
                     trimmed[prop.Name] = "[omitted]";
                 else
                     trimmed[prop.Name] = prop.Value.GetRawText();

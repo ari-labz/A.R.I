@@ -30,17 +30,38 @@ const SOURCE_EXTS = new Set([
     ".editorconfig", ".eslintrc", ".prettierrc",
 ])
 
+// Transient FS errors (EACCES/EPERM/EBUSY) can hit a file we just touched — e.g. an antivirus
+// scanner, indexer, or a back-to-back read+write race holding a brief lock. These clear in
+// milliseconds, so retry a few times before giving up rather than surfacing a scary "Permission
+// denied" to the model (which previously made it abandon edit_file and fall back to sed).
+function sleepSync(ms) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+const TRANSIENT = new Set(["EACCES", "EPERM", "EBUSY", "ETXTBSY"])
+function readFileSyncRetry(abs) {
+    for (let attempt = 0; ; attempt++) {
+        try { return fs.readFileSync(abs, "utf8") }
+        catch (e) { if (attempt < 3 && TRANSIENT.has(e.code)) { sleepSync(40 * (attempt + 1)); continue } throw e }
+    }
+}
+function writeFileSyncRetry(abs, data) {
+    for (let attempt = 0; ; attempt++) {
+        try { return fs.writeFileSync(abs, data, "utf8") }
+        catch (e) { if (attempt < 3 && TRANSIENT.has(e.code)) { sleepSync(40 * (attempt + 1)); continue } throw e }
+    }
+}
+
 function readFile(root, filePath) {
     const abs = path.resolve(root, filePath)
     if (!abs.startsWith(path.resolve(root))) throw new Error("Path traversal denied")
-    return fs.readFileSync(abs, "utf8")
+    return readFileSyncRetry(abs)
 }
 
 function writeFile(root, filePath, content) {
     const abs = path.resolve(root, filePath)
     if (!abs.startsWith(path.resolve(root))) throw new Error("Path traversal denied")
     fs.mkdirSync(path.dirname(abs), { recursive: true })
-    fs.writeFileSync(abs, content, "utf8")
+    writeFileSyncRetry(abs, content)
 }
 
 function buildTree(dir, root, results = []) {
@@ -165,87 +186,128 @@ function closestRegionHint(content, old) {
         if (score > bestScore) { bestScore = score; bestStart = w }
     }
 
+    // No region shares any tokens with old_string — pointing at line 1 would be misleading. Tell
+    // the model the text isn't there so it re-reads / searches instead of retrying blindly.
+    if (bestScore <= 0)
+        return " None of the file resembles that old_string — it may have already been changed or never existed. Re-read the file (or search_files for a nearby anchor) before retrying."
+
     const to     = Math.min(cLines.length - 1, bestStart + k - 1)
     const region = cLines.slice(bestStart, to + 1).map((l, i) => `${padLine(bestStart + i + 1)}: ${l}`).join("\n")
     return ` The closest matching region is lines ${bestStart + 1}–${to + 1}:\n\`\`\`\n${region}\n\`\`\`\n` +
            `Copy that text exactly (including indentation) into old_string if it is the code you meant to edit.`
 }
 
-function editFile(root, filePath, oldString, newString) {
-    const abs = path.resolve(root, filePath)
-    if (!abs.startsWith(path.resolve(root))) throw new Error("Path traversal denied")
-    const content = fs.readFileSync(abs, "utf8")
-    if (!oldString) return { ok: false, error: `old_string is empty. Provide the exact text to replace in ${filePath}.` }
-
-    // Match in normalized-LF space (tolerates CRLF/CR + indentation drift); re-emit on the
-    // file's dominant line ending. A looser tier is only accepted when the match is unique.
-    const nl          = content.includes("\r\n") ? "\r\n" : "\n"
-    const norm        = s => s.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
-    const normContent = norm(content)
-    // Strip line-number prefixes the model may have copied from read_file output — independently
-    // for old and new, so we never match against (or write back) a stray "  42: " prefix.
-    const rawOld      = norm(oldString)
-    const rawNew      = norm(newString)
-    const strippedOld = stripLineNumberPrefix(rawOld)
-    const strippedNew = stripLineNumberPrefix(rawNew)
-    const normOld     = strippedOld !== null ? strippedOld : rawOld
-    const normNew     = strippedNew !== null ? strippedNew : rawNew
-    const prefixed    = strippedOld !== null || strippedNew !== null
-
-    let start = -1, len = 0, fuzzy = false
-
-    // Tier 1 — exact substring.
+// Locate `normOld` in normalized-LF `buf`. Tier 1: exact unique substring. Tier 2: leading-
+// whitespace-insensitive contiguous line block. Returns {start, len, fuzzy} or {error}.
+function findMatch(buf, normOld, filePath, label) {
+    // Tier 1 — exact substring (must be unique).
     {
         let c = 0, i = 0, first = -1
-        while ((i = normContent.indexOf(normOld, i)) !== -1) { if (first < 0) first = i; c++; i += normOld.length }
-        if (c > 1) return { ok: false, error: `old_string matches ${c} locations in ${filePath}. Add more surrounding context to make it unique.` }
-        if (c === 1) { start = first; len = normOld.length }
+        while ((i = buf.indexOf(normOld, i)) !== -1) { if (first < 0) first = i; c++; i += normOld.length }
+        if (c > 1) return { error: `old_string matches ${c} locations in ${filePath}${label}. Add more surrounding context to make it unique, or set replace_all to change them all.` }
+        if (c === 1) return { start: first, len: normOld.length, fuzzy: false }
     }
-
     // Tier 2 — leading-whitespace-insensitive, contiguous line-block match.
-    if (start < 0) {
-        const cLines = normContent.split("\n")
-        const oLines = normOld.split("\n")
-        const oTrim  = oLines.map(l => l.trimStart())
-        const k      = oLines.length
-        if (k <= cLines.length) {
-            let matchStart = -1, matches = 0
-            for (let w = 0; w + k <= cLines.length; w++) {
-                let all = true
-                for (let i = 0; i < k; i++) if (cLines[w + i].trimStart() !== oTrim[i]) { all = false; break }
-                if (all) { matches++; if (matchStart < 0) matchStart = w }
-            }
-            if (matches > 1) return { ok: false, error: `old_string matches ${matches} locations in ${filePath} (ignoring indentation). Add more surrounding context to make it unique.` }
-            if (matches === 1) {
-                start = 0
-                for (let i = 0; i < matchStart; i++) start += cLines[i].length + 1
-                len = 0
-                for (let i = 0; i < k; i++) len += cLines[matchStart + i].length + (i < k - 1 ? 1 : 0)
-                fuzzy = true
-            }
+    const cLines = buf.split("\n")
+    const oLines = normOld.split("\n")
+    const oTrim  = oLines.map(l => l.trimStart())
+    const k      = oLines.length
+    if (k <= cLines.length) {
+        let matchStart = -1, matches = 0
+        for (let w = 0; w + k <= cLines.length; w++) {
+            let all = true
+            for (let i = 0; i < k; i++) if (cLines[w + i].trimStart() !== oTrim[i]) { all = false; break }
+            if (all) { matches++; if (matchStart < 0) matchStart = w }
+        }
+        if (matches > 1) return { error: `old_string matches ${matches} locations in ${filePath}${label} (ignoring indentation). Add more surrounding context to make it unique.` }
+        if (matches === 1) {
+            let start = 0
+            for (let i = 0; i < matchStart; i++) start += cLines[i].length + 1
+            let len = 0
+            for (let i = 0; i < k; i++) len += cLines[matchStart + i].length + (i < k - 1 ? 1 : 0)
+            return { start, len, fuzzy: true }
         }
     }
+    return { error: `old_string not found in ${filePath}${label}. No changes made.${closestRegionHint(buf, normOld)}` }
+}
 
-    if (start < 0)
-        return { ok: false, error: `old_string not found in ${filePath}. No changes made.${closestRegionHint(normContent, normOld)}` }
+// Targeted find-and-replace. Supports a single old/new pair OR a MultiEdit-style batch via
+// options.edits (each {old_string, new_string, replace_all}). Batched edits are applied
+// sequentially against ONE in-memory buffer, so the line shifts from earlier edits never
+// invalidate later ones — the whole set lands in a single read + single write.
+function editFile(root, filePath, oldString, newString, options = {}) {
+    const abs = path.resolve(root, filePath)
+    if (!abs.startsWith(path.resolve(root))) throw new Error("Path traversal denied")
+    const content = readFileSyncRetry(abs)
 
-    const updated = normContent.slice(0, start) + normNew + normContent.slice(start + len)
-    fs.writeFileSync(abs, updated.split("\n").join(nl), "utf8")
+    const edits = Array.isArray(options.edits) && options.edits.length > 0
+        ? options.edits.map(e => ({ old: e.old_string, new: e.new_string ?? "", all: !!e.replace_all }))
+        : [{ old: oldString, new: newString ?? "", all: !!options.replaceAll }]
 
-    // Return a numbered snippet around the edit so the model has current context without re-reading.
-    const editLine = normContent.slice(0, start).split("\n").length - 1
-    const uLines   = updated.split("\n")
-    const newCount = normNew.length === 0 ? 1 : normNew.split("\n").length
+    const nl   = content.includes("\r\n") ? "\r\n" : "\n"
+    const norm = s => String(s).replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+    let buf = norm(content)
+
+    let anyFuzzy = false, anyPrefixed = false, replacements = 0, firstStart = -1, firstNewLen = 0
+    for (let idx = 0; idx < edits.length; idx++) {
+        const ed    = edits[idx]
+        const label = edits.length > 1 ? ` (edit ${idx + 1} of ${edits.length})` : ""
+        if (!ed.old) return { ok: false, error: `old_string is empty${label}. Provide the exact text to replace in ${filePath}.` }
+
+        // Strip line-number prefixes the model may have copied from read_file output, independently
+        // for old and new, so we never match against (or write back) a stray "  42: " prefix.
+        const rawOld = norm(ed.old)
+        const rawNew = norm(ed.new)
+        const sOld   = stripLineNumberPrefix(rawOld)
+        const sNew   = stripLineNumberPrefix(rawNew)
+        const normOld = sOld !== null ? sOld : rawOld
+        const normNew = sNew !== null ? sNew : rawNew
+        if (sOld !== null || sNew !== null) anyPrefixed = true
+
+        if (ed.all) {
+            if (!buf.includes(normOld))
+                return { ok: false, error: `old_string not found in ${filePath}${label}. No changes made.${closestRegionHint(buf, normOld)}` }
+            const at    = buf.indexOf(normOld)
+            const count = buf.split(normOld).length - 1
+            buf = buf.split(normOld).join(normNew)
+            replacements += count
+            if (firstStart < 0) { firstStart = at; firstNewLen = normNew.length }
+            continue
+        }
+
+        const m = findMatch(buf, normOld, filePath, label)
+        if (m.error) return { ok: false, error: m.error }
+        buf = buf.slice(0, m.start) + normNew + buf.slice(m.start + m.len)
+        if (m.fuzzy) anyFuzzy = true
+        replacements++
+        if (firstStart < 0) { firstStart = m.start; firstNewLen = normNew.length }
+    }
+
+    writeFileSyncRetry(abs, buf.split("\n").join(nl))
+
+    const uLines = buf.split("\n")
+    const tags   = []
+    if (anyPrefixed) tags.push("stripped line-number prefixes")
+    if (anyFuzzy)    tags.push("matched ignoring indentation/line-ending differences")
+    const note   = tags.length ? ` (${tags.join("; ")})` : ""
+
+    // Multi-edit: report a summary (per-edit snippets would be misaligned after splicing).
+    if (edits.length > 1)
+        return {
+            ok: true,
+            message: `Successfully edited ${filePath}.${note} Applied ${edits.length} edits (${replacements} replacements). File is now ${uLines.length} lines.`
+        }
+
+    // Single edit: return a numbered snippet around the change so the model has current context.
+    const editLine = buf.slice(0, firstStart).split("\n").length - 1
+    const newCount = firstNewLen === 0 ? 1 : buf.slice(firstStart, firstStart + firstNewLen).split("\n").length
     const from     = Math.max(0, editLine - 5)
     const to       = Math.min(uLines.length - 1, editLine + newCount + 4)
     const snippet  = uLines.slice(from, to + 1).map((l, i) => `${padLine(from + i + 1)}: ${l}`).join("\n")
-    const tags     = []
-    if (prefixed) tags.push("stripped line-number prefixes")
-    if (fuzzy)    tags.push("matched ignoring indentation/line-ending differences")
-    const note     = tags.length ? ` (${tags.join("; ")})` : ""
+    const replNote = replacements > 1 ? ` (${replacements} occurrences replaced)` : ""
     return {
         ok: true,
-        message: `Successfully edited ${filePath}.${note} File is now ${uLines.length} lines.\n\n` +
+        message: `Successfully edited ${filePath}.${note}${replNote} File is now ${uLines.length} lines.\n\n` +
                  `[Updated context — lines ${from + 1}–${to + 1}]\n\`\`\`\n${snippet}\n\`\`\``
     }
 }
@@ -268,4 +330,54 @@ function runCommand(root, command, timeoutMs = 120000) {
     })
 }
 
-module.exports = { readFile, writeFile, getFileTree, listDirectory, searchFiles, editFile, runCommand }
+function globToRegex(glob) {
+    let re = "^"
+    for (let i = 0; i < glob.length; i++) {
+        const c = glob[i]
+        if (c === "*") { if (glob[i + 1] === "*") { re += ".*"; i++ } else re += "[^/]*" }
+        else if (c === "?") re += "[^/]"
+        else if (".()+|^$\\{}[]".includes(c)) re += "\\" + c
+        else re += c
+    }
+    return new RegExp(re + "$", "i")
+}
+
+// Find files by name/glob. Reuses buildTree (source-file filter + ignore list); matches the glob
+// against both the relative path and the bare filename. Capped at 200 results.
+function findFiles(root, pattern, searchPath) {
+    const absRoot = path.resolve(root)
+    const base    = searchPath ? path.resolve(root, searchPath) : absRoot
+    if (!base.startsWith(absRoot)) throw new Error("Path traversal denied")
+    const rx = globToRegex(pattern)
+    const results = []
+    for (const rel of buildTree(base, absRoot)) {
+        const name = rel.split("/").pop()
+        if (rx.test(rel) || rx.test(name)) {
+            results.push(rel)
+            if (results.length >= 200) break
+        }
+    }
+    return results.sort()
+}
+
+function deleteFile(root, filePath) {
+    const abs = path.resolve(root, filePath)
+    if (!abs.startsWith(path.resolve(root))) throw new Error("Path traversal denied")
+    if (!fs.existsSync(abs)) return { ok: false, error: `File not found: ${filePath}` }
+    fs.rmSync(abs, { force: false })
+    return { ok: true }
+}
+
+function moveFile(root, source, destination) {
+    const absRoot = path.resolve(root)
+    const absSrc  = path.resolve(root, source)
+    const absDst  = path.resolve(root, destination)
+    if (!absSrc.startsWith(absRoot) || !absDst.startsWith(absRoot)) throw new Error("Path traversal denied")
+    if (!fs.existsSync(absSrc)) return { ok: false, error: `Source not found: ${source}` }
+    if (fs.existsSync(absDst))  return { ok: false, error: `Destination already exists: ${destination}` }
+    fs.mkdirSync(path.dirname(absDst), { recursive: true })
+    fs.renameSync(absSrc, absDst)
+    return { ok: true }
+}
+
+module.exports = { readFile, writeFile, getFileTree, listDirectory, searchFiles, editFile, runCommand, findFiles, deleteFile, moveFile }

@@ -59,7 +59,8 @@ public static class ClientWebSocket
     }
 
     private static readonly string[] ClientToolNames =
-        { "read_file", "list_directory", "search_files", "edit_file", "write_file", "run_command" };
+        { "read_file", "list_directory", "search_files", "find_files", "edit_file", "write_file",
+          "delete_file", "move_file", "run_command", "update_todos" };
 
     private static void RegisterTools(ARI.LLM.Thread thread, WebSocket ws, ILogger log)
     {
@@ -170,6 +171,42 @@ public static class ClientWebSocket
                 }
                 catch { return "<!--ari-tool-end:write_file:file-->"; }
             });
+
+        RegisterTool(thread, ws, log,
+            name: "find_files",
+            description: "Find files by name with a glob pattern, e.g. '*.cs', 'Token*.cs', or '**/Security/*.cs'. Returns paths relative to the project root. Use search_files to match file contents.",
+            parameters: new { type = "object", properties = new { pattern = new { type = "string", description = "Glob pattern, e.g. '*.cs' or '**/Token*.cs'." }, path = new { type = "string", description = "Directory to search under, relative to project root. Defaults to root." } }, required = new[] { "pattern" } },
+            displayVerb: "Finding", displayDoneVerb: "Found",
+            labelField: "pattern");
+
+        RegisterTool(thread, ws, log,
+            name: "delete_file",
+            description: "Delete a file from the project. Use only when explicitly required (e.g. removing a file after merging its contents elsewhere). The user is asked to confirm before the deletion happens.",
+            parameters: new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root." } }, required = new[] { "path" } },
+            displayVerb: "Deleting", displayDoneVerb: "Deleted",
+            labelField: "path");
+
+        RegisterTool(thread, ws, log,
+            name: "move_file",
+            description: "Move or rename a file within the project. Creates destination directories as needed. Fails if the destination already exists.",
+            parameters: new { type = "object", properties = new { source = new { type = "string", description = "Current file path relative to project root." }, destination = new { type = "string", description = "New file path relative to project root." } }, required = new[] { "source", "destination" } },
+            displayVerb: "Moving", displayDoneVerb: "Moved",
+            labelField: "source");
+
+        // The checklist lives on the thread and must execute IN-PROCESS — never round-trip to the client.
+        thread.RegisterTodosTool();
+    }
+
+    /// <summary>Compact, capped project map injected as persistent context so the model orients fast.</summary>
+    private static string BuildProjectMap(List<string> files)
+    {
+        if (files.Count == 0) return "";
+        const int CAP = 200;
+        var sorted = files.OrderBy(f => f, StringComparer.OrdinalIgnoreCase).Take(CAP);
+        string body = string.Join("\n", sorted);
+        if (files.Count > CAP)
+            body += $"\n... ({files.Count - CAP} more — use find_files / list_directory to explore)";
+        return $"The project contains {files.Count} source files:\n{body}";
     }
 
     /// <summary>Builds a tool card marker for run_command, sanitising the command for the marker grammar.</summary>
@@ -415,6 +452,19 @@ public static class ClientWebSocket
                                     RegisterTools(codeThread, ws, log);
                                     threadKey = bindKey;
                                 }
+                            }
+
+                            // Persistent context for the Code agent: a project map, plus any
+                            // global coding conventions / per-project rules the client sends.
+                            codeThread.ProjectMap = BuildProjectMap(fileTree);
+                            // Global coding conventions come from the backend store (edited in the
+                            // control panel); project rules come from the project's instructions.
+                            string conventions = ConventionsStore.Get();
+                            codeThread.CodingConventions = string.IsNullOrWhiteSpace(conventions) ? null : conventions.Trim();
+                            if (doc.RootElement.TryGetProperty("projectRules", out var prEl))
+                            {
+                                string pr = prEl.GetString() ?? "";
+                                codeThread.ProjectRules = string.IsNullOrWhiteSpace(pr) ? null : pr.Trim();
                             }
 
                             log.LogInformation("[Client] Tree received: {Count} files, bound to thread {Key}", fileTree.Count, threadKey);

@@ -213,6 +213,7 @@ html, body {
       <div id="cp-sidebar-nav">
         <div class="cp-nav-item active" data-tab="overview">Overview</div>
         <div class="cp-nav-item" data-tab="voice">Voice Synthesis</div>
+        <div class="cp-nav-item" data-tab="conventions">Coding Conventions</div>
       </div>
     </div>
   </aside>
@@ -279,6 +280,22 @@ html, body {
     </div>
 
     <!-- Overview tab -->
+    <!-- Coding Conventions tab -->
+    <div id="tab-conventions" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div class="vs-section">
+        <div class="vs-section-title">Coding Conventions</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
+          A global rulebook given to the Code agent at the start of every coding thread. Use it for
+          house style, preferred patterns, and things the agent should always (or never) do.
+        </p>
+        <textarea id="cv-text" class="vs-input" style="width:100%;min-height:340px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;line-height:1.5;resize:vertical;" placeholder="e.g.&#10;- Prefer records over classes for DTOs.&#10;- Never catch and swallow exceptions silently.&#10;- Match the existing file's brace and indentation style."></textarea>
+        <div style="display:flex;align-items:center;gap:12px;margin-top:12px;">
+          <button class="vs-btn-primary" id="cv-save-btn" type="button">Save conventions</button>
+          <span id="cv-status" style="font-size:12px;color:var(--text-dim);"></span>
+        </div>
+      </div>
+    </div>
+
     <div id="tab-overview" class="cp-tab">
       <div id="cp-grid-wrap">
         <div class="grid-stack">
@@ -316,17 +333,45 @@ html, body {
 // ── tab switching ─────────────────────────────────────────
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), voice: document.getElementById('tab-voice') };
+const tabs     = { overview: document.getElementById('tab-overview'), voice: document.getElementById('tab-voice'), conventions: document.getElementById('tab-conventions') };
+const TAB_TITLES = { voice: 'Voice Synthesis', conventions: 'Coding Conventions', overview: 'Overview' };
 
 function switchTab(name) {
     navItems.forEach(n => n.classList.toggle('active', n.dataset.tab === name));
     Object.entries(tabs).forEach(([k, el]) => { if (el) el.style.display = k === name ? '' : 'none'; });
-    cpTitle.textContent = name === 'voice' ? 'Voice Synthesis' : 'Overview';
+    cpTitle.textContent = TAB_TITLES[name] || 'Overview';
     const gw = document.getElementById('cp-grid-wrap');
     if (gw) gw.style.display = name === 'overview' ? '' : 'none';
+    if (name === 'conventions') loadConventions();
 }
 navItems.forEach(n => n.addEventListener('click', () => switchTab(n.dataset.tab)));
 switchTab('overview');
+
+// ── coding conventions ────────────────────────────────────
+let conventionsLoaded = false;
+async function loadConventions() {
+    if (conventionsLoaded) return;
+    try {
+        const r = await fetch('/api/cp/conventions');
+        const d = await r.json();
+        document.getElementById('cv-text').value = d.text || '';
+        conventionsLoaded = true;
+    } catch { document.getElementById('cv-status').textContent = 'Failed to load.'; }
+}
+document.getElementById('cv-save-btn').addEventListener('click', async () => {
+    const status = document.getElementById('cv-status');
+    const text   = document.getElementById('cv-text').value;
+    status.textContent = 'Saving…';
+    try {
+        await fetch('/api/cp/conventions', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ text }),
+        });
+        status.textContent = 'Saved — applies to new coding threads.';
+        setTimeout(() => { status.textContent = ''; }, 4000);
+    } catch { status.textContent = 'Save failed.'; }
+});
 
 // ── sidebar toggle ────────────────────────────────────────
 const sidebar  = document.getElementById('sidebar');
