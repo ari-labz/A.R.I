@@ -64,6 +64,16 @@ public class ControlPanelApiController(LlmServiceHolder holder, WebPanelConfig c
         }
     }
 
+    [HttpGet("conventions")]
+    public IActionResult GetConventions() => Ok(new { text = ConventionsStore.Get() });
+
+    [HttpPost("conventions")]
+    public IActionResult SetConventions([FromBody] ConventionsRequest req)
+    {
+        ConventionsStore.Set(req.Text ?? "");
+        return Ok(new { ok = true });
+    }
+
     [HttpGet("ram")]
     public IActionResult GetRam()
     {
@@ -473,6 +483,8 @@ public class VoiceController(
         return Ok(new { models });
     }
 }
+
+public record ConventionsRequest(string? Text);
 
 public record TrainRequest(
     string ModelName,

@@ -23,6 +23,9 @@ public class Thread
     private const double  MIN_P                    = 0.05;  // cut the low-probability tail that derails tool-call JSON
     private const double  REPEAT_PENALTY           = 1.0;
     private const double  TOKEN_WARNING_RATIO      = 0.8;
+    private const double  COMPACT_RATIO            = 0.6;  // compact tool output once context exceeds this fraction of the window
+    private const int     COMPACT_KEEP_RECENT      = 6;    // most-recent tool results always kept full
+    private const int     MAX_DEGRADE_EVENTS       = 5;    // tool-format failures per turn before aborting to avoid a spiral
     private const string  ATTACHMENT_DIVIDER       = "-------------------";
 
     private readonly string     threadKey;
@@ -88,6 +91,18 @@ public class Thread
 
     internal string? PlatformContext { get; init; }
 
+    // ── Persistent context ───────────────────────────────────────────────────────
+    // Always-on blocks injected into the system message every Send, separate from the
+    // sliding chat-history window. Set externally (conventions / project rules / map) or
+    // maintained internally (the task checklist). Null/empty blocks are skipped.
+    public string? CodingConventions { get; set; }
+    public string? ProjectRules      { get; set; }
+    public string? ProjectMap        { get; set; }
+
+    public readonly record struct TodoItem(string Content, string Status);
+    private readonly List<TodoItem> todos = new();
+    public IReadOnlyList<TodoItem> Todos => todos;
+
     internal event Action? Updated;
     internal event Action? BufferFull;
     internal event Action<string, string>? ExchangeCompleted;
@@ -111,6 +126,71 @@ public class Thread
 
     public void UnregisterTool(string name)
         => tools.Remove(name);
+
+    /// <summary>Registers the in-process task-checklist tool on this thread. Exposed so the API layer
+    /// can wire it up without referencing the internal tool type.</summary>
+    public void RegisterTodosTool()
+        => new UpdateTodos(this).Register(this);
+
+    // ── Persistent context ───────────────────────────────────────────────────────
+
+    /// <summary>Assembles the static always-on blocks (conventions, project rules, map). The live
+    /// task checklist is injected separately each loop iteration since it changes mid-turn.</summary>
+    internal string BuildStaticContext()
+    {
+        StringBuilder sb = new();
+        void Block(string title, string? body)
+        {
+            if (string.IsNullOrWhiteSpace(body)) return;
+            sb.Append("\n\n").Append(title).Append('\n').Append(body.Trim());
+        }
+        Block("## Coding conventions", CodingConventions);
+        Block("## Project rules",      ProjectRules);
+        Block("## Project map",        ProjectMap);
+        return sb.ToString();
+    }
+
+    /// <summary>Renders the current checklist as a markdown block, or empty when there are none.</summary>
+    internal string RenderTodoBlock()
+    {
+        if (todos.Count == 0) return "";
+        StringBuilder sb = new("\n\n## Task checklist (keep current with update_todos)\n");
+        foreach (TodoItem t in todos)
+        {
+            string box = t.Status switch { "completed" => "[x]", "in_progress" => "[~]", _ => "[ ]" };
+            sb.Append(box).Append(' ').Append(t.Content).Append('\n');
+        }
+        return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>Replaces the whole checklist from an update_todos tool-call payload. Returns a
+    /// short confirmation for the model. Runs in-process (never round-trips to the client).</summary>
+    internal string ReplaceTodos(string argsJson)
+    {
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            todos.Clear();
+            if (doc.RootElement.TryGetProperty("todos", out JsonElement arr) && arr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (JsonElement el in arr.EnumerateArray())
+                {
+                    string content = el.TryGetProperty("content", out JsonElement c) ? c.GetString() ?? "" : "";
+                    string status  = el.TryGetProperty("status",  out JsonElement s) ? s.GetString() ?? "pending" : "pending";
+                    if (status is not ("pending" or "in_progress" or "completed")) status = "pending";
+                    if (!string.IsNullOrWhiteSpace(content)) todos.Add(new TodoItem(content.Trim(), status));
+                }
+            }
+            Updated?.Invoke();
+            int done = todos.Count(t => t.Status == "completed");
+            string body = RenderTodoBlock();
+            return $"Checklist updated — {done}/{todos.Count} complete.{(body.Length > 0 ? "\n" + body : "")}";
+        }
+        catch (Exception ex) { return $"Error updating checklist: {ex.Message}"; }
+    }
+
+    /// <summary>Count of checklist items not yet completed (used by the finish-time reminder).</summary>
+    internal int IncompleteTodoCount() => todos.Count(t => t.Status != "completed");
 
     // ── History ─────────────────────────────────────────────────────────────────
 
@@ -372,13 +452,16 @@ public class Thread
         if (augmentedPrompt is not null && collapsed.Count > 0)
             collapsed[^1] = collapsed[^1] with { Content = augmentedPrompt };
 
-        string systemContent = PlatformContext is null
+        // Base (static) system content: agent prompt + platform context + always-on persistent
+        // blocks (conventions / project rules / map). The live task checklist is appended per
+        // iteration inside the loop because it changes mid-turn.
+        string baseSystem = PlatformContext is null
             ? agent.SystemPrompt
             : $"{agent.SystemPrompt}\n\n{PlatformContext}";
-        if (!agent.Think)
-            systemContent = $"{systemContent}\n<|think_off|>";
+        baseSystem += BuildStaticContext();
+        string thinkSuffix = agent.Think ? "" : "\n<|think_off|>";
 
-        List<object> messages = new List<object> { new { role = "system", content = systemContent } };
+        List<object> messages = new List<object> { new { role = "system", content = baseSystem + thinkSuffix } };
 
         for (int i = 0; i < collapsed.Count - 1; i++)
         {
@@ -476,6 +559,30 @@ public class Thread
         // spiral (the model distrusts its own successful write and regenerates the whole file).
         Dictionary<string, int> writeCounts = new(StringComparer.OrdinalIgnoreCase);
         bool                    forceNoMoreTools = false;
+        // Files edited in the CURRENT batch of tool calls (cleared each iteration). A second edit
+        // to the same file within one batch is rejected because its old_string was written against
+        // pre-edit content and would fail or corrupt the file.
+        HashSet<string>         editedPathsThisBatch = new(StringComparer.OrdinalIgnoreCase);
+        // Caps the finish-time "you have incomplete checklist items" reminders so we can't loop forever.
+        int                     todoReminders = 0;
+        // Distinct files the model has edited/written this turn, and a one-shot flag for the
+        // checklist nudge: the moment a SECOND distinct file is touched with no checklist, we force
+        // the model to call update_todos first. Single-file tasks never trip it.
+        HashSet<string>         turnEditPaths = new(StringComparer.OrdinalIgnoreCase);
+        bool                    todoNudged = false;
+        // Slots (message index + id + name) of every real tool-result message this turn, oldest first,
+        // so context compaction can stub the oldest outputs when the window fills.
+        List<(int Index, string CallId, string Name)> toolResultSlots = new();
+        // Cumulative tool-format failures this turn (fallbacks, arg repairs, parse-failure 500s).
+        // Unlike consecutiveFallbacks this never resets, so a spiral of interspersed failures still
+        // trips the backstop. Degrade() increments it and aborts cleanly past MAX_DEGRADE_EVENTS.
+        int                     degradeEvents = 0;
+        void Degrade()
+        {
+            if (++degradeEvents >= MAX_DEGRADE_EVENTS)
+                throw new LlmRequestFailedException(
+                    $"Tool-call formatting failed {degradeEvents} times this turn — stopping to avoid a spiral. Any changes already applied are kept.");
+        }
         // Context hygiene: tracks the messages-array slot holding the most recent read_file result
         // for each file this turn, so an earlier copy can be stubbed when the file is re-read or
         // changed. Keeps exactly one live copy of any file and drops outdated snapshots entirely.
@@ -516,6 +623,15 @@ public class Thread
 
         while (true)
         {
+            // Refresh the system message with the current checklist (it changes mid-turn as the
+            // model calls update_todos). messages[0] is always the system message.
+            messages[0] = new { role = "system", content = baseSystem + RenderTodoBlock() + thinkSuffix };
+
+            // Compaction: bound context growth by stubbing the oldest tool outputs once the message
+            // array exceeds COMPACT_RATIO of the window. Keeps the system/persistent blocks, user
+            // messages, and the most recent tool results intact — only old, re-derivable output is dropped.
+            CompactToolOutput(messages, toolResultSlots, agent.MaxContextTokens);
+
             bool      toolsExhausted = forceNoMoreTools || (agent.MaxToolCalls > 0 && toolCallCount >= agent.MaxToolCalls);
             object[]? toolSchemas    = !toolsExhausted && tools.Count > 0
                                         ? tools.Values.Select(t => t.Schema).ToArray()
@@ -576,6 +692,7 @@ public class Thread
                     && errBody.Contains("Failed to parse tool call arguments", StringComparison.OrdinalIgnoreCase))
                 {
                     parseFailures++;
+                    Degrade();
                     if (parseFailures > 2)
                         throw new LlmRequestFailedException($"Tool call JSON parse failed {parseFailures} times in a row — aborting to prevent infinite loop.");
 
@@ -748,6 +865,7 @@ public class Thread
                 if (rawResponse.Contains("<|tool_code_start|>") || rawResponse.Contains("<|tool_call|>"))
                 {
                     consecutiveFallbacks++;
+                    Degrade();
                     if (consecutiveFallbacks > 3)
                         throw new LlmRequestFailedException($"Model stuck in tool_code_start fallback loop ({consecutiveFallbacks} consecutive) — aborting.");
                     Common.Logger.LogWarning("[{Agent}] ({Thread}) model used <|tool_code_start|> format — cannot parse, injecting correction.", agent.Name, threadKey);
@@ -761,6 +879,7 @@ public class Thread
                 if (textCalls is not null)
                 {
                     consecutiveFallbacks++;
+                    Degrade();
                     if (consecutiveFallbacks > 3)
                         throw new LlmRequestFailedException($"Model stuck in text tool call fallback loop ({consecutiveFallbacks} consecutive) — aborting.");
                     Common.Logger.LogWarning("[{Agent}] ({Thread}) model used text tool call format — parsing fallback.", agent.Name, threadKey);
@@ -779,6 +898,7 @@ public class Thread
                     if (xml is not null)
                     {
                         consecutiveFallbacks++;
+                        Degrade();
                         if (consecutiveFallbacks > 3)
                             throw new LlmRequestFailedException($"Model stuck in XML tool call fallback loop ({consecutiveFallbacks} consecutive) — aborting.");
                         Common.Logger.LogWarning("[{Agent}] ({Thread}) model used Qwen3 XML tool call format — parsing fallback.", agent.Name, threadKey);
@@ -853,6 +973,19 @@ public class Thread
                     ? new StringBuilder("Here are the results of the tool calls you made:\n\n")
                     : null;
 
+                editedPathsThisBatch.Clear();
+
+                // Parallelism: kick off independent read-only tool executions concurrently. The loop
+                // below still processes every call in order — only the I/O overlaps — so all guards,
+                // eviction and message ordering stay exactly sequential. Mutating tools run inline.
+                HashSet<string> readOnlyTools = new(StringComparer.OrdinalIgnoreCase)
+                    { "read_file", "search_files", "list_directory", "find_files" };
+                Dictionary<int, Task<string>> prelaunched = new();
+                if (pendingCalls.Count > 1)
+                    foreach (var (idx, c) in pendingCalls)
+                        if (readOnlyTools.Contains(c.Name) && tools.TryGetValue(c.Name, out var roTool))
+                            prelaunched[idx] = roTool.Execute(c.Args.ToString());
+
                 foreach (var (callIndex, call) in pendingCalls)
                 {
                     string result;
@@ -887,6 +1020,92 @@ public class Thread
                         catch { /* ignore — proceed normally */ }
                     }
 
+                    // One-edit-per-file-per-batch guard: a second edit to the same file in one batch
+                    // was written against the file's pre-edit-#1 content, so reject it and make the
+                    // model re-read before editing again (next iteration). Different files still run.
+                    if (call.Name == "edit_file")
+                    {
+                        string? editPath = null;
+                        try
+                        {
+                            using JsonDocument edoc = JsonDocument.Parse(call.Args.ToString());
+                            editPath = (edoc.RootElement.GetProperty("path").GetString() ?? "").Trim('"', '\'', ' ', '\\');
+                        }
+                        catch { /* unparseable — fall through to normal handling/error */ }
+
+                        if (!string.IsNullOrEmpty(editPath))
+                        {
+                            if (editedPathsThisBatch.Contains(editPath))
+                            {
+                                result = $"[System: edit_file was already applied to {editPath} earlier in this same batch of tool calls. This second edit was NOT applied — its old_string was written against the file's previous content and would fail or corrupt it. Re-read {editPath}, then make the next edit.]";
+                                string skipLabel = System.IO.Path.GetFileName(editPath);
+                                contentBuilder.Append($"<!--ari-tool-error:edit_file:{skipLabel}:{ToolCallParser.EscapeLabel(result)}-->");
+                                if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                                if (isXmlFallback)
+                                {
+                                    xmlResultsMsg!.AppendLine($"--- {call.Name} ---");
+                                    xmlResultsMsg.AppendLine(result);
+                                    xmlResultsMsg.AppendLine();
+                                }
+                                else
+                                {
+                                    messages.Add(new { role = "tool", tool_call_id = call.Id, name = call.Name, content = result });
+                                    if (liveCallInfo is { } lc) lc.EstimatedInputTokens += result.Length / CHARS_PER_TOKEN;
+                                }
+                                continue;
+                            }
+                            editedPathsThisBatch.Add(editPath);
+                        }
+                    }
+
+                    // One-time checklist nudge: when the model begins changing a SECOND distinct file
+                    // with no checklist, require a plan first. This is the mechanical backstop for a
+                    // model that ignores the prose rule to call update_todos on multi-file work.
+                    if (!todoNudged && todos.Count == 0 && call.Name is "edit_file" or "write_file")
+                    {
+                        string? tp = null;
+                        try
+                        {
+                            using JsonDocument tdoc = JsonDocument.Parse(call.Args.ToString());
+                            tp = (tdoc.RootElement.GetProperty("path").GetString() ?? "").Trim('"', '\'', ' ', '\\');
+                        }
+                        catch { /* unparseable — skip the nudge, let normal handling report the error */ }
+
+                        if (!string.IsNullOrEmpty(tp) && turnEditPaths.Count >= 1 && !turnEditPaths.Contains(tp))
+                        {
+                            todoNudged = true;
+                            result = $"[System: You are now changing a second file ({tp}) but have no task checklist. Before this edit, call update_todos with the full plan — one item per file/change, and include updating call sites, tests, and building as their own items. Then make this edit. Maintaining the checklist is required for multi-file work.]";
+                            string nudgeLabel = System.IO.Path.GetFileName(tp);
+                            contentBuilder.Append($"<!--ari-tool-error:{call.Name}:{nudgeLabel}:{ToolCallParser.EscapeLabel(result)}-->");
+                            if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                            if (isXmlFallback)
+                            {
+                                xmlResultsMsg!.AppendLine($"--- {call.Name} ---");
+                                xmlResultsMsg.AppendLine(result);
+                                xmlResultsMsg.AppendLine();
+                            }
+                            else
+                            {
+                                messages.Add(new { role = "tool", tool_call_id = call.Id, name = call.Name, content = result });
+                                if (liveCallInfo is { } lc) lc.EstimatedInputTokens += result.Length / CHARS_PER_TOKEN;
+                            }
+                            continue;
+                        }
+                        if (!string.IsNullOrEmpty(tp)) turnEditPaths.Add(tp);
+                    }
+                    else if (call.Name is "edit_file" or "write_file")
+                    {
+                        // Checklist exists (or already nudged): still record the file so the nudge's
+                        // "second distinct file" trigger stays accurate if todos are later cleared.
+                        try
+                        {
+                            using JsonDocument tdoc = JsonDocument.Parse(call.Args.ToString());
+                            string tp = (tdoc.RootElement.GetProperty("path").GetString() ?? "").Trim('"', '\'', ' ', '\\');
+                            if (!string.IsNullOrEmpty(tp)) turnEditPaths.Add(tp);
+                        }
+                        catch { /* ignore */ }
+                    }
+
                     if (tools.TryGetValue(call.Name, out var tool))
                     {
                         if (tool.Display is not null)
@@ -899,7 +1118,10 @@ public class Thread
                                 contentBuilder.Append(finalMarker);
                             if (onDelta is not null) await onDelta(contentBuilder.ToString());
                         }
-                        result = await tool.Execute(call.Args.ToString());
+                        // Use the pre-launched (concurrent) result for read-only tools; otherwise run now.
+                        result = prelaunched.TryGetValue(callIndex, out Task<string>? pre)
+                            ? await pre
+                            : await tool.Execute(call.Args.ToString());
 
                         // Track edits and enrich stale old_string errors with a re-read hint.
                         if (call.Name == "edit_file")
@@ -910,22 +1132,27 @@ public class Thread
                                 string editPath = (argDoc.RootElement.GetProperty("path").GetString() ?? "").Trim('"', '\'', ' ');
                                 // Contains (not StartsWith): the web-panel path wraps errors as
                                 // "[Error: old_string not found ...]", so StartsWith would miss them.
-                                bool edited   = result.Contains("Successfully edited");
-                                bool notFound = result.Contains("old_string not found");
+                                // Any non-success outcome counts as a failure — not just
+                                // old_string-not-found, but also permission/IO errors. (A transient
+                                // permission error forcing the model onto sed/grep is exactly what
+                                // collapsed an earlier run, so we steer it back to read+write here.)
+                                bool edited = result.Contains("Successfully edited");
                                 if (edited)
                                 {
                                     editedFiles.Add(editPath);
                                     editFailStreak.Remove(editPath);
                                 }
-                                else if (notFound)
+                                else
                                 {
                                     editFailStreak.TryGetValue(editPath, out int streak);
                                     editFailStreak[editPath] = ++streak;
 
                                     if (editedFiles.Contains(editPath))
                                         result += " This file was already edited earlier this turn — re-read it to see the current content before retrying.";
+                                    if (streak >= 2)
+                                        result += " Re-read the file before trying again. To change several places at once, make ONE edit_file call with an 'edits' array (each {old_string, new_string}) rather than many separate calls — or rewrite the whole file with write_file. Do NOT use run_command with sed/grep to edit files.";
                                     if (streak >= 3)
-                                        result += $" edit_file has now failed {streak} times on this file. Re-read it, then make ONE edit with a larger exact block copied verbatim from the read output. Only if the change is too extensive for one edit, use write_file ONCE with the complete corrected file — then stop; do not write the same file repeatedly.";
+                                        result += $" edit_file has now failed {streak} times on this file. Re-read it, then make ONE edit with a larger exact block copied verbatim from the read output, or use write_file ONCE with the complete corrected file — then stop; do not write the same file repeatedly.";
                                     if (streak >= 5)
                                     {
                                         // Hard stop the spiral: deny further tool calls so the next turn
@@ -1002,6 +1229,7 @@ public class Thread
                     {
                         int addedIndex = messages.Count;
                         messages.Add(new { role = "tool", tool_call_id = call.Id, name = call.Name, content = result });
+                        toolResultSlots.Add((addedIndex, call.Id, call.Name));
                         if (liveCallInfo is { } lc) lc.EstimatedInputTokens += result.Length / CHARS_PER_TOKEN;
 
                         // Keep only the newest snapshot of any file in context.
@@ -1062,6 +1290,22 @@ public class Thread
                     messages.Add(new { role = "user", content = correctionHint });
                 }
 
+                continue;
+            }
+
+            // Finish-time checklist guard: if the model is about to stop while checklist items are
+            // still incomplete, remind it (capped) before letting it finish — stops dropped sub-tasks.
+            bool toolsStillAvailable = !forceNoMoreTools && !(agent.MaxToolCalls > 0 && toolCallCount >= agent.MaxToolCalls);
+            if (pendingCalls.Count == 0 && IncompleteTodoCount() > 0 && todoReminders < 2 && toolsStillAvailable)
+            {
+                todoReminders++;
+                string pending = string.Join("\n", todos.Where(t => t.Status != "completed").Select(t => $"- {t.Content} ({t.Status})"));
+                Common.Logger.LogInformation("[{Agent}] ({Thread}) finish-time checklist reminder ({Count} incomplete).", agent.Name, threadKey, IncompleteTodoCount());
+                messages.Add(new { role = "user", content =
+                    $"[System: You still have incomplete checklist items:\n{pending}\n" +
+                    "Complete them now (make the changes, then call update_todos to mark them completed), " +
+                    "or call update_todos to remove any that are no longer needed. Do not finish until the checklist is resolved.]" });
+                responseBuilder.Clear();
                 continue;
             }
 
@@ -1161,6 +1405,37 @@ public class Thread
             name         = "read_file",
             content      = $"[Earlier contents of {path} omitted — superseded by a later read or change this turn. Re-read the file if you need its current contents.]"
         };
+    }
+
+    /// <summary>The string content of a message object (system/user/tool), or null for tool_calls turns.</summary>
+    private static string? ContentOf(object m) => m.GetType().GetProperty("content")?.GetValue(m) as string;
+
+    /// <summary>
+    /// Context compaction: once the message array exceeds COMPACT_RATIO of the context window, replace
+    /// the oldest tool-result outputs (keeping the most recent COMPACT_KEEP_RECENT) with short stubs.
+    /// Bounds context growth on long turns — the main defence against the model's tool-call formatting
+    /// degrading. Preserves role/tool_call_id/name so the assistant↔tool pairing stays valid.
+    /// </summary>
+    private static void CompactToolOutput(List<object> messages, List<(int Index, string CallId, string Name)> slots, int maxContextTokens)
+    {
+        if (maxContextTokens <= 0) return;
+        long budget = (long)(maxContextTokens * (long)CHARS_PER_TOKEN * COMPACT_RATIO);
+
+        long total = 0;
+        foreach (object m in messages) total += ContentOf(m)?.Length ?? 0;
+        if (total <= budget) return;
+
+        int stubbable = slots.Count - COMPACT_KEEP_RECENT;
+        for (int i = 0; i < stubbable && total > budget; i++)
+        {
+            (int idx, string callId, string name) = slots[i];
+            if (idx < 0 || idx >= messages.Count) continue;
+            string? cur = ContentOf(messages[idx]);
+            if (cur is null || cur.Length < 200) continue;   // already small / already stubbed — skip
+            string stub = $"[Earlier {name} output omitted to save context — re-run the tool if you need it again.]";
+            messages[idx] = new { role = "tool", tool_call_id = callId, name, content = stub };
+            total -= cur.Length - stub.Length;
+        }
     }
 
     /// <summary>Finds the last occurrence of <paramref name="oldText"/> in <paramref name="sb"/> and replaces it with <paramref name="newText"/>.</summary>

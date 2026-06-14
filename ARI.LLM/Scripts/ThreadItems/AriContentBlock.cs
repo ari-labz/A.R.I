@@ -76,6 +76,10 @@ public abstract class AriContentBlock
         "edit_file"      => new Editing(),
         "write_file"     => new Writing(),
         "run_command"    => new Running(),
+        "find_files"     => new Finding(),
+        "delete_file"    => new Deleting(),
+        "move_file"      => new Moving(),
+        "update_todos"   => new TodoList(),
         _                => null
     };
 
@@ -87,6 +91,9 @@ public abstract class AriContentBlock
         "Editing"   => new Editing(),
         "Writing"   => new Writing(),
         "Running"   => new Running(),
+        "Finding"   => new Finding(),
+        "Deleting"  => new Deleting(),
+        "Moving"    => new Moving(),
         _           => null
     };
 }
@@ -134,6 +141,32 @@ public sealed class Running : Card
 {
     public string Command { get; set; } = "";
     protected internal override void Fill(string label) => Command = label;
+}
+
+public sealed class Finding : Card
+{
+    public string Pattern { get; set; } = "";
+    protected internal override void Fill(string label) => Pattern = label;
+}
+
+public sealed class Deleting : Card
+{
+    public string File { get; set; } = "";
+    protected internal override void Fill(string label) => File = label;
+}
+
+public sealed class Moving : Card
+{
+    public string File { get; set; } = "";
+    protected internal override void Fill(string label) => File = label;
+}
+
+/// <summary>The task checklist card. The label carries the list base64-encoded; the frontend decodes
+/// and renders it. Being a Card means it is stripped from <see cref="AriResponse.ContextText"/>.</summary>
+public sealed class TodoList : Card
+{
+    public string Encoded { get; set; } = "";
+    protected internal override void Fill(string label) => Encoded = label;
 }
 
 /// <summary>A card that carries diff stats and an optional patch (edit/write).</summary>

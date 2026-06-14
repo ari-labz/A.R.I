@@ -22,6 +22,24 @@ const TOOL_VERBS: Record<string, { active: string; done: string }> = {
     edit_file:      { active: "Editing",           done: "Edited" },
     write_file:     { active: "Writing",           done: "Written" },
     run_command:    { active: "Running",           done: "Ran" },
+    find_files:     { active: "Finding",           done: "Found" },
+    delete_file:    { active: "Deleting",          done: "Deleted" },
+    move_file:      { active: "Moving",            done: "Moved" },
+}
+
+// Renders the update_todos checklist marker (base64 "status\tcontent" lines) into an HTML list.
+function renderTodoChecklist(b64: string): string {
+    let decoded = ""
+    try { decoded = b64 ? atob(b64) : "" } catch { decoded = "" }
+    const rows = decoded.split("\n").filter(l => l.length > 0).map(line => {
+        const tab = line.indexOf("\t")
+        const status  = tab >= 0 ? line.slice(0, tab) : "pending"
+        const content = tab >= 0 ? line.slice(tab + 1) : line
+        const glyph = status === "completed" ? "☑" : status === "in_progress" ? "◐" : "☐"
+        return `<li class="todo-item todo-item--${status}"><span class="todo-glyph">${glyph}</span> ${escHtml(content)}</li>`
+    }).join("")
+    if (!rows) return ""
+    return `\n\n<div class="tool-card tool-card--todos"><div class="todo-title">Task checklist</div><ul class="todo-list">${rows}</ul></div>\n\n`
 }
 
 function parseDiffLabel(rawLabel: string): { fileLabel: string; added: number; removed: number; patch: string } | null {
@@ -50,6 +68,11 @@ const TOOL_CALL_XML_RE = /<tool_call>[\s\S]*?<\/tool_call>|<tool_call>[\s\S]*$|<
 
 function preprocessToolCards(content: string, msgIndex = 0): string {
     content = content.replace(TOOL_CALL_XML_RE, "")
+
+    // update_todos renders as a checklist card, decoupled from the file start/end pairing logic:
+    // drop its start marker and convert its end marker (base64 list) directly into HTML.
+    content = content.replace(/<!--ari-tool-start:update_todos:[^>]*?-->/g, "")
+    content = content.replace(/<!--ari-tool-end:update_todos:([^>]*?)-->/g, (_, b64) => renderTodoChecklist(b64))
 
     // Step 1: collect diff data from enriched end markers as an ordered queue.
     // Using a queue (not a map) so multiple edits to the same file each get their own data,

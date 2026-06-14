@@ -14,70 +14,136 @@ internal sealed class EditFile : FileTool
         function = new
         {
             name        = "edit_file",
-            description = "Make a targeted find-and-replace edit to an existing file. old_string must match exactly once in the file — provide more surrounding context if needed to make it unique. Use write_file to create a new file or do a full rewrite.",
+            description = "Make targeted find-and-replace edits to an existing file. For one change, pass old_string/new_string (old_string must match exactly once — add surrounding context to make it unique). To change several places at once, pass an 'edits' array of {old_string, new_string} objects — they are applied in order against one buffer, so use this instead of many separate edit_file calls when changing multiple call sites in the same file. Set replace_all (on a single edit or a batch item) to replace every occurrence of old_string. Use write_file for a new file or a full rewrite.",
             parameters  = new
             {
                 type       = "object",
                 properties = new
                 {
                     path       = new { type = "string", description = "File path relative to project root" },
-                    old_string = new { type = "string", description = "The exact text to find. Must appear exactly once in the file." },
-                    new_string = new { type = "string", description = "The text to replace it with" }
+                    old_string = new { type = "string", description = "The exact text to find. Must appear exactly once unless replace_all is set. Omit if using 'edits'." },
+                    new_string = new { type = "string", description = "The text to replace it with. Omit if using 'edits'." },
+                    replace_all = new { type = "boolean", description = "Replace every occurrence of old_string instead of requiring a unique match." },
+                    edits      = new { type = "array", description = "Batch of edits applied in order: each item is {old_string, new_string, replace_all?}. Use instead of old_string/new_string for multiple changes to this file." }
                 },
-                required = new[] { "path", "old_string", "new_string" }
+                required = new[] { "path" }
             }
         }
     };
+
+    /// <summary>A single requested edit, normalized to LF space.</summary>
+    private readonly record struct EditSpec(string Old, string New, bool ReplaceAll);
 
     internal override async Task<string> Execute(string argsJson)
     {
         try
         {
             using JsonDocument doc = JsonDocument.Parse(argsJson);
-            string relPath = (doc.RootElement.GetProperty("path").GetString()       ?? "").Trim('"', '\'', ' ');
-            string oldStr  = doc.RootElement.GetProperty("old_string").GetString() ?? "";
-            string newStr  = doc.RootElement.GetProperty("new_string").GetString() ?? "";
+            JsonElement rootEl = doc.RootElement;
+            string relPath = (rootEl.GetProperty("path").GetString() ?? "").Trim('"', '\'', ' ');
             string? absPath = Resolve(relPath);
             if (absPath is null)
                 return "Access denied: path traversal is not allowed.";
             if (!File.Exists(absPath))
                 return $"File not found: {relPath}";
-            if (oldStr.Length == 0)
-                return $"old_string is empty. Provide the exact text to replace in {relPath}.";
 
-            string content = await File.ReadAllTextAsync(absPath, ct);
+            // Normalize the request into a uniform list of edits. Supports a single old/new pair or a
+            // MultiEdit-style 'edits' array applied sequentially against one buffer.
+            List<EditSpec> edits = new();
+            if (rootEl.TryGetProperty("edits", out JsonElement editsEl) && editsEl.ValueKind == JsonValueKind.Array)
+            {
+                foreach (JsonElement e in editsEl.EnumerateArray())
+                    edits.Add(new EditSpec(
+                        Normalize(e.TryGetProperty("old_string", out var o) ? o.GetString() ?? "" : ""),
+                        Normalize(e.TryGetProperty("new_string", out var n) ? n.GetString() ?? "" : ""),
+                        e.TryGetProperty("replace_all", out var r) && r.ValueKind == JsonValueKind.True));
+            }
+            else
+            {
+                edits.Add(new EditSpec(
+                    Normalize(rootEl.TryGetProperty("old_string", out var o) ? o.GetString() ?? "" : ""),
+                    Normalize(rootEl.TryGetProperty("new_string", out var n) ? n.GetString() ?? "" : ""),
+                    rootEl.TryGetProperty("replace_all", out var r) && r.ValueKind == JsonValueKind.True));
+            }
+            if (edits.Count == 0)
+                return $"No edits provided for {relPath}.";
 
-            // Match in normalized-LF space so CRLF/CR drift and indentation drift in the model's
-            // old_string still resolve to the right region. Re-emit on the file's dominant ending.
-            string nl          = content.Contains("\r\n") ? "\r\n" : "\n";
-            string normContent = Normalize(content);
-            string normOld     = Normalize(oldStr);
-            string normNew     = Normalize(newStr);
+            string content = await ReadWithRetry(absPath);
+            string nl      = content.Contains("\r\n") ? "\r\n" : "\n";
+            string buf     = Normalize(content);
 
-            MatchResult match = FindMatch(normContent, normOld);
+            bool anyFuzzy = false; int replacements = 0, firstStart = -1, firstNewLen = 0;
+            for (int i = 0; i < edits.Count; i++)
+            {
+                EditSpec ed = edits[i];
+                string label = edits.Count > 1 ? $" (edit {i + 1} of {edits.Count})" : "";
+                if (ed.Old.Length == 0)
+                    return $"old_string is empty{label}. Provide the exact text to replace in {relPath}.";
 
-            if (match.Kind == MatchKind.Multiple)
-                return $"old_string matches {match.Count} locations in {relPath}. Re-read the file and include more surrounding lines in old_string to make it unique.";
+                if (ed.ReplaceAll)
+                {
+                    if (!buf.Contains(ed.Old, StringComparison.Ordinal))
+                        return $"old_string not found in {relPath}{label}. No changes made.{ClosestRegionHint(buf, ed.Old)}";
+                    int at = buf.IndexOf(ed.Old, StringComparison.Ordinal);
+                    int count = 0; for (int p = at; p >= 0; p = buf.IndexOf(ed.Old, p + ed.Old.Length, StringComparison.Ordinal)) count++;
+                    buf = buf.Replace(ed.Old, ed.New);
+                    replacements += count;
+                    if (firstStart < 0) { firstStart = at; firstNewLen = ed.New.Length; }
+                    continue;
+                }
 
-            if (match.Kind == MatchKind.None)
-                return $"old_string not found in {relPath}. No changes made.{ClosestRegionHint(normContent, normOld)}";
+                MatchResult match = FindMatch(buf, ed.Old);
+                if (match.Kind == MatchKind.Multiple)
+                    return $"old_string matches {match.Count} locations in {relPath}{label}. Include more surrounding lines to make it unique, or set replace_all to change them all.";
+                if (match.Kind == MatchKind.None)
+                    return $"old_string not found in {relPath}{label}. No changes made.{ClosestRegionHint(buf, ed.Old)}";
 
-            string normUpdated = normContent[..match.Start] + normNew + normContent[(match.Start + match.Length)..];
-            await File.WriteAllTextAsync(absPath, normUpdated.Replace("\n", nl), ct);
+                buf = buf[..match.Start] + ed.New + buf[(match.Start + match.Length)..];
+                if (match.Kind == MatchKind.Whitespace) anyFuzzy = true;
+                replacements++;
+                if (firstStart < 0) { firstStart = match.Start; firstNewLen = ed.New.Length; }
+            }
 
-            // Locate the edited region from the splice offset (counting preceding newlines), not by
-            // searching for new_string's first line — that line may be blank or non-unique.
-            int      editLine     = normUpdated[..match.Start].Count(c => c == '\n');
-            string[] lines        = normUpdated.Split('\n');
-            int      newLineCount = normNew.Length == 0 ? 1 : normNew.Count(c => c == '\n') + 1;
-            int      from         = Math.Max(0, editLine - 5);
-            int      to           = Math.Min(lines.Length - 1, editLine + newLineCount + 4);
-            string   snippet      = string.Join("\n", lines[from..(to + 1)].Select((l, i) => $"{from + i + 1,6}: {l}"));
-            string   note         = match.Kind == MatchKind.Whitespace
-                ? " (matched ignoring indentation/line-ending differences)" : "";
-            return $"Successfully edited {relPath}.{note}\n\n[Updated context — lines {from + 1}–{to + 1}]\n```\n{snippet}\n```";
+            await WriteWithRetry(absPath, buf.Replace("\n", nl));
+
+            string[] lines = buf.Split('\n');
+            string   note  = anyFuzzy ? " (matched ignoring indentation/line-ending differences)" : "";
+
+            if (edits.Count > 1)
+                return $"Successfully edited {relPath}.{note} Applied {edits.Count} edits ({replacements} replacements). File is now {lines.Length} lines.";
+
+            // Single edit: numbered snippet around the change so the model sees the new state.
+            int    editLine     = buf[..firstStart].Count(c => c == '\n');
+            int    newLineCount = firstNewLen == 0 ? 1 : buf.Substring(firstStart, firstNewLen).Count(c => c == '\n') + 1;
+            int    from         = Math.Max(0, editLine - 5);
+            int    to           = Math.Min(lines.Length - 1, editLine + newLineCount + 4);
+            string snippet      = string.Join("\n", lines[from..(to + 1)].Select((l, i) => $"{from + i + 1,6}: {l}"));
+            string replNote     = replacements > 1 ? $" ({replacements} occurrences replaced)" : "";
+            return $"Successfully edited {relPath}.{note}{replNote}\n\n[Updated context — lines {from + 1}–{to + 1}]\n```\n{snippet}\n```";
         }
         catch (Exception ex) { return $"Error editing file: {ex.Message}"; }
+    }
+
+    // Transient FS errors (sharing/lock races, indexers) clear in milliseconds — retry briefly
+    // rather than surfacing a hard failure that makes the model abandon edit_file.
+    private async Task<string> ReadWithRetry(string absPath)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            try { return await File.ReadAllTextAsync(absPath, ct); }
+            catch (IOException) when (attempt < 3) { await Task.Delay(40 * (attempt + 1), ct); }
+            catch (UnauthorizedAccessException) when (attempt < 3) { await Task.Delay(40 * (attempt + 1), ct); }
+        }
+    }
+
+    private async Task WriteWithRetry(string absPath, string data)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            try { await File.WriteAllTextAsync(absPath, data, ct); return; }
+            catch (IOException) when (attempt < 3) { await Task.Delay(40 * (attempt + 1), ct); }
+            catch (UnauthorizedAccessException) when (attempt < 3) { await Task.Delay(40 * (attempt + 1), ct); }
+        }
     }
 
     private enum MatchKind { Exact, Whitespace, None, Multiple }
