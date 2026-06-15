@@ -59,7 +59,7 @@ public static class ClientWebSocket
     }
 
     private static readonly string[] ClientToolNames =
-        { "read_file", "list_directory", "search_files", "find_files", "edit_file", "write_file",
+        { "preview_file", "read_file", "list_directory", "search_files", "find_files", "edit_file", "write_file",
           "delete_file", "move_file", "run_command", "update_todos" };
 
     private static void RegisterTools(ARI.LLM.Thread thread, WebSocket ws, ILogger log)
@@ -72,6 +72,13 @@ public static class ClientWebSocket
             labelField: "command",
             customDisplay:     argsJson => RunCommandMarker(argsJson, "start"),
             customDisplayDone: argsJson => RunCommandMarker(argsJson, "end"));
+
+        RegisterTool(thread, ws, log,
+            name: "preview_file",
+            description: "Get a structural outline of a file — line count, size, and landmarks (classes, methods, JSON keys, headings) with line numbers. Call this before read_file on any unfamiliar file to find the right line range.",
+            parameters: new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root." } }, required = new[] { "path" } },
+            displayVerb: "Previewing", displayDoneVerb: "Previewed",
+            labelField: "path");
 
         RegisterTool(thread, ws, log,
             name: "read_file",

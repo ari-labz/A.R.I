@@ -12,7 +12,9 @@ namespace ARI.API.Controllers;
 
 public class ControlPanelController : Controller
 {
-    public IActionResult Index() => View();
+    // Control panel UI is served as a static file at /controlpanel.html (from ARI.UI/public/).
+    // This Razor route is unused — redirect so nothing breaks if someone hits /ControlPanel.
+    public IActionResult Index() => Redirect("/controlpanel.html");
 }
 
 [Route("api/cp")]

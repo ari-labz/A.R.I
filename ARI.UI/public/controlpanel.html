@@ -97,9 +97,11 @@ html, body {
 #cp-title { font-size: 14px; font-weight: 600; color: var(--text-dim); letter-spacing: .01em; }
 
 /* ── grid wrap ───────────────────────────────────────── */
-#cp-grid-wrap { flex: 1; overflow: hidden; min-height: 0; padding: 8px 16px 12px; }
+#cp-grid-wrap { flex: 1; overflow-y: auto; min-height: 0; padding: 3px; padding-bottom: 9px; background: #f3f4f6; }
+#cp-grid-wrap > .grid-stack { overflow: visible; }
 
 /* ── widgets ─────────────────────────────────────────── */
+.grid-stack-item-content { padding: 3px; box-sizing: border-box; }
 .cp-widget { display: flex; flex-direction: column; background: #fff; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; height: 100%; box-shadow: 0 1px 4px rgba(0,0,0,.05); }
 .cp-widget-header { display: flex; align-items: center; justify-content: space-between; padding: 11px 14px 10px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
 .cp-widget-title { font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim); }
@@ -132,11 +134,13 @@ html, body {
 /* ── RAM charts ──────────────────────────────────────── */
 .cp-chart-body { padding: 8px 10px 6px; display: flex; align-items: stretch; }
 .cp-chart-body canvas { width: 100% !important; height: 100% !important; }
-.ram-dual-body { display: flex; gap: 10px; padding: 8px 10px 6px; overflow: hidden; height: 100%; box-sizing: border-box; }
+.ram-dual-body { display: flex; gap: 10px; padding: 8px 10px 6px; overflow: hidden; height: 100%; box-sizing: border-box; align-items: stretch; }
 .ram-line-wrap { flex: 1.5; min-width: 0; position: relative; }
-.ram-pie-wrap  { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; overflow: hidden; }
-.ram-pie-wrap canvas { width: 100% !important; max-height: 130px; }
-#ram-pie-legend { display: flex; flex-direction: column; gap: 3px; width: 100%; overflow-y: auto; flex: 1; }
+/* Pie + legend sit side-by-side so legend is always visible regardless of widget height */
+.ram-pie-wrap  { flex: 1; min-width: 0; display: flex; flex-direction: row; align-items: stretch; gap: 12px; min-height: 0; overflow: hidden; }
+.ram-pie-canvas-wrap { flex-shrink: 0; height: 100%; aspect-ratio: 1; position: relative; max-height: 220px; }
+.ram-pie-canvas-wrap canvas { width: 100% !important; height: 100% !important; }
+#ram-pie-legend { flex: 1; min-width: 80px; min-height: 0; display: flex; flex-direction: column; gap: 3px; overflow-y: auto; padding-top: 2px; }
 .pie-legend-row { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--text); white-space: nowrap; overflow: hidden; }
 .pie-legend-swatch { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
 .pie-legend-label  { flex: 1; overflow: hidden; text-overflow: ellipsis; color: var(--text-dim); font-size: 10px; }
@@ -382,31 +386,38 @@ html, body {
     <div id="tab-overview" class="cp-tab">
       <div id="cp-grid-wrap">
         <div class="grid-stack">
-          <div class="grid-stack-item" gs-x="0" gs-y="0" gs-w="8" gs-h="10">
+          <div class="grid-stack-item" gs-id="widget-log">
             <div class="grid-stack-item-content cp-widget" id="widget-log">
               <div class="cp-widget-header"><span class="cp-widget-title">ARI.log</span><div style="display:flex;align-items:center;gap:8px"><span class="cp-scroll-hint" id="log-scroll-hint">▼ new lines</span><span class="cp-widget-badge" id="log-status">connecting…</span></div></div>
               <div class="cp-widget-body log-body" id="log-lines"></div>
             </div>
           </div>
-          <div class="grid-stack-item" gs-x="8" gs-y="0" gs-w="8" gs-h="6">
+          <div class="grid-stack-item" gs-id="widget-context">
+            <div class="grid-stack-item-content cp-widget" id="widget-context">
+              <div class="cp-widget-header"><span class="cp-widget-title">Context usage</span></div>
+              <div id="context-body" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:12px;padding:12px 14px;">
+                <div class="cp-placeholder">No active threads</div>
+              </div>
+            </div>
+          </div>
+          <div class="grid-stack-item" gs-id="widget-tokens">
             <div class="grid-stack-item-content cp-widget" id="widget-tokens">
-              <div class="cp-widget-header"><span class="cp-widget-title">Token usage per call</span></div>
+              <div class="cp-widget-header"><span class="cp-widget-title">Token usage</span></div>
               <div class="cp-widget-body" style="padding:0;overflow-y:auto"><div id="live-calls-section"></div><div id="token-rows" style="padding:8px 14px 12px"><div class="cp-placeholder">Waiting for data…</div></div></div>
             </div>
           </div>
-          <div class="grid-stack-item" gs-x="8" gs-y="5" gs-w="8" gs-h="5">
+          <div class="grid-stack-item" gs-id="widget-ram">
             <div class="grid-stack-item-content cp-widget" id="widget-ram">
               <div class="cp-widget-header"><span class="cp-widget-title">RAM</span><span class="cp-widget-badge" id="ram-badge">—</span></div>
               <div class="cp-widget-body ram-dual-body">
                 <div class="ram-line-wrap"><canvas id="ram-chart"></canvas></div>
                 <div class="ram-pie-wrap">
-                  <canvas id="ram-pie-chart"></canvas>
+                  <div class="ram-pie-canvas-wrap"><canvas id="ram-pie-chart"></canvas></div>
                   <div id="ram-pie-legend"></div>
                 </div>
               </div>
             </div>
           </div>
-          <div id="context-rows" style="display:none"></div>
         </div>
       </div>
     </div>
@@ -481,23 +492,65 @@ document.getElementById('btn-toggle-sidebar').addEventListener('click', () => se
 floatBtn.addEventListener('click', () => setSidebarCollapsed(false));
 
 // ── gridstack ─────────────────────────────────────────────
-const LAYOUT_KEY = 'ari-cp-layout-v3';
-const COLS = 16, ROWS = 10, MARGIN = 8;
-const DEFAULT_LAYOUT = [
-    { id: 'widget-log',    x: 0, y: 0, w: 8, h: 10 },
-    { id: 'widget-tokens', x: 8, y: 0, w: 8, h: 5  },
-    { id: 'widget-ram',    x: 8, y: 5, w: 8, h: 5  },
-];
-let savedLayout = null;
-try { savedLayout = JSON.parse(localStorage.getItem(LAYOUT_KEY)); } catch {}
+// Cells are fixed CELL_SIZE×CELL_SIZE px. Column count is derived from
+// container width so the grid always fills the window at every aspect ratio.
+const LAYOUT_KEY    = 'ari-cp-layout-v10';
+const CELL_SIZE     = 50;
+const MARGIN        = 3;   // gap per side (3+3 = 6px between items)
+const MARGIN_H      = 3;
+const MARGIN_STR    = `${MARGIN}px`;
+const REQUIRED_WIDGETS = ['widget-log', 'widget-context', 'widget-tokens', 'widget-ram'];
+
 const gridWrap = document.getElementById('cp-grid-wrap');
-function calcCellHeight() { return Math.max(60, Math.floor((gridWrap.clientHeight - MARGIN * (ROWS + 1)) / ROWS)); }
-const grid = GridStack.init({ column: COLS, maxRow: ROWS, float: false, margin: MARGIN, cellHeight: calcCellHeight(), animate: false });
-if (savedLayout && savedLayout.length) grid.load(savedLayout, false);
-else grid.load(DEFAULT_LAYOUT, false);
-grid.on('change', () => localStorage.setItem(LAYOUT_KEY, JSON.stringify(grid.save(false))));
+
+function getDims() {
+    const w = gridWrap.clientWidth  || window.innerWidth;
+    const h = gridWrap.clientHeight || window.innerHeight;
+    return {
+        cols: Math.max(4, Math.floor((w - MARGIN_H) / (CELL_SIZE + MARGIN_H * 2))),
+        rows: Math.max(4, Math.floor((h - MARGIN)   / (CELL_SIZE + MARGIN   * 2))),
+    };
+}
+
+function makeDefaultLayout(cols, rows) {
+    const hw = Math.floor(cols / 2), hr = Math.floor(rows / 2);
+    return [
+        { id: 'widget-ram',     x: 0,  y: 0,  w: hw,        h: hr        },
+        { id: 'widget-log',     x: 0,  y: hr, w: hw,        h: rows - hr },
+        { id: 'widget-context', x: hw, y: 0,  w: cols - hw, h: hr        },
+        { id: 'widget-tokens',  x: hw, y: hr, w: cols - hw, h: rows - hr },
+    ];
+}
+
+let savedLayout = null;
+try {
+    const raw = JSON.parse(localStorage.getItem(LAYOUT_KEY));
+    if (raw && REQUIRED_WIDGETS.every(id => raw.some(w => w.id === id))) savedLayout = raw;
+} catch {}
+
+let { cols } = getDims();
+const grid = GridStack.init({ column: cols, cellHeight: CELL_SIZE, margin: MARGIN_STR, float: false, animate: false, disableOneColumnMode: true });
+
+if (savedLayout) grid.load(savedLayout, false);
+else grid.load(makeDefaultLayout(cols, getDims().rows), false);
+
+function saveLayout() { localStorage.setItem(LAYOUT_KEY, JSON.stringify(grid.save(false))); }
+grid.on('dragstop resizestop', saveLayout);
+
 let resizeTimer;
-window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => grid.cellHeight(calcCellHeight()), 80); });
+let suppressSave = false;
+window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+        const { cols: newCols } = getDims();
+        if (newCols !== cols) {
+            suppressSave = true;
+            grid.column(newCols);
+            cols = newCols;
+            suppressSave = false;
+        }
+    }, 80);
+});
 
 // ── log SSE ───────────────────────────────────────────────
 const logLines = document.getElementById('log-lines');
@@ -585,7 +638,7 @@ const ramPieChart = new Chart(ramPieCtx, {
     type: 'doughnut',
     data: { labels: [], datasets: [{ data: [], backgroundColor: [], borderWidth: 1, borderColor: 'rgba(0,0,0,.08)' }] },
     options: {
-        animation: false, responsive: true, maintainAspectRatio: true, cutout: '58%',
+        animation: false, responsive: true, maintainAspectRatio: false, cutout: '58%',
         plugins: {
             legend: { display: false },
             tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${fmtMb(ctx.parsed)}` } }
@@ -620,9 +673,9 @@ function updateRamPie(breakdown) {
 }
 
 // ── token/context rendering ───────────────────────────────
-const tokenRows = document.getElementById('token-rows');
+const tokenRows   = document.getElementById('token-rows');
 const liveSection = document.getElementById('live-calls-section');
-const contextRows = document.getElementById('context-rows');
+const contextBody = document.getElementById('context-body');
 let lastLiveJson = '', lastTokensJson = '', lastContextJson = '';
 
 const AGENT_COLORS = { Dialogue: '#223742', Engram: '#7c3aed', Memory: '#0369a1', Refactor: '#b45309', Context: '#0f766e', Vision: '#6366f1' };
@@ -692,22 +745,34 @@ function renderTokens(calls) {
     });
 }
 
-function renderContext(ctx) {
-    const json = JSON.stringify(ctx);
+function renderContextUsage(liveCalls, contextStats) {
+    const json = JSON.stringify({ liveCalls, contextStats });
     if (json === lastContextJson) return;
     lastContextJson = json;
-    if (!ctx.length) { contextRows.innerHTML = '<div class="cp-placeholder">No active threads</div>'; return; }
-    contextRows.innerHTML = '';
-    ctx.forEach(c => {
-        const hasLimit = c.limit > 0, pct = hasLimit ? Math.min(c.pct, 100) : 0;
+    const liveMap = {};
+    (liveCalls ?? []).forEach(c => { liveMap[c.threadKey] = c; });
+    const items = [];
+    (liveCalls ?? []).forEach(c => {
+        const limit = c.contextTokenLimit ?? 0, used = c.estimatedInputTokens ?? 0;
+        const pct = limit > 0 ? Math.min(used / limit * 100, 100) : 0;
+        items.push({ threadKey: c.threadKey, agentName: c.agentName, used, limit, pct, live: true });
+    });
+    (contextStats ?? []).forEach(c => {
+        if (liveMap[c.threadKey]) return;
+        const pct = c.limit > 0 ? Math.min(c.pct, 100) : 0;
+        items.push({ threadKey: c.threadKey, agentName: c.agentName ?? 'Unknown', used: c.used, limit: c.limit, pct, live: false });
+    });
+    if (!items.length) { contextBody.innerHTML = '<div class="cp-placeholder">No active threads</div>'; return; }
+    contextBody.innerHTML = '';
+    items.forEach(c => {
         const agentName = c.agentName ?? 'Unknown';
-        const barColor = pct >= 90 ? OUT_DANGER : pct >= 70 ? OUT_WARN : (AGENT_COLORS[agentName] ?? '#6b7280');
-        const limitStr = hasLimit ? ` / ${c.limit.toLocaleString()}` : '';
-        const pctStr   = hasLimit ? ` (${pct}%)` : '';
+        const barColor = c.pct >= 90 ? OUT_DANGER : c.pct >= 75 ? OUT_WARN : (AGENT_COLORS[agentName] ?? '#518c9a');
+        const limitStr = c.limit > 0 ? ` / ${c.limit.toLocaleString()}` : '';
+        const pctStr   = c.limit > 0 ? ` (${Math.round(c.pct)}%)` : '';
         const row = document.createElement('div');
         row.className = 'thread-row';
-        row.innerHTML = `<div class="thread-row-head">${agentBadge(agentName)}<span class="thread-row-key" title="${escHtml(c.threadKey)}">${escHtml(c.threadKey.slice(0, 22))}</span></div><div class="thread-bar-wrap"><div class="thread-bar-bg"><div class="thread-bar-fill" style="width:${pct}%;background:${barColor}"></div></div><span class="thread-bar-label">${c.used.toLocaleString()}${limitStr} tok${pctStr}</span></div>`;
-        contextRows.appendChild(row);
+        row.innerHTML = `<div class="thread-row-head">${c.live ? '<span class="live-dot"></span>' : ''}${agentBadge(agentName)}<span class="thread-row-key" title="${escHtml(c.threadKey)}">${escHtml(c.threadKey.slice(0, 22))}</span></div><div class="thread-bar-wrap"><div class="thread-bar-bg"><div class="thread-bar-fill" style="width:${c.pct}%;background:${barColor};${c.live ? 'transition:width .9s linear' : ''}"></div></div><span class="thread-bar-label">${c.used.toLocaleString()}${limitStr} tok${pctStr}</span></div>`;
+        contextBody.appendChild(row);
     });
 }
 
@@ -730,7 +795,7 @@ async function pollRam() {
         const callFinished = prevLiveKeys !== '' && live.length < prevLiveKeys.split(',').filter(Boolean).length;
         prevLiveKeys = liveKeys;
         renderLiveCalls(live);
-        renderContext(data.context ?? []);
+        renderContextUsage(live, data.context ?? []);
         if (callFinished) pollStats();
     } catch { /* ignore */ }
 }
@@ -739,7 +804,6 @@ async function pollStats() {
         const res = await fetch('/api/cp/stats');
         const data = await res.json();
         renderTokens(data.calls);
-        renderContext(data.context);
     } catch { /* ignore */ }
 }
 pollRam(); setInterval(pollRam, 1000);

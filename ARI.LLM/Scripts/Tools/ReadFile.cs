@@ -15,16 +15,19 @@ internal sealed class ReadFile : FileTool
         function = new
         {
             name        = "read_file",
-            description = "Read the contents of a source file in the project. Use this when you need to examine a specific file before answering. " +
-                          "Use start_line and end_line to read a specific range rather than the whole file.",
+            description =
+                "Read lines from a source file. " +
+                "ALWAYS prefer a specific range over a whole-file read: use search_files first to locate the relevant lines, then read only that range with start_line and end_line. " +
+                "Only omit start_line/end_line when you genuinely need the whole file (e.g. a short config). " +
+                "Whole-file reads of large files are capped — you will miss content unless you target the right range.",
             parameters  = new
             {
                 type       = "object",
                 properties = new
                 {
                     path       = new { type = "string",  description = "Path to the file relative to the project root." },
-                    start_line = new { type = "integer", description = "First line to return (1-indexed, inclusive). Defaults to 1." },
-                    end_line   = new { type = "integer", description = "Last line to return (1-indexed, inclusive). Defaults to end of file." }
+                    start_line = new { type = "integer", description = "First line to return (1-indexed, inclusive). Use this whenever you know roughly where the content is." },
+                    end_line   = new { type = "integer", description = "Last line to return (1-indexed, inclusive). Pair with start_line — read a window, not the whole file." }
                 },
                 required   = new[] { "path" }
             }
@@ -53,9 +56,10 @@ internal sealed class ReadFile : FileTool
             startLine = Math.Max(1,         Math.Min(startLine, totalLines));
             endLine   = Math.Max(startLine, Math.Min(endLine,   totalLines));
 
-            // Cap whole-file reads of large files so a single read can't blow the context window.
-            const int READ_MAX_LINES = 1500;
-            const int READ_MAX_CHARS = 60000;
+            // Cap whole-file reads so a single read can't blow the context window.
+            // Targeted reads (start_line/end_line supplied) are not capped — the caller chose the range.
+            const int READ_MAX_LINES = 400;
+            const int READ_MAX_CHARS = 20000;
             bool capped = false;
             if (!hasStart && !hasEnd && totalLines > 0)
             {
@@ -77,10 +81,12 @@ internal sealed class ReadFile : FileTool
             sb.AppendLine(header);
             sb.AppendLine("```");
             for (int i = startLine - 1; i < endLine; i++)
-                sb.AppendLine($"{i + 1,6}: {lines[i]}");
+                sb.AppendLine($"{i + 1}|{lines[i]}");
             sb.Append("```");
             if (capped)
-                sb.Append($"\n[File is large ({totalLines} lines) — only the first {endLine} are shown. Read a specific range with start_line/end_line, or use search_files, rather than reading the whole file.]");
+                sb.Append($"\n[Large file ({totalLines} lines total) — capped at line {endLine}. Use search_files to find the relevant lines, then re-read with start_line/end_line.]");
+            else if (!hasStart && !hasEnd && totalLines > 150)
+                sb.Append($"\n[Tip: this file has {totalLines} lines. For future reads, use search_files to locate content first, then read only the relevant range with start_line/end_line.]");
             return sb.ToString();
         }
         catch (Exception ex)

@@ -64,10 +64,6 @@ function isDestructiveGitCommand(command: string): boolean {
     return !sub || !GIT_READONLY_SUBS.has(sub)
 }
 
-function isGitCommand(command: string): boolean {
-    return /^\s*git\b/i.test(command)
-}
-
 // Multiplexer programs whose first sub-word matters (so we whitelist "dotnet build" not all of
 // "dotnet", and "git log" not all of "git").
 const MULTIPLEXERS = new Set(["git", "dotnet", "npm", "yarn", "pnpm", "bun", "deno", "docker", "cargo", "go", "kubectl", "pip", "pip3", "brew", "make"])

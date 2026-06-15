@@ -283,6 +283,7 @@ public class LlmService : IDisposable
         if (!string.IsNullOrWhiteSpace(localPath))
         {
             string resolvedRoot = Path.GetFullPath(localPath);
+            new PreviewFile(resolvedRoot, cts.Token).Register(codeThread);
             new ReadFile(resolvedRoot, cts.Token).Register(codeThread);
             new ListDirectory(resolvedRoot, cts.Token).Register(codeThread);
             new SearchFiles(resolvedRoot, cts.Token).Register(codeThread);
