@@ -152,6 +152,41 @@
 @section Styles {
 <style>
 
+/* ── Message footer (time + speak button) ────────────────────────── */
+.msg-footer {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 2px;
+}
+.msg-footer .msg-time {
+    margin-top: 0;
+}
+.btn-speak {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    padding: 3px;
+    border-radius: 5px;
+    cursor: pointer;
+    color: var(--subtext, #a6adc8);
+    opacity: 0.45;
+    transition: opacity 0.15s, color 0.15s;
+    flex-shrink: 0;
+}
+.btn-speak:hover { opacity: 1; color: var(--accent, #518c9a); }
+.btn-speak.speaking {
+    opacity: 1;
+    color: var(--accent, #518c9a);
+    animation: speak-pulse 1.2s ease-in-out infinite;
+}
+@@keyframes speak-pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.4; }
+}
+
 /* ── Sidebar footer settings button ──────────────────────────────── */
 #sidebar-footer {
     padding: 10px 10px 14px;
@@ -1249,12 +1284,23 @@ document.getElementById('btn-new-chat').addEventListener('click', () => {
                         : `<div style="font-size:12px;color:#8e8ea0;margin-top:6px;user-select:none;">A·R·I thought for ${secs}s</div>`;
                 }
                 const senderLabel = isInternal ? escHtml(agentName ?? 'Agent') : 'A·R·I';
+                const speakBtn = item.content
+                    ? `<button class="btn-speak" title="Speak response">` +
+                      `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">` +
+                      `<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>` +
+                      `</svg></button>`
+                    : '';
                 row.innerHTML =
                     `<div class="sender">${senderLabel}</div>` +
                     `<div class="bubble"></div>` +
                     thoughtHtml +
-                    `<div class="msg-time">${t}</div>`;
+                    `<div class="msg-footer"><div class="msg-time">${t}</div>${speakBtn}</div>`;
                 setBubbleMd(row.querySelector('.bubble'), item.content);
+                if (item.content) {
+                    row.querySelector('.btn-speak').addEventListener('click', function() {
+                        speakResponse(item.content, this);
+                    });
+                }
                 break;
             }
 
@@ -1794,6 +1840,60 @@ document.getElementById('btn-new-chat').addEventListener('click', () => {
             }
             if (logo) logo.style.opacity = '0.4';
             await new Promise(r => setTimeout(r, 2000));
+        }
+    }
+
+    // ── Speak response ────────────────────────────────────
+    let activeSpeakAbort = null;
+
+    async function speakResponse(content, btn) {
+        // If this button is already speaking, stop it
+        const wasSpeaking = btn.classList.contains('speaking');
+        if (activeSpeakAbort) {
+            activeSpeakAbort.abort();
+            activeSpeakAbort = null;
+            document.querySelectorAll('.btn-speak.speaking').forEach(b => b.classList.remove('speaking'));
+        }
+        if (wasSpeaking) return; // toggle off
+
+        btn.classList.add('speaking');
+        const abort = new AbortController();
+        activeSpeakAbort = abort;
+
+        try {
+            const splitRes = await fetch('/api/cp/voice/split-sentences', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: content }),
+                signal: abort.signal
+            });
+            if (!splitRes.ok) throw new Error('split failed');
+            const { sentences } = await splitRes.json();
+
+            for (const sentence of sentences) {
+                if (abort.signal.aborted) break;
+                const wavRes = await fetch('/api/cp/voice/speak', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: sentence }),
+                    signal: abort.signal
+                });
+                if (!wavRes.ok) continue;
+                const blob = await wavRes.blob();
+                const url  = URL.createObjectURL(blob);
+                await new Promise((resolve, reject) => {
+                    const audio = new Audio(url);
+                    abort.signal.addEventListener('abort', () => { audio.pause(); reject(new DOMException('aborted')); });
+                    audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
+                    audio.onerror = () => { URL.revokeObjectURL(url); resolve(); }; // skip on error
+                    audio.play().catch(resolve);
+                });
+            }
+        } catch (err) {
+            if (err.name !== 'AbortError') console.warn('[speak]', err);
+        } finally {
+            btn.classList.remove('speaking');
+            if (activeSpeakAbort === abort) activeSpeakAbort = null;
         }
     }
 

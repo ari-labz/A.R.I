@@ -57,7 +57,7 @@ public class ModelManager : IDisposable
         await server.IsReady();
 
         servers[serverConfig.Name] = (server, targetFile);
-        holder.SetServerModel(serverConfig.Name, targetFile, modelCfg.EffectiveName, server.Pid);
+        holder.SetServerModel(serverConfig.Name, targetFile, modelCfg.EffectiveName, server.Pid, serverConfig.ContextSize);
         logger.LogInformation("[ModelManager] Server '{Server}' ready — {Model} (PID {Pid}).",
             serverConfig.Name, modelCfg.EffectiveName, server.Pid);
     }
@@ -104,7 +104,7 @@ public class ModelManager : IDisposable
             await newServer.IsReady();
 
             servers[serverName] = (newServer, relativeFile);
-            holder.SetServerModel(serverName, relativeFile, name, newServer.Pid);
+            holder.SetServerModel(serverName, relativeFile, name, newServer.Pid, serverConfig.ContextSize);
             settingsStore.SetStartupFile(serverName, relativeFile);
             PublishModelList();
 
@@ -192,10 +192,14 @@ public class ModelManager : IDisposable
         if (!string.IsNullOrWhiteSpace(stored) && File.Exists(Path.Combine(modelsPath, stored)))
             return stored;
 
-        // 2. Config StartupModel
-        if (!string.IsNullOrWhiteSpace(serverConfig.StartupModel) &&
-            File.Exists(Path.Combine(modelsPath, serverConfig.StartupModel)))
-            return serverConfig.StartupModel;
+        // 2. Config StartupModel — use it if the file exists OR if a url.txt is present (will auto-download)
+        if (!string.IsNullOrWhiteSpace(serverConfig.StartupModel))
+        {
+            string absPath = Path.Combine(modelsPath, serverConfig.StartupModel);
+            string dir     = Path.GetDirectoryName(absPath) ?? modelsPath;
+            if (File.Exists(absPath) || File.Exists(Path.Combine(dir, "url.txt")))
+                return serverConfig.StartupModel;
+        }
 
         // 3. First .gguf on disk
         string[] all = Directory.GetFiles(modelsPath, "*.gguf", SearchOption.AllDirectories);
