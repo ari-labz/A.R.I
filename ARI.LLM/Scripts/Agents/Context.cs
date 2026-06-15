@@ -40,7 +40,7 @@ internal class Context : Agent
 
             object body = new
             {
-                model    = ModelString,
+                model    = "local",
                 messages = new[]
                 {
                     new { role = "system", content = $"{resolvedPrompt}\n<|think_off|>" },
@@ -101,7 +101,7 @@ internal class Context : Agent
 
             object body = new
             {
-                model    = ModelString,
+                model    = "local",
                 messages = new[]
                 {
                     new { role = "system", content = $"{resolvedPrompt}\n<|think_off|>" },

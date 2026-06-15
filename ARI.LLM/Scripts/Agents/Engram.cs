@@ -420,7 +420,7 @@ internal class Engram : Agent, IDisposable
 
         object requestBody = new
         {
-            model    = ModelString,
+            model    = "local",
             messages = new[]
             {
                 new { role = "system", content = "You classify whether a conversation contains information worth storing as a long-term memory.\n<|think_off|>" },

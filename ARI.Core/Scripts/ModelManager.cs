@@ -8,11 +8,10 @@ public class ModelManager : IDisposable
     private readonly AriLLMConfig       llmConfig;
     private readonly string             modelsPath;
     private readonly ModelManagerHolder holder;
+    private readonly ModelSettingsStore settingsStore;
     private readonly ILogger            logger;
 
-    private LocalLlamaServer?  activeServer;
-    private string?            activeFile;
-
+    private readonly Dictionary<string, (LocalLlamaServer Server, string ActiveFile)> servers = new();
     private readonly SemaphoreSlim switchLock = new(1, 1);
 
     public ModelManager(
@@ -21,82 +20,100 @@ public class ModelManager : IDisposable
         ModelManagerHolder holder,
         ILoggerFactory     loggerFactory)
     {
-        this.llmConfig = llmConfig;
-        this.holder    = holder;
-        logger         = loggerFactory.CreateLogger<ModelManager>();
+        this.llmConfig    = llmConfig;
+        this.holder       = holder;
+        this.settingsStore = new ModelSettingsStore();
+        logger            = loggerFactory.CreateLogger<ModelManager>();
 
         modelsPath = Path.IsPathRooted(llmConfig.ModelsPath)
             ? llmConfig.ModelsPath
             : Path.GetFullPath(Path.Combine(executableDirectory, llmConfig.ModelsPath));
     }
 
-    public async Task StartInitialModelAsync(string? preferredFile = null)
+    public async Task StartAllServersAsync()
     {
-        holder.RegisterSwitchDelegate(file => BeginSwitch(file));
-        PublishModelList(preferredFile, null);
+        holder.RegisterSwitchDelegate((serverName, file) => BeginSwitch(serverName, file));
+        PublishModelList();
 
-        // Resolve which file to launch: user preference → config default → first on disk
-        string? targetFile = ResolveStartupFile(preferredFile);
-        if (targetFile is null) return;
+        List<Task> boots = new();
+        foreach (LlamaServerConfig serverConfig in llmConfig.Servers)
+            boots.Add(BootServer(serverConfig));
 
-        LlamaModelConfig cfg = BuildConfig(targetFile);
-        activeFile   = targetFile;
-        activeServer = new LocalLlamaServer(GetServer(), cfg, AppContext.BaseDirectory);
-        await activeServer.IsReady();
-
-        holder.SetActiveModel(targetFile, cfg.EffectiveName, activeServer.Pid);
-        PublishModelList(preferredFile, targetFile);
+        await Task.WhenAll(boots);
+        PublishModelList();
     }
 
-    public ModelSwitchJob BeginSwitch(string relativeFile)
+    private async Task BootServer(LlamaServerConfig serverConfig)
     {
-        ModelSwitchJob job = holder.BeginSwitchJob(relativeFile);
-        _ = Task.Run(() => RunSwitch(job, relativeFile));
+        string? targetFile = ResolveStartupFile(serverConfig);
+        if (targetFile is null)
+        {
+            logger.LogWarning("[ModelManager] No model file found for server '{Server}' — skipping.", serverConfig.Name);
+            return;
+        }
+
+        LlamaModelConfig modelCfg = BuildConfig(targetFile);
+        LocalLlamaServer server   = new(serverConfig, modelCfg, AppContext.BaseDirectory);
+        await server.IsReady();
+
+        servers[serverConfig.Name] = (server, targetFile);
+        holder.SetServerModel(serverConfig.Name, targetFile, modelCfg.EffectiveName, server.Pid);
+        logger.LogInformation("[ModelManager] Server '{Server}' ready — {Model} (PID {Pid}).",
+            serverConfig.Name, modelCfg.EffectiveName, server.Pid);
+    }
+
+    public ModelSwitchJob BeginSwitch(string serverName, string relativeFile)
+    {
+        ModelSwitchJob job = holder.BeginSwitchJob(serverName, relativeFile);
+        _ = Task.Run(() => RunSwitch(job, serverName, relativeFile));
         return job;
     }
 
-    private async Task RunSwitch(ModelSwitchJob job, string relativeFile)
+    private async Task RunSwitch(ModelSwitchJob job, string serverName, string relativeFile)
     {
         await switchLock.WaitAsync();
         try
         {
-            if (activeServer is not null)
+            LlamaServerConfig? serverConfig = llmConfig.Servers.FirstOrDefault(s => s.Name == serverName);
+            if (serverConfig is null)
             {
-                string currentName = activeFile is not null
-                    ? Path.GetFileNameWithoutExtension(activeFile)
-                    : "current model";
-
-                job.AddEvent("idle-wait", $"Waiting for {currentName} to finish active requests…", 10);
-                await WaitForIdle(GetServer().Endpoint);
-
-                job.AddEvent("powering-down", $"Powering down {currentName}…", 30);
-                activeServer.Stop();
-                activeServer.Dispose();
-                activeServer = null;
-                activeFile   = null;
-                job.AddEvent("powering-down", "Server stopped.", 50);
-                holder.SetActiveModel(null, null, -1);
+                job.AddEvent("error", $"Unknown server '{serverName}'.", 0);
+                job.Complete(false, $"Unknown server '{serverName}'.");
+                return;
             }
 
-            LlamaModelConfig cfg    = BuildConfig(relativeFile);
-            string           name   = cfg.EffectiveName;
-            LlamaServerConfig server = GetServer();
+            if (servers.TryGetValue(serverName, out var current))
+            {
+                string currentName = Path.GetFileNameWithoutExtension(current.ActiveFile);
+                job.AddEvent("idle-wait", $"Waiting for {currentName} to finish active requests…", 10);
+                await WaitForIdle(serverConfig.Endpoint);
+
+                job.AddEvent("powering-down", $"Powering down {currentName}…", 30);
+                current.Server.Stop();
+                current.Server.Dispose();
+                servers.Remove(serverName);
+                holder.SetServerModel(serverName, null, null, -1);
+                job.AddEvent("powering-down", "Server stopped.", 50);
+            }
+
+            LlamaModelConfig modelCfg = BuildConfig(relativeFile);
+            string           name     = modelCfg.EffectiveName;
 
             job.AddEvent("powering-up", $"Powering up {name}…", 60);
-            LocalLlamaServer newServer = new(server, cfg, AppContext.BaseDirectory);
+            LocalLlamaServer newServer = new(serverConfig, modelCfg, AppContext.BaseDirectory);
             await newServer.IsReady();
 
-            activeServer = newServer;
-            activeFile   = relativeFile;
-            holder.SetActiveModel(relativeFile, name, newServer.Pid);
-            PublishModelList(null, relativeFile);
+            servers[serverName] = (newServer, relativeFile);
+            holder.SetServerModel(serverName, relativeFile, name, newServer.Pid);
+            settingsStore.SetStartupFile(serverName, relativeFile);
+            PublishModelList();
 
             job.AddEvent("ready", $"{name} is ready.", 100);
             job.Complete(true);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "[ModelManager] Switch to {File} failed", relativeFile);
+            logger.LogError(ex, "[ModelManager] Switch on '{Server}' to {File} failed", serverName, relativeFile);
             job.AddEvent("error", ex.Message, 0);
             job.Complete(false, ex.Message);
         }
@@ -106,7 +123,7 @@ public class ModelManager : IDisposable
         }
     }
 
-    private void PublishModelList(string? startupFile, string? activeFileOverride)
+    private void PublishModelList()
     {
         Directory.CreateDirectory(modelsPath);
 
@@ -122,40 +139,33 @@ public class ModelManager : IDisposable
             string normRel = NormFile(relFile);
             if (!seen.Add(normRel)) continue;
 
-            string name    = Path.GetFileNameWithoutExtension(relFile);
-            long   size    = new FileInfo(fullPath).Length;
-            bool   isStart = !string.IsNullOrWhiteSpace(startupFile) &&
-                             NormFile(startupFile).Equals(normRel, StringComparison.OrdinalIgnoreCase);
+            string name = Path.GetFileNameWithoutExtension(relFile);
+            long   size = new FileInfo(fullPath).Length;
 
             (string downloadUrl, string mmprojRel, bool supportsVision, bool hasMtp) = ReadMeta(relFile);
             bool hasMmproj = !string.IsNullOrWhiteSpace(mmprojRel);
 
-            infos.Add(new ModelInfo(name, relFile, size, true, isStart, hasMmproj, supportsVision, hasMtp, downloadUrl));
+            infos.Add(new ModelInfo(name, relFile, size, true, false, hasMmproj, supportsVision, hasMtp, downloadUrl));
         }
 
         holder.Initialize(infos);
     }
 
-    // Reads metadata for a model from the companion files in its directory.
     private (string DownloadUrl, string MmprojRel, bool SupportsVision, bool HasMtp) ReadMeta(string relFile)
     {
         string dir = Path.GetDirectoryName(Path.Combine(modelsPath, relFile)) ?? modelsPath;
 
-        // url.txt in the same folder as the .gguf
         string urlFile    = Path.Combine(dir, "url.txt");
         string downloadUrl = File.Exists(urlFile) ? File.ReadAllText(urlFile).Trim() : "";
 
-        // mmproj-url.txt marks vision-capable even if the mmproj isn't downloaded yet
         bool supportsVision = File.Exists(Path.Combine(dir, "mmproj-url.txt"));
 
-        // Actual mmproj file on disk
-        string[] mmprojs = Directory.GetFiles(dir, "mmproj-*.gguf");
+        string[] mmprojs  = Directory.GetFiles(dir, "mmproj-*.gguf");
         string   mmprojRel = mmprojs.Length > 0
             ? Path.GetRelativePath(modelsPath, mmprojs[0]).Replace('\\', '/')
             : "";
         if (!string.IsNullOrEmpty(mmprojRel)) supportsVision = true;
 
-        // MTP: URL repo name or filename contains "MTP"
         bool hasMtp = downloadUrl.Contains("-MTP-", StringComparison.OrdinalIgnoreCase)
                    || relFile.Contains("MTP", StringComparison.OrdinalIgnoreCase);
 
@@ -175,26 +185,24 @@ public class ModelManager : IDisposable
         };
     }
 
-    private string? ResolveStartupFile(string? preferred)
+    private string? ResolveStartupFile(LlamaServerConfig serverConfig)
     {
-        // Try user-specified preferred file
-        if (!string.IsNullOrWhiteSpace(preferred) && File.Exists(Path.Combine(modelsPath, preferred)))
-            return preferred;
+        // 1. User override stored in model-settings.json
+        string stored = settingsStore.GetStartupFile(serverConfig.Name);
+        if (!string.IsNullOrWhiteSpace(stored) && File.Exists(Path.Combine(modelsPath, stored)))
+            return stored;
 
-        // Try config default
-        if (!string.IsNullOrWhiteSpace(llmConfig.StartupModel) &&
-            File.Exists(Path.Combine(modelsPath, llmConfig.StartupModel)))
-            return llmConfig.StartupModel;
+        // 2. Config StartupModel
+        if (!string.IsNullOrWhiteSpace(serverConfig.StartupModel) &&
+            File.Exists(Path.Combine(modelsPath, serverConfig.StartupModel)))
+            return serverConfig.StartupModel;
 
-        // First .gguf on disk (skip mmproj)
+        // 3. First .gguf on disk
         string[] all = Directory.GetFiles(modelsPath, "*.gguf", SearchOption.AllDirectories);
         return all.OrderBy(p => p)
                   .Select(p => Path.GetRelativePath(modelsPath, p).Replace('\\', '/'))
                   .FirstOrDefault(f => !f.Contains("mmproj", StringComparison.OrdinalIgnoreCase));
     }
-
-    private LlamaServerConfig GetServer() =>
-        llmConfig.Servers.Count > 0 ? llmConfig.Servers[0] : new LlamaServerConfig();
 
     private async Task WaitForIdle(string endpoint, int timeoutSeconds = 60)
     {
@@ -220,14 +228,15 @@ public class ModelManager : IDisposable
             catch { return; }
             await Task.Delay(500);
         }
-        logger.LogWarning("[ModelManager] Timed out waiting for idle — forcing shutdown.");
+        logger.LogWarning("[ModelManager] Timed out waiting for idle on '{Endpoint}' — forcing shutdown.", endpoint);
     }
 
     private static string NormFile(string f) => f.Replace('\\', '/').TrimStart('/');
 
     public void Dispose()
     {
-        activeServer?.Dispose();
+        foreach (var (server, _) in servers.Values)
+            server.Dispose();
         switchLock.Dispose();
     }
 }
