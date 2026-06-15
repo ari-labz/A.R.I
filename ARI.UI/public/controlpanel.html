@@ -188,6 +188,39 @@ html, body {
 .vs-detail { font-size: 12px; color: var(--text-dim); min-height: 16px; }
 .vs-separator { border: none; border-top: 1px solid var(--border); margin: 4px 0 16px; }
 
+/* ── model cards ──────────────────────────────────────── */
+.mdl-card { background:#fff; border:1px solid var(--border); border-radius:12px; padding:20px 22px; box-shadow:0 1px 4px rgba(0,0,0,.04); }
+.mdl-card.active { border-color:#518c9a; box-shadow:0 0 0 3px rgba(81,140,154,.12); }
+.mdl-card-header { display:flex; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap; }
+.mdl-card-name { font-size:15px; font-weight:700; color:var(--text); flex:1; min-width:0; }
+.mdl-card-badges { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+.mdl-badge { font-size:11px; font-weight:600; border-radius:20px; padding:2px 10px; white-space:nowrap; }
+.mdl-badge.active   { background:#dcfce7; color:#16a34a; }
+.mdl-badge.startup  { background:#eff6ff; color:#1d4ed8; }
+.mdl-badge.inactive { background:#f3f4f6; color:var(--text-dim); }
+.mdl-badge.notdl    { background:#fef3c7; color:#b45309; }
+.mdl-card-file { font-size:11px; color:var(--text-dim); font-family:ui-monospace,monospace; margin-bottom:10px; word-break:break-all; }
+.mdl-card-size { font-size:12px; color:var(--text-dim); margin-bottom:14px; }
+.mdl-card-notes { margin-bottom:14px; }
+.mdl-card-notes label { font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--text-dim); display:block; margin-bottom:6px; }
+.mdl-card-notes textarea { width:100%; font-family:inherit; font-size:13px; color:var(--text); background:#f9fafb; border:1px solid var(--border); border-radius:7px; padding:8px 10px; outline:none; transition:border-color .12s; resize:vertical; min-height:72px; line-height:1.5; }
+.mdl-card-notes textarea:focus { border-color:#518c9a; background:#fff; }
+.mdl-card-footer { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.mdl-btn-secondary { background:none; border:1px solid var(--border); color:var(--text-dim); border-radius:7px; padding:6px 14px; font-size:12px; font-family:inherit; cursor:pointer; transition:border-color .12s,color .12s; white-space:nowrap; }
+.mdl-btn-secondary:hover:not(:disabled) { border-color:#518c9a; color:var(--text); }
+.mdl-btn-secondary:disabled { opacity:.4; cursor:not-allowed; }
+.mdl-tags { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:14px; }
+.mdl-tag { font-size:10px; font-weight:700; letter-spacing:.05em; border-radius:5px; padding:2px 7px; white-space:nowrap; cursor:default; }
+.mdl-tag-param  { background:#eff6ff; color:#1d4ed8; }
+.mdl-tag-active { background:#f0fdf4; color:#15803d; }
+.mdl-tag-moe    { background:#faf5ff; color:#7c3aed; }
+.mdl-tag-dense  { background:#f3f4f6; color:#374151; }
+.mdl-tag-vision { background:#fff7ed; color:#c2410c; }
+.mdl-tag-mtp    { background:#fef9c3; color:#854d0e; }
+.mdl-tag-quant  { background:#f1f5f9; color:#475569; }
+.mdl-tag-perf   { background:#ecfdf5; color:#065f46; }
+.mdl-tag-dim    { background:#f3f4f6; color:#9ca3af; }
+
 @media (max-width: 640px) {
     #sidebar { position: fixed; top: 0; bottom: 0; left: 0; z-index: 200; height: 100dvh; width: var(--sidebar-w) !important; min-width: var(--sidebar-w) !important; transform: translateX(-100%); transition: transform .25s ease, box-shadow .25s ease; }
     #sidebar.mobile-open { transform: translateX(0); box-shadow: 4px 0 24px rgba(0,0,0,.35); }
@@ -212,6 +245,7 @@ html, body {
       </a>
       <div id="cp-sidebar-nav">
         <div class="cp-nav-item active" data-tab="overview">Overview</div>
+        <div class="cp-nav-item" data-tab="models">Models</div>
         <div class="cp-nav-item" data-tab="voice">Voice Synthesis</div>
         <div class="cp-nav-item" data-tab="conventions">Coding Conventions</div>
       </div>
@@ -227,6 +261,23 @@ html, body {
     <div id="cp-header">
       <img id="cp-logo" src="/images/logo-black.png" alt="A·R·I" />
       <span id="cp-title">Overview</span>
+    </div>
+
+    <!-- Models tab -->
+    <div id="tab-models" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+
+      <!-- Switch progress banner -->
+      <div id="mdl-switch-banner" style="display:none;margin-bottom:20px;" class="vs-section">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <span class="vs-section-title" style="margin:0" id="mdl-switch-phase-label">Switching model…</span>
+          <span id="mdl-switch-pct-label" style="font-size:12px;color:var(--text-dim)">0%</span>
+        </div>
+        <div class="vs-progress-track"><div class="vs-progress-fill" id="mdl-switch-fill" style="width:0%"></div></div>
+        <div id="mdl-switch-msg" style="font-size:12px;color:var(--text-dim);margin-top:6px;min-height:16px;"></div>
+      </div>
+
+      <!-- Model cards -->
+      <div id="mdl-cards" style="display:flex;flex-direction:column;gap:16px;"></div>
     </div>
 
     <!-- Voice Synthesis tab -->
@@ -333,8 +384,8 @@ html, body {
 // ── tab switching ─────────────────────────────────────────
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), voice: document.getElementById('tab-voice'), conventions: document.getElementById('tab-conventions') };
-const TAB_TITLES = { voice: 'Voice Synthesis', conventions: 'Coding Conventions', overview: 'Overview' };
+const tabs     = { overview: document.getElementById('tab-overview'), voice: document.getElementById('tab-voice'), conventions: document.getElementById('tab-conventions'), models: document.getElementById('tab-models') };
+const TAB_TITLES = { voice: 'Voice Synthesis', conventions: 'Coding Conventions', overview: 'Overview', models: 'Models' };
 
 function switchTab(name) {
     navItems.forEach(n => n.classList.toggle('active', n.dataset.tab === name));
@@ -343,6 +394,7 @@ function switchTab(name) {
     const gw = document.getElementById('cp-grid-wrap');
     if (gw) gw.style.display = name === 'overview' ? '' : 'none';
     if (name === 'conventions') loadConventions();
+    if (name === 'models') loadModels();
 }
 navItems.forEach(n => n.addEventListener('click', () => switchTab(n.dataset.tab)));
 switchTab('overview');
@@ -576,6 +628,7 @@ async function pollRam() {
         const callFinished = prevLiveKeys !== '' && live.length < prevLiveKeys.split(',').filter(Boolean).length;
         prevLiveKeys = liveKeys;
         renderLiveCalls(live);
+        renderContext(data.context ?? []);
         if (callFinished) pollStats();
     } catch { /* ignore */ }
 }
@@ -589,6 +642,198 @@ async function pollStats() {
 }
 pollRam(); setInterval(pollRam, 1000);
 pollStats(); setInterval(pollStats, 5000);
+
+// ── Models ────────────────────────────────────────────────
+let mdlSwitchEs = null;
+const mdlBanner     = document.getElementById('mdl-switch-banner');
+const mdlPhaseLabel = document.getElementById('mdl-switch-phase-label');
+const mdlPctLabel   = document.getElementById('mdl-switch-pct-label');
+const mdlFill       = document.getElementById('mdl-switch-fill');
+const mdlMsg        = document.getElementById('mdl-switch-msg');
+const mdlCards      = document.getElementById('mdl-cards');
+const mdlNoteTimers = {};
+
+async function loadModels() {
+    let data;
+    try { const r = await fetch('/api/cp/models'); data = await r.json(); }
+    catch { return; }
+    renderModelCards(data);
+    if (data.switching && !mdlSwitchEs) startSwitchProgressSse();
+}
+
+function fmtSize(mb) {
+    if (mb <= 0) return null;
+    return mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : mb.toFixed(1) + ' MB';
+}
+
+function parseModelTags(m) {
+    const fname = (m.file || '').split('/').pop().replace(/\.gguf$/i, '');
+    const tags = [];
+
+    // Total params: 35B, 7B, 0.5B — not preceded by A (active params marker)
+    const totalM = fname.match(/(?<![Aa])(\d+(?:\.\d+)?)B/);
+    const totalP = totalM ? parseFloat(totalM[1]) : null;
+
+    // Active params for MoE: -A3B, _A22B
+    const activeM = fname.match(/[_\-]A(\d+(?:\.\d+)?)B/i);
+    const activeP = activeM ? parseFloat(activeM[1]) : null;
+
+    const isMoE = activeP !== null || /moe/i.test(fname);
+
+    if (totalP  !== null) tags.push({ label: totalP + 'B',       cls: 'param',  title: 'Total parameters' });
+    if (activeP !== null) tags.push({ label: 'A' + activeP + 'B', cls: 'active', title: 'Active parameters (MoE)' });
+    tags.push(isMoE
+        ? { label: 'MoE',   cls: 'moe',   title: 'Mixture of Experts architecture' }
+        : { label: 'Dense', cls: 'dense', title: 'Dense transformer architecture' });
+
+    // Vision: hasMmproj = active, supportsVision = capable but mmproj not configured
+    if (m.hasMmproj) {
+        tags.push({ label: 'Vision', cls: 'vision', title: 'Vision active (mmproj configured)' });
+    } else if (m.supportsVision) {
+        tags.push({ label: 'Vision', cls: 'dim', title: 'Vision capable — mmproj not configured' });
+    } else {
+        tags.push({ label: 'No Vision', cls: 'dim', title: 'Text-only model' });
+    }
+
+    // MTP — from backend flag or filename
+    const hasMTP = m.hasMtp || /[_\-]mtp([_\-\.]|$)/i.test(fname);
+    tags.push(hasMTP
+        ? { label: 'MTP',    cls: 'mtp', title: 'Multi-Token Prediction enabled' }
+        : { label: 'No MTP', cls: 'dim', title: 'Standard single-token prediction' });
+
+    // Quantization
+    const quantM = fname.match(/[._\-](Q\d+(?:[_\-]K)?(?:[_\-][A-Z]+)?)/i);
+    const quantLabel = quantM ? quantM[1].toUpperCase().replace(/_/g, '_') : null;
+    const quantBits = { Q2: 2.63, Q3: 3.5, Q4: 4.5, Q5: 5.5, Q6: 6.5, Q8: 8.5 };
+    const quantKey = quantLabel ? quantLabel.match(/Q(\d+)/)?.[0] : null;
+    const bpw = quantKey ? (quantBits[quantKey] ?? 5.5) : 5.5;
+    if (quantLabel) tags.push({ label: quantLabel, cls: 'quant', title: 'Quantization format' });
+
+    // Estimated T/s — M4 Max unbinned: ~546 GB/s memory bandwidth
+    const inferP = activeP ?? totalP;
+    if (inferP !== null) {
+        const bw = 546; // GB/s
+        const gbPerToken = inferP * 1e9 * bpw / 8 / 1e9;
+        const tps = Math.round(bw / gbPerToken * 0.65);
+        tags.push({ label: '~' + tps + ' t/s', cls: 'perf', title: 'Estimated on M4 Max 48GB (theoretical ×65%)' });
+    }
+
+    return tags;
+}
+
+function renderModelCards(data) {
+    const switching = data.switching;
+    mdlCards.innerHTML = '';
+
+    (data.models ?? []).forEach(m => {
+        const card = document.createElement('div');
+        card.className = 'mdl-card' + (m.active ? ' active' : '');
+
+        // Badges
+        let badges = '';
+        if (m.active)       badges += '<span class="mdl-badge active">Active</span>';
+        else                badges += '<span class="mdl-badge inactive">Inactive</span>';
+        if (m.isStartup)    badges += '<span class="mdl-badge startup">Startup</span>';
+        if (!m.downloaded)  badges += '<span class="mdl-badge notdl">Not downloaded</span>';
+
+        const sizeStr = fmtSize(m.sizeMb);
+
+        // Footer buttons
+        let footer = '';
+        if (!m.active && !switching && m.downloaded)
+            footer += `<button class="vs-btn-primary mdl-switch-btn" data-file="${escHtml(m.file)}" style="font-size:12px;padding:7px 18px;">Load model</button>`;
+        if (!m.isStartup)
+            footer += `<button class="mdl-btn-secondary mdl-startup-btn" data-file="${escHtml(m.file)}">Set as startup</button>`;
+        footer += `<span class="mdl-save-status" style="font-size:12px;color:var(--text-dim);"></span>`;
+
+        const tagHtml = parseModelTags(m)
+            .map(t => `<span class="mdl-tag mdl-tag-${t.cls}" title="${escHtml(t.title ?? '')}">${escHtml(t.label)}</span>`)
+            .join('');
+
+        card.innerHTML = `
+            <div class="mdl-card-header">
+                <span class="mdl-card-name">${escHtml(m.name)}</span>
+                <div class="mdl-card-badges">${badges}</div>
+            </div>
+            ${m.downloadUrl
+                ? `<div class="mdl-card-file"><a href="${escHtml(m.downloadUrl)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;border-bottom:1px dashed var(--border);">${escHtml(m.downloadUrl)}</a></div>`
+                : `<div class="mdl-card-file">${escHtml(m.file)}</div>`}
+            ${sizeStr ? `<div class="mdl-card-size">${escHtml(sizeStr)}</div>` : ''}
+            <div class="mdl-tags">${tagHtml}</div>
+            <div class="mdl-card-notes">
+                <label>Notes</label>
+                <textarea placeholder="What is this model good or bad at? Any observations…" data-file="${escHtml(m.file)}">${escHtml(m.notes ?? '')}</textarea>
+            </div>
+            <div class="mdl-card-footer">${footer}</div>`;
+
+        // Notes autosave
+        const ta = card.querySelector('textarea');
+        const saveStatus = card.querySelector('.mdl-save-status');
+        ta.addEventListener('input', () => {
+            const file = ta.dataset.file;
+            clearTimeout(mdlNoteTimers[file]);
+            mdlNoteTimers[file] = setTimeout(async () => {
+                try {
+                    await fetch('/api/cp/models/notes', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ modelFile: file, notes: ta.value }) });
+                    saveStatus.textContent = 'Saved.';
+                    setTimeout(() => { saveStatus.textContent = ''; }, 2000);
+                } catch { saveStatus.textContent = 'Save failed.'; }
+            }, 800);
+        });
+
+        // Load model button
+        const switchBtn = card.querySelector('.mdl-switch-btn');
+        if (switchBtn) {
+            switchBtn.addEventListener('click', async () => {
+                switchBtn.disabled = true;
+                try {
+                    const r = await fetch('/api/cp/models/switch', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ file: switchBtn.dataset.file }) });
+                    if (!r.ok) { const err = await r.json().catch(()=>({})); alert(err.error ?? 'Switch failed.'); switchBtn.disabled = false; return; }
+                    startSwitchProgressSse();
+                    loadModels();
+                } catch { switchBtn.disabled = false; }
+            });
+        }
+
+        // Set as startup button
+        const startupBtn = card.querySelector('.mdl-startup-btn');
+        if (startupBtn) {
+            startupBtn.addEventListener('click', async () => {
+                startupBtn.disabled = true;
+                try {
+                    await fetch('/api/cp/models/startup', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ file: startupBtn.dataset.file }) });
+                    loadModels();
+                } catch { startupBtn.disabled = false; }
+            });
+        }
+
+        mdlCards.appendChild(card);
+    });
+}
+
+function startSwitchProgressSse() {
+    if (mdlSwitchEs) mdlSwitchEs.close();
+    mdlBanner.style.display = '';
+    mdlFill.className = 'vs-progress-fill';
+    const PHASES = { 'idle-wait':'Waiting for active requests to finish…', 'powering-down':'Powering down…', 'powering-up':'Powering up…', 'ready':'Model ready.', 'error':'Switch failed.' };
+
+    mdlSwitchEs = new EventSource('/api/cp/models/switch/progress');
+    mdlSwitchEs.onmessage = e => {
+        try {
+            const d = JSON.parse(e.data);
+            mdlPhaseLabel.textContent = PHASES[d.phase] ?? d.phase;
+            mdlPctLabel.textContent   = d.percent + '%';
+            mdlFill.style.width       = d.percent + '%';
+            mdlMsg.textContent        = d.message ?? '';
+            if (d.done) {
+                mdlFill.className = 'vs-progress-fill ' + (d.success ? 'done' : 'error');
+                mdlSwitchEs.close(); mdlSwitchEs = null;
+                setTimeout(() => { mdlBanner.style.display = 'none'; loadModels(); }, 1500);
+            }
+        } catch { /* ignore */ }
+    };
+    mdlSwitchEs.onerror = () => { if (mdlSwitchEs) { mdlSwitchEs.close(); mdlSwitchEs = null; } };
+}
 
 // ── Voice Synthesis ───────────────────────────────────────
 const vsDropzone = document.getElementById('vs-dropzone');

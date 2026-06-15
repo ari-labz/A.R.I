@@ -14,7 +14,7 @@ public class AriHostService : BackgroundService
 {
     private readonly ILoggerFactory loggerFactory;
     private Docker? docker;
-    private readonly List<LocalLlamaServer> llamaServers = new();
+    private ModelManager? modelManager;
     private DiscordService? discordService;
     private ApiService? webPanelService;
     private F5Synthesiser? synthesiser;
@@ -81,15 +81,9 @@ public class AriHostService : BackgroundService
         await docker.StartContainers();
         containersStarted = true;
 
-        foreach (LlamaModelConfig modelConfig in config.Llm.Models)
-        {
-            LlamaServerConfig serverConfig = config.Llm.Servers[modelConfig.ServerIndex];
-            LocalLlamaServer  llamaServer  = new(serverConfig, modelConfig, executableDirectory);
-            await llamaServer.IsReady();
-            llamaServers.Add(llamaServer);
-        }
-        if (llamaServers.Count > 0)
-            webPanelService?.SystemInfo.SetLlamaPid(llamaServers[0].Pid);
+        string startupFile = webPanelService!.ModelSettingsStore.GetStartupFile();
+        modelManager = new ModelManager(config.Llm, executableDirectory, webPanelService.ModelManagerHolder, loggerFactory);
+        await modelManager.StartInitialModelAsync(startupFile);
 
         Common.Logger.LogInformation("Loading agents...");
         LlmService llmService = new LlmService(config.Agents, config.Brain, loggerFactory);
@@ -307,8 +301,7 @@ public class AriHostService : BackgroundService
         if (webPanelService is not null)
             await webPanelService.Stop(cancellationToken);
 
-        foreach (LocalLlamaServer s in llamaServers)
-            s.Stop();
+        modelManager?.Dispose();
 
         if (docker != null && containersStarted)
             await docker.StopContainers();

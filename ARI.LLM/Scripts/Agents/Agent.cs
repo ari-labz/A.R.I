@@ -5,6 +5,7 @@ namespace ARI.LLM;
 public abstract class Agent
 {
     public    readonly string Name;
+    public    readonly string ModelName;
     internal  readonly string Endpoint;
     internal  readonly string ModelString;
     internal  readonly string SystemPrompt;
@@ -45,6 +46,7 @@ public abstract class Agent
     internal Agent(AgentConfig config)
     {
         Name           = config.Name;
+        ModelName      = config.ModelName;
         Endpoint       = config.Endpoint;
         ModelString    = config.Model;
         SystemPrompt   = config.SystemPrompt;

@@ -430,13 +430,42 @@ export default function App() {
 
                 if (type === "read_file") {
                     const content = await window.electronBridge!.readFile(localPath, params.path ?? "")
-                    // Number every line (1-indexed) so the model can build precise old_strings and
-                    // line up with the numbered snippets edit_file returns. Split on "\n" without
-                    // trimming so these numbers match fs.editFile's hint/snippet numbering exactly.
-                    const lines    = content.split("\n")
-                    const numbered = lines.map((l, i) => `${String(i + 1).padStart(6)}: ${l}`).join("\n")
-                    result = `[file: "${params.path}" (${lines.length} lines)]\n\`\`\`\n${numbered}\n\`\`\``
-                    console.warn(`[ToolSocket] → file_content  callId=${callId}  bytes=${result.length}`)
+                    const all     = content.split("\n")
+                    const total   = all.length
+
+                    // Honour start_line/end_line (1-indexed, inclusive). When neither is given, cap
+                    // whole-file reads of large files so a single read can't blow the context window
+                    // (a 93 KB file is ~30k tokens). The model is told to read a range or search instead.
+                    const rawStart = Number((params as unknown as { start_line?: unknown }).start_line)
+                    const rawEnd   = Number((params as unknown as { end_line?: unknown }).end_line)
+                    const explicit = Number.isFinite(rawStart) || Number.isFinite(rawEnd)
+                    let start = Number.isFinite(rawStart) && rawStart > 0 ? Math.min(Math.trunc(rawStart), total) : 1
+                    let end   = Number.isFinite(rawEnd)   && rawEnd   > 0 ? Math.min(Math.trunc(rawEnd),   total) : total
+                    if (end < start) end = start
+
+                    const READ_MAX_LINES = 1500
+                    const READ_MAX_CHARS = 60000
+                    let capped = false
+                    if (!explicit && total > 0) {
+                        let chars = 0, lim = total
+                        for (let i = 0; i < total; i++) {
+                            chars += all[i].length + 1
+                            if (i + 1 >= READ_MAX_LINES || chars >= READ_MAX_CHARS) { lim = i + 1; break }
+                        }
+                        if (lim < total) { end = lim; capped = true }
+                    }
+
+                    // Number lines from their real position so old_strings and edit_file snippets line up.
+                    const slice    = all.slice(start - 1, end)
+                    const numbered = slice.map((l, i) => `${String(start + i).padStart(6)}: ${l}`).join("\n")
+                    const header   = (start === 1 && end === total)
+                        ? `[file: "${params.path}" (${total} lines)]`
+                        : `[file: "${params.path}" lines ${start}-${end} of ${total}]`
+                    const capNote  = capped
+                        ? `\n[File is large (${total} lines) — only the first ${end} are shown. Read a specific range with start_line/end_line, or use search_files to find what you need, rather than reading the whole file.]`
+                        : ""
+                    result = `${header}\n\`\`\`\n${numbered}\n\`\`\`${capNote}`
+                    console.warn(`[ToolSocket] → file_content  callId=${callId}  bytes=${result.length}  lines=${start}-${end}/${total}${capped ? " CAPPED" : ""}`)
                     ws.send(JSON.stringify({ type: "file_content", callId, content: result }))
 
                 } else if (type === "list_directory") {
@@ -446,7 +475,9 @@ export default function App() {
                     ws.send(JSON.stringify({ type: "file_content", callId, content: result }))
 
                 } else if (type === "search_files") {
-                    const matches = await window.electronBridge!.searchFiles(localPath, params.pattern, params.path, params.glob)
+                    const ic = String((params as unknown as { ignore_case?: unknown }).ignore_case) === "true"
+                        || (params as unknown as { ignore_case?: unknown }).ignore_case === true
+                    const matches = await window.electronBridge!.searchFiles(localPath, params.pattern, params.path, params.glob, ic)
                     result = matches.length === 0
                         ? `No matches found for "${params.pattern}".`
                         : `[search: "${params.pattern}"]\n${matches.join("\n")}`
@@ -455,7 +486,7 @@ export default function App() {
 
                 } else if (type === "edit_file") {
                     // edit_file accepts a single old/new pair OR a MultiEdit-style batch via `edits`.
-                    const rawEdits = (params as unknown as { edits?: { old_string: string; new_string?: string; replace_all?: boolean }[] }).edits
+                    const rawEdits = (params as unknown as { edits?: { old_string?: string; new_string?: string; replace_all?: boolean; start_line?: number; end_line?: number }[] }).edits
                     const editsArr = Array.isArray(rawEdits) && rawEdits.length > 0 ? rawEdits : null
                     const replaceAll = String((params as unknown as { replace_all?: unknown }).replace_all) === "true"
                         || (params as unknown as { replace_all?: unknown }).replace_all === true
@@ -466,7 +497,14 @@ export default function App() {
                         console.warn(`[ToolSocket] → file_content (edit_file BLOCKED by safety)  callId=${callId}`)
                         ws.send(JSON.stringify({ type: "file_error", callId, error: `SAFETY MODE — file was NOT modified. Do not call edit_file or write_file again. Respond to the user now: tell them safety mode is on, show the proposed changes as a code block, and say they can disable safety mode (shield icon) to apply them.\n\nProposed diff for ${params.path}:\n\n${diff}` }))
                     } else {
-                        const res = await window.electronBridge!.editFile(localPath, params.path, params.old_string, params.new_string, { edits: editsArr ?? undefined, replaceAll })
+                        const sl = Number((params as unknown as { start_line?: unknown }).start_line)
+                        const el = Number((params as unknown as { end_line?: unknown }).end_line)
+                        const res = await window.electronBridge!.editFile(localPath, params.path, params.old_string, params.new_string, {
+                            edits: editsArr ?? undefined,
+                            replaceAll,
+                            startLine: Number.isFinite(sl) ? sl : undefined,
+                            endLine:   Number.isFinite(el) ? el : undefined,
+                        })
                         if (res.ok) {
                             // fs.editFile returns a full message with a numbered snippet around the
                             // edit, so the model sees the new state without re-reading the file.

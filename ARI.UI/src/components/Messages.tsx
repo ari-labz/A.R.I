@@ -131,7 +131,7 @@ function RecallNotes({ raw }: { raw: string }) {
 function CommandInput({ item }: { item: ThreadItem }) {
     const t = formatTime(item.timestamp)
     return (
-        <div className="msg-row command-exchange">
+        <div className="msg-row command-input-row">
             <div className="command-input">{item.input}</div>
             <div className="msg-time">{t}</div>
         </div>
@@ -141,7 +141,7 @@ function CommandInput({ item }: { item: ThreadItem }) {
 function CommandResponse({ item }: { item: ThreadItem }) {
     const t = formatTime(item.timestamp)
     return (
-        <div className="msg-row command-exchange">
+        <div className="msg-row command-response-row">
             <MdBubble content={item.response ?? ""} className="command-response-block" />
             <div className="msg-time">{t}</div>
         </div>

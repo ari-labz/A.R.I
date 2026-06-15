@@ -32,11 +32,14 @@ public class WebPanelConfig
 public class ApiService : IAsyncDisposable
 {
     private readonly ILoggerFactory loggerFactory;
-    private readonly LlmServiceHolder holder;
-    private readonly WebPanelConfig config;
-    private readonly SystemInfoHolder systemInfo;
+    private readonly LlmServiceHolder    holder;
+    private readonly WebPanelConfig      config;
+    private readonly SystemInfoHolder    systemInfo;
     private readonly DiscordServiceHolder discordHolder;
-    private readonly SpeechQueueHolder speechHolder;
+    private readonly SpeechQueueHolder   speechHolder;
+    private readonly ModelManagerHolder  modelManagerHolder;
+    private readonly ModelNotesStore     modelNotesStore;
+    private readonly ModelSettingsStore  modelSettingsStore;
     private WebApplication? app;
 
     // Cached internet connectivity — checked every 30 s in the background.
@@ -49,19 +52,25 @@ public class ApiService : IAsyncDisposable
         catch { _online = false; }
     }, null, TimeSpan.Zero, TimeSpan.FromSeconds(30));
 
-    public LlmServiceHolder     Holder        => holder;
-    public SystemInfoHolder     SystemInfo    => systemInfo;
-    public DiscordServiceHolder DiscordHolder => discordHolder;
-    public SpeechQueueHolder    SpeechHolder  => speechHolder;
+    public LlmServiceHolder     Holder             => holder;
+    public SystemInfoHolder     SystemInfo         => systemInfo;
+    public DiscordServiceHolder DiscordHolder      => discordHolder;
+    public SpeechQueueHolder    SpeechHolder       => speechHolder;
+    public ModelManagerHolder   ModelManagerHolder  => modelManagerHolder;
+    public ModelNotesStore      ModelNotesStore     => modelNotesStore;
+    public ModelSettingsStore   ModelSettingsStore  => modelSettingsStore;
 
     public ApiService(ILoggerFactory loggerFactory, WebPanelConfig config)
     {
-        this.loggerFactory    = loggerFactory;
-        this.holder           = new LlmServiceHolder();
-        this.config           = config;
-        this.systemInfo       = new SystemInfoHolder();
-        this.discordHolder    = new DiscordServiceHolder();
-        this.speechHolder     = new SpeechQueueHolder();
+        this.loggerFactory     = loggerFactory;
+        this.holder            = new LlmServiceHolder();
+        this.config            = config;
+        this.modelManagerHolder  = new ModelManagerHolder();
+        this.modelNotesStore    = new ModelNotesStore();
+        this.modelSettingsStore = new ModelSettingsStore();
+        this.systemInfo        = new SystemInfoHolder(modelManagerHolder);
+        this.discordHolder     = new DiscordServiceHolder();
+        this.speechHolder      = new SpeechQueueHolder();
     }
 
     public async Task Start(CancellationToken cancellationToken)
@@ -97,6 +106,9 @@ public class ApiService : IAsyncDisposable
         builder.Services.AddSingleton(config);
         builder.Services.AddSingleton<ProjectStore>();
         builder.Services.AddSingleton(systemInfo);
+        builder.Services.AddSingleton(modelManagerHolder);
+        builder.Services.AddSingleton(modelNotesStore);
+        builder.Services.AddSingleton(modelSettingsStore);
         builder.Services.AddSingleton(new VoiceTrainerHolder());
         builder.Services.AddSingleton(new DiscordServiceHolder());
         builder.Services.AddSingleton(speechHolder);

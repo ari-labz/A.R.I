@@ -570,6 +570,10 @@ public class Thread
         // the model to call update_todos first. Single-file tasks never trip it.
         HashSet<string>         turnEditPaths = new(StringComparer.OrdinalIgnoreCase);
         bool                    todoNudged = false;
+        // The model spells the same file inconsistently across calls ("X.cs" vs "Dir/X.cs"), which
+        // splits the per-file guard counters so the spiral cutoff never fires. Key everything by
+        // filename so failures on one file always accumulate to the same counter.
+        static string NormKey(string p) => System.IO.Path.GetFileName(p.Trim('"', '\'', ' ', '\\'));
         // Slots (message index + id + name) of every real tool-result message this turn, oldest first,
         // so context compaction can stub the oldest outputs when the window fills.
         List<(int Index, string CallId, string Name)> toolResultSlots = new();
@@ -997,7 +1001,7 @@ public class Thread
                         try
                         {
                             using JsonDocument rdoc = JsonDocument.Parse(call.Args.ToString());
-                            string rpath = rdoc.RootElement.GetProperty("path").GetString() ?? "";
+                            string rpath = NormKey(rdoc.RootElement.GetProperty("path").GetString() ?? "");
                             readCounts.TryGetValue(rpath, out int rc);
                             readCounts[rpath] = rc + 1;
                             if (rc >= 3)
@@ -1035,7 +1039,9 @@ public class Thread
 
                         if (!string.IsNullOrEmpty(editPath))
                         {
-                            if (editedPathsThisBatch.Contains(editPath))
+                            string key = NormKey(editPath);
+
+                            if (editedPathsThisBatch.Contains(key))
                             {
                                 result = $"[System: edit_file was already applied to {editPath} earlier in this same batch of tool calls. This second edit was NOT applied — its old_string was written against the file's previous content and would fail or corrupt it. Re-read {editPath}, then make the next edit.]";
                                 string skipLabel = System.IO.Path.GetFileName(editPath);
@@ -1054,7 +1060,7 @@ public class Thread
                                 }
                                 continue;
                             }
-                            editedPathsThisBatch.Add(editPath);
+                            editedPathsThisBatch.Add(key);
                         }
                     }
 
@@ -1067,7 +1073,7 @@ public class Thread
                         try
                         {
                             using JsonDocument tdoc = JsonDocument.Parse(call.Args.ToString());
-                            tp = (tdoc.RootElement.GetProperty("path").GetString() ?? "").Trim('"', '\'', ' ', '\\');
+                            tp = NormKey(tdoc.RootElement.GetProperty("path").GetString() ?? "");
                         }
                         catch { /* unparseable — skip the nudge, let normal handling report the error */ }
 
@@ -1100,7 +1106,7 @@ public class Thread
                         try
                         {
                             using JsonDocument tdoc = JsonDocument.Parse(call.Args.ToString());
-                            string tp = (tdoc.RootElement.GetProperty("path").GetString() ?? "").Trim('"', '\'', ' ', '\\');
+                            string tp = NormKey(tdoc.RootElement.GetProperty("path").GetString() ?? "");
                             if (!string.IsNullOrEmpty(tp)) turnEditPaths.Add(tp);
                         }
                         catch { /* ignore */ }
@@ -1130,6 +1136,7 @@ public class Thread
                             {
                                 using JsonDocument argDoc = JsonDocument.Parse(call.Args.ToString());
                                 string editPath = (argDoc.RootElement.GetProperty("path").GetString() ?? "").Trim('"', '\'', ' ');
+                                string editKey  = NormKey(editPath);
                                 // Contains (not StartsWith): the web-panel path wraps errors as
                                 // "[Error: old_string not found ...]", so StartsWith would miss them.
                                 // Any non-success outcome counts as a failure — not just
@@ -1139,28 +1146,22 @@ public class Thread
                                 bool edited = result.Contains("Successfully edited");
                                 if (edited)
                                 {
-                                    editedFiles.Add(editPath);
-                                    editFailStreak.Remove(editPath);
+                                    editedFiles.Add(editKey);
+                                    editFailStreak.Remove(editKey);
                                 }
                                 else
                                 {
-                                    editFailStreak.TryGetValue(editPath, out int streak);
-                                    editFailStreak[editPath] = ++streak;
+                                    editFailStreak.TryGetValue(editKey, out int streak);
+                                    editFailStreak[editKey] = ++streak;
 
-                                    if (editedFiles.Contains(editPath))
+                                    if (editedFiles.Contains(editKey))
                                         result += " This file was already edited earlier this turn — re-read it to see the current content before retrying.";
+                                    // Don't retype text that didn't match. Point the model at the path it
+                                    // already has the information for: line-anchored editing (it can see the
+                                    // line numbers) or a full rewrite. No hard cutoff — if it still can't,
+                                    // the prompt tells it to stop and ask the user.
                                     if (streak >= 2)
-                                        result += " Re-read the file before trying again. To change several places at once, make ONE edit_file call with an 'edits' array (each {old_string, new_string}) rather than many separate calls — or rewrite the whole file with write_file. Do NOT use run_command with sed/grep to edit files.";
-                                    if (streak >= 3)
-                                        result += $" edit_file has now failed {streak} times on this file. Re-read it, then make ONE edit with a larger exact block copied verbatim from the read output, or use write_file ONCE with the complete corrected file — then stop; do not write the same file repeatedly.";
-                                    if (streak >= 5)
-                                    {
-                                        // Hard stop the spiral: deny further tool calls so the next turn
-                                        // is forced to produce a text answer instead of a sixth failed edit.
-                                        forceNoMoreTools = true;
-                                        result += " Too many failed edit attempts on this file. No further tool calls will be accepted this turn — tell the user what change is needed and show the exact corrected code.";
-                                        Common.Logger.LogWarning("[{Agent}] ({Thread}) edit_file failed {Streak}x on '{File}' — cutting off tools for this turn.", agent.Name, threadKey, streak, editPath);
-                                    }
+                                        result += " Stop retyping the text. You have the line numbers from read_file/search_files — change these lines with start_line/end_line instead of old_string (one edit_file call with an 'edits' array if several lines), or rewrite the whole file with write_file. If you still cannot, stop and tell the user what is blocking you.";
                                 }
                             }
                             catch { /* ignore */ }
@@ -1174,7 +1175,11 @@ public class Thread
                             try
                             {
                                 using JsonDocument argDoc = JsonDocument.Parse(call.Args.ToString());
-                                string writePath = (argDoc.RootElement.GetProperty("path").GetString() ?? "").Trim('"', '\'', ' ');
+                                string writePath = NormKey(argDoc.RootElement.GetProperty("path").GetString() ?? "");
+                                // A full rewrite supersedes the file's edit history: clear the
+                                // edit-fail streak so the spiral-breaker doesn't keep blocking it.
+                                editFailStreak.Remove(writePath);
+                                editedFiles.Add(writePath);
                                 writeCounts.TryGetValue(writePath, out int wc);
                                 writeCounts[writePath] = ++wc;
                                 if (wc == 2)
@@ -1294,9 +1299,11 @@ public class Thread
             }
 
             // Finish-time checklist guard: if the model is about to stop while checklist items are
-            // still incomplete, remind it (capped) before letting it finish — stops dropped sub-tasks.
+            // still incomplete, remind it ONCE before letting it finish — catches a genuinely dropped
+            // sub-task. Capped at one so it can never trap the model when it is deliberately stopping
+            // to report a blocker back to the user (escalating is a valid outcome).
             bool toolsStillAvailable = !forceNoMoreTools && !(agent.MaxToolCalls > 0 && toolCallCount >= agent.MaxToolCalls);
-            if (pendingCalls.Count == 0 && IncompleteTodoCount() > 0 && todoReminders < 2 && toolsStillAvailable)
+            if (pendingCalls.Count == 0 && IncompleteTodoCount() > 0 && todoReminders < 1 && toolsStillAvailable)
             {
                 todoReminders++;
                 string pending = string.Join("\n", todos.Where(t => t.Status != "completed").Select(t => $"- {t.Content} ({t.Status})"));

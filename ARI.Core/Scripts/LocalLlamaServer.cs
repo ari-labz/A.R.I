@@ -2,7 +2,7 @@ using System.Diagnostics;
 
 namespace ARI.Core.Scripts;
 
-public class LocalLlamaServer : IDisposable
+internal class LocalLlamaServer : IDisposable
 {
     private readonly LlamaServerConfig server;
     private readonly LlamaModelConfig  model;

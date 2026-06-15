@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -12,7 +13,8 @@ public class TriliumClient
     private readonly string rootNoteId;
 
     // Full folder path → noteId.  Keys: "People", "People/Family", etc.
-    private readonly Dictionary<string, string> folderCache = new(StringComparer.OrdinalIgnoreCase);
+    // ConcurrentDictionary because parallel tree traversal writes to it from multiple tasks.
+    private readonly ConcurrentDictionary<string, string> folderCache = new(StringComparer.OrdinalIgnoreCase);
 
     // IDs of Unknown/ stubs that were suppressed during GetAllNoteIds because a non-Unknown
     // note with the same title exists. Populated on each call to GetAllNoteIds.
@@ -150,7 +152,11 @@ public class TriliumClient
 
     public async Task<List<string>> SearchNotes(string searchTerm)
     {
-        string encoded = Uri.EscapeDataString(searchTerm);
+        // Search both note titles and #alias labels so nicknames surface their canonical note.
+        // Trilium's *=* operator is a case-insensitive contains match.
+        string safe    = searchTerm.Replace("\"", "\\\"");
+        string query   = $"note.title *=* \"{safe}\" OR #alias *=* \"{safe}\"";
+        string encoded = Uri.EscapeDataString(query);
         HttpResponseMessage res = await http.GetAsync($"etapi/notes?search={encoded}");
         if (!res.IsSuccessStatusCode) return [];
 
@@ -160,6 +166,7 @@ public class TriliumClient
             .Select(n => n!["title"]?.GetValue<string>())
             .Where(t => !string.IsNullOrWhiteSpace(t))
             .Select(t => t!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 
@@ -293,22 +300,24 @@ public class TriliumClient
 
     private async Task<List<(string Id, string Title, string FolderPath, string BranchId)>> TraverseTree()
     {
-        List<(string, string, string, string)> notes = new();
-        HashSet<string> visited = new();
-        await Traverse(rootNoteId, notes, visited, folderPath: "", depth: 0, parentBranchId: "");
-        return notes;
+        // Thread-safe collections: siblings are fetched in parallel at every level.
+        ConcurrentBag<(string Id, string Title, string FolderPath, string BranchId)> notes = new();
+        ConcurrentDictionary<string, byte> visited = new();
+        await Traverse(rootNoteId, notes, visited, folderPath: "", depth: 0);
+        return notes.ToList();
     }
 
     // depth 0 = root  |  depth 1 = category folders  |  depth 2+ = notes
+    // All children of a node are fetched in parallel, cutting startup time from O(N) serial
+    // round-trips to O(tree depth) serial round-trips regardless of graph size.
     private async Task Traverse(
         string noteId,
-        List<(string Id, string Title, string FolderPath, string BranchId)> notes,
-        HashSet<string> visited,
+        ConcurrentBag<(string Id, string Title, string FolderPath, string BranchId)> notes,
+        ConcurrentDictionary<string, byte> visited,
         string folderPath,
-        int depth,
-        string parentBranchId)
+        int depth)
     {
-        if (!visited.Add(noteId)) return;
+        if (!visited.TryAdd(noteId, 0)) return;
 
         HttpResponseMessage res = await http.GetAsync($"etapi/notes/{noteId}");
         if (!res.IsSuccessStatusCode) return;
@@ -317,40 +326,32 @@ public class TriliumClient
         if (node is null) return;
 
         string? title    = node["title"]?.GetValue<string>();
-        // Capture the primary branch ID from parentBranchIds (Trilium ETAPI uses parentBranchIds, not branchIds).
         JsonArray? branchArr = node["parentBranchIds"] as JsonArray;
         string branchId  = branchArr?.FirstOrDefault()?.GetValue<string>() ?? string.Empty;
 
+        List<string> childIds = (node["childNoteIds"] as JsonArray ?? new JsonArray())
+            .Select(c => c?.GetValue<string>())
+            .Where(id => !string.IsNullOrWhiteSpace(id) && !id!.StartsWith("_"))
+            .Select(id => id!)
+            .ToList();
+
         if (depth == 1 && !string.IsNullOrWhiteSpace(title))
         {
-            // Category folder — register in cache, add the folder note itself to the index
-            // (so FindNoteId("People") can locate and update it), then recurse into children.
+            // Category folder — register in cache, add the folder note itself to the index,
+            // then recurse into all children in parallel.
             string thisFolderPath = title;
             folderCache[thisFolderPath] = noteId;
-            notes.Add((noteId, title, "", branchId)); // empty folderPath = lives at root level
-
-            JsonArray? children = node["childNoteIds"] as JsonArray;
-            foreach (JsonNode? child in children ?? new JsonArray())
-            {
-                string? childId = child?.GetValue<string>();
-                if (!string.IsNullOrWhiteSpace(childId) && !childId.StartsWith("_"))
-                    await Traverse(childId, notes, visited, thisFolderPath, depth + 1, branchId);
-            }
+            notes.Add((noteId, title, "", branchId));
+            await Task.WhenAll(childIds.Select(childId =>
+                Traverse(childId, notes, visited, thisFolderPath, depth + 1)));
             return;
         }
 
         if (depth >= 2 && !string.IsNullOrWhiteSpace(title))
             notes.Add((noteId, title, folderPath, branchId));
 
-        JsonArray? noteChildren = node["childNoteIds"] as JsonArray;
-        if (noteChildren is null) return;
-
-        foreach (JsonNode? child in noteChildren)
-        {
-            string? childId = child?.GetValue<string>();
-            if (string.IsNullOrWhiteSpace(childId) || childId.StartsWith("_")) continue;
-            await Traverse(childId, notes, visited, folderPath, depth + 1, branchId);
-        }
+        await Task.WhenAll(childIds.Select(childId =>
+            Traverse(childId, notes, visited, folderPath, depth + 1)));
     }
 
     // ── Folder management ───────────────────────────────────────────────────────
@@ -430,6 +431,22 @@ public class TriliumClient
     }
 
     // ── Attribute API ───────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Replaces all #alias labels on a note with the given set.
+    /// Clears existing aliases first so renames don't leave stale values.
+    /// </summary>
+    public async Task SetAliasLabels(string noteId, IReadOnlyList<string> aliases)
+    {
+        List<(string AttributeId, string Type, string Name, string Value)> attrs = await GetNoteAttributes(noteId);
+        foreach ((string attrId, string type, string name, string _) in attrs)
+            if (type == "label" && name == "alias")
+                await DeleteAttribute(attrId);
+
+        foreach (string alias in aliases)
+            if (!string.IsNullOrWhiteSpace(alias))
+                await CreateLabelAttribute(noteId, "alias", alias.Trim());
+    }
 
     /// <summary>Adds a label attribute to a note. Duplicates are allowed — caller deduplicates if needed.</summary>
     public async Task CreateLabelAttribute(string noteId, string name, string value = "")
