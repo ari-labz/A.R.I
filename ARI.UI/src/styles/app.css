@@ -833,6 +833,17 @@ html, body {
 .msg-time { font-size: 11px; color: #9ca3af; margin-top: 4px; }
 .msg-row.user .msg-time { text-align: right; }
 .msg-row.assistant .msg-time { text-align: left; }
+.msg-footer { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.msg-footer .msg-time { margin-top: 0; }
+.btn-speak {
+    display: flex; align-items: center; justify-content: center;
+    background: none; border: none; padding: 3px; border-radius: 5px;
+    cursor: pointer; color: #9ca3af; opacity: 0.45;
+    transition: opacity 0.15s, color 0.15s; flex-shrink: 0;
+}
+.btn-speak:hover { opacity: 1; color: var(--accent, #223742); }
+.btn-speak.speaking { opacity: 1; color: var(--accent, #223742); animation: speak-pulse 1.2s ease-in-out infinite; }
+@keyframes speak-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
 /* ── tool cards (inline in response bubble) ─────────────── */
 .tool-card {

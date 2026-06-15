@@ -166,7 +166,7 @@ internal class LocalLlamaServer : IDisposable
             return;
         }
 
-        string url = $"{model.DownloadBaseUrl}/{filename}";
+        string url = $"{model.DownloadBaseUrl}/{Path.GetFileName(filename)}";
         Common.Logger.LogInformation("Downloading {File} — this may take a while...", filename);
         await DownloadFile(url, destPath, filename);
         Common.Logger.LogInformation("Download complete: {File}", filename);

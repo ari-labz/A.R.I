@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="/css/gridstack-extra.min.css" />
   <script src="/js/gridstack-all.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3/dist/chartjs-plugin-annotation.min.js"></script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -128,9 +129,18 @@ html, body {
 .token-half-fill { height: 100%; border-radius: 0; transition: width .4s ease; flex-shrink: 0; }
 .token-half-val  { font-size: 11px; font-weight: 600; color: var(--text); white-space: nowrap; flex-shrink: 0; min-width: 80px; text-align: right; }
 
-/* ── RAM chart ───────────────────────────────────────── */
+/* ── RAM charts ──────────────────────────────────────── */
 .cp-chart-body { padding: 8px 10px 6px; display: flex; align-items: stretch; }
 .cp-chart-body canvas { width: 100% !important; height: 100% !important; }
+.ram-dual-body { display: flex; gap: 10px; padding: 8px 10px 6px; overflow: hidden; height: 100%; box-sizing: border-box; }
+.ram-line-wrap { flex: 1.5; min-width: 0; position: relative; }
+.ram-pie-wrap  { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; overflow: hidden; }
+.ram-pie-wrap canvas { width: 100% !important; max-height: 130px; }
+#ram-pie-legend { display: flex; flex-direction: column; gap: 3px; width: 100%; overflow-y: auto; flex: 1; }
+.pie-legend-row { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--text); white-space: nowrap; overflow: hidden; }
+.pie-legend-swatch { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+.pie-legend-label  { flex: 1; overflow: hidden; text-overflow: ellipsis; color: var(--text-dim); font-size: 10px; }
+.pie-legend-val    { font-weight: 600; flex-shrink: 0; font-size: 10px; }
 
 /* ── thread rows ─────────────────────────────────────── */
 #context-rows { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; }
@@ -246,6 +256,7 @@ html, body {
       <div id="cp-sidebar-nav">
         <div class="cp-nav-item active" data-tab="overview">Overview</div>
         <div class="cp-nav-item" data-tab="models">Models</div>
+        <div class="cp-nav-item" data-tab="voicesettings">Voice Settings</div>
         <div class="cp-nav-item" data-tab="voice">Voice Synthesis</div>
         <div class="cp-nav-item" data-tab="conventions">Coding Conventions</div>
       </div>
@@ -278,6 +289,27 @@ html, body {
 
       <!-- Model cards -->
       <div id="mdl-cards" style="display:flex;flex-direction:column;gap:16px;"></div>
+    </div>
+
+    <!-- Voice Settings tab -->
+    <div id="tab-voicesettings" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div class="vs-section">
+        <div class="vs-section-title">Volume</div>
+        <div style="display:flex;align-items:center;gap:14px;margin-top:4px;">
+          <input type="range" id="vol-slider" min="0" max="500" step="1" value="100" style="flex:1;accent-color:var(--accent,#223742);">
+          <input type="number" id="vol-number" min="0" max="500" step="1" value="100" class="vs-input" style="width:76px;text-align:right;">
+          <span style="font-size:13px;color:var(--text-dim)">%</span>
+        </div>
+      </div>
+      <div class="vs-section">
+        <div class="vs-section-title">Test Voice</div>
+        <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+          <label class="vs-label" style="flex:1;min-width:180px;">Text<input type="text" id="vs-tv-text" class="vs-input" placeholder="Type something to say…" autocomplete="off"></label>
+          <label class="vs-label" style="min-width:140px;">Voice model<select id="vs-tv-model" class="vs-input"></select></label>
+          <button class="vs-btn-primary" id="vs-tv-speak-btn" type="button">Speak</button>
+        </div>
+        <span id="vs-tv-status" style="font-size:12px;color:var(--text-dim);margin-top:6px;display:block;"></span>
+      </div>
     </div>
 
     <!-- Voice Synthesis tab -->
@@ -362,18 +394,19 @@ html, body {
               <div class="cp-widget-body" style="padding:0;overflow-y:auto"><div id="live-calls-section"></div><div id="token-rows" style="padding:8px 14px 12px"><div class="cp-placeholder">Waiting for data…</div></div></div>
             </div>
           </div>
-          <div class="grid-stack-item" gs-x="8" gs-y="6" gs-w="4" gs-h="4">
+          <div class="grid-stack-item" gs-x="8" gs-y="5" gs-w="8" gs-h="5">
             <div class="grid-stack-item-content cp-widget" id="widget-ram">
               <div class="cp-widget-header"><span class="cp-widget-title">RAM</span><span class="cp-widget-badge" id="ram-badge">—</span></div>
-              <div class="cp-widget-body cp-chart-body"><canvas id="ram-chart"></canvas></div>
+              <div class="cp-widget-body ram-dual-body">
+                <div class="ram-line-wrap"><canvas id="ram-chart"></canvas></div>
+                <div class="ram-pie-wrap">
+                  <canvas id="ram-pie-chart"></canvas>
+                  <div id="ram-pie-legend"></div>
+                </div>
+              </div>
             </div>
           </div>
-          <div class="grid-stack-item" gs-x="12" gs-y="6" gs-w="4" gs-h="4">
-            <div class="grid-stack-item-content cp-widget" id="widget-context">
-              <div class="cp-widget-header"><span class="cp-widget-title">Threads</span></div>
-              <div class="cp-widget-body" id="context-rows"><div class="cp-placeholder">No active threads</div></div>
-            </div>
-          </div>
+          <div id="context-rows" style="display:none"></div>
         </div>
       </div>
     </div>
@@ -384,8 +417,8 @@ html, body {
 // ── tab switching ─────────────────────────────────────────
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), voice: document.getElementById('tab-voice'), conventions: document.getElementById('tab-conventions'), models: document.getElementById('tab-models') };
-const TAB_TITLES = { voice: 'Voice Synthesis', conventions: 'Coding Conventions', overview: 'Overview', models: 'Models' };
+const tabs     = { overview: document.getElementById('tab-overview'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), conventions: document.getElementById('tab-conventions'), models: document.getElementById('tab-models') };
+const TAB_TITLES = { voice: 'Voice Synthesis', voicesettings: 'Voice Settings', conventions: 'Coding Conventions', overview: 'Overview', models: 'Models' };
 
 function switchTab(name) {
     navItems.forEach(n => n.classList.toggle('active', n.dataset.tab === name));
@@ -448,13 +481,12 @@ document.getElementById('btn-toggle-sidebar').addEventListener('click', () => se
 floatBtn.addEventListener('click', () => setSidebarCollapsed(false));
 
 // ── gridstack ─────────────────────────────────────────────
-const LAYOUT_KEY = 'ari-cp-layout-v2';
+const LAYOUT_KEY = 'ari-cp-layout-v3';
 const COLS = 16, ROWS = 10, MARGIN = 8;
 const DEFAULT_LAYOUT = [
-    { id: 'widget-log',     x: 0,  y: 0, w: 8, h: 10 },
-    { id: 'widget-tokens',  x: 8,  y: 0, w: 8, h: 6  },
-    { id: 'widget-ram',     x: 8,  y: 6, w: 4, h: 4  },
-    { id: 'widget-context', x: 12, y: 6, w: 4, h: 4  },
+    { id: 'widget-log',    x: 0, y: 0, w: 8, h: 10 },
+    { id: 'widget-tokens', x: 8, y: 0, w: 8, h: 5  },
+    { id: 'widget-ram',    x: 8, y: 5, w: 8, h: 5  },
 ];
 let savedLayout = null;
 try { savedLayout = JSON.parse(localStorage.getItem(LAYOUT_KEY)); } catch {}
@@ -500,23 +532,92 @@ function appendLogLine(text) {
     es.onmessage = e  => appendLogLine(e.data.replace(/↵/g, '\n'));
 })();
 
-// ── RAM chart ─────────────────────────────────────────────
+// ── RAM line chart ────────────────────────────────────────
 const RAM_HISTORY = 1800;
-const ramLabels = [], ramData = [];
+const RAM_LIMIT_MB = 48 * 1024;
+const ramLabels = [], ramData = [], swapData = [];
 const ramBadge = document.getElementById('ram-badge');
 const ramCtx = document.getElementById('ram-chart').getContext('2d');
 const ramChart = new Chart(ramCtx, {
     type: 'line',
-    data: { labels: ramLabels, datasets: [{ data: ramData, borderColor: '#518c9a', backgroundColor: 'rgba(81,140,154,.10)', borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.3 }] },
+    data: {
+        labels: ramLabels,
+        datasets: [
+            { data: ramData, borderColor: '#518c9a', backgroundColor: 'rgba(81,140,154,.10)', borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.3, label: 'RAM' },
+            { data: swapData, borderColor: '#ef4444', backgroundColor: 'transparent', borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0.3, label: 'Swap' }
+        ]
+    },
     options: {
         animation: false, responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => fmtMb(ctx.parsed.y) + ' MB' } } },
+        plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: ctx => ctx.dataset.label + ': ' + fmtMb(ctx.parsed.y) } },
+            annotation: {
+                annotations: {
+                    ramLimit: {
+                        type: 'line', yMin: RAM_LIMIT_MB, yMax: RAM_LIMIT_MB,
+                        borderColor: 'rgba(239,68,68,0.45)', borderWidth: 1.5,
+                        borderDash: [6, 4],
+                        label: { display: false }
+                    }
+                }
+            }
+        },
         scales: {
             x: { display: true, grid: { display: false }, ticks: { font: { size: 9 }, color: '#9ca3af', maxRotation: 0, autoSkip: false, callback: function(val, idx) { return idx % 300 === 0 ? this.getLabelForValue(val) : ''; } } },
             y: { display: true, grid: { color: 'rgba(0,0,0,.05)' }, ticks: { font: { size: 10 }, color: '#9ca3af', callback: v => fmtMbShort(v) }, suggestedMin: 0 }
         }
     }
 });
+
+// ── RAM pie chart ─────────────────────────────────────────
+const PIE_COLORS = {
+    Logic:    ['#518c9a', '#a8d5dd'],
+    Dialogue: ['#7c5cbf', '#c4b5fd'],
+    TTS:      ['#4a9e6c'],
+};
+function pieColor(serverName, idx) {
+    const p = PIE_COLORS[serverName] ?? ['#6b7280', '#9ca3af'];
+    return p[idx] ?? p[p.length - 1];
+}
+const ramPieCtx = document.getElementById('ram-pie-chart').getContext('2d');
+const ramPieChart = new Chart(ramPieCtx, {
+    type: 'doughnut',
+    data: { labels: [], datasets: [{ data: [], backgroundColor: [], borderWidth: 1, borderColor: 'rgba(0,0,0,.08)' }] },
+    options: {
+        animation: false, responsive: true, maintainAspectRatio: true, cutout: '58%',
+        plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${fmtMb(ctx.parsed)}` } }
+        }
+    }
+});
+const ramPieLegend = document.getElementById('ram-pie-legend');
+let lastBreakdownJson = '';
+function updateRamPie(breakdown) {
+    const json = JSON.stringify(breakdown);
+    if (json === lastBreakdownJson) return;
+    lastBreakdownJson = json;
+    const serverIdx = {}, labels = [], values = [], colors = [];
+    breakdown.forEach(seg => {
+        const i = serverIdx[seg.serverName] ?? 0;
+        serverIdx[seg.serverName] = i + 1;
+        labels.push(seg.label); values.push(seg.mb); colors.push(pieColor(seg.serverName, i));
+    });
+    ramPieChart.data.labels = labels;
+    ramPieChart.data.datasets[0].data = values;
+    ramPieChart.data.datasets[0].backgroundColor = colors;
+    ramPieChart.update('none');
+    ramPieLegend.innerHTML = '';
+    breakdown.forEach((seg, i) => {
+        const row = document.createElement('div');
+        row.className = 'pie-legend-row';
+        row.innerHTML = `<span class="pie-legend-swatch" style="background:${colors[i]}"></span>`
+            + `<span class="pie-legend-label" title="${escHtml(seg.label)}">${escHtml(seg.label)}</span>`
+            + `<span class="pie-legend-val">${fmtMb(seg.mb)}</span>`;
+        ramPieLegend.appendChild(row);
+    });
+}
 
 // ── token/context rendering ───────────────────────────────
 const tokenRows = document.getElementById('token-rows');
@@ -619,10 +720,11 @@ async function pollRam() {
         const res = await fetch('/api/cp/ram');
         const data = await res.json();
         const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        ramLabels.push(now); ramData.push(data.ramMb);
-        if (ramLabels.length > RAM_HISTORY) { ramLabels.shift(); ramData.shift(); }
+        ramLabels.push(now); ramData.push(data.ramMb); swapData.push(data.swapMb ?? 0);
+        if (ramLabels.length > RAM_HISTORY) { ramLabels.shift(); ramData.shift(); swapData.shift(); }
         ramChart.update('none');
         ramBadge.textContent = fmtMb(data.ramMb);
+        if (data.breakdown?.length) updateRamPie(data.breakdown);
         const live = data.liveCalls ?? [];
         const liveKeys = live.map(c => c.threadKey).join(',');
         const callFinished = prevLiveKeys !== '' && live.length < prevLiveKeys.split(',').filter(Boolean).length;
@@ -942,6 +1044,67 @@ vsTrainBtn.addEventListener('click', async () => {
         connectProgressSse();
     } catch (err) { vsStopTimer(); vsAppendLog('Error: ' + err.message, 'log-error'); vsLogBadge.textContent = 'failed'; vsLogBadge.classList.remove('live'); vsTrainBtn.disabled = false; }
 });
+
+// ── Volume ────────────────────────────────────────────────
+const VOLUME_KEY = 'ari-voice-volume';
+const volSlider  = document.getElementById('vol-slider');
+const volNumber  = document.getElementById('vol-number');
+
+function getVolumePct() { return parseFloat(localStorage.getItem(VOLUME_KEY) ?? '100'); }
+function setVolumePct(v) {
+    v = Math.max(0, Math.min(500, Math.round(v)));
+    localStorage.setItem(VOLUME_KEY, String(v));
+    if (volSlider) volSlider.value = v;
+    if (volNumber) volNumber.value = v;
+}
+
+if (volSlider && volNumber) {
+    setVolumePct(getVolumePct());
+    volSlider.addEventListener('input', () => setVolumePct(+volSlider.value));
+    volNumber.addEventListener('change', () => setVolumePct(+volNumber.value));
+    volNumber.addEventListener('keydown', e => { if (e.key === 'Enter') setVolumePct(+volNumber.value); });
+}
+
+// ── Voice Settings — Test Voice ───────────────────────────
+const vsTvText     = document.getElementById('vs-tv-text');
+const vsTvModel    = document.getElementById('vs-tv-model');
+const vsTvSpeakBtn = document.getElementById('vs-tv-speak-btn');
+const vsTvStatus   = document.getElementById('vs-tv-status');
+
+async function loadVoiceSettingsModels() {
+    try {
+        const [mr, ar] = await Promise.all([fetch('/api/cp/voice/models'), fetch('/api/cp/voice/active')]);
+        const { models } = await mr.json(), { model: activeModel, ready } = await ar.json();
+        vsTvModel.innerHTML = models.length
+            ? models.map(m => `<option value="${escHtml(m)}"${m===activeModel?' selected':''}>${escHtml(m)}${m===activeModel?' ✓':''}</option>`).join('')
+            : '<option value="">No models found</option>';
+        vsTvStatus.textContent = ready ? `Active: ${activeModel}` : 'Voice module not running';
+    } catch { vsTvModel.innerHTML = '<option value="">Failed to load</option>'; }
+}
+loadVoiceSettingsModels();
+
+vsTvSpeakBtn.addEventListener('click', async () => {
+    const text = vsTvText.value.trim(), modelName = vsTvModel.value;
+    if (!text) return;
+    vsTvSpeakBtn.disabled = true; vsTvStatus.textContent = 'Synthesising…';
+    try {
+        const resp = await fetch('/api/cp/voice/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, modelName }) });
+        if (!resp.ok) { const err = await resp.json().catch(() => ({ error: resp.statusText })); vsTvStatus.textContent = 'Error: ' + (err.error ?? resp.statusText); }
+        else {
+            const audioCtx = new AudioContext();
+            const buf = await audioCtx.decodeAudioData(await resp.arrayBuffer());
+            const gain = audioCtx.createGain();
+            gain.gain.value = getVolumePct() / 100;
+            const src = audioCtx.createBufferSource();
+            src.buffer = buf;
+            src.connect(gain); gain.connect(audioCtx.destination);
+            src.start();
+            vsTvStatus.textContent = '';
+        }
+    } catch (err) { vsTvStatus.textContent = 'Error: ' + err.message; }
+    finally { vsTvSpeakBtn.disabled = false; }
+});
+vsTvText.addEventListener('keydown', e => { if (e.key === 'Enter') vsTvSpeakBtn.click(); });
 
 // ── Test Voice ────────────────────────────────────────────
 const tvText = document.getElementById('tv-text'), tvModel = document.getElementById('tv-model'), tvSpeakBtn = document.getElementById('tv-speak-btn'), tvStatus = document.getElementById('tv-status');

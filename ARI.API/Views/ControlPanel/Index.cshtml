@@ -172,30 +172,25 @@
                     </div>
                 </div>
 
-                <!-- RAM line chart -->
-                <div class="grid-stack-item" gs-x="8" gs-y="6" gs-w="4" gs-h="4">
+                <!-- RAM: line chart + pie chart -->
+                <div class="grid-stack-item" gs-x="8" gs-y="5" gs-w="8" gs-h="5">
                     <div class="grid-stack-item-content cp-widget" id="widget-ram">
                         <div class="cp-widget-header">
                             <span class="cp-widget-title">RAM</span>
                             <span class="cp-widget-badge" id="ram-badge">—</span>
                         </div>
-                        <div class="cp-widget-body cp-chart-body">
-                            <canvas id="ram-chart"></canvas>
+                        <div class="cp-widget-body ram-dual-body">
+                            <div class="ram-line-wrap"><canvas id="ram-chart"></canvas></div>
+                            <div class="ram-pie-wrap">
+                                <canvas id="ram-pie-chart"></canvas>
+                                <div id="ram-pie-legend"></div>
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Context usage -->
-                <div class="grid-stack-item" gs-x="12" gs-y="6" gs-w="4" gs-h="4">
-                    <div class="grid-stack-item-content cp-widget" id="widget-context">
-                        <div class="cp-widget-header">
-                            <span class="cp-widget-title">Threads</span>
-                        </div>
-                        <div class="cp-widget-body" id="context-rows">
-                            <div class="cp-placeholder">No active threads</div>
-                        </div>
-                    </div>
-                </div>
+                <!-- context-rows is kept off-grid; JS still updates it -->
+                <div id="context-rows" style="display:none"></div>
 
             </div>
         </div>
@@ -320,9 +315,18 @@
 .token-half-fill { height: 100%; border-radius: 0; transition: width .4s ease; flex-shrink: 0; }
 .token-half-val  { font-size: 11px; font-weight: 600; color: var(--text); white-space: nowrap; flex-shrink: 0; min-width: 80px; text-align: right; }
 
-/* ── RAM chart ────────────────────────────────────────── */
+/* ── RAM charts ───────────────────────────────────────── */
 .cp-chart-body { padding: 8px 10px 6px; display: flex; align-items: stretch; }
 .cp-chart-body canvas { width: 100% !important; height: 100% !important; }
+.ram-dual-body { display: flex; gap: 10px; padding: 8px 10px 6px; overflow: hidden; }
+.ram-line-wrap { flex: 1.5; min-width: 0; position: relative; }
+.ram-pie-wrap  { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.ram-pie-wrap canvas { max-height: 140px; }
+#ram-pie-legend { display: flex; flex-direction: column; gap: 3px; width: 100%; overflow-y: auto; }
+.pie-legend-row { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--text); white-space: nowrap; overflow: hidden; }
+.pie-legend-swatch { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+.pie-legend-label  { flex: 1; overflow: hidden; text-overflow: ellipsis; color: var(--text-dim); }
+.pie-legend-val    { font-weight: 600; flex-shrink: 0; }
 
 /* ── thread rows ──────────────────────────────────────── */
 #context-rows { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; }
@@ -494,17 +498,16 @@ document.getElementById('btn-toggle-sidebar').addEventListener('click', () => se
 floatBtn.addEventListener('click', () => setSidebarCollapsed(false));
 
 // ── gridstack ────────────────────────────────────────────
-const LAYOUT_KEY  = 'ari-cp-layout-v2';
+const LAYOUT_KEY  = 'ari-cp-layout-v3';
 const COLS        = 16;
 const ROWS        = 10;
 const MARGIN      = 8;
 
 // Default positions used on first load or when saved layout is cleared
 const DEFAULT_LAYOUT = [
-    { id: 'widget-log',     x: 0,  y: 0, w: 8, h: 10 },
-    { id: 'widget-tokens',  x: 8,  y: 0, w: 8, h: 6  },
-    { id: 'widget-ram',     x: 8,  y: 6, w: 4, h: 4  },
-    { id: 'widget-context', x: 12, y: 6, w: 4, h: 4  },
+    { id: 'widget-log',     x: 0, y: 0, w: 8, h: 10 },
+    { id: 'widget-tokens',  x: 8, y: 0, w: 8, h: 5  },
+    { id: 'widget-ram',     x: 8, y: 5, w: 8, h: 5  },
 ];
 
 let savedLayout = null;
@@ -645,6 +648,71 @@ const ramChart = new Chart(ramCtx, {
         }
     }
 });
+
+// ── RAM pie chart ─────────────────────────────────────────
+const PIE_COLORS = {
+    Logic:     ['#518c9a', '#a8d5dd'],  // [model, KV]
+    Dialogue:  ['#7c5cbf', '#c4b5fd'],
+    TTS:       ['#4a9e6c'],
+};
+function pieColor(serverName, idx) {
+    const palette = PIE_COLORS[serverName] ?? ['#6b7280', '#9ca3af'];
+    return palette[idx] ?? palette[palette.length - 1];
+}
+
+const ramPieCtx  = document.getElementById('ram-pie-chart').getContext('2d');
+const ramPieChart = new Chart(ramPieCtx, {
+    type: 'doughnut',
+    data: { labels: [], datasets: [{ data: [], backgroundColor: [], borderWidth: 1, borderColor: 'rgba(0,0,0,.08)' }] },
+    options: {
+        animation: false,
+        responsive: true,
+        maintainAspectRatio: true,
+        cutout: '58%',
+        plugins: {
+            legend: { display: false },
+            tooltip: {
+                callbacks: { label: ctx => ` ${ctx.label}: ${fmtMb(ctx.parsed)}` }
+            }
+        }
+    }
+});
+
+const ramPieLegend = document.getElementById('ram-pie-legend');
+let lastBreakdownJson = '';
+
+function updateRamPie(breakdown) {
+    const json = JSON.stringify(breakdown);
+    if (json === lastBreakdownJson) return;
+    lastBreakdownJson = json;
+
+    // Track how many segments we've seen per server for color indexing
+    const serverIdx = {};
+    const labels = [], values = [], colors = [];
+    breakdown.forEach(seg => {
+        const i = serverIdx[seg.serverName] ?? 0;
+        serverIdx[seg.serverName] = i + 1;
+        labels.push(seg.label);
+        values.push(seg.mb);
+        colors.push(pieColor(seg.serverName, i));
+    });
+
+    ramPieChart.data.labels = labels;
+    ramPieChart.data.datasets[0].data = values;
+    ramPieChart.data.datasets[0].backgroundColor = colors;
+    ramPieChart.update('none');
+
+    ramPieLegend.innerHTML = '';
+    breakdown.forEach((seg, i) => {
+        const row = document.createElement('div');
+        row.className = 'pie-legend-row';
+        row.innerHTML =
+            `<span class="pie-legend-swatch" style="background:${colors[i]}"></span>` +
+            `<span class="pie-legend-label" title="${escHtml(seg.label)}">${escHtml(seg.label)}</span>` +
+            `<span class="pie-legend-val">${fmtMb(seg.mb)}</span>`;
+        ramPieLegend.appendChild(row);
+    });
+}
 
 // ── token rows ────────────────────────────────────────────
 const tokenRows      = document.getElementById('token-rows');
@@ -893,6 +961,7 @@ async function pollRam() {
         if (ramLabels.length > RAM_HISTORY) { ramLabels.shift(); ramData.shift(); }
         ramChart.update('none');
         ramBadge.textContent = fmtMb(data.ramMb);
+        if (data.breakdown?.length) updateRamPie(data.breakdown);
         const live    = data.liveCalls ?? [];
         const liveKeys = live.map(c => c.threadKey).join(',');
         const callFinished = prevLiveKeys !== '' && live.length < prevLiveKeys.split(',').filter(Boolean).length;

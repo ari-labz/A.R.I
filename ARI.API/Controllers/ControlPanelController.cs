@@ -119,7 +119,12 @@ public class ControlPanelApiController(LlmServiceHolder holder, WebPanelConfig c
                 }
         }
 
-        return Ok(new { ramBytes = bytes, ramMb = bytes / 1024.0 / 1024.0, liveCalls, context });
+        var breakdown = systemInfo.GetRamBreakdown()
+            .Select(s => new { label = s.Label, serverName = s.ServerName, mb = Math.Round(s.Bytes / 1024.0 / 1024.0, 1) })
+            .ToList();
+
+        double swapMb = systemInfo.GetSwapMb();
+        return Ok(new { ramBytes = bytes, ramMb = bytes / 1024.0 / 1024.0, swapMb, liveCalls, context, breakdown });
     }
 
     [HttpGet("stats")]
@@ -489,6 +494,15 @@ public class VoiceController(
         return File(wav, "audio/wav");
     }
 
+    [HttpPost("split-sentences")]
+    public IActionResult SplitSentences([FromBody] SplitSentencesRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.Text))
+            return BadRequest(new { error = "text is required." });
+        var sentences = ARI.Voice.SentenceSplitter.Split(req.Text);
+        return Ok(new { sentences });
+    }
+
     [HttpGet("active")]
     public IActionResult GetActive() =>
         Ok(new { model = speechHolder.ActiveModel, ready = speechHolder.IsReady });
@@ -672,3 +686,4 @@ public record TrainRequest(
     int    SaveEveryNEpochs = 10);
 
 public record SpeakRequest(string Text, string? ModelName = null);
+public record SplitSentencesRequest(string Text);

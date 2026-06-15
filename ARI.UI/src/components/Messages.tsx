@@ -1,6 +1,150 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState, useCallback } from "react"
 import type { ThreadItem, Attachment } from "../hooks/useThreads"
 import { setBubbleMd } from "../hooks/useMarkdown"
+
+// ── Speak response ────────────────────────────────────────────────────────────
+let globalSpeakAbort: AbortController | null = null
+// One shared AudioContext for the entire speak session — avoids cold-start per sentence
+let sharedCtx: AudioContext | null = null
+
+function getAudioCtx(): AudioContext {
+    if (!sharedCtx || sharedCtx.state === "closed")
+        sharedCtx = new AudioContext()
+    return sharedCtx
+}
+
+function getVolume(): number {
+    return Math.max(0, parseFloat(localStorage.getItem("ari-voice-volume") ?? "100")) / 100
+}
+
+// Fetches audio for a sentence and immediately decodes it into an AudioBuffer.
+// Decoding happens in parallel with synthesis of other sentences.
+async function synthesise(sentence: string, signal: AbortSignal): Promise<AudioBuffer | null> {
+    try {
+        const resp = await fetch("/api/cp/voice/speak", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: sentence }),
+            signal,
+        })
+        if (!resp.ok) return null
+        const ab = await resp.arrayBuffer()
+        if (signal.aborted) return null
+        return await getAudioCtx().decodeAudioData(ab)
+    } catch {
+        return null
+    }
+}
+
+// Schedules an AudioBuffer to play at `startAt` (AudioContext time).
+// Returns a Promise that resolves with the exact scheduled end time,
+// enabling gapless back-to-back scheduling of the next sentence.
+function scheduleBuffer(buf: AudioBuffer, startAt: number, signal: AbortSignal): Promise<number> {
+    const ctx  = getAudioCtx()
+    const gain = ctx.createGain()
+    gain.gain.value = getVolume()
+    const src  = ctx.createBufferSource()
+    src.buffer = buf
+    src.connect(gain)
+    gain.connect(ctx.destination)
+
+    // If we're behind (synthesis took longer than previous playback), play immediately
+    const playAt = Math.max(startAt, ctx.currentTime)
+    const endAt  = playAt + buf.duration
+    src.start(playAt)
+
+    return new Promise((resolve, reject) => {
+        const onAbort = () => { src.stop(); reject(new DOMException("aborted")) }
+        signal.addEventListener("abort", onAbort, { once: true })
+        // onended fires when playback finishes — resolve with the precise end time
+        src.onended = () => { signal.removeEventListener("abort", onAbort); resolve(endAt) }
+    })
+}
+
+async function speakResponse(content: string, setSpeaking: (v: boolean) => void) {
+    if (globalSpeakAbort) {
+        globalSpeakAbort.abort()
+        globalSpeakAbort = null
+    }
+
+    const abort = new AbortController()
+    globalSpeakAbort = abort
+    setSpeaking(true)
+
+    try {
+        const splitRes = await fetch("/api/cp/voice/split-sentences", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: content }),
+            signal: abort.signal,
+        })
+        if (!splitRes.ok) throw new Error("split failed")
+        const { sentences } = await splitRes.json() as { sentences: string[] }
+        if (sentences.length === 0) return
+
+        // Start decoding sentence[0] immediately.
+        // As soon as sentence[i] is ready and scheduled, we start synthesising sentence[i+1]
+        // so it decodes in parallel while sentence[i] is playing.
+        let nextBuffer = synthesise(sentences[0], abort.signal)
+        // scheduleAt tracks the precise AudioContext time at which the next sentence should start,
+        // enabling gapless chaining when audio is ready in time.
+        let scheduleAt = getAudioCtx().currentTime
+
+        for (let i = 0; i < sentences.length; i++) {
+            if (abort.signal.aborted) break
+
+            const buf = await nextBuffer
+            if (abort.signal.aborted) break
+
+            // Kick off synthesis of the next sentence immediately — it decodes in parallel
+            // with playback of the current one
+            if (i + 1 < sentences.length)
+                nextBuffer = synthesise(sentences[i + 1], abort.signal)
+
+            if (!buf) continue
+
+            // Schedule this sentence to start exactly when the previous one ends.
+            // scheduleBuffer returns the end time so we can chain the next sentence.
+            scheduleAt = await scheduleBuffer(buf, scheduleAt, abort.signal)
+        }
+    } catch (err: unknown) {
+        if (err instanceof Error && err.name !== "AbortError") console.warn("[speak]", err)
+    } finally {
+        if (globalSpeakAbort === abort) {
+            globalSpeakAbort = null
+            setSpeaking(false)
+        }
+    }
+}
+
+function SpeakButton({ content }: { content: string }) {
+    const [speaking, setSpeaking] = useState(false)
+
+    const handleClick = useCallback(() => {
+        if (speaking) {
+            // Stop
+            globalSpeakAbort?.abort()
+            globalSpeakAbort = null
+            setSpeaking(false)
+        } else {
+            speakResponse(content, setSpeaking)
+        }
+    }, [speaking, content])
+
+    return (
+        <button
+            className={`btn-speak${speaking ? " speaking" : ""}`}
+            title={speaking ? "Stop speaking" : "Speak response"}
+            onClick={handleClick}
+        >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+            </svg>
+        </button>
+    )
+}
 
 interface Props {
     items:        ThreadItem[]
@@ -100,7 +244,12 @@ function AriResponse({ item, isInternal, agentName, msgIndex }: { item: ThreadIt
                 </div>
             )}
             {thoughtEl}
-            {!streaming && <div className="msg-time">{t}</div>}
+            {!streaming && (
+                <div className="msg-footer">
+                    <div className="msg-time">{t}</div>
+                    {item.content && <SpeakButton content={item.content} />}
+                </div>
+            )}
         </div>
     )
 }

@@ -13,7 +13,7 @@ public record ModelInfo(
 
 public record ModelSwitchEvent(string Phase, string Message, int Percent);
 
-public record ServerStatus(string? ActiveFile, string? ActiveName, int Pid);
+public record ServerStatus(string? ActiveFile, string? ActiveName, int Pid, int ContextSize = 0);
 
 public class ModelSwitchJob
 {
@@ -51,8 +51,8 @@ public class ModelManagerHolder
     public void Initialize(IReadOnlyList<ModelInfo> models)
         => AllModels = models;
 
-    public void SetServerModel(string serverName, string? file, string? name, int pid)
-        => _servers[serverName] = new ServerStatus(file, name, pid);
+    public void SetServerModel(string serverName, string? file, string? name, int pid, int contextSize = 0)
+        => _servers[serverName] = new ServerStatus(file, name, pid, contextSize);
 
     // ── Legacy single-server accessors (used by older API paths) ──────────────
     public string? ActiveFile => _servers.Values.FirstOrDefault()?.ActiveFile;
