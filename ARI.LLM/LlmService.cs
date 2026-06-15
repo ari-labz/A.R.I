@@ -32,10 +32,16 @@ public class LlmService : IDisposable
     /// <summary>Every thread across all pipelines, keyed by thread key. Each carries its <see cref="ThreadType"/>.</summary>
     public IReadOnlyDictionary<string, Thread> Threads => threads;
 
-    public LlmService(IReadOnlyList<AgentConfig> agents, BrainConfig? brainConfig = null, ILoggerFactory? loggerFactory = null)
+    public LlmService(IReadOnlyList<AgentConfig> agents, IReadOnlyDictionary<string, string>? serverEndpoints = null, BrainConfig? brainConfig = null, ILoggerFactory? loggerFactory = null)
     {
         if (loggerFactory is not null)
             Common.InitialiseLogger(loggerFactory);
+
+        // Resolve ServerName → endpoint for each agent before construction
+        if (serverEndpoints is not null)
+            foreach (AgentConfig cfg in agents)
+                if (serverEndpoints.TryGetValue(cfg.ServerName, out string? ep))
+                    cfg.Endpoint = ep;
 
         Dictionary<string, AgentConfig> enabledAgents = agents
             .Where(m => m.Enabled)
@@ -45,9 +51,19 @@ public class LlmService : IDisposable
             ? new BrainService(brainConfig, loggerFactory)
             : null;
 
+        // Context is created first so it can be passed to Dialogue, which subscribes each new
+        // thread's ExchangeCompleted event to fire context.Update in the background.
+        if (enabledAgents.TryGetValue("Context", out AgentConfig? contextConfig))
+        {
+            int memoryLimit = enabledAgents.TryGetValue("Dialogue", out AgentConfig? dlgCfg) ? dlgCfg.ShortTermMemoryLimit : 25;
+            context = new Context(contextConfig, memoryLimit);
+            context.AttachRegistry(threads);
+            Common.Logger.LogInformation("Context tracker is active.");
+        }
+
         if (enabledAgents.TryGetValue("Dialogue", out AgentConfig? dialogueConfig))
         {
-            dialogue = new Dialogue(dialogueConfig, brain);
+            dialogue = new Dialogue(dialogueConfig, context);
             dialogue.AttachRegistry(threads);
             dialogue.ThreadUpdated += key => NotifyWatchers(key);
             dialogue.ThreadDeleted += key => NotifyThreadDeleted(key);
@@ -69,14 +85,6 @@ public class LlmService : IDisposable
             classifier = new Classifier(classifierConfig);
             classifier.AttachRegistry(threads);
             Common.Logger.LogInformation("Classifier is active.");
-        }
-
-        if (enabledAgents.TryGetValue("Context", out AgentConfig? contextConfig))
-        {
-            int memoryLimit = enabledAgents.TryGetValue("Dialogue", out AgentConfig? dlgCfg) ? dlgCfg.ShortTermMemoryLimit : 25;
-            context = new Context(contextConfig, memoryLimit);
-            context.AttachRegistry(threads);
-            Common.Logger.LogInformation("Context tracker is active.");
         }
 
         if (brain is not null && enabledAgents.TryGetValue("Memory", out AgentConfig? memoryConfig) && memoryConfig.RecursiveBrainSearchDepth > 0)
@@ -278,8 +286,12 @@ public class LlmService : IDisposable
             new ReadFile(resolvedRoot, cts.Token).Register(codeThread);
             new ListDirectory(resolvedRoot, cts.Token).Register(codeThread);
             new SearchFiles(resolvedRoot, cts.Token).Register(codeThread);
+            new FindFiles(resolvedRoot, cts.Token).Register(codeThread);
             new EditFile(resolvedRoot, cts.Token).Register(codeThread);
             new WriteFile(resolvedRoot, cts.Token).Register(codeThread);
+            new DeleteFile(resolvedRoot, cts.Token).Register(codeThread);
+            new MoveFile(resolvedRoot, cts.Token).Register(codeThread);
+            new UpdateTodos(codeThread).Register(codeThread);
         }
 
         LiveCallInfo liveCall = new("Code", threadKey, 0, code.MaxTokens, code.MaxContextTokens, 0);
@@ -338,7 +350,7 @@ public class LlmService : IDisposable
         }
         else
         {
-            result = await commands.Handle(input);
+            result = await commands.Handle(input, threadKey);
         }
 
         if (threadKey is not null)

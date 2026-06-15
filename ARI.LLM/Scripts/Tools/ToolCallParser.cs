@@ -77,6 +77,33 @@ internal static class ToolCallParser
     }
 
     /// <summary>
+    /// Strips &lt;think&gt;...&lt;/think&gt; blocks that leak into tool call argument streams from Qwen3.
+    /// llama.cpp forces thinking internally even when enable_thinking is false, and the closing
+    /// &lt;/think&gt; tag can arrive mid-argument delta, corrupting the JSON.
+    /// Three cases handled:
+    ///   1. Complete &lt;think&gt;...&lt;/think&gt; block inside args — stripped entirely.
+    ///   2. Orphaned &lt;/think&gt; (think opened before tool call, closed mid-arg) — truncate at tag.
+    ///   3. Orphaned &lt;think&gt; (think opened mid-arg, never closed) — truncate at tag.
+    /// </summary>
+    internal static string StripThinkLeaks(string argsJson)
+    {
+        // Case 1: complete blocks
+        argsJson = Regex.Replace(argsJson, @"<think>.*?</think>", "", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+
+        // Case 2: orphaned close tag — everything from </think> onward is garbage (model exited think mode mid-arg)
+        int closeIdx = argsJson.IndexOf("</think>", StringComparison.OrdinalIgnoreCase);
+        if (closeIdx >= 0)
+            argsJson = argsJson[..closeIdx];
+
+        // Case 3: orphaned open tag — model entered think mode mid-arg
+        int openIdx = argsJson.IndexOf("<think>", StringComparison.OrdinalIgnoreCase);
+        if (openIdx >= 0)
+            argsJson = argsJson[..openIdx];
+
+        return argsJson.TrimEnd();
+    }
+
+    /// <summary>
     /// Escapes any bare double-quotes that appear inside JSON string values. Quantized local
     /// models occasionally emit {"key": "val"ue"} instead of {"key": "val\"ue"}.
     /// </summary>
@@ -153,7 +180,7 @@ internal static class ToolCallParser
             {
                 if (toolName == "write_file" && prop.Name == "content")
                     trimmed[prop.Name] = "[content omitted]";
-                else if (toolName == "edit_file" && prop.Name is "old_string" or "new_string")
+                else if (toolName == "edit_file" && prop.Name is "old_string" or "new_string" or "edits")
                     trimmed[prop.Name] = "[omitted]";
                 else
                     trimmed[prop.Name] = prop.Value.GetRawText();

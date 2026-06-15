@@ -1,10 +1,24 @@
+// A single find/replace, or a MultiEdit-style batch applied against one buffer in order.
+export interface EditOptions {
+  replaceAll?: boolean
+  startLine?: number
+  endLine?: number
+  edits?: { old_string?: string; new_string?: string; replace_all?: boolean; start_line?: number; end_line?: number }[]
+}
+
 export interface AriEnvironment {
   isDesktop: boolean
   readFile(root: string, path: string): Promise<string>
   writeFile(root: string, path: string, content: string): Promise<void>
   listDirectory(root: string, dirPath?: string): Promise<string[]>
-  searchFiles(root: string, pattern: string, searchPath?: string, glob?: string): Promise<string[]>
-  editFile(root: string, filePath: string, oldString: string, newString: string): Promise<{ ok: boolean; error?: string }>
+  searchFiles(root: string, pattern: string, searchPath?: string, glob?: string, ignoreCase?: boolean): Promise<string[]>
+  editFile(root: string, filePath: string, oldString: string, newString: string, options?: EditOptions): Promise<{ ok: boolean; error?: string; message?: string }>
+  runCommand(root: string, command: string): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }>
+  getCommandAllowlist(): Promise<string[]>
+  setCommandAllowlist(list: string[]): Promise<void>
+  findFiles(root: string, pattern: string, searchPath?: string): Promise<string[]>
+  deleteFile(root: string, filePath: string): Promise<{ ok: boolean; error?: string }>
+  moveFile(root: string, source: string, destination: string): Promise<{ ok: boolean; error?: string }>
   pickFolder(): Promise<string | null>
   getFileTree(root: string): Promise<string[]>
   getEndpoint(): string
@@ -21,8 +35,14 @@ declare global {
       readFile(root: string, path: string): Promise<string>
       writeFile(root: string, path: string, content: string): Promise<void>
       listDirectory(root: string, dirPath?: string): Promise<string[]>
-      searchFiles(root: string, pattern: string, searchPath?: string, glob?: string): Promise<string[]>
-      editFile(root: string, filePath: string, oldString: string, newString: string): Promise<{ ok: boolean; error?: string }>
+      searchFiles(root: string, pattern: string, searchPath?: string, glob?: string, ignoreCase?: boolean): Promise<string[]>
+      editFile(root: string, filePath: string, oldString: string, newString: string, options?: EditOptions): Promise<{ ok: boolean; error?: string; message?: string }>
+      runCommand(root: string, command: string): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }>
+      getCommandAllowlist(): Promise<string[]>
+      setCommandAllowlist(list: string[]): Promise<void>
+      findFiles(root: string, pattern: string, searchPath?: string): Promise<string[]>
+      deleteFile(root: string, filePath: string): Promise<{ ok: boolean; error?: string }>
+      moveFile(root: string, source: string, destination: string): Promise<{ ok: boolean; error?: string }>
       pickFolder(): Promise<string | null>
       getFileTree(root: string): Promise<string[]>
       getEndpoint(): string
@@ -46,6 +66,12 @@ const browserEnv: AriEnvironment = {
   listDirectory: () => Promise.reject(new Error("No local filesystem in browser")),
   searchFiles:   () => Promise.reject(new Error("No local filesystem in browser")),
   editFile:      () => Promise.reject(new Error("No local filesystem in browser")),
+  runCommand:          () => Promise.reject(new Error("No local shell in browser")),
+  getCommandAllowlist: () => Promise.resolve([]),
+  setCommandAllowlist: () => Promise.resolve(),
+  findFiles:            () => Promise.reject(new Error("No local filesystem in browser")),
+  deleteFile:           () => Promise.reject(new Error("No local filesystem in browser")),
+  moveFile:             () => Promise.reject(new Error("No local filesystem in browser")),
   pickFolder:    () => Promise.resolve(null),
   getFileTree:   () => Promise.resolve([]),
   getEndpoint:   () => "",
@@ -60,8 +86,14 @@ const electronEnv: AriEnvironment = {
   readFile:      (root, path)                        => window.electronBridge!.readFile(root, path),
   writeFile:     (root, path, content)               => window.electronBridge!.writeFile(root, path, content),
   listDirectory: (root, dirPath)                     => window.electronBridge!.listDirectory(root, dirPath),
-  searchFiles:   (root, pattern, searchPath, glob)   => window.electronBridge!.searchFiles(root, pattern, searchPath, glob),
-  editFile:      (root, filePath, oldStr, newStr)    => window.electronBridge!.editFile(root, filePath, oldStr, newStr),
+  searchFiles:   (root, pattern, searchPath, glob, ignoreCase) => window.electronBridge!.searchFiles(root, pattern, searchPath, glob, ignoreCase),
+  editFile:      (root, filePath, oldStr, newStr, options) => window.electronBridge!.editFile(root, filePath, oldStr, newStr, options),
+  runCommand:          (root, command)               => window.electronBridge!.runCommand(root, command),
+  getCommandAllowlist: ()                            => window.electronBridge!.getCommandAllowlist(),
+  setCommandAllowlist: (list)                        => window.electronBridge!.setCommandAllowlist(list),
+  findFiles:            (root, pattern, searchPath)  => window.electronBridge!.findFiles(root, pattern, searchPath),
+  deleteFile:           (root, filePath)             => window.electronBridge!.deleteFile(root, filePath),
+  moveFile:             (root, source, destination)  => window.electronBridge!.moveFile(root, source, destination),
   pickFolder:    ()                                  => window.electronBridge!.pickFolder(),
   getFileTree:   (root)                              => window.electronBridge!.getFileTree(root),
   getEndpoint:   ()                                  => window.electronBridge!.getEndpoint(),

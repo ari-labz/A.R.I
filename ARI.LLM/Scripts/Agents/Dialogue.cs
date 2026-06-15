@@ -1,13 +1,12 @@
 using System.Text;
-using ARI.Brain;
 
 namespace ARI.LLM;
 
 internal class Dialogue : Agent
 {
-    private readonly BrainService? brain;
-    private readonly int           shortTermLimit;
-    private readonly int           contextTokenLimit;
+    private readonly Context? context;
+    private readonly int      shortTermLimit;
+    private readonly int      contextTokenLimit;
 
     internal override int  MemoryLimit       => shortTermLimit;
     internal override int  MaxContextTokens  => contextTokenLimit;
@@ -18,9 +17,9 @@ internal class Dialogue : Agent
     internal event Action<string>? ThreadBufferFull;
     internal event Action<string>? ThreadBecameInactive;
 
-    internal Dialogue(AgentConfig config, BrainService? brain = null) : base(config)
+    internal Dialogue(AgentConfig config, Context? context = null) : base(config)
     {
-        this.brain     = brain;
+        this.context      = context;
         shortTermLimit    = config.ShortTermMemoryLimit;
         contextTokenLimit = config.MaxContextTokens;
     }
@@ -93,12 +92,15 @@ internal class Dialogue : Agent
     {
         base.OnThreadCreated(threadKey, thread);
 
-        if (brain is not null)
-        {
-            new Recall(brain).Register(thread);
-        }
-
+        // All recall is handled proactively by the Memory agent before the prompt is sent —
+        // dialogue threads carry no retrieval tool.
         thread.BufferFull     += () => ThreadBufferFull?.Invoke(threadKey);
         thread.BecameInactive += () => ThreadBecameInactive?.Invoke(threadKey);
+
+        // After each completed exchange, update the context summary in the background on slot 2.
+        // This ensures context is fresh for the NEXT turn's recall seeding, with zero latency cost.
+        if (context is not null)
+            thread.ExchangeCompleted += (userMsg, reply) =>
+                _ = context.Update(threadKey, userMsg, reply);
     }
 }

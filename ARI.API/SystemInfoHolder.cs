@@ -2,19 +2,23 @@ using System.Diagnostics;
 
 namespace ARI.API;
 
-/// <summary>Tracks external process PIDs so the control panel can include them in RAM totals.</summary>
+/// <summary>Tracks ARI process RAM including the active llama-server, read via ModelManagerHolder.</summary>
 public class SystemInfoHolder
 {
-    private int llamaPid = -1;
+    private readonly ModelManagerHolder modelManagerHolder;
 
-    public void SetLlamaPid(int pid) => llamaPid = pid;
+    public SystemInfoHolder(ModelManagerHolder modelManagerHolder)
+    {
+        this.modelManagerHolder = modelManagerHolder;
+    }
 
     public long GetTotalRamBytes()
     {
         long total = Process.GetCurrentProcess().WorkingSet64;
-        if (llamaPid > 0)
+        int pid = modelManagerHolder.ActivePid;
+        if (pid > 0)
         {
-            try { total += Process.GetProcessById(llamaPid).WorkingSet64; }
+            try { total += Process.GetProcessById(pid).WorkingSet64; }
             catch { /* process may have exited */ }
         }
         return total;

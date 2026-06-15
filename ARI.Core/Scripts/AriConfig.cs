@@ -21,8 +21,6 @@ public class AriConfig
     public BrainConfig?      Brain   { get; init; }
     public DiscordConfig?    Discord { get; init; }
 
-    private string filePath = "";
-
     public static AriConfig LoadFrom(string path)
     {
         if (!File.Exists(path))
@@ -39,24 +37,13 @@ public class AriConfig
             throw new Exception("Failed to deserialise AriConfig.json.");
         }
 
-        result.filePath = path;
-        result.Llm.Validate();
-
-        // The Discord section persists runtime edits by rewriting the whole combined file.
-        if (result.Discord is not null)
-            result.Discord.OnSave = result.Save;
-
         return result;
     }
 
-    /// <summary>Persists the whole config back to disk. Used for runtime changes like Discord whitelist edits.</summary>
-    public void Save() => File.WriteAllText(filePath, JsonSerializer.Serialize(this, WriteOptions));
-
-    private static readonly JsonSerializerOptions ReadOptions = new() { PropertyNameCaseInsensitive = true };
-    private static readonly JsonSerializerOptions WriteOptions = new()
+    private static readonly JsonSerializerOptions ReadOptions = new()
     {
-        WriteIndented          = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        PropertyNameCaseInsensitive = true,
+        ReadCommentHandling         = JsonCommentHandling.Skip
     };
 }
 

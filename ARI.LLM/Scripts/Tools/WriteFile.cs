@@ -33,7 +33,7 @@ internal sealed class WriteFile : FileTool
         try
         {
             using JsonDocument doc = JsonDocument.Parse(argsJson);
-            string relPath = doc.RootElement.GetProperty("path").GetString()    ?? "";
+            string relPath = (doc.RootElement.GetProperty("path").GetString()    ?? "").Trim('"', '\'', ' ');
             string content = doc.RootElement.GetProperty("content").GetString() ?? "";
             string? absPath = Resolve(relPath);
             if (absPath is null)
@@ -41,7 +41,10 @@ internal sealed class WriteFile : FileTool
             string? dir = Path.GetDirectoryName(absPath);
             if (dir is not null) Directory.CreateDirectory(dir);
             await File.WriteAllTextAsync(absPath, content, ct);
-            return $"Successfully wrote {relPath}.";
+            // Report the line count back as ground truth so the model works from what is now on
+            // disk rather than rewriting the file again from memory.
+            int lineCount = content.Length == 0 ? 0 : content.Count(c => c == '\n') + 1;
+            return $"Successfully wrote {relPath} ({lineCount} lines). The file now contains exactly the content you provided — do not rewrite it unless making a further change.";
         }
         catch (Exception ex) { return $"Error writing file: {ex.Message}"; }
     }

@@ -11,7 +11,8 @@ namespace ARI.API;
 
 public static class ClientWebSocket
 {
-    private static readonly ConcurrentDictionary<string, TaskCompletionSource<string>> pendingFileCalls = new();
+    private static readonly ConcurrentDictionary<string, TaskCompletionSource<string>> pendingFileCalls  = new();
+    private static readonly ConcurrentDictionary<string, string>                       pendingCallLabels = new();
 
     public static async Task HandleAsync(WebSocket ws, HttpContext ctx, LlmService llm, ILogger log)
     {
@@ -51,14 +52,27 @@ public static class ClientWebSocket
         }
         finally
         {
-            foreach (string tool in new[] { "read_file", "list_directory", "search_files", "edit_file", "write_file" })
+            foreach (string tool in ClientToolNames)
                 codeThread.UnregisterTool(tool);
             log.LogInformation("[Client] Session ended ({Thread})", threadKey);
         }
     }
 
+    private static readonly string[] ClientToolNames =
+        { "read_file", "list_directory", "search_files", "find_files", "edit_file", "write_file",
+          "delete_file", "move_file", "run_command", "update_todos" };
+
     private static void RegisterTools(ARI.LLM.Thread thread, WebSocket ws, ILogger log)
     {
+        RegisterTool(thread, ws, log,
+            name: "run_command",
+            description: "Run a shell command in the project's root directory and get back its stdout, stderr and exit code. Use this to build, test, or inspect the project after making changes — e.g. 'dotnet build', 'dotnet test', 'git status'. Commands not on the user's allow list require their approval before running, so prefer concrete, non-destructive commands and do not chain commands with ; && or |.",
+            parameters: new { type = "object", properties = new { command = new { type = "string", description = "The exact command line to run, e.g. 'dotnet build'." } }, required = new[] { "command" } },
+            displayVerb: "Running", displayDoneVerb: "Ran",
+            labelField: "command",
+            customDisplay:     argsJson => RunCommandMarker(argsJson, "start"),
+            customDisplayDone: argsJson => RunCommandMarker(argsJson, "end"));
+
         RegisterTool(thread, ws, log,
             name: "read_file",
             description: "Read the contents of a file from the user's project.",
@@ -94,7 +108,7 @@ public static class ClientWebSocket
                     string path   = doc.RootElement.TryGetProperty("path",       out var pe) ? pe.GetString() ?? "" : "";
                     string oldStr = doc.RootElement.TryGetProperty("old_string", out var oe) ? oe.GetString() ?? "" : "";
                     string newStr = doc.RootElement.TryGetProperty("new_string", out var ne) ? ne.GetString() ?? "" : "";
-                    string label  = System.IO.Path.GetFileName(path).Replace("--", "&#45;&#45;");
+                    string label  = System.IO.Path.GetFileName(path.Trim('"', '\'', ' ', '\\')).Replace("--", "&#45;&#45;");
                     int removed   = oldStr.Split('\n').Length;
                     int added     = newStr.Split('\n').Length;
                     return $"<!--ari-tool-start:edit_file:{label}|+{added}|-{removed}-->";
@@ -109,7 +123,7 @@ public static class ClientWebSocket
                     string path    = doc.RootElement.TryGetProperty("path",       out var pe) ? pe.GetString() ?? "" : "";
                     string oldStr  = doc.RootElement.TryGetProperty("old_string", out var oe) ? oe.GetString() ?? "" : "";
                     string newStr  = doc.RootElement.TryGetProperty("new_string", out var ne) ? ne.GetString() ?? "" : "";
-                    string label   = System.IO.Path.GetFileName(path).Replace("--", "&#45;&#45;");
+                    string label   = System.IO.Path.GetFileName(path.Trim('"', '\'', ' ', '\\')).Replace("--", "&#45;&#45;");
                     int removed    = oldStr.Split('\n').Length;
                     int added      = newStr.Split('\n').Length;
                     string patch   = BuildPatch(oldStr, newStr);
@@ -134,7 +148,7 @@ public static class ClientWebSocket
                     using var doc  = JsonDocument.Parse(argsJson);
                     string path    = doc.RootElement.TryGetProperty("path",    out var pe) ? pe.GetString() ?? "" : "";
                     string content = doc.RootElement.TryGetProperty("content", out var ce) ? ce.GetString() ?? "" : "";
-                    string label   = System.IO.Path.GetFileName(path).Replace("--", "&#45;&#45;");
+                    string label   = System.IO.Path.GetFileName(path.Trim('"', '\'', ' ', '\\')).Replace("--", "&#45;&#45;");
                     int added      = content.Split('\n').Length;
                     return $"<!--ari-tool-start:write_file:{label}|+{added}-->";
                 }
@@ -147,7 +161,7 @@ public static class ClientWebSocket
                     using var doc = JsonDocument.Parse(argsJson);
                     string path    = doc.RootElement.TryGetProperty("path",    out var pe) ? pe.GetString() ?? "" : "";
                     string content = doc.RootElement.TryGetProperty("content", out var ce) ? ce.GetString() ?? "" : "";
-                    string label   = System.IO.Path.GetFileName(path).Replace("--", "&#45;&#45;");
+                    string label   = System.IO.Path.GetFileName(path.Trim('"', '\'', ' ', '\\')).Replace("--", "&#45;&#45;");
                     int added      = content.Split('\n').Length;
                     string patch   = string.Join("\n", content.Split('\n').Select(l => "+" + l));
                     string encoded = patch.Length <= 10_000
@@ -157,6 +171,59 @@ public static class ClientWebSocket
                 }
                 catch { return "<!--ari-tool-end:write_file:file-->"; }
             });
+
+        RegisterTool(thread, ws, log,
+            name: "find_files",
+            description: "Find files by name with a glob pattern, e.g. '*.cs', 'Token*.cs', or '**/Security/*.cs'. Returns paths relative to the project root. Use search_files to match file contents.",
+            parameters: new { type = "object", properties = new { pattern = new { type = "string", description = "Glob pattern, e.g. '*.cs' or '**/Token*.cs'." }, path = new { type = "string", description = "Directory to search under, relative to project root. Defaults to root." } }, required = new[] { "pattern" } },
+            displayVerb: "Finding", displayDoneVerb: "Found",
+            labelField: "pattern");
+
+        RegisterTool(thread, ws, log,
+            name: "delete_file",
+            description: "Delete a file from the project. Use only when explicitly required (e.g. removing a file after merging its contents elsewhere). The user is asked to confirm before the deletion happens.",
+            parameters: new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root." } }, required = new[] { "path" } },
+            displayVerb: "Deleting", displayDoneVerb: "Deleted",
+            labelField: "path");
+
+        RegisterTool(thread, ws, log,
+            name: "move_file",
+            description: "Move or rename a file within the project. Creates destination directories as needed. Fails if the destination already exists.",
+            parameters: new { type = "object", properties = new { source = new { type = "string", description = "Current file path relative to project root." }, destination = new { type = "string", description = "New file path relative to project root." } }, required = new[] { "source", "destination" } },
+            displayVerb: "Moving", displayDoneVerb: "Moved",
+            labelField: "source");
+
+        // The checklist lives on the thread and must execute IN-PROCESS — never round-trip to the client.
+        thread.RegisterTodosTool();
+    }
+
+    /// <summary>Compact, capped project map injected as persistent context so the model orients fast.</summary>
+    private static string BuildProjectMap(List<string> files)
+    {
+        if (files.Count == 0) return "";
+        const int CAP = 200;
+        var sorted = files.OrderBy(f => f, StringComparer.OrdinalIgnoreCase).Take(CAP);
+        string body = string.Join("\n", sorted);
+        if (files.Count > CAP)
+            body += $"\n... ({files.Count - CAP} more — use find_files / list_directory to explore)";
+        return $"The project contains {files.Count} source files:\n{body}";
+    }
+
+    /// <summary>Builds a tool card marker for run_command, sanitising the command for the marker grammar.</summary>
+    private static string RunCommandMarker(string argsJson, string markerType)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(argsJson);
+            string cmd = doc.RootElement.TryGetProperty("command", out var ce) ? ce.GetString() ?? "" : "";
+            cmd = cmd.Replace("\r", " ").Replace("\n", " ").Trim();
+            if (cmd.Length > 60) cmd = cmd[..60] + "…";
+            // Marker grammar uses ':' '>' '|' '--' as delimiters — neutralise them in the label.
+            string safe = cmd.Replace("--", "&#45;&#45;").Replace(":", "∶").Replace(">", "&gt;").Replace("|", "¦");
+            if (string.IsNullOrWhiteSpace(safe)) safe = "command";
+            return $"<!--ari-tool-{markerType}:run_command:{safe}-->";
+        }
+        catch { return $"<!--ari-tool-{markerType}:run_command:command-->"; }
     }
 
     private static string BuildPatch(string oldStr, string newStr)
@@ -182,7 +249,7 @@ public static class ClientWebSocket
             {
                 using var doc = JsonDocument.Parse(argsJson);
                 string label = doc.RootElement.TryGetProperty(labelField, out var el) ? el.GetString() ?? "" : "";
-                label = System.IO.Path.GetFileName(label).Replace("--", "&#45;&#45;");
+                label = System.IO.Path.GetFileName(label.Trim('"', '\'', ' ', '\\')).Replace("--", "&#45;&#45;");
                 if (string.IsNullOrWhiteSpace(label)) label = "file";
                 return $"<!--ari-tool-{markerType}:{name}:{label}-->";
             }
@@ -199,7 +266,7 @@ public static class ClientWebSocket
             {
                 string path = PartialJsonExtractString(partialJson, "path");
                 if (string.IsNullOrEmpty(path)) return null; // wait until path is known
-                string label = System.IO.Path.GetFileName(path).Replace("--", "&#45;&#45;");
+                string label = System.IO.Path.GetFileName(path.Trim('"', '\'', ' ', '\\')).Replace("--", "&#45;&#45;");
                 if (name == "edit_file")
                 {
                     int added   = PartialJsonCountNewlines(partialJson, "new_string");
@@ -219,29 +286,42 @@ public static class ClientWebSocket
             new { type = "function", function = new { name, description, parameters } },
             async argsJson =>
             {
+                argsJson = NormalizePathArg(argsJson);
                 string callId = Guid.NewGuid().ToString("N");
+                string label  = ExtractLogLabel(argsJson, labelField);
                 var tcs = new TaskCompletionSource<string>();
-                pendingFileCalls[callId] = tcs;
+                pendingFileCalls[callId]  = tcs;
+                pendingCallLabels[callId] = label;
 
-                log.LogInformation("[Client] → {Tool}  callId={CallId}", name, callId);
+                log.LogInformation("[Client] → {Tool}  {Label}  callId={CallId}", name, label, callId);
                 await Send(ws, new { type = name, callId, args = argsJson });
 
-                // Write/edit operations on large files can take longer to round-trip through the bridge
-                int timeoutSeconds = name is "write_file" or "edit_file" ? 90 : 30;
+                // run_command can wait on a build/test plus user confirmation; write/edit round-trips
+                // on large files are slower than reads.
+                int timeoutSeconds = name switch
+                {
+                    "run_command"            => 900,
+                    "write_file" or "edit_file" => 90,
+                    _                         => 30
+                };
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
                 cts.Token.Register(() => tcs.TrySetCanceled());
                 try
                 {
                     string result = await tcs.Task;
-                    log.LogInformation("[Client] ← {Tool}  callId={CallId}  bytes={Bytes}", name, callId, result.Length);
+                    log.LogInformation("[Client] ← {Tool}  {Label}  callId={CallId}  bytes={Bytes}", name, label, callId, result.Length);
                     return result;
                 }
                 catch (OperationCanceledException)
                 {
-                    log.LogWarning("[Client] ← {Tool} TIMEOUT  callId={CallId}", name, callId);
-                    return $"[Error: client did not respond to {name} within 30s]";
+                    log.LogWarning("[Client] ← {Tool} TIMEOUT  {Label}  callId={CallId}", name, label, callId);
+                    return $"[Error: client did not respond to {name} within {timeoutSeconds}s]";
                 }
-                finally { pendingFileCalls.TryRemove(callId, out _); }
+                finally
+                {
+                    pendingFileCalls.TryRemove(callId, out _);
+                    pendingCallLabels.TryRemove(callId, out _);
+                }
             },
             displayFn,
             displayDoneFn,
@@ -316,7 +396,7 @@ public static class ClientWebSocket
         try { await Inner(); }
         finally
         {
-            foreach (string tool in new[] { "read_file", "list_directory", "search_files", "edit_file", "write_file" })
+            foreach (string tool in ClientToolNames)
                 codeThread.UnregisterTool(tool);
         }
         return;
@@ -366,12 +446,25 @@ public static class ClientWebSocket
                                 if (!string.IsNullOrWhiteSpace(bindKey) && bindKey != threadKey)
                                 {
                                     log.LogInformation("[Client] Rebinding tools from {Old} → {New}", threadKey, bindKey);
-                                    foreach (string tool in new[] { "read_file", "list_directory", "search_files", "edit_file", "write_file" })
+                                    foreach (string tool in ClientToolNames)
                                         codeThread.UnregisterTool(tool);
                                     codeThread = llm.GetOrCreateCodeThread(bindKey);
                                     RegisterTools(codeThread, ws, log);
                                     threadKey = bindKey;
                                 }
+                            }
+
+                            // Persistent context for the Code agent: a project map, plus any
+                            // global coding conventions / per-project rules the client sends.
+                            codeThread.ProjectMap = BuildProjectMap(fileTree);
+                            // Global coding conventions come from the backend store (edited in the
+                            // control panel); project rules come from the project's instructions.
+                            string conventions = ConventionsStore.Get();
+                            codeThread.CodingConventions = string.IsNullOrWhiteSpace(conventions) ? null : conventions.Trim();
+                            if (doc.RootElement.TryGetProperty("projectRules", out var prEl))
+                            {
+                                string pr = prEl.GetString() ?? "";
+                                codeThread.ProjectRules = string.IsNullOrWhiteSpace(pr) ? null : pr.Trim();
                             }
 
                             log.LogInformation("[Client] Tree received: {Count} files, bound to thread {Key}", fileTree.Count, threadKey);
@@ -384,7 +477,8 @@ public static class ClientWebSocket
                             {
                                 string callId  = cidEl.GetString()     ?? "";
                                 string content = contentEl.GetString() ?? "";
-                                log.LogInformation("[Client] ← file_content  callId={CallId}  bytes={Bytes}  pending={Pending}", callId, content.Length, pendingFileCalls.ContainsKey(callId));
+                                string flabel  = pendingCallLabels.TryGetValue(callId, out var fl) ? fl : "";
+                                log.LogInformation("[Client] ← file_content  {Label}  callId={CallId}  bytes={Bytes}  pending={Pending}", flabel, callId, content.Length, pendingFileCalls.ContainsKey(callId));
                                 if (pendingFileCalls.TryGetValue(callId, out var tcs))
                                     tcs.TrySetResult(content);
                                 else
@@ -398,9 +492,10 @@ public static class ClientWebSocket
                             {
                                 string callId = ecidEl.GetString() ?? "";
                                 string error  = errEl.GetString()  ?? "";
-                                log.LogWarning("[Client] ← file_error  callId={CallId}  error={Error}", callId, error);
+                                string elabel = pendingCallLabels.TryGetValue(callId, out var el2) ? el2 : "";
+                                log.LogWarning("[Client] ← file_error  {Label}  callId={CallId}  error={Error}", elabel, callId, error);
                                 if (pendingFileCalls.TryGetValue(callId, out var tcs))
-                                    tcs.TrySetResult($"[Error: {error}]");
+                                    tcs.TrySetResult($"[Error: {SanitizeClientError(error)}]");
                             }
                             break;
 
@@ -411,6 +506,77 @@ public static class ClientWebSocket
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Rewrites the "path" field in a tool-call args JSON so that any surrounding quotes the model
+    /// accidentally included in the value are stripped before the path reaches the filesystem.
+    /// e.g. {"path": "\"Foo/Bar.cs\""} → {"path": "Foo/Bar.cs"}
+    /// </summary>
+    private static string NormalizePathArg(string argsJson)
+    {
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            if (!doc.RootElement.TryGetProperty("path", out JsonElement pathEl)) return argsJson;
+            string raw  = pathEl.GetString() ?? "";
+            string clean = raw.Trim('"', '\'', ' ', '\\');
+            if (clean == raw) return argsJson;
+
+            // Rebuild JSON with the cleaned path — re-serialize the whole object.
+            var rebuilt = new Dictionary<string, JsonElement>();
+            foreach (JsonProperty prop in doc.RootElement.EnumerateObject())
+                rebuilt[prop.Name] = prop.Value;
+
+            // Serialize with the clean path value substituted.
+            using var ms = new System.IO.MemoryStream();
+            using var writer = new Utf8JsonWriter(ms);
+            writer.WriteStartObject();
+            foreach (var kv in rebuilt)
+            {
+                if (kv.Key == "path")
+                    writer.WriteString("path", clean);
+                else
+                {
+                    writer.WritePropertyName(kv.Key);
+                    kv.Value.WriteTo(writer);
+                }
+            }
+            writer.WriteEndObject();
+            writer.Flush();
+            return Encoding.UTF8.GetString(ms.ToArray());
+        }
+        catch { return argsJson; }
+    }
+
+    /// <summary>
+    /// Strips raw OS-level detail from client-side file errors before they are returned to the model.
+    /// ENOENT errors include the (potentially corrupted) file path, which the model can copy verbatim
+    /// into the next call, causing an escaping spiral. Replace them with a clean message.
+    /// </summary>
+    private static string SanitizeClientError(string error)
+    {
+        // ENOENT: no such file or directory, open '/path/to/file' → File not found.
+        if (error.Contains("ENOENT", StringComparison.OrdinalIgnoreCase))
+            return "File not found. Check the path is correct and relative to the project root.";
+
+        // EACCES / EPERM: permission denied → clean message
+        if (error.Contains("EACCES", StringComparison.OrdinalIgnoreCase) ||
+            error.Contains("EPERM",  StringComparison.OrdinalIgnoreCase))
+            return "Permission denied accessing that file.";
+
+        return error;
+    }
+
+    private static string ExtractLogLabel(string argsJson, string labelField)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(argsJson);
+            string value = doc.RootElement.TryGetProperty(labelField, out var el) ? el.GetString() ?? "" : "";
+            return string.IsNullOrWhiteSpace(value) ? "" : System.IO.Path.GetFileName(value);
+        }
+        catch { return ""; }
     }
 
     private static async Task Send(WebSocket ws, object payload)
