@@ -45,9 +45,19 @@ public class LlmService : IDisposable
             ? new BrainService(brainConfig, loggerFactory)
             : null;
 
+        // Context is created first so it can be passed to Dialogue, which subscribes each new
+        // thread's ExchangeCompleted event to fire context.Update in the background.
+        if (enabledAgents.TryGetValue("Context", out AgentConfig? contextConfig))
+        {
+            int memoryLimit = enabledAgents.TryGetValue("Dialogue", out AgentConfig? dlgCfg) ? dlgCfg.ShortTermMemoryLimit : 25;
+            context = new Context(contextConfig, memoryLimit);
+            context.AttachRegistry(threads);
+            Common.Logger.LogInformation("Context tracker is active.");
+        }
+
         if (enabledAgents.TryGetValue("Dialogue", out AgentConfig? dialogueConfig))
         {
-            dialogue = new Dialogue(dialogueConfig, brain);
+            dialogue = new Dialogue(dialogueConfig, context);
             dialogue.AttachRegistry(threads);
             dialogue.ThreadUpdated += key => NotifyWatchers(key);
             dialogue.ThreadDeleted += key => NotifyThreadDeleted(key);
@@ -69,14 +79,6 @@ public class LlmService : IDisposable
             classifier = new Classifier(classifierConfig);
             classifier.AttachRegistry(threads);
             Common.Logger.LogInformation("Classifier is active.");
-        }
-
-        if (enabledAgents.TryGetValue("Context", out AgentConfig? contextConfig))
-        {
-            int memoryLimit = enabledAgents.TryGetValue("Dialogue", out AgentConfig? dlgCfg) ? dlgCfg.ShortTermMemoryLimit : 25;
-            context = new Context(contextConfig, memoryLimit);
-            context.AttachRegistry(threads);
-            Common.Logger.LogInformation("Context tracker is active.");
         }
 
         if (brain is not null && enabledAgents.TryGetValue("Memory", out AgentConfig? memoryConfig) && memoryConfig.RecursiveBrainSearchDepth > 0)
@@ -342,7 +344,7 @@ public class LlmService : IDisposable
         }
         else
         {
-            result = await commands.Handle(input);
+            result = await commands.Handle(input, threadKey);
         }
 
         if (threadKey is not null)

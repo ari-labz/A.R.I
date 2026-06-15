@@ -267,9 +267,9 @@ ipcMain.handle("fs:list-dir", (_e, root, dirPath) => {
     return listDirectory(root, dirPath)
 })
 
-ipcMain.handle("fs:search", (_e, root, pattern, searchPath, glob) => {
-    log.info(`fs:search  root=${root}  pattern=${pattern}  path=${searchPath ?? "."}  glob=${glob ?? "*"}`)
-    return searchFiles(root, pattern, searchPath, glob)
+ipcMain.handle("fs:search", (_e, root, pattern, searchPath, glob, ignoreCase) => {
+    log.info(`fs:search  root=${root}  pattern=${pattern}  path=${searchPath ?? "."}  glob=${glob ?? "*"}  ic=${!!ignoreCase}`)
+    return searchFiles(root, pattern, searchPath, glob, ignoreCase)
 })
 
 ipcMain.handle("fs:edit", (_e, root, filePath, oldString, newString, options) => {

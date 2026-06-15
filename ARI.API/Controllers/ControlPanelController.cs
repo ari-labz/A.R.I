@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Net.Http.Headers;
+using System.Text.Json;
 
 namespace ARI.API.Controllers;
 
@@ -94,7 +95,31 @@ public class ControlPanelApiController(LlmServiceHolder holder, WebPanelConfig c
                                      : 0,
         }).ToList() ?? new();
 
-        return Ok(new { ramBytes = bytes, ramMb = bytes / 1024.0 / 1024.0, liveCalls });
+        List<object> context = new();
+        if (Llm is not null)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            Agent? codeAgent = Llm.Agents.GetValueOrDefault("Code");
+            if (codeAgent is not null)
+                foreach (KeyValuePair<string, ARI.LLM.Thread> kvp in codeAgent.Threads)
+                {
+                    (int used, int limit) = codeAgent.GetContextStats(kvp.Value);
+                    if (used <= 0) continue;
+                    seen.Add(kvp.Key);
+                    context.Add(new { threadKey = kvp.Key, agentName = "Code", used, limit, pct = limit > 0 ? (int)(used * 100.0 / limit) : 0 });
+                }
+            Agent? dialogueAgent = Llm.Agents.GetValueOrDefault("Dialogue");
+            if (dialogueAgent is not null)
+                foreach (KeyValuePair<string, ARI.LLM.Thread> kvp in dialogueAgent.Threads)
+                {
+                    if (seen.Contains(kvp.Key)) continue;
+                    (int used, int limit) = dialogueAgent.GetContextStats(kvp.Value);
+                    if (used <= 0) continue;
+                    context.Add(new { threadKey = kvp.Key, agentName = "Dialogue", used, limit, pct = limit > 0 ? (int)(used * 100.0 / limit) : 0 });
+                }
+        }
+
+        return Ok(new { ramBytes = bytes, ramMb = bytes / 1024.0 / 1024.0, liveCalls, context });
     }
 
     [HttpGet("stats")]
@@ -483,6 +508,145 @@ public class VoiceController(
         return Ok(new { models });
     }
 }
+
+// ── Models API ────────────────────────────────────────────────────────────────
+
+[Route("api/cp/models")]
+[ApiController]
+public class ModelsApiController(
+    ModelManagerHolder  modelManagerHolder,
+    ModelNotesStore     notesStore,
+    ModelSettingsStore  settingsStore) : ControllerBase
+{
+    [HttpGet]
+    public IActionResult GetModels()
+    {
+        var notes      = notesStore.GetAll();
+        string? active = modelManagerHolder.ActiveFile;
+        string startup = settingsStore.GetStartupFile();
+
+        var models = modelManagerHolder.AllModels.Select(m => new
+        {
+            name       = m.Name,
+            file       = m.File,
+            sizeBytes  = m.FileSizeBytes,
+            sizeMb     = Math.Round(m.FileSizeBytes / 1024.0 / 1024.0, 1),
+            downloaded = m.FileSizeBytes > 0,
+            active     = FilesMatch(m.File, active),
+            isStartup  = FilesMatch(m.File, startup),
+            configured = m.Configured,
+            notes      = notes.TryGetValue(m.File, out string? n) ? n : "",
+            hasMmproj      = m.HasMmproj,
+            supportsVision = m.SupportsVision,
+            hasMtp         = m.HasMtp,
+            downloadUrl = m.DownloadUrl,
+        }).ToList();
+
+        var job = modelManagerHolder.CurrentSwitchJob;
+        return Ok(new
+        {
+            activeFile = active,
+            startupFile = startup,
+            switching  = job?.IsRunning ?? false,
+            models,
+        });
+    }
+
+    [HttpPost("switch")]
+    public IActionResult Switch([FromBody] SwitchFileRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.File))
+            return BadRequest(new { error = "file is required." });
+
+        if (modelManagerHolder.CurrentSwitchJob?.IsRunning == true)
+            return Conflict(new { error = "A model switch is already in progress." });
+
+        if (FilesMatch(modelManagerHolder.ActiveFile, req.File))
+            return Ok(new { ok = true, message = "Already active." });
+
+        modelManagerHolder.TriggerSwitch(req.File);
+        return Ok(new { ok = true });
+    }
+
+    [HttpGet("switch/progress")]
+    public async Task StreamSwitchProgress(CancellationToken ct)
+    {
+        Response.Headers[HeaderNames.ContentType]  = "text/event-stream";
+        Response.Headers[HeaderNames.CacheControl] = "no-cache";
+        Response.Headers["X-Accel-Buffering"]      = "no";
+
+        var job = modelManagerHolder.CurrentSwitchJob;
+        if (job is null)
+        {
+            await Response.WriteAsync("data: {\"phase\":\"idle\",\"message\":\"No switch in progress.\",\"percent\":0,\"done\":true}\n\n", ct);
+            await Response.Body.FlushAsync(ct);
+            return;
+        }
+
+        int  sent          = 0;
+        long lastKeepalive = Environment.TickCount64;
+
+        while (!ct.IsCancellationRequested)
+        {
+            var events = job.Events;
+            bool wrote = false;
+            while (sent < events.Count)
+            {
+                var ev = events[sent++];
+                string j = JsonSerializer.Serialize(new
+                {
+                    phase   = ev.Phase,
+                    message = ev.Message,
+                    percent = ev.Percent,
+                    done    = !job.IsRunning,
+                    success = job.IsSuccess,
+                    error   = job.Error,
+                });
+                await Response.WriteAsync($"data: {j}\n\n", ct);
+                wrote = true;
+            }
+
+            if (Environment.TickCount64 - lastKeepalive > 30_000)
+            {
+                await Response.WriteAsync(": keepalive\n\n", ct);
+                lastKeepalive = Environment.TickCount64;
+                wrote = true;
+            }
+
+            if (wrote) await Response.Body.FlushAsync(ct);
+            if (!job.IsRunning) break;
+            await Task.Delay(300, ct);
+        }
+    }
+
+    [HttpPost("startup")]
+    public IActionResult SetStartup([FromBody] SwitchFileRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.File))
+            return BadRequest(new { error = "file is required." });
+
+        settingsStore.SetStartupFile(req.File);
+        return Ok(new { ok = true });
+    }
+
+    [HttpPut("notes")]
+    public IActionResult SaveNotes([FromBody] ModelNotesRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.ModelFile))
+            return BadRequest(new { error = "modelFile is required." });
+
+        notesStore.Set(req.ModelFile, req.Notes ?? "");
+        return Ok(new { ok = true });
+    }
+
+    private static bool FilesMatch(string? a, string? b)
+        => string.Equals(NormFile(a), NormFile(b), StringComparison.OrdinalIgnoreCase);
+
+    private static string NormFile(string? f) => (f ?? "").Replace('\\', '/').TrimStart('/');
+}
+
+public record SwitchFileRequest(string File);
+public record ModelNotesRequest(string ModelFile, string? Notes);
 
 public record ConventionsRequest(string? Text);
 

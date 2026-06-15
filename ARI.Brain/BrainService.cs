@@ -512,6 +512,8 @@ public class BrainService
             string currentFolder = noteFolderCache.TryGetValue(existingId, out string? cf) ? cf : string.Empty;
 
             await trilium.UpdateNoteContent(existingId, resolved);
+            if (add.Aliases.Count > 0)
+                await trilium.SetAliasLabels(existingId, add.Aliases);
 
             bool moved = false;
             if (!string.Equals(currentFolder, targetFolder, StringComparison.OrdinalIgnoreCase))
@@ -545,6 +547,8 @@ public class BrainService
             noteIdCache[name]   = id;
             branchIdCache[id]   = branchId;
             noteFolderCache[id] = string.Join("/", folders);
+            if (add.Aliases.Count > 0)
+                await trilium.SetAliasLabels(id, add.Aliases);
             UpdateContentCache(name, string.Join("/", folders), resolved);
             Common.Logger.LogInformation("added: {Name}", add.NoteName);
         }
@@ -564,6 +568,8 @@ public class BrainService
         string html     = MarkdownConverter.ToHtml(edit.Content);
         string resolved = MarkdownConverter.ResolveLinks(html, await ResolveLinkNames(html));
         await trilium.UpdateNoteContent(noteId, resolved);
+        if (edit.Aliases.Count > 0)
+            await trilium.SetAliasLabels(noteId, edit.Aliases);
         string currentFolder = noteFolderCache.TryGetValue(noteId, out string? cf) ? cf : "Unknown";
         UpdateContentCache(currentName, currentFolder, resolved);
         Common.Logger.LogInformation("edited: {Name}", currentName);

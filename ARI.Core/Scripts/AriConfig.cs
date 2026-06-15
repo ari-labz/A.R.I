@@ -37,7 +37,6 @@ public class AriConfig
             throw new Exception("Failed to deserialise AriConfig.json.");
         }
 
-        result.Llm.Validate();
         return result;
     }
 

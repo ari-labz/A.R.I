@@ -105,39 +105,46 @@ function listDirectory(root, dirPath) {
         .sort()
 }
 
-function searchFiles(root, pattern, searchPath, glob) {
+// Regex content search (mirrors the C# SearchFiles tool). The model is told to search with
+// regular expressions, so this MUST be a real regex — a literal substring match silently turns
+// every alternation/anchor/escape the model writes into a non-match, which is what was forcing it
+// to guess instead of locating the exact code. Case-sensitive by default; ignore_case opts in.
+function searchFiles(root, pattern, searchPath, glob, ignoreCase) {
     const absRoot   = path.resolve(root)
     const absSearch = path.resolve(root, searchPath ?? ".")
     if (!absSearch.startsWith(absRoot)) throw new Error("Path traversal denied")
 
+    let regex
+    try { regex = new RegExp(pattern, ignoreCase ? "i" : "") }
+    catch (e) { return [`Invalid regular expression: ${e.message}`] }
+
     const results = []
     const globExt = (glob && glob !== "*" && glob.startsWith("*.")) ? glob.slice(1) : null
+    let truncated = false
 
     function search(dir) {
-        if (results.length >= 200) return
+        if (truncated) return
         let entries
         try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
         for (const entry of entries) {
-            if (results.length >= 200) return
+            if (truncated) return
             if (entry.name.startsWith(".") && entry.name !== ".env") continue
             if (IGNORED_DIRS.has(entry.name)) continue
             const abs = path.join(dir, entry.name)
-            if (entry.isDirectory()) {
-                search(abs)
-            } else {
-                if (globExt && !entry.name.endsWith(globExt)) continue
-                try {
-                    const lines = fs.readFileSync(abs, "utf8").split("\n")
-                    for (let i = 0; i < lines.length && results.length < 200; i++) {
-                        if (lines[i].toLowerCase().includes(pattern.toLowerCase())) {
-                            results.push(`${path.relative(absRoot, abs)}:${i + 1}: ${lines[i].trim()}`)
-                        }
-                    }
-                } catch { /* skip unreadable */ }
+            if (entry.isDirectory()) { search(abs); continue }
+            if (globExt && !entry.name.endsWith(globExt)) continue
+            let lines
+            try { lines = fs.readFileSync(abs, "utf8").split("\n") } catch { continue }
+            for (let i = 0; i < lines.length; i++) {
+                if (regex.test(lines[i])) {
+                    results.push(`${path.relative(absRoot, abs)}:${i + 1}: ${lines[i].trim()}`)
+                    if (results.length >= 200) { truncated = true; break }
+                }
             }
         }
     }
     search(absSearch)
+    if (truncated) results.push("... (truncated at 200 matches — narrow with path or glob)")
     return results
 }
 
@@ -189,12 +196,12 @@ function closestRegionHint(content, old) {
     // No region shares any tokens with old_string — pointing at line 1 would be misleading. Tell
     // the model the text isn't there so it re-reads / searches instead of retrying blindly.
     if (bestScore <= 0)
-        return " None of the file resembles that old_string — it may have already been changed or never existed. Re-read the file (or search_files for a nearby anchor) before retrying."
+        return " None of the file resembles that old_string — don't retype it. Re-read the file, then change the lines you want using start_line/end_line (you can see the line numbers), instead of old_string."
 
     const to     = Math.min(cLines.length - 1, bestStart + k - 1)
     const region = cLines.slice(bestStart, to + 1).map((l, i) => `${padLine(bestStart + i + 1)}: ${l}`).join("\n")
     return ` The closest matching region is lines ${bestStart + 1}–${to + 1}:\n\`\`\`\n${region}\n\`\`\`\n` +
-           `Copy that text exactly (including indentation) into old_string if it is the code you meant to edit.`
+           `Either copy that text EXACTLY (including indentation) into old_string, or — simpler — edit by line number using start_line/end_line (e.g. start_line ${bestStart + 1}).`
 }
 
 // Locate `normOld` in normalized-LF `buf`. Tier 1: exact unique substring. Tier 2: leading-
@@ -231,57 +238,95 @@ function findMatch(buf, normOld, filePath, label) {
     return { error: `old_string not found in ${filePath}${label}. No changes made.${closestRegionHint(buf, normOld)}` }
 }
 
-// Targeted find-and-replace. Supports a single old/new pair OR a MultiEdit-style batch via
-// options.edits (each {old_string, new_string, replace_all}). Batched edits are applied
-// sequentially against ONE in-memory buffer, so the line shifts from earlier edits never
-// invalidate later ones — the whole set lands in a single read + single write.
+// Edit a file by replacing one or more regions. Each region is anchored EITHER by text
+// (old_string, the verbatim content) OR by line range (start_line/end_line, 1-based inclusive —
+// the numbers shown by read_file). Line anchoring is the reliable path for a model that can see
+// numbered lines but can't reproduce a long block verbatim ("delete lines 196-232" just works).
+//
+// Supports a single edit (top-level old_string/new_string or start_line/end_line) or a batch via
+// options.edits. ALL regions are resolved against the ORIGINAL file, checked for overlap, then
+// applied highest-offset-first so earlier edits never shift the line numbers / offsets of later
+// ones. One read, one write.
 function editFile(root, filePath, oldString, newString, options = {}) {
     const abs = path.resolve(root, filePath)
     if (!abs.startsWith(path.resolve(root))) throw new Error("Path traversal denied")
     const content = readFileSyncRetry(abs)
 
-    const edits = Array.isArray(options.edits) && options.edits.length > 0
-        ? options.edits.map(e => ({ old: e.old_string, new: e.new_string ?? "", all: !!e.replace_all }))
-        : [{ old: oldString, new: newString ?? "", all: !!options.replaceAll }]
+    const rawEdits = Array.isArray(options.edits) && options.edits.length > 0
+        ? options.edits
+        : [{ old_string: oldString, new_string: newString,
+             start_line: options.startLine, end_line: options.endLine, replace_all: options.replaceAll }]
 
     const nl   = content.includes("\r\n") ? "\r\n" : "\n"
-    const norm = s => String(s).replace(/\r\n/g, "\n").replace(/\r/g, "\n")
-    let buf = norm(content)
+    const norm = s => String(s ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+    const buf0 = norm(content)
 
-    let anyFuzzy = false, anyPrefixed = false, replacements = 0, firstStart = -1, firstNewLen = 0
-    for (let idx = 0; idx < edits.length; idx++) {
-        const ed    = edits[idx]
-        const label = edits.length > 1 ? ` (edit ${idx + 1} of ${edits.length})` : ""
-        if (!ed.old) return { ok: false, error: `old_string is empty${label}. Provide the exact text to replace in ${filePath}.` }
+    // Offsets where each line begins, so a 1-based line range maps to a character span.
+    const lineStarts = [0]
+    for (let i = 0; i < buf0.length; i++) if (buf0[i] === "\n") lineStarts.push(i + 1)
+    const totalLines = lineStarts.length
 
-        // Strip line-number prefixes the model may have copied from read_file output, independently
-        // for old and new, so we never match against (or write back) a stray "  42: " prefix.
-        const rawOld = norm(ed.old)
-        const rawNew = norm(ed.new)
-        const sOld   = stripLineNumberPrefix(rawOld)
-        const sNew   = stripLineNumberPrefix(rawNew)
-        const normOld = sOld !== null ? sOld : rawOld
-        const normNew = sNew !== null ? sNew : rawNew
-        if (sOld !== null || sNew !== null) anyPrefixed = true
+    const spans = []   // { start, len, rep } resolved against buf0
+    let anyFuzzy = false, anyPrefixed = false
+    const multi = rawEdits.length > 1
 
-        if (ed.all) {
-            if (!buf.includes(normOld))
-                return { ok: false, error: `old_string not found in ${filePath}${label}. No changes made.${closestRegionHint(buf, normOld)}` }
-            const at    = buf.indexOf(normOld)
-            const count = buf.split(normOld).length - 1
-            buf = buf.split(normOld).join(normNew)
-            replacements += count
-            if (firstStart < 0) { firstStart = at; firstNewLen = normNew.length }
+    for (let idx = 0; idx < rawEdits.length; idx++) {
+        const e = rawEdits[idx]
+        const label = multi ? ` (edit ${idx + 1} of ${rawEdits.length})` : ""
+        const hasLines = e.start_line != null && e.start_line !== "" && Number.isFinite(Number(e.start_line))
+
+        if (hasLines) {
+            const s  = Math.trunc(Number(e.start_line))
+            const en = (e.end_line != null && e.end_line !== "" && Number.isFinite(Number(e.end_line))) ? Math.trunc(Number(e.end_line)) : s
+            if (s < 1 || s > totalLines || en < s || en > totalLines)
+                return { ok: false, error: `start_line/end_line ${s}-${en} is out of range${label} — ${filePath} has ${totalLines} lines. Re-read the file for current line numbers.` }
+            const sNew = stripLineNumberPrefix(norm(e.new_string))
+            let rep = sNew !== null ? sNew : norm(e.new_string)
+            if (sNew !== null) anyPrefixed = true
+            const offStart = lineStarts[s - 1]
+            let offEnd, hadNL
+            if (en < totalLines) { offEnd = lineStarts[en]; hadNL = true }   // include line `en`'s newline
+            else { offEnd = buf0.length; hadNL = false }
+            if (rep.length > 0 && hadNL && !rep.endsWith("\n")) rep += "\n"   // keep the file line-delimited
+            spans.push({ start: offStart, len: offEnd - offStart, rep })
             continue
         }
 
-        const m = findMatch(buf, normOld, filePath, label)
+        // Text-anchored. Strip line-number prefixes the model may have copied from read_file output.
+        if (!e.old_string) return { ok: false, error: `Provide old_string or start_line/end_line${label} to edit ${filePath}.` }
+        const sOld = stripLineNumberPrefix(norm(e.old_string))
+        const sNew = stripLineNumberPrefix(norm(e.new_string))
+        const normOld = sOld !== null ? sOld : norm(e.old_string)
+        const normNew = sNew !== null ? sNew : norm(e.new_string)
+        if (sOld !== null || sNew !== null) anyPrefixed = true
+
+        if (e.replace_all) {
+            let from = 0, i, found = false
+            while ((i = buf0.indexOf(normOld, from)) !== -1) { spans.push({ start: i, len: normOld.length, rep: normNew }); from = i + normOld.length; found = true }
+            if (!found) return { ok: false, error: `old_string not found in ${filePath}${label}. No changes made.${closestRegionHint(buf0, normOld)}` }
+            continue
+        }
+
+        const m = findMatch(buf0, normOld, filePath, label)
         if (m.error) return { ok: false, error: m.error }
-        buf = buf.slice(0, m.start) + normNew + buf.slice(m.start + m.len)
         if (m.fuzzy) anyFuzzy = true
-        replacements++
-        if (firstStart < 0) { firstStart = m.start; firstNewLen = normNew.length }
+        spans.push({ start: m.start, len: m.len, rep: normNew })
     }
+
+    // Overlap check (all spans are against buf0, so offsets are comparable).
+    spans.sort((a, b) => a.start - b.start)
+    for (let i = 1; i < spans.length; i++)
+        if (spans[i].start < spans[i - 1].start + spans[i - 1].len)
+            return { ok: false, error: `Edits overlap in ${filePath} — two edits target the same region. Combine them into one edit.` }
+
+    const firstStart  = spans.length ? spans[0].start : 0
+    const firstRepLen = spans.length ? spans[0].rep.length : 0
+
+    // Apply highest-offset-first; lower offsets are then unaffected, so the lowest span's start is
+    // still valid in the final buffer (used for the snippet below).
+    let buf = buf0
+    for (const sp of [...spans].sort((a, b) => b.start - a.start))
+        buf = buf.slice(0, sp.start) + sp.rep + buf.slice(sp.start + sp.len)
 
     writeFileSyncRetry(abs, buf.split("\n").join(nl))
 
@@ -291,20 +336,15 @@ function editFile(root, filePath, oldString, newString, options = {}) {
     if (anyFuzzy)    tags.push("matched ignoring indentation/line-ending differences")
     const note   = tags.length ? ` (${tags.join("; ")})` : ""
 
-    // Multi-edit: report a summary (per-edit snippets would be misaligned after splicing).
-    if (edits.length > 1)
-        return {
-            ok: true,
-            message: `Successfully edited ${filePath}.${note} Applied ${edits.length} edits (${replacements} replacements). File is now ${uLines.length} lines.`
-        }
+    if (multi)
+        return { ok: true, message: `Successfully edited ${filePath}.${note} Applied ${rawEdits.length} edits (${spans.length} replacements). File is now ${uLines.length} lines.` }
 
-    // Single edit: return a numbered snippet around the change so the model has current context.
     const editLine = buf.slice(0, firstStart).split("\n").length - 1
-    const newCount = firstNewLen === 0 ? 1 : buf.slice(firstStart, firstStart + firstNewLen).split("\n").length
+    const newCount = firstRepLen === 0 ? 1 : buf.slice(firstStart, firstStart + firstRepLen).split("\n").length
     const from     = Math.max(0, editLine - 5)
     const to       = Math.min(uLines.length - 1, editLine + newCount + 4)
     const snippet  = uLines.slice(from, to + 1).map((l, i) => `${padLine(from + i + 1)}: ${l}`).join("\n")
-    const replNote = replacements > 1 ? ` (${replacements} occurrences replaced)` : ""
+    const replNote = spans.length > 1 ? ` (${spans.length} occurrences replaced)` : ""
     return {
         ok: true,
         message: `Successfully edited ${filePath}.${note}${replNote} File is now ${uLines.length} lines.\n\n` +

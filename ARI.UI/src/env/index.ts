@@ -1,7 +1,9 @@
 // A single find/replace, or a MultiEdit-style batch applied against one buffer in order.
 export interface EditOptions {
   replaceAll?: boolean
-  edits?: { old_string: string; new_string?: string; replace_all?: boolean }[]
+  startLine?: number
+  endLine?: number
+  edits?: { old_string?: string; new_string?: string; replace_all?: boolean; start_line?: number; end_line?: number }[]
 }
 
 export interface AriEnvironment {
@@ -9,7 +11,7 @@ export interface AriEnvironment {
   readFile(root: string, path: string): Promise<string>
   writeFile(root: string, path: string, content: string): Promise<void>
   listDirectory(root: string, dirPath?: string): Promise<string[]>
-  searchFiles(root: string, pattern: string, searchPath?: string, glob?: string): Promise<string[]>
+  searchFiles(root: string, pattern: string, searchPath?: string, glob?: string, ignoreCase?: boolean): Promise<string[]>
   editFile(root: string, filePath: string, oldString: string, newString: string, options?: EditOptions): Promise<{ ok: boolean; error?: string; message?: string }>
   runCommand(root: string, command: string): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }>
   getCommandAllowlist(): Promise<string[]>
@@ -33,7 +35,7 @@ declare global {
       readFile(root: string, path: string): Promise<string>
       writeFile(root: string, path: string, content: string): Promise<void>
       listDirectory(root: string, dirPath?: string): Promise<string[]>
-      searchFiles(root: string, pattern: string, searchPath?: string, glob?: string): Promise<string[]>
+      searchFiles(root: string, pattern: string, searchPath?: string, glob?: string, ignoreCase?: boolean): Promise<string[]>
       editFile(root: string, filePath: string, oldString: string, newString: string, options?: EditOptions): Promise<{ ok: boolean; error?: string; message?: string }>
       runCommand(root: string, command: string): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }>
       getCommandAllowlist(): Promise<string[]>
@@ -84,7 +86,7 @@ const electronEnv: AriEnvironment = {
   readFile:      (root, path)                        => window.electronBridge!.readFile(root, path),
   writeFile:     (root, path, content)               => window.electronBridge!.writeFile(root, path, content),
   listDirectory: (root, dirPath)                     => window.electronBridge!.listDirectory(root, dirPath),
-  searchFiles:   (root, pattern, searchPath, glob)   => window.electronBridge!.searchFiles(root, pattern, searchPath, glob),
+  searchFiles:   (root, pattern, searchPath, glob, ignoreCase) => window.electronBridge!.searchFiles(root, pattern, searchPath, glob, ignoreCase),
   editFile:      (root, filePath, oldStr, newStr, options) => window.electronBridge!.editFile(root, filePath, oldStr, newStr, options),
   runCommand:          (root, command)               => window.electronBridge!.runCommand(root, command),
   getCommandAllowlist: ()                            => window.electronBridge!.getCommandAllowlist(),

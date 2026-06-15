@@ -5,6 +5,12 @@ public class AgentConfig
     public string Name { get; init; }
     public string Endpoint { get; init; }
     public string Model { get; init; }
+
+    /// <summary>
+    /// Name of the LlamaModelConfig this agent should run on.
+    /// Informational for now — used in the control panel to show agent–model assignments.
+    /// </summary>
+    public string ModelName { get; init; } = "";
     public string SystemPrompt { get; init; }
     public bool Enabled { get; init; }
 

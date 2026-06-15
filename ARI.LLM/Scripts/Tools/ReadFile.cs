@@ -45,11 +45,28 @@ internal sealed class ReadFile : FileTool
             string[] lines      = await File.ReadAllLinesAsync(absPath, ct);
             int      totalLines = lines.Length;
 
-            int startLine = doc.RootElement.TryGetProperty("start_line", out JsonElement startEl) ? startEl.GetInt32() : 1;
-            int endLine   = doc.RootElement.TryGetProperty("end_line",   out JsonElement endEl)   ? endEl.GetInt32()   : totalLines;
+            bool hasStart = doc.RootElement.TryGetProperty("start_line", out JsonElement startEl);
+            bool hasEnd   = doc.RootElement.TryGetProperty("end_line",   out JsonElement endEl);
+            int startLine = hasStart ? startEl.GetInt32() : 1;
+            int endLine   = hasEnd   ? endEl.GetInt32()   : totalLines;
 
             startLine = Math.Max(1,         Math.Min(startLine, totalLines));
             endLine   = Math.Max(startLine, Math.Min(endLine,   totalLines));
+
+            // Cap whole-file reads of large files so a single read can't blow the context window.
+            const int READ_MAX_LINES = 1500;
+            const int READ_MAX_CHARS = 60000;
+            bool capped = false;
+            if (!hasStart && !hasEnd && totalLines > 0)
+            {
+                int chars = 0, lim = totalLines;
+                for (int i = 0; i < totalLines; i++)
+                {
+                    chars += lines[i].Length + 1;
+                    if (i + 1 >= READ_MAX_LINES || chars >= READ_MAX_CHARS) { lim = i + 1; break; }
+                }
+                if (lim < totalLines) { endLine = lim; capped = true; }
+            }
 
             bool   fullFile = startLine == 1 && endLine == totalLines;
             string header   = fullFile
@@ -62,6 +79,8 @@ internal sealed class ReadFile : FileTool
             for (int i = startLine - 1; i < endLine; i++)
                 sb.AppendLine($"{i + 1,6}: {lines[i]}");
             sb.Append("```");
+            if (capped)
+                sb.Append($"\n[File is large ({totalLines} lines) — only the first {endLine} are shown. Read a specific range with start_line/end_line, or use search_files, rather than reading the whole file.]");
             return sb.ToString();
         }
         catch (Exception ex)

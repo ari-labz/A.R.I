@@ -19,7 +19,7 @@ internal class CommandService
         this.getDirtyNotes = getDirtyNotes;
     }
 
-    internal async Task<string?> Handle(string input)
+    internal async Task<string?> Handle(string input, string? threadKey = null)
     {
         if (string.IsNullOrWhiteSpace(input) || !input.StartsWith('/'))
             return null;
@@ -30,7 +30,7 @@ internal class CommandService
 
         return command switch
         {
-            "/engram"        => await HandleEngram(sub),
+            "/engram"        => await HandleEngram(sub, threadKey),
             "/refactor"      => await HandleRefactor(sub),
             "/purge"         => sub == "notes" ? await HandlePurge() : null,
             "/brain"         => sub == "backup" ? await HandleBackup() : null,
@@ -39,7 +39,7 @@ internal class CommandService
         };
     }
 
-    private async Task<string> HandleEngram(string sub)
+    private async Task<string> HandleEngram(string sub, string? threadKey)
     {
         if (engram is null) return "Engram is not loaded.";
 
@@ -47,7 +47,7 @@ internal class CommandService
         {
             "on"     => Enable(),
             "off"    => Disable(),
-            "sweep"  => await Sweep(),
+            "sweep"  => await Sweep(threadKey),
             "status" => Status(),
             _        => "Unknown engram command. Options: `/engram on`, `/engram off`, `/engram sweep`, `/engram status`"
         };
@@ -65,10 +65,12 @@ internal class CommandService
         return "Engram disabled.";
     }
 
-    private async Task<string> Sweep()
+    private async Task<string> Sweep(string? threadKey)
     {
-        await engram!.Sweep();
-        return engram.IsEnabled ? "Engram sweep complete." : "Engram is disabled — sweep skipped.";
+        if (!engram!.IsEnabled) return "Engram is disabled — sweep skipped.";
+        if (threadKey is null)  return "No active thread — sweep skipped.";
+        await engram.RunEngram(threadKey, "manual");
+        return "Engram sweep complete.";
     }
 
     private string Status()
