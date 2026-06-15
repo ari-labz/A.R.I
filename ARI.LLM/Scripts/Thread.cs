@@ -394,10 +394,14 @@ public class Thread
     {
         LastMessageAt = DateTime.UtcNow;
 
+        // Always kill the inactivity timer when a new exchange begins — regardless of state.
+        // Without this, the timer from the previous completed exchange can fire mid-generation
+        // and trigger BecameInactive while the AriResponse is still open.
+        inactivityTimer?.Dispose();
+        inactivityTimer = null;
+
         if (State != ThreadState.Active)
         {
-            inactivityTimer?.Dispose();
-            inactivityTimer = null;
             dormantTimer?.Dispose();
             dormantTimer = null;
             State = ThreadState.Active;
