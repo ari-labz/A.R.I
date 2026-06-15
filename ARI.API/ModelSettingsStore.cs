@@ -2,10 +2,13 @@ using System.Text.Json;
 
 namespace ARI.API;
 
-/// <summary>Persists model preferences (startup model) separately from AriConfig.json.</summary>
+/// <summary>Persists per-server model preferences (startup model overrides) separately from AriConfig.json.</summary>
 public class ModelSettingsStore
 {
-    private record Settings(string StartupFile = "");
+    private record Settings(Dictionary<string, string> Servers = null!)
+    {
+        public Dictionary<string, string> Servers { get; init; } = Servers ?? new();
+    }
 
     private readonly string filePath;
     private readonly object _lock = new();
@@ -16,21 +19,32 @@ public class ModelSettingsStore
         filePath = Path.Combine(AppContext.BaseDirectory, "model-settings.json");
     }
 
-    public string GetStartupFile()
+    public string GetStartupFile(string serverName)
     {
         lock (_lock)
         {
             if (!File.Exists(filePath)) return "";
-            try { return JsonSerializer.Deserialize<Settings>(File.ReadAllText(filePath))?.StartupFile ?? ""; }
+            try
+            {
+                Settings? s = JsonSerializer.Deserialize<Settings>(File.ReadAllText(filePath));
+                return s?.Servers.TryGetValue(serverName, out string? file) == true ? file ?? "" : "";
+            }
             catch { return ""; }
         }
     }
 
-    public void SetStartupFile(string relativeFile)
+    public void SetStartupFile(string serverName, string relativeFile)
     {
         lock (_lock)
         {
-            File.WriteAllText(filePath, JsonSerializer.Serialize(new Settings(relativeFile), JsonOpts));
+            Settings current = new();
+            if (File.Exists(filePath))
+            {
+                try { current = JsonSerializer.Deserialize<Settings>(File.ReadAllText(filePath)) ?? new(); }
+                catch { /* start fresh */ }
+            }
+            Dictionary<string, string> updated = new(current.Servers) { [serverName] = relativeFile };
+            File.WriteAllText(filePath, JsonSerializer.Serialize(new Settings(updated), JsonOpts));
         }
     }
 }

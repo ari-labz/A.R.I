@@ -3,14 +3,13 @@ namespace ARI.LLM;
 public class AgentConfig
 {
     public string Name { get; init; }
-    public string Endpoint { get; init; }
-    public string Model { get; init; }
 
-    /// <summary>
-    /// Name of the LlamaModelConfig this agent should run on.
-    /// Informational for now — used in the control panel to show agent–model assignments.
-    /// </summary>
-    public string ModelName { get; init; } = "";
+    /// <summary>Name of the server (from LlamaServerConfig.Name) this agent routes to.</summary>
+    public string ServerName { get; init; } = "";
+
+    /// <summary>Resolved at boot from ServerName → server endpoint. Not read from JSON.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string Endpoint { get; internal set; } = "";
     public string SystemPrompt { get; init; }
     public bool Enabled { get; init; }
 

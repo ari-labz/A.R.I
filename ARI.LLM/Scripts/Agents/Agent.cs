@@ -5,9 +5,8 @@ namespace ARI.LLM;
 public abstract class Agent
 {
     public    readonly string Name;
-    public    readonly string ModelName;
+    public    readonly string ServerName;
     internal  readonly string Endpoint;
-    internal  readonly string ModelString;
     internal  readonly string SystemPrompt;
     internal  readonly int    MaxTokens;
     internal  readonly int    MaxImageTokens;
@@ -45,10 +44,9 @@ public abstract class Agent
 
     internal Agent(AgentConfig config)
     {
-        Name           = config.Name;
-        ModelName      = config.ModelName;
-        Endpoint       = config.Endpoint;
-        ModelString    = config.Model;
+        Name       = config.Name;
+        ServerName = config.ServerName;
+        Endpoint   = config.Endpoint;
         SystemPrompt   = config.SystemPrompt;
         MaxTokens      = config.MaxTokens;
         MaxImageTokens = config.MaxImageTokens;

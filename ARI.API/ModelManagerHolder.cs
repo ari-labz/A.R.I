@@ -13,9 +13,12 @@ public record ModelInfo(
 
 public record ModelSwitchEvent(string Phase, string Message, int Percent);
 
+public record ServerStatus(string? ActiveFile, string? ActiveName, int Pid);
+
 public class ModelSwitchJob
 {
-    public string TargetFile { get; init; } = "";
+    public string TargetFile  { get; init; } = "";
+    public string ServerName  { get; init; } = "";
     private readonly List<ModelSwitchEvent> _events = new();
     public IReadOnlyList<ModelSwitchEvent> Events => _events;
     public bool    IsRunning { get; private set; } = true;
@@ -35,34 +38,35 @@ public class ModelSwitchJob
 
 /// <summary>
 /// Singleton published by ApiService. ModelManager (ARI.Core) writes into it;
-/// controllers read from it. Mirrors the LlmServiceHolder pattern.
+/// controllers read from it.
 /// </summary>
 public class ModelManagerHolder
 {
-    public string?                  ActiveFile   { get; private set; }
-    public string?                  ActiveName   { get; private set; }
-    public int                      ActivePid    { get; private set; } = -1;
-    public IReadOnlyList<ModelInfo> AllModels    { get; private set; } = Array.Empty<ModelInfo>();
+    private readonly Dictionary<string, ServerStatus> _servers = new();
+    public IReadOnlyDictionary<string, ServerStatus> Servers => _servers;
+
+    public IReadOnlyList<ModelInfo> AllModels { get; private set; } = Array.Empty<ModelInfo>();
     public ModelSwitchJob?          CurrentSwitchJob { get; private set; }
 
     public void Initialize(IReadOnlyList<ModelInfo> models)
         => AllModels = models;
 
-    public void SetActiveModel(string? file, string? name, int pid)
-    {
-        ActiveFile = file;
-        ActiveName = name;
-        ActivePid  = pid;
-    }
+    public void SetServerModel(string serverName, string? file, string? name, int pid)
+        => _servers[serverName] = new ServerStatus(file, name, pid);
 
-    public ModelSwitchJob BeginSwitchJob(string targetFile)
+    // ── Legacy single-server accessors (used by older API paths) ──────────────
+    public string? ActiveFile => _servers.Values.FirstOrDefault()?.ActiveFile;
+    public string? ActiveName => _servers.Values.FirstOrDefault()?.ActiveName;
+    public int     ActivePid  => _servers.Values.FirstOrDefault()?.Pid ?? -1;
+
+    public ModelSwitchJob BeginSwitchJob(string serverName, string targetFile)
     {
-        var job = new ModelSwitchJob { TargetFile = targetFile };
+        var job = new ModelSwitchJob { TargetFile = targetFile, ServerName = serverName };
         CurrentSwitchJob = job;
         return job;
     }
 
-    private Action<string>? _switchDelegate;
-    public void RegisterSwitchDelegate(Action<string> action) => _switchDelegate = action;
-    public void TriggerSwitch(string relativeFile) => _switchDelegate?.Invoke(relativeFile);
+    private Action<string, string>? _switchDelegate;
+    public void RegisterSwitchDelegate(Action<string, string> action) => _switchDelegate = action;
+    public void TriggerSwitch(string serverName, string relativeFile) => _switchDelegate?.Invoke(serverName, relativeFile);
 }

@@ -32,10 +32,16 @@ public class LlmService : IDisposable
     /// <summary>Every thread across all pipelines, keyed by thread key. Each carries its <see cref="ThreadType"/>.</summary>
     public IReadOnlyDictionary<string, Thread> Threads => threads;
 
-    public LlmService(IReadOnlyList<AgentConfig> agents, BrainConfig? brainConfig = null, ILoggerFactory? loggerFactory = null)
+    public LlmService(IReadOnlyList<AgentConfig> agents, IReadOnlyDictionary<string, string>? serverEndpoints = null, BrainConfig? brainConfig = null, ILoggerFactory? loggerFactory = null)
     {
         if (loggerFactory is not null)
             Common.InitialiseLogger(loggerFactory);
+
+        // Resolve ServerName → endpoint for each agent before construction
+        if (serverEndpoints is not null)
+            foreach (AgentConfig cfg in agents)
+                if (serverEndpoints.TryGetValue(cfg.ServerName, out string? ep))
+                    cfg.Endpoint = ep;
 
         Dictionary<string, AgentConfig> enabledAgents = agents
             .Where(m => m.Enabled)

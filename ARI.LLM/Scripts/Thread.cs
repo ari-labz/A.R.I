@@ -648,7 +648,7 @@ public class Thread
 
             Dictionary<string, object?> body = new()
             {
-                ["model"]          = agent.ModelString,
+                ["model"]          = "local",
                 ["messages"]       = messages,
                 ["stream"]         = true,
                 ["stream_options"] = new { include_usage = true },

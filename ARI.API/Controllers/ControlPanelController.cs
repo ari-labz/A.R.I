@@ -521,9 +521,8 @@ public class ModelsApiController(
     [HttpGet]
     public IActionResult GetModels()
     {
-        var notes      = notesStore.GetAll();
-        string? active = modelManagerHolder.ActiveFile;
-        string startup = settingsStore.GetStartupFile();
+        var notes   = notesStore.GetAll();
+        var servers = modelManagerHolder.Servers;
 
         var models = modelManagerHolder.AllModels.Select(m => new
         {
@@ -532,39 +531,52 @@ public class ModelsApiController(
             sizeBytes  = m.FileSizeBytes,
             sizeMb     = Math.Round(m.FileSizeBytes / 1024.0 / 1024.0, 1),
             downloaded = m.FileSizeBytes > 0,
-            active     = FilesMatch(m.File, active),
-            isStartup  = FilesMatch(m.File, startup),
             configured = m.Configured,
             notes      = notes.TryGetValue(m.File, out string? n) ? n : "",
             hasMmproj      = m.HasMmproj,
             supportsVision = m.SupportsVision,
             hasMtp         = m.HasMtp,
-            downloadUrl = m.DownloadUrl,
+            downloadUrl    = m.DownloadUrl,
+            // Per-server active state: { serverName: bool }
+            activeOnServer = servers.ToDictionary(
+                kv => kv.Key,
+                kv => FilesMatch(m.File, kv.Value.ActiveFile)),
+        }).ToList();
+
+        var serverList = servers.Select(kv => new
+        {
+            name       = kv.Key,
+            activeFile = kv.Value.ActiveFile,
+            activeName = kv.Value.ActiveName,
+            pid        = kv.Value.Pid,
         }).ToList();
 
         var job = modelManagerHolder.CurrentSwitchJob;
         return Ok(new
         {
-            activeFile = active,
-            startupFile = startup,
-            switching  = job?.IsRunning ?? false,
+            servers   = serverList,
+            switching = job?.IsRunning ?? false,
+            switchingServer = job?.IsRunning == true ? job.ServerName : null,
             models,
         });
     }
 
     [HttpPost("switch")]
-    public IActionResult Switch([FromBody] SwitchFileRequest req)
+    public IActionResult Switch([FromBody] SwitchServerFileRequest req)
     {
+        if (string.IsNullOrWhiteSpace(req.ServerName))
+            return BadRequest(new { error = "serverName is required." });
         if (string.IsNullOrWhiteSpace(req.File))
             return BadRequest(new { error = "file is required." });
 
         if (modelManagerHolder.CurrentSwitchJob?.IsRunning == true)
             return Conflict(new { error = "A model switch is already in progress." });
 
-        if (FilesMatch(modelManagerHolder.ActiveFile, req.File))
+        if (modelManagerHolder.Servers.TryGetValue(req.ServerName, out ServerStatus? status) &&
+            FilesMatch(status.ActiveFile, req.File))
             return Ok(new { ok = true, message = "Already active." });
 
-        modelManagerHolder.TriggerSwitch(req.File);
+        modelManagerHolder.TriggerSwitch(req.ServerName, req.File);
         return Ok(new { ok = true });
     }
 
@@ -620,12 +632,14 @@ public class ModelsApiController(
     }
 
     [HttpPost("startup")]
-    public IActionResult SetStartup([FromBody] SwitchFileRequest req)
+    public IActionResult SetStartup([FromBody] SwitchServerFileRequest req)
     {
+        if (string.IsNullOrWhiteSpace(req.ServerName))
+            return BadRequest(new { error = "serverName is required." });
         if (string.IsNullOrWhiteSpace(req.File))
             return BadRequest(new { error = "file is required." });
 
-        settingsStore.SetStartupFile(req.File);
+        settingsStore.SetStartupFile(req.ServerName, req.File);
         return Ok(new { ok = true });
     }
 
@@ -646,6 +660,7 @@ public class ModelsApiController(
 }
 
 public record SwitchFileRequest(string File);
+public record SwitchServerFileRequest(string ServerName, string File);
 public record ModelNotesRequest(string ModelFile, string? Notes);
 
 public record ConventionsRequest(string? Text);

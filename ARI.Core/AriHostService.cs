@@ -81,12 +81,15 @@ public class AriHostService : BackgroundService
         await docker.StartContainers();
         containersStarted = true;
 
-        string startupFile = webPanelService!.ModelSettingsStore.GetStartupFile();
-        modelManager = new ModelManager(config.Llm, executableDirectory, webPanelService.ModelManagerHolder, loggerFactory);
-        await modelManager.StartInitialModelAsync(startupFile);
+        modelManager = new ModelManager(config.Llm, executableDirectory, webPanelService!.ModelManagerHolder, loggerFactory);
+        await modelManager.StartAllServersAsync();
+
+        Dictionary<string, string> serverEndpoints = config.Llm.Servers
+            .Where(s => !string.IsNullOrWhiteSpace(s.Name) && !string.IsNullOrWhiteSpace(s.Endpoint))
+            .ToDictionary(s => s.Name, s => s.Endpoint);
 
         Common.Logger.LogInformation("Loading agents...");
-        LlmService llmService = new LlmService(config.Agents, config.Brain, loggerFactory);
+        LlmService llmService = new LlmService(config.Agents, serverEndpoints, config.Brain, loggerFactory);
         Common.Logger.LogInformation("Agents loaded.");
 
         Common.Logger.LogInformation("ARI is ready.");

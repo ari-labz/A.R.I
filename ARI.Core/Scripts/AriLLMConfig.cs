@@ -2,17 +2,19 @@ namespace ARI.Core.Scripts;
 
 public class AriLLMConfig
 {
-    public string                  ModelsPath   { get; init; } = "Models";
-    public string                  StartupModel { get; init; } = "";
-    public List<LlamaServerConfig> Servers      { get; init; } = new();
+    public string                  ModelsPath { get; init; } = "Models";
+    public List<LlamaServerConfig> Servers    { get; init; } = new();
 }
 
 public class LlamaServerConfig
 {
-    public string Endpoint      { get; init; } = "";
-    public int    Port          { get; init; } = 8081;
-    public int    ContextSize   { get; init; } = 32768;
+    public string Name         { get; init; } = "";
+    public string Endpoint     { get; init; } = "";
+    public int    Port         { get; init; } = 8081;
+    public int    ContextSize  { get; init; } = 32768;
     public int    ParallelSlots { get; init; } = 1;
+    /// <summary>Model file path (relative to ModelsPath) to load on startup. Overridable at runtime via ModelSettingsStore.</summary>
+    public string StartupModel { get; init; } = "";
 }
 
 /// <summary>
