@@ -24,7 +24,7 @@ public class Thread
     private const double  REPEAT_PENALTY           = 1.0;
     private const double  TOKEN_WARNING_RATIO      = 0.8;
     private const double  COMPACT_RATIO            = 0.6;  // compact tool output once context exceeds this fraction of the window
-    private const int     COMPACT_KEEP_RECENT      = 6;    // most-recent tool results always kept full
+    private const int     COMPACT_KEEP_RECENT      = 3;    // most-recent tool results always kept full
     private const int     MAX_DEGRADE_EVENTS       = 5;    // tool-format failures per turn before aborting to avoid a spiral
     private const string  ATTACHMENT_DIVIDER       = "-------------------";
 
@@ -355,19 +355,19 @@ public class Thread
             streamingResponse = null;
             throw;
         }
-        catch
+        catch (Exception ex)
         {
-            // Any other failure: keep a non-empty partial visible as an errored response;
-            // if nothing streamed, drop it so no empty bubble appears.
+            // Any other failure: show an error bubble so the user always gets feedback.
+            // If something was already streamed, keep that partial text; otherwise replace the
+            // empty bubble with the error message rather than silently removing it.
             if (streamingResponse is not null)
             {
-                if (string.IsNullOrWhiteSpace(streamedText))
-                    History.Remove(streamingResponse);
-                else
-                {
-                    streamingResponse.Content = AriContentBlock.Parse(streamedText);
-                    streamingResponse.State   = AriResponseState.Error;
-                }
+                streamingResponse.Content = AriContentBlock.Parse(
+                    string.IsNullOrWhiteSpace(streamedText)
+                        ? $"[Error: {ex.Message}]"
+                        : streamedText);
+                streamingResponse.State = AriResponseState.Error;
+                Updated?.Invoke();
             }
             streamingResponse = null;
             throw;
@@ -639,6 +639,15 @@ public class Thread
             // array exceeds COMPACT_RATIO of the window. Keeps the system/persistent blocks, user
             // messages, and the most recent tool results intact — only old, re-derivable output is dropped.
             CompactToolOutput(messages, toolResultSlots, agent.MaxContextTokens);
+
+            // Recompute actual input token estimate from the real messages array — accounts for the
+            // rebuilt system message, compacted slots, and all tool results accumulated this turn.
+            // This keeps the live context bar in the control panel accurate throughout the turn.
+            if (liveCallInfo is { } lci)
+            {
+                long totalChars = messages.Sum(m => (long)(ContentOf(m)?.Length ?? 0));
+                lci.EstimatedInputTokens = (int)(totalChars / CHARS_PER_TOKEN);
+            }
 
             bool      toolsExhausted = forceNoMoreTools || (agent.MaxToolCalls > 0 && toolCallCount >= agent.MaxToolCalls);
             object[]? toolSchemas    = !toolsExhausted && tools.Count > 0
@@ -1008,9 +1017,9 @@ public class Thread
                             string rpath = NormKey(rdoc.RootElement.GetProperty("path").GetString() ?? "");
                             readCounts.TryGetValue(rpath, out int rc);
                             readCounts[rpath] = rc + 1;
-                            if (rc >= 3)
+                            if (rc >= 1)
                             {
-                                result = $"[System: You have already read {rpath} {rc + 1} times this turn. The content has not changed. Use the content you already have to proceed — make an edit or write the file rather than reading it again.]";
+                                result = $"[System: You have already read {rpath} this turn. Do not read it again — use the content you already have. If you need a specific section, use search_files to find the line numbers, then read_file with start_line/end_line.]";
                                 if (isXmlFallback)
                                 {
                                     xmlResultsMsg!.AppendLine($"--- {call.Name} ---");
@@ -1430,14 +1439,18 @@ public class Thread
     private static void CompactToolOutput(List<object> messages, List<(int Index, string CallId, string Name)> slots, int maxContextTokens)
     {
         if (maxContextTokens <= 0) return;
+
+        // Always compact: stub tool results older than COMPACT_KEEP_RECENT regardless of total size.
+        // The model has already processed earlier results; keeping them verbatim wastes context.
+        // Only fall back to the budget check to stub even more aggressively when context is filling up.
         long budget = (long)(maxContextTokens * (long)CHARS_PER_TOKEN * COMPACT_RATIO);
-
-        long total = 0;
+        long total  = 0;
         foreach (object m in messages) total += ContentOf(m)?.Length ?? 0;
-        if (total <= budget) return;
 
+        // Stub all results beyond COMPACT_KEEP_RECENT (always), then continue stubbing older
+        // ones until we're under budget if context is still filling up.
         int stubbable = slots.Count - COMPACT_KEEP_RECENT;
-        for (int i = 0; i < stubbable && total > budget; i++)
+        for (int i = 0; i < stubbable; i++)
         {
             (int idx, string callId, string name) = slots[i];
             if (idx < 0 || idx >= messages.Count) continue;

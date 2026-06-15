@@ -5,7 +5,8 @@ namespace ARI.LLM;
 
 internal sealed class SearchFiles : FileTool
 {
-    private const int MAX_RESULTS = 200;
+    private const int MAX_RESULTS  = 200;
+    private const int MAX_CHARS    = 8000;
 
     // Directories that are never source code — skipped so searches stay fast and relevant.
     private static readonly HashSet<string> IgnoredDirs = new(StringComparer.OrdinalIgnoreCase)
@@ -67,8 +68,9 @@ internal sealed class SearchFiles : FileTool
                 return $"Invalid regular expression: {ex.Message}";
             }
 
-            List<string> results = new();
-            bool truncated = false;
+            List<string> results   = new();
+            bool         truncated = false;
+            int          totalChars = 0;
             foreach (string file in Directory.EnumerateFiles(absDir, glob, SearchOption.AllDirectories))
             {
                 if (!file.StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;
@@ -80,9 +82,11 @@ internal sealed class SearchFiles : FileTool
                     {
                         if (regex.IsMatch(lines[i]))
                         {
-                            string rel = Path.GetRelativePath(root, file);
-                            results.Add($"{rel}:{i + 1}: {lines[i].Trim()}");
-                            if (results.Count >= MAX_RESULTS) { truncated = true; break; }
+                            string rel  = Path.GetRelativePath(root, file);
+                            string line = $"{rel}:{i + 1}: {lines[i].Trim()}";
+                            results.Add(line);
+                            totalChars += line.Length + 1;
+                            if (results.Count >= MAX_RESULTS || totalChars >= MAX_CHARS) { truncated = true; break; }
                         }
                     }
                 }
@@ -90,7 +94,7 @@ internal sealed class SearchFiles : FileTool
                 if (truncated) break;
             }
             if (results.Count == 0) return $"No matches found for /{pattern}/.";
-            string tail = truncated ? $"\n... (truncated at {MAX_RESULTS} matches — narrow with path or glob)" : "";
+            string tail = truncated ? $"\n... (truncated — narrow with path or glob to see more)" : "";
             return $"[search: /{pattern}/]\n{string.Join("\n", results)}{tail}";
         }
         catch (Exception ex) { return $"Error searching files: {ex.Message}"; }
