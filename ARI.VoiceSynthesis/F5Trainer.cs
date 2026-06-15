@@ -49,8 +49,8 @@ public class F5Trainer(
         progress?.Report(new TrainingProgress("Training", 30, $"Fine-tuning F5-TTS for {epochs} epochs"));
         await FineTune(outputDir, progress, ct);
 
-        progress?.Report(new TrainingProgress("Saving", 98, "Copying checkpoint to Voices folder"));
-        string checkpoint = await CopyCheckpoint(outputDir, ct);
+        progress?.Report(new TrainingProgress("Saving", 98, "Exporting FP16 inference model"));
+        string checkpoint = await ExportInferenceFp16(outputDir, ct);
         progress?.Report(new TrainingProgress("Complete", 100, $"Model saved to {checkpoint}"));
         return checkpoint;
     }
@@ -199,7 +199,7 @@ public class F5Trainer(
         return stdout;
     }
 
-    private async Task<string> CopyCheckpoint(string outputDir, CancellationToken ct)
+    private async Task<string> ExportInferenceFp16(string outputDir, CancellationToken ct)
     {
         string python     = Path.Combine(f5Path, VENV_PYTHON);
         string scriptPath = Path.Combine(Path.GetTempPath(), "ari_find_ckpt.py");
@@ -218,9 +218,22 @@ public class F5Trainer(
 
         string latest = candidates.OrderByDescending(File.GetLastWriteTime).First();
         Directory.CreateDirectory(outputDir);
-        string dest = Path.Combine(outputDir, Path.GetFileName(latest));
-        File.Copy(latest, dest, overwrite: true);
-        logger?.LogInformation("[F5-Train] Checkpoint copied: {Src} → {Dest}", latest, dest);
+        string dest = Path.Combine(outputDir, "model_infer_fp16.pt");
+
+        string exportScript = Path.Combine(Path.GetTempPath(), "ari_export_fp16.py");
+        await File.WriteAllTextAsync(exportScript,
+            "import sys, os, torch\n" +
+            $"src = r'{latest}'\n" +
+            $"dst = r'{dest}'\n" +
+            "ckpt = torch.load(src, map_location='cpu', weights_only=False)\n" +
+            "if 'ema_model_state_dict' not in ckpt:\n" +
+            "    raise KeyError(f'ema_model_state_dict not found in checkpoint. Keys: {list(ckpt.keys())}')\n" +
+            "fp16 = {k: v.half() if v.is_floating_point() else v for k, v in ckpt['ema_model_state_dict'].items()}\n" +
+            "torch.save({'ema_model_state_dict': fp16}, dst)\n" +
+            "print(f'Exported {os.path.getsize(dst) / 1024 / 1024:.0f} MB')\n", ct);
+
+        await RunPython(python, exportScript, null, ct);
+        logger?.LogInformation("[F5-Train] FP16 inference model exported: {Src} → {Dest}", latest, dest);
         return dest;
     }
 

@@ -14,6 +14,7 @@ internal class Memory : Agent
     private const int MAX_THINKING      = 1000;
     private const int MIN_RECALL_LENGTH = 80;
     private const int TRANSCRIPT_LIMIT  = 5;
+    private const int MAX_CANDIDATES    = 20; // cap on notes shown to the LLM filter, keeps prompt size flat at scale
 
     private readonly BrainService brain;
     private readonly int          fetchDepth;
@@ -100,36 +101,56 @@ internal class Memory : Agent
             .Where(t => t.Length >= 3 && !Stopwords.Contains(t))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        // Parallel FTS per token → union of matching note titles.
-        List<string> seeds = new();
-        if (tokens.Count > 0)
+        // Parallel FTS per token — track how many tokens matched each note (coverage score).
+        // Alias labels are searched server-side so a token like "Grumpy" surfaces "Geoffrey" here.
+        List<string> tokenList = tokens.ToList();
+        List<string> seeds     = new();
+        Dictionary<string, int> seedCoverage = new(StringComparer.OrdinalIgnoreCase);
+        if (tokenList.Count > 0)
         {
-            List<string>[] searchResults = await Task.WhenAll(tokens.Select(t => brain.SearchNote(t)));
-            HashSet<string> seedSet = new(StringComparer.OrdinalIgnoreCase);
-            foreach (List<string> batch in searchResults)
-                foreach (string title in batch)
-                    seedSet.Add(title);
-            seeds = seedSet.ToList();
+            List<string>[] searchResults = await Task.WhenAll(tokenList.Select(t => brain.SearchNote(t)));
+            for (int i = 0; i < tokenList.Count; i++)
+                foreach (string title in searchResults[i])
+                    seedCoverage[title] = seedCoverage.GetValueOrDefault(title) + 1;
+            seeds = seedCoverage.Keys.ToList();
         }
 
-        // One-hop expansion: add every note [[linked]] from each seed.
-        HashSet<string> candidates = new(seeds, StringComparer.OrdinalIgnoreCase);
+        // One-hop expansion — track how many seeds link to each neighbour (in-degree score).
+        Dictionary<string, int> neighbourPullers = new(StringComparer.OrdinalIgnoreCase);
         if (seeds.Count > 0)
         {
             List<string>[] linkResults = await Task.WhenAll(seeds.Select(t => brain.GetNoteLinks(t)));
-            foreach (List<string> links in linkResults)
-                foreach (string link in links)
-                    candidates.Add(link);
+            for (int i = 0; i < seeds.Count; i++)
+                foreach (string link in linkResults[i])
+                    if (!seedCoverage.ContainsKey(link))
+                        neighbourPullers[link] = neighbourPullers.GetValueOrDefault(link) + 1;
         }
 
-        HashSet<string> tokenLower  = tokens.Select(t => t.ToLowerInvariant()).ToHashSet();
-        List<string>    directFetch = candidates.Where(c => tokenLower.Contains(c.ToLowerInvariant())).ToList();
-        List<string>    indirect    = candidates.Except(directFetch, StringComparer.OrdinalIgnoreCase).ToList();
+        // Score every candidate and cap at MAX_CANDIDATES before showing anything to the LLM.
+        // Scoring: exact title match (100) > token coverage hits (10/token) > neighbour in-degree (5/puller).
+        // Exact title matches are pre-fetched without LLM involvement regardless of the cap.
+        HashSet<string> tokenLower = tokenList.Select(t => t.ToLowerInvariant()).ToHashSet();
 
-        Common.Logger.LogInformation("[Memory] tokens [{Tokens}] → {Seeds} seed(s) → {Direct} direct + {Indirect} indirect candidate(s)",
-            string.Join(", ", tokens), seeds.Count, directFetch.Count, indirect.Count);
+        int Score(string title)
+        {
+            int s = 0;
+            if (tokenLower.Contains(title.ToLowerInvariant()))               s += 100;
+            if (seedCoverage.TryGetValue(title, out int cov))                s += cov * 10;
+            if (neighbourPullers.TryGetValue(title, out int pullers))        s += pullers * 5;
+            return s;
+        }
 
-        if (candidates.Count == 0)
+        HashSet<string> allCandidates = new(seedCoverage.Keys, StringComparer.OrdinalIgnoreCase);
+        foreach (string n in neighbourPullers.Keys) allCandidates.Add(n);
+
+        List<string> ranked     = allCandidates.OrderByDescending(Score).Take(MAX_CANDIDATES).ToList();
+        List<string> directFetch = ranked.Where(c => tokenLower.Contains(c.ToLowerInvariant())).ToList();
+        List<string> indirect    = ranked.Except(directFetch, StringComparer.OrdinalIgnoreCase).ToList();
+
+        Common.Logger.LogInformation("[Memory] tokens [{Tokens}] → {Seeds} seed(s) → ranked {Total} candidate(s) (cap {Cap}): {Direct} direct + {Indirect} indirect",
+            string.Join(", ", tokenList), seeds.Count, ranked.Count, MAX_CANDIDATES, directFetch.Count, indirect.Count);
+
+        if (ranked.Count == 0)
         {
             Common.Logger.LogInformation("[Memory] complete 0.0s, 0 tokens, 0.0 t/s — no memories recalled");
             return string.Empty;

@@ -19,7 +19,17 @@ if (needsInstall) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 const { app, BrowserWindow, ipcMain, dialog, session } = require("electron")
 const Store = require("electron-store")
-const { readFile, writeFile, getFileTree, listDirectory, searchFiles, editFile } = require("./fs")
+const { readFile, writeFile, getFileTree, listDirectory, searchFiles, editFile, runCommand, findFiles, deleteFile, moveFile } = require("./fs")
+
+// Commands the code agent may run without asking. The user can extend this at runtime via the
+// "Whitelist" option on the command-confirmation prompt. Entries match a command if it equals the
+// entry or begins with the entry followed by a space (so "dotnet build" covers "dotnet build -c Release").
+// git is intentionally excluded — every git command requires explicit confirmation (it's the
+// user's safety net) and is enforced as non-whitelistable in the renderer.
+const DEFAULT_COMMAND_ALLOWLIST = [
+    "dotnet build", "dotnet test", "dotnet restore", "dotnet format",
+    "npm run build", "npm run test", "npm test", "npm run lint",
+]
 const { init: initLogger, makeLogger, getLogPath } = require("./logger")
 
 const store = new Store()
@@ -257,14 +267,47 @@ ipcMain.handle("fs:list-dir", (_e, root, dirPath) => {
     return listDirectory(root, dirPath)
 })
 
-ipcMain.handle("fs:search", (_e, root, pattern, searchPath, glob) => {
-    log.info(`fs:search  root=${root}  pattern=${pattern}  path=${searchPath ?? "."}  glob=${glob ?? "*"}`)
-    return searchFiles(root, pattern, searchPath, glob)
+ipcMain.handle("fs:search", (_e, root, pattern, searchPath, glob, ignoreCase) => {
+    log.info(`fs:search  root=${root}  pattern=${pattern}  path=${searchPath ?? "."}  glob=${glob ?? "*"}  ic=${!!ignoreCase}`)
+    return searchFiles(root, pattern, searchPath, glob, ignoreCase)
 })
 
-ipcMain.handle("fs:edit", (_e, root, filePath, oldString, newString) => {
-    log.info(`fs:edit  root=${root}  path=${filePath}`)
-    return editFile(root, filePath, oldString, newString)
+ipcMain.handle("fs:edit", (_e, root, filePath, oldString, newString, options) => {
+    const n = options && Array.isArray(options.edits) ? options.edits.length : 1
+    log.info(`fs:edit  root=${root}  path=${filePath}  edits=${n}`)
+    return editFile(root, filePath, oldString, newString, options)
+})
+
+ipcMain.handle("fs:run", (_e, root, command) => {
+    log.info(`fs:run  root=${root}  command=${command}`)
+    return runCommand(root, command)
+})
+
+ipcMain.handle("fs:find", (_e, root, pattern, searchPath) => {
+    log.info(`fs:find  root=${root}  pattern=${pattern}`)
+    return findFiles(root, pattern, searchPath)
+})
+
+ipcMain.handle("fs:delete", (_e, root, filePath) => {
+    log.info(`fs:delete  root=${root}  path=${filePath}`)
+    return deleteFile(root, filePath)
+})
+
+ipcMain.handle("fs:move", (_e, root, source, destination) => {
+    log.info(`fs:move  root=${root}  ${source} -> ${destination}`)
+    return moveFile(root, source, destination)
+})
+
+// ── IPC: command allowlist (persisted per-machine) ────────────────────────────
+ipcMain.handle("cmd:get-allowlist", () => {
+    const list = store.get("commandAllowlist", DEFAULT_COMMAND_ALLOWLIST)
+    return Array.isArray(list) ? list : DEFAULT_COMMAND_ALLOWLIST
+})
+ipcMain.handle("cmd:set-allowlist", (_e, list) => {
+    if (Array.isArray(list)) {
+        store.set("commandAllowlist", list)
+        log.info(`cmd:set-allowlist → ${list.length} entr${list.length === 1 ? "y" : "ies"}`)
+    }
 })
 
 // ── IPC: config ───────────────────────────────────────────

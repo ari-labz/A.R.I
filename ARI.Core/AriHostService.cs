@@ -14,7 +14,7 @@ public class AriHostService : BackgroundService
 {
     private readonly ILoggerFactory loggerFactory;
     private Docker? docker;
-    private readonly List<LocalLlamaServer> llamaServers = new();
+    private ModelManager? modelManager;
     private DiscordService? discordService;
     private ApiService? webPanelService;
     private F5Synthesiser? synthesiser;
@@ -81,18 +81,15 @@ public class AriHostService : BackgroundService
         await docker.StartContainers();
         containersStarted = true;
 
-        foreach (LlamaModelConfig modelConfig in config.Llm.Models)
-        {
-            LlamaServerConfig serverConfig = config.Llm.Servers[modelConfig.ServerIndex];
-            LocalLlamaServer  llamaServer  = new(serverConfig, modelConfig, executableDirectory);
-            await llamaServer.IsReady();
-            llamaServers.Add(llamaServer);
-        }
-        if (llamaServers.Count > 0)
-            webPanelService?.SystemInfo.SetLlamaPid(llamaServers[0].Pid);
+        modelManager = new ModelManager(config.Llm, executableDirectory, webPanelService!.ModelManagerHolder, loggerFactory);
+        await modelManager.StartAllServersAsync();
+
+        Dictionary<string, string> serverEndpoints = config.Llm.Servers
+            .Where(s => !string.IsNullOrWhiteSpace(s.Name) && !string.IsNullOrWhiteSpace(s.Endpoint))
+            .ToDictionary(s => s.Name, s => s.Endpoint);
 
         Common.Logger.LogInformation("Loading agents...");
-        LlmService llmService = new LlmService(config.Agents, config.Brain, loggerFactory);
+        LlmService llmService = new LlmService(config.Agents, serverEndpoints, config.Brain, loggerFactory);
         Common.Logger.LogInformation("Agents loaded.");
 
         Common.Logger.LogInformation("ARI is ready.");
@@ -117,9 +114,12 @@ public class AriHostService : BackgroundService
         {
             string f5Path     = ResolvePath(executableDirectory, config.VoiceSynthesis.F5Path);
             string voicesPath = ResolvePath(executableDirectory, config.VoiceSynthesis.VoicesPath);
-            string modelName  = config.Voice.ModelName;
-            string modelPath  = Path.Combine(voicesPath, modelName, "model_last.pt");
-            string refAudio   = FindReferenceAudio(f5Path, modelName);
+            string modelName     = config.Voice.ModelName;
+            string modelDir      = Path.Combine(voicesPath, modelName);
+            string fp16Path      = Path.Combine(modelDir, "model_infer_fp16.pt");
+            string trainingPath  = Path.Combine(modelDir, "model_last.pt");
+            string modelPath     = File.Exists(fp16Path) ? fp16Path : trainingPath;
+            string refAudio      = FindReferenceAudio(f5Path, modelName);
 
             if (!File.Exists(modelPath))
             {
@@ -132,6 +132,7 @@ public class AriHostService : BackgroundService
             else
             {
                 ILogger voiceLogger = loggerFactory.CreateLogger("ARI.Voice");
+                Common.Logger.LogInformation("Voice loading model: {Path}", Path.GetFileName(modelPath));
                 synthesiser = new F5Synthesiser(f5Path, modelPath, refAudio, voiceLogger);
                 await synthesiser.Start(stoppingToken);
 
@@ -303,8 +304,7 @@ public class AriHostService : BackgroundService
         if (webPanelService is not null)
             await webPanelService.Stop(cancellationToken);
 
-        foreach (LocalLlamaServer s in llamaServers)
-            s.Stop();
+        modelManager?.Dispose();
 
         if (docker != null && containersStarted)
             await docker.StopContainers();

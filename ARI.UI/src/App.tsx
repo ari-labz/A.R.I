@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useRef, type CSSProperties } from "react"
 import Sidebar from "./components/Sidebar"
 import Main from "./components/Main"
 import ProjectsPage from "./components/ProjectsPage"
@@ -41,6 +41,120 @@ const COMMANDS = [
 
 export { COMMANDS }
 
+// ── run_command authorization ─────────────────────────────────────────────────
+type CommandDecision = "deny" | "allow" | "whitelist"
+
+// git is the user's safety net — every git command requires explicit confirmation and can never
+// be auto-run or whitelisted, even read-only ones.
+const GIT_CMD = /^\s*git\b/i
+
+function isGitCommand(command: string): boolean {
+    return GIT_CMD.test(command)
+}
+
+// Multiplexer programs whose first sub-word matters (so we whitelist "dotnet build", not all of
+// "dotnet"). git is deliberately absent — it always requires confirmation.
+const MULTIPLEXERS = new Set(["dotnet", "npm", "yarn", "pnpm", "bun", "deno", "docker", "cargo", "go", "kubectl", "pip", "pip3", "brew", "make"])
+
+// Splits a command line into its pipe/sequence segments, respecting quotes. Returns null when it
+// contains command substitution ($(...), backticks, <(...)) or unbalanced quotes — those can hide
+// arbitrary commands and must always be confirmed rather than auto-classified.
+//
+// Quote-aware so a "|" inside grep -E "(a|b)" isn't a pipe, and a "&" inside a 2>&1 redirect isn't a
+// sequence operator. Splits on | || && ; and bare & (background), only outside quotes.
+function commandSegments(command: string): string[] | null {
+    const cmd = command.trim()
+    if (!cmd) return null
+    if (/\$\(|`|<\(/.test(cmd)) return null
+
+    const segments: string[] = []
+    let cur = "", quote: string | null = null
+    for (let i = 0; i < cmd.length; i++) {
+        const c = cmd[i], next = cmd[i + 1], prev = cmd[i - 1]
+        if (quote) { cur += c; if (c === quote) quote = null; continue }
+        if (c === "'" || c === '"') { quote = c; cur += c; continue }
+        if (c === ";" || c === "\n") { segments.push(cur); cur = ""; continue }
+        if (c === "|") { if (next === "|") i++; segments.push(cur); cur = ""; continue }
+        if (c === "&") {
+            if (next === "&") { i++; segments.push(cur); cur = ""; continue }
+            if (prev === ">" || next === ">") { cur += c; continue }  // part of a redirect (2>&1, &>) — keep
+            segments.push(cur); cur = ""; continue                    // bare & — background/sequence
+        }
+        cur += c
+    }
+    if (quote) return null   // unbalanced quotes — don't risk mis-parsing
+    segments.push(cur)
+    return segments.map(s => s.trim()).filter(Boolean)
+}
+
+// Tokenise a segment, dropping leading VAR=val assignments.
+function segmentTokens(seg: string): string[] {
+    return seg.split(/\s+/).filter(t => t && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t))
+}
+
+// The program a segment invokes (basename of the first token, so /usr/bin/grep → grep).
+function segmentProgram(seg: string): string {
+    const first = segmentTokens(seg)[0] || seg
+    return first.split("/").pop() || first
+}
+
+// The allowlist key to store when the user whitelists a segment: "program subcommand" for known
+// multiplexers (dotnet build), otherwise just the program (grep).
+function segmentWhitelistKey(seg: string): string {
+    const tokens = segmentTokens(seg)
+    const prog   = (tokens[0] || seg).split("/").pop() || seg
+    if (MULTIPLEXERS.has(prog) && tokens[1] && !tokens[1].startsWith("-")) return `${prog} ${tokens[1]}`
+    return prog
+}
+
+// Keys to add when whitelisting a command (one per segment). Null when undecomposable.
+function commandWhitelistKeys(command: string): string[] | null {
+    const segs = commandSegments(command)
+    if (!segs || segs.length === 0) return null
+    return [...new Set(segs.map(segmentWhitelistKey).filter(Boolean))]
+}
+
+// An allowlist entry matches a segment if it's a single-token PROGRAM name equal to the segment's
+// program (e.g. "grep"), or a multi-word PREFIX the segment starts with (e.g. "dotnet build").
+function entryMatchesSegment(entry: string, seg: string, prog: string): boolean {
+    const e = entry.trim()
+    if (!e) return false
+    if (/\s/.test(e)) return seg === e || seg.startsWith(e + " ")
+    return prog === e
+}
+
+// A command is allowed only if EVERY segment is allowed and no segment is a git command.
+function commandIsAllowed(command: string, allowlist: string[]): boolean {
+    if (isGitCommand(command)) return false
+    const segs = commandSegments(command)
+    if (!segs || segs.length === 0) return false
+    return segs.every(seg => {
+        if (isGitCommand(seg)) return false
+        const prog = segmentProgram(seg)
+        return allowlist.some(e => entryMatchesSegment(e, seg, prog))
+    })
+}
+
+// Formats a finished command for the model: exit code first, then output, tail-biased on
+// truncation since compiler/test errors tend to land at the end.
+function formatCommandResult(command: string, res: { code: number; stdout: string; stderr: string; timedOut: boolean }): string {
+    const MAX = 6000
+    const clip = (s: string) => s.length > MAX ? "…(earlier output truncated)…\n" + s.slice(s.length - MAX) : s
+    const parts = [`$ ${command}`, `exit code: ${res.code}${res.timedOut ? " (timed out)" : ""}`]
+    if (res.stdout.trim()) parts.push("--- stdout ---\n" + clip(res.stdout.trimEnd()))
+    if (res.stderr.trim()) parts.push("--- stderr ---\n" + clip(res.stderr.trimEnd()))
+    if (!res.stdout.trim() && !res.stderr.trim()) parts.push("(no output)")
+    return parts.join("\n\n")
+}
+
+const cmdOverlayStyle: CSSProperties = { position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000 }
+const cmdModalStyle:   CSSProperties = { background: "#1e1e22", border: "1px solid #3a3a40", borderRadius: 10, padding: "20px 22px", width: "min(560px, 90vw)", boxShadow: "0 12px 40px rgba(0,0,0,0.5)", color: "#e8e8ea" }
+const cmdTitleStyle:   CSSProperties = { fontSize: 15, fontWeight: 600, marginBottom: 4 }
+const cmdSubStyle:     CSSProperties = { fontSize: 12.5, opacity: 0.7, marginBottom: 12 }
+const cmdCodeStyle:    CSSProperties = { background: "#111114", border: "1px solid #34343a", borderRadius: 6, padding: "10px 12px", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-all", margin: 0, marginBottom: 16 }
+const cmdActionsStyle: CSSProperties = { display: "flex", gap: 8, justifyContent: "flex-end" }
+const cmdBtnBase:      CSSProperties = { padding: "7px 14px", borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: "pointer", border: "1px solid transparent" }
+
 export default function App() {
     const { threads, load: loadThreads } = useThreads()
 
@@ -63,6 +177,16 @@ export default function App() {
     const [safetyMode,     setSafetyMode]     = useState(false)
     const safetyModeRef = useRef(false)
 
+    // run_command confirmation: pending prompt awaiting a deny/allow/whitelist decision, plus the
+    // in-memory allowlist (loaded from the persisted store, extended live by "Whitelist").
+    const [pendingCommand, setPendingCommand] = useState<{ command: string; resolve: (d: CommandDecision) => void } | null>(null)
+    const commandAllowlistRef = useRef<string[]>([])
+    // Generic yes/no confirmation (used for destructive file deletes).
+    const [pendingConfirm, setPendingConfirm] = useState<{ title: string; body: string; resolve: (ok: boolean) => void } | null>(null)
+    // Mirror of `projects` so stable callbacks (the tool socket) can read the latest list — used to
+    // send the selected project's instructions to the backend as the project-rules context block.
+    const projectsRef = useRef<Project[]>([])
+
     const [clientVersion,  setClientVersion]  = useState<string | null>(null)
     const [outdated,       setOutdated]       = useState(false)
 
@@ -82,6 +206,12 @@ export default function App() {
     useEffect(() => { activeThreadRef.current = activeThread }, [activeThread])
     useEffect(() => { streamingRef.current = isStreaming }, [isStreaming])
     useEffect(() => { safetyModeRef.current = safetyMode }, [safetyMode])
+
+    useEffect(() => {
+        env.getCommandAllowlist().then(list => { commandAllowlistRef.current = Array.isArray(list) ? list : [] }).catch(() => {})
+    }, [])
+
+    useEffect(() => { projectsRef.current = projects }, [projects])
 
     const heartbeat = useTypingHeartbeat(() => activeThreadRef.current)
 
@@ -258,7 +388,8 @@ export default function App() {
                 const tree = await window.electronBridge!.getFileTree(localPath)
                 console.warn(`[ToolSocket] Sending tree  files=${tree.length}  threadKey=${threadKey}`)
                 // Include threadKey so the server rebinds tools to the active web-* thread
-                ws.send(JSON.stringify({ type: "tree", root: localPath, tree, threadKey }))
+                const projectRules = projectsRef.current.find(p => p.id === projectId)?.instructions ?? ""
+                ws.send(JSON.stringify({ type: "tree", root: localPath, tree, threadKey, projectRules }))
             } catch (e) {
                 console.error("[ToolSocket] Failed to send tree:", e)
                 resolveReady!()
@@ -280,9 +411,16 @@ export default function App() {
 
             console.warn(`[ToolSocket] ← Tool request  type=${type}  callId=${callId}`)
 
-            // Parse args JSON (all tools send their params as a JSON string in "args")
+            // Parse args JSON (all tools send their params as a JSON string in "args").
+            // On malformed JSON we MUST still reply — a silent return leaves the backend waiting the
+            // full tool timeout (~90s) and the model stuck. Send an error so it can retry cleanly.
             let params: Record<string, string> = {}
-            try { if (args) params = JSON.parse(args) } catch { return }
+            try { if (args) params = JSON.parse(args) }
+            catch {
+                console.warn(`[ToolSocket] → file_error (bad args JSON)  callId=${callId}`)
+                ws.send(JSON.stringify({ type: "file_error", callId, error: "Tool arguments were not valid JSON. Re-issue the call as a single well-formed JSON function call (escape quotes/newlines inside string values)." }))
+                return
+            }
 
             // Strip surrounding quotes the model sometimes wraps around path values
             if (params.path) params.path = params.path.replace(/^["']+|["']+$/g, "").trim()
@@ -292,8 +430,42 @@ export default function App() {
 
                 if (type === "read_file") {
                     const content = await window.electronBridge!.readFile(localPath, params.path ?? "")
-                    result = `[file: "${params.path}"]\n\`\`\`\n${content}\n\`\`\``
-                    console.warn(`[ToolSocket] → file_content  callId=${callId}  bytes=${result.length}`)
+                    const all     = content.split("\n")
+                    const total   = all.length
+
+                    // Honour start_line/end_line (1-indexed, inclusive). When neither is given, cap
+                    // whole-file reads of large files so a single read can't blow the context window
+                    // (a 93 KB file is ~30k tokens). The model is told to read a range or search instead.
+                    const rawStart = Number((params as unknown as { start_line?: unknown }).start_line)
+                    const rawEnd   = Number((params as unknown as { end_line?: unknown }).end_line)
+                    const explicit = Number.isFinite(rawStart) || Number.isFinite(rawEnd)
+                    let start = Number.isFinite(rawStart) && rawStart > 0 ? Math.min(Math.trunc(rawStart), total) : 1
+                    let end   = Number.isFinite(rawEnd)   && rawEnd   > 0 ? Math.min(Math.trunc(rawEnd),   total) : total
+                    if (end < start) end = start
+
+                    const READ_MAX_LINES = 1500
+                    const READ_MAX_CHARS = 60000
+                    let capped = false
+                    if (!explicit && total > 0) {
+                        let chars = 0, lim = total
+                        for (let i = 0; i < total; i++) {
+                            chars += all[i].length + 1
+                            if (i + 1 >= READ_MAX_LINES || chars >= READ_MAX_CHARS) { lim = i + 1; break }
+                        }
+                        if (lim < total) { end = lim; capped = true }
+                    }
+
+                    // Number lines from their real position so old_strings and edit_file snippets line up.
+                    const slice    = all.slice(start - 1, end)
+                    const numbered = slice.map((l, i) => `${String(start + i).padStart(6)}: ${l}`).join("\n")
+                    const header   = (start === 1 && end === total)
+                        ? `[file: "${params.path}" (${total} lines)]`
+                        : `[file: "${params.path}" lines ${start}-${end} of ${total}]`
+                    const capNote  = capped
+                        ? `\n[File is large (${total} lines) — only the first ${end} are shown. Read a specific range with start_line/end_line, or use search_files to find what you need, rather than reading the whole file.]`
+                        : ""
+                    result = `${header}\n\`\`\`\n${numbered}\n\`\`\`${capNote}`
+                    console.warn(`[ToolSocket] → file_content  callId=${callId}  bytes=${result.length}  lines=${start}-${end}/${total}${capped ? " CAPPED" : ""}`)
                     ws.send(JSON.stringify({ type: "file_content", callId, content: result }))
 
                 } else if (type === "list_directory") {
@@ -303,7 +475,9 @@ export default function App() {
                     ws.send(JSON.stringify({ type: "file_content", callId, content: result }))
 
                 } else if (type === "search_files") {
-                    const matches = await window.electronBridge!.searchFiles(localPath, params.pattern, params.path, params.glob)
+                    const ic = String((params as unknown as { ignore_case?: unknown }).ignore_case) === "true"
+                        || (params as unknown as { ignore_case?: unknown }).ignore_case === true
+                    const matches = await window.electronBridge!.searchFiles(localPath, params.pattern, params.path, params.glob, ic)
                     result = matches.length === 0
                         ? `No matches found for "${params.pattern}".`
                         : `[search: "${params.pattern}"]\n${matches.join("\n")}`
@@ -311,15 +485,31 @@ export default function App() {
                     ws.send(JSON.stringify({ type: "file_content", callId, content: result }))
 
                 } else if (type === "edit_file") {
+                    // edit_file accepts a single old/new pair OR a MultiEdit-style batch via `edits`.
+                    const rawEdits = (params as unknown as { edits?: { old_string?: string; new_string?: string; replace_all?: boolean; start_line?: number; end_line?: number }[] }).edits
+                    const editsArr = Array.isArray(rawEdits) && rawEdits.length > 0 ? rawEdits : null
+                    const replaceAll = String((params as unknown as { replace_all?: unknown }).replace_all) === "true"
+                        || (params as unknown as { replace_all?: unknown }).replace_all === true
                     if (safetyModeRef.current) {
-                        const diff = buildSafetyDiff(params.old_string ?? "", params.new_string ?? "")
+                        const diff = editsArr
+                            ? editsArr.map((e, i) => `--- edit ${i + 1} ---\n${buildSafetyDiff(e.old_string ?? "", e.new_string ?? "")}`).join("\n\n")
+                            : buildSafetyDiff(params.old_string ?? "", params.new_string ?? "")
                         console.warn(`[ToolSocket] → file_content (edit_file BLOCKED by safety)  callId=${callId}`)
                         ws.send(JSON.stringify({ type: "file_error", callId, error: `SAFETY MODE — file was NOT modified. Do not call edit_file or write_file again. Respond to the user now: tell them safety mode is on, show the proposed changes as a code block, and say they can disable safety mode (shield icon) to apply them.\n\nProposed diff for ${params.path}:\n\n${diff}` }))
                     } else {
-                        const res = await window.electronBridge!.editFile(localPath, params.path, params.old_string, params.new_string)
+                        const sl = Number((params as unknown as { start_line?: unknown }).start_line)
+                        const el = Number((params as unknown as { end_line?: unknown }).end_line)
+                        const res = await window.electronBridge!.editFile(localPath, params.path, params.old_string, params.new_string, {
+                            edits: editsArr ?? undefined,
+                            replaceAll,
+                            startLine: Number.isFinite(sl) ? sl : undefined,
+                            endLine:   Number.isFinite(el) ? el : undefined,
+                        })
                         if (res.ok) {
+                            // fs.editFile returns a full message with a numbered snippet around the
+                            // edit, so the model sees the new state without re-reading the file.
                             console.warn(`[ToolSocket] → file_content (edit_file)  callId=${callId}  path=${params.path}`)
-                            ws.send(JSON.stringify({ type: "file_content", callId, content: `Successfully edited ${params.path}.` }))
+                            ws.send(JSON.stringify({ type: "file_content", callId, content: res.message ?? `Successfully edited ${params.path}.` }))
                         } else {
                             console.warn(`[ToolSocket] → file_error (edit_file)  callId=${callId}  error=${res.error}`)
                             ws.send(JSON.stringify({ type: "file_error", callId, error: res.error ?? "Edit failed." }))
@@ -333,9 +523,73 @@ export default function App() {
                         ws.send(JSON.stringify({ type: "file_error", callId, error: `SAFETY MODE — file was NOT written. Do not call edit_file or write_file again. Respond to the user now: tell them safety mode is on, show the proposed content as a code block, and say they can disable safety mode (shield icon) to apply it.\n\nProposed content for ${params.path} (${lines.length} lines):\n\n\`\`\`\n${params.content ?? ""}\n\`\`\`` }))
                     } else {
                         await window.electronBridge!.writeFile(localPath, params.path, params.content ?? "")
+                        const writtenLines = (params.content ?? "").split("\n").length
                         console.warn(`[ToolSocket] → file_content (write_file)  callId=${callId}  path=${params.path}`)
-                        ws.send(JSON.stringify({ type: "file_content", callId, content: `Successfully wrote ${params.path}.` }))
+                        ws.send(JSON.stringify({ type: "file_content", callId, content: `Successfully wrote ${params.path} (${writtenLines} lines).` }))
                     }
+
+                } else if (type === "run_command") {
+                    const command = (params.command ?? "").trim()
+                    if (!command) {
+                        ws.send(JSON.stringify({ type: "file_error", callId, error: "No command provided." }))
+                    } else {
+                        // Auto-run if allowlisted; otherwise ask the user (deny / allow once / whitelist).
+                        let decision: CommandDecision = "allow"
+                        if (!commandIsAllowed(command, commandAllowlistRef.current)) {
+                            console.warn(`[ToolSocket] run_command needs confirmation  callId=${callId}  cmd=${command}`)
+                            decision = await new Promise<CommandDecision>(resolve => setPendingCommand({ command, resolve }))
+                        }
+
+                        if (decision === "deny") {
+                            console.warn(`[ToolSocket] → file_error (run_command DENIED)  callId=${callId}`)
+                            ws.send(JSON.stringify({ type: "file_error", callId, error: `The user denied permission to run \`${command}\`. Do not try to run it again. Continue without it, or ask the user how they would like to proceed.` }))
+                        } else {
+                            if (decision === "whitelist") {
+                                // Whitelist by program (or "program subcommand" for multiplexers like
+                                // dotnet), so future invocations with different args/redirections —
+                                // and chains of already-trusted programs — auto-run.
+                                const keys = (commandWhitelistKeys(command) ?? []).filter(k => k && !isGitCommand(k))
+                                const next = [...commandAllowlistRef.current]
+                                for (const k of keys) if (!next.includes(k)) next.push(k)
+                                if (next.length !== commandAllowlistRef.current.length) {
+                                    commandAllowlistRef.current = next
+                                    try { await env.setCommandAllowlist(next) } catch { /* ignore persist failure */ }
+                                }
+                            }
+                            console.warn(`[ToolSocket] → run_command EXEC  callId=${callId}  cmd=${command}`)
+                            const cmdRes = await window.electronBridge!.runCommand(localPath, command)
+                            ws.send(JSON.stringify({ type: "file_content", callId, content: formatCommandResult(command, cmdRes) }))
+                        }
+                    }
+
+                } else if (type === "find_files") {
+                    const files = await window.electronBridge!.findFiles(localPath, params.pattern, params.path)
+                    result = files.length === 0
+                        ? `No files found matching "${params.pattern}".`
+                        : `[find: "${params.pattern}"]\n${files.join("\n")}`
+                    console.warn(`[ToolSocket] → file_content (find_files)  callId=${callId}  count=${files.length}`)
+                    ws.send(JSON.stringify({ type: "file_content", callId, content: result }))
+
+                } else if (type === "delete_file") {
+                    // Destructive — always ask the user before deleting.
+                    const ok = await new Promise<boolean>(resolve => setPendingConfirm({
+                        title: "Delete this file?",
+                        body:  params.path ?? "",
+                        resolve,
+                    }))
+                    if (!ok) {
+                        console.warn(`[ToolSocket] → file_error (delete_file DENIED)  callId=${callId}`)
+                        ws.send(JSON.stringify({ type: "file_error", callId, error: `The user denied deleting ${params.path}. Do not try to delete it again; ask how they would like to proceed.` }))
+                    } else {
+                        const res = await window.electronBridge!.deleteFile(localPath, params.path)
+                        if (res.ok) ws.send(JSON.stringify({ type: "file_content", callId, content: `Deleted ${params.path}.` }))
+                        else        ws.send(JSON.stringify({ type: "file_error", callId, error: res.error ?? "Delete failed." }))
+                    }
+
+                } else if (type === "move_file") {
+                    const res = await window.electronBridge!.moveFile(localPath, params.source, params.destination)
+                    if (res.ok) ws.send(JSON.stringify({ type: "file_content", callId, content: `Moved ${params.source} → ${params.destination}.` }))
+                    else        ws.send(JSON.stringify({ type: "file_error", callId, error: res.error ?? "Move failed." }))
                 }
             } catch (e: unknown) {
                 const msg = e instanceof Error ? e.message : String(e)
@@ -717,6 +971,51 @@ export default function App() {
             {toasts.map(t => (
                 <div key={t.id} className="toast toast-visible">{t.msg}</div>
             ))}
+            {pendingCommand && (
+                <div style={cmdOverlayStyle}
+                     onClick={() => { pendingCommand.resolve("deny"); setPendingCommand(null) }}>
+                    <div style={cmdModalStyle} onClick={e => e.stopPropagation()}>
+                        <div style={cmdTitleStyle}>Run this command?</div>
+                        <div style={cmdSubStyle}>
+                            {isGitCommand(pendingCommand.command)
+                                ? "ARI wants to run a git command. git always requires your approval and can't be whitelisted."
+                                : "ARI wants to run a command that isn't on the allow list."}
+                        </div>
+                        <pre style={cmdCodeStyle}>{pendingCommand.command}</pre>
+                        <div style={cmdActionsStyle}>
+                            <button style={{ ...cmdBtnBase, background: "transparent", borderColor: "#5a5a62", color: "#e8e8ea" }}
+                                    onClick={() => { pendingCommand.resolve("deny"); setPendingCommand(null) }}>Deny</button>
+                            <button style={{ ...cmdBtnBase, background: "#2d6cdf", color: "#fff" }}
+                                    onClick={() => { pendingCommand.resolve("allow"); setPendingCommand(null) }}>Allow once</button>
+                            {!isGitCommand(pendingCommand.command) && (() => {
+                                const progs = commandWhitelistKeys(pendingCommand.command)
+                                if (!progs || progs.length === 0) return null  // command substitution — allow-once only
+                                return (
+                                    <button style={{ ...cmdBtnBase, background: "#1f9d57", color: "#fff" }}
+                                            onClick={() => { pendingCommand.resolve("whitelist"); setPendingCommand(null) }}>
+                                        Always allow {progs.join(", ")}
+                                    </button>
+                                )
+                            })()}
+                        </div>
+                    </div>
+                </div>
+            )}
+            {pendingConfirm && (
+                <div style={cmdOverlayStyle}
+                     onClick={() => { pendingConfirm.resolve(false); setPendingConfirm(null) }}>
+                    <div style={cmdModalStyle} onClick={e => e.stopPropagation()}>
+                        <div style={cmdTitleStyle}>{pendingConfirm.title}</div>
+                        <pre style={cmdCodeStyle}>{pendingConfirm.body}</pre>
+                        <div style={cmdActionsStyle}>
+                            <button style={{ ...cmdBtnBase, background: "transparent", borderColor: "#5a5a62", color: "#e8e8ea" }}
+                                    onClick={() => { pendingConfirm.resolve(false); setPendingConfirm(null) }}>Cancel</button>
+                            <button style={{ ...cmdBtnBase, background: "#c0392b", color: "#fff" }}
+                                    onClick={() => { pendingConfirm.resolve(true); setPendingConfirm(null) }}>Delete</button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     )
 }

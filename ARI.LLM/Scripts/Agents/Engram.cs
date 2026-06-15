@@ -87,17 +87,6 @@ internal class Engram : Agent, IDisposable
         Common.Logger.LogInformation("[Engram] Disabled.");
     }
 
-    internal async Task Sweep()
-    {
-        if (!IsEnabled)
-        {
-            Common.Logger.LogInformation("[Engram] Manual sweep requested but Engram is disabled.");
-            return;
-        }
-        Common.Logger.LogInformation("[Engram] Manual sweep triggered.");
-        await buffer.Drain();
-    }
-
     internal Task<int> PurgeNotes() => brain.PurgeAllNotes();
 
     public void Dispose()
@@ -342,10 +331,13 @@ internal class Engram : Agent, IDisposable
                     "- If the title would collide with another note's name, append a parenthetical to disambiguate (e.g. 'Granny Squeak (person)' vs 'Granny Squeak (boat)').\n" +
                     "- Every Events entry must have a specific or approximate date (e.g. '25th August 2024:' or '~May 2026:'). Never write relative time ('recently', 'several years ago').\n" +
                     "- Include a ## Changelog section. Add a dated entry for what was created or changed. No [[links]] in changelog — plain text only.\n" +
-                    "- Only [[link]] to notes that exist or are being created this sweep.\n\n" +
+                    "- Only [[link]] to notes that exist or are being created this sweep.\n" +
+                    "- Include an \"aliases\" array with every nickname, callsign, shortened name, or alternate name that someone might speak aloud to refer to this entity. " +
+                    "These are stored as searchable labels so that saying 'Grumpy' surfaces 'Geoffrey'. " +
+                    "Only include names actually mentioned or clearly implied — do not guess. Empty array if none.\n\n" +
                     "Output a single JSON object in this exact format:\n" +
-                    "For a new note:    {\"add\": [{\"name\": \"Category/SubGroup/NoteName\", \"content\": \"markdown\"}], \"edit\": []}\n" +
-                    "For an update:     {\"add\": [], \"edit\": [{\"name\": \"CurrentPath\", \"newName\": \"NewPath\", \"content\": \"full markdown\"}]}\n" +
+                    "For a new note:    {\"add\": [{\"name\": \"Category/SubGroup/NoteName\", \"content\": \"markdown\", \"aliases\": [\"Nickname\", \"AltName\"]}], \"edit\": []}\n" +
+                    "For an update:     {\"add\": [], \"edit\": [{\"name\": \"CurrentPath\", \"newName\": \"NewPath\", \"content\": \"full markdown\", \"aliases\": [\"Nickname\"]}]}\n" +
                     "Paths may be as deep as the taxonomy requires — e.g. \"People/[REDACT]'s Family/Immediate Family/Grandparents/Geoffrey\".\n" +
                     "(Omit newName if the path is not changing. Raw JSON only — no fences, no explanation.)";
 
@@ -428,7 +420,7 @@ internal class Engram : Agent, IDisposable
 
         object requestBody = new
         {
-            model    = ModelString,
+            model    = "local",
             messages = new[]
             {
                 new { role = "system", content = "You classify whether a conversation contains information worth storing as a long-term memory.\n<|think_off|>" },
@@ -557,7 +549,7 @@ internal class Engram : Agent, IDisposable
                     string? noteName = el.GetString("name");
                     string? content  = el.GetString("content");
                     if (!string.IsNullOrWhiteSpace(noteName) && content is not null)
-                        adds.Add(new EngramAdd { NoteName = noteName, Content = content });
+                        adds.Add(new EngramAdd { NoteName = noteName, Content = content, Aliases = ParseAliases(el) });
                 }
             }
 
@@ -570,7 +562,7 @@ internal class Engram : Agent, IDisposable
                     string? newNoteName = el.GetString("newName");
                     string? content     = el.GetString("content");
                     if (!string.IsNullOrWhiteSpace(noteName) && content is not null)
-                        edits.Add(new EngramEdit { NoteName = noteName, NewNoteName = newNoteName, Content = content });
+                        edits.Add(new EngramEdit { NoteName = noteName, NewNoteName = newNoteName, Content = content, Aliases = ParseAliases(el) });
                 }
             }
 
@@ -581,6 +573,17 @@ internal class Engram : Agent, IDisposable
             Common.Logger.LogError("[Engram] Failed to parse note output: {Error}. Raw: {Raw}", ex.Message, raw);
             return (new(), new());
         }
+    }
+
+    private static IReadOnlyList<string> ParseAliases(JsonElement el)
+    {
+        if (!el.TryGetProperty("aliases", out JsonElement arr) || arr.ValueKind != JsonValueKind.Array)
+            return Array.Empty<string>();
+        return arr.EnumerateArray()
+            .Where(e => e.ValueKind == JsonValueKind.String)
+            .Select(e => e.GetString()!)
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .ToList();
     }
 }
 

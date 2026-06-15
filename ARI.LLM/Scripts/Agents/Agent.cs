@@ -5,8 +5,8 @@ namespace ARI.LLM;
 public abstract class Agent
 {
     public    readonly string Name;
+    public    readonly string ServerName;
     internal  readonly string Endpoint;
-    internal  readonly string ModelString;
     internal  readonly string SystemPrompt;
     internal  readonly int    MaxTokens;
     internal  readonly int    MaxImageTokens;
@@ -15,6 +15,7 @@ public abstract class Agent
     internal  readonly int?   Slot;
     internal  readonly double? Temperature;
     internal  readonly double? TopP;
+    internal  readonly int     MaxToolCalls;
 
     // 0 = unlimited. Overridden by agents that enforce a context window.
     internal virtual int MaxContextTokens => 0;
@@ -43,9 +44,9 @@ public abstract class Agent
 
     internal Agent(AgentConfig config)
     {
-        Name           = config.Name;
-        Endpoint       = config.Endpoint;
-        ModelString    = config.Model;
+        Name       = config.Name;
+        ServerName = config.ServerName;
+        Endpoint   = config.Endpoint;
         SystemPrompt   = config.SystemPrompt;
         MaxTokens      = config.MaxTokens;
         MaxImageTokens = config.MaxImageTokens;
@@ -54,6 +55,7 @@ public abstract class Agent
         Slot           = config.Slot;
         Temperature    = config.Temperature;
         TopP           = config.TopP;
+        MaxToolCalls   = config.MaxToolCalls;
     }
 
     /// <summary>This agent's own threads as live objects (unfiltered enumeration of the type view).</summary>

@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 
 namespace ARI.LLM;
@@ -14,11 +15,17 @@ internal sealed class ReadFile : FileTool
         function = new
         {
             name        = "read_file",
-            description = "Read the contents of a source file in the project. Use this when you need to examine a specific file before answering.",
+            description = "Read the contents of a source file in the project. Use this when you need to examine a specific file before answering. " +
+                          "Use start_line and end_line to read a specific range rather than the whole file.",
             parameters  = new
             {
                 type       = "object",
-                properties = new { path = new { type = "string", description = "Path to the file relative to the project root" } },
+                properties = new
+                {
+                    path       = new { type = "string",  description = "Path to the file relative to the project root." },
+                    start_line = new { type = "integer", description = "First line to return (1-indexed, inclusive). Defaults to 1." },
+                    end_line   = new { type = "integer", description = "Last line to return (1-indexed, inclusive). Defaults to end of file." }
+                },
                 required   = new[] { "path" }
             }
         }
@@ -28,15 +35,53 @@ internal sealed class ReadFile : FileTool
     {
         try
         {
-            using JsonDocument doc = JsonDocument.Parse(argsJson);
-            string relPath = doc.RootElement.GetProperty("path").GetString() ?? string.Empty;
-            string? absPath = Resolve(relPath);
-            if (absPath is null)
-                return "Access denied: path traversal is not allowed.";
-            if (!File.Exists(absPath))
-                return $"File not found: {relPath}";
-            string content = await File.ReadAllTextAsync(absPath, ct);
-            return $"[file: \"{relPath}\"]\n```\n{content}\n```";
+            using JsonDocument doc    = JsonDocument.Parse(argsJson);
+            string             relPath = (doc.RootElement.GetProperty("path").GetString() ?? string.Empty).Trim('"', '\'', ' ');
+            string?            absPath = Resolve(relPath);
+
+            if (absPath is null)        return "Access denied: path traversal is not allowed.";
+            if (!File.Exists(absPath))  return $"File not found: {relPath}";
+
+            string[] lines      = await File.ReadAllLinesAsync(absPath, ct);
+            int      totalLines = lines.Length;
+
+            bool hasStart = doc.RootElement.TryGetProperty("start_line", out JsonElement startEl);
+            bool hasEnd   = doc.RootElement.TryGetProperty("end_line",   out JsonElement endEl);
+            int startLine = hasStart ? startEl.GetInt32() : 1;
+            int endLine   = hasEnd   ? endEl.GetInt32()   : totalLines;
+
+            startLine = Math.Max(1,         Math.Min(startLine, totalLines));
+            endLine   = Math.Max(startLine, Math.Min(endLine,   totalLines));
+
+            // Cap whole-file reads of large files so a single read can't blow the context window.
+            const int READ_MAX_LINES = 1500;
+            const int READ_MAX_CHARS = 60000;
+            bool capped = false;
+            if (!hasStart && !hasEnd && totalLines > 0)
+            {
+                int chars = 0, lim = totalLines;
+                for (int i = 0; i < totalLines; i++)
+                {
+                    chars += lines[i].Length + 1;
+                    if (i + 1 >= READ_MAX_LINES || chars >= READ_MAX_CHARS) { lim = i + 1; break; }
+                }
+                if (lim < totalLines) { endLine = lim; capped = true; }
+            }
+
+            bool   fullFile = startLine == 1 && endLine == totalLines;
+            string header   = fullFile
+                ? $"[file: \"{relPath}\" ({totalLines} lines)]"
+                : $"[file: \"{relPath}\" lines {startLine}-{endLine} of {totalLines}]";
+
+            StringBuilder sb = new();
+            sb.AppendLine(header);
+            sb.AppendLine("```");
+            for (int i = startLine - 1; i < endLine; i++)
+                sb.AppendLine($"{i + 1,6}: {lines[i]}");
+            sb.Append("```");
+            if (capped)
+                sb.Append($"\n[File is large ({totalLines} lines) — only the first {endLine} are shown. Read a specific range with start_line/end_line, or use search_files, rather than reading the whole file.]");
+            return sb.ToString();
         }
         catch (Exception ex)
         {
@@ -48,11 +93,16 @@ internal sealed class ReadFile : FileTool
     {
         try
         {
-            using JsonDocument doc = JsonDocument.Parse(args);
-            string relPath  = doc.RootElement.GetProperty("path").GetString() ?? string.Empty;
-            string fileName = Path.GetFileName(relPath);
-            string safe     = fileName.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
-            return $"<div class=\"tool-use\">Reading {safe}</div>\n";
+            using JsonDocument doc     = JsonDocument.Parse(args);
+            string             relPath = doc.RootElement.GetProperty("path").GetString() ?? string.Empty;
+            string             safe    = Path.GetFileName(relPath).Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+
+            string suffix = "";
+            if (doc.RootElement.TryGetProperty("start_line", out JsonElement s) &&
+                doc.RootElement.TryGetProperty("end_line",   out JsonElement e))
+                suffix = $" ({s.GetInt32()}–{e.GetInt32()})";
+
+            return $"<div class=\"tool-use\">Reading {safe}{suffix}</div>\n";
         }
         catch { return "<div class=\"tool-use\">Reading file</div>\n"; }
     };
