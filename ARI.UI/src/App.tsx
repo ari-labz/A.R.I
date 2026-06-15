@@ -44,17 +44,33 @@ export { COMMANDS }
 // ── run_command authorization ─────────────────────────────────────────────────
 type CommandDecision = "deny" | "allow" | "whitelist"
 
-// git is the user's safety net — every git command requires explicit confirmation and can never
-// be auto-run or whitelisted, even read-only ones.
-const GIT_CMD = /^\s*git\b/i
+// Read-only git subcommands that are safe to whitelist.
+const GIT_READONLY_SUBS = new Set([
+    "log", "show", "status", "diff", "branch", "remote", "fetch",
+    "ls-files", "ls-tree", "rev-parse", "cat-file", "describe",
+    "shortlog", "stash", "tag", "blame", "grep", "reflog",
+    "name-rev", "for-each-ref", "count-objects", "fsck",
+])
 
-function isGitCommand(command: string): boolean {
-    return GIT_CMD.test(command)
+// Returns true if the command is a git invocation whose subcommand modifies history/state.
+function isDestructiveGitCommand(command: string): boolean {
+    const tokens = command.trim().split(/\s+/)
+    const prog = tokens[0]?.split("/").pop()
+    if (prog !== "git") return false
+    // skip flags/values like git -C <dir> <sub>
+    let i = 1
+    while (tokens[i] && tokens[i].startsWith("-")) i += 2   // skip flag + its value
+    let sub = tokens[i]
+    return !sub || !GIT_READONLY_SUBS.has(sub)
 }
 
-// Multiplexer programs whose first sub-word matters (so we whitelist "dotnet build", not all of
-// "dotnet"). git is deliberately absent — it always requires confirmation.
-const MULTIPLEXERS = new Set(["dotnet", "npm", "yarn", "pnpm", "bun", "deno", "docker", "cargo", "go", "kubectl", "pip", "pip3", "brew", "make"])
+function isGitCommand(command: string): boolean {
+    return /^\s*git\b/i.test(command)
+}
+
+// Multiplexer programs whose first sub-word matters (so we whitelist "dotnet build" not all of
+// "dotnet", and "git log" not all of "git").
+const MULTIPLEXERS = new Set(["git", "dotnet", "npm", "yarn", "pnpm", "bun", "deno", "docker", "cargo", "go", "kubectl", "pip", "pip3", "brew", "make"])
 
 // Splits a command line into its pipe/sequence segments, respecting quotes. Returns null when it
 // contains command substitution ($(...), backticks, <(...)) or unbalanced quotes — those can hide
@@ -123,13 +139,14 @@ function entryMatchesSegment(entry: string, seg: string, prog: string): boolean 
     return prog === e
 }
 
-// A command is allowed only if EVERY segment is allowed and no segment is a git command.
+// A command is allowed only if EVERY segment is on the allowlist.
+// Destructive git commands can never be auto-run; read-only git subcommands can be whitelisted.
 function commandIsAllowed(command: string, allowlist: string[]): boolean {
-    if (isGitCommand(command)) return false
+    if (isDestructiveGitCommand(command)) return false
     const segs = commandSegments(command)
     if (!segs || segs.length === 0) return false
     return segs.every(seg => {
-        if (isGitCommand(seg)) return false
+        if (isDestructiveGitCommand(seg)) return false
         const prog = segmentProgram(seg)
         return allowlist.some(e => entryMatchesSegment(e, seg, prog))
     })
@@ -548,7 +565,7 @@ export default function App() {
                                 // Whitelist by program (or "program subcommand" for multiplexers like
                                 // dotnet), so future invocations with different args/redirections —
                                 // and chains of already-trusted programs — auto-run.
-                                const keys = (commandWhitelistKeys(command) ?? []).filter(k => k && !isGitCommand(k))
+                                const keys = (commandWhitelistKeys(command) ?? []).filter(k => k && !isDestructiveGitCommand(k))
                                 const next = [...commandAllowlistRef.current]
                                 for (const k of keys) if (!next.includes(k)) next.push(k)
                                 if (next.length !== commandAllowlistRef.current.length) {
@@ -977,8 +994,8 @@ export default function App() {
                     <div style={cmdModalStyle} onClick={e => e.stopPropagation()}>
                         <div style={cmdTitleStyle}>Run this command?</div>
                         <div style={cmdSubStyle}>
-                            {isGitCommand(pendingCommand.command)
-                                ? "ARI wants to run a git command. git always requires your approval and can't be whitelisted."
+                            {isDestructiveGitCommand(pendingCommand.command)
+                                ? "ARI wants to run a git command that modifies history. This always requires your approval."
                                 : "ARI wants to run a command that isn't on the allow list."}
                         </div>
                         <pre style={cmdCodeStyle}>{pendingCommand.command}</pre>
@@ -987,7 +1004,7 @@ export default function App() {
                                     onClick={() => { pendingCommand.resolve("deny"); setPendingCommand(null) }}>Deny</button>
                             <button style={{ ...cmdBtnBase, background: "#2d6cdf", color: "#fff" }}
                                     onClick={() => { pendingCommand.resolve("allow"); setPendingCommand(null) }}>Allow once</button>
-                            {!isGitCommand(pendingCommand.command) && (() => {
+                            {!isDestructiveGitCommand(pendingCommand.command) && (() => {
                                 const progs = commandWhitelistKeys(pendingCommand.command)
                                 if (!progs || progs.length === 0) return null  // command substitution — allow-once only
                                 return (
