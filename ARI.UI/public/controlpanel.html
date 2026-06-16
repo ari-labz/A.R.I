@@ -152,8 +152,9 @@ html, body {
 .thread-row-head { display: flex; align-items: center; gap: 7px; }
 .thread-row-key { font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
 .thread-bar-wrap { display: flex; align-items: center; gap: 8px; }
-.thread-bar-bg   { flex: 1; height: 7px; border-radius: 4px; background: #e5e7eb; overflow: hidden; }
-.thread-bar-fill { height: 100%; border-radius: 4px; transition: width .6s ease, background .3s; }
+.thread-bar-bg   { flex: 1; height: 7px; border-radius: 4px; background: #e5e7eb; overflow: hidden; position: relative; }
+.thread-bar-peak { position: absolute; inset: 0; height: 100%; border-radius: 4px; }
+.thread-bar-fill { position: absolute; inset: 0; height: 100%; border-radius: 4px; transition: width .6s ease, background .3s; }
 .thread-bar-label { font-size: 11px; color: var(--text-dim); white-space: nowrap; flex-shrink: 0; }
 
 /* ── live call ───────────────────────────────────────── */
@@ -745,6 +746,8 @@ function renderTokens(calls) {
     });
 }
 
+const threadPeaks = new Map(); // threadKey → peak pct
+
 function renderContextUsage(liveCalls, contextStats) {
     const json = JSON.stringify({ liveCalls, contextStats });
     if (json === lastContextJson) return;
@@ -767,11 +770,14 @@ function renderContextUsage(liveCalls, contextStats) {
     items.forEach(c => {
         const agentName = c.agentName ?? 'Unknown';
         const barColor = c.pct >= 90 ? OUT_DANGER : c.pct >= 75 ? OUT_WARN : (AGENT_COLORS[agentName] ?? '#518c9a');
+        const peak = Math.max(threadPeaks.get(c.threadKey) ?? 0, c.pct);
+        threadPeaks.set(c.threadKey, peak);
+        const peakColor = barColor + '40'; // 25% opacity for the peak ghost
         const limitStr = c.limit > 0 ? ` / ${c.limit.toLocaleString()}` : '';
         const pctStr   = c.limit > 0 ? ` (${Math.round(c.pct)}%)` : '';
         const row = document.createElement('div');
         row.className = 'thread-row';
-        row.innerHTML = `<div class="thread-row-head">${c.live ? '<span class="live-dot"></span>' : ''}${agentBadge(agentName)}<span class="thread-row-key" title="${escHtml(c.threadKey)}">${escHtml(c.threadKey.slice(0, 22))}</span></div><div class="thread-bar-wrap"><div class="thread-bar-bg"><div class="thread-bar-fill" style="width:${c.pct}%;background:${barColor};${c.live ? 'transition:width .9s linear' : ''}"></div></div><span class="thread-bar-label">${c.used.toLocaleString()}${limitStr} tok${pctStr}</span></div>`;
+        row.innerHTML = `<div class="thread-row-head">${c.live ? '<span class="live-dot"></span>' : ''}${agentBadge(agentName)}<span class="thread-row-key" title="${escHtml(c.threadKey)}">${escHtml(c.threadKey.slice(0, 22))}</span></div><div class="thread-bar-wrap"><div class="thread-bar-bg"><div class="thread-bar-peak" style="width:${peak}%;background:${peakColor}"></div><div class="thread-bar-fill" style="width:${c.pct}%;background:${barColor};${c.live ? 'transition:width .9s linear' : ''}"></div></div><span class="thread-bar-label">${c.used.toLocaleString()}${limitStr} tok${pctStr}</span></div>`;
         contextBody.appendChild(row);
     });
 }

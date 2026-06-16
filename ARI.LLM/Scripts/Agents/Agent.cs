@@ -15,6 +15,10 @@ public abstract class Agent
     internal  readonly int?   Slot;
     internal  readonly double? Temperature;
     internal  readonly double? TopP;
+    internal  readonly int?    TopK;
+    internal  readonly double? RepeatPenalty;
+    internal  readonly double? PresencePenalty;
+    internal  readonly double? FrequencyPenalty;
     internal  readonly int     MaxToolCalls;
 
     // 0 = unlimited. Overridden by agents that enforce a context window.
@@ -53,8 +57,12 @@ public abstract class Agent
         Think          = config.Think;
         ThinkingBudget = config.ThinkingBudget;
         Slot           = config.Slot;
-        Temperature    = config.Temperature;
-        TopP           = config.TopP;
+        Temperature      = config.Temperature;
+        TopP             = config.TopP;
+        TopK             = config.TopK;
+        RepeatPenalty    = config.RepeatPenalty;
+        PresencePenalty  = config.PresencePenalty;
+        FrequencyPenalty = config.FrequencyPenalty;
         MaxToolCalls   = config.MaxToolCalls;
     }
 

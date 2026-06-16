@@ -119,7 +119,16 @@ internal class Engram : Agent, IDisposable
 
             // --- Phase 2: Fetch ---
             List<string> existingNotes  = await brain.GetNotePaths();
-            string existingNotesList    = existingNotes.Count > 0 ? string.Join(", ", existingNotes) : "none";
+            Dictionary<string, List<string>> aliasesByTitle = brain.GetAliasesByTitle();
+            string existingNotesList    = existingNotes.Count > 0
+                ? string.Join(", ", existingNotes.Select(p =>
+                  {
+                      string bare = p.Contains('/') ? p[(p.LastIndexOf('/') + 1)..] : p;
+                      return aliasesByTitle.TryGetValue(bare, out List<string>? al) && al.Count > 0
+                          ? $"{p} (aka: {string.Join(", ", al)})"
+                          : p;
+                  }))
+                : "none";
             string transcript           = BuildTranscript(conversationItems);
             string engramThreadKey      = $"engram:{Guid.NewGuid()}";
 
@@ -142,6 +151,7 @@ internal class Engram : Agent, IDisposable
                 contextBlock +
                 $"CONVERSATION:\n{transcript}\n\n" +
                 $"EXISTING NOTES (full paths — the path encodes category, ownership, and relationship): {existingNotesList}\n\n" +
+                "An entity already in this list — under its title OR any of its '(aka: ...)' aliases — is the SAME entity; plan to update it, never to create a second note for it.\n" +
                 "Use the paths to understand the graph structure before fetching. " +
                 "Identify any notes you want to read — to check for duplicates and to update existing notes. " +
                 "Any note you intend to update must be fetched first.\n" +
@@ -230,6 +240,15 @@ internal class Engram : Agent, IDisposable
                 "Hub notes are named possessively when they belong to a person ([Person]'s Family, [Person]'s Friends).\n" +
                 "This makes them unambiguous across multiple people's graphs.\n" +
                 "Individual spokes link TO the hub; the hub links down to members — not the reverse.\n\n" +
+
+                "## ONE ENTITY, ONE NOTE\n" +
+                "A title is an identity — the graph allows exactly one note per entity. Before planning an 'add', check the existing notes (including their '(aka: ...)' aliases) for the same person/place/thing under ANY name. If it already exists, plan an 'edit' on that note instead — never a second note. A nickname, role, or formal-name variant is the same entity, not a new one.\n\n" +
+
+                "## NO DEAD ENDS\n" +
+                "Recall finds a note, then follows that note's OWN outward [[links]] to reach what is related — inbound links are invisible to it. So every note must link outward to its hub (a family member links to its family hub; a device links to the owner's tech hub). A note with no outward link can be found but leads nowhere.\n\n" +
+
+                "## DON'T OVER-CONNECT\n" +
+                "Route links through hubs: a person links to their HUBS (Family, Friends, Romantic Partners, Tech), not directly to every individual member. Every link needs a reason — membership, the subject of a fact, or hub indexing. Do not link things that merely co-occur (a laptop does not link to a friend). Links are one-way: if A mentions B, only A links to B.\n\n" +
 
                 "## RELATIONSHIPS\n" +
                 "The dynamics of a relationship between two people belong in Relationships/, not duplicated on each person's note.\n" +
@@ -327,7 +346,7 @@ internal class Engram : Agent, IDisposable
                     (sweepSummary.Length > 0 ? $"Notes already saved this sweep:\n{sweepSummary}\n" : "") +
                     $"Now write the note: {item.Name}.{moveInstruction}\n\n" +
                     "Rules for this note:\n" +
-                    "- Title must be the everyday name (nickname/alias), not the formal name. Formal name goes inside under ## Info.\n" +
+                    "- Title must be the everyday name (nickname/alias), NEVER a role or status — '[REDACT] (Boyfriend)' is wrong; the title is '[REDACT]' and the role goes in the body. Formal name goes inside under ## Info and into aliases.\n" +
                     "- If the title would collide with another note's name, append a parenthetical to disambiguate (e.g. 'Granny Squeak (person)' vs 'Granny Squeak (boat)').\n" +
                     "- Every Events entry must have a specific or approximate date (e.g. '25th August 2024:' or '~May 2026:'). Never write relative time ('recently', 'several years ago').\n" +
                     "- Include a ## Changelog section. Add a dated entry for what was created or changed. No [[links]] in changelog — plain text only.\n" +

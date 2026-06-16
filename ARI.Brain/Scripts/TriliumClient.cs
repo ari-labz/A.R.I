@@ -448,6 +448,42 @@ public class TriliumClient
                 await CreateLabelAttribute(noteId, "alias", alias.Trim());
     }
 
+    /// <summary>
+    /// Adds alias labels to a note without removing existing ones, skipping any that are
+    /// already present (case-insensitive). Used by writes and merges so structural aliases
+    /// (an old title after a rename, a folded-away duplicate's name) are never lost.
+    /// </summary>
+    public async Task AddAliasLabels(string noteId, IEnumerable<string> aliases)
+    {
+        List<(string AttributeId, string Type, string Name, string Value)> attrs = await GetNoteAttributes(noteId);
+        HashSet<string> existing = attrs
+            .Where(a => a.Type == "label" && a.Name == "alias")
+            .Select(a => a.Value)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (string alias in aliases)
+        {
+            string trimmed = alias.Trim();
+            if (string.IsNullOrWhiteSpace(trimmed) || !existing.Add(trimmed)) continue;
+            await CreateLabelAttribute(noteId, "alias", trimmed);
+        }
+    }
+
+    /// <summary>
+    /// Returns every (noteId, aliasValue) pair in the graph, for building an alias → canonical-title
+    /// index. Only notes carrying at least one #alias label are fetched.
+    /// </summary>
+    public async Task<List<(string NoteId, string Alias)>> GetAllAliases()
+    {
+        List<string> ids = await SearchNoteIdsByLabel("alias");
+        List<(string, string)> result = new();
+        foreach (string id in ids)
+            foreach ((string _, string type, string name, string value) in await GetNoteAttributes(id))
+                if (type == "label" && name == "alias" && !string.IsNullOrWhiteSpace(value))
+                    result.Add((id, value));
+        return result;
+    }
+
     /// <summary>Adds a label attribute to a note. Duplicates are allowed — caller deduplicates if needed.</summary>
     public async Task CreateLabelAttribute(string noteId, string name, string value = "")
     {

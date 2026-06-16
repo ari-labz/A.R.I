@@ -84,4 +84,28 @@ public class AgentConfig
     /// Null = use the global default in Thread.cs.
     /// </summary>
     public double? TopP { get; init; } = null;
+
+    /// <summary>
+    /// Optional per-agent top-k sampling override.
+    /// Null = use the global default in Thread.cs.
+    /// </summary>
+    public int? TopK { get; init; } = null;
+
+    /// <summary>
+    /// Optional per-agent repeat penalty override (1.0 = off).
+    /// Null = use the global default in Thread.cs.
+    /// </summary>
+    public double? RepeatPenalty { get; init; } = null;
+
+    /// <summary>
+    /// Optional per-agent presence penalty override (0.0 = off).
+    /// Null = omitted from request.
+    /// </summary>
+    public double? PresencePenalty { get; init; } = null;
+
+    /// <summary>
+    /// Optional per-agent frequency penalty override (0.0 = off).
+    /// Null = omitted from request.
+    /// </summary>
+    public double? FrequencyPenalty { get; init; } = null;
 }

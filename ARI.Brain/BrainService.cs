@@ -18,6 +18,10 @@ public class BrainService
     private readonly Dictionary<string, string> branchIdCache   = new(); // noteId → branchId
     private readonly Dictionary<string, string> noteFolderCache = new(); // noteId → folder path (e.g. "People")
 
+    // Alias label value (nickname, old title after a rename, folded-away duplicate's name) → canonical title.
+    // Lets [[Grumpy]] resolve to Geoffrey, and lets dedup recognise one entity under any of its names.
+    private readonly Dictionary<string, string> aliasToTitle = new(StringComparer.OrdinalIgnoreCase);
+
     // Cached flat list of all note titles. Null = dirty, rebuilt on next GetNoteTitles() call.
     private List<string>? cachedTitles;
 
@@ -84,6 +88,15 @@ public class BrainService
             if (!string.IsNullOrEmpty(info.BranchId))
                 branchIdCache[info.Id]  = info.BranchId;
         }
+
+        // Build the alias → canonical-title index so nickname links and dedup are name-aware.
+        aliasToTitle.Clear();
+        Dictionary<string, string> idToTitle = new(StringComparer.Ordinal);
+        foreach ((string title, string id) in noteIdCache) idToTitle[id] = title;
+        foreach ((string noteId, string alias) in await trilium.GetAllAliases())
+            if (idToTitle.TryGetValue(noteId, out string? canonical))
+                aliasToTitle[alias] = canonical;
+
         cachedTitles = null; // mark dirty so first call rebuilds from the new noteIdCache
         Common.Logger.LogInformation("Brain connected to Trilium. {Count} note(s) in graph.", noteIdCache.Count);
     }
@@ -434,6 +447,19 @@ public class BrainService
     {
         if (!triliumReady) return 0;
         int deleted = await trilium.DeleteSuppressedStubs();
+
+        // Alias-duplicate stubs: an Unknown/X whose title is an alias of a different real note
+        // (e.g. Unknown/Grumpy when Geoffrey carries the alias 'Grumpy') is the same entity — merge it.
+        foreach (string title in GetTitlesByFolder("Unknown"))
+        {
+            if (aliasToTitle.TryGetValue(title, out string? canonical)
+                && !string.Equals(canonical, title, StringComparison.OrdinalIgnoreCase)
+                && noteIdCache.ContainsKey(canonical))
+            {
+                if (await MergeNotes(title, canonical)) deleted++;
+            }
+        }
+
         if (deleted > 0)
         {
             Common.Logger.LogInformation("[Brain] Cleaned {Count} duplicate Unknown stub(s).", deleted);
@@ -496,7 +522,99 @@ public class BrainService
         }
     }
 
+    /// <summary>
+    /// Folds <paramref name="fromName"/> into <paramref name="intoName"/>: the loser's title and
+    /// aliases are added as aliases on the winner, inbound link hrefs are repointed to the winner,
+    /// and the loser note is deleted. Inbound [[OldName]] links keep resolving because OldName
+    /// becomes an alias of the winner. The winner's merged CONTENT is the caller's responsibility
+    /// (supply an edit for it) — this performs only the structural fold.
+    /// </summary>
+    public async Task<bool> MergeNotes(string fromName, string intoName)
+    {
+        if (!triliumReady) return false;
+        fromName = NoteName(fromName);
+        intoName = NoteName(intoName);
+        if (string.Equals(fromName, intoName, StringComparison.OrdinalIgnoreCase)) return false;
+
+        string? intoId = await FindNoteId(intoName);
+        if (intoId is null)
+        {
+            Common.Logger.LogWarning("[Brain] Merge skipped — target '{Into}' not found.", intoName);
+            return false;
+        }
+
+        string? fromId = await FindNoteId(fromName);
+        if (fromId is null) return false;                                          // nothing to merge
+        if (string.Equals(fromId, intoId, StringComparison.Ordinal)) return false; // already the same note
+
+        // Canonical title for the winner (intoName may itself have been an alias).
+        string intoTitle = noteIdCache.FirstOrDefault(kv => kv.Value == intoId).Key ?? intoName;
+
+        // 1. Fold the loser's name + aliases into the winner so its links and searches survive.
+        List<string> fold = new() { fromName };
+        fold.AddRange((await trilium.GetNoteAttributes(fromId))
+            .Where(a => a.Type == "label" && a.Name == "alias")
+            .Select(a => a.Value));
+        await ApplyAliases(intoId, intoTitle, fold);
+
+        // 2. Repoint every inbound link href from the loser to the winner.
+        await RepointHrefs(fromId, intoId);
+
+        // 3. Delete the loser (its exact title still resolves to it until removed).
+        await DeleteNote(fromName);
+
+        Common.Logger.LogInformation("[Brain] Merged '{From}' into '{Into}'.", fromName, intoTitle);
+        return true;
+    }
+
+    /// <summary>Returns canonical title → its alias labels, for dedup-aware extraction prompts.</summary>
+    public Dictionary<string, List<string>> GetAliasesByTitle()
+    {
+        Dictionary<string, List<string>> byTitle = new(StringComparer.OrdinalIgnoreCase);
+        foreach ((string alias, string title) in aliasToTitle)
+        {
+            if (!byTitle.TryGetValue(title, out List<string>? list)) byTitle[title] = list = new();
+            list.Add(alias);
+        }
+        return byTitle;
+    }
+
     // ── Private ──────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Adds the given aliases as #alias labels on a note (append-only, never replacing existing
+    /// ones) and updates the in-memory alias → title index so resolution and dedup see them at once.
+    /// Aliases equal to the canonical title are skipped (no self-aliases).
+    /// </summary>
+    private async Task ApplyAliases(string noteId, string canonicalTitle, IEnumerable<string> aliases)
+    {
+        List<string> list = aliases
+            .Where(a => !string.IsNullOrWhiteSpace(a))
+            .Select(a => a.Trim())
+            .Where(a => !string.Equals(a, canonicalTitle, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (list.Count == 0) return;
+        await trilium.AddAliasLabels(noteId, list);
+        foreach (string a in list) aliasToTitle[a] = canonicalTitle;
+    }
+
+    /// <summary>Rewrites every stored link href pointing at <paramref name="fromId"/> to <paramref name="intoId"/>.</summary>
+    private async Task RepointHrefs(string fromId, string intoId)
+    {
+        string needle = $"#root/{fromId}";
+        foreach (string title in noteIdCache.Keys.ToList())
+        {
+            if (!noteIdCache.TryGetValue(title, out string? nid) || string.Equals(nid, fromId, StringComparison.Ordinal))
+                continue;
+            string? html = await trilium.GetNoteContent(nid);
+            if (html is null || !html.Contains(needle, StringComparison.Ordinal)) continue;
+
+            string updated = html.Replace(needle, $"#root/{intoId}");
+            await trilium.UpdateNoteContent(nid, updated);
+            string folder = noteFolderCache.TryGetValue(nid, out string? f) ? f : string.Empty;
+            UpdateContentCache(title, folder, updated);
+        }
+    }
 
     private async Task SaveAdd(EngramAdd add)
     {
@@ -512,8 +630,7 @@ public class BrainService
             string currentFolder = noteFolderCache.TryGetValue(existingId, out string? cf) ? cf : string.Empty;
 
             await trilium.UpdateNoteContent(existingId, resolved);
-            if (add.Aliases.Count > 0)
-                await trilium.SetAliasLabels(existingId, add.Aliases);
+            await ApplyAliases(existingId, name, add.Aliases);
 
             bool moved = false;
             if (!string.Equals(currentFolder, targetFolder, StringComparison.OrdinalIgnoreCase))
@@ -547,8 +664,7 @@ public class BrainService
             noteIdCache[name]   = id;
             branchIdCache[id]   = branchId;
             noteFolderCache[id] = string.Join("/", folders);
-            if (add.Aliases.Count > 0)
-                await trilium.SetAliasLabels(id, add.Aliases);
+            await ApplyAliases(id, name, add.Aliases);
             UpdateContentCache(name, string.Join("/", folders), resolved);
             Common.Logger.LogInformation("added: {Name}", add.NoteName);
         }
@@ -568,13 +684,15 @@ public class BrainService
         string html     = MarkdownConverter.ToHtml(edit.Content);
         string resolved = MarkdownConverter.ResolveLinks(html, await ResolveLinkNames(html));
         await trilium.UpdateNoteContent(noteId, resolved);
-        if (edit.Aliases.Count > 0)
-            await trilium.SetAliasLabels(noteId, edit.Aliases);
         string currentFolder = noteFolderCache.TryGetValue(noteId, out string? cf) ? cf : "Unknown";
         UpdateContentCache(currentName, currentFolder, resolved);
         Common.Logger.LogInformation("edited: {Name}", currentName);
 
-        if (string.IsNullOrWhiteSpace(edit.NewNoteName)) return;
+        if (string.IsNullOrWhiteSpace(edit.NewNoteName))
+        {
+            await ApplyAliases(noteId, currentName, edit.Aliases);
+            return;
+        }
 
         string newName      = NoteName(edit.NewNoteName);
         string[] newFolders = FolderPath(edit.NewNoteName);
@@ -605,6 +723,13 @@ public class BrainService
             InvalidateContentCache(currentName);
         }
 
+        // Aliases apply against the final title. On rename, the old title becomes a structural
+        // alias so inbound [[OldName]] links keep resolving to this note.
+        string effectiveName = renamed ? newName : currentName;
+        List<string> aliasSet = edit.Aliases.ToList();
+        if (renamed) aliasSet.Add(currentName);
+        await ApplyAliases(noteId, effectiveName, aliasSet);
+
         if (moved && renamed)
             Common.Logger.LogInformation("moved+renamed: {From} → {To}", edit.NoteName, edit.NewNoteName);
         else if (moved)
@@ -629,6 +754,10 @@ public class BrainService
     private async Task<string?> FindNoteId(string title)
     {
         if (noteIdCache.TryGetValue(title, out string? cached)) return cached;
+        // Fall back to the alias index so a stale or nickname link ([[Geoffrey]] after a rename to
+        // Grumpy, or [[Grumpy]] for canonical Geoffrey) resolves to the canonical note.
+        if (aliasToTitle.TryGetValue(title, out string? canonical)
+            && noteIdCache.TryGetValue(canonical, out string? canonicalId)) return canonicalId;
         string? found = await trilium.FindNoteIdByTitleAnywhere(title);
         if (found is not null) noteIdCache[title] = found;
         return found;

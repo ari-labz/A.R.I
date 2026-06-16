@@ -20,3 +20,10 @@ public class EngramDelete
     public string NoteName { get; init; } = string.Empty; // title of the note to delete (bare name, no folder prefix)
     public string Reason   { get; init; } = string.Empty; // logged but not written to Trilium
 }
+
+public class EngramMerge
+{
+    public string From   { get; init; } = string.Empty; // title of the duplicate note to fold away (the loser)
+    public string Into   { get; init; } = string.Empty; // title of the canonical note to keep (the winner)
+    public string Reason { get; init; } = string.Empty; // logged but not written to Trilium
+}
