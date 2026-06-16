@@ -563,6 +563,9 @@ public class Thread
         // spiral (the model distrusts its own successful write and regenerates the whole file).
         Dictionary<string, int> writeCounts = new(StringComparer.OrdinalIgnoreCase);
         bool                    forceNoMoreTools = false;
+        // Dedup cache for run_command: maps the exact command string to (result, call count).
+        // On 2nd call the cached result is returned with a nudge; on 3rd+ a hard stop is returned.
+        Dictionary<string, (string Result, int Count)> commandCache = new(StringComparer.Ordinal);
         // Files edited in the CURRENT batch of tool calls (cleared each iteration). A second edit
         // to the same file within one batch is rejected because its old_string was written against
         // pre-edit content and would fail or corrupt the file.
@@ -666,12 +669,15 @@ public class Thread
                 ["stream"]         = true,
                 ["stream_options"] = new { include_usage = true },
                 ["max_tokens"]     = maxTokens,
-                ["temperature"]    = agent.Temperature ?? TEMPERATURE,
-                ["top_p"]          = agent.TopP        ?? TOP_P,
-                ["top_k"]          = TOP_K,
+                ["temperature"]    = agent.Temperature   ?? TEMPERATURE,
+                ["top_p"]          = agent.TopP          ?? TOP_P,
+                ["top_k"]          = agent.TopK          ?? TOP_K,
                 ["min_p"]          = MIN_P,
-                ["repeat_penalty"] = REPEAT_PENALTY
+                ["repeat_penalty"] = agent.RepeatPenalty ?? REPEAT_PENALTY
             };
+
+            if (agent.PresencePenalty.HasValue)  body["presence_penalty"]  = agent.PresencePenalty.Value;
+            if (agent.FrequencyPenalty.HasValue) body["frequency_penalty"] = agent.FrequencyPenalty.Value;
 
             if (!agent.Think)
             {
@@ -1007,7 +1013,28 @@ public class Thread
                 {
                     string result;
 
-                    // Soft re-read guard: if the model reads the same file more than 3 times
+                    // preview_file dedup: same file previewed more than once this turn is a loop.
+                    if (call.Name is "preview_file")
+                    {
+                        try
+                        {
+                            using JsonDocument pdoc = JsonDocument.Parse(call.Args.ToString());
+                            string ppath = NormKey(pdoc.RootElement.GetProperty("path").GetString() ?? "");
+                            if (commandCache.TryGetValue($"preview_file:{ppath}", out var cachedPreview))
+                            {
+                                commandCache[$"preview_file:{ppath}"] = (cachedPreview.Result, cachedPreview.Count + 1);
+                                string previewNudge = cachedPreview.Count >= 2
+                                    ? $"[System: You have previewed {ppath} {cachedPreview.Count + 1} times this turn. Stop previewing it — use read_file with start_line/end_line to read the section you need.]"
+                                    : $"[System: You already previewed {ppath} this turn. Here is the cached outline — do not preview it again:\n\n{cachedPreview.Result}]";
+                                if (isXmlFallback) { xmlResultsMsg!.AppendLine($"--- {call.Name} ---"); xmlResultsMsg.AppendLine(previewNudge); xmlResultsMsg.AppendLine(); }
+                                else { messages.Add(new { role = "tool", tool_call_id = call.Id, name = call.Name, content = previewNudge }); if (liveCallInfo is { } lc2) lc2.EstimatedInputTokens += previewNudge.Length / CHARS_PER_TOKEN; }
+                                continue;
+                            }
+                        }
+                        catch { /* ignore — proceed normally */ }
+                    }
+
+                    // Soft re-read guard: if the model reads the same file more than once
                     // in one turn it's looping. Return a nudge instead of the file content again.
                     if (call.Name is "read_file")
                     {
@@ -1137,11 +1164,48 @@ public class Thread
                                 contentBuilder.Append(finalMarker);
                             if (onDelta is not null) await onDelta(contentBuilder.ToString());
                         }
+                        // run_command dedup: cache each unique command string this turn.
+                        // 2nd call → return cached output + nudge. 3rd+ → hard stop without output.
+                        if (call.Name == "run_command")
+                        {
+                            string cmdKey = call.Args.ToString().Trim();
+                            if (commandCache.TryGetValue(cmdKey, out var cached))
+                            {
+                                commandCache[cmdKey] = (cached.Result, cached.Count + 1);
+                                result = cached.Count >= 2
+                                    ? $"[System: You have run this exact command {cached.Count + 1} times this turn. Do not call it again — you already have the output. Use what you know to proceed or respond to the user.]"
+                                    : $"[System: You already ran this command earlier this turn. Here is the cached output — do not call it again:\n\n{cached.Result}]";
+                                goto AfterToolExecute;
+                            }
+                        }
+
                         // Use the pre-launched (concurrent) result for read-only tools; otherwise run now.
                         result = prelaunched.TryGetValue(callIndex, out Task<string>? pre)
                             ? await pre
                             : await tool.Execute(call.Args.ToString());
 
+                        if (call.Name == "run_command")
+                        {
+                            // Guard: bare filename passed as a command (e.g. "Foo.csproj", "Bar.cs").
+                            string cmdStr = call.Args.ToString().Trim();
+                            string cmdTrimmed = cmdStr.Trim('"', '\'', ' ');
+                            if (System.Text.RegularExpressions.Regex.IsMatch(cmdTrimmed, @"^\S+\.(csproj|sln|cs|fs|vb|py|ts|tsx|js|jsx|json|xml|yaml|yml|sh|ps1)$"))
+                                result = $"[System: \"{cmdTrimmed}\" is a filename, not a shell command — nothing was executed. Did you mean 'dotnet build {cmdTrimmed}', 'dotnet run --project {cmdTrimmed}', or similar?]";
+                            else
+                                commandCache[cmdStr] = (result, 1);
+                        }
+                        if (call.Name == "preview_file")
+                        {
+                            try
+                            {
+                                using JsonDocument pd2 = JsonDocument.Parse(call.Args.ToString());
+                                string pp = NormKey(pd2.RootElement.GetProperty("path").GetString() ?? "");
+                                commandCache[$"preview_file:{pp}"] = (result, 1);
+                            }
+                            catch { /* ignore */ }
+                        }
+
+                        AfterToolExecute:
                         // Track edits and enrich stale old_string errors with a re-read hint.
                         if (call.Name == "edit_file")
                         {
