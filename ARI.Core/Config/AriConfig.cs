@@ -1,22 +1,26 @@
+using ARI.Common;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ARI.Brain;
 using ARI.Discord;
 using ARI.LLM;
+using ARI.Voice;
+using ARI.VoiceSynthesis;
+using ARI.API;
 
 namespace ARI.Core;
 
 public class AriConfig
 {
-    public Modules modules;
-    public List<AgentConfig> Agents  { get; init; } = new();
+    public string DockerComposePath { get; init; }
+    public Modules modules { get; init; }
     
     
     public static AriConfig LoadFrom(string path)
     {
         if (!File.Exists(path))
         {
-            Common.Logger.LogCritical($"AriConfig.json not found at {path}");
+            Shared.Logger.LogCritical($"AriConfig.json not found at {path}");
             throw new Exception($"AriConfig.json not found at {path}");
         }
 
@@ -24,7 +28,7 @@ public class AriConfig
         AriConfig result = JsonSerializer.Deserialize<AriConfig>(json, ReadOptions);
         if (result == null)
         {
-            Common.Logger.LogCritical("Failed to deserialise AriConfig.json.");
+            Shared.Logger.LogCritical("Failed to deserialise AriConfig.json.");
             throw new Exception("Failed to deserialise AriConfig.json.");
         }
 

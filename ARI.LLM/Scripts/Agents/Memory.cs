@@ -1,6 +1,8 @@
+using ARI.Common;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using ARI.Brain;
 using Microsoft.Extensions.Logging;
@@ -9,27 +11,23 @@ namespace ARI.LLM;
 
 internal class Memory : Agent
 {
+    [JsonPropertyName("recursiveBrainSearchDepth")] public int RecursiveBrainSearchDepth { get; init; }
+
     private const int BASE_THINKING     = 100;
     private const int PER_CANDIDATE     = 25;
     private const int MAX_THINKING      = 1000;
     private const int MIN_RECALL_LENGTH = 80;
     private const int TRANSCRIPT_LIMIT  = 5;
-    private const int MAX_CANDIDATES    = 20; // cap on notes shown to the LLM filter, keeps prompt size flat at scale
+    private const int MAX_CANDIDATES    = 20;
 
-    private readonly BrainModule brain;
-    private readonly int          fetchDepth;
-    private readonly string       brainPublicUrl;
+    [JsonIgnore] internal BrainModule? brain          { get; set; }
+    [JsonIgnore] internal string       brainPublicUrl { get; set; } = "";
 
     internal override bool QuietLogging => true;
 
     internal override ThreadType Type => ThreadType.Memory;
 
-    internal Memory(AgentConfig config, BrainModule brain, int fetchDepth, string brainPublicUrl) : base(config)
-    {
-        this.brain          = brain;
-        this.fetchDepth     = fetchDepth;
-        this.brainPublicUrl = brainPublicUrl;
-    }
+    internal Memory() { }
 
     private static readonly string[] MemoryKeywords =
     [
@@ -70,7 +68,7 @@ internal class Memory : Agent
 
     internal async Task<string?> GetNotes(List<ThreadMessage> chatHistory, string incomingPrompt, string? contextSummary = null, CancellationToken ct = default)
     {
-        if (fetchDepth <= 0) return null;
+        if (RecursiveBrainSearchDepth <= 0) return null;
 
         string threadKey = $"memory:{Guid.NewGuid()}";
 
@@ -81,7 +79,7 @@ internal class Memory : Agent
                           || PersonalKeywords.Any(kw => incomingPrompt.Contains(kw, StringComparison.OrdinalIgnoreCase));
             if (!hasSignal)
             {
-                Common.Logger.LogInformation("[Memory] skipped");
+                Shared.Logger.LogInformation("[Memory] skipped");
                 return string.Empty;
             }
         }
@@ -108,7 +106,7 @@ internal class Memory : Agent
         Dictionary<string, int> seedCoverage = new(StringComparer.OrdinalIgnoreCase);
         if (tokenList.Count > 0)
         {
-            List<string>[] searchResults = await Task.WhenAll(tokenList.Select(t => brain.SearchNote(t)));
+            List<string>[] searchResults = await Task.WhenAll(tokenList.Select(t => brain!.SearchNote(t)));
             for (int i = 0; i < tokenList.Count; i++)
                 foreach (string title in searchResults[i])
                     seedCoverage[title] = seedCoverage.GetValueOrDefault(title) + 1;
@@ -119,7 +117,7 @@ internal class Memory : Agent
         Dictionary<string, int> neighbourPullers = new(StringComparer.OrdinalIgnoreCase);
         if (seeds.Count > 0)
         {
-            List<string>[] linkResults = await Task.WhenAll(seeds.Select(t => brain.GetNoteLinks(t)));
+            List<string>[] linkResults = await Task.WhenAll(seeds.Select(t => brain!.GetNoteLinks(t)));
             for (int i = 0; i < seeds.Count; i++)
                 foreach (string link in linkResults[i])
                     if (!seedCoverage.ContainsKey(link))
@@ -147,12 +145,12 @@ internal class Memory : Agent
         List<string> directFetch = ranked.Where(c => tokenLower.Contains(c.ToLowerInvariant())).ToList();
         List<string> indirect    = ranked.Except(directFetch, StringComparer.OrdinalIgnoreCase).ToList();
 
-        Common.Logger.LogInformation("[Memory] tokens [{Tokens}] → {Seeds} seed(s) → ranked {Total} candidate(s) (cap {Cap}): {Direct} direct + {Indirect} indirect",
+        Shared.Logger.LogInformation("[Memory] tokens [{Tokens}] → {Seeds} seed(s) → ranked {Total} candidate(s) (cap {Cap}): {Direct} direct + {Indirect} indirect",
             string.Join(", ", tokenList), seeds.Count, ranked.Count, MAX_CANDIDATES, directFetch.Count, indirect.Count);
 
         if (ranked.Count == 0)
         {
-            Common.Logger.LogInformation("[Memory] complete 0.0s, 0 tokens, 0.0 t/s — no memories recalled");
+            Shared.Logger.LogInformation("[Memory] complete 0.0s, 0 tokens, 0.0 t/s — no memories recalled");
             return string.Empty;
         }
 
@@ -164,8 +162,8 @@ internal class Memory : Agent
         {
             IEnumerable<Task<(string name, string? content, string? noteId)>> directTasks = directFetch.Select(async name =>
             {
-                string? content = await brain.GetNote(name);
-                string? noteId  = content is not null ? await brain.GetNoteId(name) : null;
+                string? content = await brain!.GetNote(name);
+                string? noteId  = content is not null ? await brain!.GetNoteId(name) : null;
                 return (name, content, noteId);
             });
             foreach ((string name, string? content, string? noteId) in await Task.WhenAll(directTasks))
@@ -174,7 +172,7 @@ internal class Memory : Agent
                 fetched.Add(name);
                 noteContents[name] = (content, noteId);
             }
-            Common.Logger.LogInformation("[Memory] Direct fetch: {Notes}", string.Join(", ", fetched.Select(n => $"[{n}]")));
+            Shared.Logger.LogInformation("[Memory] Direct fetch: {Notes}", string.Join(", ", fetched.Select(n => $"[{n}]")));
         }
 
         string candidateList = indirect.Count > 0 ? string.Join(", ", indirect) : string.Empty;
@@ -199,7 +197,7 @@ internal class Memory : Agent
             ? await Prompt(threadKey, firstPrompt, ct: ct, thinkingBudgetOverride: thinkingBudget)
             : "{\"fetch\": []}";
 
-        for (int depth = 0; depth < fetchDepth; depth++)
+        for (int depth = 0; depth < RecursiveBrainSearchDepth; depth++)
         {
             List<string> toFetch = ParseFetchList(raw)
                 .Select(n => n.Contains('/') ? n[(n.LastIndexOf('/') + 1)..] : n)
@@ -214,8 +212,8 @@ internal class Memory : Agent
 
             IEnumerable<Task<(string name, string? content, string? noteId)>> fetchTasks = toFetch.Select(async name =>
             {
-                string? content = await brain.GetNote(name);
-                string? noteId  = content is not null ? await brain.GetNoteId(name) : null;
+                string? content = await brain!.GetNote(name);
+                string? noteId  = content is not null ? await brain!.GetNoteId(name) : null;
                 return (name, content, noteId);
             });
 
@@ -230,7 +228,7 @@ internal class Memory : Agent
 
             LogRound(threadKey, roundNumber++, ref totalTokens, ref totalSeconds, recalled);
 
-            if (depth + 1 >= fetchDepth) break;
+            if (depth + 1 >= RecursiveBrainSearchDepth) break;
 
             StringBuilder notesBlock = new();
             foreach (KeyValuePair<string, (string Content, string? NoteId)> kvp in noteContents)
@@ -254,7 +252,7 @@ internal class Memory : Agent
 
         if (noteContents.Count == 0)
         {
-            Common.Logger.LogInformation("[Memory] complete {Seconds}s, {Tokens} tokens, {TokPerSec} t/s — no memories recalled",
+            Shared.Logger.LogInformation("[Memory] complete {Seconds}s, {Tokens} tokens, {TokPerSec} t/s — no memories recalled",
                 totalTimer.Elapsed.TotalSeconds.ToString("F1"), totalTokens, totalTokPerSec.ToString("F1"));
             return string.Empty;
         }
@@ -271,7 +269,7 @@ internal class Memory : Agent
             result.AppendLine();
         }
 
-        Common.Logger.LogInformation("[Memory] complete {Seconds}s, {Tokens} tokens, {TokPerSec} t/s",
+        Shared.Logger.LogInformation("[Memory] complete {Seconds}s, {Tokens} tokens, {TokPerSec} t/s",
             totalTimer.Elapsed.TotalSeconds.ToString("F1"), totalTokens, totalTokPerSec.ToString("F1"));
         return result.ToString().TrimEnd();
     }
@@ -289,10 +287,10 @@ internal class Memory : Agent
         totalSeconds += elapsed;
 
         if (recalled is null || recalled.Count == 0)
-            Common.Logger.LogInformation("[Memory] No memories recalled ({Tokens} tokens, {TokPerSec} t/s)",
+            Shared.Logger.LogInformation("[Memory] No memories recalled ({Tokens} tokens, {TokPerSec} t/s)",
                 tokens, tokPerSec.ToString("F1"));
         else
-            Common.Logger.LogInformation("[Memory] Recalled {Notes} ({Tokens} tokens, {TokPerSec} t/s)",
+            Shared.Logger.LogInformation("[Memory] Recalled {Notes} ({Tokens} tokens, {TokPerSec} t/s)",
                 string.Join(", ", recalled.Select(n => $"[{n}]")), tokens, tokPerSec.ToString("F1"));
     }
 

@@ -2,7 +2,7 @@ namespace ARI.LLM;
 
 internal class Classifier : Agent
 {
-    internal Classifier(AgentConfig config) : base(config) { }
+    internal Classifier() { }
 
     internal override ThreadType Type => ThreadType.Classifier;
 

@@ -1,4 +1,5 @@
 using ARI.Brain;
+using ARI.LLM;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ARI.API.Controllers;
@@ -10,9 +11,9 @@ namespace ARI.API.Controllers;
 /// </summary>
 [Route("api/cp/brain")]
 [ApiController]
-public class BrainController(LlmServiceHolder holder) : ControllerBase
+public class BrainController(LLMModule? llm) : ControllerBase
 {
-    private ARI.LLM.LlmService? Llm => holder.Service;
+    private LLMModule? Llm => llm;
 
     /// <summary>Lists available backups, newest first.</summary>
     [HttpGet("backups")]

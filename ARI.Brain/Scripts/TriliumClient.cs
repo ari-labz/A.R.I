@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ARI.Common;
 using Microsoft.Extensions.Logging;
 
 namespace ARI.Brain;
@@ -234,18 +235,18 @@ public class TriliumClient
                 bool incomingIsUnknown = folderPath == "Unknown";
                 if (existingIsUnknown && !incomingIsUnknown)
                 {
-                    Common.Logger.LogWarning("[Brain] Duplicate note title '{Title}' — preferring '{Incoming}' over Unknown stub.", title, folderPath.Length > 0 ? $"{folderPath}/{title}" : title);
+                    Shared.Logger.LogWarning("[Brain] Duplicate note title '{Title}' — preferring '{Incoming}' over Unknown stub.", title, folderPath.Length > 0 ? $"{folderPath}/{title}" : title);
                     suppressedStubIds.Add(existing.Id); // old Unknown stub — schedule for deletion
                     result[title] = (id, folderPath, branchId);
                 }
                 else if (!existingIsUnknown && incomingIsUnknown)
                 {
-                    Common.Logger.LogWarning("[Brain] Duplicate note title '{Title}' — keeping '{Existing}', ignoring Unknown stub.", title, existing.FolderPath.Length > 0 ? $"{existing.FolderPath}/{title}" : title);
+                    Shared.Logger.LogWarning("[Brain] Duplicate note title '{Title}' — keeping '{Existing}', ignoring Unknown stub.", title, existing.FolderPath.Length > 0 ? $"{existing.FolderPath}/{title}" : title);
                     suppressedStubIds.Add(id); // incoming Unknown stub — schedule for deletion
                 }
                 else
                 {
-                    Common.Logger.LogWarning("[Brain] Duplicate note title '{Title}' — keeping first occurrence, skipping second.", title);
+                    Shared.Logger.LogWarning("[Brain] Duplicate note title '{Title}' — keeping first occurrence, skipping second.", title);
                 }
             }
         }
@@ -282,7 +283,7 @@ public class TriliumClient
             }
             catch (Exception ex)
             {
-                Common.Logger.LogWarning("[Brain] Failed to delete suppressed stub {Id}: {Message}", id, ex.Message);
+                Shared.Logger.LogWarning("[Brain] Failed to delete suppressed stub {Id}: {Message}", id, ex.Message);
             }
         }
         return deleted;
@@ -324,7 +325,7 @@ public class TriliumClient
             int childCount = children?.Count(c => c?.GetValue<string>()?.StartsWith("_") == false) ?? 0;
             if (childCount > 0)
             {
-                Common.Logger.LogWarning("[Brain] Refusing to delete '{NoteId}' — it still has {Count} child note(s). Skipping to prevent cascade.", noteId, childCount);
+                Shared.Logger.LogWarning("[Brain] Refusing to delete '{NoteId}' — it still has {Count} child note(s). Skipping to prevent cascade.", noteId, childCount);
                 return false;
             }
         }

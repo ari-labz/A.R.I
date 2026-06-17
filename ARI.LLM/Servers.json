@@ -1,0 +1,26 @@
+{
+  "Servers": [
+    {
+      "name": "Logic",
+      "endpoint": "http://127.0.0.1",
+      "port": 8081,
+      "kvCache": 131072,
+      "parallelSlots": 1,
+      "kvCacheQuantK": 4,
+      "kvCacheQuantV": 4,
+      "bootStartup": true,
+      "currentModelName": "Qwen3-Coder-30B-A3B"
+    },
+    {
+      "name": "Dialogue",
+      "endpoint": "http://127.0.0.1",
+      "port": 8082,
+      "kvCache": 16384,
+      "parallelSlots": 1,
+      "kvCacheQuantK": 4,
+      "kvCacheQuantV": 4,
+      "bootStartup": true,
+      "currentModelName": "Gemma4-12B"
+    }
+  ]
+}

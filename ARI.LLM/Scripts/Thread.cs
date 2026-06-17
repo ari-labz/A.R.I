@@ -1,3 +1,4 @@
+using ARI.Common;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -240,13 +241,13 @@ public class Thread
     internal void MarkEngramProcessed()
     {
         State = ThreadState.Dormant;
-        Common.Logger.LogInformation("[Thread] ({ThreadKey}) dormant — scheduled for deletion in {Minutes:F1} minutes.", threadKey, DormantDuration.TotalMinutes);
+        Shared.Logger.LogInformation("[Thread] ({ThreadKey}) dormant — scheduled for deletion in {Minutes:F1} minutes.", threadKey, DormantDuration.TotalMinutes);
         dormantTimer = new Timer(_ =>
         {
             State = ThreadState.Deleted;
             inactivityTimer?.Dispose();
             dormantTimer?.Dispose();
-            Common.Logger.LogInformation("[Thread] ({ThreadKey}) deleted.", threadKey);
+            Shared.Logger.LogInformation("[Thread] ({ThreadKey}) deleted.", threadKey);
             Deleted?.Invoke();
         }, null, DormantDuration, Timeout.InfiniteTimeSpan);
     }
@@ -544,7 +545,7 @@ public class Thread
         }
 
         if (!agent.QuietLogging && !agent.SuppressPromptLog)
-            Common.Logger.LogInformation("[{Agent}] ({Thread}) prompt\n\"{Prompt}\"", agent.Name, threadKey, prompt);
+            Shared.Logger.LogInformation("[{Agent}] ({Thread}) prompt\n\"{Prompt}\"", agent.Name, threadKey, prompt);
 
         int             maxTokens        = maxTokensOverride != 0 ? maxTokensOverride : agent.MaxTokens;
         int             toolCallCount    = 0;
@@ -665,7 +666,7 @@ public class Thread
         }
         else
         {
-            liveCallInfo = new LiveCallInfo(agent.Name, threadKey, estimatedTextTokens, maxTokens, agent.MaxContextTokens, agent.MaxImageTokens, hadImages);
+            liveCallInfo = new LiveCallInfo(agent.Name, threadKey, estimatedTextTokens, maxTokens, agent.MaxContextTokens, hadImages: hadImages);
         }
 
         // The response lives in History from the moment generation starts, so partial output
@@ -703,7 +704,7 @@ public class Thread
                                         : null;
 
             if (!agent.QuietLogging && toolCallCount == 0)
-                Common.Logger.LogInformation("[{Agent}] ({Thread}) {Tools}",
+                Shared.Logger.LogInformation("[{Agent}] ({Thread}) {Tools}",
                     agent.Name, threadKey,
                     toolSchemas is not null ? $"{toolSchemas.Length} tool(s) available: {string.Join(", ", tools.Keys)}" : "no tools registered");
 
@@ -764,7 +765,7 @@ public class Thread
                     if (parseFailures > 2)
                         throw new LlmRequestFailedException($"Tool call JSON parse failed {parseFailures} times in a row — aborting to prevent infinite loop.");
 
-                    Common.Logger.LogWarning("[{Agent}] ({Thread}) Tool call JSON parse failure — injecting recovery hint.", agent.Name, threadKey);
+                    Shared.Logger.LogWarning("[{Agent}] ({Thread}) Tool call JSON parse failure — injecting recovery hint.", agent.Name, threadKey);
                     string hint = "One of your tool call arguments contained characters (such as unescaped double-quotes in XML/XAML content) that made the JSON invalid. " +
                                   "Please retry: escape all double-quotes inside string values as \\\" and avoid raw newlines inside JSON strings.";
                     messages.Add(new { role = "user", content = hint });
@@ -831,7 +832,7 @@ public class Thread
                         if (!string.IsNullOrEmpty(thinkDelta) && !wasThinking)
                         {
                             if (!agent.Think)
-                                Common.Logger.LogWarning("[{Agent}] ({Thread}) thinking chain detected — <|think_off|> may not be working.", agent.Name, threadKey);
+                                Shared.Logger.LogWarning("[{Agent}] ({Thread}) thinking chain detected — <|think_off|> may not be working.", agent.Name, threadKey);
                             wasThinking = true;
                         }
                     }
@@ -850,7 +851,7 @@ public class Thread
                             {
                                 contentBuilder.Append(preText + "\n");
                                 if (!agent.QuietLogging)
-                                    Common.Logger.LogInformation("[{Agent}] ({Thread}) \"{Text}\"", agent.Name, threadKey, preText);
+                                    Shared.Logger.LogInformation("[{Agent}] ({Thread}) \"{Text}\"", agent.Name, threadKey, preText);
                             }
                             responseBuilder.Clear();
                             if (onDelta is not null) await onDelta(contentBuilder.ToString());
@@ -906,7 +907,7 @@ public class Thread
                                                 earlyEditAbortedOnce.Add(ekey);
                                                 earlyAbort = (call.Id, call.Name, call.Args.ToString(),
                                                     $"[System: Aborted before the edit completed — you have not read {editPath} this turn, so any old_string would be guessed and the edit would fail. Call preview_file then read_file (with start_line/end_line) on {editPath} first, then edit it.]");
-                                                Common.Logger.LogWarning("[{Agent}] ({Thread}) Streaming abort: edit_file on unread file '{File}' — generation cancelled mid-stream.", agent.Name, threadKey, editPath);
+                                                Shared.Logger.LogWarning("[{Agent}] ({Thread}) Streaming abort: edit_file on unread file '{File}' — generation cancelled mid-stream.", agent.Name, threadKey, editPath);
                                                 break;
                                             }
                                         }
@@ -1014,7 +1015,7 @@ public class Thread
                     Degrade();
                     if (consecutiveFallbacks > 3)
                         throw new LlmRequestFailedException($"Model stuck in tool_code_start fallback loop ({consecutiveFallbacks} consecutive) — aborting.");
-                    Common.Logger.LogWarning("[{Agent}] ({Thread}) model used <|tool_code_start|> format — cannot parse, injecting correction.", agent.Name, threadKey);
+                    Shared.Logger.LogWarning("[{Agent}] ({Thread}) model used <|tool_code_start|> format — cannot parse, injecting correction.", agent.Name, threadKey);
                     messages.Add(new { role = "assistant", content = rawResponse.Replace("<|tool_code_start|>", "").Replace("<|tool_code_end|>", "").Replace("<|tool_call|>", "").Trim() });
                     messages.Add(new { role = "user", content = "[System: Your last response contained tool call markers (<|tool_code_start|> or <|tool_call|>) with no parseable arguments. Do not use these markers. Issue tool calls using only the proper JSON function-call format.]" });
                     responseBuilder.Clear();
@@ -1028,7 +1029,7 @@ public class Thread
                     Degrade();
                     if (consecutiveFallbacks > 3)
                         throw new LlmRequestFailedException($"Model stuck in text tool call fallback loop ({consecutiveFallbacks} consecutive) — aborting.");
-                    Common.Logger.LogWarning("[{Agent}] ({Thread}) model used text tool call format — parsing fallback.", agent.Name, threadKey);
+                    Shared.Logger.LogWarning("[{Agent}] ({Thread}) model used text tool call format — parsing fallback.", agent.Name, threadKey);
                     int fakeIndex = 0;
                     foreach (ToolCallParser.Call c in textCalls)
                         pendingCalls[fakeIndex++] = (c.Id, c.Name, new StringBuilder(c.Args));
@@ -1047,7 +1048,7 @@ public class Thread
                         Degrade();
                         if (consecutiveFallbacks > 3)
                             throw new LlmRequestFailedException($"Model stuck in XML tool call fallback loop ({consecutiveFallbacks} consecutive) — aborting.");
-                        Common.Logger.LogWarning("[{Agent}] ({Thread}) model used Qwen3 XML tool call format — parsing fallback.", agent.Name, threadKey);
+                        Shared.Logger.LogWarning("[{Agent}] ({Thread}) model used Qwen3 XML tool call format — parsing fallback.", agent.Name, threadKey);
 
                         // Preserve the full original response (with XML) as the assistant turn
                         xmlFallbackOriginalText = responseBuilder.ToString();
@@ -1078,9 +1079,9 @@ public class Thread
                     string repaired = ToolCallParser.RepairArgs(stripped);
 
                     if (stripped != raw)
-                        Common.Logger.LogWarning("[{Agent}] ({Thread}) Stripped <think> leakage from args for tool '{Tool}'.", agent.Name, threadKey, name);
+                        Shared.Logger.LogWarning("[{Agent}] ({Thread}) Stripped <think> leakage from args for tool '{Tool}'.", agent.Name, threadKey, name);
                     if (repaired != stripped)
-                        Common.Logger.LogWarning("[{Agent}] ({Thread}) Repaired malformed JSON args for tool '{Tool}'.", agent.Name, threadKey, name);
+                        Shared.Logger.LogWarning("[{Agent}] ({Thread}) Repaired malformed JSON args for tool '{Tool}'.", agent.Name, threadKey, name);
 
                     if (repaired != raw)
                         pendingCalls[key] = (id, name, new StringBuilder(repaired));
@@ -1289,7 +1290,7 @@ public class Thread
                                 result = buildState == 2
                                     ? "[System: The build is currently failing — do not run tests yet. Fix the build errors first (run the build, resolve every reported error), then run the tests once it builds cleanly.]"
                                     : "[System: Build before you test. Run the build first (e.g. 'dotnet build' on the project you changed) and confirm it reports no errors; only run tests if the build succeeds, otherwise you are testing stale binaries.]";
-                                Common.Logger.LogInformation("[{Agent}] ({Thread}) blocked test before {State} build: {Cmd}", agent.Name, threadKey, buildState == 2 ? "failed" : "successful", cmdLine);
+                                Shared.Logger.LogInformation("[{Agent}] ({Thread}) blocked test before {State} build: {Cmd}", agent.Name, threadKey, buildState == 2 ? "failed" : "successful", cmdLine);
                                 contentBuilder.Append($"<!--ari-tool-error:run_command::{ToolCallParser.EscapeLabel(result)}-->");
                                 if (onDelta is not null) await onDelta(contentBuilder.ToString());
                                 if (isXmlFallback) { xmlResultsMsg!.AppendLine($"--- {call.Name} ---"); xmlResultsMsg.AppendLine(result); xmlResultsMsg.AppendLine(); }
@@ -1428,7 +1429,7 @@ public class Thread
                                 {
                                     forceNoMoreTools = true;
                                     result += " This file has been written too many times this turn. No further tool calls will be accepted — tell the user the file has been updated and stop.";
-                                    Common.Logger.LogWarning("[{Agent}] ({Thread}) write_file called {Count}x on '{File}' — cutting off tools for this turn.", agent.Name, threadKey, wc, writePath);
+                                    Shared.Logger.LogWarning("[{Agent}] ({Thread}) write_file called {Count}x on '{File}' — cutting off tools for this turn.", agent.Name, threadKey, wc, writePath);
                                 }
                             }
                             catch { /* ignore */ }
@@ -1436,7 +1437,7 @@ public class Thread
 
                         if (ToolCallParser.IsError(result))
                         {
-                            Common.Logger.LogError("[{Agent}] ({Thread}) Tool '{Tool}' failed: {Error}", agent.Name, threadKey, call.Name, result);
+                            Shared.Logger.LogError("[{Agent}] ({Thread}) Tool '{Tool}' failed: {Error}", agent.Name, threadKey, call.Name, result);
                             string errLabel = "";
                             try
                             {
@@ -1459,7 +1460,7 @@ public class Thread
                     else
                     {
                         result = $"[Error: tool '{call.Name}' is not registered]";
-                        Common.Logger.LogError("[{Agent}] ({Thread}) Model called unknown tool '{Tool}'", agent.Name, threadKey, call.Name);
+                        Shared.Logger.LogError("[{Agent}] ({Thread}) Model called unknown tool '{Tool}'", agent.Name, threadKey, call.Name);
                         contentBuilder.Append($"<!--ari-tool-error:{call.Name}:{ToolCallParser.EscapeLabel(result)}-->");
                         if (onDelta is not null) await onDelta(contentBuilder.ToString());
                     }
@@ -1547,7 +1548,7 @@ public class Thread
             {
                 todoReminders++;
                 string pending = string.Join("\n", todos.Where(t => t.Status != "completed").Select(t => $"- {t.Content} ({t.Status})"));
-                Common.Logger.LogInformation("[{Agent}] ({Thread}) finish-time checklist reminder ({Count} incomplete).", agent.Name, threadKey, IncompleteTodoCount());
+                Shared.Logger.LogInformation("[{Agent}] ({Thread}) finish-time checklist reminder ({Count} incomplete).", agent.Name, threadKey, IncompleteTodoCount());
                 messages.Add(new { role = "user", content =
                     $"[System: You still have incomplete checklist items:\n{pending}\n" +
                     "Complete them now (make the changes, then call update_todos to mark them completed), " +
@@ -1572,7 +1573,7 @@ public class Thread
                 if (promisesAction && mentionsVerb)
                 {
                     continueNudges++;
-                    Common.Logger.LogInformation("[{Agent}] ({Thread}) premature-stop nudge — model announced an action without performing it.", agent.Name, threadKey);
+                    Shared.Logger.LogInformation("[{Agent}] ({Thread}) premature-stop nudge — model announced an action without performing it.", agent.Name, threadKey);
                     messages.Add(new { role = "user", content =
                         "[System: You described the next action but did not perform it — no tool call was made. If more work remains, issue the tool call now and keep going until the task is done (build first, then run tests only if the build succeeds). If you are genuinely finished, give your final summary to the user instead.]" });
                     responseBuilder.Clear();
@@ -1602,14 +1603,14 @@ public class Thread
 
         if (!agent.QuietLogging)
         {
-            Common.Logger.LogInformation("[{Agent}] ({Thread}) responded in {Seconds}s ({Tokens} tokens, {TokPerSec} t/s)",
+            Shared.Logger.LogInformation("[{Agent}] ({Thread}) responded in {Seconds}s ({Tokens} tokens, {TokPerSec} t/s)",
                 agent.Name, threadKey, elapsed.ToString("F1"), completionTokens, tokPerSec.ToString("F1"));
 
             if (maxTokens > 0 && completionTokens >= maxTokens * TOKEN_WARNING_RATIO)
-                Common.Logger.LogWarning("[{Agent}] ({Thread}) token usage at {Pct}% of limit ({Used}/{Max})",
+                Shared.Logger.LogWarning("[{Agent}] ({Thread}) token usage at {Pct}% of limit ({Used}/{Max})",
                     agent.Name, threadKey, (int)(completionTokens * 100.0 / maxTokens), completionTokens, maxTokens);
 
-            Common.Logger.LogInformation("[{Agent}] ({Thread}) response\n\"{Response}\"",
+            Shared.Logger.LogInformation("[{Agent}] ({Thread}) response\n\"{Response}\"",
                 agent.Name, threadKey, ExtractLogText(responseText));
         }
 
@@ -1630,7 +1631,7 @@ public class Thread
         ariResponse.ContextTokenLimit         = agent.MaxContextTokens;
         ariResponse.HadImageAttachments       = hadImages;
         ariResponse.EstimatedTextPromptTokens = estimatedTextTokens;
-        ariResponse.ImageTokenLimit           = agent.MaxImageTokens;
+        ariResponse.ImageTokenLimit           = 0;
         ariResponse.State                     = AriResponseState.Complete;
         streamingResponse                     = null;
         Updated?.Invoke();

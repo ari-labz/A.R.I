@@ -15,9 +15,9 @@ namespace ARI.API.Controllers;
 
 [Route("api/threads")]
 [ApiController]
-public class ThreadsController(LlmServiceHolder holder, ProjectStore projectStore) : ControllerBase
+public class ThreadsController(LLMModule? llm, ProjectStore projectStore) : ControllerBase
 {
-    private LlmService? Llm => holder.Service;
+    private LLMModule? Llm => llm;
 
     // Maps threadKey → projectId — backed by a persistent JSON file so it survives rebuilds
     private static ConcurrentDictionary<string, string>? _threadProjects;

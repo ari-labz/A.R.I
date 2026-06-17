@@ -1,4 +1,8 @@
 using ARI.API.Controllers;
+using ARI.API.Data;
+using ARI.LLM;
+using ARI.Voice;
+using ARI.VoiceSynthesis;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
@@ -13,34 +17,16 @@ using System.Security.Claims;
 
 namespace ARI.API;
 
-public class APIConfig
-{
-    public int Port { get; init; } = 5000;
-    public string GoogleClientId { get; init; } = "";
-    public string GoogleClientSecret { get; init; } = "";
-    public string AllowedEmail { get; init; } = "";
-    public IReadOnlyList<string> AllowedEmails { get; init; } = Array.Empty<string>();
-
-    /// <summary>Returns the effective allowlist — AllowedEmails if populated, otherwise the single AllowedEmail.</summary>
-    internal IReadOnlyList<string> EffectiveAllowedEmails =>
-        AllowedEmails.Count > 0 ? AllowedEmails : (AllowedEmail.Length > 0 ? new[] { AllowedEmail } : Array.Empty<string>());
-    public string LogPath    { get; init; } = "";
-    public string StyleTtsPath { get; init; } = "";
-    public string VoicesPath   { get; init; } = "";
-}
-
 public class APIModule : IAsyncDisposable
 {
-    private readonly ILoggerFactory loggerFactory;
-    private readonly LlmServiceHolder    holder;
-    private readonly APIConfig      config;
-    private readonly SystemInfoHolder    systemInfo;
-    private readonly DiscordServiceHolder discordHolder;
-    private readonly SpeechQueueHolder   speechHolder;
-    private readonly VoiceTrainerHolder  trainerHolder;
-    private readonly ModelManagerHolder  modelManagerHolder;
-    private readonly ModelNotesStore     modelNotesStore;
-    private readonly ModelSettingsStore  modelSettingsStore;
+    private readonly ILoggerFactory        loggerFactory;
+    private readonly APIConfig             config;
+    private readonly VoiceSynthesisConfig  voiceSynthesisConfig;
+    private readonly LLMModule?            llm;
+    private readonly PersistentData        persistentData;
+    private readonly VoiceModule?             voiceService;
+    private readonly VoiceSynthesisModule     voiceTraining;
+    private readonly SystemInfo            systemInfo;
     private WebApplication? app;
 
     // Cached internet connectivity — checked every 30 s in the background.
@@ -53,39 +39,36 @@ public class APIModule : IAsyncDisposable
         catch { _online = false; }
     }, null, TimeSpan.Zero, TimeSpan.FromSeconds(30));
 
-    public LlmServiceHolder     Holder             => holder;
-    public SystemInfoHolder     SystemInfo         => systemInfo;
-    public DiscordServiceHolder DiscordHolder      => discordHolder;
-    public SpeechQueueHolder    SpeechHolder       => speechHolder;
-    public VoiceTrainerHolder   TrainerHolder      => trainerHolder;
-    public ModelManagerHolder   ModelManagerHolder  => modelManagerHolder;
-    public ModelNotesStore      ModelNotesStore     => modelNotesStore;
-    public ModelSettingsStore   ModelSettingsStore  => modelSettingsStore;
-
-    public APIModule(ILoggerFactory loggerFactory, APIConfig config)
+    public APIModule(
+        ILoggerFactory        loggerFactory,
+        APIConfig             config,
+        VoiceSynthesisConfig  voiceSynthesisConfig,
+        string                modelsPath,
+        LLMModule?            llm,
+        PersistentData        persistentData,
+        VoiceModule?          voiceService,
+        VoiceSynthesisModule  voiceTraining)
     {
-        this.loggerFactory     = loggerFactory;
-        this.holder            = new LlmServiceHolder();
-        this.config            = config;
-        this.modelManagerHolder  = new ModelManagerHolder();
-        this.modelNotesStore    = new ModelNotesStore();
-        this.modelSettingsStore = new ModelSettingsStore();
-        this.systemInfo        = new SystemInfoHolder(modelManagerHolder);
-        this.discordHolder     = new DiscordServiceHolder();
-        this.speechHolder      = new SpeechQueueHolder();
-        this.trainerHolder     = new VoiceTrainerHolder();
+        this.loggerFactory        = loggerFactory;
+        this.config               = config;
+        this.voiceSynthesisConfig = voiceSynthesisConfig;
+        this.llm                  = llm;
+        this.persistentData       = persistentData;
+        this.voiceService         = voiceService;
+        this.voiceTraining        = voiceTraining;
+        this.systemInfo           = new SystemInfo(llm, modelsPath);
     }
 
     public async Task Start(CancellationToken cancellationToken)
     {
-        string exeDir = AppContext.BaseDirectory;
-        // Prefer ARI.UI/dist (dev/source layout), fall back to wwwroot (deployed layout)
-        string uiDist    = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "..", "..", "ARI.UI", "dist"));
+        string exeDir     = AppContext.BaseDirectory;
+        string uiDist     = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "..", "..", "ARI.UI", "dist"));
         string wwwrootDir = Directory.Exists(uiDist) ? uiDist : Path.Combine(exeDir, "wwwroot");
+
         WebApplicationBuilder builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
             ContentRootPath = exeDir,
-            WebRootPath = wwwrootDir,
+            WebRootPath     = wwwrootDir,
         });
 
         builder.Logging.ClearProviders();
@@ -95,37 +78,36 @@ public class APIModule : IAsyncDisposable
         builder.WebHost.UseShutdownTimeout(TimeSpan.FromSeconds(2));
         builder.WebHost.ConfigureKestrel(k =>
         {
-            k.Limits.MaxRequestBodySize = 512L * 1024 * 1024; // 512 MB for voice training uploads
+            k.Limits.MaxRequestBodySize = 512L * 1024 * 1024;
         });
 
-        // Persist data protection keys so auth cookies survive restarts and rebuilds
         string keysDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "keys");
         Directory.CreateDirectory(keysDir);
         builder.Services.AddDataProtection()
             .PersistKeysToFileSystem(new System.IO.DirectoryInfo(keysDir))
             .SetApplicationName("ARI");
 
-        builder.Services.AddSingleton(holder);
+        // Register services directly — no holders, no post-build .Set() calls
         builder.Services.AddSingleton(config);
-        builder.Services.AddSingleton<ProjectStore>();
+        builder.Services.AddSingleton(voiceSynthesisConfig);
+        builder.Services.AddSingleton(persistentData);
+        builder.Services.AddSingleton(voiceTraining);
         builder.Services.AddSingleton(systemInfo);
-        builder.Services.AddSingleton(modelManagerHolder);
-        builder.Services.AddSingleton(modelNotesStore);
-        builder.Services.AddSingleton(modelSettingsStore);
-        builder.Services.AddSingleton(trainerHolder);
-        builder.Services.AddSingleton(new DiscordServiceHolder());
-        builder.Services.AddSingleton(speechHolder);
+        builder.Services.AddSingleton<ProjectStore>();
 
-        // Clear any stale staging folders from a previous run
+        // Optional services — registered only when the module is enabled
+        if (llm         is not null) builder.Services.AddSingleton(llm);
+        if (voiceService is not null) builder.Services.AddSingleton(voiceService);
+
+        // Clear stale staging folders from a previous run
         string stagingRoot = Path.Combine(Path.GetTempPath(), "ari-voice-staging");
         if (Directory.Exists(stagingRoot))
-        {
             try { Directory.Delete(stagingRoot, recursive: true); } catch { /* best-effort */ }
-        }
+
         builder.Services.AddControllers()
             .AddApplicationPart(typeof(ThreadsController).Assembly);
 
-        bool useGoogleAuth = !string.IsNullOrEmpty(config.GoogleClientId);
+        bool useGoogleAuth = !string.IsNullOrEmpty(config.Google.ClientId);
 
         var authBuilder = builder.Services.AddAuthentication(options =>
         {
@@ -135,8 +117,8 @@ public class APIModule : IAsyncDisposable
         })
         .AddCookie(options =>
         {
-            options.LoginPath = "/auth/login";
-            options.ExpireTimeSpan = TimeSpan.FromDays(30);
+            options.LoginPath       = "/auth/login";
+            options.ExpireTimeSpan  = TimeSpan.FromDays(30);
             options.SlidingExpiration = true;
             options.Events.OnSigningIn = ctx =>
             {
@@ -149,13 +131,13 @@ public class APIModule : IAsyncDisposable
         {
             authBuilder.AddGoogle(options =>
             {
-                options.ClientId = config.GoogleClientId;
-                options.ClientSecret = config.GoogleClientSecret;
+                options.ClientId     = config.Google.ClientId;
+                options.ClientSecret = config.Google.ClientSecret;
                 options.CallbackPath = "/auth/callback";
                 options.Events.OnTicketReceived = ctx =>
                 {
                     string? email = ctx.Principal?.FindFirstValue(ClaimTypes.Email);
-                    if (!config.EffectiveAllowedEmails.Any(e => string.Equals(email, e, StringComparison.OrdinalIgnoreCase)))
+                    if (!config.Google.AllowedEmails.Any(e => string.Equals(email, e, StringComparison.OrdinalIgnoreCase)))
                     {
                         ctx.Fail("Access denied.");
                         ctx.HandleResponse();
@@ -172,7 +154,7 @@ public class APIModule : IAsyncDisposable
 
         app.UseExceptionHandler(errorApp => errorApp.Run(async ctx =>
         {
-            var ex = ctx.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
+            var ex  = ctx.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
             var log = ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("ARI.API");
             log.LogError(ex, "Unhandled exception on {Method} {Path}", ctx.Request.Method, ctx.Request.Path);
 
@@ -190,10 +172,9 @@ public class APIModule : IAsyncDisposable
         app.UseStaticFiles(new StaticFileOptions
         {
             FileProvider = new PhysicalFileProvider(wwwrootDir),
-            RequestPath = "",
+            RequestPath  = "",
             OnPrepareResponse = ctx =>
             {
-                // Never cache index.html or the service worker — always fetch fresh
                 string file = ctx.File.Name;
                 if (file == "index.html" || file == "sw.js")
                 {
@@ -203,38 +184,27 @@ public class APIModule : IAsyncDisposable
                 }
                 else
                 {
-                    // Hashed assets (JS/CSS bundles) are immutable — cache forever
                     ctx.Context.Response.Headers["Cache-Control"] = "public, max-age=31536000, immutable";
                 }
             },
         });
 
-        // ── Desktop client WebSocket — MUST be before UseRouting so it
-        //    short-circuits before endpoint routing can intercept it ──────────────
+        // Desktop client WebSocket — MUST be before UseRouting
         app.UseWebSockets();
         app.Use(async (ctx, next) =>
         {
             if (ctx.Request.Path == "/api/client")
             {
-                if (!ctx.WebSockets.IsWebSocketRequest)
-                {
-                    ctx.Response.StatusCode = 400;
-                    return;
-                }
+                if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
 
-                var holder = ctx.RequestServices.GetRequiredService<LlmServiceHolder>();
-                if (holder.Service is null)
-                {
-                    ctx.Response.StatusCode = 503;
-                    return;
-                }
+                LLMModule? llmSvc = ctx.RequestServices.GetService<LLMModule>();
+                if (llmSvc is null) { ctx.Response.StatusCode = 503; return; }
 
-                var ws = await ctx.WebSockets.AcceptWebSocketAsync();
+                var ws  = await ctx.WebSockets.AcceptWebSocketAsync();
                 var log = ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("ARI.Client");
-                await ClientWebSocket.HandleAsync(ws, ctx, holder.Service, log);
-                return; // don't call next — request is fully handled
+                await ClientWebSocket.HandleAsync(ws, ctx, llmSvc, log);
+                return;
             }
-
             await next();
         });
 
@@ -242,14 +212,11 @@ public class APIModule : IAsyncDisposable
         app.UseAuthentication();
         app.UseAuthorization();
 
-        // Block all routes unless authenticated with the whitelisted email
         app.Use(async (ctx, next) =>
         {
-            // No Google credentials configured — run fully open (e.g. local training server)
-            if (string.IsNullOrEmpty(config.GoogleClientId)) { await next(); return; }
+            if (string.IsNullOrEmpty(config.Google.ClientId)) { await next(); return; }
 
-            // Localhost + offline: allow through (Google OAuth can't work without internet)
-            var remoteIp   = ctx.Connection.RemoteIpAddress;
+            var remoteIp     = ctx.Connection.RemoteIpAddress;
             bool isLocalhost = remoteIp != null && (System.Net.IPAddress.IsLoopback(remoteIp) || remoteIp.ToString() == "::1");
             if (isLocalhost && !_online) { await next(); return; }
 
@@ -267,7 +234,7 @@ public class APIModule : IAsyncDisposable
             if (ctx.User.Identity?.IsAuthenticated == true)
             {
                 string? email = ctx.User.FindFirstValue(ClaimTypes.Email);
-                if (!config.EffectiveAllowedEmails.Any(e => string.Equals(email, e, StringComparison.OrdinalIgnoreCase)))
+                if (!config.Google.AllowedEmails.Any(e => string.Equals(email, e, StringComparison.OrdinalIgnoreCase)))
                 {
                     await ctx.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
                     ctx.Response.Redirect("/auth/login?error=unauthorized");
@@ -284,13 +251,11 @@ public class APIModule : IAsyncDisposable
         });
 
         app.MapControllers();
-        // SPA fallback — any non-API, non-static path serves index.html
         app.MapFallbackToFile("index.html");
 
         await app.StartAsync(cancellationToken);
 
-        ILogger logger = loggerFactory.CreateLogger("ARI.API");
-        logger.LogInformation("ARI.API is ready. Listening on http://0.0.0.0:{Port}", config.Port);
+        loggerFactory.CreateLogger("ARI.API").LogInformation("ARI.API is ready. Listening on http://0.0.0.0:{Port}", config.Port);
     }
 
     public async Task Stop(CancellationToken cancellationToken)

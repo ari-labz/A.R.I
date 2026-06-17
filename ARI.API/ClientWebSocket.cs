@@ -25,7 +25,7 @@ public static class ClientWebSocket
         public ConcurrentDictionary<string, int>  EditFailures { get; } = new(StringComparer.OrdinalIgnoreCase);
     }
 
-    public static async Task HandleAsync(WebSocket ws, HttpContext ctx, LlmService llm, ILogger log)
+    public static async Task HandleAsync(WebSocket ws, HttpContext ctx, LLMModule llm, ILogger log)
     {
         // Use the threadKey from the query string if provided (binds tools to the active web-* thread)
         string threadKey = ctx.Request.Query.TryGetValue("threadKey", out var tkv) && !string.IsNullOrWhiteSpace(tkv)
@@ -533,7 +533,7 @@ public static class ClientWebSocket
     private sealed class ConnectionState { public string Root { get; set; } = ""; }
 
     private static async Task ReceiveLoop(
-        WebSocket ws, LlmService llm, ARI.LLM.Thread initialThread,
+        WebSocket ws, LLMModule llm, ARI.LLM.Thread initialThread,
         string initialThreadKey, List<string> fileTree, ConnectionState state,
         FileToolState fileState, ILogger log)
     {
