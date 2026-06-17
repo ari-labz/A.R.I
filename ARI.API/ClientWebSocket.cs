@@ -14,6 +14,17 @@ public static class ClientWebSocket
     private static readonly ConcurrentDictionary<string, TaskCompletionSource<string>> pendingFileCalls  = new();
     private static readonly ConcurrentDictionary<string, string>                       pendingCallLabels = new();
 
+    // Persistent per-thread file tool state — survives WebSocket reconnections until the thread is deleted.
+    private static readonly ConcurrentDictionary<string, FileToolState> threadFileState = new();
+
+    private sealed class FileToolState
+    {
+        // Files modified by write_file or edit_file this session. Must be re-read before further edits.
+        public ConcurrentDictionary<string, byte> DirtyFiles   { get; } = new(StringComparer.OrdinalIgnoreCase);
+        // Consecutive edit_file old_string failures per file. Reset on read_file.
+        public ConcurrentDictionary<string, int>  EditFailures { get; } = new(StringComparer.OrdinalIgnoreCase);
+    }
+
     public static async Task HandleAsync(WebSocket ws, HttpContext ctx, LlmService llm, ILogger log)
     {
         // Use the threadKey from the query string if provided (binds tools to the active web-* thread)
@@ -25,6 +36,9 @@ public static class ClientWebSocket
 
         var fileTree = new List<string>();
         var state    = new ConnectionState();
+
+        // Get or create persistent file-tool state for this thread.
+        FileToolState fileState = threadFileState.GetOrAdd(threadKey, _ => new FileToolState());
 
         ARI.LLM.Thread codeThread;
         try
@@ -39,12 +53,12 @@ public static class ClientWebSocket
             return;
         }
 
-        RegisterTools(codeThread, ws, log);
+        RegisterTools(codeThread, ws, log, fileState);
 
         try
         {
             log.LogInformation("[Client] Entering receive loop");
-            await ReceiveLoop(ws, llm, codeThread, threadKey, fileTree, state, log);
+            await ReceiveLoop(ws, llm, codeThread, threadKey, fileTree, state, fileState, log);
         }
         catch (Exception ex)
         {
@@ -62,7 +76,7 @@ public static class ClientWebSocket
         { "preview_file", "read_file", "list_directory", "search_files", "find_files", "edit_file", "write_file",
           "delete_file", "move_file", "run_command", "update_todos" };
 
-    private static void RegisterTools(ARI.LLM.Thread thread, WebSocket ws, ILogger log)
+    private static void RegisterTools(ARI.LLM.Thread thread, WebSocket ws, ILogger log, FileToolState fileState)
     {
         RegisterTool(thread, ws, log,
             name: "run_command",
@@ -71,7 +85,8 @@ public static class ClientWebSocket
             displayVerb: "Running", displayDoneVerb: "Ran",
             labelField: "command",
             customDisplay:     argsJson => RunCommandMarker(argsJson, "start"),
-            customDisplayDone: argsJson => RunCommandMarker(argsJson, "end"));
+            customDisplayDone: argsJson => RunCommandMarker(argsJson, "end"),
+            preCheck: argsJson => CheckRunCommand(argsJson));
 
         RegisterTool(thread, ws, log,
             name: "preview_file",
@@ -85,7 +100,8 @@ public static class ClientWebSocket
             description: "Read the contents of a file from the user's project.",
             parameters: new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" } }, required = new[] { "path" } },
             displayVerb: "Reading", displayDoneVerb: "Read",
-            labelField: "path");
+            labelField: "path",
+            postHook: (argsJson, result) => { ClearDirtyAndFailures(argsJson, fileState); return null; });
 
         RegisterTool(thread, ws, log,
             name: "list_directory",
@@ -140,7 +156,9 @@ public static class ClientWebSocket
                     return $"<!--ari-tool-end:edit_file:{label}|+{added}|-{removed}|{encoded}-->";
                 }
                 catch { return "<!--ari-tool-end:edit_file:file-->"; }
-            });
+            },
+            preCheck: argsJson => CheckDirty(argsJson, fileState),
+            postHook: (argsJson, result) => TrackEditResult(argsJson, result, fileState));
 
         RegisterTool(thread, ws, log,
             name: "write_file",
@@ -177,7 +195,9 @@ public static class ClientWebSocket
                     return $"<!--ari-tool-end:write_file:{label}|+{added}|{encoded}-->";
                 }
                 catch { return "<!--ari-tool-end:write_file:file-->"; }
-            });
+            },
+            preCheck: argsJson => CheckDirty(argsJson, fileState),
+            postHook: (argsJson, result) => { MarkWriteDirty(argsJson, result, fileState); return null; });
 
         RegisterTool(thread, ws, log,
             name: "find_files",
@@ -203,6 +223,107 @@ public static class ClientWebSocket
         // The checklist lives on the thread and must execute IN-PROCESS — never round-trip to the client.
         thread.RegisterTodosTool();
     }
+
+    // ── File-tool guardrail helpers ──────────────────────────────────────────────
+
+    /// <summary>Blocks run_command from being used as a file reader (cat/head/tail/etc. or bare filename).</summary>
+    private static string? CheckRunCommand(string argsJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(argsJson);
+            string cmd = (doc.RootElement.TryGetProperty("command", out var ce) ? ce.GetString() ?? "" : "").Trim();
+            if (string.IsNullOrWhiteSpace(cmd)) return null;
+
+            string firstToken = cmd.Split(' ', 2)[0].ToLowerInvariant();
+            if (firstToken is "cat" or "head" or "tail" or "sed" or "awk" or "type")
+                return $"Use read_file instead of '{firstToken}' to read files. Pass the file path directly to read_file.";
+
+            // Bare filename with a source-file extension — model trying to view a file via the shell
+            if (!cmd.Contains(' ') && LooksLikeFilePath(cmd))
+                return $"'{cmd}' looks like a file path. Use read_file to read file contents — do not pass file paths to run_command.";
+
+            return null;
+        }
+        catch { return null; }
+    }
+
+    private static bool LooksLikeFilePath(string cmd)
+    {
+        string ext = System.IO.Path.GetExtension(cmd);
+        if (string.IsNullOrEmpty(ext)) return false;
+        return ext.ToLowerInvariant() is ".cs" or ".xaml" or ".json" or ".xml" or ".md" or ".txt"
+            or ".js" or ".ts" or ".tsx" or ".css" or ".html" or ".yml" or ".yaml"
+            or ".csproj" or ".sln" or ".config" or ".toml" or ".py" or ".sh" or ".ps1";
+    }
+
+    /// <summary>Blocks edit_file or write_file if the file is dirty (modified since last read).</summary>
+    private static string? CheckDirty(string argsJson, FileToolState fileState)
+    {
+        string path = ExtractToolPath(argsJson);
+        if (!string.IsNullOrEmpty(path) && fileState.DirtyFiles.ContainsKey(path))
+            return $"[Blocked] '{path}' has been modified this session. You must call read_file on it before making further changes.";
+        return null;
+    }
+
+    /// <summary>On successful read_file, clears the dirty flag and failure count for that file.</summary>
+    private static void ClearDirtyAndFailures(string argsJson, FileToolState fileState)
+    {
+        string path = ExtractToolPath(argsJson);
+        if (!string.IsNullOrEmpty(path))
+        {
+            fileState.DirtyFiles.TryRemove(path, out _);
+            fileState.EditFailures.TryRemove(path, out _);
+        }
+    }
+
+    /// <summary>
+    /// Tracks edit_file outcomes. On success: marks dirty, resets failure count.
+    /// On old_string failure: increments counter; after 2 failures appends a hard block message.
+    /// </summary>
+    private static string? TrackEditResult(string argsJson, string result, FileToolState fileState)
+    {
+        string path = ExtractToolPath(argsJson);
+        if (string.IsNullOrEmpty(path)) return null;
+
+        bool isOldStringFailure = result.Contains("old_string not found", StringComparison.OrdinalIgnoreCase)
+                               || result.Contains("No changes made", StringComparison.OrdinalIgnoreCase);
+
+        if (isOldStringFailure)
+        {
+            int count = fileState.EditFailures.AddOrUpdate(path, 1, (_, c) => c + 1);
+            if (count >= 2)
+                return result + $"\n\n[BLOCKED] edit_file has failed {count} times on '{path}' due to old_string mismatches. You MUST call read_file on this file before attempting any further edits to it.";
+        }
+        else if (!result.StartsWith("[Error:", StringComparison.OrdinalIgnoreCase))
+        {
+            // Successful edit — mark dirty, reset failure counter
+            fileState.EditFailures.TryRemove(path, out _);
+            fileState.DirtyFiles.TryAdd(path, 0);
+        }
+
+        return null;
+    }
+
+    /// <summary>On successful write_file, marks the file as dirty.</summary>
+    private static void MarkWriteDirty(string argsJson, string result, FileToolState fileState)
+    {
+        string path = ExtractToolPath(argsJson);
+        if (!string.IsNullOrEmpty(path) && result.StartsWith("Successfully", StringComparison.OrdinalIgnoreCase))
+            fileState.DirtyFiles.TryAdd(path, 0);
+    }
+
+    private static string ExtractToolPath(string argsJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(argsJson);
+            return (doc.RootElement.TryGetProperty("path", out var pe) ? pe.GetString() ?? "" : "").Trim();
+        }
+        catch { return ""; }
+    }
+
+    // ── End guardrail helpers ────────────────────────────────────────────────────
 
     /// <summary>Compact, capped project map injected as persistent context so the model orients fast.</summary>
     private static string BuildProjectMap(List<string> files)
@@ -248,7 +369,9 @@ public static class ClientWebSocket
         string name, string description, object parameters,
         string displayVerb, string displayDoneVerb, string labelField,
         Func<string, string>? customDisplay     = null,
-        Func<string, string>? customDisplayDone = null)
+        Func<string, string>? customDisplayDone = null,
+        Func<string, string?>? preCheck         = null,
+        Func<string, string, string?>? postHook = null)
     {
         Func<string, string> MakeDisplay(string verb, string markerType) => argsJson =>
         {
@@ -294,6 +417,14 @@ public static class ClientWebSocket
             async argsJson =>
             {
                 argsJson = NormalizePathArg(argsJson);
+
+                // Pre-check: short-circuit before round-tripping to the client.
+                if (preCheck is not null)
+                {
+                    string? block = preCheck(argsJson);
+                    if (block is not null) return block;
+                }
+
                 string callId = Guid.NewGuid().ToString("N");
                 string label  = ExtractLogLabel(argsJson, labelField);
                 var tcs = new TaskCompletionSource<string>();
@@ -313,11 +444,11 @@ public static class ClientWebSocket
                 };
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
                 cts.Token.Register(() => tcs.TrySetCanceled());
+                string result;
                 try
                 {
-                    string result = await tcs.Task;
+                    result = await tcs.Task;
                     log.LogInformation("[Client] ← {Tool}  {Label}  callId={CallId}  bytes={Bytes}", name, label, callId, result.Length);
-                    return result;
                 }
                 catch (OperationCanceledException)
                 {
@@ -329,6 +460,15 @@ public static class ClientWebSocket
                     pendingFileCalls.TryRemove(callId, out _);
                     pendingCallLabels.TryRemove(callId, out _);
                 }
+
+                // Post-hook: may modify or augment the result (e.g. appending a block warning).
+                if (postHook is not null)
+                {
+                    string? modified = postHook(argsJson, result);
+                    if (modified is not null) result = modified;
+                }
+
+                return result;
             },
             displayFn,
             displayDoneFn,
@@ -394,7 +534,8 @@ public static class ClientWebSocket
 
     private static async Task ReceiveLoop(
         WebSocket ws, LlmService llm, ARI.LLM.Thread initialThread,
-        string initialThreadKey, List<string> fileTree, ConnectionState state, ILogger log)
+        string initialThreadKey, List<string> fileTree, ConnectionState state,
+        FileToolState fileState, ILogger log)
     {
         ARI.LLM.Thread codeThread = initialThread;
         string         threadKey  = initialThreadKey;
@@ -456,7 +597,8 @@ public static class ClientWebSocket
                                     foreach (string tool in ClientToolNames)
                                         codeThread.UnregisterTool(tool);
                                     codeThread = llm.GetOrCreateCodeThread(bindKey);
-                                    RegisterTools(codeThread, ws, log);
+                                    FileToolState reboundFileState = threadFileState.GetOrAdd(bindKey, _ => new FileToolState());
+                                    RegisterTools(codeThread, ws, log, reboundFileState);
                                     threadKey = bindKey;
                                 }
                             }

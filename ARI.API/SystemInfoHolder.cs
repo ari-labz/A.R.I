@@ -62,7 +62,7 @@ public class SystemInfoHolder
         foreach (KeyValuePair<string, ServerStatus> kv in modelManagerHolder.Servers)
         {
             ServerStatus server = kv.Value;
-            if (server.ActiveFile is null || server.Pid <= 0) continue;
+            if (server is null || server.ActiveFile is null || server.Pid <= 0) continue;
             ModelInfo? info = modelManagerHolder.AllModels.FirstOrDefault(m =>
                 string.Equals(m.File, server.ActiveFile, StringComparison.OrdinalIgnoreCase));
             long fileBytes = info?.FileSizeBytes ?? 0;

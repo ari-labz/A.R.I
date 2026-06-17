@@ -7,13 +7,13 @@ public class SpeechQueue : IDisposable
 {
     public event Action<byte[]>? AudioReady;
 
-    private readonly F5Synthesiser synthesiser;
+    private readonly StyleTtsSynthesiser synthesiser;
     private readonly Channel<string> queue;
     private readonly CancellationTokenSource cts;
     private readonly ILogger? logger;
     private readonly Task worker;
 
-    public SpeechQueue(F5Synthesiser synthesiser, ILogger? logger = null)
+    public SpeechQueue(StyleTtsSynthesiser synthesiser, ILogger? logger = null)
     {
         this.synthesiser = synthesiser;
         this.logger      = logger;

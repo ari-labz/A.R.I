@@ -21,6 +21,8 @@ public class EngramDelete
     public string Reason   { get; init; } = string.Empty; // logged but not written to Trilium
 }
 
+public record BackupInfo(string FileName, DateTime Created, long SizeBytes, int NoteCount);
+
 public class EngramMerge
 {
     public string From   { get; init; } = string.Empty; // title of the duplicate note to fold away (the loser)

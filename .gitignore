@@ -438,6 +438,11 @@ FodyWeavers.xsd
 # Downloaded model files
 /Models/
 
+# StyleTTS2 — entire repo is a git submodule / external clone; exclude large runtime dirs
+External/StyleTTS2/venv/
+External/StyleTTS2/Data/
+External/StyleTTS2/Models/
+
 # F5-TTS — entire venv and downloaded base model weights (auto-installed at runtime)
 External/F5TTS/venv/
 External/F5TTS/ckpts/

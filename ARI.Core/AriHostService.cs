@@ -17,7 +17,7 @@ public class AriHostService : BackgroundService
     private ModelManager? modelManager;
     private DiscordService? discordService;
     private ApiService? webPanelService;
-    private F5Synthesiser? synthesiser;
+    private StyleTtsSynthesiser? synthesiser;
     private SpeechQueue? speechQueue;
     private bool containersStarted;
     private bool startupFailed;
@@ -54,93 +54,101 @@ public class AriHostService : BackgroundService
         {
             Common.Logger.LogInformation("Web panel module is enabled. Starting on port {Port}...", config.WebPanel.Port);
 
-            string f5Path     = ResolvePath(executableDirectory, config.Modules.VoiceSynthesis ? config.VoiceSynthesis.F5Path : "");
-            string voicesPath = ResolvePath(executableDirectory, config.Modules.VoiceSynthesis ? config.VoiceSynthesis.VoicesPath : "");
+            string styleTtsPath = ResolvePath(executableDirectory, config.Modules.VoiceSynthesis ? config.VoiceSynthesis.StyleTtsPath : "");
+            string voicesPath   = ResolvePath(executableDirectory, config.Modules.VoiceSynthesis ? config.VoiceSynthesis.VoicesPath   : "");
 
             webPanelService = new ApiService(loggerFactory, new ARI.API.WebPanelConfig
             {
                 Port               = config.WebPanel.Port,
-                GoogleClientId     = config.WebPanel.Google.ClientId,
-                GoogleClientSecret = config.WebPanel.Google.ClientSecret,
-                AllowedEmail       = config.WebPanel.Google.AllowedEmail,
-                AllowedEmails      = config.WebPanel.Google.EffectiveAllowedEmails.ToList(),
+                GoogleClientId     = config.Modules.GoogleOAuth ? config.WebPanel.Google.ClientId     : "",
+                GoogleClientSecret = config.Modules.GoogleOAuth ? config.WebPanel.Google.ClientSecret : "",
+                AllowedEmail       = config.Modules.GoogleOAuth ? config.WebPanel.Google.AllowedEmail : "",
+                AllowedEmails      = config.Modules.GoogleOAuth ? config.WebPanel.Google.EffectiveAllowedEmails.ToList() : new(),
                 LogPath            = Path.Combine(executableDirectory, "ARI.log"),
-                F5Path             = f5Path,
+                StyleTtsPath       = styleTtsPath,
                 VoicesPath         = voicesPath,
             });
             await webPanelService.Start(stoppingToken);
         }
 
-        string fullComposePath = Path.Combine(executableDirectory, config.Docker.ComposePath);
-        docker = new Docker(fullComposePath);
+        if (config.Modules.Docker)
+        {
+            string fullComposePath = Path.Combine(executableDirectory, config.Docker.ComposePath);
+            docker = new Docker(fullComposePath);
+            await Dependency.CheckDocker();
+            await docker.IsRunning();
+            await docker.StartContainers();
+            containersStarted = true;
+        }
 
-        await Dependency.CheckDocker();
-        await Dependency.CheckPython();
+        LlmService? llmService = null;
+        if (config.Modules.Llm)
+        {
+            await Dependency.CheckPython();
 
-        await docker.IsRunning();
-        await docker.StartContainers();
-        containersStarted = true;
+            modelManager = new ModelManager(config.Llm, executableDirectory, webPanelService!.ModelManagerHolder, loggerFactory);
+            await modelManager.StartAllServersAsync();
 
-        modelManager = new ModelManager(config.Llm, executableDirectory, webPanelService!.ModelManagerHolder, loggerFactory);
-        await modelManager.StartAllServersAsync();
+            Dictionary<string, string> serverEndpoints = config.Llm.Servers
+                .Where(s => !string.IsNullOrWhiteSpace(s.Name) && !string.IsNullOrWhiteSpace(s.Endpoint))
+                .ToDictionary(s => s.Name, s => s.Endpoint);
 
-        Dictionary<string, string> serverEndpoints = config.Llm.Servers
-            .Where(s => !string.IsNullOrWhiteSpace(s.Name) && !string.IsNullOrWhiteSpace(s.Endpoint))
-            .ToDictionary(s => s.Name, s => s.Endpoint);
+            ARI.Brain.BrainConfig? brainConfig = config.Modules.Brain ? config.Brain : null;
 
-        Common.Logger.LogInformation("Loading agents...");
-        LlmService llmService = new LlmService(config.Agents, serverEndpoints, config.Brain, loggerFactory);
-        Common.Logger.LogInformation("Agents loaded.");
+            Common.Logger.LogInformation("Loading agents...");
+            llmService = new LlmService(config.Agents, serverEndpoints, brainConfig, loggerFactory);
+            Common.Logger.LogInformation("Agents loaded.");
+
+            webPanelService?.Holder.Set(llmService);
+        }
 
         Common.Logger.LogInformation("ARI is ready.");
 
-        webPanelService?.Holder.Set(llmService);
-
-        if (config.Modules.Client)
+        if (config.Modules.Client && config.Modules.WebPanel)
             LaunchClient(executableDirectory, config.WebPanel.Port);
 
         List<Task> moduleTasks = new();
 
         if (config.Modules.VoiceSynthesis)
         {
-            Common.Logger.LogInformation("VoiceSynthesis module is enabled. Installing F5-TTS...");
-            string f5Path = ResolvePath(executableDirectory, config.VoiceSynthesis.F5Path);
-            string voicesPath = ResolvePath(executableDirectory, config.VoiceSynthesis.VoicesPath);
-            F5SetupService setup = new(f5Path, loggerFactory.CreateLogger("ARI.VoiceSynthesis"));
+            Common.Logger.LogInformation("VoiceSynthesis module is enabled. Installing StyleTTS2...");
+            string sttPath = ResolvePath(executableDirectory, config.VoiceSynthesis.StyleTtsPath);
+            StyleTtsSetupService setup = new(sttPath, loggerFactory.CreateLogger("ARI.VoiceSynthesis"));
             await setup.Install();
+            webPanelService?.TrainerHolder.MarkSetupComplete();
+            Common.Logger.LogInformation("VoiceSynthesis ready.");
         }
 
         if (config.Modules.Voice)
         {
-            string f5Path     = ResolvePath(executableDirectory, config.VoiceSynthesis.F5Path);
+            string sttPath    = ResolvePath(executableDirectory, config.VoiceSynthesis.StyleTtsPath);
             string voicesPath = ResolvePath(executableDirectory, config.VoiceSynthesis.VoicesPath);
-            string modelName     = config.Voice.ModelName;
-            string modelDir      = Path.Combine(voicesPath, modelName);
-            string fp16Path      = Path.Combine(modelDir, "model_infer_fp16.pt");
-            string trainingPath  = Path.Combine(modelDir, "model_last.pt");
-            string modelPath     = File.Exists(fp16Path) ? fp16Path : trainingPath;
-            string refAudio      = FindReferenceAudio(f5Path, modelName);
+            string modelName  = config.Voice.ModelName;
+            string modelDir   = Path.Combine(voicesPath, modelName);
+            string modelPath    = Path.Combine(modelDir, "model.pth");
+            string configPath   = Path.Combine(modelDir, "config.yml");
+            string refAudioPath = FindReferenceAudio(modelDir, sttPath, modelName);
 
-            if (!File.Exists(modelPath))
+            if (!File.Exists(modelPath) || !File.Exists(configPath))
             {
-                Common.Logger.LogWarning("Voice module enabled but no model found at {Path} — skipping.", modelPath);
+                Common.Logger.LogWarning("Voice module enabled but no model found at {Path} — skipping.", modelDir);
             }
-            else if (string.IsNullOrEmpty(refAudio))
+            else if (string.IsNullOrEmpty(refAudioPath))
             {
                 Common.Logger.LogWarning("Voice module enabled but no reference audio found for {Model} — skipping.", modelName);
             }
             else
             {
                 ILogger voiceLogger = loggerFactory.CreateLogger("ARI.Voice");
-                Common.Logger.LogInformation("Voice loading model: {Path}", Path.GetFileName(modelPath));
-                synthesiser = new F5Synthesiser(f5Path, modelPath, refAudio, voiceLogger);
+                Common.Logger.LogInformation("Voice loading model: {Model}", modelName);
+                synthesiser = new StyleTtsSynthesiser(sttPath, modelPath, configPath, refAudioPath, voiceLogger);
                 await synthesiser.Start(stoppingToken);
 
-                Common.Logger.LogInformation("Voice warming up (caching reference audio)...");
+                Common.Logger.LogInformation("Voice warming up...");
                 await synthesiser.Warmup(stoppingToken);
 
                 speechQueue = new SpeechQueue(synthesiser, voiceLogger);
-                string pythonPath = Path.Combine(f5Path, "venv", "bin", "python");
+                string pythonPath = Path.Combine(sttPath, OperatingSystem.IsWindows() ? @"venv\Scripts\python.exe" : "venv/bin/python");
                 speechQueue.AudioReady += wav => PlayAudio(wav, pythonPath, voiceLogger);
 
                 webPanelService?.SpeechHolder.Set(synthesiser, speechQueue, modelName);
@@ -148,7 +156,7 @@ public class AriHostService : BackgroundService
             }
         }
 
-        if (config.Modules.Discord && config.Discord is not null)
+        if (config.Modules.Discord && config.Discord is not null && llmService is not null)
         {
             Common.Logger.LogInformation("Discord module is enabled. Starting...");
             discordService = new DiscordService(loggerFactory, llmService, config.Discord);
@@ -165,9 +173,14 @@ public class AriHostService : BackgroundService
             await Task.Delay(Timeout.Infinite, stoppingToken);
     }
 
-    private static string FindReferenceAudio(string f5Path, string modelName)
+    private static string FindReferenceAudio(string modelDir, string styleTtsPath, string modelName)
     {
-        string audioDir = Path.Combine(f5Path, "training", modelName, "audio");
+        // Prefer reference.wav bundled with the model
+        string bundled = Path.Combine(modelDir, "reference.wav");
+        if (File.Exists(bundled)) return bundled;
+
+        // Fall back to training wavs in External/StyleTTS2/Data
+        string audioDir = Path.Combine(styleTtsPath, "Data", modelName, "wavs");
         if (!Directory.Exists(audioDir)) return "";
         string[] wavs = Directory.GetFiles(audioDir, "*.wav");
         return wavs.Length > 0 ? wavs.OrderBy(f => f).First() : "";

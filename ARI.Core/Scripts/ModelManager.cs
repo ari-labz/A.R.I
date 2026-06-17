@@ -33,6 +33,7 @@ public class ModelManager : IDisposable
     public async Task StartAllServersAsync()
     {
         holder.RegisterSwitchDelegate((serverName, file) => BeginSwitch(serverName, file));
+        holder.RegisterPauseResumeDelegate(StopAllServersAsync, RestartAllServersAsync);
         PublishModelList();
 
         List<Task> boots = new();
@@ -60,6 +61,28 @@ public class ModelManager : IDisposable
         holder.SetServerModel(serverConfig.Name, targetFile, modelCfg.EffectiveName, server.Pid, serverConfig.ContextSize);
         logger.LogInformation("[ModelManager] Server '{Server}' ready — {Model} (PID {Pid}).",
             serverConfig.Name, modelCfg.EffectiveName, server.Pid);
+    }
+
+    public Task StopAllServersAsync()
+    {
+        foreach (var (server, _) in servers.Values)
+        {
+            server.Stop();
+            server.Dispose();
+        }
+        servers.Clear();
+        logger.LogInformation("[ModelManager] All llama servers stopped for voice training.");
+        return Task.CompletedTask;
+    }
+
+    public async Task RestartAllServersAsync()
+    {
+        logger.LogInformation("[ModelManager] Restarting llama servers after voice training...");
+        List<Task> boots = new();
+        foreach (LlamaServerConfig serverConfig in llmConfig.Servers)
+            boots.Add(BootServer(serverConfig));
+        await Task.WhenAll(boots);
+        PublishModelList();
     }
 
     public ModelSwitchJob BeginSwitch(string serverName, string relativeFile)

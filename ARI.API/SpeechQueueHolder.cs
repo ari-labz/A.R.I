@@ -4,15 +4,15 @@ namespace ARI.API;
 
 public class SpeechQueueHolder
 {
-    private F5Synthesiser? synthesiser;
-    private SpeechQueue?   queue;
+    private StyleTtsSynthesiser? synthesiser;
+    private SpeechQueue?         queue;
 
     public bool   IsReady     => synthesiser != null;
     public string ActiveModel { get; private set; } = "";
 
-    public void Set(F5Synthesiser f5, SpeechQueue speechQueue, string modelName)
+    public void Set(StyleTtsSynthesiser stt, SpeechQueue speechQueue, string modelName)
     {
-        synthesiser = f5;
+        synthesiser = stt;
         queue       = speechQueue;
         ActiveModel = modelName;
     }
