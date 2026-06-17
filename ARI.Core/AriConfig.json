@@ -11,7 +11,7 @@
     "Client": true
   },
   "Voice": {
-    "ModelName": "Voice"
+    "ModelName": "Voice v1"
   },
   "VoiceSynthesis": {
     "StyleTtsPath": "../../../../External/StyleTTS2",

@@ -46,7 +46,13 @@ public class StyleTtsTrainer(
         string trainList = await Transcribe(audioDir, workDir, ct);
 
         progress?.Report(new TrainingProgress("Preparing", 25, "Downloading pretrained model if needed"));
-        string pretrainedModel = await EnsurePretrainedModel(ct);
+        string baseModel = await EnsurePretrainedModel(ct);
+
+        // Resume from existing checkpoint if one exists for this model name
+        string existingModel = Path.Combine(outputDir, "model.pth");
+        string pretrainedModel = File.Exists(existingModel) ? existingModel : baseModel;
+        if (pretrainedModel == existingModel)
+            logger?.LogInformation("[StyleTTS2-Train] Resuming from existing checkpoint: {Path}", existingModel);
 
         string configPath = WriteTrainingConfig(workDir, trainList, audioDir, outputDir, pretrainedModel);
 
@@ -273,10 +279,17 @@ slmadv_params:
         using Process process = Process.Start(info)
             ?? throw new InvalidOperationException("Failed to start StyleTTS2 training process.");
 
+        // Kill the entire process tree when the token is cancelled so PyTorch doesn't
+        // outlive ARI as an orphan and consume all system memory.
+        using CancellationTokenRegistration killReg = ct.Register(() =>
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+        });
+
         _ = Task.Run(async () =>
         {
             string? line;
-            while ((line = await process.StandardOutput.ReadLineAsync(ct)) != null)
+            while ((line = await process.StandardOutput.ReadLineAsync(CancellationToken.None)) != null)
             {
                 if (!string.IsNullOrWhiteSpace(line))
                     logger?.LogInformation("[StyleTTS2-Train] {Line}", line);
@@ -284,23 +297,23 @@ slmadv_params:
                 if (update != null)
                     progress?.Report(update);
             }
-        }, ct);
+        }, CancellationToken.None);
 
         var stderrLines = new System.Text.StringBuilder();
         _ = Task.Run(async () =>
         {
             string? line;
-            while ((line = await process.StandardError.ReadLineAsync(ct)) != null)
+            while ((line = await process.StandardError.ReadLineAsync(CancellationToken.None)) != null)
             {
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 stderrLines.AppendLine(line);
                 logger?.LogInformation("[StyleTTS2-Train] {Line}", line);
             }
-        }, ct);
+        }, CancellationToken.None);
 
-        await process.WaitForExitAsync(ct);
+        await process.WaitForExitAsync(CancellationToken.None);
 
-        if (process.ExitCode != 0)
+        if (process.ExitCode != 0 && !ct.IsCancellationRequested)
             throw new Exception($"StyleTTS2 training failed:\n{stderrLines}");
     }
 
@@ -387,7 +400,7 @@ slmadv_params:
 
     private static readonly (string Wrong, string Right)[] NameFixes =
     [
-        ("Shubhi", "Voice"), ("Shubey", "Voice"), ("Shuvi", "Voice"), ("Shuby", "Voice"),
+        ("Shubhi", "Voice"), ("Shubey", "Voice"), ("Shuby", "Voice"),
         ("Shubie", "Voice"), ("Shubi", "Voice"), ("Shuwi", "Voice"),
     ];
 
