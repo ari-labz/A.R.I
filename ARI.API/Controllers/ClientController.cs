@@ -13,10 +13,10 @@ namespace ARI.API.Controllers;
 [ApiController]
 public class ClientController : ControllerBase
 {
-    private readonly LlmServiceHolder llmHolder;
+    private readonly LLMModule? llmHolder;
     private readonly ILogger<ClientController> logger;
 
-    public ClientController(LlmServiceHolder llmHolder, ILogger<ClientController> logger)
+    public ClientController(LLMModule? llmHolder, ILogger<ClientController> logger)
     {
         this.llmHolder = llmHolder;
         this.logger    = logger;
@@ -37,7 +37,7 @@ public class ClientController : ControllerBase
             return;
         }
 
-        LlmService? llm = llmHolder.Service;
+        LLMModule? llm = llmHolder;
         if (llm is null)
         {
             HttpContext.Response.StatusCode = 503;
@@ -225,7 +225,7 @@ public class ClientController : ControllerBase
 
     private async Task ReceiveLoop(
         WebSocket ws,
-        LlmService llm,
+        LLMModule llm,
         ARI.LLM.Thread initialThread,
         string initialThreadKey,
         List<string> fileTree,

@@ -1,11 +1,13 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using System.Threading.Channels;
 using ARI.Brain;
+using ARI.Common;
 using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
-public class LlmService : IDisposable
+public class LLMModule : IDisposable
 {
     private readonly Dialogue?    dialogue;
     private readonly Code?        code;
@@ -27,92 +29,129 @@ public class LlmService : IDisposable
     // this and expose type-filtered views; the service navigates it directly.
     private readonly ConcurrentDictionary<string, Thread>                                         threads           = new();
 
+    private readonly List<Server>  _servers    = new();
+    private IReadOnlyList<Model>   _allModels  = Array.Empty<Model>();
+    private string                    _modelsPath = "";
+
+    /// <summary>All managed llama servers.</summary>
+    public IReadOnlyList<Server> Servers    => _servers;
+    public string                   ModelsPath => _modelsPath;
+
     /// <summary>All active agents, keyed by name. Navigate here to access threads and their data.</summary>
     public IReadOnlyDictionary<string, Agent> Agents => agentMap;
 
     /// <summary>Every thread across all pipelines, keyed by thread key. Each carries its <see cref="ThreadType"/>.</summary>
     public IReadOnlyDictionary<string, Thread> Threads => threads;
 
-    public LlmService(IReadOnlyList<AgentConfig> agents, IReadOnlyDictionary<string, string>? serverEndpoints = null, BrainConfig? brainConfig = null, ILoggerFactory? loggerFactory = null)
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        ReadCommentHandling = JsonCommentHandling.Skip
+    };
+
+    public LLMModule(IReadOnlyList<Server> servers, string agentsJsonPath, BrainConfig? brainConfig = null, ILoggerFactory? loggerFactory = null)
     {
         if (loggerFactory is not null)
-            Common.InitialiseLogger(loggerFactory);
+            Shared.InitialiseLogger(loggerFactory, "ARI.LLM");
 
-        // Resolve ServerName → endpoint for each agent before construction
-        if (serverEndpoints is not null)
-            foreach (AgentConfig cfg in agents)
-                if (serverEndpoints.TryGetValue(cfg.ServerName, out string? ep))
-                    cfg.Endpoint = ep;
+        _servers.AddRange(servers);
 
-        Dictionary<string, AgentConfig> enabledAgents = agents
-            .Where(m => m.Enabled)
-            .ToDictionary(m => m.Name);
+        Dictionary<string, string> serverEndpoints = servers.ToDictionary(s => s.Name, s => s.FullEndpoint);
+
+        Dictionary<string, JsonElement> rawAgents = new(StringComparer.OrdinalIgnoreCase);
+        if (File.Exists(agentsJsonPath))
+        {
+            using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(agentsJsonPath), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
+            if (doc.RootElement.TryGetProperty("Agents", out JsonElement arr))
+                foreach (JsonElement el in arr.EnumerateArray())
+                    if (el.TryGetProperty("name", out JsonElement nameEl) && nameEl.GetString() is string name)
+                        if (el.TryGetProperty("enabled", out JsonElement en) && en.GetBoolean())
+                            rawAgents[name] = el;
+        }
+
+        T Deserialize<T>(JsonElement el) where T : Agent
+        {
+            T agent = JsonSerializer.Deserialize<T>(el.GetRawText(), JsonOptions)!;
+            if (serverEndpoints.TryGetValue(agent.ServerName, out string? ep))
+                agent.Endpoint = ep;
+            return agent;
+        }
 
         brain = brainConfig is not null
             ? new BrainModule(brainConfig, loggerFactory)
             : null;
 
-        // Context is created first so it can be passed to Dialogue, which subscribes each new
-        // thread's ExchangeCompleted event to fire context.Update in the background.
-        if (enabledAgents.TryGetValue("Context", out AgentConfig? contextConfig))
+        if (rawAgents.TryGetValue("Context", out JsonElement contextEl))
         {
-            int memoryLimit = enabledAgents.TryGetValue("Dialogue", out AgentConfig? dlgCfg) ? dlgCfg.ShortTermMemoryLimit : 25;
-            context = new Context(contextConfig, memoryLimit);
+            context = Deserialize<Context>(contextEl);
+            int memoryLimit = rawAgents.TryGetValue("Dialogue", out JsonElement dlgEl)
+                ? JsonSerializer.Deserialize<Dialogue>(dlgEl.GetRawText(), JsonOptions)!.ShortTermMemoryLimit
+                : 25;
+            context.Init(memoryLimit);
             context.AttachRegistry(threads);
-            Common.Logger.LogInformation("Context tracker is active.");
+            Shared.Logger.LogInformation("Context tracker is active.");
         }
 
-        if (enabledAgents.TryGetValue("Dialogue", out AgentConfig? dialogueConfig))
+        if (rawAgents.TryGetValue("Dialogue", out JsonElement dialogueEl))
         {
-            dialogue = new Dialogue(dialogueConfig, context);
+            dialogue = Deserialize<Dialogue>(dialogueEl);
             dialogue.AttachRegistry(threads);
             dialogue.ThreadUpdated += key => NotifyWatchers(key);
             dialogue.ThreadDeleted += key => NotifyThreadDeleted(key);
             agentMap["Dialogue"] = dialogue;
         }
 
-        if (enabledAgents.TryGetValue("Code", out AgentConfig? codeConfig))
+        if (rawAgents.TryGetValue("Code", out JsonElement codeEl))
         {
-            code = new Code(codeConfig);
+            code = Deserialize<Code>(codeEl);
             code.AttachRegistry(threads);
             code.ThreadUpdated += key => NotifyWatchers(key);
             code.ThreadDeleted += key => NotifyThreadDeleted(key);
             agentMap["Code"] = code;
-            Common.Logger.LogInformation("Code agent is active. MaxContext: {Ctx} tokens.", codeConfig.MaxContextTokens);
+            Shared.Logger.LogInformation("Code agent is active. MaxContext: {Ctx} tokens.", code.MaxContextTokens);
         }
 
-        if (enabledAgents.TryGetValue("Classifier", out AgentConfig? classifierConfig))
+        if (rawAgents.TryGetValue("Classifier", out JsonElement classifierEl))
         {
-            classifier = new Classifier(classifierConfig);
+            classifier = Deserialize<Classifier>(classifierEl);
             classifier.AttachRegistry(threads);
-            Common.Logger.LogInformation("Classifier is active.");
+            Shared.Logger.LogInformation("Classifier is active.");
         }
 
-        if (brain is not null && enabledAgents.TryGetValue("Memory", out AgentConfig? memoryConfig) && memoryConfig.RecursiveBrainSearchDepth > 0)
+        if (brain is not null && rawAgents.TryGetValue("Memory", out JsonElement memoryEl))
         {
-            memory = new Memory(memoryConfig, brain, memoryConfig.RecursiveBrainSearchDepth, brain.BrainPublicUrl);
-            memory.AttachRegistry(threads);
-            agentMap["Memory"] = memory;
-            Common.Logger.LogInformation("Memory agent is active. Depth: {Depth}.", memoryConfig.RecursiveBrainSearchDepth);
+            Memory mem = Deserialize<Memory>(memoryEl);
+            if (mem.RecursiveBrainSearchDepth > 0)
+            {
+                memory = mem;
+                memory.brain          = brain;
+                memory.brainPublicUrl = brain.BrainPublicUrl;
+                memory.AttachRegistry(threads);
+                agentMap["Memory"] = memory;
+                Shared.Logger.LogInformation("Memory agent is active. Depth: {Depth}.", memory.RecursiveBrainSearchDepth);
+            }
         }
 
         if (brain is not null && dialogue is not null)
         {
-            if (enabledAgents.TryGetValue("Engram", out AgentConfig? engramConfig))
+            if (rawAgents.TryGetValue("Engram", out JsonElement engramEl))
             {
-                engram = new Engram(engramConfig, dialogue, brain, context, engramConfig.RecursiveBrainSearchDepth, brain.BrainPublicUrl);
+                engram = Deserialize<Engram>(engramEl);
+                engram.Init(dialogue, brain, context, brain.BrainPublicUrl);
                 engram.AttachRegistry(threads);
                 engram.SweepCompleted += key => NotifyWatchers(key);
                 agentMap["Engram"] = engram;
-                Common.Logger.LogInformation("Engram is active. Brain connected.");
+                Shared.Logger.LogInformation("Engram is active. Brain connected.");
             }
 
-            if (enabledAgents.TryGetValue("Refactor", out AgentConfig? refactorConfig))
+            if (rawAgents.TryGetValue("Refactor", out JsonElement refactorEl))
             {
-                refactor = new Refactor(refactorConfig, brain, engram);
+                refactor = Deserialize<Refactor>(refactorEl);
+                refactor.brain  = brain;
+                refactor.engram = engram;
                 refactor.AttachRegistry(threads);
                 agentMap["Refactor"] = refactor;
-                Common.Logger.LogInformation("Refactor is active.");
+                Shared.Logger.LogInformation("Refactor is active.");
             }
 
             commands = new CommandService(engram, refactor, brain.PurgeAllNotes, brain.Backup, brain.GetDirtyNotes);
@@ -123,7 +162,73 @@ public class LlmService : IDisposable
         }
     }
 
-    public void Dispose() => engram?.Dispose();
+    // ── Agent assignment ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Reassigns a live agent to a different server. Resolves the server name to an endpoint
+    /// from the current server list. Returns false if the agent or server is not found.
+    /// </summary>
+    public bool AssignAgentServer(string agentName, string serverName)
+    {
+        if (!agentMap.TryGetValue(agentName, out Agent? agent)) return false;
+        Server? server = _servers.FirstOrDefault(s => s.Name.Equals(serverName, StringComparison.OrdinalIgnoreCase));
+        if (server is null) return false;
+        agent.ServerName = server.Name;
+        agent.Endpoint   = server.FullEndpoint;
+        return true;
+    }
+
+    /// <summary>
+    /// Assigns a specific llama-server slot index to a live agent. Pass null to clear.
+    /// Returns false if the agent is not found.
+    /// </summary>
+    public bool AssignAgentSlot(string agentName, int? slot)
+    {
+        if (!agentMap.TryGetValue(agentName, out Agent? agent)) return false;
+        agent.Slot = slot;
+        return true;
+    }
+
+    // ── Server lifecycle ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Boot all servers that have BootStartup = true, loading their assigned model.
+    /// Callers supply the models lookup (from PersistentData) and the path to model files.
+    /// </summary>
+    public async Task StartServersAsync(IReadOnlyList<Model> allModels, string modelsPath)
+    {
+        _allModels  = allModels;
+        _modelsPath = modelsPath;
+        List<Task> boots = new();
+        foreach (Server server in _servers.Where(s => s.BootStartup))
+        {
+            Model? model = server.CurrentModelName is not null
+                ? allModels.FirstOrDefault(m => m.Name.Equals(server.CurrentModelName, StringComparison.OrdinalIgnoreCase))
+                : null;
+            boots.Add(server.StartAsync(model, modelsPath));
+        }
+        await Task.WhenAll(boots);
+    }
+
+    public Task StopAllServersAsync()
+    {
+        foreach (Server server in _servers)
+            server.Stop();
+        return Task.CompletedTask;
+    }
+
+    public async Task RestartAllServersAsync()
+    {
+        await StopAllServersAsync();
+        await StartServersAsync(_allModels, _modelsPath);
+    }
+
+    public void Dispose()
+    {
+        engram?.Dispose();
+        foreach (Server server in _servers)
+            server.Dispose();
+    }
 
     // ── Brain backups ───────────────────────────────────────────────────────────
     public bool BrainAvailable => brain is not null;
@@ -183,12 +288,12 @@ public class LlmService : IDisposable
             if (forcedCodeThreads.Contains(threadKey))
             {
                 agent = "Code";
-                Common.Logger.LogInformation($"[Classifier] ({threadKey}) → Code (forced by project)");
+                Shared.Logger.LogInformation($"[Classifier] ({threadKey}) → Code (forced by project)");
             }
             else
             {
                 agent = await classifier.Classify(prompt, cts.Token);
-                Common.Logger.LogInformation($"[Classifier] ({threadKey}) → {agent}");
+                Shared.Logger.LogInformation($"[Classifier] ({threadKey}) → {agent}");
             }
 
             // Pre-create the thread on the correct agent so watchers receive isCodeMode
@@ -211,7 +316,7 @@ public class LlmService : IDisposable
     {
         if (engram?.IsSweeping(threadKey) == true)
         {
-            Common.Logger.LogInformation("[Dialogue] ({Thread}) waiting for Engram sweep to finish before processing.", threadKey);
+            Shared.Logger.LogInformation("[Dialogue] ({Thread}) waiting for Engram sweep to finish before processing.", threadKey);
             await engram.WaitForSweep(threadKey, cts.Token);
         }
 
@@ -237,7 +342,7 @@ public class LlmService : IDisposable
 
         try
         {
-            Common.Logger.LogInformation("[Dialogue] ({Thread}) prompt\n\"{Prompt}\"", threadKey, prompt);
+            Shared.Logger.LogInformation("[Dialogue] ({Thread}) prompt\n\"{Prompt}\"", threadKey, prompt);
 
             string? contextSummary = context?.GetContext(threadKey);
 
@@ -251,14 +356,14 @@ public class LlmService : IDisposable
                 }
                 catch (Exception ex)
                 {
-                    Common.Logger.LogError("[Memory] Failed to retrieve memories: {Error}", ex.Message);
+                    Shared.Logger.LogError("[Memory] Failed to retrieve memories: {Error}", ex.Message);
                     string errorMessage = "> error retrieving memories";
                     if (onDelta is not null) await onDelta(errorMessage);
                     return errorMessage;
                 }
             }
 
-            return await dialogue.SendPrompt(threadKey, effectivePrompt, username, platformContext, recallBlock, contextSummary, cts.Token, userMessagePreadded: true, onDelta: onDelta);
+            return await dialogue.SendPrompt(threadKey, effectivePrompt, username, platformContext, recallBlock, contextSummary, ct: cts.Token, userMessagePreadded: true, onDelta: onDelta);
         }
         catch (OperationCanceledException)
         {
@@ -279,7 +384,7 @@ public class LlmService : IDisposable
     {
         if (code is null)
         {
-            Common.Logger.LogWarning("[Code] ({Thread}) Code agent not enabled, falling back to Dialogue.", threadKey);
+            Shared.Logger.LogWarning("[Code] ({Thread}) Code agent not enabled, falling back to Dialogue.", threadKey);
             return await DialoguePipeline(threadKey, prompt, username, platformContext, onDelta, cts);
         }
 
@@ -320,7 +425,7 @@ public class LlmService : IDisposable
 
         try
         {
-            Common.Logger.LogInformation("[Code] ({Thread}) prompt\n\"{Prompt}\"", threadKey, prompt);
+            Shared.Logger.LogInformation("[Code] ({Thread}) prompt\n\"{Prompt}\"", threadKey, prompt);
             return await code.SendPrompt(threadKey, effectivePrompt, username, platformContext, cts.Token, userMessagePreadded: true, onDelta: onDelta);
         }
         catch (OperationCanceledException)

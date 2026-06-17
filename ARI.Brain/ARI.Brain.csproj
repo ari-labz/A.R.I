@@ -11,4 +11,9 @@
     <PackageReference Include="YamlDotNet" Version="18.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\ARI.Common\ARI.Common.csproj" />
+  </ItemGroup>
+
+
 </Project>

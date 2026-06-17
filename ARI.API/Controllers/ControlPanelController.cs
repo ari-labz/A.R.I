@@ -1,4 +1,7 @@
+using ARI.API.Data;
+using ARI.Common;
 using ARI.LLM;
+using ARI.Voice;
 using ARI.VoiceSynthesis;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -19,9 +22,9 @@ public class ControlPanelController : Controller
 
 [Route("api/cp")]
 [ApiController]
-public class ControlPanelApiController(LlmServiceHolder holder, APIConfig config, SystemInfoHolder systemInfo) : ControllerBase
+public class ControlPanelApiController(LLMModule? llm, APIConfig config, SystemInfo systemInfo, PersistentData persistentData) : ControllerBase
 {
-    private LlmService? Llm => holder.Service;
+    private LLMModule? Llm => llm;
 
     /// <summary>
     /// SSE stream of the ARI.log tail — sends the last 100 lines on connect,
@@ -137,7 +140,7 @@ public class ControlPanelApiController(LlmServiceHolder holder, APIConfig config
         List<object> callStats = new();
         if (Llm is not null)
         {
-            foreach (LlmService.LlmCallStat c in Llm.CallStats())
+            foreach (LLMModule.LlmCallStat c in Llm.CallStats())
             {
                 // Emit Vision row before the agent row when image tokens were spent
                 if (c.HadImageAttachments && c.EstimatedImageTokens > 0)
@@ -254,6 +257,50 @@ public class ControlPanelApiController(LlmServiceHolder holder, APIConfig config
     }
 
     private static string EscapeSse(string s) => s.Replace("\n", "↵").Replace("\r", "");
+
+    // ── Agent assignment ─────────────────────────────────────────────────────────
+
+    [HttpGet("agents")]
+    public IActionResult GetAgents()
+    {
+        if (Llm is null) return Ok(new { agents = Array.Empty<object>() });
+
+        var assignments = persistentData.GetAgentAssignments();
+        var agents = Llm.Agents.Values.Select(a => new
+        {
+            name       = a.Name,
+            serverName = a.ServerName,
+            slot       = a.Slot,
+        });
+        return Ok(new { agents });
+    }
+
+    [HttpPut("agents/{name}/server")]
+    public IActionResult AssignAgentServer(string name, [FromBody] AssignServerRequest req)
+    {
+        if (Llm is null) return StatusCode(503, new { error = "LLM not available." });
+
+        if (!Llm.AssignAgentServer(name, req.ServerName))
+            return NotFound(new { error = $"Agent '{name}' or server '{req.ServerName}' not found." });
+
+        var existing = persistentData.GetAgentAssignment(name);
+        persistentData.SetAgentAssignment(name, new AgentAssignment(req.ServerName, existing?.Slot));
+        return NoContent();
+    }
+
+    [HttpPut("agents/{name}/slot")]
+    public IActionResult AssignAgentSlot(string name, [FromBody] AssignSlotRequest req)
+    {
+        if (Llm is null) return StatusCode(503, new { error = "LLM not available." });
+
+        if (!Llm.AssignAgentSlot(name, req.Slot))
+            return NotFound(new { error = $"Agent '{name}' not found." });
+
+        var existing = persistentData.GetAgentAssignment(name);
+        string serverName = existing?.ServerName ?? Llm.Agents.GetValueOrDefault(name)?.ServerName ?? "";
+        persistentData.SetAgentAssignment(name, new AgentAssignment(serverName, req.Slot));
+        return NoContent();
+    }
 }
 
 // ── Voice Synthesis API ───────────────────────────────────────────────────────
@@ -261,11 +308,10 @@ public class ControlPanelApiController(LlmServiceHolder holder, APIConfig config
 [Route("api/cp/voice")]
 [ApiController]
 public class VoiceController(
-    VoiceTrainerHolder voiceHolder,
-    DiscordServiceHolder discordHolder,
-    SpeechQueueHolder speechHolder,
-    ModelManagerHolder modelManagerHolder,
-    APIConfig config,
+    VoiceSynthesisModule voiceTraining,
+    VoiceModule? voiceService,
+    LLMModule? llm,
+    VoiceSynthesisConfig vsConfig,
     ILoggerFactory loggerFactory,
     IHostApplicationLifetime lifetime) : ControllerBase
 {
@@ -361,24 +407,24 @@ public class VoiceController(
             return BadRequest(new { error = "modelName is required." });
         if (string.IsNullOrWhiteSpace(req.StagingPath) || !Directory.Exists(req.StagingPath))
             return BadRequest(new { error = "stagingPath does not exist." });
-        if (string.IsNullOrEmpty(config.StyleTtsPath) || string.IsNullOrEmpty(config.VoicesPath))
+        if (string.IsNullOrEmpty(vsConfig.StyleTtsPath) || string.IsNullOrEmpty(vsConfig.VoicesPath))
             return StatusCode(503, new { error = "VoiceSynthesis module is not configured." });
-        if (!voiceHolder.IsSetupComplete)
+        if (!voiceTraining.IsSetupComplete)
             return StatusCode(503, new { error = "StyleTTS2 is still installing. Please wait." });
 
         TrainingJob job;
         try
         {
             StyleTtsTrainer trainer = new(
-                styleTtsPath:    config.StyleTtsPath,
-                voicesPath:      config.VoicesPath,
+                styleTtsPath:    vsConfig.StyleTtsPath,
+                voicesPath:      vsConfig.VoicesPath,
                 audioPath:       req.StagingPath,
                 modelName:       req.ModelName,
                 epochs:          req.Epochs,
                 saveEveryNEpochs: req.SaveEveryNEpochs,
                 logger:          logger);
 
-            job = voiceHolder.Start(trainer, req.ModelName, lifetime.ApplicationStopping);
+            job = voiceTraining.Start(trainer, req.ModelName, lifetime.ApplicationStopping);
         }
         catch (InvalidOperationException ex)
         {
@@ -394,7 +440,7 @@ public class VoiceController(
         string modelName   = req.ModelName;
         _ = Task.Run(async () =>
         {
-            await modelManagerHolder.StopAllServersAsync();
+            if (llm is not null) await llm.StopAllServersAsync();
 
             while (job.IsRunning)
                 await Task.Delay(2000);
@@ -404,14 +450,15 @@ public class VoiceController(
             if (job.IsSuccess)
             {
                 logger.LogInformation("[Voice] Voice Synthesis of {ModelName} complete", modelName);
-                await discordHolder.NotifyOwner($"> Voice Synthesis of {modelName} complete");
+                if (Modules.Discord is not null)
+                    await Modules.Discord.NotifyOwner($"> Voice Synthesis of {modelName} complete");
             }
             else
             {
                 logger.LogWarning("[Voice] Training failed for {ModelName}: {Error}", modelName, job.Error);
             }
 
-            await modelManagerHolder.RestartAllServersAsync();
+            if (llm is not null) await llm.RestartAllServersAsync();
         });
 
         return Ok(new { jobId = job.JobId, modelName = job.ModelName });
@@ -425,7 +472,7 @@ public class VoiceController(
         Response.Headers[HeaderNames.CacheControl] = "no-cache";
         Response.Headers["X-Accel-Buffering"]      = "no";
 
-        var job = voiceHolder.Current;
+        var job = voiceTraining.Current;
         if (job is null)
         {
             await Response.WriteAsync("data: {\"step\":\"Idle\",\"percent\":0}\n\n", ct);
@@ -476,7 +523,7 @@ public class VoiceController(
     [HttpGet("status")]
     public IActionResult GetStatus()
     {
-        var job = voiceHolder.Current;
+        var job = voiceTraining.Current;
         if (job is null)
             return Ok(new { idle = true });
 
@@ -496,10 +543,10 @@ public class VoiceController(
     {
         if (string.IsNullOrWhiteSpace(req.Text))
             return BadRequest(new { error = "text is required." });
-        if (!speechHolder.IsReady)
+        if (voiceService?.IsReady != true)
             return StatusCode(503, new { error = "Voice module is not running." });
 
-        byte[] wav = await speechHolder.Synthesise(req.Text, ct);
+        byte[] wav = await voiceService.Synthesise(req.Text, ct);
         logger.LogInformation("[Voice/Speak] '{Text}' → {Bytes} bytes", req.Text, wav.Length);
         return File(wav, "audio/wav");
     }
@@ -515,15 +562,15 @@ public class VoiceController(
 
     [HttpGet("active")]
     public IActionResult GetActive() =>
-        Ok(new { model = speechHolder.ActiveModel, ready = speechHolder.IsReady });
+        Ok(new { model = voiceService?.ActiveModel, ready = voiceService?.IsReady ?? false });
 
     [HttpGet("models")]
     public IActionResult GetModels()
     {
-        if (string.IsNullOrEmpty(config.VoicesPath) || !Directory.Exists(config.VoicesPath))
+        if (string.IsNullOrEmpty(vsConfig.VoicesPath) || !Directory.Exists(vsConfig.VoicesPath))
             return Ok(new { models = Array.Empty<string>() });
 
-        string[] models = Directory.GetDirectories(config.VoicesPath)
+        string[] models = Directory.GetDirectories(vsConfig.VoicesPath)
             .Select(Path.GetFileName)
             .Where(n => n != null)
             .OrderBy(n => n)
@@ -533,159 +580,161 @@ public class VoiceController(
     }
 }
 
-// ── Models API ────────────────────────────────────────────────────────────────
+// ── LLM Models & Servers API ──────────────────────────────────────────────────
 
 [Route("api/cp/models")]
 [ApiController]
-public class ModelsApiController(
-    ModelManagerHolder  modelManagerHolder,
-    ModelNotesStore     notesStore,
-    ModelSettingsStore  settingsStore) : ControllerBase
+public class ModelsApiController(LLMModule? llm, PersistentData persistentData) : ControllerBase
 {
+    private string ModelsPath => llm?.ModelsPath ?? "";
+
     [HttpGet]
     public IActionResult GetModels()
     {
-        var notes   = notesStore.GetAll();
-        var servers = modelManagerHolder.Servers;
+        var notes      = persistentData.GetAllNotes();
+        string mPath   = ModelsPath;
 
-        var models = modelManagerHolder.AllModels.Select(m => new
+        var models = persistentData.GetModels().Select(m =>
         {
-            name       = m.Name,
-            file       = m.File,
-            sizeBytes  = m.FileSizeBytes,
-            sizeMb     = Math.Round(m.FileSizeBytes / 1024.0 / 1024.0, 1),
-            downloaded = m.FileSizeBytes > 0,
-            configured = m.Configured,
-            notes      = notes.TryGetValue(m.File, out string? n) ? n : "",
-            hasMmproj      = m.HasMmproj,
-            supportsVision = m.SupportsVision,
-            hasMtp         = m.HasMtp,
-            downloadUrl    = m.DownloadUrl,
-            // Per-server active state: { serverName: bool }
-            activeOnServer = servers.ToDictionary(
-                kv => kv.Key,
-                kv => FilesMatch(m.File, kv.Value.ActiveFile)),
+            m.RefreshDownloadedState(mPath);
+            return new
+            {
+                name               = m.Name,
+                downloadLink       = m.DownloadLink,
+                mmprojDownloadLink = m.MmprojDownloadLink,
+                downloaded         = m.Downloaded,
+                modelSize          = m.ModelSize,
+                moe                = m.MoE,
+                mtp                = m.MTP,
+                notes              = notes.TryGetValue(m.Name, out string? n) ? n : "",
+            };
         }).ToList();
 
-        var serverList = servers.Select(kv => new
+        var servers = persistentData.GetServers().Select(s =>
         {
-            name       = kv.Key,
-            activeFile = kv.Value.ActiveFile,
-            activeName = kv.Value.ActiveName,
-            pid        = kv.Value.Pid,
+            ServerStatus status = llm?.Servers.FirstOrDefault(r => r.Id == s.Id)?.Status ?? ServerStatus.Offline;
+            Model?    active = llm?.Servers.FirstOrDefault(r => r.Id == s.Id)?.ActiveModel;
+            return new
+            {
+                id              = s.Id,
+                name            = s.Name,
+                status          = status.ToString(),
+                activeModelName = active?.Name,
+                endpoint        = s.FullEndpoint,
+                port            = s.Port,
+                contextSize     = s.ContextSize,
+                parallelSlots   = s.ParallelSlots,
+                kvCacheQuantK   = s.KvCacheQuantK,
+                kvCacheQuantV   = s.KvCacheQuantV,
+
+                currentModelName = s.CurrentModelName,
+                autoStart       = s.BootStartup,
+            };
         }).ToList();
 
-        var job = modelManagerHolder.CurrentSwitchJob;
-        return Ok(new
-        {
-            servers   = serverList,
-            switching = job?.IsRunning ?? false,
-            switchingServer = job?.IsRunning == true ? job.ServerName : null,
-            models,
-        });
+        return Ok(new { models, servers });
     }
 
-    [HttpPost("switch")]
-    public IActionResult Switch([FromBody] SwitchServerFileRequest req)
+    // ── Model CRUD ────────────────────────────────────────────────────────────
+
+    [HttpPost]
+    public IActionResult AddModel([FromBody] Model model)
     {
-        if (string.IsNullOrWhiteSpace(req.ServerName))
-            return BadRequest(new { error = "serverName is required." });
-        if (string.IsNullOrWhiteSpace(req.File))
-            return BadRequest(new { error = "file is required." });
+        if (string.IsNullOrWhiteSpace(model.Name))
+            return BadRequest(new { error = "name is required." });
 
-        if (modelManagerHolder.CurrentSwitchJob?.IsRunning == true)
-            return Conflict(new { error = "A model switch is already in progress." });
+        persistentData.AddModel(model);
+        model.RefreshDownloadedState(ModelsPath);
+        return Ok(model);
+    }
 
-        if (modelManagerHolder.Servers.TryGetValue(req.ServerName, out ServerStatus? status) &&
-            FilesMatch(status.ActiveFile, req.File))
-            return Ok(new { ok = true, message = "Already active." });
+    [HttpPut("{id:guid}")]
+    public IActionResult UpdateModel(Guid id, [FromBody] Model model)
+    {
+        if (!persistentData.UpdateModel(model))
+            return NotFound(new { error = "Model not found." });
 
-        modelManagerHolder.TriggerSwitch(req.ServerName, req.File);
+        model.RefreshDownloadedState(ModelsPath);
+        return Ok(model);
+    }
+
+    [HttpDelete("{id:guid}")]
+    public IActionResult DeleteModel(Guid id)
+    {
+        if (!persistentData.RemoveModel(id.ToString()))
+            return NotFound(new { error = "Model not found." });
         return Ok(new { ok = true });
     }
 
-    [HttpGet("switch/progress")]
-    public async Task StreamSwitchProgress(CancellationToken ct)
+    // ── Server CRUD ───────────────────────────────────────────────────────────
+
+    [HttpPost("/api/cp/servers")]
+    public IActionResult AddServer([FromBody] Server server)
     {
-        Response.Headers[HeaderNames.ContentType]  = "text/event-stream";
-        Response.Headers[HeaderNames.CacheControl] = "no-cache";
-        Response.Headers["X-Accel-Buffering"]      = "no";
+        if (string.IsNullOrWhiteSpace(server.Name))
+            return BadRequest(new { error = "name is required." });
 
-        var job = modelManagerHolder.CurrentSwitchJob;
-        if (job is null)
-        {
-            await Response.WriteAsync("data: {\"phase\":\"idle\",\"message\":\"No switch in progress.\",\"percent\":0,\"done\":true}\n\n", ct);
-            await Response.Body.FlushAsync(ct);
-            return;
-        }
-
-        int  sent          = 0;
-        long lastKeepalive = Environment.TickCount64;
-
-        while (!ct.IsCancellationRequested)
-        {
-            var events = job.Events;
-            bool wrote = false;
-            while (sent < events.Count)
-            {
-                var ev = events[sent++];
-                string j = JsonSerializer.Serialize(new
-                {
-                    phase   = ev.Phase,
-                    message = ev.Message,
-                    percent = ev.Percent,
-                    done    = !job.IsRunning,
-                    success = job.IsSuccess,
-                    error   = job.Error,
-                });
-                await Response.WriteAsync($"data: {j}\n\n", ct);
-                wrote = true;
-            }
-
-            if (Environment.TickCount64 - lastKeepalive > 30_000)
-            {
-                await Response.WriteAsync(": keepalive\n\n", ct);
-                lastKeepalive = Environment.TickCount64;
-                wrote = true;
-            }
-
-            if (wrote) await Response.Body.FlushAsync(ct);
-            if (!job.IsRunning) break;
-            await Task.Delay(300, ct);
-        }
+        persistentData.AddServer(server);
+        return Ok(server);
     }
 
-    [HttpPost("startup")]
-    public IActionResult SetStartup([FromBody] SwitchServerFileRequest req)
+    [HttpPut("/api/cp/servers/{id:guid}")]
+    public IActionResult UpdateServer(Guid id, [FromBody] Server server)
     {
-        if (string.IsNullOrWhiteSpace(req.ServerName))
-            return BadRequest(new { error = "serverName is required." });
-        if (string.IsNullOrWhiteSpace(req.File))
-            return BadRequest(new { error = "file is required." });
+        if (!persistentData.UpdateServer(server))
+            return NotFound(new { error = "Server not found." });
+        return Ok(server);
+    }
 
-        settingsStore.SetStartupFile(req.ServerName, req.File);
+    [HttpDelete("/api/cp/servers/{id:guid}")]
+    public IActionResult DeleteServer(Guid id)
+    {
+        if (!persistentData.RemoveServer(id))
+            return NotFound(new { error = "Server not found." });
+        return Ok(new { ok = true });
+    }
+
+    // ── Model switching & notes ───────────────────────────────────────────────
+
+    [HttpPost("switch")]
+    public IActionResult Switch([FromBody] SwitchModelRequest req)
+    {
+        if (req.ServerId == Guid.Empty)
+            return BadRequest(new { error = "serverId is required." });
+        if (string.IsNullOrWhiteSpace(req.ModelName))
+            return BadRequest(new { error = "modelName is required." });
+
+        Server? server = llm?.Servers.FirstOrDefault(s => s.Id == req.ServerId);
+        if (server is null)
+            return NotFound(new { error = "Server not found." });
+
+        Model? model = persistentData.GetModel(req.ModelName);
+        if (model is null)
+            return NotFound(new { error = "Model not found." });
+
+        string modelsPath = llm!.ModelsPath;
+        _ = Task.Run(async () =>
+        {
+            await server.ChangeModelAsync(model, modelsPath);
+            persistentData.SetServerCurrentModel(server.Id, model.Name);
+        });
+
         return Ok(new { ok = true });
     }
 
     [HttpPut("notes")]
     public IActionResult SaveNotes([FromBody] ModelNotesRequest req)
     {
-        if (string.IsNullOrWhiteSpace(req.ModelFile))
-            return BadRequest(new { error = "modelFile is required." });
+        if (string.IsNullOrWhiteSpace(req.ModelName))
+            return BadRequest(new { error = "modelName is required." });
 
-        notesStore.Set(req.ModelFile, req.Notes ?? "");
+        persistentData.SetNote(req.ModelName, req.Notes ?? "");
         return Ok(new { ok = true });
     }
-
-    private static bool FilesMatch(string? a, string? b)
-        => string.Equals(NormFile(a), NormFile(b), StringComparison.OrdinalIgnoreCase);
-
-    private static string NormFile(string? f) => (f ?? "").Replace('\\', '/').TrimStart('/');
 }
 
-public record SwitchFileRequest(string File);
-public record SwitchServerFileRequest(string ServerName, string File);
-public record ModelNotesRequest(string ModelFile, string? Notes);
+public record SwitchModelRequest(Guid ServerId, string ModelName);
+public record ModelNotesRequest(string ModelName, string? Notes);
 
 public record ConventionsRequest(string? Text);
 
@@ -697,3 +746,5 @@ public record TrainRequest(
 
 public record SpeakRequest(string Text, string? ModelName = null);
 public record SplitSentencesRequest(string Text);
+public record AssignServerRequest(string ServerName);
+public record AssignSlotRequest(int? Slot);

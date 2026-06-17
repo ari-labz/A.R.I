@@ -1,7 +1,8 @@
-namespace ARI.Core;
+namespace ARI.Discord;
 
 public class DiscordConfig
 {
+    public bool Enabled { get; init; }
     public string Token { get; init; }
     public ulong OwnerId { get; init; }
     public List<ulong> WhitelistedUserIds { get; init; }

@@ -41,7 +41,7 @@ void EmergencyShutdown()
     {
         string executableDirectory = AppDomain.CurrentDomain.BaseDirectory;
         AriConfig config = AriConfig.LoadFrom(Path.Combine(executableDirectory, "AriConfig.json"));
-        Docker docker = new Docker(Path.Combine(executableDirectory, config.Docker.ComposePath));
+        Docker docker = new Docker(Path.Combine(executableDirectory, config.DockerComposePath));
         docker.StopContainers().GetAwaiter().GetResult();
         Log.Information("Emergency shutdown complete.");
     }

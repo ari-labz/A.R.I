@@ -1,9 +1,11 @@
+using ARI.Common;
 using System.Diagnostics;
 
 namespace ARI.Core.Scripts;
 
 public class Docker
 {
+    public bool containersRunning = false;
     private readonly string fullComposePath;
     private readonly string envFilePath;
 
@@ -15,23 +17,23 @@ public class Docker
 
     public async Task IsRunning()
     {
-        Process process = Common.RunCommand("docker", "info");
+        Process process = Shared.RunCommand("docker", "info");
         await process.WaitForExitAsync();
 
         if (process.ExitCode != 0)
         {
-            Common.Logger.LogError("Docker is not running. Please start Docker and try again.");
+            Shared.Logger.LogError("Docker is not running. Please start Docker and try again.");
             throw new Exception("Docker is not running. Please start Docker and try again.");
         }
 
-        Common.Logger.LogInformation("Docker is running.");
+        Shared.Logger.LogInformation("Docker is running.");
     }
 
     public async Task StartContainers()
     {
         if (!File.Exists(fullComposePath))
         {
-            Common.Logger.LogError("compose.yaml not found at: {Path}", fullComposePath);
+            Shared.Logger.LogError("compose.yaml not found at: {Path}", fullComposePath);
             throw new Exception($"compose.yaml not found at: {fullComposePath}");
         }
 
@@ -49,7 +51,7 @@ public class Docker
         process.ErrorDataReceived += (_, args) =>
         {
             if (!string.IsNullOrWhiteSpace(args.Data))
-                Common.Logger.LogInformation("[Docker] {Line}", args.Data);
+                Shared.Logger.LogInformation("[Docker] {Line}", args.Data);
         };
 
         process.BeginErrorReadLine();
@@ -59,18 +61,19 @@ public class Docker
 
         if (process.ExitCode != 0)
         {
-            Common.Logger.LogError("docker compose exited with a non-zero exit code.");
+            Shared.Logger.LogError("docker compose exited with a non-zero exit code.");
             if (!string.IsNullOrWhiteSpace(stdout))
-                Common.Logger.LogError("stdout: {Output}", stdout);
+                Shared.Logger.LogError("stdout: {Output}", stdout);
             throw new Exception("Failed to start ARI containers. Check logs for details.");
         }
 
-        Common.Logger.LogInformation("Containers are running.");
+        containersRunning = true;
+        Shared.Logger.LogInformation("Containers are running.");
     }
 
     public async Task StopContainers()
     {
-        Common.Logger.LogInformation("Stopping containers...");
+        Shared.Logger.LogInformation("Stopping containers...");
 
         ProcessStartInfo startInfo = new("docker", $"compose -f {fullComposePath} stop trilium cloudflared")
         {
@@ -85,12 +88,12 @@ public class Docker
         process.ErrorDataReceived += (_, args) =>
         {
             if (!string.IsNullOrWhiteSpace(args.Data))
-                Common.Logger.LogInformation("[Docker] {Line}", args.Data);
+                Shared.Logger.LogInformation("[Docker] {Line}", args.Data);
         };
 
         process.BeginErrorReadLine();
         await process.WaitForExitAsync();
 
-        Common.Logger.LogInformation("Containers stopped.");
+        Shared.Logger.LogInformation("Containers stopped.");
     }
 }

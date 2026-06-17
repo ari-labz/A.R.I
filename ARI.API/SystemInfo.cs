@@ -1,3 +1,4 @@
+using ARI.LLM;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
@@ -5,18 +6,18 @@ namespace ARI.API;
 
 public record RamSegment(string Label, string ServerName, long Bytes);
 
-/// <summary>Tracks ARI process RAM: the .NET host, all active llama-server instances, and F5-TTS.</summary>
-public class SystemInfoHolder
+/// <summary>Provides system RAM telemetry for the control panel.</summary>
+public class SystemInfo
 {
-    private readonly ModelManagerHolder modelManagerHolder;
+    private readonly LLMModule? _llm;
+    private readonly string     _modelsPath;
 
-    public SystemInfoHolder(ModelManagerHolder modelManagerHolder)
+    public SystemInfo(LLMModule? llm, string modelsPath)
     {
-        this.modelManagerHolder = modelManagerHolder;
+        _llm        = llm;
+        _modelsPath = modelsPath;
     }
 
-    // Returns total system RAM used (App + Wired + Compressed) — matches Activity Monitor "Used".
-    // Per-process phys_footprint misses Metal/GPU wired allocations where model weights and KV caches live.
     public long GetTotalRamBytes()
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
@@ -57,53 +58,50 @@ public class SystemInfoHolder
         long totalSystem = GetTotalRamBytes();
         long accounted   = 0;
 
-        // Collect model file sizes and KV weights per server
-        var serverEntries = new List<(string ServerName, string Label, long FileBytes, int ContextSize)>();
-        foreach (KeyValuePair<string, ServerStatus> kv in modelManagerHolder.Servers)
+        var serverEntries = new List<(string Name, long FileBytes, int ContextSize)>();
+
+        if (_llm is not null)
         {
-            ServerStatus server = kv.Value;
-            if (server is null || server.ActiveFile is null || server.Pid <= 0) continue;
-            ModelInfo? info = modelManagerHolder.AllModels.FirstOrDefault(m =>
-                string.Equals(m.File, server.ActiveFile, StringComparison.OrdinalIgnoreCase));
-            long fileBytes = info?.FileSizeBytes ?? 0;
-            if (fileBytes <= 0) continue;
-            serverEntries.Add((kv.Key, server.ActiveName ?? kv.Key, fileBytes, server.ContextSize));
-            accounted += fileBytes;
+            foreach (Server server in _llm.Servers)
+            {
+                if (server.Status != ServerStatus.Online || server.Pid <= 0 || server.ActiveModel is null)
+                    continue;
+
+                string modelFile = Path.Combine(_modelsPath, server.ActiveModel.Name + ".gguf");
+                long   fileBytes = File.Exists(modelFile) ? new FileInfo(modelFile).Length : 0;
+                if (fileBytes <= 0) continue;
+
+                serverEntries.Add((server.Name, fileBytes, server.ContextSize));
+                accounted += fileBytes;
+            }
         }
 
-        // F5-TTS — PyTorch uses regular app memory, not Metal wired, so phys_footprint is accurate
         long pythonBytes = 0;
         foreach (Process p in Process.GetProcessesByName("python").Concat(Process.GetProcessesByName("python3")))
-        {
             try { pythonBytes += PhysFootprint(p.Id); } catch { }
-        }
         accounted += pythonBytes;
 
-        // KV pool = total system - model weights - F5-TTS - OS baseline
-        const long OsBaselineBytes = 2_684_354_560L; // ~2.5 GB for macOS kernel + ARI .NET
+        const long OsBaselineBytes = 2_684_354_560L;
         long kvPool   = Math.Max(0, totalSystem - accounted - OsBaselineBytes);
         long totalCtx = serverEntries.Sum(e => (long)e.ContextSize);
 
-        // Emit segments: each model immediately followed by its KV cache, then F5-TTS
         var segments = new List<RamSegment>();
         foreach (var e in serverEntries)
         {
-            segments.Add(new RamSegment(e.Label, e.ServerName, e.FileBytes));
+            segments.Add(new RamSegment(e.Name, e.Name, e.FileBytes));
             if (kvPool > 0 && totalCtx > 0)
             {
                 long kvBytes = kvPool * e.ContextSize / totalCtx;
-                if (kvBytes > 0) segments.Add(new RamSegment($"{e.ServerName} KV cache", e.ServerName, kvBytes));
+                if (kvBytes > 0) segments.Add(new RamSegment($"{e.Name} KV cache", e.Name, kvBytes));
             }
         }
         if (kvPool > 0 && totalCtx == 0)
             segments.Add(new RamSegment("KV cache", "System", kvPool));
 
         if (pythonBytes > 0) segments.Add(new RamSegment("F5-TTS", "TTS", pythonBytes));
-
         return segments;
     }
 
-    // Returns swap currently used by the OS in MB (macOS only via sysctl).
     public double GetSwapMb()
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return 0;
@@ -116,7 +114,6 @@ public class SystemInfoHolder
             using Process p = Process.Start(psi)!;
             string line = p.StandardOutput.ReadToEnd();
             p.WaitForExit();
-            // format: "vm.swapusage: total = 2048.00M  used = 512.00M  free = ..."
             int usedIdx = line.IndexOf("used = ", StringComparison.Ordinal);
             if (usedIdx < 0) return 0;
             string after = line[(usedIdx + 7)..].TrimStart();
@@ -128,9 +125,6 @@ public class SystemInfoHolder
         catch { return 0; }
     }
 
-    // ── macOS phys_footprint via proc_pid_rusage ─────────────────────────────
-    // This captures wired/Metal/GPU memory that WorkingSet64 misses.
-
     private static long PhysFootprint(int pid)
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
@@ -141,7 +135,7 @@ public class SystemInfoHolder
 
         try
         {
-            var info = new RUsageInfoV0();
+            var info   = new RUsageInfoV0();
             int result = proc_pid_rusage(pid, 0, ref info);
             return result == 0 ? (long)info.ri_phys_footprint : 0;
         }
@@ -156,16 +150,9 @@ public class SystemInfoHolder
     {
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
         public byte[] ri_uuid;
-        public ulong ri_user_time;
-        public ulong ri_system_time;
-        public ulong ri_pkg_idle_wkups;
-        public ulong ri_interrupt_wkups;
-        public ulong ri_pageins;
-        public ulong ri_wired_size;
-        public ulong ri_resident_size;
-        public ulong ri_phys_footprint;
-        public ulong ri_phys_footprint_lifetime_max;
-        public ulong ri_proc_start_abstime;
-        public ulong ri_proc_exit_abstime;
+        public ulong ri_user_time, ri_system_time, ri_pkg_idle_wkups, ri_interrupt_wkups;
+        public ulong ri_pageins, ri_wired_size, ri_resident_size;
+        public ulong ri_phys_footprint, ri_phys_footprint_lifetime_max;
+        public ulong ri_proc_start_abstime, ri_proc_exit_abstime;
     }
 }

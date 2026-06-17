@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using ARI.Common;
 using Microsoft.Extensions.Logging;
 
 namespace ARI.Brain;
@@ -34,7 +35,7 @@ public class BrainModule
     public BrainModule(BrainConfig config, ILoggerFactory? loggerFactory = null)
     {
         if (loggerFactory is not null)
-            Common.InitialiseLogger(loggerFactory);
+            Shared.InitialiseLogger(loggerFactory, "ARI.Brain");
 
         trilium          = new TriliumClient(config.TriliumUrl, config.EtapiToken, config.RootNoteId);
         brainCacheSize   = config.BrainCacheSize;
@@ -59,7 +60,7 @@ public class BrainModule
             }
             catch (Exception ex)
             {
-                Common.Logger.LogWarning("Brain could not connect to Trilium (retrying in {Delay}s): {Message}", delay, ex.Message);
+                Shared.Logger.LogWarning("Brain could not connect to Trilium (retrying in {Delay}s): {Message}", delay, ex.Message);
                 await Task.Delay(TimeSpan.FromSeconds(delay));
             }
         }
@@ -73,7 +74,7 @@ public class BrainModule
         catch (Exception ex)
         {
             triliumReady = false;
-            Common.Logger.LogError("Brain failed to connect to Trilium after all retries: {Message}", ex.Message);
+            Shared.Logger.LogError("Brain failed to connect to Trilium after all retries: {Message}", ex.Message);
         }
     }
 
@@ -99,7 +100,7 @@ public class BrainModule
                 aliasToTitle[alias] = canonical;
 
         cachedTitles = null; // mark dirty so first call rebuilds from the new noteIdCache
-        Common.Logger.LogInformation("Brain connected to Trilium. {Count} note(s) in graph.", noteIdCache.Count);
+        Shared.Logger.LogInformation("Brain connected to Trilium. {Count} note(s) in graph.", noteIdCache.Count);
     }
 
     // ── Public API ───────────────────────────────────────────────────────────────
@@ -150,7 +151,7 @@ public class BrainModule
 
         string folder = noteFolderCache.TryGetValue(noteId, out string? f) ? f : string.Empty;
         UpdateContentCache(targetName, folder, resolved);
-        Common.Logger.LogInformation("[Brain] Backlink [[{Source}]] added to '{Target}'", sourceName, targetName);
+        Shared.Logger.LogInformation("[Brain] Backlink [[{Source}]] added to '{Target}'", sourceName, targetName);
     }
 
     public async Task<List<string>> GetNoteTitles()
@@ -253,13 +254,13 @@ public class BrainModule
 
         if (noteId is null)
         {
-            Common.Logger.LogWarning("[Brain] Delete failed — '{Title}' not found.", title);
+            Shared.Logger.LogWarning("[Brain] Delete failed — '{Title}' not found.", title);
             return;
         }
         bool deleted = await trilium.DeleteNote(noteId);
         if (!deleted)
         {
-            Common.Logger.LogWarning("[Brain] Delete of '{Title}' skipped — note still has children (moved notes may not have fully detached yet).", title);
+            Shared.Logger.LogWarning("[Brain] Delete of '{Title}' skipped — note still has children (moved notes may not have fully detached yet).", title);
             return;
         }
         noteIdCache.Remove(title);
@@ -267,7 +268,7 @@ public class BrainModule
         noteFolderCache.Remove(noteId);
         cachedTitles = null;
         InvalidateContentCache(title);
-        Common.Logger.LogInformation("deleted: {Title}", title);
+        Shared.Logger.LogInformation("deleted: {Title}", title);
     }
 
     public async Task<string> Backup()
@@ -317,11 +318,11 @@ public class BrainModule
         while (existing.Length - deleted > maxBackups)
         {
             existing[deleted].Delete();
-            Common.Logger.LogInformation("[Brain] Deleted old backup: {Name}", existing[deleted].Name);
+            Shared.Logger.LogInformation("[Brain] Deleted old backup: {Name}", existing[deleted].Name);
             deleted++;
         }
 
-        Common.Logger.LogInformation("[Brain] Backup saved: {Path} ({Count} note(s))", zipPath, notes.Count);
+        Shared.Logger.LogInformation("[Brain] Backup saved: {Path} ({Count} note(s))", zipPath, notes.Count);
         return $"Backup saved — {notes.Count} note(s). File: `{Path.GetFileName(zipPath)}`";
     }
 
@@ -346,7 +347,7 @@ public class BrainModule
                     if (d.RootElement.TryGetProperty("noteCount", out JsonElement nc)) notes = nc.GetInt32();
                 }
             }
-            catch (Exception ex) { Common.Logger.LogWarning("[Brain] Could not read backup {File}: {Msg}", fi.Name, ex.Message); }
+            catch (Exception ex) { Shared.Logger.LogWarning("[Brain] Could not read backup {File}: {Msg}", fi.Name, ex.Message); }
             result.Add(new BackupInfo(fi.Name, fi.CreationTimeUtc, fi.Length, notes));
         }
         return result;
@@ -398,16 +399,16 @@ public class BrainModule
         }
         catch (Exception ex)
         {
-            Common.Logger.LogError("[Brain] Restore failed reading {File}: {Msg}", Path.GetFileName(zipPath), ex.Message);
+            Shared.Logger.LogError("[Brain] Restore failed reading {File}: {Msg}", Path.GetFileName(zipPath), ex.Message);
             return $"Restore failed: {ex.Message}";
         }
 
         if (adds.Count == 0) return "Backup contained no restorable notes.";
 
-        Common.Logger.LogInformation("[Brain] Restoring {Count} note(s) from {File}...", adds.Count, Path.GetFileName(zipPath));
+        Shared.Logger.LogInformation("[Brain] Restoring {Count} note(s) from {File}...", adds.Count, Path.GetFileName(zipPath));
         await AddNotes(adds);
         await OnReady(); // re-sync caches + alias index after a bulk restore
-        Common.Logger.LogInformation("[Brain] Restore complete — {Count} note(s) from {File}.", adds.Count, Path.GetFileName(zipPath));
+        Shared.Logger.LogInformation("[Brain] Restore complete — {Count} note(s) from {File}.", adds.Count, Path.GetFileName(zipPath));
         return $"Restored {adds.Count} note(s) from {Path.GetFileName(zipPath)}.";
     }
 
@@ -416,17 +417,17 @@ public class BrainModule
         if (!triliumReady) return 0;
 
         List<string> noteIds = noteIdCache.Values.ToList();
-        Common.Logger.LogInformation("Brain purge requested — {Count} note(s) to delete.", noteIds.Count);
+        Shared.Logger.LogInformation("Brain purge requested — {Count} note(s) to delete.", noteIds.Count);
 
         int deleted = 0;
         foreach (string noteId in noteIds)
         {
             try { if (await trilium.DeleteNote(noteId)) deleted++; }
-            catch (Exception ex) { Common.Logger.LogWarning("Failed to delete note {NoteId}: {Message}", noteId, ex.Message); }
+            catch (Exception ex) { Shared.Logger.LogWarning("Failed to delete note {NoteId}: {Message}", noteId, ex.Message); }
         }
 
         try { await trilium.PurgeCategoryFolders(); }
-        catch (Exception ex) { Common.Logger.LogWarning("Failed to remove folders: {Message}", ex.Message); }
+        catch (Exception ex) { Shared.Logger.LogWarning("Failed to remove folders: {Message}", ex.Message); }
 
         noteIdCache.Clear();
         branchIdCache.Clear();
@@ -434,7 +435,7 @@ public class BrainModule
         cachedTitles = null;
         contentCacheOrder.Clear();
         contentCacheStore.Clear();
-        Common.Logger.LogInformation("Brain purged — {Deleted}/{Total} note(s) deleted.", deleted, noteIds.Count);
+        Shared.Logger.LogInformation("Brain purged — {Deleted}/{Total} note(s) deleted.", deleted, noteIds.Count);
         return deleted;
     }
 
@@ -460,7 +461,7 @@ public class BrainModule
             if (attrs.Any(a => a.Type == "label" && a.Name == DirtyLabel)) continue;
 
             try { await trilium.CreateLabelAttribute(noteId, DirtyLabel); }
-            catch (Exception ex) { Common.Logger.LogWarning("[Brain] MarkDirty failed for '{Title}': {Msg}", title, ex.Message); }
+            catch (Exception ex) { Shared.Logger.LogWarning("[Brain] MarkDirty failed for '{Title}': {Msg}", title, ex.Message); }
         }
     }
 
@@ -491,7 +492,7 @@ public class BrainModule
             foreach ((string attrId, string type, string name, string _) in attrs)
                 if (type == "label" && name == DirtyLabel)
                     try { await trilium.DeleteAttribute(attrId); }
-                    catch (Exception ex) { Common.Logger.LogWarning("[Brain] ClearDirty failed for '{Title}': {Msg}", title, ex.Message); }
+                    catch (Exception ex) { Shared.Logger.LogWarning("[Brain] ClearDirty failed for '{Title}': {Msg}", title, ex.Message); }
         }
     }
 
@@ -623,7 +624,7 @@ public class BrainModule
             string folder = noteFolderCache.TryGetValue(id, out string? ff) ? ff : string.Empty;
             UpdateContentCache(title, folder, resolved);
             updated++;
-            Common.Logger.LogInformation("[Brain] Hub '{Title}' linked to {Count} child note(s): {Kids}", title, missing.Count, string.Join(", ", missing));
+            Shared.Logger.LogInformation("[Brain] Hub '{Title}' linked to {Count} child note(s): {Kids}", title, missing.Count, string.Join(", ", missing));
         }
         return updated;
     }
@@ -652,7 +653,7 @@ public class BrainModule
 
         if (deleted > 0)
         {
-            Common.Logger.LogInformation("[Brain] Cleaned {Count} duplicate Unknown stub(s).", deleted);
+            Shared.Logger.LogInformation("[Brain] Cleaned {Count} duplicate Unknown stub(s).", deleted);
             cachedTitles = null;
         }
         return deleted;
@@ -680,8 +681,8 @@ public class BrainModule
                 noteFolderCache[id]   = string.Join("/", folders);
                 cachedTitles          = null;
             }
-            catch (HttpRequestException ex) when (ex.StatusCode is null) { triliumReady = false; Common.Logger.LogError("[Brain] AddNotes aborted — Trilium unreachable: {Message}", ex.Message); return; }
-            catch (Exception ex) { Common.Logger.LogWarning("[Brain] Register failed for '{Name}': {Message}", add.NoteName, ex.Message); }
+            catch (HttpRequestException ex) when (ex.StatusCode is null) { triliumReady = false; Shared.Logger.LogError("[Brain] AddNotes aborted — Trilium unreachable: {Message}", ex.Message); return; }
+            catch (Exception ex) { Shared.Logger.LogWarning("[Brain] Register failed for '{Name}': {Message}", add.NoteName, ex.Message); }
         }
 
         // Main pass: fill in content with links resolved. Per-note isolation — a single bad
@@ -689,8 +690,8 @@ public class BrainModule
         foreach (EngramAdd add in adds)
         {
             try { await SaveAdd(add); }
-            catch (HttpRequestException ex) when (ex.StatusCode is null) { triliumReady = false; Common.Logger.LogError("[Brain] AddNotes aborted — Trilium unreachable: {Message}", ex.Message); return; }
-            catch (Exception ex) { Common.Logger.LogWarning("[Brain] Add failed for '{Name}': {Message}", add.NoteName, ex.Message); }
+            catch (HttpRequestException ex) when (ex.StatusCode is null) { triliumReady = false; Shared.Logger.LogError("[Brain] AddNotes aborted — Trilium unreachable: {Message}", ex.Message); return; }
+            catch (Exception ex) { Shared.Logger.LogWarning("[Brain] Add failed for '{Name}': {Message}", add.NoteName, ex.Message); }
         }
     }
 
@@ -708,8 +709,8 @@ public class BrainModule
         foreach (EngramEdit edit in edits)
         {
             try { await SaveEdit(edit); }
-            catch (HttpRequestException ex) when (ex.StatusCode is null) { triliumReady = false; Common.Logger.LogError("[Brain] EditNotes aborted — Trilium unreachable: {Message}", ex.Message); return; }
-            catch (Exception ex) { Common.Logger.LogWarning("[Brain] Edit failed for '{Name}': {Message}", edit.NoteName, ex.Message); }
+            catch (HttpRequestException ex) when (ex.StatusCode is null) { triliumReady = false; Shared.Logger.LogError("[Brain] EditNotes aborted — Trilium unreachable: {Message}", ex.Message); return; }
+            catch (Exception ex) { Shared.Logger.LogWarning("[Brain] Edit failed for '{Name}': {Message}", edit.NoteName, ex.Message); }
         }
     }
 
@@ -730,7 +731,7 @@ public class BrainModule
         string? intoId = await FindNoteId(intoName);
         if (intoId is null)
         {
-            Common.Logger.LogWarning("[Brain] Merge skipped — target '{Into}' not found.", intoName);
+            Shared.Logger.LogWarning("[Brain] Merge skipped — target '{Into}' not found.", intoName);
             return false;
         }
 
@@ -754,7 +755,7 @@ public class BrainModule
         // note, as happened with 'Immediate Family'). Refuse — keep it as a sub-hub and link to it.
         if (await trilium.HasChildNotes(fromId))
         {
-            Common.Logger.LogWarning("[Brain] Merge skipped — '{From}' has child notes; it is a sub-hub, not a duplicate. Keep it and link to it from '{Into}'.", fromName, intoName);
+            Shared.Logger.LogWarning("[Brain] Merge skipped — '{From}' has child notes; it is a sub-hub, not a duplicate. Keep it and link to it from '{Into}'.", fromName, intoName);
             return false;
         }
 
@@ -774,7 +775,7 @@ public class BrainModule
         // 3. Delete the loser (its exact title still resolves to it until removed).
         await DeleteNote(fromName);
 
-        Common.Logger.LogInformation("[Brain] Merged '{From}' into '{Into}'.", fromName, intoTitle);
+        Shared.Logger.LogInformation("[Brain] Merged '{From}' into '{Into}'.", fromName, intoTitle);
         return true;
     }
 
@@ -853,11 +854,11 @@ public class BrainModule
                     string newBranchId = await trilium.MoveNoteToFolderPath(branchId, existingId, folders);
                     branchIdCache[existingId] = newBranchId;
                     moved = true;
-                    Common.Logger.LogInformation("added (moved): {From} → {To}", $"{currentFolder}/{name}", add.NoteName);
+                    Shared.Logger.LogInformation("added (moved): {From} → {To}", $"{currentFolder}/{name}", add.NoteName);
                 }
                 else
                 {
-                    Common.Logger.LogWarning("[Brain] Move skipped — could not resolve branch for '{Name}'.", add.NoteName);
+                    Shared.Logger.LogWarning("[Brain] Move skipped — could not resolve branch for '{Name}'.", add.NoteName);
                 }
             }
 
@@ -866,7 +867,7 @@ public class BrainModule
             if (moved || string.Equals(currentFolder, targetFolder, StringComparison.OrdinalIgnoreCase))
                 noteFolderCache[existingId] = targetFolder;
             UpdateContentCache(name, targetFolder, resolved);
-            Common.Logger.LogInformation("added (updated): {Name}", add.NoteName);
+            Shared.Logger.LogInformation("added (updated): {Name}", add.NoteName);
         }
         else
         {
@@ -877,7 +878,7 @@ public class BrainModule
             noteFolderCache[id] = string.Join("/", folders);
             await ApplyAliases(id, name, add.Aliases);
             UpdateContentCache(name, string.Join("/", folders), resolved);
-            Common.Logger.LogInformation("added: {Name}", add.NoteName);
+            Shared.Logger.LogInformation("added: {Name}", add.NoteName);
         }
     }
 
@@ -888,7 +889,7 @@ public class BrainModule
 
         if (noteId is null)
         {
-            Common.Logger.LogWarning("[Brain] Edit failed — '{Name}' not found.", currentName);
+            Shared.Logger.LogWarning("[Brain] Edit failed — '{Name}' not found.", currentName);
             return;
         }
 
@@ -897,7 +898,7 @@ public class BrainModule
         await trilium.UpdateNoteContent(noteId, resolved);
         string currentFolder = noteFolderCache.TryGetValue(noteId, out string? cf) ? cf : "Unknown";
         UpdateContentCache(currentName, currentFolder, resolved);
-        Common.Logger.LogInformation("edited: {Name}", currentName);
+        Shared.Logger.LogInformation("edited: {Name}", currentName);
 
         if (string.IsNullOrWhiteSpace(edit.NewNoteName))
         {
@@ -921,7 +922,7 @@ public class BrainModule
         }
         else
         {
-            Common.Logger.LogWarning("[Brain] Move skipped — could not resolve branch for '{Name}'.", edit.NoteName);
+            Shared.Logger.LogWarning("[Brain] Move skipped — could not resolve branch for '{Name}'.", edit.NoteName);
         }
 
         bool renamed = !string.Equals(currentName, newName, StringComparison.OrdinalIgnoreCase);
@@ -942,11 +943,11 @@ public class BrainModule
         await ApplyAliases(noteId, effectiveName, aliasSet);
 
         if (moved && renamed)
-            Common.Logger.LogInformation("moved+renamed: {From} → {To}", edit.NoteName, edit.NewNoteName);
+            Shared.Logger.LogInformation("moved+renamed: {From} → {To}", edit.NoteName, edit.NewNoteName);
         else if (moved)
-            Common.Logger.LogInformation("moved: {From} → {To}", edit.NoteName, edit.NewNoteName);
+            Shared.Logger.LogInformation("moved: {From} → {To}", edit.NoteName, edit.NewNoteName);
         else if (renamed)
-            Common.Logger.LogInformation("renamed: {From} → {To}", edit.NoteName, edit.NewNoteName);
+            Shared.Logger.LogInformation("renamed: {From} → {To}", edit.NoteName, edit.NewNoteName);
     }
 
     /// <summary>Finds note IDs for all [[Name]] placeholders in html, creating Unknown stubs if needed.</summary>
@@ -990,7 +991,7 @@ public class BrainModule
         branchIdCache[newId]   = branchId;
         noteFolderCache[newId] = "Unknown";
         cachedTitles           = null;
-        Common.Logger.LogInformation("created stub: {Name}", name);
+        Shared.Logger.LogInformation("created stub: {Name}", name);
         return newId;
     }
 

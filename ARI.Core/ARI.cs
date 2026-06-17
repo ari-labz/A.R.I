@@ -1,181 +1,187 @@
+using ARI.Common;
+using CommonModules = ARI.Common.Modules;
 using ARI.Core.Scripts;
 using ARI.Discord;
 using ARI.LLM;
 using ARI.Voice;
 using ARI.VoiceSynthesis;
 using ARI.API;
+using ARI.API.Data;
 using ARI.Brain;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using APIConfig = ARI.API.APIConfig;
-using Common = ARI.Core.Scripts.Common;
 
 namespace ARI.Core;
 
 public class ARI : BackgroundService
 {
-
     public static ARI instance;
-    
-    //config
+
     private AriConfig config;
-    
+
     // modules
     public DiscordModule? discordService;
-    public APIModule? apiModule;
-    public BrainModule? brainModule;
-    
+    public APIModule?     apiModule;
+    public BrainModule?   brainModule;
+    public VoiceModule?           voiceModule;
+    public VoiceSynthesisModule?  voiceSynthesisModule;
+    private LLMModule?           llmModule;
+
     private readonly ILoggerFactory loggerFactory;
-    private Docker? docker;
-    private ModelManager? modelManager;
+    private Docker?              docker;
     private StyleTtsSynthesiser? synthesiser;
-    private SpeechQueue? speechQueue;
-    private bool containersStarted;
+    private SpeechQueue?         speechQueue;
     private bool startupFailed;
     private static System.Diagnostics.Process? clientProcess;
 
     public ARI(ILoggerFactory loggerFactory)
     {
         this.loggerFactory = loggerFactory;
-        Common.InitialiseLogger(loggerFactory);
+        Shared.InitialiseLogger(loggerFactory, "ARI.Core");
     }
 
-    // Launch ARI
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        try
-        {
-            await Startup(stoppingToken);
-        }
+        try   { await Startup(stoppingToken); }
         catch (Exception ex)
         {
             startupFailed = true;
-            Common.Logger.LogCritical("Startup failed: {Error}", ex.Message);
+            Shared.Logger.LogCritical("Startup failed: {Error}", ex.Message);
             throw;
         }
     }
 
     private async Task Startup(CancellationToken stoppingToken)
     {
-        Common.Logger.LogInformation("ARI is starting...");
+        Shared.Logger.LogInformation("ARI is starting...");
 
         string executableDirectory = AppDomain.CurrentDomain.BaseDirectory;
         config = AriConfig.LoadFrom(Path.Combine(executableDirectory, "AriConfig.json"));
 
-        if (config.Modules.API)
-        {
-            Common.Logger.LogInformation("Web panel module is enabled. Starting on port {Port}...", config.WebPanel.Port);
-
-            string styleTtsPath = ResolvePath(executableDirectory, config.Modules.VoiceSynthesis ? config.VoiceSynthesis.StyleTtsPath : "");
-            string voicesPath   = ResolvePath(executableDirectory, config.Modules.VoiceSynthesis ? config.VoiceSynthesis.VoicesPath   : "");
-
-            apiModule = new APIModule(loggerFactory, new APIConfig
-            {
-                Port               = config.WebPanel.Port,
-                GoogleClientId     = config.Modules.GoogleOAuth ? config.WebPanel.Google.ClientId     : "",
-                GoogleClientSecret = config.Modules.GoogleOAuth ? config.WebPanel.Google.ClientSecret : "",
-                AllowedEmail       = config.Modules.GoogleOAuth ? config.WebPanel.Google.AllowedEmail : "",
-                AllowedEmails      = config.Modules.GoogleOAuth ? config.WebPanel.Google.EffectiveAllowedEmails.ToList() : new(),
-                LogPath            = Path.Combine(executableDirectory, "ARI.log"),
-                StyleTtsPath       = styleTtsPath,
-                VoicesPath         = voicesPath,
-            });
-            await apiModule.Start(stoppingToken);
-        }
-
-        string fullComposePath = Path.Combine(executableDirectory, "compose.yaml");
-        docker = new Docker(fullComposePath);
+        await Dependency.CheckPython();
         await Dependency.CheckDocker();
+        await Dependency.CheckHomebrew();
+        await Dependency.CheckLlamaCpp();
+
+        docker = new Docker(Path.Combine(executableDirectory, config.DockerComposePath));
         await docker.IsRunning();
         await docker.StartContainers();
-        containersStarted = true;
-        
 
-        LlmService? llmService = null;
-        if (config.Modules.Llm)
+        // ── Shared infrastructure ────────────────────────────────────────────────
+        PersistentData persistentData = new();
+
+        // ── LLM module ───────────────────────────────────────────────────────────
+        string modelsPath = ResolvePath(executableDirectory, config.modules.LLM.ModelsPath);
+
+        if (config.modules.LLM.Enabled)
         {
-            await Dependency.CheckPython();
+            string serversJsonPath = Path.Combine(executableDirectory, "Servers.json");
+            persistentData.SeedFromFile(serversJsonPath);
 
-            modelManager = new ModelManager(config.Llm, executableDirectory, apiModule!.ModelManagerHolder, loggerFactory);
-            await modelManager.StartAllServersAsync();
+            BrainConfig? brainConfig = config.modules.Brain?.Enabled == true ? config.modules.Brain : null;
 
-            Dictionary<string, string> serverEndpoints = config.Llm.Servers
-                .Where(s => !string.IsNullOrWhiteSpace(s.Name) && !string.IsNullOrWhiteSpace(s.Endpoint))
-                .ToDictionary(s => s.Name, s => s.Endpoint);
-
-            global::ARI.Brain.BrainConfig? brainConfig = config.Modules.Brain ? config.Brain : null;
-
-            Common.Logger.LogInformation("Loading agents...");
-            llmService = new LlmService(config.Agents, serverEndpoints, brainConfig, loggerFactory);
-            Common.Logger.LogInformation("Agents loaded.");
-
-            apiModule?.Holder.Set(llmService);
+            Shared.Logger.LogInformation("Loading agents...");
+            llmModule = new LLMModule(
+                servers:        persistentData.GetServers().ToList(),
+                agentsJsonPath: Path.Combine(executableDirectory, "Agents.json"),
+                brainConfig:    brainConfig,
+                loggerFactory:  loggerFactory);
+            Shared.Logger.LogInformation("Agents loaded.");
         }
 
-        Common.Logger.LogInformation("ARI is ready.");
+        // ── Voice setup ──────────────────────────────────────────────────────────
 
-        if (config.Modules.Client && config.Modules.API)
-            LaunchClient(executableDirectory, config.WebPanel.Port);
+        voiceSynthesisModule = new VoiceSynthesisModule();
 
-        List<Task> moduleTasks = new();
-
-        if (config.Modules.VoiceSynthesis)
+        if (config.modules.VoiceSynthesis.Enabled)
         {
-            Common.Logger.LogInformation("VoiceSynthesis module is enabled. Installing StyleTTS2...");
-            string sttPath = ResolvePath(executableDirectory, config.VoiceSynthesis.StyleTtsPath);
-            StyleTtsSetupService setup = new(sttPath, loggerFactory.CreateLogger("ARI.VoiceSynthesis"));
-            await setup.Install();
-            apiModule?.TrainerHolder.MarkSetupComplete();
-            Common.Logger.LogInformation("VoiceSynthesis ready.");
+            Shared.Logger.LogInformation("VoiceSynthesis module is enabled. Installing StyleTTS2...");
+            string sttPath = ResolvePath(executableDirectory, config.modules.VoiceSynthesis.StyleTtsPath);
+            await new StyleTtsSetupService(sttPath, loggerFactory.CreateLogger("ARI.VoiceSynthesis")).Install();
+            voiceSynthesisModule.MarkSetupComplete();
+            Shared.Logger.LogInformation("VoiceSynthesis ready.");
         }
 
-        if (config.Modules.Voice)
+        if (config.modules.Voice.Enabled)
         {
-            string sttPath    = ResolvePath(executableDirectory, config.VoiceSynthesis.StyleTtsPath);
-            string voicesPath = ResolvePath(executableDirectory, config.VoiceSynthesis.VoicesPath);
-            string modelName  = config.Voice.ModelName;
+            string sttPath    = ResolvePath(executableDirectory, config.modules.VoiceSynthesis.StyleTtsPath);
+            string voicesPath = ResolvePath(executableDirectory, config.modules.VoiceSynthesis.VoicesPath);
+            string modelName  = config.modules.Voice.ModelName;
             string modelDir   = Path.Combine(voicesPath, modelName);
-            string modelPath    = Path.Combine(modelDir, "model.pth");
-            string configPath   = Path.Combine(modelDir, "config.yml");
-            string refAudioPath = FindReferenceAudio(modelDir, sttPath, modelName);
+            string modelPath  = Path.Combine(modelDir, "model.pth");
+            string configPath = Path.Combine(modelDir, "config.yml");
+            string refAudio   = FindReferenceAudio(modelDir, sttPath, modelName);
 
             if (!File.Exists(modelPath) || !File.Exists(configPath))
-            {
-                Common.Logger.LogWarning("Voice module enabled but no model found at {Path} — skipping.", modelDir);
-            }
-            else if (string.IsNullOrEmpty(refAudioPath))
-            {
-                Common.Logger.LogWarning("Voice module enabled but no reference audio found for {Model} — skipping.", modelName);
-            }
+                Shared.Logger.LogWarning("Voice module enabled but no model found at {Path} — skipping.", modelDir);
+            else if (string.IsNullOrEmpty(refAudio))
+                Shared.Logger.LogWarning("Voice module enabled but no reference audio found for {Model} — skipping.", modelName);
             else
             {
                 ILogger voiceLogger = loggerFactory.CreateLogger("ARI.Voice");
-                Common.Logger.LogInformation("Voice loading model: {Model}", modelName);
-                synthesiser = new StyleTtsSynthesiser(sttPath, modelPath, configPath, refAudioPath, voiceLogger);
+                Shared.Logger.LogInformation("Voice loading model: {Model}", modelName);
+                synthesiser = new StyleTtsSynthesiser(sttPath, modelPath, configPath, refAudio, voiceLogger);
                 await synthesiser.Start(stoppingToken);
-
-                Common.Logger.LogInformation("Voice warming up...");
                 await synthesiser.Warmup(stoppingToken);
 
                 speechQueue = new SpeechQueue(synthesiser, voiceLogger);
                 string pythonPath = Path.Combine(sttPath, OperatingSystem.IsWindows() ? @"venv\Scripts\python.exe" : "venv/bin/python");
                 speechQueue.AudioReady += wav => PlayAudio(wav, pythonPath, voiceLogger);
 
-                apiModule?.SpeechHolder.Set(synthesiser, speechQueue, modelName);
-                Common.Logger.LogInformation("Voice ready.");
+                voiceModule = new VoiceModule(synthesiser, speechQueue, modelName);
+                Shared.Logger.LogInformation("Voice ready.");
             }
         }
 
-        if (config.Modules.Discord && config.Discord is not null && llmService is not null)
+        // ── API ──────────────────────────────────────────────────────────────────
+        if (config.modules.API.Enabled)
         {
-            Common.Logger.LogInformation("Discord module is enabled. Starting...");
-            discordService = new DiscordModule(loggerFactory, llmService, config.Discord);
+            Shared.Logger.LogInformation("Web panel module is enabled. Starting on port {Port}...", config.modules.API.Port);
+
+            apiModule = new APIModule(
+                loggerFactory:        loggerFactory,
+                config:               config.modules.API,
+                voiceSynthesisConfig: config.modules.VoiceSynthesis,
+                modelsPath:           modelsPath,
+                llm:                  llmModule,
+                persistentData:       persistentData,
+                voiceService:         voiceModule,
+                voiceTraining:        voiceSynthesisModule);
+
+            await apiModule.Start(stoppingToken);
+        }
+
+        // ── Start LLM servers (after API is up so status is visible) ────────────
+        if (llmModule is not null)
+        {
+            Shared.Logger.LogInformation("Starting LLM servers...");
+            await llmModule.StartServersAsync(persistentData.GetModels().ToList(), modelsPath);
+
+            foreach ((string name, var assignment) in persistentData.GetAgentAssignments())
+            {
+                llmModule.AssignAgentServer(name, assignment.ServerName);
+                llmModule.AssignAgentSlot(name, assignment.Slot);
+            }
+        }
+
+        // ── Discord ──────────────────────────────────────────────────────────────
+        List<Task> moduleTasks = new();
+
+        if (config.modules.Discord.Enabled)
+        {
+            Shared.Logger.LogInformation("Discord module is enabled. Starting...");
+            discordService = new DiscordModule(loggerFactory, llmModule, config.modules.Discord);
             await discordService.StartAsync(stoppingToken);
             if (discordService.ExecuteTask is not null)
                 moduleTasks.Add(discordService.ExecuteTask);
 
-            apiModule?.DiscordHolder.Set(msg => discordService.NotifyOwner(msg));
+            CommonModules.Register(discord: discordService);
         }
+
+        if (config.modules.API.Enabled)
+            LaunchClient(executableDirectory, config.modules.API.Port);
+
+        Shared.Logger.LogInformation("ARI is ready.");
 
         if (moduleTasks.Count > 0)
             await Task.WhenAny(moduleTasks.Concat(new[] { Task.Delay(Timeout.Infinite, stoppingToken) }));
@@ -185,11 +191,9 @@ public class ARI : BackgroundService
 
     private static string FindReferenceAudio(string modelDir, string styleTtsPath, string modelName)
     {
-        // Prefer reference.wav bundled with the model
         string bundled = Path.Combine(modelDir, "reference.wav");
         if (File.Exists(bundled)) return bundled;
 
-        // Fall back to training wavs in External/StyleTTS2/Data
         string audioDir = Path.Combine(styleTtsPath, "Data", modelName, "wavs");
         if (!Directory.Exists(audioDir)) return "";
         string[] wavs = Directory.GetFiles(audioDir, "*.wav");
@@ -224,15 +228,13 @@ public class ARI : BackgroundService
         {
             string stderr = await proc.StandardError.ReadToEndAsync();
             await proc.WaitForExitAsync();
-            if (proc.ExitCode != 0)
-                logger.LogError("[Voice] Playback failed: {Error}", stderr);
+            if (proc.ExitCode != 0) logger.LogError("[Voice] Playback failed: {Error}", stderr);
             try { File.Delete(scriptPath); } catch { }
         });
     }
 
     private static void LaunchClient(string executableDirectory, int port)
     {
-        // Walk up from the executable directory until we find ARI.Client/ari-client.sh
         string? scriptPath = null;
         DirectoryInfo? dir = new DirectoryInfo(executableDirectory);
         while (dir is not null)
@@ -244,55 +246,31 @@ public class ARI : BackgroundService
 
         if (scriptPath is null)
         {
-            Common.Logger.LogWarning("[Client] setup.sh not found — skipping client launch.");
+            Shared.Logger.LogWarning("[Client] setup.sh not found — skipping client launch.");
             return;
         }
 
-        // Kill any previous client process before launching a new one
         try
         {
             if (clientProcess is not null && !clientProcess.HasExited)
             {
-                Common.Logger.LogInformation("[Client] Stopping previous client instance (PID {Pid})...", clientProcess.Id);
+                Shared.Logger.LogInformation("[Client] Stopping previous client instance (PID {Pid})...", clientProcess.Id);
                 clientProcess.Kill(entireProcessTree: true);
                 clientProcess.WaitForExit(3000);
             }
         }
-        catch { /* process may have already exited */ }
+        catch { }
         clientProcess = null;
 
-        Common.Logger.LogInformation("[Client] Launching ARI.Client...");
-
-        // ARI_BASE_URL is read by setup.sh → passed into the Tauri app
+        Shared.Logger.LogInformation("[Client] Launching ARI.Client...");
         Environment.SetEnvironmentVariable("ARI_BASE_URL", $"http://localhost:{port}");
 
-        var psi = new System.Diagnostics.ProcessStartInfo
-        {
-            FileName               = "/bin/bash",
-            Arguments              = $"\"{scriptPath}\"",
-            UseShellExecute        = true,
-            CreateNoWindow         = false,
-        };
+        var psi = OperatingSystem.IsMacOS()
+            ? new System.Diagnostics.ProcessStartInfo("open", $"-a Terminal \"{scriptPath}\"") { UseShellExecute = false }
+            : new System.Diagnostics.ProcessStartInfo("/bin/bash", $"\"{scriptPath}\"") { UseShellExecute = true, CreateNoWindow = false };
 
-        // On macOS open in a new Terminal window
-        if (OperatingSystem.IsMacOS())
-        {
-            psi = new System.Diagnostics.ProcessStartInfo
-            {
-                FileName        = "open",
-                Arguments       = $"-a Terminal \"{scriptPath}\"",
-                UseShellExecute = false,
-            };
-        }
-
-        try
-        {
-            clientProcess = System.Diagnostics.Process.Start(psi);
-        }
-        catch (Exception ex)
-        {
-            Common.Logger.LogWarning("[Client] Failed to launch client: {Error}", ex.Message);
-        }
+        try { clientProcess = System.Diagnostics.Process.Start(psi); }
+        catch (Exception ex) { Shared.Logger.LogWarning("[Client] Failed to launch client: {Error}", ex.Message); }
     }
 
     private static string ResolvePath(string baseDir, string path)
@@ -305,13 +283,13 @@ public class ARI : BackgroundService
     {
         if (startupFailed) return;
 
-        Common.Logger.LogInformation("ARI is shutting down...");
+        Shared.Logger.LogInformation("ARI is shutting down...");
 
         try
         {
             if (clientProcess is not null && !clientProcess.HasExited)
             {
-                Common.Logger.LogInformation("[Client] Stopping client process...");
+                Shared.Logger.LogInformation("[Client] Stopping client process...");
                 clientProcess.Kill(entireProcessTree: true);
             }
         }
@@ -324,12 +302,13 @@ public class ARI : BackgroundService
         speechQueue?.Dispose();
         synthesiser?.Dispose();
 
+        llmModule?.StopAllServersAsync();
+        llmModule?.Dispose();
+
         if (apiModule is not null)
             await apiModule.Stop(cancellationToken);
 
-        modelManager?.Dispose();
-
-        if (docker != null && containersStarted)
+        if (docker != null && docker.containersRunning)
             await docker.StopContainers();
 
         await base.StopAsync(cancellationToken);
