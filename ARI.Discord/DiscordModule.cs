@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ARI.Discord;
 
-public class DiscordService : BackgroundService
+public class DiscordModule : BackgroundService
 {
     private const int MAX_MESSAGE_LENGTH = 2000;
     private const int MESSAGE_SEND_DELAY_MS = 500;
@@ -30,7 +30,7 @@ public class DiscordService : BackgroundService
         "If the conversation was clearly not directed at you and you don't need to be involved, reply with only: [PASS] — nothing else. " +
         "Otherwise, reply normally.";
 
-    public DiscordService(ILoggerFactory loggerFactory, LlmService llmService, DiscordConfig config)
+    public DiscordModule(ILoggerFactory loggerFactory, LlmService llmService, DiscordConfig config)
     {
         Common.InitialiseLogger(loggerFactory);
         Common.Logger.LogInformation("Initialising Discord...");

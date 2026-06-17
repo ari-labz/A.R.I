@@ -16,7 +16,7 @@ internal class Memory : Agent
     private const int TRANSCRIPT_LIMIT  = 5;
     private const int MAX_CANDIDATES    = 20; // cap on notes shown to the LLM filter, keeps prompt size flat at scale
 
-    private readonly BrainService brain;
+    private readonly BrainModule brain;
     private readonly int          fetchDepth;
     private readonly string       brainPublicUrl;
 
@@ -24,7 +24,7 @@ internal class Memory : Agent
 
     internal override ThreadType Type => ThreadType.Memory;
 
-    internal Memory(AgentConfig config, BrainService brain, int fetchDepth, string brainPublicUrl) : base(config)
+    internal Memory(AgentConfig config, BrainModule brain, int fetchDepth, string brainPublicUrl) : base(config)
     {
         this.brain          = brain;
         this.fetchDepth     = fetchDepth;

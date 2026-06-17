@@ -13,7 +13,7 @@ using System.Security.Claims;
 
 namespace ARI.API;
 
-public class WebPanelConfig
+public class APIConfig
 {
     public int Port { get; init; } = 5000;
     public string GoogleClientId { get; init; } = "";
@@ -29,11 +29,11 @@ public class WebPanelConfig
     public string VoicesPath   { get; init; } = "";
 }
 
-public class ApiService : IAsyncDisposable
+public class APIModule : IAsyncDisposable
 {
     private readonly ILoggerFactory loggerFactory;
     private readonly LlmServiceHolder    holder;
-    private readonly WebPanelConfig      config;
+    private readonly APIConfig      config;
     private readonly SystemInfoHolder    systemInfo;
     private readonly DiscordServiceHolder discordHolder;
     private readonly SpeechQueueHolder   speechHolder;
@@ -62,7 +62,7 @@ public class ApiService : IAsyncDisposable
     public ModelNotesStore      ModelNotesStore     => modelNotesStore;
     public ModelSettingsStore   ModelSettingsStore  => modelSettingsStore;
 
-    public ApiService(ILoggerFactory loggerFactory, WebPanelConfig config)
+    public APIModule(ILoggerFactory loggerFactory, APIConfig config)
     {
         this.loggerFactory     = loggerFactory;
         this.holder            = new LlmServiceHolder();

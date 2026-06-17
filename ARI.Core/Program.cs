@@ -22,7 +22,7 @@ IHost host = Host.CreateDefaultBuilder(args)
     .UseSerilog()
     .ConfigureServices((context, services) =>
     {
-        services.AddHostedService<AriHostService>();
+        services.AddHostedService<ARI.Core.ARI>();
     })
     .Build();
 

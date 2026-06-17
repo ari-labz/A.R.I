@@ -1,57 +1,57 @@
 {
-  "Modules": {
-    "WebPanel": true,
-    "GoogleOAuth": true,
-    "Llm": true,
-    "Docker": true,
-    "Brain": true,
-    "Discord": true,
-    "VoiceSynthesis": true,
-    "Voice": true,
-    "Client": true
-  },
-  "Voice": {
-    "ModelName": "Voice v1"
-  },
-  "VoiceSynthesis": {
-    "StyleTtsPath": "../../../../External/StyleTTS2",
-    "VoicesPath": "../../../../Voices"
-  },
-  "WebPanel": {
-    "Port": 5074,
-    "Google": {
-      "ClientId": "886723798260-eapta34u4n4bug81ut10bq2399leu9vn.apps.googleusercontent.com",
-      "ClientSecret": "[REDACTED]",
-      "AllowedEmail": "owner@example.com"
+  "Modules": 
+  {
+    "API": {
+      "Port": 5074,
+      "Google": {
+        "ClientId": "886723798260-eapta34u4n4bug81ut10bq2399leu9vn.apps.googleusercontent.com",
+        "ClientSecret": "[REDACTED]",
+        "AllowedEmail": "owner@example.com"
+      }
+    },
+    "LLM": 
+    {
+      "ModelsPath": "/Users/user/Documents/GitHub/A.R.I/Models"
+    },
+    "Voice": 
+    {
+      "ModelName": "Voice v1"
+    },
+    "VoiceSynthesis": 
+    {
+      "StyleTtsPath": "../../../../External/StyleTTS2",
+      "VoicesPath": "../../../../Voices"
+    },
+    "Brain": {
+      "TriliumUrl": "http://localhost:8080",
+      "EtapiToken": "[REDACTED]",
+      "RootNoteId": "root",
+      "BrainCacheSize": 50,
+      "BackupPath": "./Backups",
+      "MaxBackups": 5
+    },
+    "Discord": 
+    {
+      "Token": "[REDACTED]",
+      "OwnerId": 0,
+      "WhitelistedUserIds": 
+      [
+        0,
+        0
+      ],
+      "WatchedChannelIds": 
+      [
+        0
+      ],
+      "AllowedGuildIds": 
+      [
+        0
+      ]
     }
   },
-  "Trilium": {
-    "Endpoint": "http://localhost:8080"
-  },
-  "Docker": {
-    "ComposePath": "compose.yaml"
-  },
-  "Llm": {
-    "ModelsPath": "/Users/user/Documents/GitHub/A.R.I/Models",
-    "Servers": [
-      {
-        "Name": "Logic",
-        "Endpoint": "http://localhost:8081",
-        "Port": 8081,
-        "ContextSize": 131072,
-        "ParallelSlots": 1,
-        "StartupModel": "Qwen3-Coder-30B-A3B/Qwen3-Coder-30B-A3B-Instruct-UD-Q5_K_XL.gguf"
-      },
-      {
-        "Name": "Dialogue",
-        "Endpoint": "http://localhost:8082",
-        "Port": 8082,
-        "ContextSize": 16384,
-        "ParallelSlots": 1,
-        "StartupModel": "Gemma4-12B/gemma-4-12b-it-Q5_K_M.gguf"
-      }
-    ]
-  },
+  
+  
+  //todo move these to persistent data
   "Agents": [
     {
       "Name": "Dialogue",
@@ -131,27 +131,5 @@
       "Temperature": 0.5,
       "Enabled": true
     }
-  ],
-  "Brain": {
-    "TriliumUrl": "http://localhost:8080",
-    "EtapiToken": "[REDACTED]",
-    "RootNoteId": "root",
-    "BrainCacheSize": 50,
-    "BackupPath": "./Backups",
-    "MaxBackups": 5
-  },
-  "Discord": {
-    "Token": "[REDACTED]",
-    "OwnerId": 0,
-    "WhitelistedUserIds": [
-      0,
-      0
-    ],
-    "WatchedChannelIds": [
-      0
-    ],
-    "AllowedGuildIds": [
-      0
-    ]
-  }
+  ]
 }
