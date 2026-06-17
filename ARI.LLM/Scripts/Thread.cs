@@ -556,6 +556,10 @@ public class Thread
         Dictionary<string, int> readCounts  = new(StringComparer.OrdinalIgnoreCase);
         // Tracks files edited this turn so stale old_string errors include a re-read hint.
         HashSet<string>         editedFiles = new(StringComparer.OrdinalIgnoreCase);
+        // Files for which a streaming edit was aborted once for read-before-edit. A second attempt
+        // on the same file is allowed through so we never livelock: if the model insists, the normal
+        // old_string / line-range path will report any genuine problem instead.
+        HashSet<string>         earlyEditAbortedOnce = new(StringComparer.OrdinalIgnoreCase);
         // Counts consecutive failed edit attempts per file this turn, to escalate guidance and
         // ultimately cut off tool access rather than letting the model spiral on the same edit.
         Dictionary<string, int> editFailStreak = new(StringComparer.OrdinalIgnoreCase);
@@ -740,6 +744,13 @@ public class Thread
             string? xmlFallbackOriginalText = null;
             responseBuilder.Clear();
 
+            // Streaming fail-fast: when a tool call's arguments reveal an unrecoverable precondition
+            // violation (e.g. edit_file on a file never read this turn), we cancel the generation
+            // mid-stream rather than waiting for the model to finish emitting a large new_string.
+            // The aborted call is recorded with an injected error so the model can retry next loop.
+            (string Id, string Name, string Args, string Error)? earlyAbort = null;
+            HashSet<int> precheckedCalls = new();
+
             string? line;
             while ((line = await reader.ReadLineAsync(ct)) is not null)
             {
@@ -822,6 +833,40 @@ public class Thread
                                 {
                                     call.Args.Append(argsDelta);
 
+                                    // Streaming fail-fast: the moment edit_file's `path` has fully
+                                    // arrived, check read-before-edit. If the file was never read this
+                                    // turn the model is about to fabricate old_string, so abort now —
+                                    // before the (potentially huge) new_string streams in and burns the
+                                    // whole output budget on a call that can only fail.
+                                    if (earlyAbort is null && call.Name == "edit_file" && !precheckedCalls.Contains(index))
+                                    {
+                                        string? editPath = ToolCallParser.TryExtractJsonString(call.Args.ToString(), "path");
+                                        if (editPath is not null)
+                                        {
+                                            precheckedCalls.Add(index);
+                                            string ekey = NormKey(editPath);
+                                            bool readThisTurn = readCounts.ContainsKey(ekey)
+                                                || editedFiles.Contains(ekey)
+                                                || threadAtts.Any(a => NormKey(a.Name) == ekey)
+                                                || msgAtts.Any(a => NormKey(a.Name) == ekey);
+                                            // A read_file/preview_file for the same file earlier in THIS
+                                            // batch hasn't executed yet (reads run after streaming), so
+                                            // don't false-abort an in-batch read+edit pairing.
+                                            bool readInBatch = pendingCalls.Values.Any(pc =>
+                                                (pc.Name == "read_file" || pc.Name == "preview_file")
+                                                && ToolCallParser.TryExtractJsonString(pc.Args.ToString(), "path") is { } rp
+                                                && NormKey(rp) == ekey);
+                                            if (!readThisTurn && !readInBatch && !earlyEditAbortedOnce.Contains(ekey))
+                                            {
+                                                earlyEditAbortedOnce.Add(ekey);
+                                                earlyAbort = (call.Id, call.Name, call.Args.ToString(),
+                                                    $"[System: Aborted before the edit completed — you have not read {editPath} this turn, so any old_string would be guessed and the edit would fail. Call preview_file then read_file (with start_line/end_line) on {editPath} first, then edit it.]");
+                                                Common.Logger.LogWarning("[{Agent}] ({Thread}) Streaming abort: edit_file on unread file '{File}' — generation cancelled mid-stream.", agent.Name, threadKey, editPath);
+                                                break;
+                                            }
+                                        }
+                                    }
+
                                     // Live streaming start marker: update counts as args stream in.
                                     if (tools.TryGetValue(call.Name, out var liveTool) && liveTool.StreamingDisplay is not null)
                                     {
@@ -848,6 +893,9 @@ public class Thread
                                 }
                             }
                         }
+                        // A streaming precondition failure cancels the rest of the generation:
+                        // stop reading the stream and handle the abort after the loop.
+                        if (earlyAbort is not null) break;
                         continue;
                     }
 
@@ -877,6 +925,36 @@ public class Thread
                         }
                     }
                 }
+            }
+
+            // Streaming fail-fast: a precondition violation cancelled this generation. Record the
+            // attempted call (path only — the rest was never streamed) and inject the error as its
+            // result, then loop so the model corrects course. Costs ~the path's worth of tokens
+            // instead of a full failed turn.
+            if (earlyAbort is not null)
+            {
+                var (aId, aName, aArgs, aErr) = earlyAbort.Value;
+                string? aPath  = ToolCallParser.TryExtractJsonString(aArgs, "path");
+                string  safeArgs = JsonSerializer.Serialize(new { path = aPath ?? "" });
+
+                if (responseBuilder.Length > 0)
+                {
+                    string preText = responseBuilder.ToString().TrimEnd();
+                    if (preText.Length > 0) contentBuilder.Append(preText + "\n");
+                }
+
+                messages.Add(new { role = "assistant", tool_calls = new[]
+                    { new { id = aId, type = "function", function = new { name = aName, arguments = safeArgs } } } });
+                messages.Add(new { role = "tool", tool_call_id = aId, name = aName, content = aErr });
+                if (liveCallInfo is { } lcAbort) lcAbort.EstimatedInputTokens += aErr.Length / CHARS_PER_TOKEN;
+
+                string aLabel = aPath is not null ? System.IO.Path.GetFileName(aPath.Trim('"', '\'', ' ', '\\')) : "";
+                contentBuilder.Append($"<!--ari-tool-error:{aName}:{aLabel}:{ToolCallParser.EscapeLabel(aErr)}-->");
+                if (onDelta is not null) await onDelta(contentBuilder.ToString());
+
+                toolCallCount++;
+                Degrade();
+                continue;
             }
 
             if (pendingCalls.Count == 0 && responseBuilder.Length > 0)
