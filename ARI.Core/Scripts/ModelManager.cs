@@ -5,7 +5,7 @@ namespace ARI.Core.Scripts;
 
 public class ModelManager : IDisposable
 {
-    private readonly AriLLMConfig       llmConfig;
+    private readonly LLMConfig       llmConfig;
     private readonly string             modelsPath;
     private readonly ModelManagerHolder holder;
     private readonly ModelSettingsStore settingsStore;
@@ -15,7 +15,7 @@ public class ModelManager : IDisposable
     private readonly SemaphoreSlim switchLock = new(1, 1);
 
     public ModelManager(
-        AriLLMConfig       llmConfig,
+        LLMConfig       llmConfig,
         string             executableDirectory,
         ModelManagerHolder holder,
         ILoggerFactory     loggerFactory)

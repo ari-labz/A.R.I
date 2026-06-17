@@ -2,7 +2,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Diagnostics;
 
-namespace ARI.Core.Scripts;
+namespace ARI.Core;
 
 public static class Common
 {

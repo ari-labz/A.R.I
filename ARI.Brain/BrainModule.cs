@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ARI.Brain;
 
-public class BrainService
+public class BrainModule
 {
     private readonly TriliumClient trilium;
     private readonly int brainCacheSize;
@@ -31,7 +31,7 @@ public class BrainService
     private readonly LinkedList<string> contentCacheOrder = new();
     private readonly Dictionary<string, string> contentCacheStore = new(StringComparer.OrdinalIgnoreCase);
 
-    public BrainService(BrainConfig config, ILoggerFactory? loggerFactory = null)
+    public BrainModule(BrainConfig config, ILoggerFactory? loggerFactory = null)
     {
         if (loggerFactory is not null)
             Common.InitialiseLogger(loggerFactory);

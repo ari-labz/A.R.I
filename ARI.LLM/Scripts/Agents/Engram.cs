@@ -12,7 +12,7 @@ internal class Engram : Agent, IDisposable
     private const int ENGRAM_TRIGGER_DELAY = 5;
 
     private readonly Dialogue    dialogue;
-    private readonly BrainService brain;
+    private readonly BrainModule brain;
     private readonly Context?    context;
     private readonly string      brainPublicUrl;
     private readonly EngramBuffer buffer;
@@ -49,7 +49,7 @@ internal class Engram : Agent, IDisposable
 
     internal override ThreadType Type => ThreadType.Engram;
 
-    internal Engram(AgentConfig config, Dialogue dialogue, BrainService brain, Context? context, int fetchDepth = 7, string brainPublicUrl = "") : base(config)
+    internal Engram(AgentConfig config, Dialogue dialogue, BrainModule brain, Context? context, int fetchDepth = 7, string brainPublicUrl = "") : base(config)
     {
         this.dialogue       = dialogue;
         this.brain          = brain;

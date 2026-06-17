@@ -14,7 +14,7 @@ public class LlmService : IDisposable
     private readonly Engram?      engram;
     private readonly Refactor?    refactor;
     private readonly Classifier?  classifier;
-    private readonly BrainService? brain;
+    private readonly BrainModule? brain;
     private readonly CommandService commands;
 
     private readonly ConcurrentDictionary<string, CancellationTokenSource>                      processingThreads = new();
@@ -49,7 +49,7 @@ public class LlmService : IDisposable
             .ToDictionary(m => m.Name);
 
         brain = brainConfig is not null
-            ? new BrainService(brainConfig, loggerFactory)
+            ? new BrainModule(brainConfig, loggerFactory)
             : null;
 
         // Context is created first so it can be passed to Dialogue, which subscribes each new

@@ -1,6 +1,5 @@
-namespace ARI.Core.Scripts;
-
-public class AriLLMConfig
+namespace ARI.Core;
+public class LLMConfig
 {
     public string                  ModelsPath { get; init; } = "Models";
     public List<LlamaServerConfig> Servers    { get; init; } = new();
@@ -31,3 +30,4 @@ internal class LlamaModelConfig
 
     public string EffectiveName => System.IO.Path.GetFileNameWithoutExtension(File);
 }
+

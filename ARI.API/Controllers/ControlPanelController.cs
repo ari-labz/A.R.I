@@ -19,7 +19,7 @@ public class ControlPanelController : Controller
 
 [Route("api/cp")]
 [ApiController]
-public class ControlPanelApiController(LlmServiceHolder holder, WebPanelConfig config, SystemInfoHolder systemInfo) : ControllerBase
+public class ControlPanelApiController(LlmServiceHolder holder, APIConfig config, SystemInfoHolder systemInfo) : ControllerBase
 {
     private LlmService? Llm => holder.Service;
 
@@ -265,7 +265,7 @@ public class VoiceController(
     DiscordServiceHolder discordHolder,
     SpeechQueueHolder speechHolder,
     ModelManagerHolder modelManagerHolder,
-    WebPanelConfig config,
+    APIConfig config,
     ILoggerFactory loggerFactory,
     IHostApplicationLifetime lifetime) : ControllerBase
 {

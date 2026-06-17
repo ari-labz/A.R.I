@@ -6,7 +6,7 @@ IHost host = Host.CreateDefaultBuilder(args)
         services.Configure<DiscordConfig>(
             context.Configuration.GetSection("Discord"));
 
-        services.AddHostedService<DiscordService>();
+        services.AddHostedService<DiscordModule>();
     })
     .Build();
 

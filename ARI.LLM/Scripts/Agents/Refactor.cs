@@ -8,7 +8,7 @@ namespace ARI.LLM;
 
 internal class Refactor : Agent
 {
-    private readonly BrainService brain;
+    private readonly BrainModule brain;
     private readonly Engram?      engram;
     private readonly SemaphoreSlim runLock = new(1, 1);
 
@@ -18,7 +18,7 @@ internal class Refactor : Agent
 
     internal override ThreadType Type => ThreadType.Refactor;
 
-    internal Refactor(AgentConfig config, BrainService brain, Engram? engram = null) : base(config)
+    internal Refactor(AgentConfig config, BrainModule brain, Engram? engram = null) : base(config)
     {
         this.brain  = brain;
         this.engram = engram;

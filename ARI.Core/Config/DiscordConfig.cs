@@ -1,4 +1,4 @@
-namespace ARI.Discord;
+namespace ARI.Core;
 
 public class DiscordConfig
 {
