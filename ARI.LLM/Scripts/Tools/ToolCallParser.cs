@@ -196,4 +196,42 @@ internal static class ToolCallParser
 
     internal static string EscapeLabel(string s) =>
         s.Replace("--", "&#45;&#45;").Replace(">", "&gt;");
+
+    /// <summary>
+    /// Extracts a complete top-level string property value from a possibly-incomplete JSON
+    /// object (a tool call's arguments while they are still streaming). Returns the unescaped
+    /// value once its closing quote has arrived, or null if the property is absent or its value
+    /// is not yet complete. Used for streaming fail-fast so a precondition (e.g. read-before-edit)
+    /// can be checked the moment the relevant field lands, without waiting for the whole call.
+    /// </summary>
+    internal static string? TryExtractJsonString(string partialJson, string key)
+    {
+        string needle = "\"" + key + "\"";
+        int k = partialJson.IndexOf(needle, StringComparison.Ordinal);
+        if (k < 0) return null;
+
+        int i = k + needle.Length;
+        // Skip whitespace and the ':' separator.
+        while (i < partialJson.Length && (char.IsWhiteSpace(partialJson[i]) || partialJson[i] == ':')) i++;
+        if (i >= partialJson.Length || partialJson[i] != '"') return null; // value not a string, or not started
+        i++; // past the opening quote
+
+        System.Text.StringBuilder sb = new();
+        while (i < partialJson.Length)
+        {
+            char c = partialJson[i];
+            if (c == '\\')
+            {
+                if (i + 1 >= partialJson.Length) return null; // escape sequence not yet complete
+                char n = partialJson[i + 1];
+                sb.Append(n switch { 'n' => '\n', 't' => '\t', 'r' => '\r', '"' => '"', '\\' => '\\', '/' => '/', _ => n });
+                i += 2;
+                continue;
+            }
+            if (c == '"') return sb.ToString(); // closing quote reached — value complete
+            sb.Append(c);
+            i++;
+        }
+        return null; // closing quote not yet streamed
+    }
 }
