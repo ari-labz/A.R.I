@@ -560,6 +560,12 @@ public class Thread
         // on the same file is allowed through so we never livelock: if the model insists, the normal
         // old_string / line-range path will report any genuine problem instead.
         HashSet<string>         earlyEditAbortedOnce = new(StringComparer.OrdinalIgnoreCase);
+        // Build-before-test discipline: 0 = no build yet this turn, 1 = last build succeeded,
+        // 2 = last build failed. A test command issued while this is not 1 is redirected to build first.
+        int                     buildState = 0;
+        // Caps the premature-stop nudges so a model that announces an action then stops gets pushed
+        // to actually do it, without ever looping forever.
+        int                     continueNudges = 0;
         // Counts consecutive failed edit attempts per file this turn, to escalate guidance and
         // ultimately cut off tool access rather than letting the model spiral on the same edit.
         Dictionary<string, int> editFailStreak = new(StringComparer.OrdinalIgnoreCase);
@@ -585,6 +591,41 @@ public class Thread
         // splits the per-file guard counters so the spiral cutoff never fires. Key everything by
         // filename so failures on one file always accumulate to the same counter.
         static string NormKey(string p) => System.IO.Path.GetFileName(p.Trim('"', '\'', ' ', '\\'));
+        // Command classification for the build-before-test guard. Kept deliberately conservative:
+        // an unrecognised build/test runner simply isn't matched, so the guard never blocks it.
+        static bool IsBuildCmd(string c) => System.Text.RegularExpressions.Regex.IsMatch(c,
+            @"(?i)\b(dotnet\s+(build|publish|msbuild)|msbuild|make|cargo\s+build|go\s+build|npm\s+run\s+build|yarn\s+build|tsc)\b");
+        static bool IsTestCmd(string c) => System.Text.RegularExpressions.Regex.IsMatch(c,
+            @"(?i)\b(dotnet\s+(test|vstest)|vstest|cargo\s+test|go\s+test|pytest|npm\s+(run\s+)?test|yarn\s+test|jest)\b");
+        // Pulls compiler errors (with file/line locations) out of a failed build's output and caps
+        // them at the first 10, so the model gets the actionable diagnostics instead of kilobytes of
+        // restore/MSBuild noise (which the client also truncates, often before the errors appear).
+        // Returns null when no recognisable compiler errors are present (e.g. a test-assertion
+        // failure), so that output is left untouched.
+        static string? CondenseBuildErrors(string output)
+        {
+            System.Text.RegularExpressions.MatchCollection ms = System.Text.RegularExpressions.Regex.Matches(
+                output, @"(?im)^.*?:\s*error\s+[A-Za-z]+\d+:.*$");
+            if (ms.Count == 0) return null;
+
+            // Dedupe identical errors (MSBuild repeats them per target framework); the trailing
+            // "[/path/project.csproj]" differs, so strip it when keying but keep the file:line:message.
+            List<string> seen = new();
+            foreach (System.Text.RegularExpressions.Match m in ms)
+            {
+                string line = m.Value.Trim();
+                string key  = System.Text.RegularExpressions.Regex.Replace(line, @"\s*\[[^\]]*\]\s*$", "");
+                if (!seen.Contains(key)) seen.Add(key);
+            }
+
+            int total = seen.Count;
+            StringBuilder sb = new();
+            sb.AppendLine($"Build failed with {total} error{(total == 1 ? "" : "s")}{(total > 10 ? " (showing the first 10)" : "")}:");
+            foreach (string e in seen.Take(10)) sb.AppendLine(e);
+            if (total > 10) sb.AppendLine($"... and {total - 10} more error(s). Fix the errors above (they list the file and line), then rebuild.");
+            else            sb.AppendLine("Fix the errors above (they list the file and line), then rebuild.");
+            return sb.ToString().TrimEnd();
+        }
         // Slots (message index + id + name) of every real tool-result message this turn, oldest first,
         // so context compaction can stub the oldest outputs when the window fills.
         List<(int Index, string CallId, string Name)> toolResultSlots = new();
@@ -767,8 +808,12 @@ public class Thread
                 {
                     if (chunk.RootElement.TryGetProperty("usage", out JsonElement usage))
                     {
-                        completionTokens = usage.TryGetProperty("completion_tokens", out JsonElement ctEl) ? ctEl.GetInt32() : 0;
-                        promptTokens     = usage.TryGetProperty("prompt_tokens",     out JsonElement ptEl) ? ptEl.GetInt32() : 0;
+                        // Each generation in this turn reports its own usage; accumulate so the
+                        // turn total (and the t/s figure, cost, and 80%-of-limit warning) reflect
+                        // the whole turn rather than only the final generation. prompt_tokens is the
+                        // latest request's input size, so it is replaced, not summed.
+                        completionTokens += usage.TryGetProperty("completion_tokens", out JsonElement ctEl) ? ctEl.GetInt32() : 0;
+                        promptTokens      = usage.TryGetProperty("prompt_tokens",     out JsonElement ptEl) ? ptEl.GetInt32() : 0;
                     }
 
                     if (!chunk.RootElement.TryGetProperty("choices", out JsonElement choices) || choices.GetArrayLength() == 0) continue;
@@ -1232,6 +1277,27 @@ public class Thread
 
                     if (tools.TryGetValue(call.Name, out var tool))
                     {
+                        // Build-before-test: refuse a test command until a build has succeeded this
+                        // turn. Tests against stale/unbuilt binaries produce misleading failures, and
+                        // the model should see build errors first. Checked before the run marker so a
+                        // blocked test never shows as having run.
+                        if (call.Name == "run_command" && buildState != 1)
+                        {
+                            string cmdLine = ToolCallParser.TryExtractJsonString(call.Args.ToString(), "command") ?? "";
+                            if (IsTestCmd(cmdLine) && !IsBuildCmd(cmdLine))
+                            {
+                                result = buildState == 2
+                                    ? "[System: The build is currently failing — do not run tests yet. Fix the build errors first (run the build, resolve every reported error), then run the tests once it builds cleanly.]"
+                                    : "[System: Build before you test. Run the build first (e.g. 'dotnet build' on the project you changed) and confirm it reports no errors; only run tests if the build succeeds, otherwise you are testing stale binaries.]";
+                                Common.Logger.LogInformation("[{Agent}] ({Thread}) blocked test before {State} build: {Cmd}", agent.Name, threadKey, buildState == 2 ? "failed" : "successful", cmdLine);
+                                contentBuilder.Append($"<!--ari-tool-error:run_command::{ToolCallParser.EscapeLabel(result)}-->");
+                                if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                                if (isXmlFallback) { xmlResultsMsg!.AppendLine($"--- {call.Name} ---"); xmlResultsMsg.AppendLine(result); xmlResultsMsg.AppendLine(); }
+                                else { messages.Add(new { role = "tool", tool_call_id = call.Id, name = call.Name, content = result }); if (liveCallInfo is { } lcBT) lcBT.EstimatedInputTokens += result.Length / CHARS_PER_TOKEN; }
+                                continue;
+                            }
+                        }
+
                         if (tool.Display is not null)
                         {
                             string finalMarker = tool.Display(call.Args.ToString());
@@ -1271,6 +1337,25 @@ public class Thread
                                 result = $"[System: \"{cmdTrimmed}\" is a filename, not a shell command — nothing was executed. Did you mean 'dotnet build {cmdTrimmed}', 'dotnet run --project {cmdTrimmed}', or similar?]";
                             else
                                 commandCache[cmdStr] = (result, 1);
+
+                            // Record build outcome so the build-before-test guard knows whether a green
+                            // build exists this turn. A test runner's implicit build counts too: if the
+                            // model ran tests after a clean build, success here keeps tests unblocked.
+                            string cmdLine = ToolCallParser.TryExtractJsonString(call.Args.ToString(), "command") ?? "";
+                            if (IsBuildCmd(cmdLine) || IsTestCmd(cmdLine))
+                            {
+                                bool failed = result.Contains("Build FAILED")
+                                    || result.Contains(": error ")
+                                    || System.Text.RegularExpressions.Regex.IsMatch(result, @"\b[1-9]\d*\s+Error\(s\)");
+                                bool ok = !failed && (result.Contains("Build succeeded") || result.Contains("0 Error(s)"));
+                                if (ok)          buildState = 1;
+                                else if (failed) buildState = 2;
+
+                                // Replace verbose failed-build output with just the located errors
+                                // (first 10), so the model sees what to fix and where instead of noise.
+                                if (buildState == 2 && CondenseBuildErrors(result) is { } condensed)
+                                    result = condensed;
+                            }
                         }
                         if (call.Name == "preview_file")
                         {
@@ -1469,6 +1554,30 @@ public class Thread
                     "or call update_todos to remove any that are no longer needed. Do not finish until the checklist is resolved.]" });
                 responseBuilder.Clear();
                 continue;
+            }
+
+            // Premature-stop guard: the model sometimes announces an action ("Let me read the file:")
+            // then ends the turn without doing it — no tool call follows. If the final text clearly
+            // promises an imminent action, nudge it to actually act rather than letting the turn end
+            // on a dangling intent. Capped so it can never loop.
+            if (pendingCalls.Count == 0 && toolsStillAvailable && continueNudges < 2)
+            {
+                string tail = responseBuilder.ToString().TrimEnd();
+                bool promisesAction = tail.Length > 0 && (
+                    tail.EndsWith(":")
+                    || System.Text.RegularExpressions.Regex.IsMatch(tail,
+                        @"(?i)\b(let me|let's|i'll|i will|i'm going to|i need to|now i'll|first,? i|next,? i)\b[^.!?]{0,100}$"));
+                bool mentionsVerb = System.Text.RegularExpressions.Regex.IsMatch(tail,
+                    @"(?i)\b(read|check|run|build|test|look|examine|open|search|edit|create|add|update|fix|verify|inspect|modify|write|review|rebuild|re-?run)\b");
+                if (promisesAction && mentionsVerb)
+                {
+                    continueNudges++;
+                    Common.Logger.LogInformation("[{Agent}] ({Thread}) premature-stop nudge — model announced an action without performing it.", agent.Name, threadKey);
+                    messages.Add(new { role = "user", content =
+                        "[System: You described the next action but did not perform it — no tool call was made. If more work remains, issue the tool call now and keep going until the task is done (build first, then run tests only if the build succeeds). If you are genuinely finished, give your final summary to the user instead.]" });
+                    responseBuilder.Clear();
+                    continue;
+                }
             }
 
             break;
