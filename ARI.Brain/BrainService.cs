@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
@@ -324,6 +325,92 @@ public class BrainService
         return $"Backup saved — {notes.Count} note(s). File: `{Path.GetFileName(zipPath)}`";
     }
 
+    /// <summary>Lists available backup files, newest first, with their note counts.</summary>
+    public List<BackupInfo> ListBackups()
+    {
+        string dirPath = Path.GetFullPath(backupPath);
+        if (!Directory.Exists(dirPath)) return new();
+
+        List<BackupInfo> result = new();
+        foreach (FileInfo fi in new DirectoryInfo(dirPath).GetFiles("ARI-Brain-*.zip").OrderByDescending(f => f.CreationTimeUtc))
+        {
+            int notes = 0;
+            try
+            {
+                using ZipArchive z = ZipFile.OpenRead(fi.FullName);
+                ZipArchiveEntry? e = z.GetEntry("brain.json");
+                if (e is not null)
+                {
+                    using StreamReader r = new(e.Open());
+                    using JsonDocument d = JsonDocument.Parse(r.ReadToEnd());
+                    if (d.RootElement.TryGetProperty("noteCount", out JsonElement nc)) notes = nc.GetInt32();
+                }
+            }
+            catch (Exception ex) { Common.Logger.LogWarning("[Brain] Could not read backup {File}: {Msg}", fi.Name, ex.Message); }
+            result.Add(new BackupInfo(fi.Name, fi.CreationTimeUtc, fi.Length, notes));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Restores notes from a backup zip. Additive and safe: every note in the backup is recreated
+    /// (if missing) or overwritten to its backed-up content (if present). Notes created AFTER the
+    /// backup are left untouched — restore never deletes. Returns a human-readable summary.
+    /// </summary>
+    public async Task<string> RestoreBackup(string fileName)
+    {
+        if (!triliumReady) { await Startup(); if (!triliumReady) return "Brain is not connected — restore aborted."; }
+
+        // Resolve against the backup folder only, by bare file name — no path traversal.
+        string dirPath = Path.GetFullPath(backupPath);
+        string zipPath = Path.Combine(dirPath, Path.GetFileName(fileName));
+        if (!File.Exists(zipPath)) return $"Backup not found: {Path.GetFileName(fileName)}";
+
+        List<EngramAdd> adds = new();
+        try
+        {
+            using ZipArchive zip = ZipFile.OpenRead(zipPath);
+            ZipArchiveEntry? entry = zip.GetEntry("brain.json");
+            if (entry is null) return "Backup is missing brain.json.";
+
+            using StreamReader reader = new(entry.Open());
+            string json = await reader.ReadToEndAsync();
+            using JsonDocument doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("notes", out JsonElement notesArr) || notesArr.ValueKind != JsonValueKind.Array)
+                return "Backup contains no notes.";
+
+            foreach (JsonElement n in notesArr.EnumerateArray())
+            {
+                string title   = n.TryGetProperty("title",   out JsonElement t) ? t.GetString() ?? string.Empty : string.Empty;
+                string folder  = n.TryGetProperty("folder",  out JsonElement f) ? f.GetString() ?? string.Empty : string.Empty;
+                string content = n.TryGetProperty("content", out JsonElement c) ? c.GetString() ?? string.Empty : string.Empty;
+                if (string.IsNullOrWhiteSpace(title)) continue;
+
+                // Backup content is "Path: {path}\n\n{markdown}" — strip the Path header.
+                string markdown = content;
+                int sep = content.IndexOf("\n\n", StringComparison.Ordinal);
+                if (sep >= 0 && content.StartsWith("Path:", StringComparison.Ordinal))
+                    markdown = content[(sep + 2)..];
+
+                string noteName = string.IsNullOrEmpty(folder) ? title : $"{folder}/{title}";
+                adds.Add(new EngramAdd { NoteName = noteName, Content = markdown });
+            }
+        }
+        catch (Exception ex)
+        {
+            Common.Logger.LogError("[Brain] Restore failed reading {File}: {Msg}", Path.GetFileName(zipPath), ex.Message);
+            return $"Restore failed: {ex.Message}";
+        }
+
+        if (adds.Count == 0) return "Backup contained no restorable notes.";
+
+        Common.Logger.LogInformation("[Brain] Restoring {Count} note(s) from {File}...", adds.Count, Path.GetFileName(zipPath));
+        await AddNotes(adds);
+        await OnReady(); // re-sync caches + alias index after a bulk restore
+        Common.Logger.LogInformation("[Brain] Restore complete — {Count} note(s) from {File}.", adds.Count, Path.GetFileName(zipPath));
+        return $"Restored {adds.Count} note(s) from {Path.GetFileName(zipPath)}.";
+    }
+
     public async Task<int> PurgeAllNotes()
     {
         if (!triliumReady) return 0;
@@ -439,6 +526,109 @@ public class BrainService
     }
 
     /// <summary>
+    /// Builds a compact whole-graph skeleton: the folder tree (nesting = indentation) with each
+    /// note's outbound [[links]] — titles and connections only, never full bodies. This is the
+    /// anchor the survey-based Refactor reasons over; full content is fetched on demand per change.
+    /// Example line: "  [REDACT]  →  [REDACT], [REDACT]'s Family, [REDACT]".
+    /// </summary>
+    public async Task<string> GetGraphSkeleton()
+    {
+        if (!triliumReady) { await Startup(); if (!triliumReady) return string.Empty; }
+
+        // Full path for every note, and which full paths are folders (parent of ≥1 note).
+        List<(string Title, string FullPath)> all = new();
+        HashSet<string> folderPaths = new(StringComparer.OrdinalIgnoreCase);
+        foreach ((string title, string id) in noteIdCache)
+        {
+            string folder = noteFolderCache.TryGetValue(id, out string? f) ? f : string.Empty;
+            all.Add((title, string.IsNullOrEmpty(folder) ? title : $"{folder}/{title}"));
+            if (!string.IsNullOrEmpty(folder)) folderPaths.Add(folder);
+        }
+
+        // Outbound links per note, fetched in parallel (content is cached after the first pass).
+        (string Title, List<string> Links)[] linkResults = await Task.WhenAll(
+            all.Select(async n => (n.Title, await GetNoteLinks(n.Title))));
+        Dictionary<string, string> linksByTitle = new(StringComparer.OrdinalIgnoreCase);
+        foreach ((string title, List<string> links) in linkResults)
+            linksByTitle[title] = links.Count > 0 ? string.Join(", ", links) : string.Empty;
+
+        // Lexicographic path order renders the tree top-down.
+        all.Sort((a, b) => string.Compare(a.FullPath, b.FullPath, StringComparison.OrdinalIgnoreCase));
+
+        StringBuilder sb = new();
+        foreach ((string title, string fullPath) in all)
+        {
+            int    depth  = fullPath.Count(c => c == '/');
+            string indent = new string(' ', depth * 2);
+            string name   = folderPaths.Contains(fullPath) ? $"{title}/" : title;
+            string links  = linksByTitle.TryGetValue(title, out string? l) && l.Length > 0 ? $"  →  {l}" : string.Empty;
+            sb.AppendLine($"{indent}{name}{links}");
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Deterministic structural pass: every note that is a folder (has child notes) must link to
+    /// EACH of its direct children — including children that are themselves hubs (e.g. [REDACT]'s
+    /// Family → Immediate Family, Cousins, Grandparents). Missing child links are appended under a
+    /// ## Members section. Folder structure is the source of truth, so this never relies on the LLM.
+    /// Returns the number of hub notes updated.
+    /// </summary>
+    public async Task<int> EnsureHubChildLinks()
+    {
+        if (!triliumReady) return 0;
+
+        // Group child titles by their parent's full path (e.g. "People/[REDACT]'s Family").
+        Dictionary<string, string>       fullPathById          = new(StringComparer.Ordinal);
+        Dictionary<string, List<string>> childrenByParentPath  = new(StringComparer.OrdinalIgnoreCase);
+        foreach ((string title, string id) in noteIdCache)
+        {
+            string folder = noteFolderCache.TryGetValue(id, out string? f) ? f : string.Empty;
+            fullPathById[id] = string.IsNullOrEmpty(folder) ? title : $"{folder}/{title}";
+            if (string.IsNullOrEmpty(folder)) continue;
+            if (!childrenByParentPath.TryGetValue(folder, out List<string>? kids))
+                childrenByParentPath[folder] = kids = new();
+            kids.Add(title);
+        }
+
+        int updated = 0;
+        foreach ((string title, string id) in noteIdCache.ToList())
+        {
+            if (!childrenByParentPath.TryGetValue(fullPathById[id], out List<string>? children) || children.Count == 0)
+                continue; // not a hub — no child notes
+
+            string? html = await trilium.GetNoteContent(id);
+            if (html is null) continue;
+            string markdown = MarkdownConverter.FromHtml(html);
+
+            List<string> missing = children
+                .Where(c => !markdown.Contains($"[[{c}]]", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (missing.Count == 0) continue;
+
+            string bullets = string.Join("\n", missing.Select(c => $"- [[{c}]]"));
+            string updatedMd;
+            if (Regex.IsMatch(markdown, @"^## Members\b", RegexOptions.Multiline | RegexOptions.IgnoreCase))
+                updatedMd = Regex.Replace(markdown, @"(^## Members\b[^\n]*\n)", $"$1{bullets}\n",
+                    RegexOptions.Multiline | RegexOptions.IgnoreCase);
+            else if (Regex.IsMatch(markdown, @"^## Changelog\b", RegexOptions.Multiline | RegexOptions.IgnoreCase))
+                updatedMd = Regex.Replace(markdown, @"(^## Changelog\b)", $"## Members\n\n{bullets}\n\n$1",
+                    RegexOptions.Multiline | RegexOptions.IgnoreCase);
+            else
+                updatedMd = markdown.TrimEnd() + $"\n\n## Members\n\n{bullets}\n";
+
+            string newHtml  = MarkdownConverter.ToHtml(updatedMd);
+            string resolved = MarkdownConverter.ResolveLinks(newHtml, await ResolveLinkNames(newHtml));
+            await trilium.UpdateNoteContent(id, resolved);
+            string folder = noteFolderCache.TryGetValue(id, out string? ff) ? ff : string.Empty;
+            UpdateContentCache(title, folder, resolved);
+            updated++;
+            Common.Logger.LogInformation("[Brain] Hub '{Title}' linked to {Count} child note(s): {Kids}", title, missing.Count, string.Join(", ", missing));
+        }
+        return updated;
+    }
+
+    /// <summary>
     /// Deletes Unknown/ stubs that are duplicates of properly-categorised notes.
     /// These are identified at startup and tracked until cleaned up.
     /// Returns the number of stubs deleted.
@@ -475,31 +665,32 @@ public class BrainService
     public async Task AddNotes(IReadOnlyList<EngramAdd> adds)
     {
         if (!triliumReady) { await Startup(); if (!triliumReady) return; }
-        try
-        {
-            // Pre-pass: register all new note names in the correct folders.
-            foreach (EngramAdd add in adds)
-            {
-                string name = NoteName(add.NoteName);
-                if (!noteIdCache.ContainsKey(name))
-                {
-                    string[] folders = FolderPath(add.NoteName);
-                    (string id, string branchId) = await trilium.CreateNoteAtPath(folders, name, string.Empty);
-                    noteIdCache[name]     = id;
-                    branchIdCache[id]     = branchId;
-                    noteFolderCache[id]   = string.Join("/", folders);
-                    cachedTitles          = null;
-                }
-            }
 
-            // Main pass: fill in content with links resolved.
-            foreach (EngramAdd add in adds)
-                await SaveAdd(add);
-        }
-        catch (Exception ex)
+        // Pre-pass: register all new note names in the correct folders.
+        foreach (EngramAdd add in adds)
         {
-            triliumReady = false;
-            Common.Logger.LogError("Brain.AddNotes failed: {Message}", ex.Message);
+            string name = NoteName(add.NoteName);
+            if (noteIdCache.ContainsKey(name)) continue;
+            try
+            {
+                string[] folders = FolderPath(add.NoteName);
+                (string id, string branchId) = await trilium.CreateNoteAtPath(folders, name, string.Empty);
+                noteIdCache[name]     = id;
+                branchIdCache[id]     = branchId;
+                noteFolderCache[id]   = string.Join("/", folders);
+                cachedTitles          = null;
+            }
+            catch (HttpRequestException ex) when (ex.StatusCode is null) { triliumReady = false; Common.Logger.LogError("[Brain] AddNotes aborted — Trilium unreachable: {Message}", ex.Message); return; }
+            catch (Exception ex) { Common.Logger.LogWarning("[Brain] Register failed for '{Name}': {Message}", add.NoteName, ex.Message); }
+        }
+
+        // Main pass: fill in content with links resolved. Per-note isolation — a single bad
+        // note (e.g. a 400 on one move) is logged and skipped, never aborting the batch.
+        foreach (EngramAdd add in adds)
+        {
+            try { await SaveAdd(add); }
+            catch (HttpRequestException ex) when (ex.StatusCode is null) { triliumReady = false; Common.Logger.LogError("[Brain] AddNotes aborted — Trilium unreachable: {Message}", ex.Message); return; }
+            catch (Exception ex) { Common.Logger.LogWarning("[Brain] Add failed for '{Name}': {Message}", add.NoteName, ex.Message); }
         }
     }
 
@@ -510,15 +701,15 @@ public class BrainService
     public async Task EditNotes(IReadOnlyList<EngramEdit> edits)
     {
         if (!triliumReady) { await Startup(); if (!triliumReady) return; }
-        try
+
+        // Per-note isolation: a single failing note (e.g. a 400 on one move/rename) is logged
+        // and skipped so the rest of the batch — and any merges/deletes that run after — still
+        // apply. Only a genuine connection failure (no HTTP status) marks the brain not-ready.
+        foreach (EngramEdit edit in edits)
         {
-            foreach (EngramEdit edit in edits)
-                await SaveEdit(edit);
-        }
-        catch (Exception ex)
-        {
-            triliumReady = false;
-            Common.Logger.LogError("Brain.EditNotes failed: {Message}", ex.Message);
+            try { await SaveEdit(edit); }
+            catch (HttpRequestException ex) when (ex.StatusCode is null) { triliumReady = false; Common.Logger.LogError("[Brain] EditNotes aborted — Trilium unreachable: {Message}", ex.Message); return; }
+            catch (Exception ex) { Common.Logger.LogWarning("[Brain] Edit failed for '{Name}': {Message}", edit.NoteName, ex.Message); }
         }
     }
 
@@ -546,6 +737,26 @@ public class BrainService
         string? fromId = await FindNoteId(fromName);
         if (fromId is null) return false;                                          // nothing to merge
         if (string.Equals(fromId, intoId, StringComparison.Ordinal)) return false; // already the same note
+
+        // Prefer a real, categorised note as the winner: never fold a real note into an Unknown/
+        // stub. If the target is an Unknown stub and the source is not, swap so the stub loses.
+        string intoFolder = noteFolderCache.TryGetValue(intoId, out string? inf) ? inf : string.Empty;
+        string fromFolder = noteFolderCache.TryGetValue(fromId, out string? frf) ? frf : string.Empty;
+        if (intoFolder.StartsWith("Unknown", StringComparison.OrdinalIgnoreCase)
+            && !fromFolder.StartsWith("Unknown", StringComparison.OrdinalIgnoreCase))
+        {
+            (fromId, intoId)     = (intoId, fromId);
+            (fromName, intoName) = (intoName, fromName);
+        }
+
+        // A note with its own child notes is a sub-hub, not a duplicate. Merging it would either
+        // orphan its children or silently fail to delete it (leaving a half-merged alias + live
+        // note, as happened with 'Immediate Family'). Refuse — keep it as a sub-hub and link to it.
+        if (await trilium.HasChildNotes(fromId))
+        {
+            Common.Logger.LogWarning("[Brain] Merge skipped — '{From}' has child notes; it is a sub-hub, not a duplicate. Keep it and link to it from '{Into}'.", fromName, intoName);
+            return false;
+        }
 
         // Canonical title for the winner (intoName may itself have been an alias).
         string intoTitle = noteIdCache.FirstOrDefault(kv => kv.Value == intoId).Key ?? intoName;

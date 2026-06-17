@@ -239,7 +239,8 @@ internal class Engram : Agent, IDisposable
                 "- A thematic hub that cuts across folders: Projects/[Person]'s Tech (linking Hardware + Software + Projects)\n" +
                 "Hub notes are named possessively when they belong to a person ([Person]'s Family, [Person]'s Friends).\n" +
                 "This makes them unambiguous across multiple people's graphs.\n" +
-                "Individual spokes link TO the hub; the hub links down to members — not the reverse.\n\n" +
+                "Individual spokes link TO the hub; the hub links down to members — not the reverse.\n" +
+                "A hub links DOWN to EVERY one of its direct children, including children that are themselves hubs: '[REDACT]'s Family' links to 'Immediate Family', 'Cousins', and 'Grandparents'. Link to direct children only — each sub-hub links to its own members. Do not merge a sub-hub into its parent; keep the nesting and link to it.\n\n" +
 
                 "## ONE ENTITY, ONE NOTE\n" +
                 "A title is an identity — the graph allows exactly one note per entity. Before planning an 'add', check the existing notes (including their '(aka: ...)' aliases) for the same person/place/thing under ANY name. If it already exists, plan an 'edit' on that note instead — never a second note. A nickname, role, or formal-name variant is the same entity, not a new one.\n\n" +
@@ -262,6 +263,13 @@ internal class Engram : Agent, IDisposable
                 "- Links outward to ongoing notes for broader context (e.g. an event note about a first date links to the Relationships/ note for the ongoing relationship).\n" +
                 "- Does NOT carry evolving facts — those belong in the linked ongoing note.\n" +
                 "Example: 'Events/[REDACT] and [REDACT] got together' captures the date and the occasion. The ongoing story lives in 'Relationships/[REDACT] and [REDACT] Relationship'.\n\n" +
+
+                "## CONVERSATION NOTES\n" +
+                "Maintain exactly ONE dated log note per day at Conversations/YYYY-MM-DD, dated to when the conversation happened (use today's date from the context summary).\n" +
+                "- It is a temporal INDEX, not a fact store: a 1–3 sentence summary of what was discussed that day, followed by a [[link]] to every person, place, project, or topic that came up.\n" +
+                "- If today's note already exists, EDIT it (op \"edit\"): append the new summary line and add links for any newly-discussed notes. NEVER create a second note for a day that already has one.\n" +
+                "- Do NOT store evolving facts here — those live on each entity's own note. The conversation note only records that a topic was discussed on this date and links to it, so 'what did we talk about on YYYY-MM-DD' is answerable.\n" +
+                "- Only link to notes that exist or are being created this sweep.\n\n" +
 
                 "## DO NOT CREATE NOTES FOR DESCRIPTORS\n" +
                 "A descriptor, status, or label is not a note. It belongs as a field, sentence, or section inside the relevant note.\n" +
@@ -298,7 +306,7 @@ internal class Engram : Agent, IDisposable
                 "Do NOT write a bullet point whose only content is a [[link]] to a note that does not exist — omit the bullet entirely.\n\n" +
 
                 "Include any Unknown/ notes that should be moved to a proper category (use newName).\n" +
-                "Include the Conversations/YYYY-MM-DD note.\n\n" +
+                "Include today's Conversations/YYYY-MM-DD note (see CONVERSATION NOTES above) — edit it if it already exists, otherwise add it.\n\n" +
 
                 "Output ONLY:\n" +
                 "{\"plan\": [{\"op\": \"add\", \"name\": \"People/[Person]'s Family/Immediate Family/[Name]\", \"summary\": \"...\"}]}\n" +

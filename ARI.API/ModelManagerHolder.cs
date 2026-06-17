@@ -42,7 +42,7 @@ public class ModelSwitchJob
 /// </summary>
 public class ModelManagerHolder
 {
-    private readonly Dictionary<string, ServerStatus> _servers = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ServerStatus> _servers = new();
     public IReadOnlyDictionary<string, ServerStatus> Servers => _servers;
 
     public IReadOnlyList<ModelInfo> AllModels { get; private set; } = Array.Empty<ModelInfo>();
@@ -69,4 +69,14 @@ public class ModelManagerHolder
     private Action<string, string>? _switchDelegate;
     public void RegisterSwitchDelegate(Action<string, string> action) => _switchDelegate = action;
     public void TriggerSwitch(string serverName, string relativeFile) => _switchDelegate?.Invoke(serverName, relativeFile);
+
+    private Func<Task>? _stopAllDelegate;
+    private Func<Task>? _restartAllDelegate;
+    public void RegisterPauseResumeDelegate(Func<Task> stopAll, Func<Task> restartAll)
+    {
+        _stopAllDelegate    = stopAll;
+        _restartAllDelegate = restartAll;
+    }
+    public Task StopAllServersAsync()    => _stopAllDelegate?.Invoke()    ?? Task.CompletedTask;
+    public Task RestartAllServersAsync() => _restartAllDelegate?.Invoke() ?? Task.CompletedTask;
 }

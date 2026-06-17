@@ -14,6 +14,7 @@ public class LlmService : IDisposable
     private readonly Engram?      engram;
     private readonly Refactor?    refactor;
     private readonly Classifier?  classifier;
+    private readonly BrainService? brain;
     private readonly CommandService commands;
 
     private readonly ConcurrentDictionary<string, CancellationTokenSource>                      processingThreads = new();
@@ -47,7 +48,7 @@ public class LlmService : IDisposable
             .Where(m => m.Enabled)
             .ToDictionary(m => m.Name);
 
-        BrainService? brain = brainConfig is not null
+        brain = brainConfig is not null
             ? new BrainService(brainConfig, loggerFactory)
             : null;
 
@@ -123,6 +124,12 @@ public class LlmService : IDisposable
     }
 
     public void Dispose() => engram?.Dispose();
+
+    // ── Brain backups ───────────────────────────────────────────────────────────
+    public bool BrainAvailable => brain is not null;
+    public Task<string> BackupBrain()                  => brain?.Backup()           ?? Task.FromResult("Brain is not available.");
+    public List<BackupInfo> ListBrainBackups()         => brain?.ListBackups()      ?? new List<BackupInfo>();
+    public Task<string> RestoreBrainBackup(string file) => brain?.RestoreBackup(file) ?? Task.FromResult("Brain is not available.");
 
     // ── Prompting ───────────────────────────────────────────────────────────────
 

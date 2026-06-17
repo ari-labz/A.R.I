@@ -60,11 +60,15 @@ public class DockerConfig
 
 public class ModulesConfig
 {
-    public bool Discord { get; init; }
-    public bool WebPanel { get; init; }
-    public bool VoiceSynthesis { get; init; }
-    public bool Voice { get; init; }
-    public bool Client { get; init; } = true;
+    public bool WebPanel        { get; init; }
+    public bool GoogleOAuth     { get; init; } = true;
+    public bool Llm             { get; init; } = true;
+    public bool Docker          { get; init; } = true;
+    public bool Brain           { get; init; } = true;
+    public bool Discord         { get; init; }
+    public bool VoiceSynthesis  { get; init; }
+    public bool Voice           { get; init; }
+    public bool Client          { get; init; } = true;
 }
 
 public class VoiceConfig
@@ -74,8 +78,8 @@ public class VoiceConfig
 
 public class VoiceSynthesisConfig
 {
-    public string F5Path    { get; init; } = "";
-    public string VoicesPath { get; init; } = "";
+    public string StyleTtsPath { get; init; } = "";
+    public string VoicesPath   { get; init; } = "";
 }
 
 public class WebPanelConfig

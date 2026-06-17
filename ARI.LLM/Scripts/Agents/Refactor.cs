@@ -224,15 +224,28 @@ internal class Refactor : Agent
             allEdits   = editsByTitle.Values.ToList();
             allDeletes = deletesByTitle.Values.ToList();
 
-            // Deduplicate merges by source title (first-writer-wins), dropping any self-merge.
+            // Deduplicate and sanity-check merges. Drop self-merges, duplicate sources, and any
+            // merge that would fold away a note already chosen as a winner — this collapses the
+            // contradictory A→B + B→A pair an LLM can emit into a single coherent direction.
             // A note being merged away is removed from the delete list — MergeNotes deletes it
             // itself, after repointing its inbound links and folding its name into the winner.
             Dictionary<string, EngramMerge> mergesByFrom = new(StringComparer.OrdinalIgnoreCase);
+            HashSet<string> mergeWinners = new(StringComparer.OrdinalIgnoreCase);
             foreach (EngramMerge mg in allMerges)
-                if (!string.Equals(BareTitle(mg.From), BareTitle(mg.Into), StringComparison.OrdinalIgnoreCase))
-                    mergesByFrom.TryAdd(BareTitle(mg.From), mg);
+            {
+                string from = BareTitle(mg.From), into = BareTitle(mg.Into);
+                if (string.Equals(from, into, StringComparison.OrdinalIgnoreCase)) continue; // self-merge
+                if (mergesByFrom.ContainsKey(from)) continue;                                  // duplicate source
+                if (mergeWinners.Contains(from)) continue;                                     // would merge away a winner (A↔B / chains)
+                mergesByFrom[from] = mg;
+                mergeWinners.Add(into);
+            }
             allMerges  = mergesByFrom.Values.ToList();
-            allDeletes = allDeletes.Where(d => !mergesByFrom.ContainsKey(BareTitle(d.NoteName))).ToList();
+            // Never delete a note that a merge touches — neither a source (MergeNotes deletes it
+            // itself) nor a WINNER (deleting it would destroy the just-merged content).
+            allDeletes = allDeletes.Where(d =>
+                !mergesByFrom.ContainsKey(BareTitle(d.NoteName)) &&
+                !mergeWinners.Contains(BareTitle(d.NoteName))).ToList();
 
             // ── Merge and apply operations ────────────────────────────────────────
             // LLM edits take priority: they already saw stripped content, so their output
@@ -265,7 +278,8 @@ internal class Refactor : Agent
                 foreach (EngramMerge mg in allMerges)
                 {
                     Common.Logger.LogInformation("[Refactor] Merging '{From}' → '{Into}': {Reason}", mg.From, mg.Into, mg.Reason);
-                    await brain.MergeNotes(mg.From, mg.Into);
+                    try { await brain.MergeNotes(mg.From, mg.Into); }
+                    catch (Exception ex) { Common.Logger.LogWarning("[Refactor] Merge '{From}' → '{Into}' failed: {Message}", mg.From, mg.Into, ex.Message); }
                 }
             }
 
@@ -275,9 +289,17 @@ internal class Refactor : Agent
                 foreach (EngramDelete del in allDeletes)
                 {
                     Common.Logger.LogInformation("[Refactor] Deleting '{Name}': {Reason}", del.NoteName, del.Reason);
-                    await brain.DeleteNote(del.NoteName);
+                    try { await brain.DeleteNote(del.NoteName); }
+                    catch (Exception ex) { Common.Logger.LogWarning("[Refactor] Delete '{Name}' failed: {Message}", del.NoteName, ex.Message); }
                 }
             }
+
+            // ── Hub child-link pass ───────────────────────────────────────────────
+            // Deterministic: every hub (folder) links to each direct child, including child hubs.
+            // Done after all structural changes so it reflects the final folder tree.
+            int hubsLinked = await brain.EnsureHubChildLinks();
+            if (hubsLinked > 0)
+                Common.Logger.LogInformation("[Refactor] Hub child-link pass updated {Count} hub(s).", hubsLinked);
 
             // ── Clear dirty flags ─────────────────────────────────────────────────
             await brain.ClearDirty(loaded.Keys);
@@ -510,9 +532,9 @@ internal class Refactor : Agent
         sb.AppendLine("- Recall reaches a note, then follows that note's OWN outward [[links]] to find what is related. Inbound links are invisible to recall. So a note with no outward link is a dead end: findable, but it leads nowhere. Every entity must link outward to its hub.");
         sb.AppendLine();
         sb.AppendLine("YOUR TASKS:");
-        sb.AppendLine("1. MERGE DUPLICATES — if two notes describe the SAME entity (e.g. '[REDACT] (Boyfriend)' and '[REDACT]'; '[REDACT] and [REDACT]' and '[REDACT] and [REDACT] Relationship'; an Unknown/ stub and its real note), pick ONE canonical note and fold the others into it via the 'merge' list ({\"from\": loser, \"into\": winner}). Merging folds the loser's name into the winner's aliases, repoints inbound links, and deletes the loser — so nothing breaks. Put the winner's combined content in 'edit'. NEVER leave two notes for one entity, and NEVER 'delete' a duplicate (that loses its links) — merge it.");
+        sb.AppendLine("1. MERGE DUPLICATES — if two notes describe the SAME entity (e.g. '[REDACT] (Boyfriend)' and '[REDACT]'; '[REDACT] and [REDACT]' and '[REDACT] and [REDACT] Relationship'; an Unknown/ stub and its real note), pick ONE canonical note and fold the others into it via the 'merge' list ({\"from\": loser, \"into\": winner}). Merging folds the loser's name into the winner's aliases, repoints inbound links, and deletes the loser — so nothing breaks. Put the winner's combined content in 'edit'. NEVER leave two notes for one entity, and NEVER 'delete' a duplicate (that loses its links) — merge it. Emit each merge in ONE direction only — never both A→B and B→A for the same pair.");
         sb.AppendLine("2. NO DEAD ENDS — every entity note must contain at least one outward [[link]] to its hub (a family member → its family hub; a device → the owner's tech hub). If a note has no outward links, add the hub link. Members link UP to the hub; the hub links DOWN to each member.");
-        sb.AppendLine("3. HUBS — keep exactly ONE hub per cluster (family, friends, colleagues, tech…). Merge duplicate hubs (e.g. 'Immediate Family' and '[REDACT]'s Siblings' → one). Route links through hubs: a person links to their HUBS (Family, Friends, Romantic Partners, Tech), not directly to every individual member. Hubs that belong to a person are named possessively ('[REDACT]'s Family').");
+        sb.AppendLine("3. HUBS — one hub per cluster. A hub links to EVERY one of its DIRECT children, including children that are themselves hubs: '[REDACT]'s Family' must link to 'Immediate Family', 'Cousins', and 'Grandparents'. Link to direct children only, NEVER grandchildren — the parent hub links to each sub-hub, and each sub-hub links to its own members. A person links to their top-level hubs (Family, Friends, Romantic Partners, Tech), not to individuals the sub-hubs already route. Hubs that belong to a person are named possessively ('[REDACT]'s Family'). NEVER merge a sub-hub that has its own member notes into its parent — that is a real nesting level, not a duplicate; keep it and link to it. Merge only flat, childless duplicate hubs (e.g. a stray '[REDACT]'s Cousins' into the 'Cousins' folder-hub).");
         sb.AppendLine("4. PRUNE OVER-CONNECTION — every edge must have a reason: hub membership, the subject of a fact on this note, or hub-to-member indexing. Remove links that exist for no reason (a laptop linked to a friend; a person linked to every relative when a family hub already routes them). Do not add links the content does not support. Never add a 'See Also' section.");
         sb.AppendLine("5. ONE-WAY LINKS — links are directional. If A's note mentions B, only A links to B; B does not link back. The ONLY two-way relationship is hub ⇄ member (two purposeful edges). Do not add reciprocal backlinks.");
         sb.AppendLine("6. PREFERRED NAMES, NO DESCRIPTOR TITLES — a title is the everyday name (nickname, preferred name), NEVER a role, status, or formal name. '[REDACT] (Boyfriend)' is wrong: the role goes in the body, the title is '[REDACT]'. The formal/legal name goes inside under ## Info AND into the note's aliases. Rename via newName only when the preferred name is explicitly stated or clearly implied. Whenever a rename or merge changes a title, every alternate name (old title, formal name, nickname) must end up in 'aliases' so the note stays findable.");

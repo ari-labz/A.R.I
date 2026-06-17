@@ -25,8 +25,8 @@ public class WebPanelConfig
     internal IReadOnlyList<string> EffectiveAllowedEmails =>
         AllowedEmails.Count > 0 ? AllowedEmails : (AllowedEmail.Length > 0 ? new[] { AllowedEmail } : Array.Empty<string>());
     public string LogPath    { get; init; } = "";
-    public string F5Path     { get; init; } = "";
-    public string VoicesPath { get; init; } = "";
+    public string StyleTtsPath { get; init; } = "";
+    public string VoicesPath   { get; init; } = "";
 }
 
 public class ApiService : IAsyncDisposable
@@ -37,6 +37,7 @@ public class ApiService : IAsyncDisposable
     private readonly SystemInfoHolder    systemInfo;
     private readonly DiscordServiceHolder discordHolder;
     private readonly SpeechQueueHolder   speechHolder;
+    private readonly VoiceTrainerHolder  trainerHolder;
     private readonly ModelManagerHolder  modelManagerHolder;
     private readonly ModelNotesStore     modelNotesStore;
     private readonly ModelSettingsStore  modelSettingsStore;
@@ -56,6 +57,7 @@ public class ApiService : IAsyncDisposable
     public SystemInfoHolder     SystemInfo         => systemInfo;
     public DiscordServiceHolder DiscordHolder      => discordHolder;
     public SpeechQueueHolder    SpeechHolder       => speechHolder;
+    public VoiceTrainerHolder   TrainerHolder      => trainerHolder;
     public ModelManagerHolder   ModelManagerHolder  => modelManagerHolder;
     public ModelNotesStore      ModelNotesStore     => modelNotesStore;
     public ModelSettingsStore   ModelSettingsStore  => modelSettingsStore;
@@ -71,6 +73,7 @@ public class ApiService : IAsyncDisposable
         this.systemInfo        = new SystemInfoHolder(modelManagerHolder);
         this.discordHolder     = new DiscordServiceHolder();
         this.speechHolder      = new SpeechQueueHolder();
+        this.trainerHolder     = new VoiceTrainerHolder();
     }
 
     public async Task Start(CancellationToken cancellationToken)
@@ -109,7 +112,7 @@ public class ApiService : IAsyncDisposable
         builder.Services.AddSingleton(modelManagerHolder);
         builder.Services.AddSingleton(modelNotesStore);
         builder.Services.AddSingleton(modelSettingsStore);
-        builder.Services.AddSingleton(new VoiceTrainerHolder());
+        builder.Services.AddSingleton(trainerHolder);
         builder.Services.AddSingleton(new DiscordServiceHolder());
         builder.Services.AddSingleton(speechHolder);
 
@@ -122,40 +125,46 @@ public class ApiService : IAsyncDisposable
         builder.Services.AddControllers()
             .AddApplicationPart(typeof(ThreadsController).Assembly);
 
-        builder.Services.AddAuthentication(options =>
+        bool useGoogleAuth = !string.IsNullOrEmpty(config.GoogleClientId);
+
+        var authBuilder = builder.Services.AddAuthentication(options =>
         {
             options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-            options.DefaultChallengeScheme = GoogleDefaults.AuthenticationScheme;
+            if (useGoogleAuth)
+                options.DefaultChallengeScheme = GoogleDefaults.AuthenticationScheme;
         })
         .AddCookie(options =>
         {
             options.LoginPath = "/auth/login";
             options.ExpireTimeSpan = TimeSpan.FromDays(30);
             options.SlidingExpiration = true;
-            // Always write a persistent cookie so it survives browser/Electron restarts
             options.Events.OnSigningIn = ctx =>
             {
                 ctx.Properties.IsPersistent = true;
                 return Task.CompletedTask;
             };
-        })
-        .AddGoogle(options =>
-        {
-            options.ClientId = config.GoogleClientId;
-            options.ClientSecret = config.GoogleClientSecret;
-            options.CallbackPath = "/auth/callback";
-            options.Events.OnTicketReceived = ctx =>
-            {
-                string? email = ctx.Principal?.FindFirstValue(ClaimTypes.Email);
-                if (!config.EffectiveAllowedEmails.Any(e => string.Equals(email, e, StringComparison.OrdinalIgnoreCase)))
-                {
-                    ctx.Fail($"Access denied.");
-                    ctx.HandleResponse();
-                    ctx.Response.Redirect("/auth/login?error=unauthorized");
-                }
-                return Task.CompletedTask;
-            };
         });
+
+        if (useGoogleAuth)
+        {
+            authBuilder.AddGoogle(options =>
+            {
+                options.ClientId = config.GoogleClientId;
+                options.ClientSecret = config.GoogleClientSecret;
+                options.CallbackPath = "/auth/callback";
+                options.Events.OnTicketReceived = ctx =>
+                {
+                    string? email = ctx.Principal?.FindFirstValue(ClaimTypes.Email);
+                    if (!config.EffectiveAllowedEmails.Any(e => string.Equals(email, e, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        ctx.Fail("Access denied.");
+                        ctx.HandleResponse();
+                        ctx.Response.Redirect("/auth/login?error=unauthorized");
+                    }
+                    return Task.CompletedTask;
+                };
+            });
+        }
 
         builder.Services.AddAuthorization();
 
@@ -236,6 +245,9 @@ public class ApiService : IAsyncDisposable
         // Block all routes unless authenticated with the whitelisted email
         app.Use(async (ctx, next) =>
         {
+            // No Google credentials configured — run fully open (e.g. local training server)
+            if (string.IsNullOrEmpty(config.GoogleClientId)) { await next(); return; }
+
             // Localhost + offline: allow through (Google OAuth can't work without internet)
             var remoteIp   = ctx.Connection.RemoteIpAddress;
             bool isLocalhost = remoteIp != null && (System.Net.IPAddress.IsLoopback(remoteIp) || remoteIp.ToString() == "::1");

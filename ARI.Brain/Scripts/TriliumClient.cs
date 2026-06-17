@@ -122,24 +122,62 @@ public class TriliumClient
     }
 
     /// <summary>
-    /// Moves a note to a new folder path by deleting its old branch and creating a new one.
+    /// Moves a note to a new folder path. Trilium has no "change parent" call, so a move is a
+    /// new branch plus removal of the old one. CRITICAL ORDER: create the new branch FIRST, then
+    /// delete the old. Trilium deletes a note the instant it loses its LAST branch, so deleting
+    /// first orphaned (destroyed) the note and made the follow-up POST fail with "note does not
+    /// exist". The passed-in branchId is ignored in favour of the note's actual live branches.
     /// Returns the new branch ID so the caller can update its cache.
     /// </summary>
     public async Task<string> MoveNoteToFolderPath(string branchId, string noteId, string[] newFolderPath)
     {
         string newParentId = await GetOrCreateFolderPath(newFolderPath);
 
-        // Trilium ETAPI does not support changing parentNoteId via PATCH on a branch.
-        // The correct approach is: delete the old branch, then create a new one.
-        await http.DeleteAsync($"etapi/branches/{branchId}");
+        // Look up the note's real current parents/branches — never trust a (possibly stale) id.
+        (List<string> parentIds, List<string> branchIds) = await GetParents(noteId);
 
-        object body = new { noteId, parentNoteId = newParentId, notePosition = 0 };
+        // Already under the target parent — nothing to move.
+        if (parentIds.Contains(newParentId))
+            return branchIds.Count > 0 ? branchIds[0] : branchId;
+
+        // 1. CREATE the new branch first. While the old branch still exists the note exists, so
+        //    the POST validates and the note is never left parentless.
+        object body = new { noteId, parentNoteId = newParentId, notePosition = 10 };
         StringContent payload = new(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
         HttpResponseMessage res = await http.PostAsync("etapi/branches", payload);
         res.EnsureSuccessStatusCode();
 
-        JsonNode result = JsonNode.Parse(await res.Content.ReadAsStringAsync())!;
-        return result["branchId"]!.GetValue<string>();
+        JsonNode result    = JsonNode.Parse(await res.Content.ReadAsStringAsync())!;
+        string newBranchId = result["branchId"]!.GetValue<string>();
+
+        // 2. Now remove the old branch(es) — every parent except the new one — turning the
+        //    temporary clone into a clean move. Safe: the note still has the new branch.
+        foreach (string oldBranchId in branchIds)
+            if (oldBranchId != newBranchId)
+                await http.DeleteAsync($"etapi/branches/{oldBranchId}");
+
+        return newBranchId;
+    }
+
+    /// <summary>Returns true if the note has any real (non-system) child notes.</summary>
+    public async Task<bool> HasChildNotes(string noteId)
+    {
+        HttpResponseMessage res = await http.GetAsync($"etapi/notes/{noteId}");
+        if (!res.IsSuccessStatusCode) return false;
+        JsonNode? node = JsonNode.Parse(await res.Content.ReadAsStringAsync());
+        JsonArray? kids = node?["childNoteIds"] as JsonArray;
+        return kids is not null && kids.Any(c => c?.GetValue<string>()?.StartsWith("_") == false);
+    }
+
+    /// <summary>Returns a note's current parent note IDs and parent branch IDs.</summary>
+    private async Task<(List<string> ParentIds, List<string> BranchIds)> GetParents(string noteId)
+    {
+        HttpResponseMessage res = await http.GetAsync($"etapi/notes/{noteId}");
+        if (!res.IsSuccessStatusCode) return (new(), new());
+        JsonNode? node = JsonNode.Parse(await res.Content.ReadAsStringAsync());
+        List<string> parents  = (node?["parentNoteIds"]   as JsonArray)?.Where(x => x is not null).Select(x => x!.GetValue<string>()).ToList() ?? new();
+        List<string> branches = (node?["parentBranchIds"] as JsonArray)?.Where(x => x is not null).Select(x => x!.GetValue<string>()).ToList() ?? new();
+        return (parents, branches);
     }
 
     /// <summary>Renames a note. Best-effort — failures are silently ignored.</summary>

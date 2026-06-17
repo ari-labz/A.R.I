@@ -7,12 +7,15 @@ public class VoiceTrainerHolder
     private readonly object lockObj = new();
     private TrainingJob? current;
 
+    public bool IsSetupComplete { get; private set; }
+    public void MarkSetupComplete() => IsSetupComplete = true;
+
     public TrainingJob? Current
     {
         get { lock (lockObj) return current; }
     }
 
-    public TrainingJob Start(F5Trainer trainer, string modelName, CancellationToken appStopping)
+    public TrainingJob Start(StyleTtsTrainer trainer, string modelName, CancellationToken appStopping)
     {
         lock (lockObj)
         {
@@ -50,7 +53,7 @@ public class TrainingJob
         cts = CancellationTokenSource.CreateLinkedTokenSource(appStopping);
     }
 
-    internal void Run(F5Trainer trainer)
+    internal void Run(StyleTtsTrainer trainer)
     {
         Progress<TrainingProgress> progress = new(p =>
         {

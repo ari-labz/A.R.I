@@ -264,6 +264,7 @@ public class VoiceController(
     VoiceTrainerHolder voiceHolder,
     DiscordServiceHolder discordHolder,
     SpeechQueueHolder speechHolder,
+    ModelManagerHolder modelManagerHolder,
     WebPanelConfig config,
     ILoggerFactory loggerFactory,
     IHostApplicationLifetime lifetime) : ControllerBase
@@ -360,14 +361,16 @@ public class VoiceController(
             return BadRequest(new { error = "modelName is required." });
         if (string.IsNullOrWhiteSpace(req.StagingPath) || !Directory.Exists(req.StagingPath))
             return BadRequest(new { error = "stagingPath does not exist." });
-        if (string.IsNullOrEmpty(config.F5Path) || string.IsNullOrEmpty(config.VoicesPath))
+        if (string.IsNullOrEmpty(config.StyleTtsPath) || string.IsNullOrEmpty(config.VoicesPath))
             return StatusCode(503, new { error = "VoiceSynthesis module is not configured." });
+        if (!voiceHolder.IsSetupComplete)
+            return StatusCode(503, new { error = "StyleTTS2 is still installing. Please wait." });
 
         TrainingJob job;
         try
         {
-            F5Trainer trainer = new(
-                f5Path:          config.F5Path,
+            StyleTtsTrainer trainer = new(
+                styleTtsPath:    config.StyleTtsPath,
                 voicesPath:      config.VoicesPath,
                 audioPath:       req.StagingPath,
                 modelName:       req.ModelName,
@@ -386,11 +389,13 @@ public class VoiceController(
             "[Voice] Training started — model: {ModelName}, epochs: {Epochs}",
             req.ModelName, req.Epochs);
 
-        // Delete staging dir and send Discord notification when job finishes
+        // Stop llama servers to free RAM, run training, then restart them
         string stagingPath = req.StagingPath;
         string modelName   = req.ModelName;
         _ = Task.Run(async () =>
         {
+            await modelManagerHolder.StopAllServersAsync();
+
             while (job.IsRunning)
                 await Task.Delay(2000);
             try { Directory.Delete(stagingPath, recursive: true); }
@@ -405,6 +410,8 @@ public class VoiceController(
             {
                 logger.LogWarning("[Voice] Training failed for {ModelName}: {Error}", modelName, job.Error);
             }
+
+            await modelManagerHolder.RestartAllServersAsync();
         });
 
         return Ok(new { jobId = job.JobId, modelName = job.ModelName });
@@ -493,6 +500,7 @@ public class VoiceController(
             return StatusCode(503, new { error = "Voice module is not running." });
 
         byte[] wav = await speechHolder.Synthesise(req.Text, ct);
+        logger.LogInformation("[Voice/Speak] '{Text}' → {Bytes} bytes", req.Text, wav.Length);
         return File(wav, "audio/wav");
     }
 

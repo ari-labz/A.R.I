@@ -59,4 +59,5 @@
     <ProjectReference Include="..\ARI.VoiceSynthesis\ARI.VoiceSynthesis.csproj" />
     <ProjectReference Include="..\ARI.Voice\ARI.Voice.csproj" />
   </ItemGroup>
+
 </Project>
