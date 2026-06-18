@@ -69,9 +69,11 @@ html, body {
 #btn-back svg { flex-shrink: 0; opacity: .7; }
 
 #cp-sidebar-nav { padding: 0 8px; }
-.cp-nav-item { padding: 9px 12px; border-radius: 7px; font-size: 14px; color: var(--sidebar-text); cursor: pointer; transition: background .1s; }
+.cp-nav-item { padding: 7px 12px 7px 20px; border-radius: 7px; font-size: 13.5px; color: var(--sidebar-text); cursor: pointer; transition: background .1s; }
 .cp-nav-item:hover  { background: var(--sidebar-hover); }
 .cp-nav-item.active { background: var(--sidebar-active); color: #fff; }
+.cp-nav-group { padding: 14px 12px 4px; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--sidebar-dim); user-select: none; }
+.cp-nav-item.top-level { padding-left: 12px; font-size: 14px; }
 
 /* ── main ────────────────────────────────────────────── */
 #main { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; background: #fff; }
@@ -259,11 +261,17 @@ html, body {
         Back
       </a>
       <div id="cp-sidebar-nav">
-        <div class="cp-nav-item active" data-tab="overview">Overview</div>
+        <div class="cp-nav-item top-level active" data-tab="overview">Overview</div>
+        <div class="cp-nav-group">LLM</div>
+        <div class="cp-nav-item" data-tab="servers">Servers</div>
         <div class="cp-nav-item" data-tab="models">Models</div>
+        <div class="cp-nav-item" data-tab="agents">Agents</div>
+        <div class="cp-nav-item" data-tab="conventions">Coding Conventions</div>
+        <div class="cp-nav-item" data-tab="llmconfigs">Configs</div>
+        <div class="cp-nav-group">Voice</div>
         <div class="cp-nav-item" data-tab="voicesettings">Voice Settings</div>
         <div class="cp-nav-item" data-tab="voice">Voice Synthesis</div>
-        <div class="cp-nav-item" data-tab="conventions">Coding Conventions</div>
+        <div class="cp-nav-group">Memory</div>
         <div class="cp-nav-item" data-tab="brain">Brain</div>
       </div>
     </div>
@@ -280,6 +288,61 @@ html, body {
       <span id="cp-title">Overview</span>
     </div>
 
+    <!-- Servers tab -->
+    <div id="tab-servers" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+        <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);">LLM Servers</div>
+        <button class="vs-btn-primary" id="srv-add-btn" type="button" style="font-size:12px;padding:6px 16px;">+ New server</button>
+      </div>
+      <div id="srv-cards" style="display:flex;flex-direction:column;gap:16px;"></div>
+
+      <!-- Create / Edit modal -->
+      <div id="srv-modal-overlay" style="display:none;position:fixed;inset:0;z-index:400;background:rgba(0,0,0,.45);align-items:center;justify-content:center;">
+        <div style="background:#fff;border-radius:14px;padding:28px 28px 22px;width:480px;max-width:calc(100vw - 32px);box-shadow:0 8px 40px rgba(0,0,0,.18);max-height:90vh;overflow-y:auto;">
+          <div style="font-size:15px;font-weight:700;margin-bottom:20px;" id="srv-modal-title">New server</div>
+          <div style="display:flex;flex-direction:column;gap:14px;">
+            <label class="vs-label">Name<input type="text" id="srv-f-name" class="vs-input" placeholder="e.g. Logic" autocomplete="off"></label>
+            <div style="display:flex;gap:12px;">
+              <label class="vs-label" style="flex:1;">Port<input type="number" id="srv-f-port" class="vs-input" value="8081" min="1" max="65535"></label>
+              <label class="vs-label" style="flex:1;">Parallel slots<input type="number" id="srv-f-slots" class="vs-input" value="1" min="1" max="32"></label>
+            </div>
+            <div class="vs-label" style="gap:8px;">
+              Context size
+              <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
+                <input type="range" id="srv-f-ctx-slider" min="0" max="6" step="1" value="3"
+                  style="flex:1;accent-color:var(--accent,#223742);">
+                <input type="text" id="srv-f-ctx" class="vs-input" value="32K"
+                  style="width:72px;text-align:center;" placeholder="e.g. 48K">
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-dim);margin-top:2px;padding:0 1px;">
+                <span>4K</span><span>8K</span><span>16K</span><span>32K</span><span>64K</span><span>128K</span><span>256K</span>
+              </div>
+            </div>
+            <div style="display:flex;gap:12px;">
+              <label class="vs-label" style="flex:1;">KV quant K<select id="srv-f-kvk" class="vs-input"><option value="4">Q4</option><option value="8">Q8</option><option value="16">F16</option></select></label>
+              <label class="vs-label" style="flex:1;">KV quant V<select id="srv-f-kvv" class="vs-input"><option value="4">Q4</option><option value="8">Q8</option><option value="16">F16</option></select></label>
+            </div>
+            <label class="vs-label">Startup model<select id="srv-f-model" class="vs-input"><option value="">— none —</option></select></label>
+            <div style="display:flex;gap:24px;">
+              <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:var(--text);">
+                <input type="checkbox" id="srv-f-boot" style="width:15px;height:15px;accent-color:var(--accent,#223742);">
+                Auto-start on boot
+              </label>
+              <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:var(--text);">
+                <input type="checkbox" id="srv-f-unified" style="width:15px;height:15px;accent-color:var(--accent,#223742);">
+                Unified cache
+              </label>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;margin-top:22px;justify-content:flex-end;">
+            <button class="mdl-btn-secondary" id="srv-modal-cancel" type="button">Cancel</button>
+            <button class="vs-btn-primary" id="srv-modal-save" type="button">Save</button>
+          </div>
+          <div id="srv-modal-err" style="font-size:12px;color:#dc2626;margin-top:8px;min-height:16px;"></div>
+        </div>
+      </div>
+    </div>
+
     <!-- Models tab -->
     <div id="tab-models" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
 
@@ -291,6 +354,22 @@ html, body {
         </div>
         <div class="vs-progress-track"><div class="vs-progress-fill" id="mdl-switch-fill" style="width:0%"></div></div>
         <div id="mdl-switch-msg" style="font-size:12px;color:var(--text-dim);margin-top:6px;min-height:16px;"></div>
+      </div>
+
+      <!-- Add model form -->
+      <div class="vs-section" style="margin-bottom:20px;">
+        <div class="vs-section-title">Register Model</div>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">
+          <div style="display:flex;gap:10px;">
+            <input id="mdl-add-name" class="vs-input" type="text" placeholder="Name (e.g. Qwen3-30B-A3B)" style="flex:1;font-size:13px;">
+            <input id="mdl-add-url" class="vs-input" type="text" placeholder="HuggingFace URL (.gguf)" style="flex:3;font-size:13px;">
+          </div>
+          <div style="display:flex;gap:10px;">
+            <input id="mdl-add-mmproj-url" class="vs-input" type="text" placeholder="mmproj URL (optional, for vision)" style="flex:4;font-size:13px;">
+            <button class="vs-btn-primary" id="mdl-add-btn" type="button" style="white-space:nowrap;">Add Model</button>
+          </div>
+          <div id="mdl-add-status" style="font-size:12px;color:var(--text-dim);min-height:16px;"></div>
+        </div>
       </div>
 
       <!-- Model cards -->
@@ -376,7 +455,31 @@ html, body {
       </div>
     </div>
 
+    <!-- LLM Configs tab -->
+    <div id="tab-llmconfigs" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div class="vs-section">
+        <div class="vs-section-title">LLM Configurations</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 16px;">
+          Save a snapshot of your Servers, Models, Agents and Coding Conventions. Restoring a config stops all running servers, applies the snapshot, then boots any server with Auto-start on.
+        </p>
+        <div style="display:flex;gap:10px;margin-bottom:24px;">
+          <input id="lcfg-name" class="vs-input" type="text" placeholder="Config name" style="flex:1;font-size:13px;">
+          <input id="lcfg-desc" class="vs-input" type="text" placeholder="Description (optional)" style="flex:2;font-size:13px;">
+          <button class="vs-btn-primary" id="lcfg-save-btn" type="button" style="white-space:nowrap;">Save current</button>
+        </div>
+        <div id="lcfg-status" style="font-size:12px;color:var(--text-dim);margin-bottom:16px;min-height:16px;"></div>
+        <div id="lcfg-list"></div>
+      </div>
+    </div>
+
     <!-- Brain tab -->
+    <div id="tab-agents" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+        <span style="font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--text-dim);text-transform:uppercase;">Agents</span>
+      </div>
+      <div id="agent-cards" style="display:flex;flex-direction:column;gap:12px;"></div>
+    </div>
+
     <div id="tab-brain" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
         <div class="vs-section-title">Backups</div>
@@ -439,18 +542,23 @@ html, body {
 // ── tab switching ─────────────────────────────────────────
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), conventions: document.getElementById('tab-conventions'), models: document.getElementById('tab-models'), brain: document.getElementById('tab-brain') };
-const TAB_TITLES = { voice: 'Voice Synthesis', voicesettings: 'Voice Settings', conventions: 'Coding Conventions', overview: 'Overview', models: 'Models', brain: 'Brain' };
+const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), conventions: document.getElementById('tab-conventions'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), llmconfigs: document.getElementById('tab-llmconfigs') };
+const TAB_TITLES = { voice: 'Voice Synthesis', voicesettings: 'Voice Settings', conventions: 'Coding Conventions', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', llmconfigs: 'LLM Configs' };
 
+let srvPollTimer = null;
 function switchTab(name) {
     navItems.forEach(n => n.classList.toggle('active', n.dataset.tab === name));
     Object.entries(tabs).forEach(([k, el]) => { if (el) el.style.display = k === name ? '' : 'none'; });
     cpTitle.textContent = TAB_TITLES[name] || 'Overview';
     const gw = document.getElementById('cp-grid-wrap');
     if (gw) gw.style.display = name === 'overview' ? '' : 'none';
+    if (name !== 'servers') { clearTimeout(srvPollTimer); srvPollTimer = null; }
     if (name === 'conventions') loadConventions();
     if (name === 'models') loadModels();
     if (name === 'brain') loadBrain();
+    if (name === 'servers') loadServers();
+    if (name === 'agents') loadAgents();
+    if (name === 'llmconfigs') loadLLMConfigs();
 }
 navItems.forEach(n => n.addEventListener('click', () => switchTab(n.dataset.tab)));
 switchTab('overview');
@@ -528,6 +636,68 @@ document.getElementById('cv-save-btn').addEventListener('click', async () => {
         });
         status.textContent = 'Saved — applies to new coding threads.';
         setTimeout(() => { status.textContent = ''; }, 4000);
+    } catch { status.textContent = 'Save failed.'; }
+});
+
+// ── LLM Configs ───────────────────────────────────────────
+async function loadLLMConfigs() {
+    const list   = document.getElementById('lcfg-list');
+    const status = document.getElementById('lcfg-status');
+    list.innerHTML = '<span style="color:var(--text-dim);font-size:13px;">Loading…</span>';
+    try {
+        const configs = await fetch('/api/cp/llmconfigs').then(r => r.json());
+        if (!configs.length) { list.innerHTML = '<span style="color:var(--text-dim);font-size:13px;">No saved configs yet.</span>'; return; }
+        list.innerHTML = '';
+        configs.forEach(cfg => {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px;margin-bottom:8px;';
+            const savedAt = cfg.savedAt ? new Date(cfg.savedAt).toLocaleString() : '';
+            const kb = cfg.sizeBytes ? `${(cfg.sizeBytes/1024).toFixed(1)} KB` : '';
+            row.innerHTML = `
+                <div style="flex:1;min-width:0;">
+                    <div style="font-weight:600;font-size:14px;color:var(--text);">${escHtml(cfg.name)}</div>
+                    ${cfg.description ? `<div style="font-size:12px;color:var(--text-dim);margin-top:2px;">${escHtml(cfg.description)}</div>` : ''}
+                    <div style="font-size:11px;color:var(--text-dim);margin-top:4px;">${savedAt}${kb ? ' · ' + kb : ''}</div>
+                </div>
+                <button class="mdl-btn-secondary lcfg-restore" data-file="${escHtml(cfg.fileName)}" style="font-size:12px;color:#d97706;border-color:#d97706;">Restore</button>
+                <button class="mdl-btn-secondary lcfg-delete"  data-file="${escHtml(cfg.fileName)}" style="font-size:12px;color:#dc2626;border-color:#fca5a5;">Delete</button>`;
+            row.querySelector('.lcfg-restore').addEventListener('click', async () => {
+                if (!confirm(`Restore "${cfg.name}"?\n\nAll running servers will stop, the config will be applied, then servers with Auto-start will boot.`)) return;
+                status.textContent = 'Restoring…';
+                try {
+                    const r = await fetch(`/api/cp/llmconfigs/${encodeURIComponent(cfg.fileName)}/restore`, { method: 'POST' });
+                    if (!r.ok) { const e = await r.json().catch(()=>{}); status.textContent = e?.error ?? 'Restore failed.'; return; }
+                    status.textContent = 'Restored. Servers booting…';
+                    setTimeout(() => { status.textContent = ''; }, 5000);
+                } catch { status.textContent = 'Restore failed.'; }
+            });
+            row.querySelector('.lcfg-delete').addEventListener('click', async () => {
+                if (!confirm(`Delete config "${cfg.name}"? This cannot be undone.`)) return;
+                await fetch(`/api/cp/llmconfigs/${encodeURIComponent(cfg.fileName)}`, { method: 'DELETE' });
+                loadLLMConfigs();
+            });
+            list.appendChild(row);
+        });
+    } catch { list.innerHTML = '<span style="color:#dc2626;font-size:13px;">Failed to load configs.</span>'; }
+}
+
+document.getElementById('lcfg-save-btn').addEventListener('click', async () => {
+    const name   = document.getElementById('lcfg-name').value.trim();
+    const desc   = document.getElementById('lcfg-desc').value.trim();
+    const status = document.getElementById('lcfg-status');
+    if (!name) { status.textContent = 'Enter a name first.'; return; }
+    status.textContent = 'Saving…';
+    try {
+        const r = await fetch('/api/cp/llmconfigs/save', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, description: desc }),
+        });
+        if (!r.ok) { const e = await r.json().catch(()=>{}); status.textContent = e?.error ?? 'Save failed.'; return; }
+        status.textContent = 'Saved.';
+        document.getElementById('lcfg-name').value = '';
+        document.getElementById('lcfg-desc').value = '';
+        setTimeout(() => { status.textContent = ''; }, 3000);
+        loadLLMConfigs();
     } catch { status.textContent = 'Save failed.'; }
 });
 
@@ -876,6 +1046,370 @@ async function pollStats() {
 pollRam(); setInterval(pollRam, 1000);
 pollStats(); setInterval(pollStats, 5000);
 
+// ── Servers ───────────────────────────────────────────────
+const srvCards      = document.getElementById('srv-cards');
+const srvModalOverlay = document.getElementById('srv-modal-overlay');
+const srvModalTitle  = document.getElementById('srv-modal-title');
+const srvModalErr    = document.getElementById('srv-modal-err');
+const srvFName       = document.getElementById('srv-f-name');
+const srvFPort       = document.getElementById('srv-f-port');
+const srvFSlots      = document.getElementById('srv-f-slots');
+const srvFCtx        = document.getElementById('srv-f-ctx');
+const srvFCtxSlider  = document.getElementById('srv-f-ctx-slider');
+const srvFKvk        = document.getElementById('srv-f-kvk');
+const srvFKvv        = document.getElementById('srv-f-kvv');
+const srvFModel      = document.getElementById('srv-f-model');
+const srvFBoot       = document.getElementById('srv-f-boot');
+const srvFUnified    = document.getElementById('srv-f-unified');
+
+const CTX_STEPS = [4096, 8192, 16384, 32768, 65536, 131072, 262144];
+
+function ctxTokensToText(tokens) { return (tokens / 1024).toFixed(0) + 'K'; }
+function ctxTextToTokens(text) {
+    const m = text.trim().match(/^(\d+(?:\.\d+)?)\s*[Kk]?$/);
+    if (!m) return null;
+    const n = parseFloat(m[1]);
+    return text.trim().toUpperCase().endsWith('K') ? Math.round(n * 1024) : Math.round(n);
+}
+function ctxSliderIndex(tokens) {
+    let best = 0;
+    for (let i = 0; i < CTX_STEPS.length; i++) if (CTX_STEPS[i] <= tokens) best = i;
+    return best;
+}
+
+srvFCtxSlider.addEventListener('input', () => {
+    const tokens = CTX_STEPS[parseInt(srvFCtxSlider.value, 10)];
+    srvFCtx.value = ctxTokensToText(tokens);
+});
+srvFCtx.addEventListener('change', () => {
+    const tokens = ctxTextToTokens(srvFCtx.value);
+    if (tokens) {
+        srvFCtxSlider.value = ctxSliderIndex(tokens);
+        srvFCtx.value = ctxTokensToText(tokens);
+    }
+});
+
+let srvEditId = null;
+let srvAllModels = [];
+
+function srvStatusColor(s) {
+    return { Online:'#16a34a', Starting:'#ca8a04', Stopping:'#ca8a04', Offline:'#9ca3af' }[s] ?? '#9ca3af';
+}
+function srvStatusBg(s) {
+    return { Online:'#dcfce7', Starting:'#fef9c3', Stopping:'#fef9c3', Offline:'#f3f4f6' }[s] ?? '#f3f4f6';
+}
+
+// ── Agents ────────────────────────────────────────────────────────────────────
+
+async function loadAgents() {
+    const container = document.getElementById('agent-cards');
+    container.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Loading…</span>';
+    let agents, servers;
+    try {
+        const [ra, rs] = await Promise.all([fetch('/api/cp/agents'), fetch('/api/cp/models')]);
+        agents  = (await ra.json()).agents  ?? [];
+        servers = (await rs.json()).servers ?? [];
+    } catch { container.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Failed to load.</span>'; return; }
+
+    container.innerHTML = '';
+    agents.forEach(a => {
+        const card = document.createElement('div');
+        card.className = 'mdl-card';
+        card.style.cssText = 'padding:18px 20px;';
+
+        const serverOpts = servers.map(s =>
+            `<option value="${escHtml(s.name)}" ${s.name === a.serverName ? 'selected' : ''}>${escHtml(s.name)}</option>`
+        ).join('');
+
+        const fv = (v, def = '') => v != null ? v : def;
+        const enabledStyle = a.enabled
+            ? 'background:#dcfce7;color:#166534;'
+            : 'background:#f3f4f6;color:#6b7280;';
+
+        card.innerHTML = `
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+                <span style="font-weight:700;font-size:15px;">${escHtml(a.name)}</span>
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim);cursor:pointer;">
+                        <input type="checkbox" class="ag-enabled" ${a.enabled ? 'checked' : ''}>
+                        Enabled
+                    </label>
+                    <button class="ag-expand-btn" style="font-size:11px;padding:3px 10px;border:1px solid var(--border);border-radius:4px;background:transparent;color:var(--text-dim);cursor:pointer;">Details ▾</button>
+                </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;margin-bottom:10px;">
+                <label class="vs-label" style="font-size:12px;">
+                    Server
+                    <select class="vs-input ag-server" style="font-size:12px;padding:5px 8px;margin-top:4px;">
+                        ${serverOpts}
+                    </select>
+                </label>
+                <label class="vs-label" style="font-size:12px;">
+                    Slot
+                    <input class="vs-input ag-slot" type="number" min="0" value="${fv(a.slot, 0)}" style="font-size:12px;padding:5px 8px;margin-top:4px;">
+                </label>
+            </div>
+            <div class="ag-details" style="display:none;border-top:1px solid var(--border);padding-top:14px;margin-top:4px;">
+                <label class="vs-label" style="font-size:12px;margin-bottom:10px;display:flex;flex-direction:column;gap:4px;">
+                    System prompt
+                    <textarea class="vs-input ag-sysprompt" rows="6" style="font-size:12px;padding:6px 8px;font-family:monospace;resize:vertical;">${escHtml(fv(a.systemPrompt, ''))}</textarea>
+                </label>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:10px;">
+                    <label class="vs-label" style="font-size:12px;">Temperature<input class="vs-input ag-temp" type="number" step="0.05" min="0" max="2" value="${fv(a.temperature, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:4px;"></label>
+                    <label class="vs-label" style="font-size:12px;">Top-P<input class="vs-input ag-topp" type="number" step="0.01" min="0" max="1" value="${fv(a.topP, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:4px;"></label>
+                    <label class="vs-label" style="font-size:12px;">Top-K<input class="vs-input ag-topk" type="number" min="0" value="${fv(a.topK, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:4px;"></label>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:10px;">
+                    <label class="vs-label" style="font-size:12px;">Repeat penalty<input class="vs-input ag-rep" type="number" step="0.01" min="0" value="${fv(a.repeatPenalty, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:4px;"></label>
+                    <label class="vs-label" style="font-size:12px;">Presence penalty<input class="vs-input ag-pres" type="number" step="0.01" value="${fv(a.presencePenalty, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:4px;"></label>
+                    <label class="vs-label" style="font-size:12px;">Frequency penalty<input class="vs-input ag-freq" type="number" step="0.01" value="${fv(a.frequencyPenalty, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:4px;"></label>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:10px;">
+                    <label class="vs-label" style="font-size:12px;">Max tokens<input class="vs-input ag-maxtok" type="number" min="-1" value="${fv(a.maxTokens, -1)}" style="font-size:12px;padding:5px 8px;margin-top:4px;"></label>
+                    <label class="vs-label" style="font-size:12px;">Max context tokens<input class="vs-input ag-maxctx" type="number" min="0" value="${fv(a.maxContextTokens, 0)}" style="font-size:12px;padding:5px 8px;margin-top:4px;"></label>
+                    <label class="vs-label" style="font-size:12px;">Max tool calls<input class="vs-input ag-maxtool" type="number" min="0" value="${fv(a.maxToolCalls, 0)}" style="font-size:12px;padding:5px 8px;margin-top:4px;"></label>
+                </div>
+                <div style="display:flex;align-items:center;gap:20px;margin-bottom:10px;">
+                    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim);cursor:pointer;">
+                        <input type="checkbox" class="ag-think" ${a.think ? 'checked' : ''}>
+                        Think
+                    </label>
+                    <label class="vs-label" style="font-size:12px;flex-direction:row;align-items:center;gap:8px;">
+                        Thinking budget
+                        <input class="vs-input ag-thinkbudget" type="number" min="0" value="${fv(a.thinkingBudget, 0)}" style="font-size:12px;padding:5px 8px;width:100px;">
+                    </label>
+                </div>
+            </div>
+            <div class="ag-save-status" style="font-size:11px;color:var(--text-dim);margin-top:4px;min-height:14px;"></div>`;
+
+        const agServer    = card.querySelector('.ag-server');
+        const agSlot      = card.querySelector('.ag-slot');
+        const agEnabled   = card.querySelector('.ag-enabled');
+        const agSysprompt = card.querySelector('.ag-sysprompt');
+        const agTemp      = card.querySelector('.ag-temp');
+        const agTopP      = card.querySelector('.ag-topp');
+        const agTopK      = card.querySelector('.ag-topk');
+        const agRep       = card.querySelector('.ag-rep');
+        const agPres      = card.querySelector('.ag-pres');
+        const agFreq      = card.querySelector('.ag-freq');
+        const agMaxTok    = card.querySelector('.ag-maxtok');
+        const agMaxCtx    = card.querySelector('.ag-maxctx');
+        const agMaxTool   = card.querySelector('.ag-maxtool');
+        const agThink     = card.querySelector('.ag-think');
+        const agThinkBudget = card.querySelector('.ag-thinkbudget');
+        const agDetails   = card.querySelector('.ag-details');
+        const agExpandBtn = card.querySelector('.ag-expand-btn');
+        const saveStatus  = card.querySelector('.ag-save-status');
+        let saveTimer;
+
+        agExpandBtn.addEventListener('click', () => {
+            const open = agDetails.style.display === 'none';
+            agDetails.style.display = open ? '' : 'none';
+            agExpandBtn.textContent = open ? 'Details ▴' : 'Details ▾';
+        });
+
+        const parseNum = (el, fallback = null) => {
+            const v = parseFloat(el.value);
+            return isNaN(v) ? fallback : v;
+        };
+        const parseInt2 = (el, fallback = null) => {
+            const v = parseInt(el.value, 10);
+            return isNaN(v) ? fallback : v;
+        };
+
+        async function saveAgent() {
+            clearTimeout(saveTimer);
+            saveTimer = setTimeout(async () => {
+                const body = {
+                    name:             a.name,
+                    serverName:       agServer.value,
+                    slot:             parseInt2(agSlot, 0),
+                    enabled:          agEnabled.checked,
+                    systemPrompt:     agSysprompt.value,
+                    temperature:      parseNum(agTemp),
+                    topP:             parseNum(agTopP),
+                    topK:             parseInt2(agTopK),
+                    repeatPenalty:    parseNum(agRep),
+                    presencePenalty:  parseNum(agPres),
+                    frequencyPenalty: parseNum(agFreq),
+                    maxTokens:        parseInt2(agMaxTok, -1),
+                    maxContextTokens: parseInt2(agMaxCtx, 0),
+                    maxToolCalls:     parseInt2(agMaxTool, 0),
+                    think:            agThink.checked,
+                    thinkingBudget:   parseInt2(agThinkBudget, 0),
+                };
+                try {
+                    const r = await fetch(`/api/cp/agents/${encodeURIComponent(a.name)}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body),
+                    });
+                    if (!r.ok) throw new Error();
+                    saveStatus.textContent = 'Saved.';
+                    setTimeout(() => { saveStatus.textContent = ''; }, 2000);
+                } catch { saveStatus.textContent = 'Save failed.'; }
+            }, 600);
+        }
+
+        [agServer, agSlot, agEnabled, agThink].forEach(el => el.addEventListener('change', saveAgent));
+        [agSysprompt, agTemp, agTopP, agTopK, agRep, agPres, agFreq, agMaxTok, agMaxCtx, agMaxTool, agThinkBudget]
+            .forEach(el => el.addEventListener('input', saveAgent));
+
+        container.appendChild(card);
+    });
+}
+
+async function loadServers() {
+    let data;
+    try {
+        const r = await fetch('/api/cp/models');
+        if (!r.ok) { console.error('[loadServers] HTTP', r.status, await r.text()); renderServerCards([]); return; }
+        data = await r.json();
+    } catch(e) { console.error('[loadServers] fetch/parse error:', e); renderServerCards([]); return; }
+    srvAllModels = data.models ?? [];
+    renderServerCards(data.servers ?? []);
+    clearTimeout(srvPollTimer);
+    const hasTransient = (data.servers ?? []).some(s => s.status === 'Starting' || s.status === 'Stopping');
+    srvPollTimer = setTimeout(loadServers, hasTransient ? 1500 : 6000);
+}
+
+function renderServerCards(servers) {
+    srvCards.innerHTML = '';
+    if (servers.length === 0) {
+        srvCards.innerHTML = '<div class="cp-placeholder">No servers configured. Click "+ New server" to add one.</div>';
+        return;
+    }
+    servers.forEach(s => {
+        const card = document.createElement('div');
+        card.className = 'mdl-card';
+        const statusColor = srvStatusColor(s.status);
+        const statusBg    = srvStatusBg(s.status);
+        const isOnline  = s.status === 'Online';
+        const isOffline = s.status === 'Offline';
+        const isBusy    = s.status === 'Starting' || s.status === 'Stopping';
+
+        const activeModel = s.activeModelName ? escHtml(s.activeModelName) : '<span style="color:var(--text-dim);font-style:italic">idle</span>';
+        const startupModel = s.currentModelName ? escHtml(s.currentModelName) : '<span style="color:var(--text-dim);font-style:italic">none</span>';
+
+        card.innerHTML = `
+            <div class="mdl-card-header" style="margin-bottom:14px;">
+                <span class="mdl-card-name">${escHtml(s.name)}</span>
+                <span style="font-size:11px;font-weight:600;border-radius:20px;padding:2px 10px;background:${statusBg};color:${statusColor};">${escHtml(s.status)}</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 20px;font-size:12px;color:var(--text-dim);margin-bottom:14px;">
+                <div>Port <span style="color:var(--text);font-weight:600;">${s.port}</span></div>
+                <div>Slots <span style="color:var(--text);font-weight:600;">${s.parallelSlots}</span></div>
+                <div>Context <span style="color:var(--text);font-weight:600;">${(s.contextSize/1024).toFixed(0)}K</span></div>
+                <div>KV <span style="color:var(--text);font-weight:600;">K${s.kvCacheQuantK}/V${s.kvCacheQuantV}</span></div>
+                <div>Active model <span style="color:var(--text);font-weight:600;">${activeModel}</span></div>
+                <div>Startup model <span style="color:var(--text);font-weight:600;">${startupModel}</span></div>
+                <div>Auto-start <span style="color:var(--text);font-weight:600;">${s.autoStart ? 'Yes' : 'No'}</span></div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <button class="vs-btn-primary srv-start-btn" data-id="${s.id}" ${!isOffline?'disabled':''} style="font-size:12px;padding:6px 14px;background:${isOffline?'#16a34a':'#6b9e7a'};border-color:${isOffline?'#16a34a':'#6b9e7a'};color:#fff;opacity:${isOffline?'1':'0.6'};">Start</button>
+                <button class="mdl-btn-secondary srv-stop-btn"    data-id="${s.id}" ${!isOnline?'disabled':''} style="font-size:12px;background:#c0392b;border-color:#c0392b;color:#fff;">Stop</button>
+                <button class="mdl-btn-secondary srv-restart-btn" data-id="${s.id}" ${!isOnline?'disabled':''} style="font-size:12px;background:#d68910;border-color:#d68910;color:#fff;">Restart</button>
+                <select class="vs-input srv-model-select" data-id="${s.id}" data-current="${escHtml(s.currentModelName??'')}" style="font-size:12px;padding:5px 8px;flex:1;min-width:140px;">
+                    ${srvAllModels.map(m => `<option value="${escHtml(m.name)}" ${m.name===s.currentModelName?'selected':''}>${escHtml(m.name)}</option>`).join('')}
+                </select>
+                <button class="mdl-btn-secondary srv-edit-btn"   data-id="${s.id}" style="font-size:12px;">Edit</button>
+                ${isOffline ? `<button class="mdl-btn-secondary srv-delete-btn" data-id="${s.id}" style="font-size:12px;color:#dc2626;border-color:#fca5a5;">Delete</button>` : ''}
+            </div>
+            <div class="srv-model-hint" style="display:none;font-size:11px;color:var(--text-dim);margin-top:6px;">Restart the server for changes to take effect.</div>`;
+
+        card.querySelector('.srv-start-btn').addEventListener('click', async btn => {
+            await srvAction(s.id, 'start'); loadServers();
+        });
+        card.querySelector('.srv-stop-btn').addEventListener('click', async () => {
+            await srvAction(s.id, 'stop'); loadServers();
+        });
+        card.querySelector('.srv-restart-btn').addEventListener('click', async () => {
+            await srvAction(s.id, 'restart'); loadServers();
+        });
+        card.querySelector('.srv-model-select').addEventListener('change', async () => {
+            const sel  = card.querySelector('.srv-model-select');
+            const hint = card.querySelector('.srv-model-hint');
+            const modelName = sel.value;
+            if (!modelName) return;
+            try {
+                const r = await fetch(`/api/cp/servers/${s.id}/startup-model`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ modelName }) });
+                if (!r.ok) { const e = await r.json().catch(()=>{}); alert(e?.error ?? 'Update failed.'); sel.value = sel.dataset.current; return; }
+                sel.dataset.current = modelName;
+                hint.style.display = modelName !== s.currentModelName ? '' : 'none';
+            } catch { sel.value = sel.dataset.current; }
+        });
+        card.querySelector('.srv-edit-btn').addEventListener('click', () => openSrvModal(s));
+        card.querySelector('.srv-delete-btn')?.addEventListener('click', async () => {
+            if (!confirm(`Delete server "${s.name}"? This cannot be undone.`)) return;
+            await fetch(`/api/cp/servers/${s.id}`, { method:'DELETE' });
+            loadServers();
+        });
+
+        srvCards.appendChild(card);
+    });
+}
+
+async function srvAction(id, action) {
+    await fetch(`/api/cp/servers/${id}/${action}`, { method:'POST' });
+}
+
+function populateSrvModelSelect(selectedName) {
+    srvFModel.innerHTML = '<option value="">— none —</option>'
+        + srvAllModels.map(m => `<option value="${escHtml(m.name)}" ${m.name === selectedName ? 'selected' : ''}>${escHtml(m.name)}</option>`).join('');
+}
+
+function openSrvModal(server) {
+    srvEditId = server?.id ?? null;
+    srvModalTitle.textContent = server ? 'Edit server' : 'New server';
+    srvModalErr.textContent = '';
+    srvFName.value  = server?.name ?? '';
+    srvFPort.value  = server?.port ?? 8081;
+    srvFSlots.value = server?.parallelSlots ?? 1;
+    const ctxTokens = server?.contextSize ?? 32768;
+    srvFCtx.value = ctxTokensToText(ctxTokens);
+    srvFCtxSlider.value = ctxSliderIndex(ctxTokens);
+    srvFKvk.value   = server?.kvCacheQuantK ?? 4;
+    srvFKvv.value   = server?.kvCacheQuantV ?? 4;
+    srvFBoot.checked    = server?.autoStart    ?? true;
+    srvFUnified.checked = server?.unifiedCache ?? false;
+    populateSrvModelSelect(server?.currentModelName ?? '');
+    srvModalOverlay.style.display = 'flex';
+    srvFName.focus();
+}
+
+function closeSrvModal() { srvModalOverlay.style.display = 'none'; srvEditId = null; }
+
+document.getElementById('srv-add-btn').addEventListener('click', () => openSrvModal(null));
+document.getElementById('srv-modal-cancel').addEventListener('click', closeSrvModal);
+srvModalOverlay.addEventListener('click', e => { if (e.target === srvModalOverlay) closeSrvModal(); });
+
+document.getElementById('srv-modal-save').addEventListener('click', async () => {
+    srvModalErr.textContent = '';
+    const name = srvFName.value.trim();
+    if (!name) { srvModalErr.textContent = 'Name is required.'; return; }
+    const body = {
+        id: srvEditId ?? '00000000-0000-0000-0000-000000000000',
+        name,
+        port:           parseInt(srvFPort.value, 10),
+        parallelSlots:  parseInt(srvFSlots.value, 10),
+        kvCache:        ctxTextToTokens(srvFCtx.value) ?? 32768,
+        kvCacheQuantK:  parseInt(srvFKvk.value, 10),
+        kvCacheQuantV:  parseInt(srvFKvv.value, 10),
+        currentModelName: srvFModel.value || null,
+        bootStartup:    srvFBoot.checked,
+        unifiedCache:   srvFUnified.checked,
+        endpoint:       'http://127.0.0.1',
+    };
+    try {
+        const url    = srvEditId ? `/api/cp/servers/${srvEditId}` : '/api/cp/servers';
+        const method = srvEditId ? 'PUT' : 'POST';
+        const r = await fetch(url, { method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+        if (!r.ok) { const e = await r.json().catch(()=>{}); srvModalErr.textContent = e?.error ?? 'Save failed.'; return; }
+        closeSrvModal();
+        loadServers();
+    } catch (ex) { srvModalErr.textContent = 'Network error.'; }
+});
+
 // ── Models ────────────────────────────────────────────────
 let mdlSwitchEs = null;
 const mdlBanner     = document.getElementById('mdl-switch-banner');
@@ -900,7 +1434,7 @@ function fmtSize(mb) {
 }
 
 function parseModelTags(m) {
-    const fname = (m.file || '').split('/').pop().replace(/\.gguf$/i, '');
+    const fname = (m.name || '').replace(/\.gguf$/i, '');
     const tags = [];
 
     // Total params: 35B, 7B, 0.5B — not preceded by A (active params marker)
@@ -920,16 +1454,14 @@ function parseModelTags(m) {
         : { label: 'Dense', cls: 'dense', title: 'Dense transformer architecture' });
 
     // Vision: hasMmproj = active, supportsVision = capable but mmproj not configured
-    if (m.hasMmproj) {
-        tags.push({ label: 'Vision', cls: 'vision', title: 'Vision active (mmproj configured)' });
-    } else if (m.supportsVision) {
-        tags.push({ label: 'Vision', cls: 'dim', title: 'Vision capable — mmproj not configured' });
+    if (m.mmprojDownloadLink) {
+        tags.push({ label: 'Vision', cls: 'vision', title: 'Vision capable (mmproj available)' });
     } else {
         tags.push({ label: 'No Vision', cls: 'dim', title: 'Text-only model' });
     }
 
     // MTP — from backend flag or filename
-    const hasMTP = m.hasMtp || /[_\-]mtp([_\-\.]|$)/i.test(fname);
+    const hasMTP = m.mtp || /[_\-]mtp([_\-\.]|$)/i.test(fname);
     tags.push(hasMTP
         ? { label: 'MTP',    cls: 'mtp', title: 'Multi-Token Prediction enabled' }
         : { label: 'No MTP', cls: 'dim', title: 'Standard single-token prediction' });
@@ -969,15 +1501,10 @@ function renderModelCards(data) {
         if (m.isStartup)    badges += '<span class="mdl-badge startup">Startup</span>';
         if (!m.downloaded)  badges += '<span class="mdl-badge notdl">Not downloaded</span>';
 
-        const sizeStr = fmtSize(m.sizeMb);
+        const sizeStr = fmtSize(m.modelSize);
 
         // Footer buttons
-        let footer = '';
-        if (!m.active && !switching && m.downloaded)
-            footer += `<button class="vs-btn-primary mdl-switch-btn" data-file="${escHtml(m.file)}" style="font-size:12px;padding:7px 18px;">Load model</button>`;
-        if (!m.isStartup)
-            footer += `<button class="mdl-btn-secondary mdl-startup-btn" data-file="${escHtml(m.file)}">Set as startup</button>`;
-        footer += `<span class="mdl-save-status" style="font-size:12px;color:var(--text-dim);"></span>`;
+        let footer = `<span class="mdl-save-status" style="font-size:12px;color:var(--text-dim);"></span><button class="mdl-delete-btn" style="margin-left:auto;font-size:12px;color:#dc2626;border:1px solid #fca5a5;background:none;border-radius:4px;padding:3px 10px;cursor:pointer;">Remove</button>`;
 
         const tagHtml = parseModelTags(m)
             .map(t => `<span class="mdl-tag mdl-tag-${t.cls}" title="${escHtml(t.title ?? '')}">${escHtml(t.label)}</span>`)
@@ -988,14 +1515,14 @@ function renderModelCards(data) {
                 <span class="mdl-card-name">${escHtml(m.name)}</span>
                 <div class="mdl-card-badges">${badges}</div>
             </div>
-            ${m.downloadUrl
-                ? `<div class="mdl-card-file"><a href="${escHtml(m.downloadUrl)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;border-bottom:1px dashed var(--border);">${escHtml(m.downloadUrl)}</a></div>`
-                : `<div class="mdl-card-file">${escHtml(m.file)}</div>`}
+            ${m.downloadLink
+                ? `<div class="mdl-card-file"><a href="${escHtml(m.downloadLink)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;border-bottom:1px dashed var(--border);">${escHtml(m.downloadLink)}</a></div>`
+                : ''}
             ${sizeStr ? `<div class="mdl-card-size">${escHtml(sizeStr)}</div>` : ''}
             <div class="mdl-tags">${tagHtml}</div>
             <div class="mdl-card-notes">
                 <label>Notes</label>
-                <textarea placeholder="What is this model good or bad at? Any observations…" data-file="${escHtml(m.file)}">${escHtml(m.notes ?? '')}</textarea>
+                <textarea placeholder="What is this model good or bad at? Any observations…" data-name="${escHtml(m.name)}">${escHtml(m.notes ?? '')}</textarea>
             </div>
             <div class="mdl-card-footer">${footer}</div>`;
 
@@ -1003,11 +1530,11 @@ function renderModelCards(data) {
         const ta = card.querySelector('textarea');
         const saveStatus = card.querySelector('.mdl-save-status');
         ta.addEventListener('input', () => {
-            const file = ta.dataset.file;
-            clearTimeout(mdlNoteTimers[file]);
-            mdlNoteTimers[file] = setTimeout(async () => {
+            const name = ta.dataset.name;
+            clearTimeout(mdlNoteTimers[name]);
+            mdlNoteTimers[name] = setTimeout(async () => {
                 try {
-                    await fetch('/api/cp/models/notes', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ modelFile: file, notes: ta.value }) });
+                    await fetch('/api/cp/models/notes', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ modelName: name, notes: ta.value }) });
                     saveStatus.textContent = 'Saved.';
                     setTimeout(() => { saveStatus.textContent = ''; }, 2000);
                 } catch { saveStatus.textContent = 'Save failed.'; }
@@ -1040,9 +1567,53 @@ function renderModelCards(data) {
             });
         }
 
+        // Delete model button
+        const deleteBtn = card.querySelector('.mdl-delete-btn');
+        if (deleteBtn) {
+            deleteBtn.addEventListener('click', async () => {
+                if (!confirm(`Remove "${m.name}" from the registry?`)) return;
+                deleteBtn.disabled = true;
+                try {
+                    const r = await fetch(`/api/cp/models/${encodeURIComponent(m.name)}`, { method: 'DELETE' });
+                    if (!r.ok) { const err = await r.json().catch(()=>({})); alert(err.error ?? 'Delete failed.'); deleteBtn.disabled = false; return; }
+                    loadModels();
+                } catch { deleteBtn.disabled = false; }
+            });
+        }
+
         mdlCards.appendChild(card);
     });
 }
+
+document.getElementById('mdl-add-btn').addEventListener('click', async () => {
+    const name   = document.getElementById('mdl-add-name').value.trim();
+    const url    = document.getElementById('mdl-add-url').value.trim();
+    const mmproj = document.getElementById('mdl-add-mmproj-url').value.trim();
+    const status = document.getElementById('mdl-add-status');
+
+    if (!name)  { status.style.color = '#dc2626'; status.textContent = 'Name is required.'; return; }
+    if (!url)   { status.style.color = '#dc2626'; status.textContent = 'Download URL is required.'; return; }
+
+    const filename      = url.split('/').pop().split('?')[0];
+    const mmprojFilename = mmproj ? mmproj.split('/').pop().split('?')[0] : '';
+
+    const body = { name, downloadLink: url, path: filename };
+    if (mmproj) { body.mmprojDownloadLink = mmproj; body.mmprojPath = mmprojFilename; }
+
+    status.style.color = 'var(--text-dim)';
+    status.textContent = 'Saving…';
+    try {
+        const r = await fetch('/api/cp/models', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+        if (!r.ok) { const err = await r.json().catch(()=>({})); status.style.color='#dc2626'; status.textContent = err.error ?? 'Failed.'; return; }
+        document.getElementById('mdl-add-name').value = '';
+        document.getElementById('mdl-add-url').value  = '';
+        document.getElementById('mdl-add-mmproj-url').value = '';
+        status.style.color = 'var(--text-dim)';
+        status.textContent = 'Model registered.';
+        setTimeout(() => { status.textContent = ''; }, 3000);
+        loadModels();
+    } catch { status.style.color = '#dc2626'; status.textContent = 'Request failed.'; }
+});
 
 function startSwitchProgressSse() {
     if (mdlSwitchEs) mdlSwitchEs.close();

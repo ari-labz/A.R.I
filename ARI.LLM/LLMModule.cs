@@ -217,6 +217,16 @@ public class LLMModule : IDisposable
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Replace the in-memory server list after a config restore.
+    /// All servers must already be stopped before calling this.
+    /// </summary>
+    public void ReplaceServers(IReadOnlyList<Server> servers)
+    {
+        _servers.Clear();
+        _servers.AddRange(servers);
+    }
+
     public async Task RestartAllServersAsync()
     {
         await StopAllServersAsync();

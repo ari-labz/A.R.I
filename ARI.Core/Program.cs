@@ -1,3 +1,4 @@
+using ARI.Common;
 using ARI.Core;
 using ARI.Core.Scripts;
 using Microsoft.Extensions.Hosting;
@@ -5,6 +6,7 @@ using Serilog;
 using Serilog.Events;
 
 string logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ARI.log");
+Shared.LogPath = logPath;
 
 if (File.Exists(logPath))
     File.Delete(logPath);

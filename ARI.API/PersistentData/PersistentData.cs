@@ -3,101 +3,178 @@ using ARI.LLM;
 
 namespace ARI.API.Data;
 
-public sealed record AgentAssignment(string ServerName, int? Slot);
+public sealed class AgentDefinition
+{
+    public string  Name              { get; set; } = "";
+    public string  ServerName        { get; set; } = "";
+    public string  SystemPrompt      { get; set; } = "";
+    public bool    Enabled           { get; set; } = true;
+    public int?    Slot              { get; set; }
+    public bool    Think             { get; set; }
+    public int     ThinkingBudget    { get; set; }
+    public int     MaxTokens         { get; set; } = -1;
+    public int     MaxToolCalls      { get; set; }
+    public int     MaxContextTokens  { get; set; }
+    public double? Temperature       { get; set; }
+    public double? TopP              { get; set; }
+    public int?    TopK              { get; set; }
+    public double? RepeatPenalty     { get; set; }
+    public double? PresencePenalty   { get; set; }
+    public double? FrequencyPenalty  { get; set; }
+    // Dialogue-specific
+    public int?    ShortTermMemoryLimit { get; set; }
+    // Engram-specific
+    public int?    SweepIntervalMinutes { get; set; }
+    public int?    RecursiveBrainSearchDepth { get; set; }
+    // Memory-specific (also used by Engram)
+    public int?    MinP              { get; set; }
+}
 
 /// <summary>
-/// Persists LLM servers, model records, and model notes to ~/.ari/llm-data.json.
-/// All mutations go through this class. Thread-safe.
+/// Persists LLM data across three files under ~/.ari/PersistentData/:
+///   Servers.json, Models.json, Agents.json
+/// All mutations go through this class. Thread-safe per-file.
 /// </summary>
 public class PersistentData
 {
-
-    private sealed class DataFile
+    private sealed class ServersFile
     {
-        public List<Server>                      Servers           { get; set; } = new();
-        public List<Model>                       Models            { get; set; } = new();
-        public Dictionary<string, string>           ModelNotes        { get; set; } = new();
-        public Dictionary<string, AgentAssignment>  AgentAssignments  { get; set; } = new();
+        public List<Server> Servers { get; set; } = new();
     }
+
+    private sealed class ModelsFile
+    {
+        public List<Model>                Models     { get; set; } = new();
+        public Dictionary<string, string> ModelNotes { get; set; } = new();
+    }
+
+    private sealed class AgentsFile
+    {
+        public List<AgentDefinition> Agents { get; set; } = new();
+    }
+
+    // ────────────────────────────────────────────────────────────────────────────
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
-        WriteIndented           = true,
+        WriteIndented               = true,
         PropertyNameCaseInsensitive = true,
     };
 
-    private readonly string _path;
-    private readonly object _lock = new();
+    private readonly string _dir;
+    private readonly string _serversPath;
+    private readonly string _modelsPath;
+    private readonly string _agentsPath;
+
+    private readonly object _serversLock = new();
+    private readonly object _modelsLock  = new();
+    private readonly object _agentsLock  = new();
 
     public PersistentData()
     {
-        string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari");
-        Directory.CreateDirectory(dir);
-        _path = Path.Combine(dir, "llm-data.json");
+        string ariDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "Server");
+        _dir = Path.Combine(ariDir, "PersistentData");
+        Directory.CreateDirectory(_dir);
+
+        _serversPath = Path.Combine(_dir, "Servers.json");
+        _modelsPath  = Path.Combine(_dir, "Models.json");
+        _agentsPath  = Path.Combine(_dir, "Agents.json");
+
+    }
+
+    /// <summary>
+    /// If Agents.json is missing or empty, bootstrap it from the bundled dev-side Agents.json.
+    /// Called by ARI.cs after PersistentData is constructed, passing the exe-dir fallback path.
+    /// </summary>
+    public void EnsureAgentsFileFromFallback(string fallbackPath)
+    {
+        lock (_agentsLock)
+        {
+            AgentsFile existing = LoadAgents();
+            if (existing.Agents.Count > 0) return;
+
+            if (!File.Exists(fallbackPath)) return;
+            try
+            {
+                using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(fallbackPath),
+                    new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
+                if (!doc.RootElement.TryGetProperty("Agents", out JsonElement arr)) return;
+
+                var agents = arr.EnumerateArray()
+                    .Select(el => JsonSerializer.Deserialize<AgentDefinition>(el.GetRawText(), JsonOpts))
+                    .Where(a => a is not null)
+                    .Select(a => a!)
+                    .ToList();
+
+                if (agents.Count > 0)
+                    Save(_agentsPath, new AgentsFile { Agents = agents });
+            }
+            catch { }
+        }
     }
 
     // ── Servers ─────────────────────────────────────────────────────────────────
 
     public IReadOnlyList<Server> GetServers()
     {
-        lock (_lock) return Load().Servers;
+        lock (_serversLock) return LoadServers().Servers;
     }
 
     public Server? GetServer(Guid id)
     {
-        lock (_lock) return Load().Servers.FirstOrDefault(s => s.Id == id);
+        lock (_serversLock) return LoadServers().Servers.FirstOrDefault(s => s.Id == id);
     }
 
     public Server? GetServerByName(string name)
     {
-        lock (_lock) return Load().Servers.FirstOrDefault(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        lock (_serversLock) return LoadServers().Servers.FirstOrDefault(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
     }
 
     public Server AddServer(Server server)
     {
-        lock (_lock)
+        lock (_serversLock)
         {
-            DataFile data = Load();
+            ServersFile data = LoadServers();
             data.Servers.Add(server);
-            Save(data);
+            Save(_serversPath, data);
             return server;
         }
     }
 
     public bool UpdateServer(Server updated)
     {
-        lock (_lock)
+        lock (_serversLock)
         {
-            DataFile data = Load();
+            ServersFile data = LoadServers();
             int idx = data.Servers.FindIndex(s => s.Id == updated.Id);
             if (idx < 0) return false;
             data.Servers[idx] = updated;
-            Save(data);
+            Save(_serversPath, data);
             return true;
         }
     }
 
     public bool RemoveServer(Guid id)
     {
-        lock (_lock)
+        lock (_serversLock)
         {
-            DataFile data    = Load();
-            int      removed = data.Servers.RemoveAll(s => s.Id == id);
+            ServersFile data    = LoadServers();
+            int         removed = data.Servers.RemoveAll(s => s.Id == id);
             if (removed == 0) return false;
-            Save(data);
+            Save(_serversPath, data);
             return true;
         }
     }
 
     public void SetServerCurrentModel(Guid serverId, string? modelName)
     {
-        lock (_lock)
+        lock (_serversLock)
         {
-            DataFile  data   = Load();
-            Server? server = data.Servers.FirstOrDefault(s => s.Id == serverId);
+            ServersFile data   = LoadServers();
+            Server?     server = data.Servers.FirstOrDefault(s => s.Id == serverId);
             if (server is null) return;
             server.CurrentModelName = modelName;
-            Save(data);
+            Save(_serversPath, data);
         }
     }
 
@@ -105,138 +182,134 @@ public class PersistentData
 
     public IReadOnlyList<Model> GetModels()
     {
-        lock (_lock) return Load().Models;
+        lock (_modelsLock) return LoadModels().Models;
     }
 
     public Model? GetModel(string name)
     {
-        lock (_lock) return Load().Models.FirstOrDefault(m => m.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        lock (_modelsLock) return LoadModels().Models.FirstOrDefault(m => m.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
     }
 
     public Model AddModel(Model model)
     {
-        lock (_lock)
+        lock (_modelsLock)
         {
-            DataFile data = Load();
+            ModelsFile data = LoadModels();
             data.Models.Add(model);
-            Save(data);
+            Save(_modelsPath, data);
             return model;
         }
     }
 
     public bool UpdateModel(Model updated)
     {
-        lock (_lock)
+        lock (_modelsLock)
         {
-            DataFile data = Load();
+            ModelsFile data = LoadModels();
             int idx = data.Models.FindIndex(m => m.Name.Equals(updated.Name, StringComparison.OrdinalIgnoreCase));
             if (idx < 0) return false;
             data.Models[idx] = updated;
-            Save(data);
+            Save(_modelsPath, data);
             return true;
         }
     }
 
     public bool RemoveModel(string name)
     {
-        lock (_lock)
+        lock (_modelsLock)
         {
-            DataFile data    = Load();
-            int      removed = data.Models.RemoveAll(m => m.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+            ModelsFile data    = LoadModels();
+            int        removed = data.Models.RemoveAll(m => m.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
             if (removed == 0) return false;
-            Save(data);
+            Save(_modelsPath, data);
             return true;
         }
     }
 
-    // ── Model notes (replaces ModelNotesStore) ──────────────────────────────────
+    // ── Model notes ─────────────────────────────────────────────────────────────
 
     public Dictionary<string, string> GetAllNotes()
     {
-        lock (_lock) return new Dictionary<string, string>(Load().ModelNotes);
+        lock (_modelsLock) return new Dictionary<string, string>(LoadModels().ModelNotes);
     }
 
     public void SetNote(string modelName, string notes)
     {
-        lock (_lock)
+        lock (_modelsLock)
         {
-            DataFile data = Load();
+            ModelsFile data = LoadModels();
             if (string.IsNullOrWhiteSpace(notes))
                 data.ModelNotes.Remove(modelName);
             else
                 data.ModelNotes[modelName] = notes;
-            Save(data);
+            Save(_modelsPath, data);
         }
     }
 
-    // ── Agent assignments ────────────────────────────────────────────────────────
+    // ── Agents ────────────────────────────────────────────────────────────────────
 
-    public Dictionary<string, AgentAssignment> GetAgentAssignments()
+    public IReadOnlyList<AgentDefinition> GetAgents()
     {
-        lock (_lock) return new Dictionary<string, AgentAssignment>(Load().AgentAssignments);
+        lock (_agentsLock) return LoadAgents().Agents;
     }
 
-    public AgentAssignment? GetAgentAssignment(string agentName)
+    public AgentDefinition? GetAgent(string name)
     {
-        lock (_lock) return Load().AgentAssignments.GetValueOrDefault(agentName);
+        lock (_agentsLock) return LoadAgents().Agents
+            .FirstOrDefault(a => a.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
     }
 
-    public void SetAgentAssignment(string agentName, AgentAssignment assignment)
+    public bool UpdateAgent(AgentDefinition updated)
     {
-        lock (_lock)
+        lock (_agentsLock)
         {
-            DataFile data = Load();
-            data.AgentAssignments[agentName] = assignment;
-            Save(data);
+            AgentsFile data = LoadAgents();
+            int idx = data.Agents.FindIndex(a => a.Name.Equals(updated.Name, StringComparison.OrdinalIgnoreCase));
+            if (idx < 0) return false;
+            data.Agents[idx] = updated;
+            Save(_agentsPath, data);
+            return true;
         }
     }
 
-    public void ClearAgentAssignment(string agentName)
+    public AgentDefinition AddAgent(AgentDefinition agent)
     {
-        lock (_lock)
+        lock (_agentsLock)
         {
-            DataFile data = Load();
-            data.AgentAssignments.Remove(agentName);
-            Save(data);
+            AgentsFile data = LoadAgents();
+            data.Agents.Add(agent);
+            Save(_agentsPath, data);
+            return agent;
         }
     }
 
-    // ── Seed ────────────────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Imports servers from Servers.json on first boot. Skipped if servers already exist in persistent data.
-    /// </summary>
-    public void SeedFromFile(string serversJsonPath)
+    public bool RemoveAgent(string name)
     {
-        lock (_lock)
+        lock (_agentsLock)
         {
-            DataFile data = Load();
-            if (data.Servers.Count > 0) return;
-            if (!File.Exists(serversJsonPath)) return;
-
-            DataFile seed = JsonSerializer.Deserialize<DataFile>(File.ReadAllText(serversJsonPath), JsonOpts) ?? new();
-            foreach (Server s in seed.Servers)
-                data.Servers.Add(s);
-
-            Save(data);
+            AgentsFile data    = LoadAgents();
+            int        removed = data.Agents.RemoveAll(a => a.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (removed == 0) return false;
+            Save(_agentsPath, data);
+            return true;
         }
     }
 
     // ── IO ───────────────────────────────────────────────────────────────────────
 
-    private DataFile Load()
-    {
-        if (!File.Exists(_path)) return new DataFile();
+    private ServersFile LoadServers() => Load<ServersFile>(_serversPath);
+    private ModelsFile  LoadModels()  => Load<ModelsFile>(_modelsPath);
+    private AgentsFile  LoadAgents()  => Load<AgentsFile>(_agentsPath);
 
-        try
-        {
-            return JsonSerializer.Deserialize<DataFile>(File.ReadAllText(_path), JsonOpts) ?? new DataFile();
-        }
-        catch { return new DataFile(); }
+    private T Load<T>(string path) where T : new()
+    {
+        if (!File.Exists(path)) return new T();
+        try { return JsonSerializer.Deserialize<T>(File.ReadAllText(path), JsonOpts) ?? new T(); }
+        catch { return new T(); }
     }
 
-    private void Save(DataFile data)
+    private void Save<T>(string path, T data)
     {
-        File.WriteAllText(_path, JsonSerializer.Serialize(data, JsonOpts));
+        File.WriteAllText(path, JsonSerializer.Serialize(data, JsonOpts));
     }
 }

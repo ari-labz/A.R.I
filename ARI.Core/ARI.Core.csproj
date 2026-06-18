@@ -23,11 +23,7 @@
   </Target>
 
   <ItemGroup>
-  	<Content Include="..\ARI.LLM\Servers.json">
-  		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-  		<Link>Servers.json</Link>
-  	</Content>
-  	<Content Include="..\compose.yaml">
+<Content Include="..\compose.yaml">
   		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
   		<Link>compose.yaml</Link>
   	</Content>

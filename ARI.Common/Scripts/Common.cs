@@ -10,6 +10,8 @@ public static class Shared
 
     public static ILogger Logger { get; private set; } = NullLogger.Instance;
 
+    public static string LogPath { get; set; } = "";
+
     public static void InitialiseLogger(ILoggerFactory factory, string categoryName = "ARI")
     {
         _factory = factory;

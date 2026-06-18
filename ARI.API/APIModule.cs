@@ -81,7 +81,7 @@ public class APIModule : IAsyncDisposable
             k.Limits.MaxRequestBodySize = 512L * 1024 * 1024;
         });
 
-        string keysDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "keys");
+        string keysDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "Server", "keys");
         Directory.CreateDirectory(keysDir);
         builder.Services.AddDataProtection()
             .PersistKeysToFileSystem(new System.IO.DirectoryInfo(keysDir))
