@@ -37,7 +37,7 @@ public class ControlPanelApiController(LLMModule? llm, APIConfig config, SystemI
         Response.Headers[HeaderNames.CacheControl] = "no-cache";
         Response.Headers["X-Accel-Buffering"]      = "no";
 
-        string logPath = config.LogPath;
+        string logPath = Shared.LogPath;
         if (string.IsNullOrEmpty(logPath) || !System.IO.File.Exists(logPath))
         {
             await Response.WriteAsync("data: (log file not found)\n\n", cancellationToken);
@@ -263,42 +263,25 @@ public class ControlPanelApiController(LLMModule? llm, APIConfig config, SystemI
     [HttpGet("agents")]
     public IActionResult GetAgents()
     {
-        if (Llm is null) return Ok(new { agents = Array.Empty<object>() });
-
-        var assignments = persistentData.GetAgentAssignments();
-        var agents = Llm.Agents.Values.Select(a => new
-        {
-            name       = a.Name,
-            serverName = a.ServerName,
-            slot       = a.Slot,
-        });
+        var agents = persistentData.GetAgents();
         return Ok(new { agents });
     }
 
-    [HttpPut("agents/{name}/server")]
-    public IActionResult AssignAgentServer(string name, [FromBody] AssignServerRequest req)
+    [HttpPut("agents/{name}")]
+    public IActionResult UpdateAgent(string name, [FromBody] AgentDefinition req)
     {
-        if (Llm is null) return StatusCode(503, new { error = "LLM not available." });
+        req.Name = name;
 
-        if (!Llm.AssignAgentServer(name, req.ServerName))
-            return NotFound(new { error = $"Agent '{name}' or server '{req.ServerName}' not found." });
-
-        var existing = persistentData.GetAgentAssignment(name);
-        persistentData.SetAgentAssignment(name, new AgentAssignment(req.ServerName, existing?.Slot));
-        return NoContent();
-    }
-
-    [HttpPut("agents/{name}/slot")]
-    public IActionResult AssignAgentSlot(string name, [FromBody] AssignSlotRequest req)
-    {
-        if (Llm is null) return StatusCode(503, new { error = "LLM not available." });
-
-        if (!Llm.AssignAgentSlot(name, req.Slot))
+        if (!persistentData.UpdateAgent(req))
             return NotFound(new { error = $"Agent '{name}' not found." });
 
-        var existing = persistentData.GetAgentAssignment(name);
-        string serverName = existing?.ServerName ?? Llm.Agents.GetValueOrDefault(name)?.ServerName ?? "";
-        persistentData.SetAgentAssignment(name, new AgentAssignment(serverName, req.Slot));
+        // Apply server/slot changes live if LLM is running
+        if (Llm is not null)
+        {
+            Llm.AssignAgentServer(name, req.ServerName);
+            if (req.Slot.HasValue) Llm.AssignAgentSlot(name, req.Slot.Value);
+        }
+
         return NoContent();
     }
 }
@@ -594,6 +577,9 @@ public class ModelsApiController(LLMModule? llm, PersistentData persistentData) 
         var notes      = persistentData.GetAllNotes();
         string mPath   = ModelsPath;
 
+        var activeModelNames  = llm?.Servers.Select(s => s.ActiveModel?.Name).Where(n => n is not null).ToHashSet() ?? [];
+        var startupModelNames = persistentData.GetServers().Select(s => s.CurrentModelName).Where(n => n is not null).ToHashSet();
+
         var models = persistentData.GetModels().Select(m =>
         {
             m.RefreshDownloadedState(mPath);
@@ -607,6 +593,8 @@ public class ModelsApiController(LLMModule? llm, PersistentData persistentData) 
                 moe                = m.MoE,
                 mtp                = m.MTP,
                 notes              = notes.TryGetValue(m.Name, out string? n) ? n : "",
+                active             = activeModelNames.Contains(m.Name),
+                isStartup          = startupModelNames.Contains(m.Name),
             };
         }).ToList();
 
@@ -658,10 +646,10 @@ public class ModelsApiController(LLMModule? llm, PersistentData persistentData) 
         return Ok(model);
     }
 
-    [HttpDelete("{id:guid}")]
-    public IActionResult DeleteModel(Guid id)
+    [HttpDelete("{name}")]
+    public IActionResult DeleteModel(string name)
     {
-        if (!persistentData.RemoveModel(id.ToString()))
+        if (!persistentData.RemoveModel(Uri.UnescapeDataString(name)))
             return NotFound(new { error = "Model not found." });
         return Ok(new { ok = true });
     }
@@ -689,8 +677,44 @@ public class ModelsApiController(LLMModule? llm, PersistentData persistentData) 
     [HttpDelete("/api/cp/servers/{id:guid}")]
     public IActionResult DeleteServer(Guid id)
     {
+        Server? live = llm?.Servers.FirstOrDefault(s => s.Id == id);
+        live?.Stop();
         if (!persistentData.RemoveServer(id))
             return NotFound(new { error = "Server not found." });
+        return Ok(new { ok = true });
+    }
+
+    // ── Server lifecycle ──────────────────────────────────────────────────────
+
+    [HttpPost("/api/cp/servers/{id:guid}/start")]
+    public IActionResult StartServer(Guid id)
+    {
+        Server? server = llm?.Servers.FirstOrDefault(s => s.Id == id);
+        if (server is null) return NotFound(new { error = "Server not found or LLM module unavailable." });
+
+        Model? model = server.CurrentModelName is not null
+            ? persistentData.GetModel(server.CurrentModelName)
+            : null;
+        string modelsPath = llm!.ModelsPath;
+        _ = Task.Run(() => server.StartAsync(model, modelsPath));
+        return Ok(new { ok = true });
+    }
+
+    [HttpPost("/api/cp/servers/{id:guid}/stop")]
+    public IActionResult StopServer(Guid id)
+    {
+        Server? server = llm?.Servers.FirstOrDefault(s => s.Id == id);
+        if (server is null) return NotFound(new { error = "Server not found or LLM module unavailable." });
+        server.Stop();
+        return Ok(new { ok = true });
+    }
+
+    [HttpPost("/api/cp/servers/{id:guid}/restart")]
+    public IActionResult RestartServer(Guid id)
+    {
+        Server? server = llm?.Servers.FirstOrDefault(s => s.Id == id);
+        if (server is null) return NotFound(new { error = "Server not found or LLM module unavailable." });
+        _ = Task.Run(() => server.RestartAsync());
         return Ok(new { ok = true });
     }
 
@@ -722,6 +746,17 @@ public class ModelsApiController(LLMModule? llm, PersistentData persistentData) 
         return Ok(new { ok = true });
     }
 
+    [HttpPut("/api/cp/servers/{id:guid}/startup-model")]
+    public IActionResult SetStartupModel(Guid id, [FromBody] SetStartupModelRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.ModelName))
+            return BadRequest(new { error = "modelName is required." });
+        if (persistentData.GetServer(id) is null)
+            return NotFound(new { error = "Server not found." });
+        persistentData.SetServerCurrentModel(id, req.ModelName);
+        return Ok(new { ok = true });
+    }
+
     [HttpPut("notes")]
     public IActionResult SaveNotes([FromBody] ModelNotesRequest req)
     {
@@ -734,6 +769,7 @@ public class ModelsApiController(LLMModule? llm, PersistentData persistentData) 
 }
 
 public record SwitchModelRequest(Guid ServerId, string ModelName);
+public record SetStartupModelRequest(string ModelName);
 public record ModelNotesRequest(string ModelName, string? Notes);
 
 public record ConventionsRequest(string? Text);
@@ -746,5 +782,3 @@ public record TrainRequest(
 
 public record SpeakRequest(string Text, string? ModelName = null);
 public record SplitSentencesRequest(string Text);
-public record AssignServerRequest(string ServerName);
-public record AssignSlotRequest(int? Slot);

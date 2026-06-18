@@ -260,6 +260,10 @@ def synthesise_text(text, alpha=0.3, beta=0.7, diffusion_steps=5, embedding_scal
 
 app = Flask(__name__)
 
+@app.errorhandler(500)
+def handle_500(e):
+    return jsonify({'error': str(e.description)}), 500
+
 @app.route('/health')
 def health():
     return jsonify({'status': 'ok'})
@@ -273,6 +277,10 @@ def synthesise():
     _raw_peak = np.abs(wav).max()
     _raw_nans = int(np.isnan(wav).sum())
     _sys.stderr.write(f'[synthesise] raw shape={wav.shape} peak={_raw_peak:.4f} nans={_raw_nans}\n'); _sys.stderr.flush()
+    if _raw_nans > 1:
+        _sys.stderr.write(f'[synthesise] ERROR: {_raw_nans} NaN samples in output — model weights may be corrupted\n'); _sys.stderr.flush()
+        from flask import abort
+        abort(500, description=f'NaN audio output: {_raw_nans} NaN samples. Model weights may be corrupted or undertrained.')
     wav = np.nan_to_num(wav, nan=0.0, posinf=0.0, neginf=0.0)
     peak = np.abs(wav).max()
     if peak > 0:

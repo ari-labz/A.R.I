@@ -27,9 +27,9 @@ public class ProjectStore
     public ProjectStore()
     {
         string dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari");
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "Client");
         Directory.CreateDirectory(dir);
-        _filePath       = Path.Combine(dir, "projects.json");
+        _filePath       = Path.Combine(dir, "Projects.json");
         _threadMapPath  = Path.Combine(dir, "thread-projects.json");
         _attachmentsDir = Path.Combine(dir, "project-attachments");
         Directory.CreateDirectory(_attachmentsDir);

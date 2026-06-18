@@ -70,20 +70,22 @@ public class ARI : BackgroundService
         // ── Shared infrastructure ────────────────────────────────────────────────
         PersistentData persistentData = new();
 
+        string ariPersistentDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "Server", "PersistentData");
+        string persistentAgentsPath = Path.Combine(ariPersistentDir, "Agents.json");
+        persistentData.EnsureAgentsFileFromFallback(Path.Combine(executableDirectory, "Agents.json"));
+
         // ── LLM module ───────────────────────────────────────────────────────────
         string modelsPath = ResolvePath(executableDirectory, config.modules.LLM.ModelsPath);
 
         if (config.modules.LLM.Enabled)
         {
-            string serversJsonPath = Path.Combine(executableDirectory, "Servers.json");
-            persistentData.SeedFromFile(serversJsonPath);
-
             BrainConfig? brainConfig = config.modules.Brain?.Enabled == true ? config.modules.Brain : null;
 
             Shared.Logger.LogInformation("Loading agents...");
             llmModule = new LLMModule(
                 servers:        persistentData.GetServers().ToList(),
-                agentsJsonPath: Path.Combine(executableDirectory, "Agents.json"),
+                agentsJsonPath: persistentAgentsPath,
                 brainConfig:    brainConfig,
                 loggerFactory:  loggerFactory);
             Shared.Logger.LogInformation("Agents loaded.");
@@ -157,10 +159,10 @@ public class ARI : BackgroundService
             Shared.Logger.LogInformation("Starting LLM servers...");
             await llmModule.StartServersAsync(persistentData.GetModels().ToList(), modelsPath);
 
-            foreach ((string name, var assignment) in persistentData.GetAgentAssignments())
+            foreach (var agent in persistentData.GetAgents())
             {
-                llmModule.AssignAgentServer(name, assignment.ServerName);
-                llmModule.AssignAgentSlot(name, assignment.Slot);
+                llmModule.AssignAgentServer(agent.Name, agent.ServerName);
+                if (agent.Slot.HasValue) llmModule.AssignAgentSlot(agent.Name, agent.Slot.Value);
             }
         }
 

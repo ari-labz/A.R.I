@@ -47,6 +47,9 @@ public class Server : IDisposable
     [JsonPropertyName("bootStartup")]
     public bool BootStartup { get; set; } = true;
 
+    [JsonPropertyName("unifiedCache")]
+    public bool UnifiedCache { get; set; } = false;
+
     // ── Runtime state (not persisted) ───────────────────────────────────────────
 
     [JsonIgnore] public ServerStatus Status { get; private set; } = ServerStatus.Offline;
@@ -217,6 +220,7 @@ public class Server : IDisposable
             jinja ? "--jinja" : "",
             $"-np {ParallelSlots} -ngl 99 --port {Port}",
             "--host 127.0.0.1",
+            UnifiedCache ? "--cache-reuse 256" : "",
         };
 
         args.RemoveAll(string.IsNullOrWhiteSpace);
