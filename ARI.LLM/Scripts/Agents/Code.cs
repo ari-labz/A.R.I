@@ -12,8 +12,6 @@ internal class Code : Agent
     internal override int  MemoryLimit      => ShortTermMemoryLimit;
     internal override bool SuppressPromptLog => true;
 
-    internal override ThreadType Type => ThreadType.Code;
-
     internal Code() { }
 
     // ── Per-thread code context ──────────────────────────────────────────────
@@ -105,9 +103,4 @@ internal class Code : Agent
     internal override bool   HasTasks(Thread thread)                  => GetOrCreateState(thread.Key).Todos.Count > 0;
     internal override string PendingTaskSummary(Thread thread)        => string.Join("\n", GetOrCreateState(thread.Key).Todos.Where(t => t.Status != "completed").Select(t => $"- {t.Content} ({t.Status})"));
 
-    protected override void OnThreadCreated(string threadKey, Thread thread)
-    {
-        base.OnThreadCreated(threadKey, thread);
-        thread.BecameInactive += () => thread.MarkEngramProcessed();
-    }
 }

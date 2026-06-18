@@ -19,8 +19,6 @@ internal class Refactor : Agent
     private const int CLUSTER_CALL_LIMIT    = 20;
     private const int EXCERPT_LENGTH        = 300;
 
-    internal override ThreadType Type => ThreadType.Refactor;
-
     internal Refactor() { }
 
     /// <summary>
@@ -337,11 +335,11 @@ internal class Refactor : Agent
         List<NoteData> hubNotes,
         List<string> allTitles)
     {
-        string threadKey = $"refactor-folder-{folder}:{Guid.NewGuid()}";
-        string prompt    = BuildFolderPrompt(folder, notes, hubNotes, allTitles);
+        Thread refactorThread = new Thread(ThreadType.Refactor, $"refactor-folder-{folder}:{Guid.NewGuid()}");
+        string prompt         = BuildFolderPrompt(folder, notes, hubNotes, allTitles);
 
         Shared.Logger.LogInformation("[Refactor] Folder '{Folder}': single-pass LLM call ({Count} notes).", folder, notes.Count);
-        string raw = await SendPrompt(threadKey, prompt, maxTokensOverride: -1);
+        string raw = await SendPrompt(refactorThread, prompt, maxTokensOverride: -1);
         (List<EngramAdd> adds, List<EngramEdit> edits, List<EngramDelete> deletes, List<EngramMerge> merges) = ParseAddEdit(raw);
 
         // Enforce folder scope: only accept edits for notes that live inside this folder.
@@ -372,11 +370,11 @@ internal class Refactor : Agent
         List<string> allTitles)
     {
         // Pass 1 — Cluster detection (titles + short excerpt per note)
-        string p1Key    = $"refactor-clusters-{folder}:{Guid.NewGuid()}";
+        Thread p1Thread = new Thread(ThreadType.Refactor, $"refactor-clusters-{folder}:{Guid.NewGuid()}");
         string p1Prompt = ClusterDetectionPrompt(folder, notes, hubNotes);
 
         Shared.Logger.LogInformation("[Refactor] Folder '{Folder}': cluster detection pass ({Count} notes).", folder, notes.Count);
-        string clusterRaw     = await SendPrompt(p1Key, p1Prompt, maxTokensOverride: -1);
+        string clusterRaw     = await SendPrompt(p1Thread, p1Prompt, maxTokensOverride: -1);
         List<ClusterPlan> clusters = ParseClusterPlan(clusterRaw);
 
         if (clusters.Count == 0)
@@ -404,11 +402,11 @@ internal class Refactor : Agent
             NoteData? existingHub = hubNotes.FirstOrDefault(h =>
                 string.Equals(h.Title, cluster.HubName, StringComparison.OrdinalIgnoreCase));
 
-            string p2Key    = $"refactor-cluster-{cluster.Theme}:{Guid.NewGuid()}";
+            Thread p2Thread = new Thread(ThreadType.Refactor, $"refactor-cluster-{cluster.Theme}:{Guid.NewGuid()}");
             string p2Prompt = ClusterAnalysisPrompt(cluster, clusterNotes, existingHub, hubNotes, allTitles);
 
             Shared.Logger.LogInformation("[Refactor] Cluster '{Theme}' ({Count} notes).", cluster.Theme, clusterNotes.Count);
-            string raw = await SendPrompt(p2Key, p2Prompt, maxTokensOverride: -1);
+            string raw = await SendPrompt(p2Thread, p2Prompt, maxTokensOverride: -1);
             (List<EngramAdd> adds, List<EngramEdit> edits, List<EngramDelete> deletes, List<EngramMerge> merges) = ParseAddEdit(raw);
 
             // Enforce cluster scope: only accept edits for notes that are members of this cluster.

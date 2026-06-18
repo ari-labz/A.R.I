@@ -25,8 +25,6 @@ internal class Memory : Agent
 
     internal override bool QuietLogging => true;
 
-    internal override ThreadType Type => ThreadType.Memory;
-
     internal Memory() { }
 
     private static readonly string[] MemoryKeywords =
@@ -70,7 +68,7 @@ internal class Memory : Agent
     {
         if (RecursiveBrainSearchDepth <= 0) return null;
 
-        string threadKey = $"memory:{Guid.NewGuid()}";
+        Thread memThread = new Thread(ThreadType.Memory, $"memory:{Guid.NewGuid()}");
 
         // Skip for short messages with no question or memory/personal signal.
         if (incomingPrompt.Length < MIN_RECALL_LENGTH && !incomingPrompt.Contains('?'))
@@ -194,7 +192,7 @@ internal class Memory : Agent
         Stopwatch totalTimer = Stopwatch.StartNew();
 
         string raw = indirect.Count > 0
-            ? await SendPrompt(threadKey, firstPrompt, ct: ct, thinkingBudgetOverride: thinkingBudget)
+            ? await SendPrompt(memThread, firstPrompt, ct: ct, thinkingBudgetOverride: thinkingBudget)
             : "{\"fetch\": []}";
 
         for (int depth = 0; depth < RecursiveBrainSearchDepth; depth++)
@@ -206,7 +204,7 @@ internal class Memory : Agent
 
             if (toFetch.Count == 0)
             {
-                LogRound(threadKey, roundNumber, ref totalTokens, ref totalSeconds, recalled: null);
+                LogRound(memThread, roundNumber, ref totalTokens, ref totalSeconds, recalled: null);
                 break;
             }
 
@@ -226,7 +224,7 @@ internal class Memory : Agent
                 noteContents[name] = (content, noteId);
             }
 
-            LogRound(threadKey, roundNumber++, ref totalTokens, ref totalSeconds, recalled);
+            LogRound(memThread, roundNumber++, ref totalTokens, ref totalSeconds, recalled);
 
             if (depth + 1 >= RecursiveBrainSearchDepth) break;
 
@@ -244,7 +242,7 @@ internal class Memory : Agent
                 $"Do NOT re-request notes already fetched: {string.Join(", ", fetched)}.\n" +
                 "Respond ONLY with JSON: {\"fetch\": [\"Name\"]} — or {\"fetch\": []} to stop.";
 
-            raw = await SendPrompt(threadKey, nextPrompt, ct: ct, thinkingBudgetOverride: thinkingBudget);
+            raw = await SendPrompt(memThread, nextPrompt, ct: ct, thinkingBudgetOverride: thinkingBudget);
         }
 
         totalTimer.Stop();
@@ -274,9 +272,9 @@ internal class Memory : Agent
         return result.ToString().TrimEnd();
     }
 
-    private void LogRound(string threadKey, int round, ref int totalTokens, ref double totalSeconds, List<string>? recalled)
+    private void LogRound(Thread memThread, int round, ref int totalTokens, ref double totalSeconds, List<string>? recalled)
     {
-        AriResponse? last = GetThread(threadKey)?.History.OfType<AriResponse>().LastOrDefault();
+        AriResponse? last = memThread.History.OfType<AriResponse>().LastOrDefault();
         if (last is null) return;
 
         int    tokens    = last.CompletionTokens;

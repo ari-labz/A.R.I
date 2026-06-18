@@ -52,8 +52,7 @@ internal sealed class CodePipeline : Pipeline
         Shared.Logger.LogInformation("[Code] ({Thread}) prompt\n\"{Prompt}\"", threadKey, effectivePrompt);
 
         return code.SendPrompt(
-            threadKey, effectivePrompt, username,
-            platformContext:    platformContext,
+            thread, effectivePrompt, username,
             ct:                 cts.Token,
             userMessagePreadded: true,
             onDelta:            onDelta);
