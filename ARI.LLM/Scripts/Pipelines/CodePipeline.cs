@@ -46,7 +46,7 @@ internal sealed class CodePipeline : Pipeline
             new WriteFile(resolvedRoot, cts.Token).Register(thread);
             new DeleteFile(resolvedRoot, cts.Token).Register(thread);
             new MoveFile(resolvedRoot, cts.Token).Register(thread);
-            new UpdateTodos(thread).Register(thread);
+            new UpdateTodos(code, thread).Register(thread);
         }
 
         Shared.Logger.LogInformation("[Code] ({Thread}) prompt\n\"{Prompt}\"", threadKey, effectivePrompt);

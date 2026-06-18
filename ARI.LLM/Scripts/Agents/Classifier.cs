@@ -11,7 +11,7 @@ internal class Classifier : Agent
         string ephemeralKey = $"__classify_{Guid.NewGuid():N}";
         try
         {
-            string result = await Prompt(ephemeralKey, message, ct: ct);
+            string result = await SendPrompt(ephemeralKey, message, ct: ct);
             return result.Trim().StartsWith("CODE", StringComparison.OrdinalIgnoreCase) ? "Code" : "Dialogue";
         }
         finally
