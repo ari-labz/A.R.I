@@ -50,25 +50,26 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 
     /// <summary>Finds an existing user-facing thread (Dialogue or Code) by key.</summary>
     private ARI.LLM.Thread? GetThread(string threadKey)
-        => Llm?.Agents.GetValueOrDefault("Dialogue")?.GetThread(threadKey)
-        ?? Llm?.Agents.GetValueOrDefault("Code")?.GetThread(threadKey);
+    {
+        if (Llm is null) return null;
+        Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? t);
+        return t;
+    }
 
     /// <summary>Finds an existing internal agent thread (Engram, Refactor, etc.) by key.</summary>
     private ARI.LLM.Thread? GetInternalThread(string threadKey)
     {
-        foreach (string name in new[] { "Engram", "Refactor", "Context", "Memory" })
-        {
-            ARI.LLM.Thread? t = Llm?.Agents.GetValueOrDefault(name)?.GetThread(threadKey);
-            if (t is not null) return t;
-        }
-        return null;
+        if (Llm is null) return null;
+        Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? t);
+        return t;
     }
 
     /// <summary>Gets or creates the correct thread for the given key, routing to Code or Dialogue.</summary>
     private ARI.LLM.Thread GetOrCreateThread(string threadKey)
     {
-        string agentName = Llm!.Agents.GetValueOrDefault("Code")?.Threads.ContainsKey(threadKey) == true ? "Code" : "Dialogue";
-        return Llm.Agents[agentName].GetOrCreateThread(threadKey);
+        bool isCode = Llm!.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? existing)
+                      && existing.Type == ARI.LLM.ThreadType.Code;
+        return isCode ? Llm.GetOrCreateCodeThread(threadKey) : Llm.GetOrCreateDialogueThread(threadKey);
     }
 
     // ── Thread endpoints ────────────────────────────────────────────────────────
@@ -78,51 +79,30 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
 
-        Agent? dialogueAgent = Llm.Agents.GetValueOrDefault("Dialogue");
-        Agent? codeAgent     = Llm.Agents.GetValueOrDefault("Code");
+        var allThreads = Llm.Threads;
 
-        // Collect all user-facing thread keys from both agents, deduped
-        var allKeys = new Dictionary<string, (DateTime lastMessageAt, int count, string state, bool isCode)>();
-
-        if (dialogueAgent is not null)
-        {
-            foreach (var kvp in dialogueAgent.Threads)
-            {
-                bool isCode = codeAgent?.Threads.ContainsKey(kvp.Key) == true;
-                allKeys[kvp.Key] = (kvp.Value.LastMessageAt, kvp.Value.History.Count(m => m is UserMessage or AriResponse),
-                    kvp.Value.State.ToString().ToLowerInvariant(), isCode);
-            }
-        }
-        if (codeAgent is not null)
-        {
-            foreach (var kvp in codeAgent.Threads)
-            {
-                if (!allKeys.ContainsKey(kvp.Key))
-                    allKeys[kvp.Key] = (kvp.Value.LastMessageAt, kvp.Value.History.Count(m => m is UserMessage or AriResponse),
-                        kvp.Value.State.ToString().ToLowerInvariant(), true);
-            }
-        }
-
-        List<ThreadEntry> threads = allKeys
+        List<ThreadEntry> threads = allThreads
+            .Where(kvp => kvp.Value.Type == ARI.LLM.ThreadType.Dialogue || kvp.Value.Type == ARI.LLM.ThreadType.Code)
             .Select(kvp =>
             {
                 string? projectId   = ThreadProjects.TryGetValue(kvp.Key, out string? pid) ? pid : null;
                 string? projectName = projectId is not null ? projectStore.Get(projectId)?.Name : null;
                 return new ThreadEntry(kvp.Key, AgentName: null, IsInternal: false,
-                    LastMessageAt: kvp.Value.lastMessageAt, MessageCount: kvp.Value.count,
-                    State: kvp.Value.state, IsCodeMode: kvp.Value.isCode,
+                    LastMessageAt: kvp.Value.LastMessageAt,
+                    MessageCount: kvp.Value.History.Count(m => m is UserMessage or AriResponse),
+                    State: kvp.Value.State.ToString().ToLowerInvariant(),
+                    IsCodeMode: kvp.Value.Type == ARI.LLM.ThreadType.Code,
                     ProjectName: projectName, ProjectId: projectId);
             })
             .ToList();
 
         if (includeInternal)
         {
-            HashSet<string> userKeys = new(dialogueAgent?.Threads.Keys ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
-            IEnumerable<ThreadEntry> internalThreads = Llm.Agents
-                .Where(kvp => kvp.Key != "Dialogue" && kvp.Key != "Code")
-                .SelectMany(kvp => kvp.Value.Threads
-                    .Where(t => !userKeys.Contains(t.Key))
-                    .Select(t => new ThreadEntry(t.Key, kvp.Key, IsInternal: true, t.Value.LastMessageAt, t.Value.History.Count)));
+            HashSet<string> userKeys = new(threads.Select(t => t.Key), StringComparer.OrdinalIgnoreCase);
+            IEnumerable<ThreadEntry> internalThreads = allThreads
+                .Where(kvp => !userKeys.Contains(kvp.Key))
+                .Select(kvp => new ThreadEntry(kvp.Key, kvp.Value.Type.ToString(), IsInternal: true,
+                    kvp.Value.LastMessageAt, kvp.Value.History.Count));
             threads.AddRange(internalThreads);
         }
 
@@ -233,7 +213,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     {
         bool isProcessing  = Llm?.IsThreadProcessing(threadKey)  ?? false;
         bool isRemembering = Llm?.IsEngramSweeping(threadKey)     ?? false;
-        bool isCodeMode    = Llm?.Agents.GetValueOrDefault("Code")?.Threads.ContainsKey(threadKey) == true;
+        bool isCodeMode    = Llm?.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? wt) == true && wt?.Type == ARI.LLM.ThreadType.Code;
         string payload     = JsonSerializer.Serialize(new { isProcessing, isRemembering, isCodeMode });
         await Response.WriteAsync($"data: {payload}\n\n", ct);
         await Response.Body.FlushAsync(ct);
@@ -516,8 +496,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 
         // Safeguard: reject prompts that are clearly too large for the context window.
         // Estimate at 4 chars/token; limit comes from the thread's configured MaxContextTokens (0 = unconfigured).
-        Agent? dialogueAgent = Llm.Agents.GetValueOrDefault("Dialogue");
-        (int _, int contextLimit) = dialogueAgent?.GetContextStats(dialogueAgent.GetThread(threadKey)) ?? (0, 0);
+        (int _, int contextLimit) = Llm.GetContextStats(threadKey);
         int effectiveLimit    = contextLimit > 0 ? contextLimit : 8000;
         int estimatedTokens   = prompt.Length / 4;
         if (estimatedTokens > effectiveLimit)

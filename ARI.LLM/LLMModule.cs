@@ -27,8 +27,7 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly Dictionary<string, Agent>                                                   agentMap          = new();
     private readonly HashSet<string>                                                              forcedCodeThreads = new();
 
-    // The single flat registry of every thread, across all pipelines. Agents hold a reference to
-    // this and expose type-filtered views; the service navigates it directly.
+    // The single flat registry of every thread, across all pipelines.
     private readonly ConcurrentDictionary<string, Thread>                                         threads           = new();
 
     private readonly List<Server>  _servers    = new();
@@ -100,25 +99,18 @@ public class LLMModule : ILLMModule, IDisposable
                 ? JsonSerializer.Deserialize<Dialogue>(dlgEl.GetRawText(), JsonOptions)!.ShortTermMemoryLimit
                 : 25;
             context.Init(memoryLimit);
-            context.AttachRegistry(threads);
             _logger.LogInformation("Context tracker is active.");
         }
 
         if (rawAgents.TryGetValue("Dialogue", out JsonElement dialogueEl))
         {
             dialogue = Deserialize<Dialogue>(dialogueEl);
-            dialogue.AttachRegistry(threads);
-            dialogue.ThreadUpdated += key => NotifyWatchers(key);
-            dialogue.ThreadDeleted += key => NotifyThreadDeleted(key);
             agentMap["Dialogue"] = dialogue;
         }
 
         if (rawAgents.TryGetValue("Code", out JsonElement codeEl))
         {
             code = Deserialize<Code>(codeEl);
-            code.AttachRegistry(threads);
-            code.ThreadUpdated += key => NotifyWatchers(key);
-            code.ThreadDeleted += key => NotifyThreadDeleted(key);
             agentMap["Code"] = code;
             _logger.LogInformation("Code agent is active. MaxContext: {Ctx} tokens.", code.MaxContextTokens);
         }
@@ -126,7 +118,6 @@ public class LLMModule : ILLMModule, IDisposable
         if (rawAgents.TryGetValue("Classifier", out JsonElement classifierEl))
         {
             classifier = Deserialize<Classifier>(classifierEl);
-            classifier.AttachRegistry(threads);
             _logger.LogInformation("Classifier is active.");
         }
 
@@ -138,7 +129,6 @@ public class LLMModule : ILLMModule, IDisposable
                 memory = mem;
                 memory.brain          = brain;
                 memory.brainPublicUrl = brain.BrainPublicUrl;
-                memory.AttachRegistry(threads);
                 agentMap["Memory"] = memory;
                 _logger.LogInformation("Memory agent is active. Depth: {Depth}.", memory.RecursiveBrainSearchDepth);
             }
@@ -149,8 +139,7 @@ public class LLMModule : ILLMModule, IDisposable
             if (rawAgents.TryGetValue("Engram", out JsonElement engramEl))
             {
                 engram = Deserialize<Engram>(engramEl);
-                engram.Init(dialogue, brain, context, brain.BrainPublicUrl);
-                engram.AttachRegistry(threads);
+                engram.Init(dialogue, brain, context, brain.BrainPublicUrl, threads);
                 engram.SweepCompleted += key => NotifyWatchers(key);
                 agentMap["Engram"] = engram;
                 _logger.LogInformation("Engram is active. Brain connected.");
@@ -161,7 +150,6 @@ public class LLMModule : ILLMModule, IDisposable
                 refactor = Deserialize<Refactor>(refactorEl);
                 refactor.brain  = brain;
                 refactor.engram = engram;
-                refactor.AttachRegistry(threads);
                 agentMap["Refactor"] = refactor;
                 _logger.LogInformation("Refactor is active.");
             }
@@ -182,6 +170,28 @@ public class LLMModule : ILLMModule, IDisposable
 
         if (code is not null)
             codePipeline = new CodePipeline(code, processingThreads, liveCalls, NotifyWatchers);
+    }
+
+    // ── Thread registry ──────────────────────────────────────────────────────────
+
+    private Thread GetOrCreateThread(ThreadType type, string threadKey, string? platformContext = null)
+    {
+        if (threads.TryGetValue(threadKey, out Thread? existing)) return existing;
+        Thread thread = new Thread(type, threadKey, platformContext);
+        threads[threadKey] = thread;
+        thread.Updated += () => NotifyWatchers(threadKey);
+        thread.Deleted += () => { threads.TryRemove(threadKey, out _); NotifyThreadDeleted(threadKey); };
+        if (type == ThreadType.Code)
+            thread.BecameInactive += () => thread.MarkEngramProcessed();
+        if (type == ThreadType.Dialogue && dialogue is not null)
+        {
+            thread.Deleted        += () => dialogue.RaiseThreadDeleted(threadKey);
+            thread.BufferFull     += () => dialogue.RaiseThreadBufferFull(threadKey);
+            thread.BecameInactive += () => dialogue.RaiseThreadBecameInactive(threadKey);
+            if (context is not null)
+                thread.ExchangeCompleted += (user, asst) => _ = context.Update(threadKey, user, asst);
+        }
+        return thread;
     }
 
     // ── Agent assignment ─────────────────────────────────────────────────────────
@@ -277,7 +287,7 @@ public class LLMModule : ILLMModule, IDisposable
     public void ForceCodeThread(string threadKey)
     {
         forcedCodeThreads.Add(threadKey);
-        code?.GetOrCreateThread(threadKey);
+        GetOrCreateThread(ThreadType.Code, threadKey);
     }
 
     public Task<string> Prompt(string threadKey, string prompt, string username, string? platformContext = null, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null)
@@ -307,7 +317,10 @@ public class LLMModule : ILLMModule, IDisposable
         bool isDiscordThread = threadKey.StartsWith("dm:", StringComparison.OrdinalIgnoreCase)
                             || threadKey.StartsWith("guild:", StringComparison.OrdinalIgnoreCase);
         if (isDiscordThread || classifier is null)
-            return await dialoguePipeline!.ExecuteAsync(threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments);
+        {
+            Thread dlgThread = GetOrCreateThread(ThreadType.Dialogue, threadKey, platformContext);
+            return await dialoguePipeline!.ExecuteAsync(dlgThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments);
+        }
 
         // if the thread already exists, its type tells us which pipeline owns it
         threads.TryGetValue(threadKey, out Thread? existing);
@@ -328,18 +341,23 @@ public class LLMModule : ILLMModule, IDisposable
                 _logger.LogInformation($"[Classifier] ({threadKey}) → {agent}");
             }
 
-            // Pre-create the thread on the correct agent so watchers receive isCodeMode
-            // before the LLM starts responding — this triggers the animation immediately.
+            // Pre-create the thread so watchers receive isCodeMode before the LLM starts responding.
             if (agent == "Code")
-                code?.GetOrCreateThread(threadKey);
+                GetOrCreateThread(ThreadType.Code, threadKey, platformContext);
         }
 
         switch (agent)
         {
             case "Code":
-                return await (codePipeline ?? (Pipeline)dialoguePipeline!).ExecuteAsync(threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments, localPath);
+            {
+                Thread codeThread = GetOrCreateThread(ThreadType.Code, threadKey, platformContext);
+                return await (codePipeline ?? (Pipeline)dialoguePipeline!).ExecuteAsync(codeThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments, localPath);
+            }
             default:
-                return await dialoguePipeline!.ExecuteAsync(threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments);
+            {
+                Thread dlgThread = GetOrCreateThread(ThreadType.Dialogue, threadKey, platformContext);
+                return await dialoguePipeline!.ExecuteAsync(dlgThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments);
+            }
         }
         
     }
@@ -349,8 +367,8 @@ public class LLMModule : ILLMModule, IDisposable
     public async Task<string?> HandleCommand(string? threadKey, string input)
     {
         // Show the input straight away to acknowledge the command, then run it.
-        if (threadKey is not null)
-            dialogue?.AddCommandInput(threadKey, input);
+        if (threadKey is not null && threads.TryGetValue(threadKey, out Thread? cmdThreadPre))
+            cmdThreadPre.AddItem(new CommandInput { Input = input, Timestamp = DateTime.Now });
 
         string trimmed = input.Trim().ToLowerInvariant();
 
@@ -367,10 +385,10 @@ public class LLMModule : ILLMModule, IDisposable
             result = await commands.Handle(input, threadKey);
         }
 
-        if (threadKey is not null)
+        if (threadKey is not null && threads.TryGetValue(threadKey, out Thread? cmdThread))
         {
-            if (result is not null) dialogue?.AddCommandResponse(threadKey, result);
-            else                    dialogue?.DropCommandInput(threadKey);   // unrecognised — undo the input
+            if (result is not null) cmdThread.AddItem(new CommandResponse { Response = result, Timestamp = DateTime.Now });
+            else                    cmdThread.DropLastCommandInput();
         }
         return result;
     }
@@ -450,11 +468,20 @@ public class LLMModule : ILLMModule, IDisposable
 
     public bool IsEngramSweeping(string threadKey) => engram?.IsSweeping(threadKey) ?? false;
 
-    public void NotifyTyping(string threadKey) => dialogue?.NotifyTyping(threadKey);
+    public void NotifyTyping(string threadKey)
+    {
+        if (threads.TryGetValue(threadKey, out Thread? t)) t.ResetInactivityTimer();
+    }
 
     /// <summary>Returns the Code thread for a given key, creating it if needed, for tool registration.</summary>
     public Thread GetOrCreateCodeThread(string threadKey)
-        => code?.GetOrCreateThread(threadKey) ?? throw new InvalidOperationException("Code agent not loaded");
+    {
+        if (code is null) throw new InvalidOperationException("Code agent not loaded");
+        return GetOrCreateThread(ThreadType.Code, threadKey);
+    }
+
+    public Thread GetOrCreateDialogueThread(string threadKey)
+        => GetOrCreateThread(ThreadType.Dialogue, threadKey);
 
     public void SetCodeThreadContext(string threadKey, string? projectMap, string? conventions, string? rules)
         => code?.SetThreadContext(threadKey, projectMap, conventions, rules);
@@ -481,11 +508,12 @@ public class LLMModule : ILLMModule, IDisposable
             ? CancellationTokenSource.CreateLinkedTokenSource(ct)
             : new CancellationTokenSource();
         processingThreads[threadKey] = cts;
-        return codePipeline!.ExecuteAsync(threadKey, prompt, username, platformContext, onDelta, cts, localPath: localPath);
+        Thread codeThread = GetOrCreateThread(ThreadType.Code, threadKey, platformContext);
+        return codePipeline!.ExecuteAsync(codeThread, threadKey, prompt, username, platformContext, onDelta, cts, localPath: localPath);
     }
 
     public (int used, int limit) GetContextStats(string threadKey)
-        => dialogue?.GetContextStats(dialogue.GetThread(threadKey)) ?? (0, 0);
+        => dialogue?.GetContextStats(threads.TryGetValue(threadKey, out Thread? t) ? t : null) ?? (0, 0);
 
     public void Cancel(string threadKey)
     {
@@ -495,8 +523,7 @@ public class LLMModule : ILLMModule, IDisposable
 
     public void Interrupt(string threadKey)
     {
-        Thread? thread = dialogue?.GetThread(threadKey);
-        if (thread is not null) thread.preserveOnCancel = true;
+        if (threads.TryGetValue(threadKey, out Thread? thread)) thread.preserveOnCancel = true;
         Cancel(threadKey);
     }
 

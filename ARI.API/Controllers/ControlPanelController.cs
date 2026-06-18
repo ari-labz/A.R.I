@@ -102,25 +102,14 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
         List<object> context = new();
         if (Llm is not null)
         {
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            Agent? codeAgent = Llm.Agents.GetValueOrDefault("Code");
-            if (codeAgent is not null)
-                foreach (KeyValuePair<string, ARI.LLM.Thread> kvp in codeAgent.Threads)
-                {
-                    (int used, int limit) = codeAgent.GetContextStats(kvp.Value);
-                    if (used <= 0) continue;
-                    seen.Add(kvp.Key);
-                    context.Add(new { threadKey = kvp.Key, agentName = "Code", used, limit, pct = limit > 0 ? (int)(used * 100.0 / limit) : 0 });
-                }
-            Agent? dialogueAgent = Llm.Agents.GetValueOrDefault("Dialogue");
-            if (dialogueAgent is not null)
-                foreach (KeyValuePair<string, ARI.LLM.Thread> kvp in dialogueAgent.Threads)
-                {
-                    if (seen.Contains(kvp.Key)) continue;
-                    (int used, int limit) = dialogueAgent.GetContextStats(kvp.Value);
-                    if (used <= 0) continue;
-                    context.Add(new { threadKey = kvp.Key, agentName = "Dialogue", used, limit, pct = limit > 0 ? (int)(used * 100.0 / limit) : 0 });
-                }
+            foreach (KeyValuePair<string, ARI.LLM.Thread> kvp in Llm.Threads
+                         .Where(t => t.Value.Type == ARI.LLM.ThreadType.Code || t.Value.Type == ARI.LLM.ThreadType.Dialogue))
+            {
+                (int used, int limit) = Llm.GetContextStats(kvp.Key);
+                if (used <= 0) continue;
+                string agentName = kvp.Value.Type == ARI.LLM.ThreadType.Code ? "Code" : "Dialogue";
+                context.Add(new { threadKey = kvp.Key, agentName, used, limit, pct = limit > 0 ? (int)(used * 100.0 / limit) : 0 });
+            }
         }
 
         var breakdown = systemInfo.GetRamBreakdown()
@@ -191,44 +180,20 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
         {
             // Collect all user-facing threads across Dialogue and Code, deduped by key.
             // For threads present in both agents, prefer the Code label.
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            Agent? codeAgent = Llm.Agents.GetValueOrDefault("Code");
-            if (codeAgent is not null)
+            foreach (KeyValuePair<string, ARI.LLM.Thread> kvp in Llm.Threads
+                         .Where(t => t.Value.Type == ARI.LLM.ThreadType.Code || t.Value.Type == ARI.LLM.ThreadType.Dialogue))
             {
-                foreach (KeyValuePair<string, ARI.LLM.Thread> kvp in codeAgent.Threads)
+                (int used, int limit) = Llm.GetContextStats(kvp.Key);
+                if (used <= 0) continue;
+                string agentName = kvp.Value.Type == ARI.LLM.ThreadType.Code ? "Code" : "Dialogue";
+                contextStats.Add(new
                 {
-                    (int used, int limit) = codeAgent.GetContextStats(kvp.Value);
-                    if (used <= 0) continue;
-                    seen.Add(kvp.Key);
-                    contextStats.Add(new
-                    {
-                        threadKey = kvp.Key,
-                        agentName = "Code",
-                        used,
-                        limit,
-                        pct = limit > 0 ? (int)(used * 100.0 / limit) : 0,
-                    });
-                }
-            }
-
-            Agent? dialogueAgent = Llm.Agents.GetValueOrDefault("Dialogue");
-            if (dialogueAgent is not null)
-            {
-                foreach (KeyValuePair<string, ARI.LLM.Thread> kvp in dialogueAgent.Threads)
-                {
-                    if (seen.Contains(kvp.Key)) continue;  // already listed under Code
-                    (int used, int limit) = dialogueAgent.GetContextStats(kvp.Value);
-                    if (used <= 0) continue;
-                    contextStats.Add(new
-                    {
-                        threadKey = kvp.Key,
-                        agentName = "Dialogue",
-                        used,
-                        limit,
-                        pct = limit > 0 ? (int)(used * 100.0 / limit) : 0,
-                    });
-                }
+                    threadKey = kvp.Key,
+                    agentName,
+                    used,
+                    limit,
+                    pct = limit > 0 ? (int)(used * 100.0 / limit) : 0,
+                });
             }
         }
 

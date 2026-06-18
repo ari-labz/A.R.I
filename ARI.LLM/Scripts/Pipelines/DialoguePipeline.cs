@@ -77,8 +77,7 @@ internal sealed class DialoguePipeline : Pipeline
         }
 
         return await dialogue.SendPrompt(
-            threadKey, effectivePrompt, username,
-            platformContext: platformContext,
+            thread, effectivePrompt, username,
             recallNotes:     recallBlock,
             contextSummary:  contextSummary,
             ct:              cts.Token,
