@@ -286,7 +286,7 @@ slmadv_params:
             try { process.Kill(entireProcessTree: true); } catch { }
         });
 
-        _ = Task.Run(async () =>
+        Task stdoutTask = Task.Run(async () =>
         {
             string? line;
             while ((line = await process.StandardOutput.ReadLineAsync(CancellationToken.None)) != null)
@@ -300,18 +300,21 @@ slmadv_params:
         }, CancellationToken.None);
 
         var stderrLines = new System.Text.StringBuilder();
-        _ = Task.Run(async () =>
+        Task stderrTask = Task.Run(async () =>
         {
             string? line;
             while ((line = await process.StandardError.ReadLineAsync(CancellationToken.None)) != null)
             {
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 stderrLines.AppendLine(line);
-                logger?.LogInformation("[StyleTTS2-Train] {Line}", line);
+                logger?.LogWarning("[StyleTTS2-Train] [stderr] {Line}", line);
             }
         }, CancellationToken.None);
 
         await process.WaitForExitAsync(CancellationToken.None);
+        await Task.WhenAll(stdoutTask, stderrTask);
+
+        logger?.LogInformation("[StyleTTS2-Train] Process exited with code {Code}", process.ExitCode);
 
         if (process.ExitCode != 0 && !ct.IsCancellationRequested)
             throw new Exception($"StyleTTS2 training failed:\n{stderrLines}");

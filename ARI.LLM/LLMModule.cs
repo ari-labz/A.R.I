@@ -9,15 +9,17 @@ namespace ARI.LLM;
 
 public class LLMModule : ILLMModule, IDisposable
 {
-    private readonly Dialogue?    dialogue;
-    private readonly Code?        code;
-    private readonly Memory?      memory;
-    private readonly Context?     context;
-    private readonly Engram?      engram;
-    private readonly Refactor?    refactor;
-    private readonly Classifier?  classifier;
-    private readonly BrainModule? brain;
-    private readonly CommandService commands;
+    private readonly DialoguePipeline? dialoguePipeline;
+    private readonly CodePipeline?     codePipeline;
+    private readonly Dialogue?         dialogue;
+    private readonly Code?             code;
+    private readonly Memory?           memory;
+    private readonly Context?          context;
+    private readonly Engram?           engram;
+    private readonly Refactor?         refactor;
+    private readonly Classifier?       classifier;
+    private readonly BrainModule?      brain;
+    private readonly CommandService    commands;
 
     private readonly ConcurrentDictionary<string, CancellationTokenSource>                      processingThreads = new();
     private readonly ConcurrentDictionary<string, LiveCallInfo>                                  liveCalls         = new();
@@ -32,6 +34,7 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly List<Server>  _servers    = new();
     private IReadOnlyList<Model>   _allModels  = Array.Empty<Model>();
     private string                    _modelsPath = "";
+    private ILogger                   _logger;
 
     /// <summary>All managed llama servers.</summary>
     public IReadOnlyList<Server> Servers    => _servers;
@@ -51,8 +54,17 @@ public class LLMModule : ILLMModule, IDisposable
 
     public LLMModule(IReadOnlyList<Server> servers, string agentsJsonPath, BrainConfig? brainConfig = null, ILoggerFactory? loggerFactory = null)
     {
+        _logger = loggerFactory is not null
+            ? loggerFactory.CreateLogger("ARI.LLM")
+            : Shared.Logger;
+
         if (loggerFactory is not null)
+        {
             Shared.InitialiseLogger(loggerFactory, "ARI.LLM");
+            ILogger serverLogger = loggerFactory.CreateLogger("ARI.Brain");
+            foreach (Server s in servers)
+                s.SetLogger(serverLogger);
+        }
 
         _servers.AddRange(servers);
 
@@ -89,7 +101,7 @@ public class LLMModule : ILLMModule, IDisposable
                 : 25;
             context.Init(memoryLimit);
             context.AttachRegistry(threads);
-            Shared.Logger.LogInformation("Context tracker is active.");
+            _logger.LogInformation("Context tracker is active.");
         }
 
         if (rawAgents.TryGetValue("Dialogue", out JsonElement dialogueEl))
@@ -108,14 +120,14 @@ public class LLMModule : ILLMModule, IDisposable
             code.ThreadUpdated += key => NotifyWatchers(key);
             code.ThreadDeleted += key => NotifyThreadDeleted(key);
             agentMap["Code"] = code;
-            Shared.Logger.LogInformation("Code agent is active. MaxContext: {Ctx} tokens.", code.MaxContextTokens);
+            _logger.LogInformation("Code agent is active. MaxContext: {Ctx} tokens.", code.MaxContextTokens);
         }
 
         if (rawAgents.TryGetValue("Classifier", out JsonElement classifierEl))
         {
             classifier = Deserialize<Classifier>(classifierEl);
             classifier.AttachRegistry(threads);
-            Shared.Logger.LogInformation("Classifier is active.");
+            _logger.LogInformation("Classifier is active.");
         }
 
         if (brain is not null && rawAgents.TryGetValue("Memory", out JsonElement memoryEl))
@@ -128,7 +140,7 @@ public class LLMModule : ILLMModule, IDisposable
                 memory.brainPublicUrl = brain.BrainPublicUrl;
                 memory.AttachRegistry(threads);
                 agentMap["Memory"] = memory;
-                Shared.Logger.LogInformation("Memory agent is active. Depth: {Depth}.", memory.RecursiveBrainSearchDepth);
+                _logger.LogInformation("Memory agent is active. Depth: {Depth}.", memory.RecursiveBrainSearchDepth);
             }
         }
 
@@ -141,7 +153,7 @@ public class LLMModule : ILLMModule, IDisposable
                 engram.AttachRegistry(threads);
                 engram.SweepCompleted += key => NotifyWatchers(key);
                 agentMap["Engram"] = engram;
-                Shared.Logger.LogInformation("Engram is active. Brain connected.");
+                _logger.LogInformation("Engram is active. Brain connected.");
             }
 
             if (rawAgents.TryGetValue("Refactor", out JsonElement refactorEl))
@@ -151,7 +163,7 @@ public class LLMModule : ILLMModule, IDisposable
                 refactor.engram = engram;
                 refactor.AttachRegistry(threads);
                 agentMap["Refactor"] = refactor;
-                Shared.Logger.LogInformation("Refactor is active.");
+                _logger.LogInformation("Refactor is active.");
             }
 
             commands = new CommandService(engram, refactor, brain.PurgeAllNotes, brain.Backup, brain.GetDirtyNotes);
@@ -160,6 +172,16 @@ public class LLMModule : ILLMModule, IDisposable
         {
             commands = new CommandService(engram);
         }
+
+        if (dialogue is not null)
+        {
+            dialoguePipeline = new DialoguePipeline(dialogue, memory, context, engram, processingThreads, liveCalls, NotifyWatchers);
+            dialoguePipeline.ThreadBufferFull    += key => NotifyWatchers(key);
+            dialoguePipeline.ThreadBecameInactive += key => NotifyWatchers(key);
+        }
+
+        if (code is not null)
+            codePipeline = new CodePipeline(code, processingThreads, liveCalls, NotifyWatchers);
     }
 
     // ── Agent assignment ─────────────────────────────────────────────────────────
@@ -285,7 +307,7 @@ public class LLMModule : ILLMModule, IDisposable
         bool isDiscordThread = threadKey.StartsWith("dm:", StringComparison.OrdinalIgnoreCase)
                             || threadKey.StartsWith("guild:", StringComparison.OrdinalIgnoreCase);
         if (isDiscordThread || classifier is null)
-            return await DialoguePipeline(threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments);
+            return await dialoguePipeline!.ExecuteAsync(threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments);
 
         // if the thread already exists, its type tells us which pipeline owns it
         threads.TryGetValue(threadKey, out Thread? existing);
@@ -298,12 +320,12 @@ public class LLMModule : ILLMModule, IDisposable
             if (forcedCodeThreads.Contains(threadKey))
             {
                 agent = "Code";
-                Shared.Logger.LogInformation($"[Classifier] ({threadKey}) → Code (forced by project)");
+                _logger.LogInformation($"[Classifier] ({threadKey}) → Code (forced by project)");
             }
             else
             {
                 agent = await classifier.Classify(prompt, cts.Token);
-                Shared.Logger.LogInformation($"[Classifier] ({threadKey}) → {agent}");
+                _logger.LogInformation($"[Classifier] ({threadKey}) → {agent}");
             }
 
             // Pre-create the thread on the correct agent so watchers receive isCodeMode
@@ -315,142 +337,11 @@ public class LLMModule : ILLMModule, IDisposable
         switch (agent)
         {
             case "Code":
-                return await CodePipeline(threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments, localPath);
+                return await (codePipeline ?? (Pipeline)dialoguePipeline!).ExecuteAsync(threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments, localPath);
             default:
-                return await DialoguePipeline(threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments);
+                return await dialoguePipeline!.ExecuteAsync(threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments);
         }
         
-    }
-
-    private async Task<string> DialoguePipeline(string threadKey, string prompt, string username, string? platformContext, Func<string, Task>? onDelta, CancellationTokenSource cts, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null)
-    {
-        if (engram?.IsSweeping(threadKey) == true)
-        {
-            Shared.Logger.LogInformation("[Dialogue] ({Thread}) waiting for Engram sweep to finish before processing.", threadKey);
-            await engram.WaitForSweep(threadKey, cts.Token);
-        }
-
-        Thread dialogueThread = dialogue!.GetOrCreateThread(threadKey);
-        if (threadAttachments is { Count: > 0 })
-            foreach (Attachment a in threadAttachments) dialogueThread.AddAttachment(a);
-
-        LiveCallInfo liveCall = new("Dialogue", threadKey, 0, dialogue.MaxTokens, dialogue.MaxContextTokens, dialogue.MaxImageTokens);
-        liveCalls[threadKey] = liveCall;
-        dialogueThread.SetLiveCall(liveCall);
-
-        string effectivePrompt = dialogueThread.History.Count > 0 && dialogueThread.History[^1] is UserMessage prev
-            ? prev.Content + "\n" + prompt
-            : prompt;
-
-        dialogueThread.AddItem(new UserMessage
-        {
-            Username    = username,
-            Content     = prompt,
-            Timestamp   = DateTime.Now,
-            Attachments = messageAttachments is { Count: > 0 } ? messageAttachments : null
-        });
-
-        try
-        {
-            Shared.Logger.LogInformation("[Dialogue] ({Thread}) prompt\n\"{Prompt}\"", threadKey, prompt);
-
-            string? contextSummary = context?.GetContext(threadKey);
-
-            string? recallBlock = null;
-            if (memory is not null)
-            {
-                try
-                {
-                    List<ThreadMessage> chatHistory = dialogueThread.GetChatHistory();
-                    recallBlock = await memory.GetNotes(chatHistory, effectivePrompt, contextSummary, cts.Token);
-                }
-                catch (Exception ex)
-                {
-                    Shared.Logger.LogError("[Memory] Failed to retrieve memories: {Error}", ex.Message);
-                    string errorMessage = "> error retrieving memories";
-                    if (onDelta is not null) await onDelta(errorMessage);
-                    return errorMessage;
-                }
-            }
-
-            return await dialogue.SendPrompt(threadKey, effectivePrompt, username, platformContext, recallBlock, contextSummary, ct: cts.Token, userMessagePreadded: true, onDelta: onDelta);
-        }
-        catch (OperationCanceledException)
-        {
-            dialogueThread.preserveOnCancel = false;
-            throw;
-        }
-        finally
-        {
-            liveCalls.TryRemove(threadKey, out _);
-            dialogueThread.ClearMessageAttachments();
-            processingThreads.TryRemove(new KeyValuePair<string, CancellationTokenSource>(threadKey, cts));
-            cts.Dispose();
-            NotifyWatchers(threadKey);
-        }
-    }
-
-    private async Task<string> CodePipeline(string threadKey, string prompt, string username, string? platformContext, Func<string, Task>? onDelta, CancellationTokenSource cts, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null, string? localPath = null)
-    {
-        if (code is null)
-        {
-            Shared.Logger.LogWarning("[Code] ({Thread}) Code agent not enabled, falling back to Dialogue.", threadKey);
-            return await DialoguePipeline(threadKey, prompt, username, platformContext, onDelta, cts);
-        }
-
-        Thread codeThread = code.GetOrCreateThread(threadKey);
-        if (threadAttachments is { Count: > 0 })
-            foreach (Attachment a in threadAttachments) codeThread.AddAttachment(a);
-
-        if (!string.IsNullOrWhiteSpace(localPath))
-        {
-            string resolvedRoot = Path.GetFullPath(localPath);
-            new PreviewFile(resolvedRoot, cts.Token).Register(codeThread);
-            new ReadFile(resolvedRoot, cts.Token).Register(codeThread);
-            new ListDirectory(resolvedRoot, cts.Token).Register(codeThread);
-            new SearchFiles(resolvedRoot, cts.Token).Register(codeThread);
-            new FindFiles(resolvedRoot, cts.Token).Register(codeThread);
-            new EditFile(resolvedRoot, cts.Token).Register(codeThread);
-            new WriteFile(resolvedRoot, cts.Token).Register(codeThread);
-            new DeleteFile(resolvedRoot, cts.Token).Register(codeThread);
-            new MoveFile(resolvedRoot, cts.Token).Register(codeThread);
-            new UpdateTodos(codeThread).Register(codeThread);
-        }
-
-        LiveCallInfo liveCall = new("Code", threadKey, 0, code.MaxTokens, code.MaxContextTokens, 0);
-        liveCalls[threadKey] = liveCall;
-        codeThread.SetLiveCall(liveCall);
-
-        string effectivePrompt = codeThread.History.Count > 0 && codeThread.History[^1] is UserMessage prev
-            ? prev.Content + "\n" + prompt
-            : prompt;
-
-        codeThread.AddItem(new UserMessage
-        {
-            Username    = username,
-            Content     = prompt,
-            Timestamp   = DateTime.Now,
-            Attachments = messageAttachments is { Count: > 0 } ? messageAttachments : null
-        });
-
-        try
-        {
-            Shared.Logger.LogInformation("[Code] ({Thread}) prompt\n\"{Prompt}\"", threadKey, prompt);
-            return await code.SendPrompt(threadKey, effectivePrompt, username, platformContext, cts.Token, userMessagePreadded: true, onDelta: onDelta);
-        }
-        catch (OperationCanceledException)
-        {
-            codeThread.preserveOnCancel = false;
-            throw;
-        }
-        finally
-        {
-            liveCalls.TryRemove(threadKey, out _);
-            codeThread.ClearMessageAttachments();
-            processingThreads.TryRemove(new KeyValuePair<string, CancellationTokenSource>(threadKey, cts));
-            cts.Dispose();
-            NotifyWatchers(threadKey);
-        }
     }
 
     // ── Commands ────────────────────────────────────────────────────────────────
@@ -581,7 +472,7 @@ public class LLMModule : ILLMModule, IDisposable
             ? CancellationTokenSource.CreateLinkedTokenSource(ct)
             : new CancellationTokenSource();
         processingThreads[threadKey] = cts;
-        return CodePipeline(threadKey, prompt, username, platformContext, onDelta, cts, localPath: localPath);
+        return codePipeline!.ExecuteAsync(threadKey, prompt, username, platformContext, onDelta, cts, localPath: localPath);
     }
 
     public (int used, int limit) GetContextStats(string threadKey)
