@@ -1,3 +1,4 @@
+using ARI.Common;
 using ARI.LLM;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -9,12 +10,11 @@ public record RamSegment(string Label, string ServerName, long Bytes);
 /// <summary>Provides system RAM telemetry for the control panel.</summary>
 public class SystemInfo
 {
-    private readonly LLMModule? _llm;
-    private readonly string     _modelsPath;
+    private LLMModule? _llm => (LLMModule?)Modules.Llm;
+    private readonly string _modelsPath;
 
-    public SystemInfo(LLMModule? llm, string modelsPath)
+    public SystemInfo(string modelsPath)
     {
-        _llm        = llm;
         _modelsPath = modelsPath;
     }
 

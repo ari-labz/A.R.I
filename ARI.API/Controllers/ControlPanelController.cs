@@ -3,7 +3,6 @@ using ARI.Common;
 using ARI.LLM;
 using ARI.Voice;
 using ARI.VoiceSynthesis;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Hosting;
@@ -22,9 +21,9 @@ public class ControlPanelController : Controller
 
 [Route("api/cp")]
 [ApiController]
-public class ControlPanelApiController(LLMModule? llm, APIConfig config, SystemInfo systemInfo, PersistentData persistentData) : ControllerBase
+public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, PersistentData persistentData) : ControllerBase
 {
-    private LLMModule? Llm => llm;
+    private LLMModule? Llm => (LLMModule?)Modules.Llm;
 
     /// <summary>
     /// SSE stream of the ARI.log tail — sends the last 100 lines on connect,
@@ -291,14 +290,14 @@ public class ControlPanelApiController(LLMModule? llm, APIConfig config, SystemI
 [Route("api/cp/voice")]
 [ApiController]
 public class VoiceController(
-    VoiceSynthesisModule voiceTraining,
-    VoiceModule? voiceService,
-    LLMModule? llm,
     VoiceSynthesisConfig vsConfig,
     ILoggerFactory loggerFactory,
     IHostApplicationLifetime lifetime) : ControllerBase
 {
     private readonly ILogger logger = loggerFactory.CreateLogger("ARI.WebPanel");
+    private VoiceSynthesisModule? voiceTraining => (VoiceSynthesisModule?)Modules.VoiceSynthesis;
+    private VoiceModule?          voiceService  => (VoiceModule?)Modules.Voice;
+    private LLMModule?            llm           => (LLMModule?)Modules.Llm;
     private static readonly string StagingRoot = Path.Combine(Path.GetTempPath(), "ari-voice-staging");
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> chunkCounters = new();
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> assembleLocks = new();
@@ -392,7 +391,7 @@ public class VoiceController(
             return BadRequest(new { error = "stagingPath does not exist." });
         if (string.IsNullOrEmpty(vsConfig.StyleTtsPath) || string.IsNullOrEmpty(vsConfig.VoicesPath))
             return StatusCode(503, new { error = "VoiceSynthesis module is not configured." });
-        if (!voiceTraining.IsSetupComplete)
+        if (voiceTraining?.IsSetupComplete != true)
             return StatusCode(503, new { error = "StyleTTS2 is still installing. Please wait." });
 
         TrainingJob job;
@@ -407,7 +406,7 @@ public class VoiceController(
                 saveEveryNEpochs: req.SaveEveryNEpochs,
                 logger:          logger);
 
-            job = voiceTraining.Start(trainer, req.ModelName, lifetime.ApplicationStopping);
+            job = voiceTraining!.Start(trainer, req.ModelName, lifetime.ApplicationStopping);
         }
         catch (InvalidOperationException ex)
         {
@@ -455,7 +454,7 @@ public class VoiceController(
         Response.Headers[HeaderNames.CacheControl] = "no-cache";
         Response.Headers["X-Accel-Buffering"]      = "no";
 
-        var job = voiceTraining.Current;
+        var job = voiceTraining?.Current;
         if (job is null)
         {
             await Response.WriteAsync("data: {\"step\":\"Idle\",\"percent\":0}\n\n", ct);
@@ -506,7 +505,7 @@ public class VoiceController(
     [HttpGet("status")]
     public IActionResult GetStatus()
     {
-        var job = voiceTraining.Current;
+        var job = voiceTraining?.Current;
         if (job is null)
             return Ok(new { idle = true });
 
@@ -567,8 +566,9 @@ public class VoiceController(
 
 [Route("api/cp/models")]
 [ApiController]
-public class ModelsApiController(LLMModule? llm, PersistentData persistentData) : ControllerBase
+public class ModelsApiController(PersistentData persistentData) : ControllerBase
 {
+    private LLMModule? llm => (LLMModule?)Modules.Llm;
     private string ModelsPath => llm?.ModelsPath ?? "";
 
     [HttpGet]

@@ -1,7 +1,9 @@
+using ARI.Common;
+
 namespace ARI.VoiceSynthesis;
 
 /// <summary>Manages the active voice training job. Always registered; reports not ready if setup is incomplete.</summary>
-public class VoiceSynthesisModule
+public class VoiceSynthesisModule : IVoiceSynthesisModule
 {
     private readonly object _lock = new();
     private TrainingJob? _current;
