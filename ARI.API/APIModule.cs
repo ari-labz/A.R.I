@@ -1,7 +1,7 @@
 using ARI.API.Controllers;
 using ARI.API.Data;
+using ARI.Common;
 using ARI.LLM;
-using ARI.Voice;
 using ARI.VoiceSynthesis;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -19,14 +19,11 @@ namespace ARI.API;
 
 public class APIModule : IAsyncDisposable
 {
-    private readonly ILoggerFactory        loggerFactory;
-    private readonly APIConfig             config;
-    private readonly VoiceSynthesisConfig  voiceSynthesisConfig;
-    private readonly LLMModule?            llm;
-    private readonly PersistentData        persistentData;
-    private readonly VoiceModule?             voiceService;
-    private readonly VoiceSynthesisModule     voiceTraining;
-    private readonly SystemInfo            systemInfo;
+    private readonly ILoggerFactory       loggerFactory;
+    private readonly APIConfig            config;
+    private readonly VoiceSynthesisConfig voiceSynthesisConfig;
+    private readonly PersistentData       persistentData;
+    private readonly SystemInfo           systemInfo;
     private WebApplication? app;
 
     // Cached internet connectivity — checked every 30 s in the background.
@@ -40,23 +37,17 @@ public class APIModule : IAsyncDisposable
     }, null, TimeSpan.Zero, TimeSpan.FromSeconds(30));
 
     public APIModule(
-        ILoggerFactory        loggerFactory,
-        APIConfig             config,
-        VoiceSynthesisConfig  voiceSynthesisConfig,
-        string                modelsPath,
-        LLMModule?            llm,
-        PersistentData        persistentData,
-        VoiceModule?          voiceService,
-        VoiceSynthesisModule  voiceTraining)
+        ILoggerFactory       loggerFactory,
+        APIConfig            config,
+        VoiceSynthesisConfig voiceSynthesisConfig,
+        string               modelsPath,
+        PersistentData       persistentData)
     {
         this.loggerFactory        = loggerFactory;
         this.config               = config;
         this.voiceSynthesisConfig = voiceSynthesisConfig;
-        this.llm                  = llm;
         this.persistentData       = persistentData;
-        this.voiceService         = voiceService;
-        this.voiceTraining        = voiceTraining;
-        this.systemInfo           = new SystemInfo(llm, modelsPath);
+        this.systemInfo           = new SystemInfo(modelsPath);
     }
 
     public async Task Start(CancellationToken cancellationToken)
@@ -87,17 +78,11 @@ public class APIModule : IAsyncDisposable
             .PersistKeysToFileSystem(new System.IO.DirectoryInfo(keysDir))
             .SetApplicationName("ARI");
 
-        // Register services directly — no holders, no post-build .Set() calls
         builder.Services.AddSingleton(config);
         builder.Services.AddSingleton(voiceSynthesisConfig);
         builder.Services.AddSingleton(persistentData);
-        builder.Services.AddSingleton(voiceTraining);
         builder.Services.AddSingleton(systemInfo);
         builder.Services.AddSingleton<ProjectStore>();
-
-        // Optional services — registered only when the module is enabled
-        if (llm         is not null) builder.Services.AddSingleton(llm);
-        if (voiceService is not null) builder.Services.AddSingleton(voiceService);
 
         // Clear stale staging folders from a previous run
         string stagingRoot = Path.Combine(Path.GetTempPath(), "ari-voice-staging");
@@ -197,7 +182,7 @@ public class APIModule : IAsyncDisposable
             {
                 if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
 
-                LLMModule? llmSvc = ctx.RequestServices.GetService<LLMModule>();
+                LLMModule? llmSvc = (LLMModule?)Modules.Llm;
                 if (llmSvc is null) { ctx.Response.StatusCode = 503; return; }
 
                 var ws  = await ctx.WebSockets.AcceptWebSocketAsync();

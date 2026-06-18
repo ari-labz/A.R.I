@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
-public class LLMModule : IDisposable
+public class LLMModule : ILLMModule, IDisposable
 {
     private readonly Dialogue?    dialogue;
     private readonly Code?        code;

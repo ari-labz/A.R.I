@@ -1,7 +1,9 @@
+using ARI.Common;
+
 namespace ARI.Voice;
 
 /// <summary>Active voice synthesis instance. Null if the Voice module is disabled.</summary>
-public class VoiceModule
+public class VoiceModule : IVoiceModule
 {
     private readonly StyleTtsSynthesiser synthesiser;
     private readonly SpeechQueue         queue;

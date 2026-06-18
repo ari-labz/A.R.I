@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Channels;
 using ARI.API;
+using ARI.Common;
 using ARI.LLM;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -15,9 +16,9 @@ namespace ARI.API.Controllers;
 
 [Route("api/threads")]
 [ApiController]
-public class ThreadsController(LLMModule? llm, ProjectStore projectStore) : ControllerBase
+public class ThreadsController(ProjectStore projectStore) : ControllerBase
 {
-    private LLMModule? Llm => llm;
+    private LLMModule? Llm => (LLMModule?)Modules.Llm;
 
     // Maps threadKey → projectId — backed by a persistent JSON file so it survives rebuilds
     private static ConcurrentDictionary<string, string>? _threadProjects;

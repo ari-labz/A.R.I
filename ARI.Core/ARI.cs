@@ -58,6 +58,12 @@ public class ARI : BackgroundService
         string executableDirectory = AppDomain.CurrentDomain.BaseDirectory;
         config = AriConfig.LoadFrom(Path.Combine(executableDirectory, "AriConfig.json"));
 
+        // Resolve relative paths to absolute up front so all modules see consistent paths.
+        if (!string.IsNullOrEmpty(config.modules.VoiceSynthesis.StyleTtsPath))
+            config.modules.VoiceSynthesis.StyleTtsPath = ResolvePath(executableDirectory, config.modules.VoiceSynthesis.StyleTtsPath);
+        if (!string.IsNullOrEmpty(config.modules.VoiceSynthesis.VoicesPath))
+            config.modules.VoiceSynthesis.VoicesPath = ResolvePath(executableDirectory, config.modules.VoiceSynthesis.VoicesPath);
+
         await Dependency.CheckPython();
         await Dependency.CheckDocker();
         await Dependency.CheckHomebrew();
@@ -88,12 +94,14 @@ public class ARI : BackgroundService
                 agentsJsonPath: persistentAgentsPath,
                 brainConfig:    brainConfig,
                 loggerFactory:  loggerFactory);
+            CommonModules.Register(llm: llmModule);
             Shared.Logger.LogInformation("Agents loaded.");
         }
 
         // ── Voice setup ──────────────────────────────────────────────────────────
 
         voiceSynthesisModule = new VoiceSynthesisModule();
+        CommonModules.Register(voiceSynthesis: voiceSynthesisModule);
 
         if (config.modules.VoiceSynthesis.Enabled)
         {
@@ -124,13 +132,15 @@ public class ARI : BackgroundService
                 Shared.Logger.LogInformation("Voice loading model: {Model}", modelName);
                 synthesiser = new StyleTtsSynthesiser(sttPath, modelPath, configPath, refAudio, voiceLogger);
                 await synthesiser.Start(stoppingToken);
-                await synthesiser.Warmup(stoppingToken);
+                try { await synthesiser.Warmup(stoppingToken); }
+                catch (Exception ex) { Shared.Logger.LogError("Voice warmup failed (model may have corrupt weights): {Error}", ex.Message); }
 
                 speechQueue = new SpeechQueue(synthesiser, voiceLogger);
                 string pythonPath = Path.Combine(sttPath, OperatingSystem.IsWindows() ? @"venv\Scripts\python.exe" : "venv/bin/python");
                 speechQueue.AudioReady += wav => PlayAudio(wav, pythonPath, voiceLogger);
 
                 voiceModule = new VoiceModule(synthesiser, speechQueue, modelName);
+                CommonModules.Register(voice: voiceModule);
                 Shared.Logger.LogInformation("Voice ready.");
             }
         }
@@ -145,10 +155,7 @@ public class ARI : BackgroundService
                 config:               config.modules.API,
                 voiceSynthesisConfig: config.modules.VoiceSynthesis,
                 modelsPath:           modelsPath,
-                llm:                  llmModule,
-                persistentData:       persistentData,
-                voiceService:         voiceModule,
-                voiceTraining:        voiceSynthesisModule);
+                persistentData:       persistentData);
 
             await apiModule.Start(stoppingToken);
         }

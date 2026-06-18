@@ -239,7 +239,7 @@ slmadv_params:
         string trainScript = Path.Combine(Path.GetTempPath(), "ari_train_stt2.py");
         await File.WriteAllTextAsync(trainScript,
             "import torch, sys\n" +
-            $"sys.path.insert(0, r'{styleTtsPath}')\n" +
+            $"sys.path.insert(0, r'{Path.GetFullPath(styleTtsPath)}')\n" +
             // PyTorch 2.6 changed torch.load default to weights_only=True — patch it back for StyleTTS2
             "_orig = torch.load\n" +
             "torch.load = lambda *a, **kw: _orig(*a, **{**kw, 'weights_only': False})\n" +

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using ARI.Common;
 using ARI.LLM;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -13,13 +14,11 @@ namespace ARI.API.Controllers;
 [ApiController]
 public class ClientController : ControllerBase
 {
-    private readonly LLMModule? llmHolder;
     private readonly ILogger<ClientController> logger;
 
-    public ClientController(LLMModule? llmHolder, ILogger<ClientController> logger)
+    public ClientController(ILogger<ClientController> logger)
     {
-        this.llmHolder = llmHolder;
-        this.logger    = logger;
+        this.logger = logger;
     }
 
     // Pending tool calls: callId → TaskCompletionSource<string>
@@ -37,7 +36,7 @@ public class ClientController : ControllerBase
             return;
         }
 
-        LLMModule? llm = llmHolder;
+        LLMModule? llm = (LLMModule?)Modules.Llm;
         if (llm is null)
         {
             HttpContext.Response.StatusCode = 503;

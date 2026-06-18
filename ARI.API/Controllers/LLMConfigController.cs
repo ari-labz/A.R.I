@@ -1,4 +1,5 @@
 using ARI.API.Data;
+using ARI.Common;
 using ARI.LLM;
 using Microsoft.AspNetCore.Mvc;
 using System.IO.Compression;
@@ -8,7 +9,7 @@ namespace ARI.API.Controllers;
 
 [Route("api/cp/llmconfigs")]
 [ApiController]
-public class LLMConfigController(LLMModule? llm, PersistentData persistentData) : ControllerBase
+public class LLMConfigController(PersistentData persistentData) : ControllerBase
 {
     private static readonly string ConfigsDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "Server", "LLMConfigs");
@@ -26,6 +27,8 @@ public class LLMConfigController(LLMModule? llm, PersistentData persistentData) 
         public string Description { get; set; } = "";
         public DateTime SavedAt   { get; set; }
     }
+
+    private LLMModule? llm => (LLMModule?)Modules.Llm;
 
     // ── GET /api/cp/llmconfigs ───────────────────────────────────────────────
 
