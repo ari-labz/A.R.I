@@ -341,7 +341,7 @@ internal class Refactor : Agent
         string prompt    = BuildFolderPrompt(folder, notes, hubNotes, allTitles);
 
         Shared.Logger.LogInformation("[Refactor] Folder '{Folder}': single-pass LLM call ({Count} notes).", folder, notes.Count);
-        string raw = await Prompt(threadKey, prompt, maxTokensOverride: -1);
+        string raw = await SendPrompt(threadKey, prompt, maxTokensOverride: -1);
         (List<EngramAdd> adds, List<EngramEdit> edits, List<EngramDelete> deletes, List<EngramMerge> merges) = ParseAddEdit(raw);
 
         // Enforce folder scope: only accept edits for notes that live inside this folder.
@@ -376,7 +376,7 @@ internal class Refactor : Agent
         string p1Prompt = ClusterDetectionPrompt(folder, notes, hubNotes);
 
         Shared.Logger.LogInformation("[Refactor] Folder '{Folder}': cluster detection pass ({Count} notes).", folder, notes.Count);
-        string clusterRaw     = await Prompt(p1Key, p1Prompt, maxTokensOverride: -1);
+        string clusterRaw     = await SendPrompt(p1Key, p1Prompt, maxTokensOverride: -1);
         List<ClusterPlan> clusters = ParseClusterPlan(clusterRaw);
 
         if (clusters.Count == 0)
@@ -408,7 +408,7 @@ internal class Refactor : Agent
             string p2Prompt = ClusterAnalysisPrompt(cluster, clusterNotes, existingHub, hubNotes, allTitles);
 
             Shared.Logger.LogInformation("[Refactor] Cluster '{Theme}' ({Count} notes).", cluster.Theme, clusterNotes.Count);
-            string raw = await Prompt(p2Key, p2Prompt, maxTokensOverride: -1);
+            string raw = await SendPrompt(p2Key, p2Prompt, maxTokensOverride: -1);
             (List<EngramAdd> adds, List<EngramEdit> edits, List<EngramDelete> deletes, List<EngramMerge> merges) = ParseAddEdit(raw);
 
             // Enforce cluster scope: only accept edits for notes that are members of this cluster.

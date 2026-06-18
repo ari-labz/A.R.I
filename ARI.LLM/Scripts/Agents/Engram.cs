@@ -163,7 +163,7 @@ internal class Engram : Agent, IDisposable
                 "Any note you intend to update must be fetched first.\n" +
                 "Respond with bare note TITLES (the last segment of the path): {\"fetch\": [\"[REDACT]\"]} — or {\"fetch\": []} to proceed straight to extraction.";
 
-            string initialRaw    = await Prompt(engramThreadKey, initialFetchPrompt);
+            string initialRaw    = await SendPrompt(engramThreadKey, initialFetchPrompt);
             List<string> toFetch = ParseFetchList(initialRaw).Where(n => !alreadyFetched.Contains(n)).ToList();
 
             if (toFetch.Count == 0)
@@ -195,7 +195,7 @@ internal class Engram : Agent, IDisposable
                       "If any of those notes reference further notes you need to read (e.g. a [[link]]), request them now. " +
                       "Respond with {\"fetch\": [\"Name\"]} to request more, or {\"fetch\": []} to proceed to planning.";
 
-                string deliverRaw = await Prompt(engramThreadKey, deliverPrompt);
+                string deliverRaw = await SendPrompt(engramThreadKey, deliverPrompt);
                 toFetch = atLimit
                     ? new List<string>()
                     : ParseFetchList(deliverRaw).Where(n => !alreadyFetched.Contains(n)).ToList();
@@ -318,7 +318,7 @@ internal class Engram : Agent, IDisposable
                 "{\"plan\": [{\"op\": \"add\", \"name\": \"People/[Person]'s Family/Immediate Family/[Name]\", \"summary\": \"...\"}]}\n" +
                 "If nothing needs to be stored: {\"plan\": []}";
 
-            string planRaw = await Prompt(engramThreadKey, planPrompt);
+            string planRaw = await SendPrompt(engramThreadKey, planPrompt);
             List<EngramPlanItem> plan = ParsePlanManifest(planRaw);
 
             if (plan.Count == 0)
@@ -377,7 +377,7 @@ internal class Engram : Agent, IDisposable
                 // Fork from the saved context snapshot so each write call starts with the same base.
                 Thread writeThread = new Thread(Type, $"adhoc:{Guid.NewGuid()}");
                 writeThread.Seed(savedContext);
-                string writeRaw = await writeThread.SendPrompt(this, writePrompt, maxTokensOverride: -1);
+                string writeRaw = await SendPrompt(writeThread, writePrompt, maxTokensOverride: -1);
 
                 (List<EngramAdd> noteAdds, List<EngramEdit> noteEdits) = ParseEngramOutput(writeRaw);
 

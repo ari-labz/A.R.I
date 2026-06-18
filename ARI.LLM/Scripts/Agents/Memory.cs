@@ -194,7 +194,7 @@ internal class Memory : Agent
         Stopwatch totalTimer = Stopwatch.StartNew();
 
         string raw = indirect.Count > 0
-            ? await Prompt(threadKey, firstPrompt, ct: ct, thinkingBudgetOverride: thinkingBudget)
+            ? await SendPrompt(threadKey, firstPrompt, ct: ct, thinkingBudgetOverride: thinkingBudget)
             : "{\"fetch\": []}";
 
         for (int depth = 0; depth < RecursiveBrainSearchDepth; depth++)
@@ -244,7 +244,7 @@ internal class Memory : Agent
                 $"Do NOT re-request notes already fetched: {string.Join(", ", fetched)}.\n" +
                 "Respond ONLY with JSON: {\"fetch\": [\"Name\"]} — or {\"fetch\": []} to stop.";
 
-            raw = await Prompt(threadKey, nextPrompt, ct: ct, thinkingBudgetOverride: thinkingBudget);
+            raw = await SendPrompt(threadKey, nextPrompt, ct: ct, thinkingBudgetOverride: thinkingBudget);
         }
 
         totalTimer.Stop();

@@ -456,6 +456,15 @@ public class LLMModule : ILLMModule, IDisposable
     public Thread GetOrCreateCodeThread(string threadKey)
         => code?.GetOrCreateThread(threadKey) ?? throw new InvalidOperationException("Code agent not loaded");
 
+    public void SetCodeThreadContext(string threadKey, string? projectMap, string? conventions, string? rules)
+        => code?.SetThreadContext(threadKey, projectMap, conventions, rules);
+
+    public void RegisterUpdateTodos(Thread thread)
+    {
+        if (code is null) return;
+        new UpdateTodos(code, thread).Register(thread);
+    }
+
     /// <summary>Sends a prompt directly through the Code pipeline, bypassing classification.
     /// Used by the desktop client which always needs code-aware responses.</summary>
     public Task<string> PromptCodeStreaming(

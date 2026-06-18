@@ -344,6 +344,14 @@ html, body {
               </label>
             </div>
           </div>
+          <div id="srv-ram-estimate" style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-size:12px;color:var(--text-dim);margin-top:4px;display:none;">
+            <div style="font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;color:var(--text-dim);">Estimated RAM</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px 16px;">
+              <div>Model weights<br><span id="srv-ram-weights" style="font-size:13px;font-weight:700;color:var(--text);">—</span></div>
+              <div>KV cache<br><span id="srv-ram-kv" style="font-size:13px;font-weight:700;color:var(--text);">—</span></div>
+              <div>Total<br><span id="srv-ram-total" style="font-size:13px;font-weight:700;color:#0369a1;">—</span></div>
+            </div>
+          </div>
           <div style="display:flex;gap:10px;margin-top:22px;justify-content:flex-end;">
             <button class="mdl-btn-secondary" id="srv-modal-cancel" type="button">Cancel</button>
             <button class="vs-btn-primary" id="srv-modal-save" type="button">Save</button>
@@ -1095,6 +1103,7 @@ function ctxSliderIndex(tokens) {
 srvFCtxSlider.addEventListener('input', () => {
     const tokens = CTX_STEPS[parseInt(srvFCtxSlider.value, 10)];
     srvFCtx.value = ctxTokensToText(tokens);
+    updateSrvRamEstimate();
 });
 srvFCtx.addEventListener('change', () => {
     const tokens = ctxTextToTokens(srvFCtx.value);
@@ -1102,10 +1111,77 @@ srvFCtx.addEventListener('change', () => {
         srvFCtxSlider.value = ctxSliderIndex(tokens);
         srvFCtx.value = ctxTokensToText(tokens);
     }
+    updateSrvRamEstimate();
 });
+
+function fmtRamMb(mb) {
+    return mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB';
+}
+
+function updateSrvRamEstimate() {
+    const ctx    = ctxTextToTokens(srvFCtx.value) ?? 32768;
+    const slots  = Math.max(1, parseInt(srvFSlots.value, 10) || 1);
+    const kBits  = parseInt(srvFKvk.value, 10) || 4;
+    const vBits  = parseInt(srvFKvv.value, 10) || 4;
+
+    // KV cache: ctx * slots * bytes_per_token
+    // bytes_per_token = (n_layers * n_kv_heads * head_dim * (K+V)) / n_tokens_per_seq
+    // Approximation using model params: for a dense model with P billion params,
+    // typical arch has n_layers*n_kv_heads*head_dim ≈ P*1e9 / (4*d_model) and d_model ≈ sqrt(P*1e9/12)
+    // Simpler: bytes_per_token ≈ totalP_B * 1e9 * (kBits+vBits)/8 / (32*128*4096) for a 7B-like arch
+    // For a 7B: 32 layers, 32 kv_heads, 128 head_dim → 32*32*128 = 131072 elements per token per K or V
+    // At f16: 131072 * 2 bytes * 2 (K+V) = 524288 bytes/token ≈ 0.5 MB/K-tokens
+    // Scale by (totalP / 7) and by quant bits / 16
+
+    const modelName = srvFModel.value;
+    const modelObj  = srvAllModels.find(m => m.name === modelName);
+    const weightsMb = modelObj?.modelSize ?? 0;
+
+    // Parse param count from model filename
+    let totalP = null;
+    if (modelObj) {
+        const m = (modelObj.name || '').replace(/\.gguf$/i, '').match(/(?<![Aa])(\d+(?:\.\d+)?)B/);
+        if (m) totalP = parseFloat(m[1]);
+    }
+    // Fallback: guess from weight size if no B-param tag
+    // At ~Q4 (4.5 bpw): weightsMb ≈ totalP * 1e9 * 4.5/8 / 1e6 → totalP ≈ weightsMb * 8 / (4.5 * 1000)
+    if (totalP === null && weightsMb > 0) totalP = weightsMb * 8 / (4.5 * 1000);
+
+    let kvMb = null;
+    if (totalP !== null) {
+        // Scale from 7B reference: 7B @ f16 → ~0.5 MB/K-tokens/slot per full-precision
+        const kvPerKtokPerSlotF16 = (totalP / 7) * 0.5; // MB per 1K tokens per slot at f16
+        const quantScale = (kBits + vBits) / 32; // f16 = 16 bits per element, 32 total
+        kvMb = (ctx / 1024) * slots * kvPerKtokPerSlotF16 * quantScale;
+    }
+
+    const ramEl   = document.getElementById('srv-ram-estimate');
+    const wEl     = document.getElementById('srv-ram-weights');
+    const kvEl    = document.getElementById('srv-ram-kv');
+    const totEl   = document.getElementById('srv-ram-total');
+
+    ramEl.style.display = '';
+    wEl.textContent  = weightsMb > 0 ? fmtRamMb(weightsMb) : '—';
+    kvEl.textContent = kvMb !== null ? '~' + fmtRamMb(kvMb) : '—';
+    if (weightsMb > 0 && kvMb !== null) {
+        totEl.textContent = '~' + fmtRamMb(weightsMb + kvMb);
+    } else if (kvMb !== null) {
+        totEl.textContent = '~' + fmtRamMb(kvMb) + ' (KV only)';
+    } else if (weightsMb > 0) {
+        totEl.textContent = fmtRamMb(weightsMb) + ' (weights only)';
+    } else {
+        totEl.textContent = '—';
+    }
+}
 
 let srvEditId = null;
 let srvAllModels = [];
+
+// Wire up live RAM estimate updates
+['srv-f-slots', 'srv-f-kvk', 'srv-f-kvv', 'srv-f-model'].forEach(id => {
+    document.getElementById(id).addEventListener('change', updateSrvRamEstimate);
+});
+document.getElementById('srv-f-slots').addEventListener('input', updateSrvRamEstimate);
 
 function srvStatusColor(s) {
     return { Online:'#16a34a', Starting:'#ca8a04', Stopping:'#ca8a04', Offline:'#9ca3af' }[s] ?? '#9ca3af';
@@ -1411,6 +1487,7 @@ function openSrvModal(server) {
     populateSrvModelSelect(server?.currentModelName ?? '');
     srvModalOverlay.style.display = 'flex';
     srvFName.focus();
+    updateSrvRamEstimate();
 }
 
 function closeSrvModal() { srvModalOverlay.style.display = 'none'; srvEditId = null; }

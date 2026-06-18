@@ -53,7 +53,7 @@ public static class ClientWebSocket
             return;
         }
 
-        RegisterTools(codeThread, ws, log, fileState);
+        RegisterTools(codeThread, ws, log, fileState, llm);
 
         try
         {
@@ -76,7 +76,7 @@ public static class ClientWebSocket
         { "preview_file", "read_file", "list_directory", "search_files", "find_files", "edit_file", "write_file",
           "delete_file", "move_file", "run_command", "update_todos" };
 
-    private static void RegisterTools(ARI.LLM.Thread thread, WebSocket ws, ILogger log, FileToolState fileState)
+    private static void RegisterTools(ARI.LLM.Thread thread, WebSocket ws, ILogger log, FileToolState fileState, LLMModule llm)
     {
         RegisterTool(thread, ws, log,
             name: "run_command",
@@ -221,7 +221,7 @@ public static class ClientWebSocket
             labelField: "source");
 
         // The checklist lives on the thread and must execute IN-PROCESS — never round-trip to the client.
-        thread.RegisterTodosTool();
+        llm.RegisterUpdateTodos(thread);
     }
 
     // ── File-tool guardrail helpers ──────────────────────────────────────────────
@@ -598,23 +598,18 @@ public static class ClientWebSocket
                                         codeThread.UnregisterTool(tool);
                                     codeThread = llm.GetOrCreateCodeThread(bindKey);
                                     FileToolState reboundFileState = threadFileState.GetOrAdd(bindKey, _ => new FileToolState());
-                                    RegisterTools(codeThread, ws, log, reboundFileState);
+                                    RegisterTools(codeThread, ws, log, reboundFileState, llm);
                                     threadKey = bindKey;
                                 }
                             }
 
-                            // Persistent context for the Code agent: a project map, plus any
-                            // global coding conventions / per-project rules the client sends.
-                            codeThread.ProjectMap = BuildProjectMap(fileTree);
-                            // Global coding conventions come from the backend store (edited in the
-                            // control panel); project rules come from the project's instructions.
                             string conventions = ConventionsStore.Get();
-                            codeThread.CodingConventions = string.IsNullOrWhiteSpace(conventions) ? null : conventions.Trim();
-                            if (doc.RootElement.TryGetProperty("projectRules", out var prEl))
-                            {
-                                string pr = prEl.GetString() ?? "";
-                                codeThread.ProjectRules = string.IsNullOrWhiteSpace(pr) ? null : pr.Trim();
-                            }
+                            string? projectRules = doc.RootElement.TryGetProperty("projectRules", out var prEl) ? prEl.GetString()?.Trim() : null;
+                            llm.SetCodeThreadContext(
+                                threadKey,
+                                projectMap:   BuildProjectMap(fileTree),
+                                conventions:  string.IsNullOrWhiteSpace(conventions) ? null : conventions.Trim(),
+                                rules:        string.IsNullOrWhiteSpace(projectRules) ? null : projectRules);
 
                             log.LogInformation("[Client] Tree received: {Count} files, bound to thread {Key}", fileTree.Count, threadKey);
                             await Send(ws, new { type = "tree_ack", count = fileTree.Count });

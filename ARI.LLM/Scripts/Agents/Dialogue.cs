@@ -37,7 +37,7 @@ internal class Dialogue : Agent
         bool userMessagePreadded = false,
         Func<string, Task>? onDelta = null)
     {
-        return await Prompt(
+        return await SendPrompt(
             threadKey,
             prompt: prompt,
             username: username,
