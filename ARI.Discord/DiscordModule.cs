@@ -22,6 +22,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
     private readonly DiscordConfig config;
     private readonly LLMModule llmModule;
     private readonly HttpClient httpClient = new();
+    private readonly ILogger _logger;
     
     
     private const string PassToken = "[PASS]";
@@ -33,8 +34,8 @@ public class DiscordModule : BackgroundService, IDiscordModule
 
     public DiscordModule(ILoggerFactory loggerFactory, LLMModule llmModule, DiscordConfig config)
     {
-        Shared.InitialiseLogger(loggerFactory, "ARI.Discord");
-        Shared.Logger.LogInformation("Initialising Discord...");
+        _logger = loggerFactory.CreateLogger("ARI.Discord");
+        _logger.LogInformation("Initialising Discord...");
 
         this.llmModule = llmModule;
         this.config     = config;
@@ -52,7 +53,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        Shared.Logger.LogInformation("Connecting to Discord...");
+        _logger.LogInformation("Connecting to Discord...");
         await client.LoginAsync(TokenType.Bot, config.Token);
         await client.StartAsync();
 
@@ -69,7 +70,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
 
     public async Task NotifyOffline()
     {
-        Shared.Logger.LogInformation("Notifying owner that ARI is going offline...");
+        _logger.LogInformation("Notifying owner that ARI is going offline...");
 
         IUser owner = await client.GetUserAsync(config.OwnerId);
         IDMChannel dm = await owner.CreateDMChannelAsync();
@@ -81,7 +82,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
     private async Task OnReady()
     {
         botOnlineSince = DateTimeOffset.UtcNow;
-        Shared.Logger.LogInformation("Discord bot is ready. Registering slash commands...");
+        _logger.LogInformation("Discord bot is ready. Registering slash commands...");
         await RegisterSlashCommands();
 
         try
@@ -89,11 +90,11 @@ public class DiscordModule : BackgroundService, IDiscordModule
             IUser owner = await client.GetUserAsync(config.OwnerId);
             IDMChannel dm = await owner.CreateDMChannelAsync();
             await dm.SendMessageAsync(AsBlockQuote("A·R·I is online."));
-            Shared.Logger.LogInformation("Sent online notification to owner {OwnerId}", config.OwnerId);
+            _logger.LogInformation("Sent online notification to owner {OwnerId}", config.OwnerId);
         }
         catch (Exception ex)
         {
-            Shared.Logger.LogWarning("Could not send online notification to owner: {Message}", ex.Message);
+            _logger.LogWarning("Could not send online notification to owner: {Message}", ex.Message);
         }
     }
 
@@ -156,18 +157,18 @@ public class DiscordModule : BackgroundService, IDiscordModule
             // Global commands take up to 1 hour to propagate on first registration, but updates
             // to existing global commands are usually near-instant.
             await client.Rest.BulkOverwriteGlobalCommands(commands);
-            Shared.Logger.LogInformation("Slash commands registered globally (available in DMs and servers).");
+            _logger.LogInformation("Slash commands registered globally (available in DMs and servers).");
 
             // Also register per-guild for instant availability in known servers.
             foreach (ulong guildId in config.AllowedGuildIds)
             {
                 await client.Rest.BulkOverwriteGuildCommands(commands, guildId);
-                Shared.Logger.LogInformation("Slash commands registered for guild {GuildId}", guildId);
+                _logger.LogInformation("Slash commands registered for guild {GuildId}", guildId);
             }
         }
         catch (Exception ex)
         {
-            Shared.Logger.LogError("Failed to register slash commands: {Error}", ex.Message);
+            _logger.LogError("Failed to register slash commands: {Error}", ex.Message);
         }
     }
 
@@ -221,7 +222,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
                 return;
             }
             config.WhitelistedUserIds.Add(userId);
-            Shared.Logger.LogInformation("Owner added {UserId} to whitelist", userId);
+            _logger.LogInformation("Owner added {UserId} to whitelist", userId);
             await cmd.RespondAsync($"`{target.Username}` added to whitelist.", ephemeral: true);
         }
         else
@@ -232,7 +233,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
                 return;
             }
             config.WhitelistedUserIds.Remove(userId);
-            Shared.Logger.LogInformation("Owner removed {UserId} from whitelist", userId);
+            _logger.LogInformation("Owner removed {UserId} from whitelist", userId);
             await cmd.RespondAsync($"`{target.Username}` removed from whitelist.", ephemeral: true);
         }
     }
@@ -244,7 +245,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
         // Discard messages sent before the bot came online — Discord.Net replays missed messages on reconnect
         if (message.Timestamp < botOnlineSince)
         {
-            Shared.Logger.LogDebug("Discarding stale message from {Username} sent at {Timestamp} (bot online since {OnlineSince})",
+            _logger.LogDebug("Discarding stale message from {Username} sent at {Timestamp} (bot online since {OnlineSince})",
                 message.Author.Username, message.Timestamp, botOnlineSince);
             return;
         }
@@ -259,7 +260,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
     {
         if (message.Author.Id != config.OwnerId)
         {
-            Shared.Logger.LogDebug("Ignored DM from non-owner user {UserId}", message.Author.Id);
+            _logger.LogDebug("Ignored DM from non-owner user {UserId}", message.Author.Id);
             return;
         }
 
@@ -271,7 +272,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
             string? result = await llmModule.HandleCommand(null, message.Content);
             if (result is not null)
             {
-                Shared.Logger.LogInformation("Command [{Input}] → {Result}", message.Content, result);
+                _logger.LogInformation("Command [{Input}] → {Result}", message.Content, result);
                 await message.Channel.SendMessageAsync(AsBlockQuote(result));
             }
             return;
@@ -281,7 +282,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
         string timestamp = message.Timestamp.LocalDateTime.ToString("dd/MM/yyyy HH:mm");
         string prompt = $"[{timestamp}] [{message.Author.Username} via DM]: {message.Content}";
 
-        Shared.Logger.LogInformation("DM from {Username} ({UserId}): {Content}",
+        _logger.LogInformation("DM from {Username} ({UserId}): {Content}",
             message.Author.Username, message.Author.Id, message.Content);
 
         List<LlmAttachment>? attachments = message.Attachments.Count > 0
@@ -294,13 +295,13 @@ public class DiscordModule : BackgroundService, IDiscordModule
     {
         if (!config.WhitelistedUserIds.Contains(message.Author.Id))
         {
-            Shared.Logger.LogDebug("Ignored server message from non-whitelisted user {UserId}", message.Author.Id);
+            _logger.LogDebug("Ignored server message from non-whitelisted user {UserId}", message.Author.Id);
             return;
         }
 
         if (config.AllowedGuildIds.Count > 0 && !config.AllowedGuildIds.Contains(guildChannel.Guild.Id))
         {
-            Shared.Logger.LogDebug("Ignored message from non-allowed guild {GuildId}", guildChannel.Guild.Id);
+            _logger.LogDebug("Ignored message from non-allowed guild {GuildId}", guildChannel.Guild.Id);
             return;
         }
 
@@ -309,7 +310,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
 
         if (!isMentioned && !isWatchedChannel)
         {
-            Shared.Logger.LogDebug("Ignored server message in non-watched channel {ChannelId} with no mention", message.Channel.Id);
+            _logger.LogDebug("Ignored server message in non-watched channel {ChannelId} with no mention", message.Channel.Id);
             return;
         }
 
@@ -318,7 +319,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
         string timestamp = message.Timestamp.LocalDateTime.ToString("dd/MM/yyyy HH:mm");
         string prompt = $"[{timestamp}] [{message.Author.Username} in #{guildChannel.Name}]: {content}";
 
-        Shared.Logger.LogInformation("Server message from {Username} ({UserId}) in #{ChannelName}: {Content}",
+        _logger.LogInformation("Server message from {Username} ({UserId}) in #{ChannelName}: {Content}",
             message.Author.Username, message.Author.Id, guildChannel.Name, message.Content);
 
         List<LlmAttachment>? attachments = message.Attachments.Count > 0
@@ -338,7 +339,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
 
             if (!isImage && !ReadableExtensions.Contains(ext))
             {
-                Shared.Logger.LogDebug("Skipping unsupported Discord attachment: {Filename}", att.Filename);
+                _logger.LogDebug("Skipping unsupported Discord attachment: {Filename}", att.Filename);
                 continue;
             }
 
@@ -346,7 +347,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
             string content = isImage ? Convert.ToBase64String(bytes) : Encoding.UTF8.GetString(bytes);
 
             result.Add(new LlmAttachment { Name = att.Filename, Content = content, IsImage = isImage, MimeType = mime });
-            Shared.Logger.LogDebug("Loaded Discord attachment: {Filename} ({Mime})", att.Filename, mime);
+            _logger.LogDebug("Loaded Discord attachment: {Filename} ({Mime})", att.Filename, mime);
         }
         return result;
     }
@@ -363,11 +364,11 @@ public class DiscordModule : BackgroundService, IDiscordModule
 
             if (response.Trim() == PassToken)
             {
-                Shared.Logger.LogInformation("Ari chose not to respond in [{ConversationKey}]", conversationKey);
+                _logger.LogInformation("Ari chose not to respond in [{ConversationKey}]", conversationKey);
                 return;
             }
 
-            Shared.Logger.LogInformation("ARI reply sent to {Username} [{ConversationKey}]",
+            _logger.LogInformation("ARI reply sent to {Username} [{ConversationKey}]",
                 message.Author.Username, conversationKey);
 
             foreach (string chunk in SplitIntoChunks(response))
@@ -379,13 +380,13 @@ public class DiscordModule : BackgroundService, IDiscordModule
         catch (LlmRequestFailedException ex)
         {
             typingCts.Cancel();
-            Shared.Logger.LogError("LLM request failed: {Error}", ex.Message);
+            _logger.LogError("LLM request failed: {Error}", ex.Message);
             await message.Channel.SendMessageAsync(AsBlockQuote("A·R·I is unable to respond right now."));
         }
         catch (ModelNotFoundException ex)
         {
             typingCts.Cancel();
-            Shared.Logger.LogError("Dialogue model not available: {Error}", ex.Message);
+            _logger.LogError("Dialogue model not available: {Error}", ex.Message);
             await message.Channel.SendMessageAsync(AsBlockQuote("A·R·I is unable to respond right now."));
         }
     }
@@ -421,7 +422,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
             _                    => LogLevel.Information
         };
 
-        Shared.Logger.Log(level, log.Exception, "[Discord.Net] {Message}", log.Message);
+        _logger.Log(level, log.Exception, "[Discord.Net] {Message}", log.Message);
         return Task.CompletedTask;
     }
 }

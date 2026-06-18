@@ -11,6 +11,7 @@
   <script src="/js/gridstack-all.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3/dist/chartjs-plugin-annotation.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@13/marked.min.js"></script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -207,6 +208,15 @@ html, body {
 
 /* ── model cards ──────────────────────────────────────── */
 .mdl-card { background:#fff; border:1px solid var(--border); border-radius:12px; padding:20px 22px; box-shadow:0 1px 4px rgba(0,0,0,.04); }
+.ag-sysprompt-preview h1,.ag-sysprompt-preview h2,.ag-sysprompt-preview h3 { font-weight:700; margin:.6em 0 .3em; }
+.ag-sysprompt-preview h1 { font-size:15px; } .ag-sysprompt-preview h2 { font-size:14px; } .ag-sysprompt-preview h3 { font-size:13px; }
+.ag-sysprompt-preview p { margin:.4em 0; }
+.ag-sysprompt-preview ul,.ag-sysprompt-preview ol { padding-left:1.4em; margin:.4em 0; }
+.ag-sysprompt-preview li { margin:.2em 0; }
+.ag-sysprompt-preview code { font-family:ui-monospace,monospace; font-size:12px; background:#f3f4f6; padding:1px 4px; border-radius:3px; }
+.ag-sysprompt-preview pre { background:#f3f4f6; border-radius:6px; padding:8px 10px; overflow-x:auto; font-size:12px; margin:.4em 0; }
+.ag-sysprompt-preview pre code { background:none; padding:0; }
+.ag-sysprompt-preview strong { font-weight:700; } .ag-sysprompt-preview em { font-style:italic; }
 .mdl-card.active { border-color:#518c9a; box-shadow:0 0 0 3px rgba(81,140,154,.12); }
 .mdl-card-header { display:flex; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap; }
 .mdl-card-name { font-size:15px; font-weight:700; color:var(--text); flex:1; min-width:0; }
@@ -356,8 +366,13 @@ html, body {
         <div id="mdl-switch-msg" style="font-size:12px;color:var(--text-dim);margin-top:6px;min-height:16px;"></div>
       </div>
 
-      <!-- Add model form -->
-      <div class="vs-section" style="margin-bottom:20px;">
+      <!-- Add model toggle -->
+      <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:16px;">
+        <button class="vs-btn-primary" id="mdl-toggle-add-btn" type="button">+ Add Model</button>
+      </div>
+
+      <!-- Add model form (hidden by default) -->
+      <div class="vs-section" id="mdl-add-panel" style="display:none;margin-bottom:20px;">
         <div class="vs-section-title">Register Model</div>
         <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">
           <div style="display:flex;gap:10px;">
@@ -366,7 +381,7 @@ html, body {
           </div>
           <div style="display:flex;gap:10px;">
             <input id="mdl-add-mmproj-url" class="vs-input" type="text" placeholder="mmproj URL (optional, for vision)" style="flex:4;font-size:13px;">
-            <button class="vs-btn-primary" id="mdl-add-btn" type="button" style="white-space:nowrap;">Add Model</button>
+            <button class="vs-btn-primary" id="mdl-add-btn" type="button" style="white-space:nowrap;">Register</button>
           </div>
           <div id="mdl-add-status" style="font-size:12px;color:var(--text-dim);min-height:16px;"></div>
         </div>
@@ -1127,60 +1142,58 @@ async function loadAgents() {
             : 'background:#f3f4f6;color:#6b7280;';
 
         card.innerHTML = `
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
-                <span style="font-weight:700;font-size:15px;">${escHtml(a.name)}</span>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
                 <div style="display:flex;align-items:center;gap:10px;">
-                    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim);cursor:pointer;">
-                        <input type="checkbox" class="ag-enabled" ${a.enabled ? 'checked' : ''}>
-                        Enabled
-                    </label>
-                    <button class="ag-expand-btn" style="font-size:11px;padding:3px 10px;border:1px solid var(--border);border-radius:4px;background:transparent;color:var(--text-dim);cursor:pointer;">Details ▾</button>
-                </div>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;margin-bottom:10px;">
-                <label class="vs-label" style="font-size:12px;">
-                    Server
-                    <select class="vs-input ag-server" style="font-size:12px;padding:5px 8px;margin-top:4px;">
-                        ${serverOpts}
-                    </select>
-                </label>
-                <label class="vs-label" style="font-size:12px;">
-                    Slot
-                    <input class="vs-input ag-slot" type="number" min="0" value="${fv(a.slot, 0)}" style="font-size:12px;padding:5px 8px;margin-top:4px;">
-                </label>
-            </div>
-            <div class="ag-details" style="display:none;border-top:1px solid var(--border);padding-top:14px;margin-top:4px;">
-                <label class="vs-label" style="font-size:12px;margin-bottom:10px;display:flex;flex-direction:column;gap:4px;">
-                    System prompt
-                    <textarea class="vs-input ag-sysprompt" rows="6" style="font-size:12px;padding:6px 8px;font-family:monospace;resize:vertical;">${escHtml(fv(a.systemPrompt, ''))}</textarea>
-                </label>
-                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:10px;">
-                    <label class="vs-label" style="font-size:12px;">Temperature<input class="vs-input ag-temp" type="number" step="0.05" min="0" max="2" value="${fv(a.temperature, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:4px;"></label>
-                    <label class="vs-label" style="font-size:12px;">Top-P<input class="vs-input ag-topp" type="number" step="0.01" min="0" max="1" value="${fv(a.topP, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:4px;"></label>
-                    <label class="vs-label" style="font-size:12px;">Top-K<input class="vs-input ag-topk" type="number" min="0" value="${fv(a.topK, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:4px;"></label>
-                </div>
-                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:10px;">
-                    <label class="vs-label" style="font-size:12px;">Repeat penalty<input class="vs-input ag-rep" type="number" step="0.01" min="0" value="${fv(a.repeatPenalty, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:4px;"></label>
-                    <label class="vs-label" style="font-size:12px;">Presence penalty<input class="vs-input ag-pres" type="number" step="0.01" value="${fv(a.presencePenalty, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:4px;"></label>
-                    <label class="vs-label" style="font-size:12px;">Frequency penalty<input class="vs-input ag-freq" type="number" step="0.01" value="${fv(a.frequencyPenalty, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:4px;"></label>
-                </div>
-                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:10px;">
-                    <label class="vs-label" style="font-size:12px;">Max tokens<input class="vs-input ag-maxtok" type="number" min="-1" value="${fv(a.maxTokens, -1)}" style="font-size:12px;padding:5px 8px;margin-top:4px;"></label>
-                    <label class="vs-label" style="font-size:12px;">Max context tokens<input class="vs-input ag-maxctx" type="number" min="0" value="${fv(a.maxContextTokens, 0)}" style="font-size:12px;padding:5px 8px;margin-top:4px;"></label>
-                    <label class="vs-label" style="font-size:12px;">Max tool calls<input class="vs-input ag-maxtool" type="number" min="0" value="${fv(a.maxToolCalls, 0)}" style="font-size:12px;padding:5px 8px;margin-top:4px;"></label>
-                </div>
-                <div style="display:flex;align-items:center;gap:20px;margin-bottom:10px;">
-                    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim);cursor:pointer;">
-                        <input type="checkbox" class="ag-think" ${a.think ? 'checked' : ''}>
-                        Think
-                    </label>
-                    <label class="vs-label" style="font-size:12px;flex-direction:row;align-items:center;gap:8px;">
-                        Thinking budget
-                        <input class="vs-input ag-thinkbudget" type="number" min="0" value="${fv(a.thinkingBudget, 0)}" style="font-size:12px;padding:5px 8px;width:100px;">
+                    <span style="font-weight:700;font-size:14px;">${escHtml(a.name)}</span>
+                    <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text-dim);cursor:pointer;">
+                        <input type="checkbox" class="ag-enabled" ${a.enabled ? 'checked' : ''}> Enabled
                     </label>
                 </div>
+                <button class="ag-expand-btn" style="font-size:11px;padding:3px 10px;border:1px solid var(--border);border-radius:4px;background:transparent;color:var(--text-dim);cursor:pointer;">Details ▾</button>
             </div>
-            <div class="ag-save-status" style="font-size:11px;color:var(--text-dim);margin-top:4px;min-height:14px;"></div>`;
+            <div style="display:grid;grid-template-columns:2fr 1fr;gap:8px;align-items:end;">
+                <label class="vs-label" style="font-size:12px;">Server
+                    <select class="vs-input ag-server" style="font-size:12px;padding:5px 8px;margin-top:3px;">${serverOpts}</select>
+                </label>
+                <label class="vs-label" style="font-size:12px;">Slot
+                    <input class="vs-input ag-slot" type="number" min="0" value="${fv(a.slot, 0)}" style="font-size:12px;padding:5px 8px;margin-top:3px;">
+                </label>
+            </div>
+            <div class="ag-details" style="display:none;border-top:1px solid var(--border);padding-top:14px;margin-top:12px;">
+                <div style="font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em;">System Prompt</div>
+                <div class="ag-sysprompt-tabs" style="display:flex;gap:6px;margin-bottom:8px;">
+                    <button class="ag-tab-edit vs-btn-primary" style="font-size:11px;padding:3px 10px;">Edit</button>
+                    <button class="ag-tab-preview" style="font-size:11px;padding:3px 10px;border:1px solid var(--border);border-radius:4px;background:transparent;color:var(--text-dim);cursor:pointer;">Preview</button>
+                </div>
+                <textarea class="vs-input ag-sysprompt" rows="7" style="font-size:12px;padding:6px 8px;font-family:monospace;resize:vertical;width:100%;margin-bottom:8px;">${escHtml(fv(a.systemPrompt, ''))}</textarea>
+                <div class="ag-sysprompt-preview" style="display:none;border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-size:13px;line-height:1.6;min-height:80px;max-height:320px;overflow-y:auto;margin-bottom:8px;"></div>
+                <div style="font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:8px;margin-top:4px;text-transform:uppercase;letter-spacing:.06em;">Sampling</div>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px;">
+                    <label class="vs-label" style="font-size:12px;">Temperature<input class="vs-input ag-temp" type="number" step="0.05" min="0" max="2" value="${fv(a.temperature, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
+                    <label class="vs-label" style="font-size:12px;">Top-P<input class="vs-input ag-topp" type="number" step="0.01" min="0" max="1" value="${fv(a.topP, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
+                    <label class="vs-label" style="font-size:12px;">Top-K<input class="vs-input ag-topk" type="number" min="0" value="${fv(a.topK, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px;">
+                    <label class="vs-label" style="font-size:12px;">Repeat penalty<input class="vs-input ag-rep" type="number" step="0.01" min="0" value="${fv(a.repeatPenalty, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
+                    <label class="vs-label" style="font-size:12px;">Presence penalty<input class="vs-input ag-pres" type="number" step="0.01" value="${fv(a.presencePenalty, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
+                    <label class="vs-label" style="font-size:12px;">Frequency penalty<input class="vs-input ag-freq" type="number" step="0.01" value="${fv(a.frequencyPenalty, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
+                </div>
+                <div style="font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:8px;text-transform:uppercase;letter-spacing:.06em;">Limits</div>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px;">
+                    <label class="vs-label" style="font-size:12px;">Max tokens<input class="vs-input ag-maxtok" type="number" min="-1" value="${fv(a.maxTokens, -1)}" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
+                    <label class="vs-label" style="font-size:12px;">Max context<input class="vs-input ag-maxctx" type="number" min="0" value="${fv(a.maxContextTokens, 0)}" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
+                    <label class="vs-label" style="font-size:12px;">Max tool calls<input class="vs-input ag-maxtool" type="number" min="0" value="${fv(a.maxToolCalls, 0)}" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
+                </div>
+                <div style="display:flex;align-items:center;gap:16px;">
+                    <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text-dim);cursor:pointer;">
+                        <input type="checkbox" class="ag-think" ${a.think ? 'checked' : ''}> Think
+                    </label>
+                    <label class="vs-label" style="font-size:12px;flex-direction:row;align-items:center;gap:8px;margin:0;">
+                        Thinking budget <input class="vs-input ag-thinkbudget" type="number" min="0" value="${fv(a.thinkingBudget, 0)}" style="font-size:12px;padding:5px 8px;width:90px;">
+                    </label>
+                </div>
+            </div>
+            <div class="ag-save-status" style="font-size:11px;color:var(--text-dim);margin-top:6px;min-height:14px;"></div>`;
 
         const agServer    = card.querySelector('.ag-server');
         const agSlot      = card.querySelector('.ag-slot');
@@ -1207,6 +1220,29 @@ async function loadAgents() {
             agDetails.style.display = open ? '' : 'none';
             agExpandBtn.textContent = open ? 'Details ▴' : 'Details ▾';
         });
+
+        const agTabEdit    = card.querySelector('.ag-tab-edit');
+        const agTabPreview = card.querySelector('.ag-tab-preview');
+        const agPreviewDiv = card.querySelector('.ag-sysprompt-preview');
+
+        function showEditTab() {
+            agSysprompt.style.display = '';
+            agPreviewDiv.style.display = 'none';
+            agTabEdit.style.opacity = '1';
+            agTabPreview.style.opacity = '.5';
+        }
+        function showPreviewTab() {
+            agPreviewDiv.innerHTML = typeof marked !== 'undefined'
+                ? marked.parse(agSysprompt.value || '_No system prompt set._')
+                : `<pre style="white-space:pre-wrap">${escHtml(agSysprompt.value)}</pre>`;
+            agSysprompt.style.display = 'none';
+            agPreviewDiv.style.display = '';
+            agTabEdit.style.opacity = '.5';
+            agTabPreview.style.opacity = '1';
+        }
+        agTabEdit.addEventListener('click', showEditTab);
+        agTabPreview.addEventListener('click', showPreviewTab);
+        showEditTab();
 
         const parseNum = (el, fallback = null) => {
             const v = parseFloat(el.value);
@@ -1585,6 +1621,14 @@ function renderModelCards(data) {
     });
 }
 
+document.getElementById('mdl-toggle-add-btn').addEventListener('click', () => {
+    const panel = document.getElementById('mdl-add-panel');
+    const btn   = document.getElementById('mdl-toggle-add-btn');
+    const open  = panel.style.display === 'none';
+    panel.style.display = open ? '' : 'none';
+    btn.textContent = open ? '✕ Cancel' : '+ Add Model';
+});
+
 document.getElementById('mdl-add-btn').addEventListener('click', async () => {
     const name   = document.getElementById('mdl-add-name').value.trim();
     const url    = document.getElementById('mdl-add-url').value.trim();
@@ -1610,7 +1654,11 @@ document.getElementById('mdl-add-btn').addEventListener('click', async () => {
         document.getElementById('mdl-add-mmproj-url').value = '';
         status.style.color = 'var(--text-dim)';
         status.textContent = 'Model registered.';
-        setTimeout(() => { status.textContent = ''; }, 3000);
+        setTimeout(() => {
+            status.textContent = '';
+            document.getElementById('mdl-add-panel').style.display = 'none';
+            document.getElementById('mdl-toggle-add-btn').textContent = '+ Add Model';
+        }, 1500);
         loadModels();
     } catch { status.style.color = '#dc2626'; status.textContent = 'Request failed.'; }
 });

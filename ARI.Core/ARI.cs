@@ -28,6 +28,7 @@ public class ARI : BackgroundService
     private LLMModule?           llmModule;
 
     private readonly ILoggerFactory loggerFactory;
+    private ILogger _logger = Shared.Logger;
     private Docker?              docker;
     private StyleTtsSynthesiser? synthesiser;
     private SpeechQueue?         speechQueue;
@@ -37,6 +38,7 @@ public class ARI : BackgroundService
     public ARI(ILoggerFactory loggerFactory)
     {
         this.loggerFactory = loggerFactory;
+        _logger = loggerFactory.CreateLogger("ARI.Core");
         Shared.InitialiseLogger(loggerFactory, "ARI.Core");
     }
 
@@ -46,14 +48,14 @@ public class ARI : BackgroundService
         catch (Exception ex)
         {
             startupFailed = true;
-            Shared.Logger.LogCritical("Startup failed: {Error}", ex.Message);
+            _logger.LogCritical("Startup failed: {Error}", ex.Message);
             throw;
         }
     }
 
     private async Task Startup(CancellationToken stoppingToken)
     {
-        Shared.Logger.LogInformation("ARI is starting...");
+        _logger.LogInformation("ARI is starting...");
 
         string executableDirectory = AppDomain.CurrentDomain.BaseDirectory;
         config = AriConfig.LoadFrom(Path.Combine(executableDirectory, "AriConfig.json"));
@@ -88,14 +90,14 @@ public class ARI : BackgroundService
         {
             BrainConfig? brainConfig = config.modules.Brain?.Enabled == true ? config.modules.Brain : null;
 
-            Shared.Logger.LogInformation("Loading agents...");
+            _logger.LogInformation("Loading agents...");
             llmModule = new LLMModule(
                 servers:        persistentData.GetServers().ToList(),
                 agentsJsonPath: persistentAgentsPath,
                 brainConfig:    brainConfig,
                 loggerFactory:  loggerFactory);
             CommonModules.Register(llm: llmModule);
-            Shared.Logger.LogInformation("Agents loaded.");
+            _logger.LogInformation("Agents loaded.");
         }
 
         // ── Voice setup ──────────────────────────────────────────────────────────
@@ -105,11 +107,11 @@ public class ARI : BackgroundService
 
         if (config.modules.VoiceSynthesis.Enabled)
         {
-            Shared.Logger.LogInformation("VoiceSynthesis module is enabled. Installing StyleTTS2...");
+            _logger.LogInformation("VoiceSynthesis module is enabled. Installing StyleTTS2...");
             string sttPath = ResolvePath(executableDirectory, config.modules.VoiceSynthesis.StyleTtsPath);
             await new StyleTtsSetupService(sttPath, loggerFactory.CreateLogger("ARI.VoiceSynthesis")).Install();
             voiceSynthesisModule.MarkSetupComplete();
-            Shared.Logger.LogInformation("VoiceSynthesis ready.");
+            _logger.LogInformation("VoiceSynthesis ready.");
         }
 
         if (config.modules.Voice.Enabled)
@@ -123,17 +125,17 @@ public class ARI : BackgroundService
             string refAudio   = FindReferenceAudio(modelDir, sttPath, modelName);
 
             if (!File.Exists(modelPath) || !File.Exists(configPath))
-                Shared.Logger.LogWarning("Voice module enabled but no model found at {Path} — skipping.", modelDir);
+                _logger.LogWarning("Voice module enabled but no model found at {Path} — skipping.", modelDir);
             else if (string.IsNullOrEmpty(refAudio))
-                Shared.Logger.LogWarning("Voice module enabled but no reference audio found for {Model} — skipping.", modelName);
+                _logger.LogWarning("Voice module enabled but no reference audio found for {Model} — skipping.", modelName);
             else
             {
                 ILogger voiceLogger = loggerFactory.CreateLogger("ARI.Voice");
-                Shared.Logger.LogInformation("Voice loading model: {Model}", modelName);
+                _logger.LogInformation("Voice loading model: {Model}", modelName);
                 synthesiser = new StyleTtsSynthesiser(sttPath, modelPath, configPath, refAudio, voiceLogger);
                 await synthesiser.Start(stoppingToken);
                 try { await synthesiser.Warmup(stoppingToken); }
-                catch (Exception ex) { Shared.Logger.LogError("Voice warmup failed (model may have corrupt weights): {Error}", ex.Message); }
+                catch (Exception ex) { _logger.LogError("Voice warmup failed (model may have corrupt weights): {Error}", ex.Message); }
 
                 speechQueue = new SpeechQueue(synthesiser, voiceLogger);
                 string pythonPath = Path.Combine(sttPath, OperatingSystem.IsWindows() ? @"venv\Scripts\python.exe" : "venv/bin/python");
@@ -141,14 +143,14 @@ public class ARI : BackgroundService
 
                 voiceModule = new VoiceModule(synthesiser, speechQueue, modelName);
                 CommonModules.Register(voice: voiceModule);
-                Shared.Logger.LogInformation("Voice ready.");
+                _logger.LogInformation("Voice ready.");
             }
         }
 
         // ── API ──────────────────────────────────────────────────────────────────
         if (config.modules.API.Enabled)
         {
-            Shared.Logger.LogInformation("Web panel module is enabled. Starting on port {Port}...", config.modules.API.Port);
+            _logger.LogInformation("Web panel module is enabled. Starting on port {Port}...", config.modules.API.Port);
 
             apiModule = new APIModule(
                 loggerFactory:        loggerFactory,
@@ -163,7 +165,7 @@ public class ARI : BackgroundService
         // ── Start LLM servers (after API is up so status is visible) ────────────
         if (llmModule is not null)
         {
-            Shared.Logger.LogInformation("Starting LLM servers...");
+            _logger.LogInformation("Starting LLM servers...");
             await llmModule.StartServersAsync(persistentData.GetModels().ToList(), modelsPath);
 
             foreach (var agent in persistentData.GetAgents())
@@ -178,7 +180,7 @@ public class ARI : BackgroundService
 
         if (config.modules.Discord.Enabled)
         {
-            Shared.Logger.LogInformation("Discord module is enabled. Starting...");
+            _logger.LogInformation("Discord module is enabled. Starting...");
             discordService = new DiscordModule(loggerFactory, llmModule, config.modules.Discord);
             await discordService.StartAsync(stoppingToken);
             if (discordService.ExecuteTask is not null)
@@ -190,7 +192,7 @@ public class ARI : BackgroundService
         if (config.modules.API.Enabled)
             LaunchClient(executableDirectory, config.modules.API.Port);
 
-        Shared.Logger.LogInformation("ARI is ready.");
+        _logger.LogInformation("ARI is ready.");
 
         if (moduleTasks.Count > 0)
             await Task.WhenAny(moduleTasks.Concat(new[] { Task.Delay(Timeout.Infinite, stoppingToken) }));
@@ -242,7 +244,7 @@ public class ARI : BackgroundService
         });
     }
 
-    private static void LaunchClient(string executableDirectory, int port)
+    private void LaunchClient(string executableDirectory, int port)
     {
         string? scriptPath = null;
         DirectoryInfo? dir = new DirectoryInfo(executableDirectory);
@@ -255,7 +257,7 @@ public class ARI : BackgroundService
 
         if (scriptPath is null)
         {
-            Shared.Logger.LogWarning("[Client] setup.sh not found — skipping client launch.");
+            _logger.LogWarning("[Client] setup.sh not found — skipping client launch.");
             return;
         }
 
@@ -263,7 +265,7 @@ public class ARI : BackgroundService
         {
             if (clientProcess is not null && !clientProcess.HasExited)
             {
-                Shared.Logger.LogInformation("[Client] Stopping previous client instance (PID {Pid})...", clientProcess.Id);
+                _logger.LogInformation("[Client] Stopping previous client instance (PID {Pid})...", clientProcess.Id);
                 clientProcess.Kill(entireProcessTree: true);
                 clientProcess.WaitForExit(3000);
             }
@@ -271,7 +273,7 @@ public class ARI : BackgroundService
         catch { }
         clientProcess = null;
 
-        Shared.Logger.LogInformation("[Client] Launching ARI.Client...");
+        _logger.LogInformation("[Client] Launching ARI.Client...");
         Environment.SetEnvironmentVariable("ARI_BASE_URL", $"http://localhost:{port}");
 
         var psi = OperatingSystem.IsMacOS()
@@ -279,7 +281,7 @@ public class ARI : BackgroundService
             : new System.Diagnostics.ProcessStartInfo("/bin/bash", $"\"{scriptPath}\"") { UseShellExecute = true, CreateNoWindow = false };
 
         try { clientProcess = System.Diagnostics.Process.Start(psi); }
-        catch (Exception ex) { Shared.Logger.LogWarning("[Client] Failed to launch client: {Error}", ex.Message); }
+        catch (Exception ex) { _logger.LogWarning("[Client] Failed to launch client: {Error}", ex.Message); }
     }
 
     private static string ResolvePath(string baseDir, string path)
@@ -292,13 +294,13 @@ public class ARI : BackgroundService
     {
         if (startupFailed) return;
 
-        Shared.Logger.LogInformation("ARI is shutting down...");
+        _logger.LogInformation("ARI is shutting down...");
 
         try
         {
             if (clientProcess is not null && !clientProcess.HasExited)
             {
-                Shared.Logger.LogInformation("[Client] Stopping client process...");
+                _logger.LogInformation("[Client] Stopping client process...");
                 clientProcess.Kill(entireProcessTree: true);
             }
         }

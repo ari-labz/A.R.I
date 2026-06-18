@@ -60,8 +60,13 @@ public class Server : IDisposable
 
     // ── Internals ────────────────────────────────────────────────────────────────
 
+    private ILogger? _logger;
     private Process? _process;
     private string _modelsPath = "";
+
+    public void SetLogger(ILogger logger) => _logger = logger;
+
+    private ILogger Log => _logger ?? Shared.Logger;
 
     // ── Public lifecycle ─────────────────────────────────────────────────────────
 
@@ -73,7 +78,7 @@ public class Server : IDisposable
         _modelsPath = modelsPath;
         ActiveModel = model;
 
-        Shared.Logger.LogInformation("[{Server}] Preparing to start...", Name);
+        Log.LogInformation("[{Server}] Preparing to start...", Name);
 
         if (model is not null)
             await EnsureModelFilesAsync(model);
@@ -82,13 +87,13 @@ public class Server : IDisposable
         await WaitUntilReadyAsync();
 
         Status = ServerStatus.Online;
-        Shared.Logger.LogInformation("[{Server}] Online (PID {Pid}).", Name, Pid);
+        Log.LogInformation("[{Server}] Online (PID {Pid}).", Name, Pid);
     }
 
     public void Stop()
     {
         Status = ServerStatus.Stopping;
-        Shared.Logger.LogInformation("[{Server}] Stopping...", Name);
+        Log.LogInformation("[{Server}] Stopping...", Name);
 
         if (_process is not null && !_process.HasExited)
         {
@@ -101,7 +106,7 @@ public class Server : IDisposable
         Pid = -1;
         ActiveModel = null;
         Status = ServerStatus.Offline;
-        Shared.Logger.LogInformation("[{Server}] Stopped.", Name);
+        Log.LogInformation("[{Server}] Stopped.", Name);
     }
 
     public async Task RestartAsync()
@@ -114,7 +119,7 @@ public class Server : IDisposable
 
     public async Task ChangeModelAsync(Model newModel, string modelsPath)
     {
-        Shared.Logger.LogInformation("[{Server}] Changing model to {Model}...", Name, newModel.Name);
+        Log.LogInformation("[{Server}] Changing model to {Model}...", Name, newModel.Name);
         await WaitForIdleAsync();
         Stop();
         await StartAsync(newModel, modelsPath);
@@ -139,11 +144,11 @@ public class Server : IDisposable
         string dest = Path.Combine(_modelsPath, filename);
         if (File.Exists(dest))
         {
-            Shared.Logger.LogInformation("[{Server}] Model file exists: {File}", Name, filename);
+            Log.LogInformation("[{Server}] Model file exists: {File}", Name, filename);
             return;
         }
 
-        Shared.Logger.LogInformation("[{Server}] Downloading {File}...", Name, filename);
+        Log.LogInformation("[{Server}] Downloading {File}...", Name, filename);
         Directory.CreateDirectory(_modelsPath);
 
         using HttpClient hc = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
@@ -174,7 +179,7 @@ public class Server : IDisposable
                     int pct = (int)(downloaded * 100 / total.Value);
                     if (pct != lastPct && pct % 5 == 0)
                     {
-                        Shared.Logger.LogInformation("[{Server}] {File}: {Pct}% ({MB:F0} MB)", Name, filename, pct, downloaded / 1_048_576.0);
+                        Log.LogInformation("[{Server}] {File}: {Pct}% ({MB:F0} MB)", Name, filename, pct, downloaded / 1_048_576.0);
                         lastPct = pct;
                     }
                 }
@@ -188,7 +193,7 @@ public class Server : IDisposable
             throw;
         }
 
-        Shared.Logger.LogInformation("[{Server}] Download complete: {File}", Name, filename);
+        Log.LogInformation("[{Server}] Download complete: {File}", Name, filename);
     }
 
     // ── Process management ────────────────────────────────────────────────────
@@ -233,12 +238,12 @@ public class Server : IDisposable
         }) ?? throw new Exception($"[{Name}] Failed to start llama-server process.");
 
         Pid = _process.Id;
-        Shared.Logger.LogInformation("[{Server}] llama-server started (PID {Pid}).", Name, Pid);
+        Log.LogInformation("[{Server}] llama-server started (PID {Pid}).", Name, Pid);
     }
 
     private async Task WaitUntilReadyAsync()
     {
-        Shared.Logger.LogInformation("[{Server}] Waiting for llama-server to come online...", Name);
+        Log.LogInformation("[{Server}] Waiting for llama-server to come online...", Name);
 
         using HttpClient hc = new();
         DateTime timeout = DateTime.UtcNow.AddMinutes(3);
@@ -286,7 +291,7 @@ public class Server : IDisposable
             await Task.Delay(500);
         }
 
-        Shared.Logger.LogWarning("[{Server}] Timed out waiting for idle — forcing shutdown.", Name);
+        Log.LogWarning("[{Server}] Timed out waiting for idle — forcing shutdown.", Name);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
