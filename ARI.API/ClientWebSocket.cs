@@ -119,43 +119,43 @@ public static class ClientWebSocket
 
         RegisterTool(thread, ws, log,
             name: "edit_file",
-            description: "Make a targeted find-and-replace edit to an existing file. old_string must match exactly once.",
-            parameters: new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" }, old_string = new { type = "string", description = "Exact text to find (must appear exactly once)" }, new_string = new { type = "string", description = "Replacement text" } }, required = new[] { "path", "old_string", "new_string" } },
+            description: "Edit a file by replacing one or more line ranges with new text. REQUIREMENT: read_file the file first — you edit BY LINE NUMBER using the 1-based line numbers shown by read_file/search_files. Set start_line and end_line (inclusive) and new_string (the replacement text only; an empty string deletes the range). To change several places at once, pass an 'edits' array of {start_line, end_line, new_string}; they all resolve against the file as you last read it, so line numbers don't shift between them. Use write_file for a new file or a full rewrite. Do not retype existing code or pass old_string.",
+            parameters: new { type = "object", properties = new {
+                path       = new { type = "string",  description = "File path relative to project root" },
+                start_line = new { type = "integer", description = "First line to replace (1-based, inclusive, exactly as shown by read_file/search_files)." },
+                end_line   = new { type = "integer", description = "Last line to replace (1-based, inclusive). Defaults to start_line for a single line." },
+                new_string = new { type = "string",  description = "Replacement text for the line range — the replacement code only, without the read_file line-number prefix. Empty string deletes the range." },
+                edits      = new { type = "array",   description = "Batch several changes to this file at once; each item is {start_line, end_line, new_string}. They resolve against the file as you last read it and apply together." }
+            }, required = new[] { "path" } },
             displayVerb: "Editing", displayDoneVerb: "Edited",
             labelField: "path",
             customDisplay: argsJson =>
             {
+                string label = EditLabel(argsJson); // extracted leniently so the filename survives any later failure
                 try
                 {
                     using var doc = JsonDocument.Parse(argsJson);
-                    string path   = doc.RootElement.TryGetProperty("path",       out var pe) ? pe.GetString() ?? "" : "";
-                    string oldStr = doc.RootElement.TryGetProperty("old_string", out var oe) ? oe.GetString() ?? "" : "";
-                    string newStr = doc.RootElement.TryGetProperty("new_string", out var ne) ? ne.GetString() ?? "" : "";
-                    string label  = System.IO.Path.GetFileName(path.Trim('"', '\'', ' ', '\\')).Replace("--", "&#45;&#45;");
-                    int removed   = oldStr.Split('\n').Length;
-                    int added     = newStr.Split('\n').Length;
+                    (int added, int removed) = EditCounts(doc.RootElement);
                     return $"<!--ari-tool-start:edit_file:{label}|+{added}|-{removed}-->";
                 }
-                catch { return "<!--ari-tool-start:edit_file:file-->"; }
+                catch { return $"<!--ari-tool-start:edit_file:{label}-->"; }
             },
             customDisplayDone: argsJson =>
             {
+                string label = EditLabel(argsJson);
                 try
                 {
                     using var doc = JsonDocument.Parse(argsJson);
-                    string path    = doc.RootElement.TryGetProperty("path",       out var pe) ? pe.GetString() ?? "" : "";
                     string oldStr  = doc.RootElement.TryGetProperty("old_string", out var oe) ? oe.GetString() ?? "" : "";
                     string newStr  = doc.RootElement.TryGetProperty("new_string", out var ne) ? ne.GetString() ?? "" : "";
-                    string label   = System.IO.Path.GetFileName(path.Trim('"', '\'', ' ', '\\')).Replace("--", "&#45;&#45;");
-                    int removed    = oldStr.Split('\n').Length;
-                    int added      = newStr.Split('\n').Length;
+                    (int added, int removed) = EditCounts(doc.RootElement);
                     string patch   = BuildPatch(oldStr, newStr);
-                    string encoded = patch.Length <= 10_000
+                    string encoded = patch.Length is > 0 and <= 10_000
                         ? Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(patch))
                         : "";
                     return $"<!--ari-tool-end:edit_file:{label}|+{added}|-{removed}|{encoded}-->";
                 }
-                catch { return "<!--ari-tool-end:edit_file:file-->"; }
+                catch { return $"<!--ari-tool-end:edit_file:{label}|+0|-0-->"; }
             },
             preCheck: argsJson => CheckDirty(argsJson, fileState),
             postHook: (argsJson, result) => TrackEditResult(argsJson, result, fileState));
@@ -352,6 +352,56 @@ public static class ClientWebSocket
             return $"<!--ari-tool-{markerType}:run_command:{safe}-->";
         }
         catch { return $"<!--ari-tool-{markerType}:run_command:command-->"; }
+    }
+
+    /// <summary>
+    /// Extracts the file label for an edit_file card directly from the args text (regex), so the filename
+    /// is shown even if the full JSON can't be parsed / a count step throws. Falls back to "file".
+    /// </summary>
+    private static string EditLabel(string argsJson)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(argsJson, "\"path\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
+        if (!m.Success) return "file";
+        string path = m.Groups[1].Value.Replace("\\\\", "\\").Replace("\\\"", "\"").Replace("\\/", "/");
+        try
+        {
+            string f = System.IO.Path.GetFileName(path.Trim());
+            return string.IsNullOrEmpty(f) ? "file" : f.Replace("--", "&#45;&#45;");
+        }
+        catch { return "file"; }
+    }
+
+    /// <summary>
+    /// Computes the +added / -removed line counts for an edit_file tool card. Handles line-range edits
+    /// (start_line/end_line + new_string), a MultiEdit 'edits' array, and the legacy old_string form.
+    /// </summary>
+    private static (int Added, int Removed) EditCounts(JsonElement root)
+    {
+        static int Lines(string s) => s.Length == 0 ? 0 : s.Split('\n').Length;
+
+        if (root.TryGetProperty("edits", out var edits) && edits.ValueKind == JsonValueKind.Array)
+        {
+            int a = 0, r = 0;
+            foreach (var e in edits.EnumerateArray())
+            {
+                a += Lines(e.TryGetProperty("new_string", out var n) ? n.GetString() ?? "" : "");
+                if (e.TryGetProperty("start_line", out var sl) && sl.TryGetInt32(out int s) &&
+                    e.TryGetProperty("end_line",   out var el) && el.TryGetInt32(out int en) && en >= s)
+                    r += en - s + 1;
+                else
+                    r += Lines(e.TryGetProperty("old_string", out var o) ? o.GetString() ?? "" : "");
+            }
+            return (a, r);
+        }
+
+        int added = Lines(root.TryGetProperty("new_string", out var ns) ? ns.GetString() ?? "" : "");
+        int removed;
+        if (root.TryGetProperty("start_line", out var s0) && s0.TryGetInt32(out int start) &&
+            root.TryGetProperty("end_line",   out var e0) && e0.TryGetInt32(out int end) && end >= start)
+            removed = end - start + 1;
+        else
+            removed = Lines(root.TryGetProperty("old_string", out var os) ? os.GetString() ?? "" : "");
+        return (added, removed);
     }
 
     private static string BuildPatch(string oldStr, string newStr)

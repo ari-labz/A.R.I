@@ -54,7 +54,7 @@ internal class Engram : Agent, IDisposable
         await tcs.Task;
     }
 
-    internal Engram() { }
+    public Engram() { }
 
     internal void Init(Dialogue dialogue, BrainModule brain, Context? context, string brainPublicUrl, ConcurrentDictionary<string, Thread> threads)
     {

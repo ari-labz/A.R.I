@@ -19,7 +19,7 @@ internal class Context : Agent
     private readonly SemaphoreSlim updateLock = new(1, 1);
     private string resolvedPrompt;
 
-    internal Context()
+    public Context()
     {
         httpClient = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
         resolvedPrompt = "";

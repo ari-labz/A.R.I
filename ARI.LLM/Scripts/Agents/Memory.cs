@@ -25,7 +25,7 @@ internal class Memory : Agent
 
     internal override bool QuietLogging => true;
 
-    internal Memory() { }
+    public Memory() { }
 
     private static readonly string[] MemoryKeywords =
     [
