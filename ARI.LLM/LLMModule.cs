@@ -9,8 +9,11 @@ namespace ARI.LLM;
 
 public class LLMModule : ILLMModule, IDisposable
 {
+    //pipelines
     private readonly DialoguePipeline? dialoguePipeline;
     private readonly CodePipeline?     codePipeline;
+    
+    //agents
     private readonly Dialogue?         dialogue;
     private readonly Code?             code;
     private readonly Memory?           memory;
@@ -19,15 +22,14 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly Refactor?         refactor;
     private readonly Classifier?       classifier;
     private readonly BrainModule?      brain;
+    
+    
     private readonly CommandService    commands;
-
     private readonly ConcurrentDictionary<string, CancellationTokenSource>                      processingThreads = new();
     private readonly ConcurrentDictionary<string, LiveCallInfo>                                  liveCalls         = new();
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<Guid, Channel<bool?>>>   threadWatchers    = new();
     private readonly Dictionary<string, Agent>                                                   agentMap          = new();
     private readonly HashSet<string>                                                              forcedCodeThreads = new();
-
-    // The single flat registry of every thread, across all pipelines.
     private readonly ConcurrentDictionary<string, Thread>                                         threads           = new();
 
     private readonly List<Server>  _servers    = new();
