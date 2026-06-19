@@ -141,6 +141,8 @@ from Utils.PLBERT.util import load_plbert
 
 if torch.cuda.is_available():
     device = 'cuda'
+elif torch.backends.mps.is_available():
+    device = 'mps'
 else:
     device = 'cpu'
 config = yaml.safe_load(open(args.config))
@@ -165,14 +167,16 @@ for k in model:
             sd = OrderedDict((n[7:], v) for n, v in params[k].items())
             model[k].load_state_dict(sd, strict=False)
 
-# sigma_data can be NaN in fine-tuned checkpoints due to MPS training instability;
-# it is a fixed scaling constant (not learned), safe to reset to the LibriTTS default.
-if hasattr(model.diffusion, 'diffusion') and hasattr(model.diffusion.diffusion, 'sigma_data'):
-    import math
-    if math.isnan(model.diffusion.diffusion.sigma_data):
-        model.diffusion.diffusion.sigma_data = 1.0
-        import sys as _sys
-        _sys.stderr.write('[serve] sigma_data was NaN — reset to 1.0\n'); _sys.stderr.flush()
+# Validate checkpoint — fail loudly if any component has NaN weights.
+# Training should prevent this; if it happens, the checkpoint is corrupt.
+import sys as _sys
+_nan_components = [_k for _k in model
+                   if any(_p.is_floating_point() and torch.isnan(_p).any()
+                          for _p in model[_k].parameters())]
+if _nan_components:
+    _msg = f'[serve] CORRUPT CHECKPOINT: NaN weights in {_nan_components} — retrain or use an earlier checkpoint'
+    _sys.stderr.write(_msg + '\n'); _sys.stderr.flush()
+    _sys.exit(1)
 
 sampler = DiffusionSampler(
     model.diffusion.diffusion,

@@ -22,6 +22,7 @@ internal abstract class Pipeline
     }
 
     internal async Task<string> ExecuteAsync(
+        Thread               thread,
         string               threadKey,
         string               prompt,
         string               username,
@@ -32,8 +33,6 @@ internal abstract class Pipeline
         List<Attachment>?    threadAttachments  = null,
         string?              localPath          = null)
     {
-        Thread thread = PrimaryAgent.GetOrCreateThread(threadKey);
-
         if (threadAttachments is { Count: > 0 })
             foreach (Attachment a in threadAttachments)
                 thread.AddAttachment(a);
