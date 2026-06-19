@@ -60,6 +60,9 @@ public class SystemInfo
 
         var serverEntries = new List<(string Name, long FileBytes, int ContextSize)>();
 
+        // PID-keyed: servers whose RAM we've already measured via PhysFootprint
+        var pidMeasuredSegments = new List<RamSegment>();
+
         if (_llm is not null)
         {
             foreach (Server server in _llm.Servers)
@@ -67,17 +70,31 @@ public class SystemInfo
                 if (server.Status != ServerStatus.Online || server.Pid <= 0 || server.ActiveModel is null)
                     continue;
 
-                string modelFile = Path.Combine(_modelsPath, server.ActiveModel.Name + ".gguf");
+                string modelFile = Path.Combine(_modelsPath, server.ActiveModel.Path);
                 long   fileBytes = File.Exists(modelFile) ? new FileInfo(modelFile).Length : 0;
-                if (fileBytes <= 0) continue;
 
-                serverEntries.Add((server.Name, fileBytes, server.ContextSize));
-                accounted += fileBytes;
+                if (fileBytes > 0)
+                {
+                    serverEntries.Add((server.Name, fileBytes, server.ContextSize));
+                    accounted += fileBytes;
+                }
+                else
+                {
+                    // File path unknown — measure the process directly (model + KV combined)
+                    long pidBytes = PhysFootprint(server.Pid);
+                    if (pidBytes > 0)
+                    {
+                        pidMeasuredSegments.Add(new RamSegment(server.Name, server.Name, pidBytes));
+                        accounted += pidBytes;
+                    }
+                }
             }
         }
 
         long pythonBytes = 0;
-        foreach (Process p in Process.GetProcessesByName("python").Concat(Process.GetProcessesByName("python3")))
+        foreach (Process p in Process.GetProcessesByName("python")
+            .Concat(Process.GetProcessesByName("python3"))
+            .Concat(Process.GetProcessesByName("Python")))
             try { pythonBytes += PhysFootprint(p.Id); } catch { }
         accounted += pythonBytes;
 
@@ -86,6 +103,8 @@ public class SystemInfo
         long totalCtx = serverEntries.Sum(e => (long)e.ContextSize);
 
         var segments = new List<RamSegment>();
+
+        // File-size tracked servers: split kvPool proportionally by context size
         foreach (var e in serverEntries)
         {
             segments.Add(new RamSegment(e.Name, e.Name, e.FileBytes));
@@ -95,10 +114,24 @@ public class SystemInfo
                 if (kvBytes > 0) segments.Add(new RamSegment($"{e.Name} KV cache", e.Name, kvBytes));
             }
         }
-        if (kvPool > 0 && totalCtx == 0)
-            segments.Add(new RamSegment("KV cache", "System", kvPool));
 
-        if (pythonBytes > 0) segments.Add(new RamSegment("F5-TTS", "TTS", pythonBytes));
+        // PID-measured servers: process footprint = model weights; split remaining kvPool equally
+        if (pidMeasuredSegments.Count > 0)
+        {
+            long kvPerPidServer = kvPool > 0 ? kvPool / pidMeasuredSegments.Count : 0;
+            foreach (var seg in pidMeasuredSegments)
+            {
+                segments.Add(seg);
+                if (kvPerPidServer > 0)
+                    segments.Add(new RamSegment($"{seg.ServerName} KV cache", seg.ServerName, kvPerPidServer));
+            }
+        }
+        else if (kvPool > 0 && serverEntries.Count == 0)
+        {
+            segments.Add(new RamSegment("KV cache", "System", kvPool));
+        }
+
+        if (pythonBytes > 0) segments.Add(new RamSegment("StyleTTS2", "StyleTTS2", pythonBytes));
         return segments;
     }
 

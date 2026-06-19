@@ -883,19 +883,34 @@ const ramChart = new Chart(ramCtx, {
 });
 
 // ── RAM pie chart ─────────────────────────────────────────
-const PIE_COLORS = {
-    Logic:    ['#518c9a', '#a8d5dd'],
-    Dialogue: ['#7c5cbf', '#c4b5fd'],
-    TTS:      ['#4a9e6c'],
-};
-function pieColor(serverName, idx) {
-    const p = PIE_COLORS[serverName] ?? ['#6b7280', '#9ca3af'];
-    return p[idx] ?? p[p.length - 1];
+// ARI base hue: ~190° (teal). All servers including StyleTTS2 share the rotation.
+const ARI_BASE_HUE = 190;
+
+// Build hue assignments fresh each time the server list changes.
+// N servers → hues spaced 360/N apart, starting at ARI_BASE_HUE.
+let _serverHueCache = {}; // serverName → hue°
+let _lastServerKey  = '';
+
+function buildServerHues(serverNames) {
+    const key = serverNames.join(',');
+    if (key === _lastServerKey) return;
+    _lastServerKey = key;
+    _serverHueCache = {};
+    const n = serverNames.length;
+    serverNames.forEach((name, i) => {
+        _serverHueCache[name] = (ARI_BASE_HUE + i * (360 / Math.max(n, 1))) % 360;
+    });
 }
+
+function hslForServer(serverName, isKv) {
+    const h = _serverHueCache[serverName] ?? ARI_BASE_HUE;
+    return isKv ? `hsl(${h},38%,55%)` : `hsl(${h},38%,30%)`;
+}
+
 const ramPieCtx = document.getElementById('ram-pie-chart').getContext('2d');
 const ramPieChart = new Chart(ramPieCtx, {
     type: 'doughnut',
-    data: { labels: [], datasets: [{ data: [], backgroundColor: [], borderWidth: 1, borderColor: 'rgba(0,0,0,.08)' }] },
+    data: { labels: [], datasets: [{ data: [], backgroundColor: [], borderWidth: 2, borderColor: 'rgba(0,0,0,.12)' }] },
     options: {
         animation: false, responsive: true, maintainAspectRatio: false, cutout: '58%',
         plugins: {
@@ -910,22 +925,37 @@ function updateRamPie(breakdown) {
     const json = JSON.stringify(breakdown);
     if (json === lastBreakdownJson) return;
     lastBreakdownJson = json;
-    const serverIdx = {}, labels = [], values = [], colors = [];
+
+    // All unique server names in stable order (excluding generic 'System' fallback)
+    const allServers = [...new Set(breakdown.map(s => s.serverName).filter(n => n !== 'System'))];
+    buildServerHues(allServers);
+
+    const labels = [], values = [], colors = [];
+    const serverSegCount = {};
     breakdown.forEach(seg => {
-        const i = serverIdx[seg.serverName] ?? 0;
-        serverIdx[seg.serverName] = i + 1;
-        labels.push(seg.label); values.push(seg.mb); colors.push(pieColor(seg.serverName, i));
+        const segIdx = serverSegCount[seg.serverName] ?? 0;
+        serverSegCount[seg.serverName] = segIdx + 1;
+        const isKv = segIdx > 0; // first segment per server = model weights, subsequent = KV cache
+        labels.push(seg.label);
+        values.push(seg.mb);
+        colors.push(hslForServer(seg.serverName, isKv));
     });
+
     ramPieChart.data.labels = labels;
     ramPieChart.data.datasets[0].data = values;
     ramPieChart.data.datasets[0].backgroundColor = colors;
     ramPieChart.update('none');
+
     ramPieLegend.innerHTML = '';
     breakdown.forEach((seg, i) => {
+        const isKv = colors[i] === hslForServer(seg.serverName, true) && i > 0;
+        const segIdx = breakdown.slice(0, i).filter(s => s.serverName === seg.serverName).length;
+        const kvRow  = segIdx > 0;
         const row = document.createElement('div');
         row.className = 'pie-legend-row';
-        row.innerHTML = `<span class="pie-legend-swatch" style="background:${colors[i]}"></span>`
-            + `<span class="pie-legend-label" title="${escHtml(seg.label)}">${escHtml(seg.label)}</span>`
+        if (kvRow) row.style.cssText = 'padding-left:4px;';
+        row.innerHTML = `<span class="pie-legend-swatch" style="background:${colors[i]};opacity:${kvRow?.75:1}"></span>`
+            + `<span class="pie-legend-label" title="${escHtml(seg.label)}" style="color:${kvRow?'var(--text-dim)':'var(--text)'}">${escHtml(seg.label)}</span>`
             + `<span class="pie-legend-val">${fmtMb(seg.mb)}</span>`;
         ramPieLegend.appendChild(row);
     });
