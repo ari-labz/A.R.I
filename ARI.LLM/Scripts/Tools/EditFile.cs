@@ -14,19 +14,17 @@ internal sealed class EditFile : FileTool
         function = new
         {
             name        = "edit_file",
-            description = "Edit a file by replacing one or more regions. REQUIREMENT: you MUST call read_file on a file before editing it — never edit a file you have not read in this session, as you will fabricate old_string content that does not exist and the edit will fail. PREFERRED: anchor by line range — set start_line/end_line (the 1-based inclusive line numbers shown by read_file/search_files) and new_string. This is reliable because you don't retype existing code: replace a block, or delete it with new_string empty (e.g. start_line 196, end_line 232). Alternatively anchor by text with old_string (must match exactly once unless replace_all). To change several places at once, pass an 'edits' array — each item is {start_line,end_line,new_string} (preferred) or {old_string,new_string}; all regions resolve against the file you just read and apply together, so line numbers don't shift between them. Use write_file for a new file or a full rewrite.",
+            description = "Edit a file by replacing one or more line ranges with new text. REQUIREMENT: call read_file on the file first — you edit BY LINE NUMBER, using the 1-based line numbers shown by read_file/search_files. Set start_line and end_line (inclusive) and new_string (the replacement text; empty string deletes that range). You never retype existing code — you point at the lines you can already see. To change several places at once, pass an 'edits' array of {start_line,end_line,new_string}; they all resolve against the file as you last read it and apply together, so line numbers don't shift between them. Use write_file for a new file or a full rewrite.",
             parameters  = new
             {
                 type       = "object",
                 properties = new
                 {
-                    path       = new { type = "string",  description = "File path relative to project root" },
-                    start_line = new { type = "integer", description = "PREFERRED. First line to replace (1-based inclusive, as shown by read_file/search_files)." },
-                    end_line   = new { type = "integer", description = "Last line to replace (1-based inclusive). Defaults to start_line." },
-                    new_string = new { type = "string",  description = "Replacement text for the line range or old_string. Empty string deletes the region." },
-                    old_string = new { type = "string",  description = "Alternative to start_line/end_line: exact text to find (must match once unless replace_all). Only valid if you have read this file and are copying the text verbatim from the read result — never reconstruct it from memory." },
-                    replace_all = new { type = "boolean", description = "Replace every occurrence of old_string instead of requiring a unique match." },
-                    edits      = new { type = "array",   description = "Batch for several changes to this file; each item {start_line,end_line,new_string} (preferred) or {old_string,new_string}." }
+                    path       = new { type = "string",  description = "File path relative to project root." },
+                    start_line = new { type = "integer", description = "First line to replace (1-based inclusive, exactly as shown by read_file/search_files)." },
+                    end_line   = new { type = "integer", description = "Last line to replace (1-based inclusive). Defaults to start_line for a single line." },
+                    new_string = new { type = "string",  description = "Replacement text for the line range. Empty string deletes the range. The replacement code only — do not include the existing code or the read_file line-number prefix." },
+                    edits      = new { type = "array",   description = "Batch several changes to this file at once; each item is {start_line, end_line, new_string}. They resolve against the file as you last read it and apply together." }
                 },
                 required = new[] { "path" }
             }
@@ -98,25 +96,12 @@ internal sealed class EditFile : FileTool
                     continue;
                 }
 
-                if (ed.Old.Length == 0)
-                    return $"Provide old_string or start_line/end_line{label} to edit {relPath}.";
-
-                if (ed.ReplaceAll)
-                {
-                    bool found = false;
-                    for (int p = buf0.IndexOf(ed.Old, StringComparison.Ordinal); p >= 0; p = buf0.IndexOf(ed.Old, p + ed.Old.Length, StringComparison.Ordinal))
-                    { spans.Add(new Span(p, ed.Old.Length, ed.New)); found = true; }
-                    if (!found) return $"old_string not found in {relPath}{label}. No changes made.{ClosestRegionHint(buf0, ed.Old)}";
-                    continue;
-                }
-
-                MatchResult match = FindMatch(buf0, ed.Old);
-                if (match.Kind == MatchKind.Multiple)
-                    return $"old_string matches {match.Count} locations in {relPath}{label}. Include more surrounding lines to make it unique, or set replace_all to change them all.";
-                if (match.Kind == MatchKind.None)
-                    return $"old_string not found in {relPath}{label}. No changes made.{ClosestRegionHint(buf0, ed.Old)}";
-                if (match.Kind == MatchKind.Whitespace) anyFuzzy = true;
-                spans.Add(new Span(match.Start, match.Length, ed.New));
+                // Line-number editing only. This model retypes old_string inaccurately, and the fuzzy
+                // closest-match fallback can resolve to an unrelated region (a file-corruption risk —
+                // it once pointed an edit of GrantAccess at the unrelated CreateRecord/UpdateRecord
+                // methods). Reject old_string outright and require the explicit line numbers the model
+                // already has from read_file/search_files.
+                return $"edit_file is edited BY LINE NUMBER, not old_string{label}. Re-read {relPath} if you don't have its current line numbers, then call edit_file with start_line and end_line (1-based, inclusive) and new_string set to the replacement text only.";
             }
 
             // Overlap check, then apply highest-offset-first so earlier edits don't shift later ones.

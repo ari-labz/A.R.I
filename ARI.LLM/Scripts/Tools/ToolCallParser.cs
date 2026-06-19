@@ -35,13 +35,38 @@ internal static class ToolCallParser
             foreach (Match p in Regex.Matches(callBody, @"<parameter=(\w+)>\s*(.*?)\s*</parameter>", RegexOptions.Singleline))
             {
                 if (!first) argsBuilder.Append(',');
-                argsBuilder.Append($"\"{p.Groups[1].Value}\":\"{p.Groups[2].Value.Trim()}\"");
+                string pName = p.Groups[1].Value;
+                string pVal  = p.Groups[2].Value.Trim();
+                argsBuilder.Append(JsonSerializer.Serialize(pName));
+                argsBuilder.Append(':');
+                // Structured params (edit_file's `edits`, update_todos' `todos`) are emitted by the model as
+                // a JSON array. Embed them as raw JSON so the executor receives an array, not a stringified
+                // one (which Array.isArray rejects → "Provide old_string or start_line/end_line"). All other
+                // values (code in new_string/content, paths, patterns) are serialized as JSON strings so
+                // their quotes/newlines/backslashes can't break the args JSON.
+                if (IsStructuredParam(pName) && IsJsonArrayOrObject(pVal))
+                    argsBuilder.Append(pVal);
+                else
+                    argsBuilder.Append(JsonSerializer.Serialize(pVal));
                 first = false;
             }
             argsBuilder.Append('}');
             calls.Add(new Call($"fallback_{++index}", name, argsBuilder.ToString()));
         }
         return calls;
+    }
+
+    /// <summary>Tool parameters whose value the model emits as a JSON array/object (not a string).</summary>
+    private static bool IsStructuredParam(string name) =>
+        name.Equals("edits", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("todos", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>True if the trimmed value is parseable JSON that starts as an array or object.</summary>
+    private static bool IsJsonArrayOrObject(string s)
+    {
+        if (s.Length < 2 || (s[0] != '[' && s[0] != '{')) return false;
+        try { using JsonDocument _ = JsonDocument.Parse(s); return true; }
+        catch { return false; }
     }
 
     /// <summary>Parses the Qwen3 XML tool-call format: &lt;tool_name&gt;&lt;param&gt;value&lt;/param&gt;...&lt;/tool_name&gt;. Null if none.</summary>
@@ -162,6 +187,47 @@ internal static class ToolCallParser
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Salvages a native tool call's arguments when the model leaked text-format markers
+    /// (&lt;function=…&gt;, &lt;parameter=…&gt;, &lt;tool_call&gt;) into what should be pure JSON — a
+    /// repetition/format-mix runaway. Truncates at the first marker and balances any dangling
+    /// string/object so the prefix parses (e.g. {"pattern":"GrantAccess → {"pattern":"GrantAccess"}).
+    /// </summary>
+    internal static string SalvageNativeArgs(string raw)
+    {
+        // Cut at the first leaked text-format marker, then rebuild clean JSON from the field values
+        // in the prefix — stripping leaked whitespace/control chars out of each value and properly
+        // escaping it. This recovers the first call's real arguments (e.g. a read_file path) from a
+        // runaway native-arg blob, producing JSON that always parses.
+        int cut = raw.Length;
+        foreach (string m in new[] { "<tool_call", "</tool_call", "<function", "</function", "<parameter", "</parameter" })
+        {
+            int i = raw.IndexOf(m, StringComparison.OrdinalIgnoreCase);
+            if (i >= 0 && i < cut) cut = i;
+        }
+        string s = raw[..cut];
+
+        List<string> fields = new();
+        // Capture each "key":"value" preserving the model's existing JSON escaping — the value body
+        // matches proper JSON string syntax ((?:\\.|[^"\\])*: an escape sequence, or any non-quote/
+        // non-backslash char), so \". and \\ inside the value are kept intact and the match stops at
+        // the first *unescaped* closing quote. We emit the value VERBATIM (no re-escaping — re-escaping
+        // already-valid content double-escapes regex backslashes, e.g. "\\.IsAdmin" → "\\\\.IsAdmin").
+        // We only strip real control chars (invalid in JSON) and trailing truncation noise (a dangling
+        // \n/\r/\t or whitespace left where the runaway tail was cut).
+        foreach (Match m in Regex.Matches(s, "\"(\\w+)\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)", RegexOptions.Singleline))
+        {
+            string val = m.Groups[2].Value
+                .Replace("\r", "").Replace("\n", " ").Replace("\t", " ");
+            val = Regex.Replace(val, @"(?:\\[nrt]|\s)+$", "");
+            fields.Add($"\"{m.Groups[1].Value}\":\"{val}\"");
+        }
+        foreach (Match m in Regex.Matches(s, "\"(\\w+)\"\\s*:\\s*(-?\\d+)"))
+            fields.Add($"\"{m.Groups[1].Value}\":{m.Groups[2].Value}");
+
+        return fields.Count == 0 ? "{}" : "{" + string.Join(",", fields) + "}";
     }
 
     /// <summary>

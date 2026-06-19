@@ -94,16 +94,16 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
         const k = `${m[1]}:${m[2]}`
         errorCount.set(k, (errorCount.get(k) ?? 0) + 1)
     }
+    // A tool card finalizes (→ "done") as soon as its batch completes — i.e. its end marker is followed
+    // by a batch-end marker. We deliberately do NOT also require content after the batch-end: that made a
+    // card linger on "Editing…" until the model resumed talking (very visible with long edits) and left the
+    // last card stuck forever when a turn ended right after an edit.
     const END_RE_G = new RegExp(TOOL_END_RE.source, "g")
     for (const m of normalized.matchAll(END_RE_G)) {
         const after = m.index! + m[0].length
-        const batchEndIdx = normalized.indexOf(BATCH_END, after)
-        if (batchEndIdx < 0) continue
-        const tail = normalized.slice(batchEndIdx + BATCH_END.length)
-        if (/\S/.test(tail)) {
-            const k = `${m[1]}:${m[2]}`
-            doneCount.set(k, (doneCount.get(k) ?? 0) + 1)
-        }
+        if (normalized.indexOf(BATCH_END, after) < 0) continue
+        const k = `${m[1]}:${m[2]}`
+        doneCount.set(k, (doneCount.get(k) ?? 0) + 1)
     }
 
     // Occurrence counter so multiple edits to the same file get unique badge IDs.

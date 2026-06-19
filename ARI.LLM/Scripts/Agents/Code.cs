@@ -7,12 +7,12 @@ namespace ARI.LLM;
 
 internal class Code : Agent
 {
-    [JsonPropertyName("shortTermMemoryLimit")] public int ShortTermMemoryLimit { get; init; }
+    [JsonPropertyName("shortTermMemoryLimit")] public int? ShortTermMemoryLimit { get; init; }
 
-    internal override int  MemoryLimit      => ShortTermMemoryLimit;
+    internal override int  MemoryLimit      => ShortTermMemoryLimit ?? 0;
     internal override bool SuppressPromptLog => true;
 
-    internal Code() { }
+    public Code() { }
 
     // ── Per-thread code context ──────────────────────────────────────────────
 

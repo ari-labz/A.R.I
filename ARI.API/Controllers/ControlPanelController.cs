@@ -555,6 +555,8 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
                 mmprojDownloadLink = m.MmprojDownloadLink,
                 downloaded         = m.Downloaded,
                 modelSize          = m.ModelSize,
+                fileSizeMb         = m.FileSizeBytes > 0 ? Math.Round(m.FileSizeBytes / 1048576.0) : (double?)null,
+                kvArch             = m.KvArch is { } a ? new { nLayers = a.NLayers, nKvHeads = a.NKvHeads, headDim = a.HeadDim } : null,
                 moe                = m.MoE,
                 mtp                = m.MTP,
                 notes              = notes.TryGetValue(m.Name, out string? n) ? n : "",
@@ -582,6 +584,7 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
 
                 currentModelName = s.CurrentModelName,
                 autoStart       = s.BootStartup,
+                unifiedCache    = s.UnifiedCache,
             };
         }).ToList();
 
@@ -628,6 +631,7 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
             return BadRequest(new { error = "name is required." });
 
         persistentData.AddServer(server);
+        llm?.AddServer(server);
         return Ok(server);
     }
 
@@ -636,6 +640,7 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
     {
         if (!persistentData.UpdateServer(server))
             return NotFound(new { error = "Server not found." });
+        llm?.UpdateServer(server);
         return Ok(server);
     }
 
@@ -646,6 +651,7 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
         live?.Stop();
         if (!persistentData.RemoveServer(id))
             return NotFound(new { error = "Server not found." });
+        llm?.RemoveServer(id);
         return Ok(new { ok = true });
     }
 

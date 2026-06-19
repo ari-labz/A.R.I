@@ -302,6 +302,7 @@ public abstract class Agent
         HashSet<string>         earlyEditAbortedOnce = new(StringComparer.OrdinalIgnoreCase);
         int                     buildState   = 0;
         int                     continueNudges = 0;
+        int                     noProgressBatches = 0; // consecutive tool batches that produced no new info / no mutation
         Dictionary<string, int> editFailStreak = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<string, int> writeCounts  = new(StringComparer.OrdinalIgnoreCase);
         bool                    forceNoMoreTools = false;
@@ -378,7 +379,18 @@ public abstract class Agent
 
         while (true)
         {
-            messages[0] = new { role = "system", content = baseSystem + RenderDynamicContextBlock(thread) + thinkSuffix };
+            bool      toolsExhausted = forceNoMoreTools || (MaxToolCalls > 0 && toolCallCount >= MaxToolCalls);
+            object[]? toolSchemas    = !toolsExhausted && thread.tools.Count > 0
+                                        ? thread.tools.Values.Select(t => t.Schema).ToArray()
+                                        : null;
+            // Text tool protocol (see BuildToolCatalog): advertise tools as text in the system prompt and
+            // parse the model's <tool_call> XML ourselves, instead of sending the native `tools` field —
+            // which makes llama.cpp 9430 intermittently half-parse Qwen3.6's XML and leak the tail into the
+            // arguments (the "runaway"). Text in, text out, parsed deterministically by ParseTextCalls.
+            bool   textTools   = toolSchemas is not null;
+            string toolCatalog = textTools ? BuildToolCatalog(toolSchemas!) : "";
+
+            messages[0] = new { role = "system", content = baseSystem + toolCatalog + RenderDynamicContextBlock(thread) + thinkSuffix };
 
             CompactToolOutput(messages, toolResultSlots, MaxContextTokens);
 
@@ -387,11 +399,6 @@ public abstract class Agent
                 long totalChars = messages.Sum(m => (long)(ContentOf(m)?.Length ?? 0));
                 lci.EstimatedInputTokens = (int)(totalChars / CHARS_PER_TOKEN);
             }
-
-            bool      toolsExhausted = forceNoMoreTools || (MaxToolCalls > 0 && toolCallCount >= MaxToolCalls);
-            object[]? toolSchemas    = !toolsExhausted && thread.tools.Count > 0
-                                        ? thread.tools.Values.Select(t => t.Schema).ToArray()
-                                        : null;
 
             if (!QuietLogging && toolCallCount == 0)
                 Shared.Logger.LogInformation("[{Agent}] ({Thread}) {Tools}",
@@ -428,10 +435,19 @@ public abstract class Agent
                 body["chat_template_kwargs"] = new { enable_thinking = true, thinking_budget = budget };
             }
 
-            if (toolSchemas is not null) body["tools"]   = toolSchemas;
+            // No native `tools` field — tools are advertised as text (textTools / BuildToolCatalog). The
+            // model emits <tool_call> XML which we parse, and may batch several calls in one turn before
+            // stopping naturally (<|im_end|>). We deliberately do NOT set a "</tool_call>" stop: that would
+            // cut generation after the FIRST call and kill batching — the main lever against TTFT, since
+            // every extra turn re-pays prefill. The runaway guard / max_tokens bound any run-on.
             if (Slot.HasValue)           body["id_slot"] = Slot.Value;
 
             string             json    = JsonSerializer.Serialize(body);
+            if (!QuietLogging)
+                Shared.Logger.LogInformation("[{Agent}] ({Thread}) → request (step {Step}): max_tokens={MT}, tools={N}, msgs={Msgs}",
+                    Name, thread.Key, toolCallCount,
+                    body.TryGetValue("max_tokens", out object? mtv) ? mtv : "?",
+                    toolSchemas?.Length ?? 0, messages.Count);
             HttpRequestMessage request = new(HttpMethod.Post, $"{Endpoint}/v1/chat/completions")
             {
                 Content = new StringContent(json, Encoding.UTF8, "application/json")
@@ -472,7 +488,9 @@ public abstract class Agent
 
             (string Id, string Name, string Args, string Error)? earlyAbort = null;
             HashSet<int> precheckedCalls = new();
+            int? runawayCall = null;   // a native call whose args ran away (model looping / leaking text-format markers)
 
+            DateTime lastProgress = DateTime.UtcNow;
             string? line;
             while ((line = await reader.ReadLineAsync(ct)) is not null)
             {
@@ -501,6 +519,21 @@ public abstract class Agent
                         finishReason = frEl.GetString();
 
                     JsonElement delta = choice.GetProperty("delta");
+
+                    // Live progress so a long/runaway generation is visible in the log as it happens.
+                    if (!QuietLogging && (DateTime.UtcNow - lastProgress).TotalSeconds >= 3)
+                    {
+                        lastProgress = DateTime.UtcNow;
+                        int argChars = pendingCalls.Values.Sum(c => c.Args.Length);
+                        string tail  = responseBuilder.Length > 0
+                            ? responseBuilder.ToString()
+                            : (pendingCalls.Count > 0 ? pendingCalls.Values.Last().Args.ToString() : "");
+                        if (tail.Length > 120) tail = tail[^120..];
+                        Shared.Logger.LogInformation("[{Agent}] ({Thread}) … decoding: {N} native call(s) [{Names}], {AC} arg chars, {CC} content chars | …{Tail}",
+                            Name, thread.Key, pendingCalls.Count,
+                            string.Join(",", pendingCalls.Values.Select(c => c.Name)),
+                            argChars, responseBuilder.Length, tail.Replace("\n", "\\n"));
+                    }
 
                     if (delta.TryGetProperty("reasoning_content", out JsonElement reasoning))
                     {
@@ -551,6 +584,16 @@ public abstract class Agent
                                 if (!string.IsNullOrEmpty(argsDelta) && pendingCalls.TryGetValue(index, out (string Id, string Name, StringBuilder Args) call))
                                 {
                                     call.Args.Append(argsDelta);
+
+                                    // Runaway guard: native tool-call args must be JSON. If the model leaks
+                                    // text-format tool markers into them it has started looping / stuffing extra
+                                    // calls inside this one — stop the stream now and salvage the first call.
+                                    if (runawayCall is null && (call.Args.ToString().Contains("<tool_call") || call.Args.ToString().Contains("<function=")))
+                                    {
+                                        runawayCall = index;
+                                        Shared.Logger.LogWarning("[{Agent}] ({Thread}) native tool-call runaway ({Tool}, {Len} arg chars — text-format leak) — aborting generation and salvaging.", Name, thread.Key, call.Name, call.Args.Length);
+                                        break;
+                                    }
 
                                     if (earlyAbort is null && call.Name == "edit_file" && !precheckedCalls.Contains(index))
                                     {
@@ -603,7 +646,7 @@ public abstract class Agent
                                 }
                             }
                         }
-                        if (earlyAbort is not null) break;
+                        if (earlyAbort is not null || runawayCall is not null) break;
                         continue;
                     }
 
@@ -627,9 +670,26 @@ public abstract class Agent
                             string visible = accumulated.Length < AriPrefix.Length
                                 ? (accumulated.StartsWith(AriPrefix[..accumulated.Length], StringComparison.OrdinalIgnoreCase) ? "" : accumulated)
                                 : (accumulated.StartsWith(AriPrefix, StringComparison.OrdinalIgnoreCase) ? accumulated[AriPrefix.Length..] : accumulated);
-                            await onDelta(contentBuilder.ToString() + visible);
+                            // Show a live "Editing <file> +N/-M" card while the model streams an edit_file/
+                            // write_file text tool call, instead of frozen narration. View-only transform of
+                            // the streamed text; responseBuilder and the parse/execute path are untouched.
+                            await onDelta(contentBuilder.ToString() + InjectLiveToolCards(visible));
                         }
                     }
+                }
+            }
+
+            if (!QuietLogging)
+            {
+                int doneArgChars = pendingCalls.Values.Sum(c => c.Args.Length);
+                Shared.Logger.LogInformation("[{Agent}] ({Thread}) ← stream done: finish={FR}, completion_tokens={CT}, {PC} native call(s) [{Names}], {CC} content chars, {AC} arg chars",
+                    Name, thread.Key, finishReason ?? "null", completionTokens, pendingCalls.Count,
+                    string.Join(",", pendingCalls.Values.Select(c => c.Name)), responseBuilder.Length, doneArgChars);
+                if (responseBuilder.Length > 0)
+                {
+                    string snip = responseBuilder.ToString();
+                    Shared.Logger.LogInformation("[{Agent}] ({Thread}) ← content: {Snip}",
+                        Name, thread.Key, (snip.Length > 400 ? snip[..400] + "…" : snip).Replace("\n", "\\n"));
                 }
             }
 
@@ -675,14 +735,38 @@ public abstract class Agent
                     continue;
                 }
 
+                // Guard against a tool call truncated before its closing tag (e.g. hit max_tokens): if an
+                // opening <tool_call> has no matching close, add one so ParseTextCalls can still match it.
+                if (textTools && responseBuilder.ToString().Contains("<tool_call>") && !responseBuilder.ToString().Contains("</tool_call>"))
+                    responseBuilder.Append("\n</tool_call>");
+
                 List<ToolCallParser.Call>? textCalls = ToolCallParser.ParseTextCalls(responseBuilder.ToString());
                 if (textCalls is not null)
                 {
-                    consecutiveFallbacks++;
-                    Degrade();
-                    if (consecutiveFallbacks > 3)
-                        throw new LlmRequestFailedException($"Model stuck in text tool call fallback loop ({consecutiveFallbacks} consecutive) — aborting.");
-                    Shared.Logger.LogWarning("[{Agent}] ({Thread}) model used text tool call format — parsing fallback.", Name, thread.Key);
+                    if (!textTools)
+                    {
+                        // Unexpected text format from a native-tools model — treat as a degraded fallback.
+                        consecutiveFallbacks++;
+                        Degrade();
+                        if (consecutiveFallbacks > 3)
+                            throw new LlmRequestFailedException($"Model stuck in text tool call fallback loop ({consecutiveFallbacks} consecutive) — aborting.");
+                        Shared.Logger.LogWarning("[{Agent}] ({Thread}) model used text tool call format — parsing fallback.", Name, thread.Key);
+                    }
+                    else
+                    {
+                        // Expected path: preserve any narration the model wrote before the tool call so the
+                        // user still sees "Now I'll look at…" style updates (reasoning in <think> is dropped).
+                        string rb    = responseBuilder.ToString();
+                        int    tcIdx = rb.IndexOf("<tool_call>", StringComparison.OrdinalIgnoreCase);
+                        if (tcIdx > 0)
+                        {
+                            string pre = System.Text.RegularExpressions.Regex.Replace(
+                                rb[..tcIdx], "<think>.*?</think>", "",
+                                System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                            pre = pre.Replace("<think>", "").Replace("</think>", "").Trim();
+                            if (pre.Length > 0) contentBuilder.Append(pre);
+                        }
+                    }
                     int fakeIndex = 0;
                     foreach (ToolCallParser.Call c in textCalls)
                         pendingCalls[fakeIndex++] = (c.Id, c.Name, new StringBuilder(c.Args));
@@ -722,7 +806,15 @@ public abstract class Agent
                 foreach (var key in pendingCalls.Keys)
                 {
                     var (id, name, args) = pendingCalls[key];
-                    string raw      = args.ToString();
+                    string original = args.ToString();
+                    string raw      = original;
+                    // Salvage a runaway native call: the model leaked text-format markers into the JSON
+                    // args, so keep only the first valid call and discard the looping tail.
+                    if (raw.Contains("<tool_call") || raw.Contains("<function="))
+                    {
+                        raw = ToolCallParser.SalvageNativeArgs(raw);
+                        Shared.Logger.LogInformation("[{Agent}] ({Thread}) salvaged runaway args for '{Tool}' → {Args}", Name, thread.Key, name, raw);
+                    }
                     string stripped = ToolCallParser.StripThinkLeaks(raw);
                     string repaired = ToolCallParser.RepairArgs(stripped);
 
@@ -731,7 +823,9 @@ public abstract class Agent
                     if (repaired != stripped)
                         Shared.Logger.LogWarning("[{Agent}] ({Thread}) Repaired malformed JSON args for tool '{Tool}'.", Name, thread.Key, name);
 
-                    if (repaired != raw)
+                    // Write back whenever salvage/strip/repair changed the original — comparing against
+                    // the original (not the post-salvage `raw`) so a fully-cleaned salvage still persists.
+                    if (repaired != original)
                         pendingCalls[key] = (id, name, new StringBuilder(repaired));
                 }
 
@@ -772,6 +866,7 @@ public abstract class Agent
                         if (readOnlyTools.Contains(c.Name) && thread.tools.TryGetValue(c.Name, out var roTool))
                             prelaunched[idx] = roTool.Execute(c.Args.ToString());
 
+                bool productiveBatch = false; // set true when a tool returns new info or mutates a file
                 foreach (var (callIndex, call) in pendingCalls)
                 {
                     string result;
@@ -1003,10 +1098,30 @@ public abstract class Agent
                                     editFailStreak.TryGetValue(editKey, out int streak);
                                     editFailStreak[editKey] = ++streak;
 
-                                    if (editedFiles.Contains(editKey))
-                                        result += " This file was already edited earlier this turn — re-read it to see the current content before retrying.";
-                                    if (streak >= 2)
-                                        result += " Stop retyping the text. You have the line numbers from read_file/search_files — change these lines with start_line/end_line instead of old_string (one edit_file call with an 'edits' array if several lines), or rewrite the whole file with write_file. If you still cannot, stop and tell the user what is blocking you.";
+                                    // Environmental failures (permission denied, file not found) can't be fixed by
+                                    // changing edit strategy — nudging the model to retry with line numbers just
+                                    // loops it. Let the clean client error stand so it surfaces the blocker instead.
+                                    bool environmental =
+                                        result.Contains("Permission denied", StringComparison.OrdinalIgnoreCase) ||
+                                        result.Contains("File not found",    StringComparison.OrdinalIgnoreCase);
+
+                                    if (!environmental)
+                                    {
+                                        if (editedFiles.Contains(editKey))
+                                            result += " This file was already edited earlier this turn — re-read it to see the current content before retrying.";
+
+                                        // Hand the model the exact line numbers from the "closest matching region" — local
+                                        // models ignore generic advice but follow concrete numbers, which forces it off old_string.
+                                        var region = System.Text.RegularExpressions.Regex.Match(result, @"lines (\d+)\s*[–—-]\s*(\d+)");
+                                        if (region.Success)
+                                            result += $" STOP using old_string on this file. Retry as ONE edit_file with start_line:{region.Groups[1].Value}, end_line:{region.Groups[2].Value} and new_string set to the replacement code only (do not pass old_string).";
+                                        else if (streak >= 2)
+                                            result += " Stop retyping the text. You have the line numbers from read_file/search_files — change these lines with start_line/end_line instead of old_string (one edit_file call with an 'edits' array if several lines), or rewrite the whole file with write_file. If you still cannot, stop and tell the user what is blocking you.";
+                                    }
+                                    else if (streak >= 2)
+                                    {
+                                        result += " This is a filesystem permission/access problem, not an editing-strategy problem — stop retrying and tell the user the file cannot be written and why.";
+                                    }
                                 }
                             }
                             catch { /* ignore */ }
@@ -1055,6 +1170,11 @@ public abstract class Agent
                             if (onDelta is not null) await onDelta(contentBuilder.ToString());
                         }
                         toolResults.Add(result);
+                        // Progress = a tool returned real content or mutated a file. Repeated-read nags and
+                        // cached-dup notices start with "[System:"; errors start with "[Error:". A batch of
+                        // only those is "no progress" and feeds the loop-breaker below.
+                        if (!result.StartsWith("[System:", StringComparison.OrdinalIgnoreCase) && !ToolCallParser.IsError(result))
+                            productiveBatch = true;
                     }
                     else
                     {
@@ -1116,7 +1236,22 @@ public abstract class Agent
                 contentBuilder.Append("<!--ari-batch-end-->");
                 if (onDelta is not null) await onDelta(contentBuilder.ToString());
 
-                bool wasFallback = pendingCalls.Values.Any(c => c.Id.StartsWith("fallback_"));
+                // Loop-breaker: a weak model can call tools forever without progressing (e.g. re-reading a
+                // file it already read). The per-tool nags only scold; nothing terminates. Under the text
+                // protocol MaxToolCalls doesn't help either — text calls still execute after tools are
+                // "exhausted". So after enough consecutive no-progress batches, end the turn outright.
+                if (productiveBatch) noProgressBatches = 0;
+                else if (++noProgressBatches >= 6)
+                {
+                    Shared.Logger.LogWarning("[{Agent}] ({Thread}) loop-break: {N} consecutive tool batches made no progress — ending turn.", Name, thread.Key, noProgressBatches);
+                    contentBuilder.Append("\n\n_Stopped — repeated tool calls were not making progress._");
+                    if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                    break;
+                }
+
+                // Only nag about format when NOT on the text protocol — under it, text-format tool calls
+                // (fallback_* ids) are the expected, correct form, not an error to be corrected.
+                bool wasFallback = !textTools && pendingCalls.Values.Any(c => c.Id.StartsWith("fallback_"));
                 if (wasFallback)
                 {
                     string correctionHint =
@@ -1157,7 +1292,7 @@ public abstract class Agent
                     continueNudges++;
                     Shared.Logger.LogInformation("[{Agent}] ({Thread}) premature-stop nudge — model announced an action without performing it.", Name, thread.Key);
                     messages.Add(new { role = "user", content =
-                        "[System: You described the next action but did not perform it — no tool call was made. If more work remains, issue the tool call now and keep going until the task is done (build first, then run tests only if the build succeeds). If you are genuinely finished, give your final summary to the user instead.]" });
+                        "[System: You described an action but didn't perform it — no tool call was made. Either issue that tool call now and keep working until the task is fully done AND verified (build the project you changed; re-read what you edited), or, if you are genuinely finished, stop and give the user a short summary of what you changed. Do not narrate without acting, and do not repeat a tool call you have already made.]" });
                     responseBuilder.Clear();
                     continue;
                 }
@@ -1240,6 +1375,82 @@ public abstract class Agent
 
     // ── Static helpers ────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Builds the textual tool catalog appended to the system prompt. We deliberately do NOT send the
+    /// native `tools` field to llama-server for this model. Qwen3.6's chat template trains the model to
+    /// emit tool calls as &lt;tool_call&gt;&lt;function=name&gt;&lt;parameter=..&gt; TEXT; llama.cpp 9430 only
+    /// intermittently re-parses that into native tool_calls, and when it half-parses the XML tail leaks
+    /// into the JSON arguments (the "runaway"). Advertising tools as text and parsing the response
+    /// ourselves (ParseTextCalls) makes every tool call deterministic. Mirrors the model template's
+    /// own tool-advertisement block so the format the model sees is exactly what it was trained on.
+    /// </summary>
+    private static string BuildToolCatalog(object[] schemas)
+    {
+        StringBuilder sb = new();
+        sb.Append("\n\n# Tools\n\nYou have access to the following functions:\n\n<tools>");
+        foreach (object schema in schemas)
+        {
+            using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(schema));
+            JsonElement fn = doc.RootElement.TryGetProperty("function", out JsonElement f) ? f : doc.RootElement;
+            sb.Append('\n').Append(fn.GetRawText());
+        }
+        sb.Append("\n</tools>\n\n");
+        sb.Append(
+            "To call a function, reply with ONLY this format and NOTHING after it:\n" +
+            "<tool_call>\n<function=FUNCTION_NAME>\n<parameter=PARAM_NAME>\nVALUE\n</parameter>\n</function>\n</tool_call>\n" +
+            "Rules:\n" +
+            "- Put the <tool_call> block at the start of a new line with no indentation.\n" +
+            "- One <parameter=NAME> block per argument; a value may span multiple lines.\n" +
+            "- Use the XML format above exactly — do NOT emit JSON for the call.\n" +
+            "- Stop immediately after </tool_call>; the tool result will be provided to you.\n" +
+            "- When you are done and need no tool, reply normally with your final answer.");
+        return sb.ToString();
+    }
+
+    // Matches an edit_file/write_file text tool call (complete, or still streaming to end-of-string).
+    private static readonly System.Text.RegularExpressions.Regex LiveEditRe = new(
+        @"<tool_call>\s*<function=(edit_file|write_file)>(.*?)(?:</tool_call>|\z)",
+        System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// Replaces an in-progress (or just-completed) edit_file/write_file text tool call in a streamed chunk
+    /// with a live "active" tool-card marker (file + line counts), so the UI shows what is being edited as
+    /// the model streams it rather than a frozen "thinking". Other tool calls are left for the UI to strip.
+    /// The added count grows as new_string/content streams in; removed comes from start_line/end_line.
+    /// </summary>
+    private static string InjectLiveToolCards(string text)
+    {
+        if (!text.Contains("<function=edit_file", StringComparison.OrdinalIgnoreCase) &&
+            !text.Contains("<function=write_file", StringComparison.OrdinalIgnoreCase))
+            return text;
+
+        return LiveEditRe.Replace(text, m =>
+        {
+            string name = m.Groups[1].Value.ToLowerInvariant();
+            string body = m.Groups[2].Value;
+            string? path = LiveParam(body, "path");
+            if (path is null) return m.Value; // path not streamed yet — leave for the UI to strip
+            string label = System.IO.Path.GetFileName(path.Trim()).Replace("--", "&#45;&#45;");
+            string? content = LiveParam(body, name == "write_file" ? "content" : "new_string");
+            int added = string.IsNullOrEmpty(content) ? 0 : content.Split('\n').Length;
+            int removed = 0;
+            if (int.TryParse(LiveParam(body, "start_line"), out int s) &&
+                int.TryParse(LiveParam(body, "end_line"),   out int e) && e >= s)
+                removed = e - s + 1;
+            return $"<!--ari-tool-start:{name}:{label}|+{added}|-{removed}-->";
+        });
+    }
+
+    /// <summary>Extracts a parameter value from a possibly-incomplete text tool-call body (up to
+    /// &lt;/parameter&gt; if closed, else the partial trailing value). Null if the parameter hasn't started.</summary>
+    private static string? LiveParam(string body, string key)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(body,
+            $@"<parameter={System.Text.RegularExpressions.Regex.Escape(key)}>\s*(.*?)\s*(?:</parameter>|\z)",
+            System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        return m.Success ? m.Groups[1].Value : null;
+    }
+
     private static string ExtractLogText(string content) =>
         string.Concat(AriContentBlock.Parse(content).OfType<TextBlock>().Select(b => b.Text))
             .Replace("<!--ari-batch-end-->", "")
@@ -1267,8 +1478,16 @@ public abstract class Agent
         long total  = 0;
         foreach (object m in messages) total += ContentOf(m)?.Length ?? 0;
 
+        // Only compact once we ACTUALLY exceed the budget. Stubbing tool outputs rewrites the middle of
+        // the message array, which (1) invalidates the server's KV prefix cache and forces a full
+        // re-prefill of the whole context each step (~125s on a large context), and (2) throws away file
+        // contents the model just read, forcing wasteful re-reads. Previously this ran unconditionally
+        // every turn even with the context far under budget. Leave context untouched until it's too big,
+        // then stub only as many of the oldest outputs as needed to get back under budget.
+        if (total <= budget) return;
+
         int stubbable = slots.Count - COMPACT_KEEP_RECENT;
-        for (int i = 0; i < stubbable; i++)
+        for (int i = 0; i < stubbable && total > budget; i++)
         {
             (int idx, string callId, string name) = slots[i];
             if (idx < 0 || idx >= messages.Count) continue;

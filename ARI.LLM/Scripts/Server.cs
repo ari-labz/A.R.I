@@ -1,5 +1,6 @@
 using ARI.Common;
 using System.Diagnostics;
+using System.Linq;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 
@@ -50,6 +51,11 @@ public class Server : IDisposable
     [JsonPropertyName("unifiedCache")]
     public bool UnifiedCache { get; set; } = false;
 
+    /// <summary>Load the model's multimodal projector (--mmproj). Off by default: vision costs RAM
+    /// the coding/dialogue path never uses, and on unified memory that competes with weights + KV.</summary>
+    [JsonPropertyName("visionEnabled")]
+    public bool VisionEnabled { get; set; } = false;
+
     // ── Runtime state (not persisted) ───────────────────────────────────────────
 
     [JsonIgnore] public ServerStatus Status { get; private set; } = ServerStatus.Offline;
@@ -83,11 +89,38 @@ public class Server : IDisposable
         if (model is not null)
             await EnsureModelFilesAsync(model);
 
-        Launch(model);
-        await WaitUntilReadyAsync();
+        // V-cache quantization step-up ladder. A quantized V cache requires Flash Attention, which
+        // some models/backends can't use (e.g. hybrid linear-attention models on Metal). Start at the
+        // requested V quant and step toward less compression (q4_0 → q8_0 → f16) until the server
+        // boots; f16 needs no Flash Attention, so it always succeeds. K stays at its configured quant.
+        int[] vLadder = new[] { 4, 8, 16 }.Where(q => q >= KvCacheQuantV).DefaultIfEmpty(16).ToArray();
+        int bootedV = vLadder[^1];
+
+        for (int i = 0; i < vLadder.Length; i++)
+        {
+            if (i > 0)
+            {
+                Log.LogWarning("[{Server}] Startup failed with V cache {Prev} — stepping up to {Next}...",
+                    Name, KvQuantLabel(vLadder[i - 1]), KvQuantLabel(vLadder[i]));
+                KillProcess();
+                Status = ServerStatus.Starting;
+            }
+
+            try
+            {
+                Launch(model, vQuantOverride: vLadder[i]);
+                await WaitUntilReadyAsync();
+                bootedV = vLadder[i];
+                break;                                          // booted on this rung
+            }
+            catch (Exception) when (i < vLadder.Length - 1)
+            {
+                // not the last rung — loop steps up to the next, less-compressed V quant
+            }
+        }
 
         Status = ServerStatus.Online;
-        Log.LogInformation("[{Server}] Online (PID {Pid}).", Name, Pid);
+        Log.LogInformation("[{Server}] Online (PID {Pid}, K{K}/V {V}).", Name, Pid, KvQuantLabel(KvCacheQuantK), KvQuantLabel(bootedV));
     }
 
     public void Stop()
@@ -95,6 +128,16 @@ public class Server : IDisposable
         Status = ServerStatus.Stopping;
         Log.LogInformation("[{Server}] Stopping...", Name);
 
+        KillProcess();
+        ActiveModel = null;
+        Status = ServerStatus.Offline;
+        Log.LogInformation("[{Server}] Stopped.", Name);
+    }
+
+    /// <summary>Terminate and dispose the llama-server process without touching server state
+    /// (Status/ActiveModel) — used by Stop() and by the startup KV-fallback retry.</summary>
+    private void KillProcess()
+    {
         if (_process is not null && !_process.HasExited)
         {
             _process.Kill(entireProcessTree: true);
@@ -104,9 +147,6 @@ public class Server : IDisposable
         _process?.Dispose();
         _process = null;
         Pid = -1;
-        ActiveModel = null;
-        Status = ServerStatus.Offline;
-        Log.LogInformation("[{Server}] Stopped.", Name);
     }
 
     public async Task RestartAsync()
@@ -133,7 +173,7 @@ public class Server : IDisposable
     {
         await EnsureFileAsync(model.DownloadLink, model.Path);
 
-        if (!string.IsNullOrWhiteSpace(model.MmprojDownloadLink))
+        if (VisionEnabled && !string.IsNullOrWhiteSpace(model.MmprojDownloadLink))
             await EnsureFileAsync(model.MmprojDownloadLink, model.MmprojPath);
     }
 
@@ -198,10 +238,13 @@ public class Server : IDisposable
 
     // ── Process management ────────────────────────────────────────────────────
 
-    private void Launch(Model? model)
+    private void Launch(Model? model, int? vQuantOverride = null)
     {
         string kvQuantK = KvQuantLabel(KvCacheQuantK);
-        string kvQuantV = KvQuantLabel(KvCacheQuantV);
+        // V quant comes from the startup step-up ladder (see StartAsync): a quantized V cache needs
+        // Flash Attention, so when a model can't use FA the ladder steps to a less-compressed V until
+        // it boots. vQuantOverride is the rung being attempted; null uses the configured value.
+        string kvQuantV = KvQuantLabel(vQuantOverride ?? KvCacheQuantV);
 
         float temp = model?.Temp ?? 0.6f;
         float topP = model?.TopP ?? 0.95f;
@@ -214,7 +257,7 @@ public class Server : IDisposable
         List<string> args = new()
         {
             model is not null ? $"-m \"{System.IO.Path.Combine(_modelsPath, model.Path)}\"" : "",
-            model?.MmprojDownloadLink is { Length: > 0 }
+            VisionEnabled && model?.MmprojPath is { Length: > 0 }
                 ? $"--mmproj \"{System.IO.Path.Combine(_modelsPath, model.MmprojPath)}\""
                 : "",
             mtp ? "--spec-type draft-mtp --spec-draft-n-max 3" : "",
@@ -225,7 +268,7 @@ public class Server : IDisposable
             jinja ? "--jinja" : "",
             $"-np {ParallelSlots} -ngl 99 --port {Port}",
             "--host 127.0.0.1",
-            UnifiedCache ? "--cache-reuse 256" : "",
+            UnifiedCache ? "--kv-unified --cache-reuse 256" : "",
         };
 
         args.RemoveAll(string.IsNullOrWhiteSpace);

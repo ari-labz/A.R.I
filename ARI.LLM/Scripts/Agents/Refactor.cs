@@ -19,7 +19,7 @@ internal class Refactor : Agent
     private const int CLUSTER_CALL_LIMIT    = 20;
     private const int EXCERPT_LENGTH        = 300;
 
-    internal Refactor() { }
+    public Refactor() { }
 
     /// <summary>
     /// Incremental pass: processes dirty notes + their 1-hop references, expanded to full folders.

@@ -54,8 +54,25 @@ public class Model
     [JsonIgnore]
     public bool Downloaded { get; set; }
 
+    [JsonIgnore]
+    public long FileSizeBytes { get; set; }
+
+    [JsonIgnore]
+    public GgufReader.KvArchParams? KvArch { get; set; }
+
     public void RefreshDownloadedState(string modelsPath)
     {
-        Downloaded = File.Exists(System.IO.Path.Combine(modelsPath, Path));
+        var fullPath = System.IO.Path.Combine(modelsPath, Path);
+        Downloaded = File.Exists(fullPath);
+        if (Downloaded)
+        {
+            FileSizeBytes = new FileInfo(fullPath).Length;
+            KvArch = GgufReader.TryRead(fullPath);
+        }
+        else
+        {
+            FileSizeBytes = 0;
+            KvArch = null;
+        }
     }
 }

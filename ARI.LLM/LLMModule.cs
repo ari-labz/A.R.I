@@ -51,6 +51,23 @@ public class LLMModule : ILLMModule, IDisposable
         ReadCommentHandling = JsonCommentHandling.Skip
     };
 
+    /// <summary>Case-insensitive property lookup so the agent loader tolerates either PascalCase
+    /// (Name/Enabled, as persisted) or the camelCase of the [JsonPropertyName] attributes —
+    /// matching the case-insensitive behaviour of <see cref="JsonOptions"/> used for deserialization.</summary>
+    private static bool TryGetPropCI(JsonElement el, string name, out JsonElement value)
+    {
+        if (el.ValueKind == JsonValueKind.Object)
+            foreach (JsonProperty p in el.EnumerateObject())
+                if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = p.Value;
+                    return true;
+                }
+
+        value = default;
+        return false;
+    }
+
     public LLMModule(IReadOnlyList<Server> servers, string agentsJsonPath, BrainConfig? brainConfig = null, ILoggerFactory? loggerFactory = null)
     {
         _logger = loggerFactory is not null
@@ -73,11 +90,11 @@ public class LLMModule : ILLMModule, IDisposable
         if (File.Exists(agentsJsonPath))
         {
             using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(agentsJsonPath), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
-            if (doc.RootElement.TryGetProperty("Agents", out JsonElement arr))
+            if (TryGetPropCI(doc.RootElement, "Agents", out JsonElement arr) && arr.ValueKind == JsonValueKind.Array)
                 foreach (JsonElement el in arr.EnumerateArray())
-                    if (el.TryGetProperty("name", out JsonElement nameEl) && nameEl.GetString() is string name)
-                        if (el.TryGetProperty("enabled", out JsonElement en) && en.GetBoolean())
-                            rawAgents[name] = el;
+                    if (TryGetPropCI(el, "name", out JsonElement nameEl) && nameEl.GetString() is string name)
+                        if (TryGetPropCI(el, "enabled", out JsonElement en) && en.GetBoolean())
+                            rawAgents[name] = el.Clone();   // Clone: JsonElements must outlive the using-disposed JsonDocument
         }
 
         T Deserialize<T>(JsonElement el) where T : Agent
@@ -96,7 +113,7 @@ public class LLMModule : ILLMModule, IDisposable
         {
             context = Deserialize<Context>(contextEl);
             int memoryLimit = rawAgents.TryGetValue("Dialogue", out JsonElement dlgEl)
-                ? JsonSerializer.Deserialize<Dialogue>(dlgEl.GetRawText(), JsonOptions)!.ShortTermMemoryLimit
+                ? JsonSerializer.Deserialize<Dialogue>(dlgEl.GetRawText(), JsonOptions)!.ShortTermMemoryLimit ?? 25
                 : 25;
             context.Init(memoryLimit);
             _logger.LogInformation("Context tracker is active.");
@@ -257,6 +274,16 @@ public class LLMModule : ILLMModule, IDisposable
     {
         _servers.Clear();
         _servers.AddRange(servers);
+    }
+
+    public void AddServer(Server server) => _servers.Add(server);
+
+    public void RemoveServer(Guid id) => _servers.RemoveAll(s => s.Id == id);
+
+    public void UpdateServer(Server updated)
+    {
+        int idx = _servers.FindIndex(s => s.Id == updated.Id);
+        if (idx >= 0) _servers[idx] = updated;
     }
 
     public async Task RestartAllServersAsync()

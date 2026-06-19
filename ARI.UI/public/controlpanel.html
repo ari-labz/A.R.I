@@ -327,6 +327,14 @@ html, body {
               <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-dim);margin-top:2px;padding:0 1px;">
                 <span>4K</span><span>8K</span><span>16K</span><span>32K</span><span>64K</span><span>128K</span><span>256K</span>
               </div>
+              <label style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;cursor:pointer;">
+                <span style="font-size:13px;color:var(--text);font-weight:400;">Unified cache</span>
+                <span style="position:relative;display:inline-block;width:44px;height:26px;flex-shrink:0;">
+                  <input type="checkbox" id="srv-f-unified" style="opacity:0;width:0;height:0;position:absolute;">
+                  <span id="srv-f-unified-track" style="position:absolute;inset:0;border-radius:13px;background:#d1d5db;transition:background .2s;"></span>
+                  <span id="srv-f-unified-thumb" style="position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .2s;"></span>
+                </span>
+              </label>
             </div>
             <div style="display:flex;gap:12px;">
               <label class="vs-label" style="flex:1;">KV quant K<select id="srv-f-kvk" class="vs-input"><option value="4">Q4</option><option value="8">Q8</option><option value="16">F16</option></select></label>
@@ -337,10 +345,6 @@ html, body {
               <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:var(--text);">
                 <input type="checkbox" id="srv-f-boot" style="width:15px;height:15px;accent-color:var(--accent,#223742);">
                 Auto-start on boot
-              </label>
-              <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:var(--text);">
-                <input type="checkbox" id="srv-f-unified" style="width:15px;height:15px;accent-color:var(--accent,#223742);">
-                Unified cache
               </label>
             </div>
           </div>
@@ -1084,6 +1088,15 @@ const srvFKvv        = document.getElementById('srv-f-kvv');
 const srvFModel      = document.getElementById('srv-f-model');
 const srvFBoot       = document.getElementById('srv-f-boot');
 const srvFUnified    = document.getElementById('srv-f-unified');
+const srvFUnifiedTrack = document.getElementById('srv-f-unified-track');
+const srvFUnifiedThumb = document.getElementById('srv-f-unified-thumb');
+const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#223742';
+function syncUnifiedToggle() {
+    const on = srvFUnified.checked;
+    srvFUnifiedTrack.style.background = on ? accent : '#d1d5db';
+    srvFUnifiedThumb.style.transform  = on ? 'translateX(18px)' : 'translateX(0)';
+}
+srvFUnified.addEventListener('change', () => { syncUnifiedToggle(); updateSrvRamEstimate(); });
 
 const CTX_STEPS = [4096, 8192, 16384, 32768, 65536, 131072, 262144];
 
@@ -1119,40 +1132,32 @@ function fmtRamMb(mb) {
 }
 
 function updateSrvRamEstimate() {
-    const ctx    = ctxTextToTokens(srvFCtx.value) ?? 32768;
-    const slots  = Math.max(1, parseInt(srvFSlots.value, 10) || 1);
-    const kBits  = parseInt(srvFKvk.value, 10) || 4;
-    const vBits  = parseInt(srvFKvv.value, 10) || 4;
-
-    // KV cache: ctx * slots * bytes_per_token
-    // bytes_per_token = (n_layers * n_kv_heads * head_dim * (K+V)) / n_tokens_per_seq
-    // Approximation using model params: for a dense model with P billion params,
-    // typical arch has n_layers*n_kv_heads*head_dim ≈ P*1e9 / (4*d_model) and d_model ≈ sqrt(P*1e9/12)
-    // Simpler: bytes_per_token ≈ totalP_B * 1e9 * (kBits+vBits)/8 / (32*128*4096) for a 7B-like arch
-    // For a 7B: 32 layers, 32 kv_heads, 128 head_dim → 32*32*128 = 131072 elements per token per K or V
-    // At f16: 131072 * 2 bytes * 2 (K+V) = 524288 bytes/token ≈ 0.5 MB/K-tokens
-    // Scale by (totalP / 7) and by quant bits / 16
+    const ctx     = ctxTextToTokens(srvFCtx.value) ?? 32768;
+    const slots   = Math.max(1, parseInt(srvFSlots.value, 10) || 1);
+    const kBits   = parseInt(srvFKvk.value, 10) || 4;
+    const vBits   = parseInt(srvFKvv.value, 10) || 4;
+    // Unified cache shares one KV pool across all slots — only pay for 1 slot's worth.
+    const kvSlots = srvFUnified.checked ? 1 : slots;
 
     const modelName = srvFModel.value;
     const modelObj  = srvAllModels.find(m => m.name === modelName);
-    const weightsMb = modelObj?.modelSize ?? 0;
+    const weightsMb = modelObj?.fileSizeMb ?? 0;
 
-    // Parse param count from model filename
-    let totalP = null;
-    if (modelObj) {
-        const m = (modelObj.name || '').replace(/\.gguf$/i, '').match(/(?<![Aa])(\d+(?:\.\d+)?)B/);
-        if (m) totalP = parseFloat(m[1]);
-    }
-    // Fallback: guess from weight size if no B-param tag
-    // At ~Q4 (4.5 bpw): weightsMb ≈ totalP * 1e9 * 4.5/8 / 1e6 → totalP ≈ weightsMb * 8 / (4.5 * 1000)
-    if (totalP === null && weightsMb > 0) totalP = weightsMb * 8 / (4.5 * 1000);
-
+    // KV cache: n_layers * n_kv_heads * head_dim * 2 (K+V) * bytes_per_element * ctx * slots
+    // Use exact arch params from GGUF when available; fall back to param-count heuristic.
     let kvMb = null;
-    if (totalP !== null) {
-        // Scale from 7B reference: 7B @ f16 → ~0.5 MB/K-tokens/slot per full-precision
-        const kvPerKtokPerSlotF16 = (totalP / 7) * 0.5; // MB per 1K tokens per slot at f16
-        const quantScale = (kBits + vBits) / 32; // f16 = 16 bits per element, 32 total
-        kvMb = (ctx / 1024) * slots * kvPerKtokPerSlotF16 * quantScale;
+    const arch = modelObj?.kvArch;
+    if (arch) {
+        const bytesPerElem = (kBits + vBits) / 8 / 2; // avg of K and V quant in bytes
+        const bytesPerToken = arch.nLayers * arch.nKvHeads * arch.headDim * 2 * bytesPerElem;
+        kvMb = (bytesPerToken * ctx * kvSlots) / (1024 * 1024);
+    } else if (weightsMb > 0) {
+        // Fallback: estimate param count from file size at ~4.5 bpw, then use 7B MHA reference
+        // 7B dense MHA (32L × 32kv × 128d): 524288 bytes/token at f16 = 500 MB/K-tokens
+        const totalP = weightsMb * 8 / (4.5 * 1000);
+        const kvPerKtokPerSlotF16 = (totalP / 7) * 500;
+        const quantScale = (kBits + vBits) / 32;
+        kvMb = (ctx / 1024) * kvSlots * kvPerKtokPerSlotF16 * quantScale;
     }
 
     const ramEl   = document.getElementById('srv-ram-estimate');
@@ -1411,7 +1416,7 @@ function renderServerCards(servers) {
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 20px;font-size:12px;color:var(--text-dim);margin-bottom:14px;">
                 <div>Port <span style="color:var(--text);font-weight:600;">${s.port}</span></div>
                 <div>Slots <span style="color:var(--text);font-weight:600;">${s.parallelSlots}</span></div>
-                <div>Context <span style="color:var(--text);font-weight:600;">${(s.contextSize/1024).toFixed(0)}K</span></div>
+                <div>Context <span style="color:var(--text);font-weight:600;">${(s.contextSize/1024).toFixed(0)}K${s.unifiedCache ? ' <span style="color:#0369a1;">(unified)</span>' : ''}</span></div>
                 <div>KV <span style="color:var(--text);font-weight:600;">K${s.kvCacheQuantK}/V${s.kvCacheQuantV}</span></div>
                 <div>Active model <span style="color:var(--text);font-weight:600;">${activeModel}</span></div>
                 <div>Startup model <span style="color:var(--text);font-weight:600;">${startupModel}</span></div>
@@ -1483,7 +1488,7 @@ function openSrvModal(server) {
     srvFKvk.value   = server?.kvCacheQuantK ?? 4;
     srvFKvv.value   = server?.kvCacheQuantV ?? 4;
     srvFBoot.checked    = server?.autoStart    ?? true;
-    srvFUnified.checked = server?.unifiedCache ?? false;
+    srvFUnified.checked = server?.unifiedCache ?? false; syncUnifiedToggle();
     populateSrvModelSelect(server?.currentModelName ?? '');
     srvModalOverlay.style.display = 'flex';
     srvFName.focus();
@@ -1614,7 +1619,7 @@ function renderModelCards(data) {
         if (m.isStartup)    badges += '<span class="mdl-badge startup">Startup</span>';
         if (!m.downloaded)  badges += '<span class="mdl-badge notdl">Not downloaded</span>';
 
-        const sizeStr = fmtSize(m.modelSize);
+        const sizeStr = fmtSize(m.fileSizeMb);
 
         // Footer buttons
         let footer = `<span class="mdl-save-status" style="font-size:12px;color:var(--text-dim);"></span><button class="mdl-delete-btn" style="margin-left:auto;font-size:12px;color:#dc2626;border:1px solid #fca5a5;background:none;border-radius:4px;padding:3px 10px;cursor:pointer;">Remove</button>`;

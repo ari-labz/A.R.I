@@ -2,7 +2,7 @@ namespace ARI.LLM;
 
 internal class Classifier : Agent
 {
-    internal Classifier() { }
+    public Classifier() { }
 
     internal async Task<string> Classify(string message, CancellationToken ct = default)
     {
