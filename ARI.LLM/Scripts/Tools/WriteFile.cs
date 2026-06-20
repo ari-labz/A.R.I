@@ -14,7 +14,7 @@ internal sealed class WriteFile : FileTool
         function = new
         {
             name        = "write_file",
-            description = "Write or create a file. Overwrites the file if it already exists and creates any missing parent directories. Prefer edit_file for targeted changes to existing files.",
+            description = "Create a NEW file, or deliberately replace an entire existing file's contents. Overwrites the whole file and creates missing parent directories. Do NOT use write_file to change an existing file — adding a method, editing lines, or fixing call sites is always edit_file. In particular, if edit_file feels stuck (line numbers shifted, an edit didn't seem to land), the fix is to re-read the file for fresh line numbers and use search_files to find exact call sites — NOT to fall back to write_file. Rewriting a whole existing file from memory reliably drops or duplicates code and is never the right escape hatch.",
             parameters  = new
             {
                 type       = "object",
@@ -35,6 +35,11 @@ internal sealed class WriteFile : FileTool
             using JsonDocument doc = JsonDocument.Parse(argsJson);
             string relPath = (doc.RootElement.GetProperty("path").GetString()    ?? "").Trim('"', '\'', ' ');
             string content = doc.RootElement.GetProperty("content").GetString() ?? "";
+            // Guard: history compaction renders earlier write/edit payloads as "[content omitted]" /
+            // "[omitted]". A weak model can copy that placeholder back as the real content and erase the
+            // file. Never write a redaction placeholder.
+            if (IsRedactionPlaceholder(content))
+                return $"Refused: the content was a placeholder (\"{content.Trim()}\"), not real file content. That text appears in the conversation only because an earlier payload was hidden to save space — it is not the file. Re-send the full, literal content you want written to {relPath}.";
             string? absPath = Resolve(relPath);
             if (absPath is null)
                 return "Access denied: path traversal is not allowed.";

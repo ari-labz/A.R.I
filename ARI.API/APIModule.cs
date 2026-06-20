@@ -205,6 +205,14 @@ public class APIModule : IAsyncDisposable
             bool isLocalhost = remoteIp != null && (System.Net.IPAddress.IsLoopback(remoteIp) || remoteIp.ToString() == "::1");
             if (isLocalhost && !_online) { await next(); return; }
 
+            // Localhost eval harness: static token in X-Eval-Token header bypasses Google auth.
+            if (isLocalhost && !string.IsNullOrEmpty(config.EvalToken)
+                && ctx.Request.Headers.TryGetValue("X-Eval-Token", out var evalHeader)
+                && evalHeader.ToString() == config.EvalToken)
+            {
+                await next(); return;
+            }
+
             bool isAuthPath = ctx.Request.Path == "/auth/login"
                 || ctx.Request.Path == "/auth/callback"
                 || ctx.Request.Path.StartsWithSegments("/signin-google")

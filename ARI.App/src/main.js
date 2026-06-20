@@ -272,10 +272,10 @@ ipcMain.handle("fs:search", (_e, root, pattern, searchPath, glob, ignoreCase) =>
     return searchFiles(root, pattern, searchPath, glob, ignoreCase)
 })
 
-ipcMain.handle("fs:edit", (_e, root, filePath, oldString, newString, options) => {
+ipcMain.handle("fs:edit", (_e, root, filePath, newString, options) => {
     const n = options && Array.isArray(options.edits) ? options.edits.length : 1
     log.info(`fs:edit  root=${root}  path=${filePath}  edits=${n}`)
-    return editFile(root, filePath, oldString, newString, options)
+    return editFile(root, filePath, newString, options)
 })
 
 ipcMain.handle("fs:run", (_e, root, command) => {

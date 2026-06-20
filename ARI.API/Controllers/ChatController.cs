@@ -565,7 +565,8 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                 string escaped = accumulated.Replace("\n", "\\n").Replace("\r", "");
                 await Response.WriteAsync($"data: {escaped}\n\n", cancellationToken);
                 await Response.Body.FlushAsync(cancellationToken);
-            }, cancellationToken, messageAttachments: msgAtts, threadAttachments: threadAtts);
+            }, cancellationToken, messageAttachments: msgAtts, threadAttachments: threadAtts,
+               localPath: string.IsNullOrWhiteSpace(body.LocalPath) ? null : body.LocalPath);
             await Response.WriteAsync("data: [DONE]\n\n", cancellationToken);
         }
         catch (OperationCanceledException)
@@ -581,7 +582,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     }
 }
 
-public record StreamRequest(string Prompt);
+public record StreamRequest(string Prompt, string? LocalPath = null);
 public record CommandRequest(string? ThreadKey, string Input);
 public record NewThreadRequest(string? ProjectId);
 public record InjectContextRequest(string Name, string Content);

@@ -58,8 +58,8 @@ internal sealed class ReadFile : FileTool
 
             // Cap whole-file reads so a single read can't blow the context window.
             // Targeted reads (start_line/end_line supplied) are not capped — the caller chose the range.
-            const int READ_MAX_LINES = 400;
-            const int READ_MAX_CHARS = 20000;
+            const int READ_MAX_LINES = 800;
+            const int READ_MAX_CHARS = 48000;
             bool capped = false;
             if (!hasStart && !hasEnd && totalLines > 0)
             {

@@ -8,6 +8,7 @@ public class APIConfig
     public int Port { get; init; } = 5000;
     public string LogPath { get; init; } = "";
     public GoogleAuthConfig Google { get; init; } = new();
+    public string EvalToken { get; init; } = "";
 }
 
 public class GoogleAuthConfig

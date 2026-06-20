@@ -6,6 +6,7 @@
     {
       "Enabled": true,
       "Port": 5074,
+      "EvalToken": "ari-eval-local-2026",
       "Google": {
         "ClientId": "886723798260-eapta34u4n4bug81ut10bq2399leu9vn.apps.googleusercontent.com",
         "ClientSecret": "[REDACTED]",

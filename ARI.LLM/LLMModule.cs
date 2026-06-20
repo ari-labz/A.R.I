@@ -79,7 +79,7 @@ public class LLMModule : ILLMModule, IDisposable
         if (loggerFactory is not null)
         {
             Shared.InitialiseLogger(loggerFactory, "ARI.LLM");
-            ILogger serverLogger = loggerFactory.CreateLogger("ARI.Brain");
+            ILogger serverLogger = loggerFactory.CreateLogger("ARI.LLM");
             foreach (Server s in servers)
                 s.SetLogger(serverLogger);
         }

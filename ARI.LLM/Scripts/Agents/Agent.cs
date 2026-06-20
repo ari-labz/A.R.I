@@ -26,6 +26,10 @@ public abstract class Agent
     [JsonPropertyName("presencePenalty")]  public double? PresencePenalty  { get; init; }
     [JsonPropertyName("frequencyPenalty")]  public double? FrequencyPenalty  { get; init; }
     [JsonPropertyName("maxContextTokens")] public int     MaxContextTokens  { get; init; }
+    // When true, send tools via the native OpenAI `tools` field and parse native tool_calls, instead
+    // of the text protocol (BuildToolCatalog + ParseTextCalls). Native relies on llama.cpp's --jinja
+    // chat-template tool parsing (qwen3_coder format) being reliable for this model/build.
+    [JsonPropertyName("nativeTools")]   public bool    NativeTools   { get; init; }
 
     // ── Runtime-only ─────────────────────────────────────────────────────────
     [JsonIgnore] public string Endpoint { get; internal set; } = "";
@@ -47,6 +51,12 @@ public abstract class Agent
     private const double COMPACT_RATIO       = 0.6;
     private const int    COMPACT_KEEP_RECENT = 3;
     private const int    MAX_DEGRADE_EVENTS  = 5;
+    // After this many reads of the SAME file in one turn, every further read is handed back with a firm
+    // "stop verifying" directive. Set above a legitimate preview+few-ranges+one-post-edit-check (~4-5) so
+    // normal work is never nagged, but well under the 20+ reads a distrust/brace-hallucination loop produces.
+    private const int    READ_LOOP_CEILING   = 6;
+    // Stop the turn after this many "[omitted]" placeholder edit/write refusals — the copy-forward loop.
+    private const int    MAX_PLACEHOLDER_REFUSALS = 3;
     private const int    DEFAULT_MEMORY_LIMIT = 25;
     private const string ATTACHMENT_DIVIDER  = "-------------------";
 
@@ -298,6 +308,11 @@ public abstract class Agent
         int             consecutiveFallbacks = 0;
         List<string>    toolResults          = new();
         Dictionary<string, int> readCounts   = new(StringComparer.OrdinalIgnoreCase);
+        // Per-file read tally for the WHOLE turn, deliberately NOT cleared when the file is edited (unlike
+        // readCounts, which is reset on edit so a post-edit re-read returns fresh content). Used only to
+        // detect a re-read loop: the model edits a file, distrusts the result, re-reads, perceives a phantom
+        // structural problem, re-reads again — each edit resets readCounts so the per-range dedup never fires.
+        Dictionary<string, int> fileReadTotals = new(StringComparer.OrdinalIgnoreCase);
         HashSet<string>         editedFiles  = new(StringComparer.OrdinalIgnoreCase);
         HashSet<string>         earlyEditAbortedOnce = new(StringComparer.OrdinalIgnoreCase);
         int                     buildState   = 0;
@@ -312,6 +327,11 @@ public abstract class Agent
         HashSet<string>         turnEditPaths = new(StringComparer.OrdinalIgnoreCase);
         bool                    todoNudged = false;
         static string NormKey(string p) => System.IO.Path.GetFileName(p.Trim('"', '\'', ' ', '\\'));
+        // Dedup key for run_command: the extracted command text with whitespace collapsed, so two identical
+        // commands match even when the text-protocol parse wraps the args JSON differently each time. Prefixed
+        // "cmd:" so these entries can be cleared on an edit (a rebuild after a fix must re-run, not dedup).
+        string NormCmd(string argsJson) => "cmd:" + System.Text.RegularExpressions.Regex.Replace(
+            (ToolCallParser.TryExtractJsonString(argsJson, "command") ?? argsJson).Trim(), @"\s+", " ");
         static bool IsBuildCmd(string c) => System.Text.RegularExpressions.Regex.IsMatch(c,
             @"(?i)\b(dotnet\s+(build|publish|msbuild)|msbuild|make|cargo\s+build|go\s+build|npm\s+run\s+build|yarn\s+build|tsc)\b");
         static bool IsTestCmd(string c) => System.Text.RegularExpressions.Regex.IsMatch(c,
@@ -338,6 +358,9 @@ public abstract class Agent
         }
         List<(int Index, string CallId, string Name)> toolResultSlots = new();
         int degradeEvents = 0;
+        // Safety net for the placeholder copy-loop: each time edit_file/write_file refuses an "[omitted]"
+        // placeholder payload, count it; after a few in one turn we stop rather than let it spin to a runaway.
+        int placeholderRefusals = 0;
         void Degrade()
         {
             if (++degradeEvents >= MAX_DEGRADE_EVENTS)
@@ -383,11 +406,14 @@ public abstract class Agent
             object[]? toolSchemas    = !toolsExhausted && thread.tools.Count > 0
                                         ? thread.tools.Values.Select(t => t.Schema).ToArray()
                                         : null;
-            // Text tool protocol (see BuildToolCatalog): advertise tools as text in the system prompt and
-            // parse the model's <tool_call> XML ourselves, instead of sending the native `tools` field —
-            // which makes llama.cpp 9430 intermittently half-parse Qwen3.6's XML and leak the tail into the
-            // arguments (the "runaway"). Text in, text out, parsed deterministically by ParseTextCalls.
-            bool   textTools   = toolSchemas is not null;
+            // Tool protocol. Text (default): advertise tools as text in the system prompt and parse the
+            // model's <tool_call> XML ourselves (BuildToolCatalog + ParseTextCalls) — robust against the
+            // llama.cpp 9430 runaway where the native parser half-parses Qwen3.6's XML and leaks the tail
+            // into the arguments. Native (NativeTools=true): send the OpenAI `tools` field and let the
+            // server's --jinja qwen3_coder template parse tool_calls. The text-call parser still runs as a
+            // fallback in native mode, so a leak degrades rather than corrupts.
+            bool   nativeTools = toolSchemas is not null && NativeTools;
+            bool   textTools   = toolSchemas is not null && !NativeTools;
             string toolCatalog = textTools ? BuildToolCatalog(toolSchemas!) : "";
 
             messages[0] = new { role = "system", content = baseSystem + toolCatalog + RenderDynamicContextBlock(thread) + thinkSuffix };
@@ -435,11 +461,11 @@ public abstract class Agent
                 body["chat_template_kwargs"] = new { enable_thinking = true, thinking_budget = budget };
             }
 
-            // No native `tools` field — tools are advertised as text (textTools / BuildToolCatalog). The
-            // model emits <tool_call> XML which we parse, and may batch several calls in one turn before
-            // stopping naturally (<|im_end|>). We deliberately do NOT set a "</tool_call>" stop: that would
-            // cut generation after the FIRST call and kill batching — the main lever against TTFT, since
-            // every extra turn re-pays prefill. The runaway guard / max_tokens bound any run-on.
+            // Native mode: hand the server the OpenAI `tools` field so its --jinja template formats and
+            // parses tool calls. Text mode deliberately omits it (tools are in the system prompt instead)
+            // and sets no "</tool_call>" stop, so the model can batch several calls per turn before
+            // stopping naturally (<|im_end|>) — the main lever against TTFT. Guards bound any run-on.
+            if (nativeTools)             body["tools"] = toolSchemas;
             if (Slot.HasValue)           body["id_slot"] = Slot.Value;
 
             string             json    = JsonSerializer.Serialize(body);
@@ -489,6 +515,7 @@ public abstract class Agent
             (string Id, string Name, string Args, string Error)? earlyAbort = null;
             HashSet<int> precheckedCalls = new();
             int? runawayCall = null;   // a native call whose args ran away (model looping / leaking text-format markers)
+            bool contentRunaway = false; // text content degenerated into a repeated-character spiral (e.g. backslashes)
 
             DateTime lastProgress = DateTime.UtcNow;
             string? line;
@@ -533,7 +560,25 @@ public abstract class Agent
                             Name, thread.Key, pendingCalls.Count,
                             string.Join(",", pendingCalls.Values.Select(c => c.Name)),
                             argChars, responseBuilder.Length, tail.Replace("\n", "\\n"));
+
+                        // Runaway-content guard: a weak model can degenerate into a character spiral (e.g. an
+                        // escalating backslash/quote-escape mess) that never forms a valid tool call and would
+                        // run to the token limit. If one non-whitespace character dominates the recent output,
+                        // the generation is garbage — stop the stream and end the turn.
+                        if (responseBuilder.Length > 2000)
+                        {
+                            string recent = responseBuilder.ToString();
+                            recent = recent.Length > 600 ? recent[^600..] : recent;
+                            (char domChar, double ratio) = DominantChar(recent);
+                            if (ratio > 0.6 && !char.IsWhiteSpace(domChar))
+                            {
+                                Shared.Logger.LogWarning("[{Agent}] ({Thread}) content runaway: '{Char}' is {Pct}% of recent output — aborting generation.",
+                                    Name, thread.Key, domChar == '\\' ? "\\\\" : domChar.ToString(), (int)(ratio * 100));
+                                contentRunaway = true;
+                            }
+                        }
                     }
+                    if (contentRunaway) break;
 
                     if (delta.TryGetProperty("reasoning_content", out JsonElement reasoning))
                     {
@@ -614,7 +659,7 @@ public abstract class Agent
                                             {
                                                 earlyEditAbortedOnce.Add(ekey);
                                                 earlyAbort = (call.Id, call.Name, call.Args.ToString(),
-                                                    $"[System: Aborted before the edit completed — you have not read {editPath} this turn, so any old_string would be guessed and the edit would fail. Call preview_file then read_file (with start_line/end_line) on {editPath} first, then edit it.]");
+                                                    $"[System: Aborted before the edit completed — you have not read {editPath} this turn, so you don't have its current line numbers and the edit would target the wrong lines. Call preview_file then read_file (with start_line/end_line) on {editPath} first, then edit it.]");
                                                 Shared.Logger.LogWarning("[{Agent}] ({Thread}) Streaming abort: edit_file on unread file '{File}' — generation cancelled mid-stream.", Name, thread.Key, editPath);
                                                 break;
                                             }
@@ -691,6 +736,16 @@ public abstract class Agent
                     Shared.Logger.LogInformation("[{Agent}] ({Thread}) ← content: {Snip}",
                         Name, thread.Key, (snip.Length > 400 ? snip[..400] + "…" : snip).Replace("\n", "\\n"));
                 }
+            }
+
+            // The stream degenerated into a character spiral. Discard the garbage and end the turn —
+            // there's no salvageable tool call, and continuing would just repeat the spiral.
+            if (contentRunaway)
+            {
+                responseBuilder.Clear();
+                contentBuilder.Append("\n\n_Stopped — the model's output ran away repeating characters._");
+                if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                break;
             }
 
             if (earlyAbort is not null)
@@ -870,6 +925,7 @@ public abstract class Agent
                 foreach (var (callIndex, call) in pendingCalls)
                 {
                     string result;
+                    bool   blindFirstRead = false; // read_file on a file never previewed or read this turn
 
                     if (call.Name is "preview_file")
                     {
@@ -897,11 +953,39 @@ public abstract class Agent
                         {
                             using JsonDocument rdoc = JsonDocument.Parse(call.Args.ToString());
                             string rpath = NormKey(rdoc.RootElement.GetProperty("path").GetString() ?? "");
-                            readCounts.TryGetValue(rpath, out int rc);
-                            readCounts[rpath] = rc + 1;
+                            // Key by path+range so different line ranges of the same file are each allowed once.
+                            string startStr  = rdoc.RootElement.TryGetProperty("start_line", out var rsl) ? rsl.GetRawText() : "0";
+                            string endStr    = rdoc.RootElement.TryGetProperty("end_line",   out var rel) ? rel.GetRawText() : "0";
+                            string rangeKey  = $"{rpath}:{startStr}-{endStr}";
+                            readCounts.TryGetValue(rangeKey, out int rc);
+                            readCounts[rangeKey] = rc + 1;
+                            // Also record that the path was read at all (used by the edit pre-check).
+                            readCounts.TryGetValue(rpath, out int pathRc);
+                            readCounts[rpath] = pathRc + 1;
+                            // Turn-level tally that edits do NOT reset — drives the re-read-loop circuit breaker below.
+                            fileReadTotals.TryGetValue(rpath, out int fileTotalRc);
+                            fileReadTotals[rpath] = fileTotalRc + 1;
+                            // Soft nudge: first read of a file that was never previewed this turn. Encourages
+                            // preview -> read -> edit without blocking (the read still runs).
+                            blindFirstRead = pathRc == 0 && !commandCache.ContainsKey($"preview_file:{rpath}");
                             if (rc >= 1)
                             {
-                                result = $"[System: You have already read {rpath} this turn. Do not read it again — use the content you already have. If you need a specific section, use search_files to find the line numbers, then read_file with start_line/end_line.]";
+                                // Duplicate read of the same range. Hand back the cached content (not a bare
+                                // refusal) so the model is never "stuck waiting on a file" — weaker models read
+                                // a "you already read this" nag as a cache error and loop on it. Lead with a
+                                // firm directive to move to editing.
+                                string cachedRead = commandCache.TryGetValue($"read_file:{rangeKey}", out var rcv) ? rcv.Result : "";
+                                // Escalate once this file has been read many times overall this turn (the dedup
+                                // intercepts same-range re-reads before the post-execution circuit breaker below,
+                                // so without this a multi-edit re-orientation loop just keeps getting the soft nag
+                                // and eventually loop-breaks unfinished). Point to the real recovery path: locate
+                                // remaining call sites with search_files (exact line numbers) and edit each.
+                                if (fileReadTotals[rpath] >= READ_LOOP_CEILING)
+                                    result = $"[System: You have read {rpath} {fileReadTotals[rpath]} times this turn and are looping. The content has not changed and re-reading will not help. To finish a multi-spot change, call search_files for the symbol (it returns exact current line numbers for every remaining call site), then edit_file each one — do not keep re-reading. If the change is already done, stop and give your summary now.]";
+                                else
+                                    result = string.IsNullOrEmpty(cachedRead)
+                                    ? $"[System: You already have {rpath} lines {startStr}–{endStr} in the context above. This is not a cache error — the content has not changed. Stop re-reading and make your edits now with edit_file (start_line/end_line). To see a different part, read a different range.]"
+                                    : $"[System: You already have these lines — this is not a cache error, the file has not changed. Stop re-reading and make your edits now with edit_file. Repeating the content for reference:]\n\n{cachedRead}";
                                 if (isXmlFallback)
                                 {
                                     xmlResultsMsg!.AppendLine($"--- {call.Name} ---");
@@ -935,7 +1019,7 @@ public abstract class Agent
 
                             if (editedPathsThisBatch.Contains(ekey))
                             {
-                                result = $"[System: edit_file was already applied to {editPath} earlier in this same batch of tool calls. This second edit was NOT applied — its old_string was written against the file's previous content and would fail or corrupt it. Re-read {editPath}, then make the next edit.]";
+                                result = $"[System: edit_file was already applied to {editPath} earlier in this same batch of tool calls. This second edit was NOT applied — its line numbers were computed against the file's previous content and would now target the wrong lines. Re-read {editPath}, then make the next edit.]";
                                 string skipLabel = System.IO.Path.GetFileName(editPath);
                                 contentBuilder.Append($"<!--ari-tool-error:edit_file:{skipLabel}:{ToolCallParser.EscapeLabel(result)}-->");
                                 if (onDelta is not null) await onDelta(contentBuilder.ToString());
@@ -1030,7 +1114,7 @@ public abstract class Agent
 
                         if (call.Name == "run_command")
                         {
-                            string cmdKey = call.Args.ToString().Trim();
+                            string cmdKey = NormCmd(call.Args.ToString());
                             if (commandCache.TryGetValue(cmdKey, out var cached))
                             {
                                 commandCache[cmdKey] = (cached.Result, cached.Count + 1);
@@ -1045,14 +1129,65 @@ public abstract class Agent
                             ? await pre
                             : await tool.Execute(call.Args.ToString());
 
+                        // Placeholder copy-loop safety net: edit_file/write_file refuse an "[omitted]" payload
+                        // with "Refused: ... placeholder". Keeping edit args un-omitted (see TrimArgs) removes
+                        // the usual trigger, but if the model still spirals on a placeholder we stop the turn
+                        // rather than let it run away (it was reaching ~80 steps before this guard).
+                        if ((call.Name is "edit_file" or "write_file")
+                            && result.StartsWith("Refused:", StringComparison.Ordinal)
+                            && result.Contains("placeholder", StringComparison.OrdinalIgnoreCase)
+                            && ++placeholderRefusals >= MAX_PLACEHOLDER_REFUSALS)
+                            throw new LlmRequestFailedException(
+                                $"Stopped: {placeholderRefusals} edits in a row sent a redaction placeholder instead of real code — breaking the copy-forward loop. Any changes already applied are kept.");
+
+                        // Cache the clean read result by path+range so a duplicate read can be served back
+                        // (see the read dedup above) instead of a confusing "already read" refusal.
+                        if (call.Name == "read_file" && !ToolCallParser.IsError(result))
+                        {
+                            try
+                            {
+                                using JsonDocument rcDoc = JsonDocument.Parse(call.Args.ToString());
+                                string rcPath = NormKey(rcDoc.RootElement.GetProperty("path").GetString() ?? "");
+                                string rcS = rcDoc.RootElement.TryGetProperty("start_line", out var a2) ? a2.GetRawText() : "0";
+                                string rcE = rcDoc.RootElement.TryGetProperty("end_line",   out var b2) ? b2.GetRawText() : "0";
+                                commandCache[$"read_file:{rcPath}:{rcS}-{rcE}"] = (result, 1);
+                            }
+                            catch { /* ignore */ }
+                        }
+
+                        if (call.Name == "read_file" && blindFirstRead
+                            && !result.StartsWith("[System:", StringComparison.OrdinalIgnoreCase)
+                            && !ToolCallParser.IsError(result))
+                            result += "\n[System: You read this file without previewing it first. For an unfamiliar file, call preview_file to see its structure and line numbers, then read only the range you need — and use search_files to locate specific call sites instead of scrolling.]";
+
+                        // Re-read-loop circuit breaker. The per-range dedup above is reset whenever the file is
+                        // edited (so a legitimate post-edit re-read returns fresh content), which lets a
+                        // distrust loop slip through: edit -> re-read whole file -> imagine a structural problem
+                        // (this model misreads a column-0 brace as "missing"; C# ignores indentation) -> edit ->
+                        // re-read. fileReadTotals counts every read of a file this turn and edits never reset it,
+                        // so once a single file has been read many times we hand the content back WITH a firm
+                        // directive to stop verifying. Content still flows (never blocked) — only steered.
+                        if (call.Name == "read_file" && !ToolCallParser.IsError(result))
+                        {
+                            try
+                            {
+                                using JsonDocument brkDoc = JsonDocument.Parse(call.Args.ToString());
+                                string brkPath = NormKey(brkDoc.RootElement.GetProperty("path").GetString() ?? "");
+                                fileReadTotals.TryGetValue(brkPath, out int brkTotal);
+                                if (brkTotal >= READ_LOOP_CEILING)
+                                    result += $"\n[System: You have now read this file {brkTotal} times this turn — far more than the work needs. The file is fine: C# ignores indentation, so a brace at column 0 is still a valid, correctly-placed brace, and edit_file already showed you each change landed. Re-reading is not revealing a real problem. STOP re-reading and verifying. If one specific line is genuinely wrong, make a single tight edit to fix exactly that line; otherwise you are finished — write your summary now. Do not read this file again.]";
+                            }
+                            catch { /* ignore */ }
+                        }
+
                         if (call.Name == "run_command")
                         {
-                            string cmdStr     = call.Args.ToString().Trim();
-                            string cmdTrimmed = cmdStr.Trim('"', '\'', ' ');
+                            string cmdKeyW    = NormCmd(call.Args.ToString());
+                            string cmdTrimmed = (ToolCallParser.TryExtractJsonString(call.Args.ToString(), "command") ?? "").Trim('"', '\'', ' ');
                             if (System.Text.RegularExpressions.Regex.IsMatch(cmdTrimmed, @"^\S+\.(csproj|sln|cs|fs|vb|py|ts|tsx|js|jsx|json|xml|yaml|yml|sh|ps1)$"))
                                 result = $"[System: \"{cmdTrimmed}\" is a filename, not a shell command — nothing was executed. Did you mean 'dotnet build {cmdTrimmed}', 'dotnet run --project {cmdTrimmed}', or similar?]";
                             else
-                                commandCache[cmdStr] = (result, 1);
+                                commandCache[cmdKeyW] = (result, 1);
 
                             string cmdLine = ToolCallParser.TryExtractJsonString(call.Args.ToString(), "command") ?? "";
                             if (IsBuildCmd(cmdLine) || IsTestCmd(cmdLine))
@@ -1108,15 +1243,9 @@ public abstract class Agent
                                     if (!environmental)
                                     {
                                         if (editedFiles.Contains(editKey))
-                                            result += " This file was already edited earlier this turn — re-read it to see the current content before retrying.";
-
-                                        // Hand the model the exact line numbers from the "closest matching region" — local
-                                        // models ignore generic advice but follow concrete numbers, which forces it off old_string.
-                                        var region = System.Text.RegularExpressions.Regex.Match(result, @"lines (\d+)\s*[–—-]\s*(\d+)");
-                                        if (region.Success)
-                                            result += $" STOP using old_string on this file. Retry as ONE edit_file with start_line:{region.Groups[1].Value}, end_line:{region.Groups[2].Value} and new_string set to the replacement code only (do not pass old_string).";
+                                            result += " This file was already edited earlier this turn — re-read it to see the current content and line numbers before retrying.";
                                         else if (streak >= 2)
-                                            result += " Stop retyping the text. You have the line numbers from read_file/search_files — change these lines with start_line/end_line instead of old_string (one edit_file call with an 'edits' array if several lines), or rewrite the whole file with write_file. If you still cannot, stop and tell the user what is blocking you.";
+                                            result += " Re-read the file to get current line numbers, then change these lines with start_line/end_line (one edit_file call with an 'edits' array if several ranges), or rewrite the whole file with write_file. If you still cannot, stop and tell the user what is blocking you.";
                                     }
                                     else if (streak >= 2)
                                     {
@@ -1206,19 +1335,37 @@ public abstract class Agent
                             {
                                 if (call.Name == "read_file")
                                 {
-                                    if (liveReads.TryGetValue(hpath, out var prev))
+                                    // Key by path+range so different ranges of the same file don't stub each other.
+                                    string startStr = hdoc.RootElement.TryGetProperty("start_line", out var sl) ? (sl.GetRawText()) : "0";
+                                    string endStr   = hdoc.RootElement.TryGetProperty("end_line",   out var el) ? (el.GetRawText()) : "0";
+                                    string rangeKey = $"{hpath}:{startStr}-{endStr}";
+                                    if (liveReads.TryGetValue(rangeKey, out var prev))
                                         StubRead(messages, prev.Index, prev.CallId, hpath);
                                     if (!result.StartsWith("[System:"))
-                                        liveReads[hpath] = (addedIndex, call.Id);
+                                        liveReads[rangeKey] = (addedIndex, call.Id);
                                 }
                                 else if (call.Name is "edit_file" or "write_file"
                                          && (result.Contains("Successfully edited") || result.Contains("Successfully wrote")))
                                 {
-                                    if (liveReads.TryGetValue(hpath, out var prev))
+                                    // Invalidate all cached ranges for this file after a write.
+                                    foreach (string k in liveReads.Keys.Where(k => k.StartsWith(hpath + ":", StringComparison.OrdinalIgnoreCase)).ToList())
                                     {
-                                        StubRead(messages, prev.Index, prev.CallId, hpath);
-                                        liveReads.Remove(hpath);
+                                        StubRead(messages, liveReads[k].Index, liveReads[k].CallId, hpath);
+                                        liveReads.Remove(k);
                                     }
+                                    // The file just changed, so any cached read of it is stale. Drop this file's
+                                    // read counts and cached read/preview output so a follow-up read RE-EXECUTES
+                                    // and returns the NEW content — otherwise the dedup serves the pre-edit copy
+                                    // and the model, seeing its change "missing", loops re-editing.
+                                    string editedKey = NormKey(hpath);
+                                    foreach (string rk in readCounts.Keys.Where(k => k == editedKey || k.StartsWith(editedKey + ":", StringComparison.OrdinalIgnoreCase)).ToList())
+                                        readCounts.Remove(rk);
+                                    foreach (string ck in commandCache.Keys.Where(k => k.StartsWith($"read_file:{editedKey}:", StringComparison.OrdinalIgnoreCase) || k == $"preview_file:{editedKey}").ToList())
+                                        commandCache.Remove(ck);
+                                    // An edit changes build/test state, so any cached run_command result is stale —
+                                    // drop them so a rebuild AFTER a fix re-runs instead of being deduped as "already ran".
+                                    foreach (string ck in commandCache.Keys.Where(k => k.StartsWith("cmd:", StringComparison.Ordinal)).ToList())
+                                        commandCache.Remove(ck);
                                 }
                             }
                         }
@@ -1464,8 +1611,19 @@ public abstract class Agent
             role         = "tool",
             tool_call_id = callId,
             name         = "read_file",
-            content      = $"[Earlier contents of {path} omitted — superseded by a later read or change this turn. Re-read the file if you need its current contents.]"
+            content      = $"[An earlier copy of {path} was removed here to save context. If it was superseded by a later read, that newer copy is below — work from it. If you edited this file, its line numbers changed: read it once more before editing it again.]"
         };
+    }
+
+    /// <summary>Most-frequent character in s and the fraction of s it makes up — used to detect a
+    /// degenerate repeated-character spiral (e.g. runaway backslash escaping) in streamed output.</summary>
+    private static (char Char, double Ratio) DominantChar(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return ('\0', 0);
+        Dictionary<char, int> counts = new();
+        foreach (char c in s) counts[c] = counts.TryGetValue(c, out int n) ? n + 1 : 1;
+        KeyValuePair<char, int> top = counts.MaxBy(kv => kv.Value);
+        return (top.Key, (double)top.Value / s.Length);
     }
 
     private static string? ContentOf(object m) => m.GetType().GetProperty("content")?.GetValue(m) as string;

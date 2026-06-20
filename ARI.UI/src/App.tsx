@@ -12,10 +12,12 @@ import "./styles/app.css"
 
 export type AppMode = "idle" | "active"
 
-function buildSafetyDiff(oldStr: string, newStr: string): string {
-    const removed = oldStr.split("\n").map(l => `- ${l}`).join("\n")
-    const added   = newStr.split("\n").map(l => `+ ${l}`).join("\n")
-    return `\`\`\`diff\n${removed}\n${added}\n\`\`\``
+function buildSafetyDiff(newStr: string, startLine?: number, endLine?: number): string {
+    const range = startLine != null
+        ? ` (replacing lines ${startLine}${endLine != null && endLine !== startLine ? `–${endLine}` : ""})`
+        : ""
+    const added = newStr.split("\n").map(l => `+ ${l}`).join("\n")
+    return `\`\`\`diff\n# proposed${range}\n${added}\n\`\`\``
 }
 
 export interface PendingAttachment {
@@ -468,7 +470,7 @@ export default function App() {
                         if (lim < total) { end = lim; capped = true }
                     }
 
-                    // Number lines from their real position so old_strings and edit_file snippets line up.
+                    // Number lines from their real position so edit_file line ranges and snippets line up.
                     const slice    = all.slice(start - 1, end)
                     const numbered = slice.map((l, i) => `${String(start + i).padStart(6)}: ${l}`).join("\n")
                     const header   = (start === 1 && end === total)
@@ -498,23 +500,24 @@ export default function App() {
                     ws.send(JSON.stringify({ type: "file_content", callId, content: result }))
 
                 } else if (type === "edit_file") {
-                    // edit_file accepts a single old/new pair OR a MultiEdit-style batch via `edits`.
-                    const rawEdits = (params as unknown as { edits?: { old_string?: string; new_string?: string; replace_all?: boolean; start_line?: number; end_line?: number }[] }).edits
+                    // edit_file edits BY LINE NUMBER — a single start_line/end_line/new_string, or a
+                    // MultiEdit-style batch via `edits` (each {start_line, end_line, new_string}).
+                    const rawEdits = (params as unknown as { edits?: { new_string?: string; start_line?: number; end_line?: number }[] }).edits
                     const editsArr = Array.isArray(rawEdits) && rawEdits.length > 0 ? rawEdits : null
-                    const replaceAll = String((params as unknown as { replace_all?: unknown }).replace_all) === "true"
-                        || (params as unknown as { replace_all?: unknown }).replace_all === true
                     if (safetyModeRef.current) {
                         const diff = editsArr
-                            ? editsArr.map((e, i) => `--- edit ${i + 1} ---\n${buildSafetyDiff(e.old_string ?? "", e.new_string ?? "")}`).join("\n\n")
-                            : buildSafetyDiff(params.old_string ?? "", params.new_string ?? "")
+                            ? editsArr.map((e, i) => `--- edit ${i + 1} ---\n${buildSafetyDiff(e.new_string ?? "", e.start_line, e.end_line)}`).join("\n\n")
+                            : buildSafetyDiff(
+                                params.new_string ?? "",
+                                Number((params as unknown as { start_line?: unknown }).start_line) || undefined,
+                                Number((params as unknown as { end_line?: unknown }).end_line) || undefined)
                         console.warn(`[ToolSocket] → file_content (edit_file BLOCKED by safety)  callId=${callId}`)
                         ws.send(JSON.stringify({ type: "file_error", callId, error: `SAFETY MODE — file was NOT modified. Do not call edit_file or write_file again. Respond to the user now: tell them safety mode is on, show the proposed changes as a code block, and say they can disable safety mode (shield icon) to apply them.\n\nProposed diff for ${params.path}:\n\n${diff}` }))
                     } else {
                         const sl = Number((params as unknown as { start_line?: unknown }).start_line)
                         const el = Number((params as unknown as { end_line?: unknown }).end_line)
-                        const res = await window.electronBridge!.editFile(localPath, params.path, params.old_string, params.new_string, {
+                        const res = await window.electronBridge!.editFile(localPath, params.path, params.new_string, {
                             edits: editsArr ?? undefined,
-                            replaceAll,
                             startLine: Number.isFinite(sl) ? sl : undefined,
                             endLine:   Number.isFinite(el) ? el : undefined,
                         })
