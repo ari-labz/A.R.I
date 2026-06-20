@@ -12,7 +12,7 @@ contextBridge.exposeInMainWorld("electronBridge", {
     setLocalPath:  (projectId, path)                 => ipcRenderer.invoke("project:set-path",  projectId, path),
     listDirectory: (root, dirPath)                   => ipcRenderer.invoke("fs:list-dir",        root, dirPath),
     searchFiles:   (root, pattern, searchPath, glob, ignoreCase) => ipcRenderer.invoke("fs:search", root, pattern, searchPath, glob, ignoreCase),
-    editFile:      (root, filePath, oldStr, newStr, options) => ipcRenderer.invoke("fs:edit",     root, filePath, oldStr, newStr, options),
+    editFile:      (root, filePath, newStr, options) => ipcRenderer.invoke("fs:edit",     root, filePath, newStr, options),
     runCommand:          (root, command) => ipcRenderer.invoke("fs:run",            root, command),
     findFiles:           (root, pattern, searchPath) => ipcRenderer.invoke("fs:find",   root, pattern, searchPath),
     deleteFile:          (root, filePath)            => ipcRenderer.invoke("fs:delete", root, filePath),

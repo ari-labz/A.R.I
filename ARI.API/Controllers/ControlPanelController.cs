@@ -638,9 +638,15 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
     [HttpPut("/api/cp/servers/{id:guid}")]
     public IActionResult UpdateServer(Guid id, [FromBody] Server server)
     {
+        Server? existing = persistentData.GetServers().FirstOrDefault(s => s.Id == id);
         if (!persistentData.UpdateServer(server))
             return NotFound(new { error = "Server not found." });
         llm?.UpdateServer(server);
+
+        // If the server was renamed, repoint any agents that referenced the old name.
+        if (existing is not null && existing.Name != server.Name)
+            persistentData.RenameServerInAgents(existing.Name, server.Name);
+
         return Ok(server);
     }
 

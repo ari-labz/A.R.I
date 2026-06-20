@@ -41,7 +41,7 @@ internal static class ToolCallParser
                 argsBuilder.Append(':');
                 // Structured params (edit_file's `edits`, update_todos' `todos`) are emitted by the model as
                 // a JSON array. Embed them as raw JSON so the executor receives an array, not a stringified
-                // one (which Array.isArray rejects → "Provide old_string or start_line/end_line"). All other
+                // one (which the executor would reject as missing start_line/end_line). All other
                 // values (code in new_string/content, paths, patterns) are serialized as JSON strings so
                 // their quotes/newlines/backslashes can't break the args JSON.
                 if (IsStructuredParam(pName) && IsJsonArrayOrObject(pVal))
@@ -193,7 +193,7 @@ internal static class ToolCallParser
     /// Salvages a native tool call's arguments when the model leaked text-format markers
     /// (&lt;function=…&gt;, &lt;parameter=…&gt;, &lt;tool_call&gt;) into what should be pure JSON — a
     /// repetition/format-mix runaway. Truncates at the first marker and balances any dangling
-    /// string/object so the prefix parses (e.g. {"pattern":"GrantAccess → {"pattern":"GrantAccess"}).
+    /// string/object so the prefix parses (e.g. {"pattern":"foo → {"pattern":"foo"}).
     /// </summary>
     internal static string SalvageNativeArgs(string raw)
     {
@@ -241,17 +241,33 @@ internal static class ToolCallParser
         {
             using JsonDocument doc = JsonDocument.Parse(argsJson);
             JsonElement root = doc.RootElement;
-            Dictionary<string, object?> trimmed = new();
+            // Build the object by hand. Kept fields are emitted as their RAW JSON text — they are
+            // already valid JSON, so re-serializing them (e.g. via a Dictionary<string,string> of
+            // GetRawText()) double-encodes: path:"foo" → path:"\"foo\"", start_line:81 → "81". That
+            // double-encoding was the escape-spiral root cause (the model imitates the quoting each
+            // turn and it compounds). Only the omitted payload fields are emitted as fresh strings.
+            StringBuilder sb = new();
+            sb.Append('{');
+            bool first = true;
             foreach (JsonProperty prop in root.EnumerateObject())
             {
+                if (!first) sb.Append(',');
+                first = false;
+                sb.Append(JsonSerializer.Serialize(prop.Name));
+                sb.Append(':');
+                // Only write_file content is omitted (it can be a whole file). edit_file payloads are
+                // deliberately KEPT in full: they are small (tight edits, capped at MAX_REPLACE_SPAN lines)
+                // so they cost almost nothing, and omitting them caused a doom loop — the model copies the
+                // "[omitted]" placeholder from its own prior edit call in history back as the new_string,
+                // the edit guard refuses it, the model re-reads history, sees "[omitted]" again, and re-sends
+                // forever. Keeping the real edit content means there is no placeholder for it to copy.
                 if (toolName == "write_file" && prop.Name == "content")
-                    trimmed[prop.Name] = "[content omitted]";
-                else if (toolName == "edit_file" && prop.Name is "old_string" or "new_string" or "edits")
-                    trimmed[prop.Name] = "[omitted]";
+                    sb.Append("\"[content omitted]\"");
                 else
-                    trimmed[prop.Name] = prop.Value.GetRawText();
+                    sb.Append(prop.Value.GetRawText());
             }
-            return JsonSerializer.Serialize(trimmed);
+            sb.Append('}');
+            return sb.ToString();
         }
         catch { return argsJson; }
     }

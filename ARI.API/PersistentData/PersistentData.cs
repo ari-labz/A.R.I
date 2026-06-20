@@ -15,6 +15,7 @@ public sealed class AgentDefinition
     public int     MaxTokens         { get; set; } = -1;
     public int     MaxToolCalls      { get; set; }
     public int     MaxContextTokens  { get; set; }
+    public bool    NativeTools       { get; set; }
     public double? Temperature       { get; set; }
     public double? TopP              { get; set; }
     public int?    TopK              { get; set; }
@@ -292,6 +293,24 @@ public class PersistentData
             if (removed == 0) return false;
             Save(_agentsPath, data);
             return true;
+        }
+    }
+
+    public void RenameServerInAgents(string oldName, string newName)
+    {
+        lock (_agentsLock)
+        {
+            AgentsFile data    = LoadAgents();
+            bool       changed = false;
+            foreach (AgentDefinition a in data.Agents)
+            {
+                if (a.ServerName?.Equals(oldName, StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    a.ServerName = newName;
+                    changed      = true;
+                }
+            }
+            if (changed) Save(_agentsPath, data);
         }
     }
 

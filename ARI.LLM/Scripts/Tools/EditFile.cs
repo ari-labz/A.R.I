@@ -14,7 +14,7 @@ internal sealed class EditFile : FileTool
         function = new
         {
             name        = "edit_file",
-            description = "Edit a file by replacing one or more line ranges with new text. REQUIREMENT: call read_file on the file first — you edit BY LINE NUMBER, using the 1-based line numbers shown by read_file/search_files. Set start_line and end_line (inclusive) and new_string (the replacement text; empty string deletes that range). You never retype existing code — you point at the lines you can already see. To change several places at once, pass an 'edits' array of {start_line,end_line,new_string}; they all resolve against the file as you last read it and apply together, so line numbers don't shift between them. Use write_file for a new file or a full rewrite.",
+            description = "Edit a file by line number. Make the SMALLEST edit that does the job: change ONLY the lines that actually differ. To rename a symbol on lines 8, 10 and 13, edit those three lines individually — do NOT replace the whole method, and never re-type surrounding code that isn't changing (that is how lines get dropped or duplicated). REQUIREMENT: call read_file first; you edit by the 1-based line numbers it shows. Set start_line and end_line (inclusive) and new_string (the replacement for exactly those lines). For a single changed line, start_line == end_line and new_string is that one line. To change several separate spots, pass an 'edits' array of {start_line,end_line,new_string} — one TIGHT item per spot; they resolve against the file as you last read it and apply together, so line numbers don't shift between them. An empty new_string deletes the range. Use write_file only for a brand-new file or a genuine whole-file rewrite — never to change a few lines.",
             parameters  = new
             {
                 type       = "object",
@@ -22,19 +22,41 @@ internal sealed class EditFile : FileTool
                 {
                     path       = new { type = "string",  description = "File path relative to project root." },
                     start_line = new { type = "integer", description = "First line to replace (1-based inclusive, exactly as shown by read_file/search_files)." },
-                    end_line   = new { type = "integer", description = "Last line to replace (1-based inclusive). Defaults to start_line for a single line." },
-                    new_string = new { type = "string",  description = "Replacement text for the line range. Empty string deletes the range. The replacement code only — do not include the existing code or the read_file line-number prefix." },
-                    edits      = new { type = "array",   description = "Batch several changes to this file at once; each item is {start_line, end_line, new_string}. They resolve against the file as you last read it and apply together." }
+                    end_line   = new { type = "integer", description = "Last line to replace (1-based inclusive). Equals start_line for a single-line change — the common case." },
+                    new_string = new { type = "string",  description = "Replacement for exactly the start_line..end_line range — the changed line(s) only, no read_file 'N|' prefix, and no unchanged surrounding lines. Empty string deletes the range." },
+                    edits      = new { type = "array",   description = "Several tight changes at once; each item is {start_line, end_line, new_string}, kept as narrow as possible. They resolve against the file as you last read it and apply together. Prefer many small items over one wide range." }
                 },
                 required = new[] { "path" }
             }
         }
     };
 
-    /// <summary>A requested edit: text-anchored (Old set) or line-anchored (StartLine set).</summary>
-    private readonly record struct EditSpec(string Old, string New, bool ReplaceAll, int StartLine, int EndLine);
+    // A single edit_file edit may replace at most this many lines when new_string has content. Wider
+    // replacements are bounced back so the model edits only the lines that change (or uses write_file for a
+    // real rewrite) — re-typing a whole block to change a few lines is how this model drops/duplicates code.
+    // Deletions (empty new_string) are exempt: removing a large range in one go is legitimate.
+    private const int MAX_REPLACE_SPAN = 15;
+
+    /// <summary>A requested edit, anchored by line range (1-based inclusive).</summary>
+    private readonly record struct EditSpec(string New, int StartLine, int EndLine);
     /// <summary>A resolved character span to replace, against the original buffer.</summary>
     private readonly record struct Span(int Start, int Len, string Rep);
+
+    /// <summary>
+    /// Read a line-number property, tolerating the quotes/whitespace the model can wrap around it
+    /// under the text protocol (e.g. "174"). Returns 0 when absent or unparseable.
+    /// </summary>
+    private static int ReadLine(JsonElement parent, string name)
+    {
+        if (!parent.TryGetProperty(name, out JsonElement el)) return 0;
+        if (el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out int v)) return v;
+        if (el.ValueKind == JsonValueKind.String)
+        {
+            string digits = new(((el.GetString() ?? "").Where(c => char.IsDigit(c) || c == '-')).ToArray());
+            if (int.TryParse(digits, out int sv)) return sv;
+        }
+        return 0;
+    }
 
     internal override async Task<string> Execute(string argsJson)
     {
@@ -51,11 +73,9 @@ internal sealed class EditFile : FileTool
 
             // Normalize the request into a uniform list of edits (single, or a MultiEdit batch).
             static EditSpec Parse(JsonElement e) => new(
-                Normalize(e.TryGetProperty("old_string", out var o) ? o.GetString() ?? "" : ""),
                 Normalize(e.TryGetProperty("new_string", out var n) ? n.GetString() ?? "" : ""),
-                e.TryGetProperty("replace_all", out var r) && r.ValueKind == JsonValueKind.True,
-                e.TryGetProperty("start_line", out var s) && s.TryGetInt32(out int sv) ? sv : 0,
-                e.TryGetProperty("end_line",   out var en) && en.TryGetInt32(out int ev) ? ev : 0);
+                ReadLine(e, "start_line"),
+                ReadLine(e, "end_line"));
 
             List<EditSpec> edits = new();
             if (rootEl.TryGetProperty("edits", out JsonElement editsEl) && editsEl.ValueKind == JsonValueKind.Array)
@@ -64,6 +84,9 @@ internal sealed class EditFile : FileTool
                 edits.Add(Parse(rootEl));
             if (edits.Count == 0)
                 return $"No edits provided for {relPath}.";
+            // History compaction renders earlier payloads as "[omitted]"; never apply that placeholder.
+            if (edits.Any(e => IsRedactionPlaceholder(e.New)))
+                return $"Refused: a new_string was a placeholder (\"[omitted]\"), not real replacement text. That appears in the conversation only because an earlier payload was hidden to save space. Re-send the literal replacement text for {relPath}.";
 
             string content = await ReadWithRetry(absPath);
             string nl      = content.Contains("\r\n") ? "\r\n" : "\n";
@@ -74,34 +97,30 @@ internal sealed class EditFile : FileTool
             for (int i = 0; i < buf0.Length; i++) if (buf0[i] == '\n') lineStarts.Add(i + 1);
             int totalLines = lineStarts.Count;
 
-            // Resolve every edit to one or more character spans against the ORIGINAL buffer.
+            // Resolve every edit to a character span against the ORIGINAL buffer. Line-number anchoring
+            // only — the model points at the lines it can already see from read_file/search_files.
             List<Span> spans = new();
-            bool anyFuzzy = false; bool multi = edits.Count > 1;
+            bool multi = edits.Count > 1;
             for (int i = 0; i < edits.Count; i++)
             {
                 EditSpec ed = edits[i];
                 string label = multi ? $" (edit {i + 1} of {edits.Count})" : "";
 
-                if (ed.StartLine > 0)
-                {
-                    int s = ed.StartLine, en = ed.EndLine > 0 ? ed.EndLine : ed.StartLine;
-                    if (s < 1 || s > totalLines || en < s || en > totalLines)
-                        return $"start_line/end_line {s}-{en} is out of range{label} — {relPath} has {totalLines} lines. Re-read the file for current line numbers.";
-                    int offStart = lineStarts[s - 1];
-                    int offEnd; bool hadNL;
-                    if (en < totalLines) { offEnd = lineStarts[en]; hadNL = true; } else { offEnd = buf0.Length; hadNL = false; }
-                    string rep = ed.New;
-                    if (rep.Length > 0 && hadNL && !rep.EndsWith('\n')) rep += "\n";
-                    spans.Add(new Span(offStart, offEnd - offStart, rep));
-                    continue;
-                }
+                if (ed.StartLine <= 0)
+                    return $"edit_file requires start_line and end_line{label} — the 1-based line numbers shown by read_file/search_files. Re-read {relPath} if you don't have them, then set start_line, end_line (inclusive) and new_string (the replacement text only).";
 
-                // Line-number editing only. This model retypes old_string inaccurately, and the fuzzy
-                // closest-match fallback can resolve to an unrelated region (a file-corruption risk —
-                // it once pointed an edit of GrantAccess at the unrelated CreateRecord/UpdateRecord
-                // methods). Reject old_string outright and require the explicit line numbers the model
-                // already has from read_file/search_files.
-                return $"edit_file is edited BY LINE NUMBER, not old_string{label}. Re-read {relPath} if you don't have its current line numbers, then call edit_file with start_line and end_line (1-based, inclusive) and new_string set to the replacement text only.";
+                int s = ed.StartLine, en = ed.EndLine > 0 ? ed.EndLine : ed.StartLine;
+                if (s < 1 || s > totalLines || en < s || en > totalLines)
+                    return $"start_line/end_line {s}-{en} is out of range{label} — {relPath} has {totalLines} lines. Re-read the file for current line numbers.";
+                if (en - s + 1 > MAX_REPLACE_SPAN && ed.New.Trim().Length > 0)
+                    return $"This edit{label} replaces {en - s + 1} lines at once ({s}-{en}). Edit only the line(s) that actually change — pass an 'edits' array with one tight item per changed spot (start_line==end_line for a single line); don't re-type the surrounding unchanged code, it gets dropped. For a genuine whole-block rewrite use write_file. (Deleting a range with an empty new_string is allowed at any size.)";
+                int offStart = lineStarts[s - 1];
+                int offEnd; bool hadNL;
+                if (en < totalLines) { offEnd = lineStarts[en]; hadNL = true; } else { offEnd = buf0.Length; hadNL = false; }
+                string rep = ed.New;
+                if (rep.Length > 0) rep = MatchIndent(rep, LeadingWhitespace(buf0, offStart));
+                if (rep.Length > 0 && hadNL && !rep.EndsWith('\n')) rep += "\n";
+                spans.Add(new Span(offStart, offEnd - offStart, rep));
             }
 
             // Overlap check, then apply highest-offset-first so earlier edits don't shift later ones.
@@ -120,10 +139,9 @@ internal sealed class EditFile : FileTool
             await WriteWithRetry(absPath, buf.Replace("\n", nl));
 
             string[] lines = buf.Split('\n');
-            string   note  = anyFuzzy ? " (matched ignoring indentation/line-ending differences)" : "";
 
             if (multi)
-                return $"Successfully edited {relPath}.{note} Applied {edits.Count} edits ({spans.Count} replacements). File is now {lines.Length} lines.";
+                return $"Successfully edited {relPath}. Applied {edits.Count} edits ({spans.Count} replacements). File is now {lines.Length} lines.";
 
             // Single edit: numbered snippet around the change so the model sees the new state.
             int    editLine     = buf[..firstStart].Count(c => c == '\n');
@@ -131,8 +149,7 @@ internal sealed class EditFile : FileTool
             int    from         = Math.Max(0, editLine - 5);
             int    to           = Math.Min(lines.Length - 1, editLine + newLineCount + 4);
             string snippet      = string.Join("\n", lines[from..(to + 1)].Select((l, i) => $"{from + i + 1,6}: {l}"));
-            string replNote     = spans.Count > 1 ? $" ({spans.Count} occurrences replaced)" : "";
-            return $"Successfully edited {relPath}.{note}{replNote}\n\n[Updated context — lines {from + 1}–{to + 1}]\n```\n{snippet}\n```";
+            return $"Successfully edited {relPath}.\n\n[Updated context — lines {from + 1}–{to + 1}]\n```\n{snippet}\n```";
         }
         catch (Exception ex) { return $"Error editing file: {ex.Message}"; }
     }
@@ -159,87 +176,32 @@ internal sealed class EditFile : FileTool
         }
     }
 
-    private enum MatchKind { Exact, Whitespace, None, Multiple }
-
-    /// <summary>The outcome of locating old_string. Start/Length are a char span into normalized content.</summary>
-    private readonly record struct MatchResult(MatchKind Kind, int Start, int Length, int Count);
-
     private static string Normalize(string s) => s.Replace("\r\n", "\n").Replace("\r", "\n");
 
-    /// <summary>
-    /// Locates old_string in content, tolerating line-ending and indentation drift.
-    /// Tier 1: exact substring. Tier 2: leading-whitespace-insensitive line-block match.
-    /// A looser tier is only accepted when it resolves to exactly one region.
-    /// </summary>
-    private static MatchResult FindMatch(string content, string old)
+    /// <summary>Leading run of spaces/tabs on the line that begins at <paramref name="offset"/>.</summary>
+    private static string LeadingWhitespace(string buf, int offset)
     {
-        // Tier 1 — exact (in normalized space).
-        int count = 0, idx = 0, firstIdx = -1;
-        while ((idx = content.IndexOf(old, idx, StringComparison.Ordinal)) >= 0)
-        {
-            if (firstIdx < 0) firstIdx = idx;
-            count++; idx += old.Length;
-        }
-        if (count == 1) return new MatchResult(MatchKind.Exact, firstIdx, old.Length, 1);
-        if (count > 1)  return new MatchResult(MatchKind.Multiple, -1, 0, count);
-
-        // Tier 2 — leading-whitespace-insensitive, contiguous line-block match.
-        string[] contentLines = content.Split('\n');
-        string[] oldLines     = old.Split('\n');
-        string[] oldTrim      = oldLines.Select(l => l.TrimStart()).ToArray();
-        int      k            = oldLines.Length;
-        if (k == 0 || k > contentLines.Length) return new MatchResult(MatchKind.None, -1, 0, 0);
-
-        int matchStartLine = -1, matches = 0;
-        for (int w = 0; w + k <= contentLines.Length; w++)
-        {
-            bool all = true;
-            for (int i = 0; i < k; i++)
-                if (!contentLines[w + i].TrimStart().Equals(oldTrim[i], StringComparison.Ordinal)) { all = false; break; }
-            if (all) { matches++; if (matchStartLine < 0) matchStartLine = w; }
-        }
-        if (matches > 1) return new MatchResult(MatchKind.Multiple, -1, 0, matches);
-        if (matches == 1)
-        {
-            int start = 0;
-            for (int i = 0; i < matchStartLine; i++) start += contentLines[i].Length + 1; // +1 for the '\n'
-            int len = 0;
-            for (int i = 0; i < k; i++) len += contentLines[matchStartLine + i].Length + (i < k - 1 ? 1 : 0);
-            return new MatchResult(MatchKind.Whitespace, start, len, 1);
-        }
-
-        return new MatchResult(MatchKind.None, -1, 0, 0);
+        int i = offset;
+        while (i < buf.Length && (buf[i] == ' ' || buf[i] == '\t')) i++;
+        return buf[offset..i];
     }
 
     /// <summary>
-    /// When no match is found, return the file region most similar to old_string (by trimmed
-    /// line equality) with line numbers, so the model can copy the exact bytes instead of guessing.
+    /// Restores the leading indentation of the FIRST line of a replacement to match the line it replaces.
+    /// The model reliably drops the indent of new_string's first line (the line-number tool means it never
+    /// has to repeat the surrounding code, but it forgets the first line's own indent) while giving the
+    /// remaining lines their correct absolute indentation. So we only ever fix the first line — a uniform
+    /// shift would over-indent the already-correct lines below it. Indent is only added, never removed.
     /// </summary>
-    private static string ClosestRegionHint(string content, string old)
+    private static string MatchIndent(string rep, string targetIndent)
     {
-        string[] contentLines = content.Split('\n');
-        string[] oldTrim      = old.Split('\n').Select(l => l.TrimStart()).ToArray();
-        int      k            = Math.Min(oldTrim.Length, contentLines.Length);
-        if (k == 0)
-            return " Re-read the file to get the exact current text, then retry with a matching old_string.";
+        if (targetIndent.Length == 0 || rep.Length == 0 || rep[0] == '\n') return rep;
 
-        int bestStart = -1, bestScore = -1;
-        for (int w = 0; w + k <= contentLines.Length; w++)
-        {
-            int score = 0;
-            for (int i = 0; i < k; i++)
-                if (contentLines[w + i].TrimStart().Equals(oldTrim[i], StringComparison.Ordinal)) score++;
-            if (score > bestScore) { bestScore = score; bestStart = w; }
-        }
+        int firstIndent = 0;
+        while (firstIndent < rep.Length && (rep[firstIndent] == ' ' || rep[firstIndent] == '\t')) firstIndent++;
+        if (firstIndent >= targetIndent.Length) return rep;
 
-        if (bestScore <= 0 || bestStart < 0)
-            return " None of the file resembles that old_string — don't retype it. Re-read the file, then change the lines using start_line/end_line (you can see the line numbers) instead of old_string.";
-
-        int    to     = Math.Min(contentLines.Length - 1, bestStart + k - 1);
-        string region = string.Join("\n", Enumerable.Range(bestStart, to - bestStart + 1)
-            .Select(i => $"{i + 1,6}: {contentLines[i]}"));
-        return $" The closest matching region is lines {bestStart + 1}–{to + 1}:\n```\n{region}\n```\n" +
-               $"Either copy that text EXACTLY into old_string, or — simpler — edit by line number using start_line/end_line (e.g. start_line {bestStart + 1}).";
+        return targetIndent[firstIndent..] + rep;
     }
 
     internal override Func<string, string>? Display => args =>

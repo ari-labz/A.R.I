@@ -21,7 +21,7 @@ public static class ClientWebSocket
     {
         // Files modified by write_file or edit_file this session. Must be re-read before further edits.
         public ConcurrentDictionary<string, byte> DirtyFiles   { get; } = new(StringComparer.OrdinalIgnoreCase);
-        // Consecutive edit_file old_string failures per file. Reset on read_file.
+        // Consecutive edit_file failures per file. Reset on read_file.
         public ConcurrentDictionary<string, int>  EditFailures { get; } = new(StringComparer.OrdinalIgnoreCase);
     }
 
@@ -119,7 +119,7 @@ public static class ClientWebSocket
 
         RegisterTool(thread, ws, log,
             name: "edit_file",
-            description: "Edit a file by replacing one or more line ranges with new text. REQUIREMENT: read_file the file first — you edit BY LINE NUMBER using the 1-based line numbers shown by read_file/search_files. Set start_line and end_line (inclusive) and new_string (the replacement text only; an empty string deletes the range). To change several places at once, pass an 'edits' array of {start_line, end_line, new_string}; they all resolve against the file as you last read it, so line numbers don't shift between them. Use write_file for a new file or a full rewrite. Do not retype existing code or pass old_string.",
+            description: "Edit a file by replacing one or more line ranges with new text. REQUIREMENT: read_file the file first — you edit BY LINE NUMBER using the 1-based line numbers shown by read_file/search_files. Set start_line and end_line (inclusive) and new_string (the replacement text only; an empty string deletes the range). You never retype existing code — you point at the lines you can already see. To change several places at once, pass an 'edits' array of {start_line, end_line, new_string}; they all resolve against the file as you last read it, so line numbers don't shift between them. Use write_file for a new file or a full rewrite.",
             parameters: new { type = "object", properties = new {
                 path       = new { type = "string",  description = "File path relative to project root" },
                 start_line = new { type = "integer", description = "First line to replace (1-based, inclusive, exactly as shown by read_file/search_files)." },
@@ -146,10 +146,9 @@ public static class ClientWebSocket
                 try
                 {
                     using var doc = JsonDocument.Parse(argsJson);
-                    string oldStr  = doc.RootElement.TryGetProperty("old_string", out var oe) ? oe.GetString() ?? "" : "";
                     string newStr  = doc.RootElement.TryGetProperty("new_string", out var ne) ? ne.GetString() ?? "" : "";
                     (int added, int removed) = EditCounts(doc.RootElement);
-                    string patch   = BuildPatch(oldStr, newStr);
+                    string patch   = BuildPatch(newStr);
                     string encoded = patch.Length is > 0 and <= 10_000
                         ? Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(patch))
                         : "";
@@ -279,21 +278,22 @@ public static class ClientWebSocket
 
     /// <summary>
     /// Tracks edit_file outcomes. On success: marks dirty, resets failure count.
-    /// On old_string failure: increments counter; after 2 failures appends a hard block message.
+    /// On failure: increments counter; after 2 failures appends a hard block message.
     /// </summary>
     private static string? TrackEditResult(string argsJson, string result, FileToolState fileState)
     {
         string path = ExtractToolPath(argsJson);
         if (string.IsNullOrEmpty(path)) return null;
 
-        bool isOldStringFailure = result.Contains("old_string not found", StringComparison.OrdinalIgnoreCase)
-                               || result.Contains("No changes made", StringComparison.OrdinalIgnoreCase);
+        bool isEditFailure = result.Contains("out of range", StringComparison.OrdinalIgnoreCase)
+                          || result.Contains("requires start_line", StringComparison.OrdinalIgnoreCase)
+                          || result.Contains("No changes made", StringComparison.OrdinalIgnoreCase);
 
-        if (isOldStringFailure)
+        if (isEditFailure)
         {
             int count = fileState.EditFailures.AddOrUpdate(path, 1, (_, c) => c + 1);
             if (count >= 2)
-                return result + $"\n\n[BLOCKED] edit_file has failed {count} times on '{path}' due to old_string mismatches. You MUST call read_file on this file before attempting any further edits to it.";
+                return result + $"\n\n[BLOCKED] edit_file has failed {count} times on '{path}'. You MUST call read_file on this file to get its current line numbers before attempting any further edits to it.";
         }
         else if (!result.StartsWith("[Error:", StringComparison.OrdinalIgnoreCase))
         {
@@ -372,8 +372,8 @@ public static class ClientWebSocket
     }
 
     /// <summary>
-    /// Computes the +added / -removed line counts for an edit_file tool card. Handles line-range edits
-    /// (start_line/end_line + new_string), a MultiEdit 'edits' array, and the legacy old_string form.
+    /// Computes the +added / -removed line counts for an edit_file tool card. Edits are line-range
+    /// anchored (start_line/end_line + new_string), single or via a MultiEdit 'edits' array.
     /// </summary>
     private static (int Added, int Removed) EditCounts(JsonElement root)
     {
@@ -388,27 +388,21 @@ public static class ClientWebSocket
                 if (e.TryGetProperty("start_line", out var sl) && sl.TryGetInt32(out int s) &&
                     e.TryGetProperty("end_line",   out var el) && el.TryGetInt32(out int en) && en >= s)
                     r += en - s + 1;
-                else
-                    r += Lines(e.TryGetProperty("old_string", out var o) ? o.GetString() ?? "" : "");
             }
             return (a, r);
         }
 
         int added = Lines(root.TryGetProperty("new_string", out var ns) ? ns.GetString() ?? "" : "");
-        int removed;
+        int removed = 0;
         if (root.TryGetProperty("start_line", out var s0) && s0.TryGetInt32(out int start) &&
             root.TryGetProperty("end_line",   out var e0) && e0.TryGetInt32(out int end) && end >= start)
             removed = end - start + 1;
-        else
-            removed = Lines(root.TryGetProperty("old_string", out var os) ? os.GetString() ?? "" : "");
         return (added, removed);
     }
 
-    private static string BuildPatch(string oldStr, string newStr)
+    private static string BuildPatch(string newStr)
     {
         var sb = new System.Text.StringBuilder();
-        foreach (var line in oldStr.Split('\n'))
-            sb.Append('-').AppendLine(line);
         foreach (var line in newStr.Split('\n'))
             sb.Append('+').AppendLine(line);
         return sb.ToString();
@@ -440,7 +434,7 @@ public static class ClientWebSocket
         var displayDoneFn = customDisplayDone ?? MakeDisplay(displayDoneVerb, "end");
 
         // Streaming display: emits a live start marker during arg streaming so the UI can
-        // show and animate line counts as old_string / new_string / content arrive token-by-token.
+        // show and animate line counts as new_string / content arrive token-by-token.
         Func<string, string?>? streamingDisplayFn = (name is "edit_file" or "write_file")
             ? partialJson =>
             {
@@ -449,9 +443,8 @@ public static class ClientWebSocket
                 string label = System.IO.Path.GetFileName(path.Trim('"', '\'', ' ', '\\')).Replace("--", "&#45;&#45;");
                 if (name == "edit_file")
                 {
-                    int added   = PartialJsonCountNewlines(partialJson, "new_string");
-                    int removed = PartialJsonCountNewlines(partialJson, "old_string");
-                    return $"<!--ari-tool-start:edit_file:{label}|+{added}|-{removed}-->";
+                    int added = PartialJsonCountNewlines(partialJson, "new_string");
+                    return $"<!--ari-tool-start:edit_file:{label}|+{added}-->";
                 }
                 else // write_file
                 {

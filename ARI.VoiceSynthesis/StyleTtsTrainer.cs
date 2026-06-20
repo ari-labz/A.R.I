@@ -238,11 +238,17 @@ slmadv_params:
         string python      = Path.Combine(styleTtsPath, VenvPython);
         string trainScript = Path.Combine(Path.GetTempPath(), "ari_train_stt2.py");
         await File.WriteAllTextAsync(trainScript,
+            // MPS fallback: ops not natively supported on Apple GPU fall back to CPU instead of crashing.
+            "import os; os.environ.setdefault('PYTORCH_ENABLE_MPS_FALLBACK', '1')\n" +
             "import torch, sys\n" +
             $"sys.path.insert(0, r'{Path.GetFullPath(styleTtsPath)}')\n" +
             // PyTorch 2.6 changed torch.load default to weights_only=True — patch it back for StyleTTS2
             "_orig = torch.load\n" +
             "torch.load = lambda *a, **kw: _orig(*a, **{**kw, 'weights_only': False})\n" +
+            // empty_cache: flush MPS allocator (cuda version is a no-op on MPS)
+            "if torch.backends.mps.is_available():\n" +
+            "    _orig_empty = torch.cuda.empty_cache\n" +
+            "    torch.cuda.empty_cache = lambda: (torch.mps.empty_cache(), _orig_empty())\n" +
             // WavLM (microsoft/wavlm-base-plus) only supports CUDA/CPU, not MPS.
             // We patch train_finetune.WavLMLoss (its module-global) after import but before main() runs.
             // IMPORTANT: do NOT replace losses.WavLMLoss — the original __init__ does

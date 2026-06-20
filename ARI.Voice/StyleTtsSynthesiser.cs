@@ -148,12 +148,21 @@ else:
 config = yaml.safe_load(open(args.config))
 
 # Load utility models (paths relative to repo root)
-text_aligner  = load_ASR_models(config['ASR_path'],  config['ASR_config'])
+text_aligner    = load_ASR_models(config['ASR_path'], config['ASR_config'])
 pitch_extractor = load_F0_models(config['F0_path'])
-plbert = load_plbert(config['PLBERT_dir'])
+plbert          = load_plbert(config['PLBERT_dir'])
 
 model_params = recursive_munch(config['model_params'])
 model = build_model(model_params, text_aligner, pitch_extractor, plbert)
+
+# Drop training-only components NOW — before moving anything to device — so they
+# never occupy MPS memory. Also clear the local refs so Python can GC them.
+# Saves ~700MB: WavLM discriminator (~350MB), ASR aligner (~150MB), mpd/msd, JDC.
+_TRAINING_ONLY = {'text_aligner', 'pitch_extractor', 'mpd', 'msd', 'wd'}
+for _k in _TRAINING_ONLY:
+    if _k in model: del model[_k]
+del text_aligner, pitch_extractor  # drop local refs so GC can reclaim them
+
 _ = [model[k].eval().to(device) for k in model]
 
 ckpt = torch.load(args.model, map_location='cpu')
@@ -167,8 +176,14 @@ for k in model:
             sd = OrderedDict((n[7:], v) for n, v in params[k].items())
             model[k].load_state_dict(sd, strict=False)
 
+# Free the 2GB checkpoint dict — it's fully consumed into model params now.
+import gc as _gc
+del ckpt, params
+_gc.collect()
+if torch.backends.mps.is_available():
+    torch.mps.empty_cache()
+
 # Validate checkpoint — fail loudly if any component has NaN weights.
-# Training should prevent this; if it happens, the checkpoint is corrupt.
 import sys as _sys
 _nan_components = [_k for _k in model
                    if any(_p.is_floating_point() and torch.isnan(_p).any()
@@ -177,6 +192,34 @@ if _nan_components:
     _msg = f'[serve] CORRUPT CHECKPOINT: NaN weights in {_nan_components} — retrain or use an earlier checkpoint'
     _sys.stderr.write(_msg + '\n'); _sys.stderr.flush()
     _sys.exit(1)
+
+# Fix zero-norm weight_v vectors. weight_norm computes g * v / ||v||; if ||v|| == 0
+# the result is NaN even when no stored parameter contains NaN. Pretrained checkpoints
+# can ship with zero-norm rows (LibriTTS base had 83 in decode[3].pool), and the
+# training clamp only fires after optimizer steps so they survive into inference.
+_FLOAT32_TINY = torch.finfo(torch.float32).tiny
+from torch.nn.utils.weight_norm import WeightNorm as _WeightNorm
+
+def _fix_weight_norm_zeros(module):
+    fixed = []
+    for m in module.modules():
+        for hook in list(getattr(m, '_forward_pre_hooks', {}).values()):
+            if isinstance(hook, _WeightNorm):
+                v = getattr(m, hook.name + '_v')
+                norms = v.data.view(v.shape[0], -1).norm(dim=1)
+                bad = (norms == 0) | (norms < _FLOAT32_TINY)
+                if bad.any():
+                    with torch.no_grad():
+                        for idx in bad.nonzero(as_tuple=False).squeeze(1):
+                            v.data[idx].fill_(1e-4)
+                    fixed.append(f'{type(m).__name__}.{hook.name}_v[{bad.sum().item()}]')
+    return fixed
+
+for _k in model:
+    _fixed = _fix_weight_norm_zeros(model[_k])
+    if _fixed:
+        _sys.stderr.write(f'[serve] Fixed zero weight_v norms in {_k}: {_fixed}\n')
+        _sys.stderr.flush()
 
 sampler = DiffusionSampler(
     model.diffusion.diffusion,
