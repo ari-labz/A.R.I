@@ -5,7 +5,7 @@ using System.Text.Json.Serialization;
 
 namespace ARI.LLM;
 
-internal class Code : Agent
+internal partial class Code : Agent
 {
     [JsonPropertyName("shortTermMemoryLimit")] public int? ShortTermMemoryLimit { get; init; }
 

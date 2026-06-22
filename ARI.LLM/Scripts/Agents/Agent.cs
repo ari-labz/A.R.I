@@ -51,12 +51,6 @@ public abstract class Agent
     private const double COMPACT_RATIO       = 0.6;
     private const int    COMPACT_KEEP_RECENT = 3;
     private const int    MAX_DEGRADE_EVENTS  = 5;
-    // After this many reads of the SAME file in one turn, every further read is handed back with a firm
-    // "stop verifying" directive. Set above a legitimate preview+few-ranges+one-post-edit-check (~4-5) so
-    // normal work is never nagged, but well under the 20+ reads a distrust/brace-hallucination loop produces.
-    private const int    READ_LOOP_CEILING   = 6;
-    // Stop the turn after this many "[omitted]" placeholder edit/write refusals — the copy-forward loop.
-    private const int    MAX_PLACEHOLDER_REFUSALS = 3;
     private const int    DEFAULT_MEMORY_LIMIT = 25;
     private const string ATTACHMENT_DIVIDER  = "-------------------";
 
@@ -68,6 +62,30 @@ public abstract class Agent
     internal virtual int    IncompleteTasks(Thread thread)           => 0;
     internal virtual bool   HasTasks(Thread thread)                  => false;
     internal virtual string PendingTaskSummary(Thread thread)        => "";
+
+    // ── Tool-loop hooks (Code overrides; base = generic, no-guard behaviour) ──────
+    // Per-turn state for the tool loop. The base carries only what the generic loop reads; Code's
+    // CodeTurnState subclass adds its guard counters. Created fresh per SendPrompt turn (never shared
+    // between threads) so one agent instance can serve many threads concurrently.
+    protected class ToolTurnState
+    {
+        public bool ForceNoMoreTools;   // a guard cut tools off for the rest of this turn
+        public bool BlindFirstRead;     // transient: the last read was of a file not previewed this turn
+    }
+    protected virtual ToolTurnState CreateToolTurnState() => new();
+    // Called once per tool batch, before its calls are executed.
+    protected virtual void OnToolBatchStart(ToolTurnState state) { }
+    // Mid-stream veto of an edit_file whose target hasn't been read this turn. Returns an abort message or null.
+    protected virtual string? StreamEditPrecheck(Thread thread, ToolTurnState state, string toolName, string argsJson,
+        IEnumerable<string> pendingReadPaths, List<Attachment> threadAtts, List<Attachment> msgAtts) => null;
+    // Before executing a tool: return a short-circuit result (dedup / nudge / cache hit) or null to proceed.
+    protected virtual string? PreToolGuard(Thread thread, ToolTurnState state, string toolName, string callId, string argsJson) => null;
+    // After executing a tool: post-process / track state; returns the (possibly modified) result. May throw to abort the turn.
+    protected virtual string PostToolProcess(Thread thread, ToolTurnState state, string toolName, string argsJson, string result) => result;
+    // After a tool result is appended to messages: maintain read-stub / cache bookkeeping.
+    protected virtual void AfterToolAppended(ToolTurnState state, List<object> messages, string toolName, string callId, string argsJson, string result, int addedIndex) { }
+    // At batch end: should the turn stop for lack of progress?
+    protected virtual bool OnBatchEndShouldBreak(Thread thread, ToolTurnState state, bool productiveBatch) => false;
 
     internal List<ThreadMessage> ContextSnapshot(Thread thread)
     {
@@ -307,67 +325,19 @@ public abstract class Agent
         int             parseFailures        = 0;
         int             consecutiveFallbacks = 0;
         List<string>    toolResults          = new();
-        Dictionary<string, int> readCounts   = new(StringComparer.OrdinalIgnoreCase);
-        // Per-file read tally for the WHOLE turn, deliberately NOT cleared when the file is edited (unlike
-        // readCounts, which is reset on edit so a post-edit re-read returns fresh content). Used only to
-        // detect a re-read loop: the model edits a file, distrusts the result, re-reads, perceives a phantom
-        // structural problem, re-reads again — each edit resets readCounts so the per-range dedup never fires.
-        Dictionary<string, int> fileReadTotals = new(StringComparer.OrdinalIgnoreCase);
-        HashSet<string>         editedFiles  = new(StringComparer.OrdinalIgnoreCase);
-        HashSet<string>         earlyEditAbortedOnce = new(StringComparer.OrdinalIgnoreCase);
-        int                     buildState   = 0;
         int                     continueNudges = 0;
-        int                     noProgressBatches = 0; // consecutive tool batches that produced no new info / no mutation
-        Dictionary<string, int> editFailStreak = new(StringComparer.OrdinalIgnoreCase);
-        Dictionary<string, int> writeCounts  = new(StringComparer.OrdinalIgnoreCase);
-        bool                    forceNoMoreTools = false;
-        Dictionary<string, (string Result, int Count)> commandCache = new(StringComparer.Ordinal);
-        HashSet<string>         editedPathsThisBatch = new(StringComparer.OrdinalIgnoreCase);
         int                     todoReminders = 0;
-        HashSet<string>         turnEditPaths = new(StringComparer.OrdinalIgnoreCase);
-        bool                    todoNudged = false;
-        static string NormKey(string p) => System.IO.Path.GetFileName(p.Trim('"', '\'', ' ', '\\'));
-        // Dedup key for run_command: the extracted command text with whitespace collapsed, so two identical
-        // commands match even when the text-protocol parse wraps the args JSON differently each time. Prefixed
-        // "cmd:" so these entries can be cleared on an edit (a rebuild after a fix must re-run, not dedup).
-        string NormCmd(string argsJson) => "cmd:" + System.Text.RegularExpressions.Regex.Replace(
-            (ToolCallParser.TryExtractJsonString(argsJson, "command") ?? argsJson).Trim(), @"\s+", " ");
-        static bool IsBuildCmd(string c) => System.Text.RegularExpressions.Regex.IsMatch(c,
-            @"(?i)\b(dotnet\s+(build|publish|msbuild)|msbuild|make|cargo\s+build|go\s+build|npm\s+run\s+build|yarn\s+build|tsc)\b");
-        static bool IsTestCmd(string c) => System.Text.RegularExpressions.Regex.IsMatch(c,
-            @"(?i)\b(dotnet\s+(test|vstest)|vstest|cargo\s+test|go\s+test|pytest|npm\s+(run\s+)?test|yarn\s+test|jest)\b");
-        static string? CondenseBuildErrors(string output)
-        {
-            System.Text.RegularExpressions.MatchCollection ms = System.Text.RegularExpressions.Regex.Matches(
-                output, @"(?im)^.*?:\s*error\s+[A-Za-z]+\d+:.*$");
-            if (ms.Count == 0) return null;
-            List<string> seen = new();
-            foreach (System.Text.RegularExpressions.Match m in ms)
-            {
-                string line = m.Value.Trim();
-                string key  = System.Text.RegularExpressions.Regex.Replace(line, @"\s*\[[^\]]*\]\s*$", "");
-                if (!seen.Contains(key)) seen.Add(key);
-            }
-            int total = seen.Count;
-            StringBuilder sb = new();
-            sb.AppendLine($"Build failed with {total} error{(total == 1 ? "" : "s")}{(total > 10 ? " (showing the first 10)" : "")}:");
-            foreach (string e in seen.Take(10)) sb.AppendLine(e);
-            if (total > 10) sb.AppendLine($"... and {total - 10} more error(s). Fix the errors above (they list the file and line), then rebuild.");
-            else            sb.AppendLine("Fix the errors above (they list the file and line), then rebuild.");
-            return sb.ToString().TrimEnd();
-        }
+        // All Code-specific per-turn guard state (read/edit/command dedup, build state, loop counters) lives
+        // here; the generic loop only reads ToolTurnState.ForceNoMoreTools. See Code.ToolLoop.cs.
+        ToolTurnState           toolTurn      = CreateToolTurnState();
         List<(int Index, string CallId, string Name)> toolResultSlots = new();
         int degradeEvents = 0;
-        // Safety net for the placeholder copy-loop: each time edit_file/write_file refuses an "[omitted]"
-        // placeholder payload, count it; after a few in one turn we stop rather than let it spin to a runaway.
-        int placeholderRefusals = 0;
         void Degrade()
         {
             if (++degradeEvents >= MAX_DEGRADE_EVENTS)
                 throw new LlmRequestFailedException(
                     $"Tool-call formatting failed {degradeEvents} times this turn — stopping to avoid a spiral. Any changes already applied are kept.");
         }
-        Dictionary<string, (int Index, string CallId)> liveReads = new(StringComparer.OrdinalIgnoreCase);
         StringBuilder   responseBuilder  = new();
         StringBuilder   contentBuilder   = new();
         Stopwatch       sw               = Stopwatch.StartNew();
@@ -413,7 +383,7 @@ public abstract class Agent
 
         while (true)
         {
-            bool      toolsExhausted = forceNoMoreTools || (MaxToolCalls > 0 && toolCallCount >= MaxToolCalls);
+            bool      toolsExhausted = toolTurn.ForceNoMoreTools || (MaxToolCalls > 0 && toolCallCount >= MaxToolCalls);
             object[]? toolSchemas    = !toolsExhausted && thread.tools.Count > 0
                                         ? thread.tools.Values.Select(t => t.Schema).ToArray()
                                         : null;
@@ -667,27 +637,17 @@ public abstract class Agent
 
                                     if (earlyAbort is null && call.Name == "edit_file" && !precheckedCalls.Contains(index))
                                     {
-                                        string? editPath = ToolCallParser.TryExtractJsonString(call.Args.ToString(), "path");
-                                        if (editPath is not null)
+                                        precheckedCalls.Add(index);
+                                        IEnumerable<string> pendingReadPaths = pendingCalls.Values
+                                            .Where(pc => pc.Name == "read_file" || pc.Name == "preview_file")
+                                            .Select(pc => ToolCallParser.TryExtractJsonString(pc.Args.ToString(), "path"))
+                                            .Where(p => p is not null)!
+                                            .Cast<string>();
+                                        string? abortMsg = StreamEditPrecheck(thread, toolTurn, call.Name, call.Args.ToString(), pendingReadPaths, threadAtts, msgAtts);
+                                        if (abortMsg is not null)
                                         {
-                                            precheckedCalls.Add(index);
-                                            string ekey = NormKey(editPath);
-                                            bool readThisTurn = readCounts.ContainsKey(ekey)
-                                                || editedFiles.Contains(ekey)
-                                                || threadAtts.Any(a => NormKey(a.Name) == ekey)
-                                                || msgAtts.Any(a => NormKey(a.Name) == ekey);
-                                            bool readInBatch = pendingCalls.Values.Any(pc =>
-                                                (pc.Name == "read_file" || pc.Name == "preview_file")
-                                                && ToolCallParser.TryExtractJsonString(pc.Args.ToString(), "path") is { } rp
-                                                && NormKey(rp) == ekey);
-                                            if (!readThisTurn && !readInBatch && !earlyEditAbortedOnce.Contains(ekey))
-                                            {
-                                                earlyEditAbortedOnce.Add(ekey);
-                                                earlyAbort = (call.Id, call.Name, call.Args.ToString(),
-                                                    $"[System: Aborted before the edit completed — you have not read {editPath} this turn, so you don't have its current line numbers and the edit would target the wrong lines. Call preview_file then read_file (with start_line/end_line) on {editPath} first, then edit it.]");
-                                                Shared.Logger.LogWarning("[{Agent}] ({Thread}) Streaming abort: edit_file on unread file '{File}' — generation cancelled mid-stream.", Name, thread.Key, editPath);
-                                                break;
-                                            }
+                                            earlyAbort = (call.Id, call.Name, call.Args.ToString(), abortMsg);
+                                            break;
                                         }
                                     }
 
@@ -936,7 +896,7 @@ public abstract class Agent
                     ? new StringBuilder("Here are the results of the tool calls you made:\n\n")
                     : null;
 
-                editedPathsThisBatch.Clear();
+                OnToolBatchStart(toolTurn);
 
                 HashSet<string> readOnlyTools = new(StringComparer.OrdinalIgnoreCase)
                     { "read_file", "search_files", "list_directory", "find_files" };
@@ -949,187 +909,21 @@ public abstract class Agent
                 bool productiveBatch = false; // set true when a tool returns new info or mutates a file
                 foreach (var (callIndex, call) in pendingCalls)
                 {
+                    string argsJson = call.Args.ToString();
                     string result;
-                    bool   blindFirstRead = false; // read_file on a file never previewed or read this turn
 
-                    if (call.Name is "preview_file")
+                    // Code-specific pre-execute guards (dedup / nudges / build-before-test / command cache).
+                    // Returns a short-circuit result, or null to run the tool. See Code.ToolLoop.cs.
+                    string? guard = PreToolGuard(thread, toolTurn, call.Name, call.Id, argsJson);
+                    if (guard is not null)
                     {
-                        try
-                        {
-                            using JsonDocument pdoc = JsonDocument.Parse(call.Args.ToString());
-                            string ppath = NormKey(pdoc.RootElement.GetProperty("path").GetString() ?? "");
-                            if (commandCache.TryGetValue($"preview_file:{ppath}", out var cachedPreview))
-                            {
-                                commandCache[$"preview_file:{ppath}"] = (cachedPreview.Result, cachedPreview.Count + 1);
-                                string previewNudge = cachedPreview.Count >= 2
-                                    ? $"[System: You have previewed {ppath} {cachedPreview.Count + 1} times this turn. Stop previewing it — use read_file with start_line/end_line to read the section you need.]"
-                                    : $"[System: You already previewed {ppath} this turn. Here is the cached outline — do not preview it again:\n\n{cachedPreview.Result}]";
-                                if (isXmlFallback) { xmlResultsMsg!.AppendLine($"--- {call.Name} ---"); xmlResultsMsg.AppendLine(previewNudge); xmlResultsMsg.AppendLine(); }
-                                else { messages.Add(new { role = "tool", tool_call_id = call.Id, name = call.Name, content = previewNudge }); if (thread.liveCallInfo is { } lc2) lc2.EstimatedInputTokens += previewNudge.Length / CHARS_PER_TOKEN; }
-                                continue;
-                            }
-                        }
-                        catch { /* ignore */ }
+                        result = guard;
                     }
-
-                    if (call.Name is "read_file")
+                    else if (thread.tools.TryGetValue(call.Name, out var tool))
                     {
-                        try
-                        {
-                            using JsonDocument rdoc = JsonDocument.Parse(call.Args.ToString());
-                            string rpath = NormKey(rdoc.RootElement.GetProperty("path").GetString() ?? "");
-                            // Key by path+range so different line ranges of the same file are each allowed once.
-                            string startStr  = rdoc.RootElement.TryGetProperty("start_line", out var rsl) ? rsl.GetRawText() : "0";
-                            string endStr    = rdoc.RootElement.TryGetProperty("end_line",   out var rel) ? rel.GetRawText() : "0";
-                            string rangeKey  = $"{rpath}:{startStr}-{endStr}";
-                            readCounts.TryGetValue(rangeKey, out int rc);
-                            readCounts[rangeKey] = rc + 1;
-                            // Also record that the path was read at all (used by the edit pre-check).
-                            readCounts.TryGetValue(rpath, out int pathRc);
-                            readCounts[rpath] = pathRc + 1;
-                            // Turn-level tally that edits do NOT reset — drives the re-read-loop circuit breaker below.
-                            fileReadTotals.TryGetValue(rpath, out int fileTotalRc);
-                            fileReadTotals[rpath] = fileTotalRc + 1;
-                            // Soft nudge: first read of a file that was never previewed this turn. Encourages
-                            // preview -> read -> edit without blocking (the read still runs).
-                            blindFirstRead = pathRc == 0 && !commandCache.ContainsKey($"preview_file:{rpath}");
-                            if (rc >= 1)
-                            {
-                                // Duplicate read of the same range. Hand back the cached content (not a bare
-                                // refusal) so the model is never "stuck waiting on a file" — weaker models read
-                                // a "you already read this" nag as a cache error and loop on it. Lead with a
-                                // firm directive to move to editing.
-                                string cachedRead = commandCache.TryGetValue($"read_file:{rangeKey}", out var rcv) ? rcv.Result : "";
-                                // Escalate once this file has been read many times overall this turn (the dedup
-                                // intercepts same-range re-reads before the post-execution circuit breaker below,
-                                // so without this a multi-edit re-orientation loop just keeps getting the soft nag
-                                // and eventually loop-breaks unfinished). Point to the real recovery path: locate
-                                // remaining call sites with search_files (exact line numbers) and edit each.
-                                if (fileReadTotals[rpath] >= READ_LOOP_CEILING)
-                                    result = $"[System: You have read {rpath} {fileReadTotals[rpath]} times this turn and are looping. The content has not changed and re-reading will not help. To finish a multi-spot change, call search_files for the symbol (it returns exact current line numbers for every remaining call site), then edit_file each one — do not keep re-reading. If the change is already done, stop and give your summary now.]";
-                                else
-                                    result = string.IsNullOrEmpty(cachedRead)
-                                    ? $"[System: You already have {rpath} lines {startStr}–{endStr} in the context above. This is not a cache error — the content has not changed. Stop re-reading and make your edits now with edit_file (start_line/end_line). To see a different part, read a different range.]"
-                                    : $"[System: You already have these lines — this is not a cache error, the file has not changed. Stop re-reading and make your edits now with edit_file. Repeating the content for reference:]\n\n{cachedRead}";
-                                if (isXmlFallback)
-                                {
-                                    xmlResultsMsg!.AppendLine($"--- {call.Name} ---");
-                                    xmlResultsMsg.AppendLine(result);
-                                    xmlResultsMsg.AppendLine();
-                                }
-                                else
-                                {
-                                    messages.Add(new { role = "tool", tool_call_id = call.Id, name = call.Name, content = result });
-                                    if (thread.liveCallInfo is { } lc) lc.EstimatedInputTokens += result.Length / CHARS_PER_TOKEN;
-                                }
-                                continue;
-                            }
-                        }
-                        catch { /* ignore */ }
-                    }
-
-                    if (call.Name == "edit_file")
-                    {
-                        string? editPath = null;
-                        try
-                        {
-                            using JsonDocument edoc = JsonDocument.Parse(call.Args.ToString());
-                            editPath = (edoc.RootElement.GetProperty("path").GetString() ?? "").Trim('"', '\'', ' ', '\\');
-                        }
-                        catch { /* fall through */ }
-
-                        if (!string.IsNullOrEmpty(editPath))
-                        {
-                            string ekey = NormKey(editPath);
-
-                            if (editedPathsThisBatch.Contains(ekey))
-                            {
-                                result = $"[System: edit_file was already applied to {editPath} earlier in this same batch of tool calls. This second edit was NOT applied — its line numbers were computed against the file's previous content and would now target the wrong lines. Re-read {editPath}, then make the next edit.]";
-                                string skipLabel = System.IO.Path.GetFileName(editPath);
-                                contentBuilder.Append($"<!--ari-tool-error:edit_file:{skipLabel}:{ToolCallParser.EscapeLabel(result)}-->");
-                                if (onDelta is not null) await onDelta(contentBuilder.ToString());
-                                if (isXmlFallback)
-                                {
-                                    xmlResultsMsg!.AppendLine($"--- {call.Name} ---");
-                                    xmlResultsMsg.AppendLine(result);
-                                    xmlResultsMsg.AppendLine();
-                                }
-                                else
-                                {
-                                    messages.Add(new { role = "tool", tool_call_id = call.Id, name = call.Name, content = result });
-                                    if (thread.liveCallInfo is { } lc) lc.EstimatedInputTokens += result.Length / CHARS_PER_TOKEN;
-                                }
-                                continue;
-                            }
-                            editedPathsThisBatch.Add(ekey);
-                        }
-                    }
-
-                    if (!todoNudged && !HasTasks(thread) && call.Name is "edit_file" or "write_file")
-                    {
-                        string? tp = null;
-                        try
-                        {
-                            using JsonDocument tdoc = JsonDocument.Parse(call.Args.ToString());
-                            tp = NormKey(tdoc.RootElement.GetProperty("path").GetString() ?? "");
-                        }
-                        catch { /* skip the nudge */ }
-
-                        if (!string.IsNullOrEmpty(tp) && turnEditPaths.Count >= 1 && !turnEditPaths.Contains(tp))
-                        {
-                            todoNudged = true;
-                            result = $"[System: You are now changing a second file ({tp}) but have no task checklist. Before this edit, call update_todos with the full plan — one item per file/change, and include updating call sites, tests, and building as their own items. Then make this edit. Maintaining the checklist is required for multi-file work.]";
-                            string nudgeLabel = System.IO.Path.GetFileName(tp);
-                            contentBuilder.Append($"<!--ari-tool-error:{call.Name}:{nudgeLabel}:{ToolCallParser.EscapeLabel(result)}-->");
-                            if (onDelta is not null) await onDelta(contentBuilder.ToString());
-                            if (isXmlFallback)
-                            {
-                                xmlResultsMsg!.AppendLine($"--- {call.Name} ---");
-                                xmlResultsMsg.AppendLine(result);
-                                xmlResultsMsg.AppendLine();
-                            }
-                            else
-                            {
-                                messages.Add(new { role = "tool", tool_call_id = call.Id, name = call.Name, content = result });
-                                if (thread.liveCallInfo is { } lc) lc.EstimatedInputTokens += result.Length / CHARS_PER_TOKEN;
-                            }
-                            continue;
-                        }
-                        if (!string.IsNullOrEmpty(tp)) turnEditPaths.Add(tp);
-                    }
-                    else if (call.Name is "edit_file" or "write_file")
-                    {
-                        try
-                        {
-                            using JsonDocument tdoc = JsonDocument.Parse(call.Args.ToString());
-                            string tp = NormKey(tdoc.RootElement.GetProperty("path").GetString() ?? "");
-                            if (!string.IsNullOrEmpty(tp)) turnEditPaths.Add(tp);
-                        }
-                        catch { /* ignore */ }
-                    }
-
-                    if (thread.tools.TryGetValue(call.Name, out var tool))
-                    {
-                        if (call.Name == "run_command" && buildState != 1)
-                        {
-                            string cmdLine = ToolCallParser.TryExtractJsonString(call.Args.ToString(), "command") ?? "";
-                            if (IsTestCmd(cmdLine) && !IsBuildCmd(cmdLine))
-                            {
-                                result = buildState == 2
-                                    ? "[System: The build is currently failing — do not run tests yet. Fix the build errors first (run the build, resolve every reported error), then run the tests once it builds cleanly.]"
-                                    : "[System: Build before you test. Run the build first (e.g. 'dotnet build' on the project you changed) and confirm it reports no errors; only run tests if the build succeeds, otherwise you are testing stale binaries.]";
-                                Shared.Logger.LogInformation("[{Agent}] ({Thread}) blocked test before {State} build: {Cmd}", Name, thread.Key, buildState == 2 ? "failed" : "successful", cmdLine);
-                                contentBuilder.Append($"<!--ari-tool-error:run_command::{ToolCallParser.EscapeLabel(result)}-->");
-                                if (onDelta is not null) await onDelta(contentBuilder.ToString());
-                                if (isXmlFallback) { xmlResultsMsg!.AppendLine($"--- {call.Name} ---"); xmlResultsMsg.AppendLine(result); xmlResultsMsg.AppendLine(); }
-                                else { messages.Add(new { role = "tool", tool_call_id = call.Id, name = call.Name, content = result }); if (thread.liveCallInfo is { } lcBT) lcBT.EstimatedInputTokens += result.Length / CHARS_PER_TOKEN; }
-                                continue;
-                            }
-                        }
-
                         if (tool.Display is not null)
                         {
-                            string finalMarker = tool.Display(call.Args.ToString());
+                            string finalMarker = tool.Display(argsJson);
                             if (streamingMarkers.TryGetValue(callIndex, out string? prevStreamMarker))
                                 ReplaceInBuilder(contentBuilder, prevStreamMarker, finalMarker);
                             else
@@ -1137,206 +931,49 @@ public abstract class Agent
                             if (onDelta is not null) await onDelta(contentBuilder.ToString());
                         }
 
-                        if (call.Name == "run_command")
-                        {
-                            string cmdKey = NormCmd(call.Args.ToString());
-                            if (commandCache.TryGetValue(cmdKey, out var cached))
-                            {
-                                commandCache[cmdKey] = (cached.Result, cached.Count + 1);
-                                result = cached.Count >= 2
-                                    ? $"[System: You have run this exact command {cached.Count + 1} times this turn. Do not call it again — you already have the output. Use what you know to proceed or respond to the user.]"
-                                    : $"[System: You already ran this command earlier this turn. Here is the cached output — do not call it again:\n\n{cached.Result}]";
-                                goto AfterToolExecute;
-                            }
-                        }
-
                         result = prelaunched.TryGetValue(callIndex, out Task<string>? pre)
                             ? await pre
-                            : await tool.Execute(call.Args.ToString());
+                            : await tool.Execute(argsJson);
 
-                        // Placeholder copy-loop safety net: edit_file/write_file refuse an "[omitted]" payload
-                        // with "Refused: ... placeholder". Keeping edit args un-omitted (see TrimArgs) removes
-                        // the usual trigger, but if the model still spirals on a placeholder we stop the turn
-                        // rather than let it run away (it was reaching ~80 steps before this guard).
-                        if ((call.Name is "edit_file" or "write_file")
-                            && result.StartsWith("Refused:", StringComparison.Ordinal)
-                            && result.Contains("placeholder", StringComparison.OrdinalIgnoreCase)
-                            && ++placeholderRefusals >= MAX_PLACEHOLDER_REFUSALS)
-                            throw new LlmRequestFailedException(
-                                $"Stopped: {placeholderRefusals} edits in a row sent a redaction placeholder instead of real code — breaking the copy-forward loop. Any changes already applied are kept.");
-
-                        // Cache the clean read result by path+range so a duplicate read can be served back
-                        // (see the read dedup above) instead of a confusing "already read" refusal.
-                        if (call.Name == "read_file" && !ToolCallParser.IsError(result))
-                        {
-                            try
-                            {
-                                using JsonDocument rcDoc = JsonDocument.Parse(call.Args.ToString());
-                                string rcPath = NormKey(rcDoc.RootElement.GetProperty("path").GetString() ?? "");
-                                string rcS = rcDoc.RootElement.TryGetProperty("start_line", out var a2) ? a2.GetRawText() : "0";
-                                string rcE = rcDoc.RootElement.TryGetProperty("end_line",   out var b2) ? b2.GetRawText() : "0";
-                                commandCache[$"read_file:{rcPath}:{rcS}-{rcE}"] = (result, 1);
-                            }
-                            catch { /* ignore */ }
-                        }
-
-                        if (call.Name == "read_file" && blindFirstRead
-                            && !result.StartsWith("[System:", StringComparison.OrdinalIgnoreCase)
-                            && !ToolCallParser.IsError(result))
-                            result += "\n[System: You read this file without previewing it first. For an unfamiliar file, call preview_file to see its structure and line numbers, then read only the range you need — and use search_files to locate specific call sites instead of scrolling.]";
-
-                        // Re-read-loop circuit breaker. The per-range dedup above is reset whenever the file is
-                        // edited (so a legitimate post-edit re-read returns fresh content), which lets a
-                        // distrust loop slip through: edit -> re-read whole file -> imagine a structural problem
-                        // (this model misreads a column-0 brace as "missing"; C# ignores indentation) -> edit ->
-                        // re-read. fileReadTotals counts every read of a file this turn and edits never reset it,
-                        // so once a single file has been read many times we hand the content back WITH a firm
-                        // directive to stop verifying. Content still flows (never blocked) — only steered.
-                        if (call.Name == "read_file" && !ToolCallParser.IsError(result))
-                        {
-                            try
-                            {
-                                using JsonDocument brkDoc = JsonDocument.Parse(call.Args.ToString());
-                                string brkPath = NormKey(brkDoc.RootElement.GetProperty("path").GetString() ?? "");
-                                fileReadTotals.TryGetValue(brkPath, out int brkTotal);
-                                if (brkTotal >= READ_LOOP_CEILING)
-                                    result += $"\n[System: You have now read this file {brkTotal} times this turn — far more than the work needs. The file is fine: C# ignores indentation, so a brace at column 0 is still a valid, correctly-placed brace, and edit_file already showed you each change landed. Re-reading is not revealing a real problem. STOP re-reading and verifying. If one specific line is genuinely wrong, make a single tight edit to fix exactly that line; otherwise you are finished — write your summary now. Do not read this file again.]";
-                            }
-                            catch { /* ignore */ }
-                        }
-
-                        if (call.Name == "run_command")
-                        {
-                            string cmdKeyW    = NormCmd(call.Args.ToString());
-                            string cmdTrimmed = (ToolCallParser.TryExtractJsonString(call.Args.ToString(), "command") ?? "").Trim('"', '\'', ' ');
-                            if (System.Text.RegularExpressions.Regex.IsMatch(cmdTrimmed, @"^\S+\.(csproj|sln|cs|fs|vb|py|ts|tsx|js|jsx|json|xml|yaml|yml|sh|ps1)$"))
-                                result = $"[System: \"{cmdTrimmed}\" is a filename, not a shell command — nothing was executed. Did you mean 'dotnet build {cmdTrimmed}', 'dotnet run --project {cmdTrimmed}', or similar?]";
-                            else
-                                commandCache[cmdKeyW] = (result, 1);
-
-                            string cmdLine = ToolCallParser.TryExtractJsonString(call.Args.ToString(), "command") ?? "";
-                            if (IsBuildCmd(cmdLine) || IsTestCmd(cmdLine))
-                            {
-                                bool failed = result.Contains("Build FAILED")
-                                    || result.Contains(": error ")
-                                    || System.Text.RegularExpressions.Regex.IsMatch(result, @"\b[1-9]\d*\s+Error\(s\)");
-                                bool ok = !failed && (result.Contains("Build succeeded") || result.Contains("0 Error(s)"));
-                                if (ok)          buildState = 1;
-                                else if (failed) buildState = 2;
-
-                                if (buildState == 2 && CondenseBuildErrors(result) is { } condensed)
-                                    result = condensed;
-                            }
-                        }
-                        if (call.Name == "preview_file")
-                        {
-                            try
-                            {
-                                using JsonDocument pd2 = JsonDocument.Parse(call.Args.ToString());
-                                string pp = NormKey(pd2.RootElement.GetProperty("path").GetString() ?? "");
-                                commandCache[$"preview_file:{pp}"] = (result, 1);
-                            }
-                            catch { /* ignore */ }
-                        }
-
-                        AfterToolExecute:
-                        if (call.Name == "edit_file")
-                        {
-                            try
-                            {
-                                using JsonDocument argDoc = JsonDocument.Parse(call.Args.ToString());
-                                string editPath = (argDoc.RootElement.GetProperty("path").GetString() ?? "").Trim('"', '\'', ' ');
-                                string editKey  = NormKey(editPath);
-                                bool edited = result.Contains("Successfully edited");
-                                if (edited)
-                                {
-                                    editedFiles.Add(editKey);
-                                    editFailStreak.Remove(editKey);
-                                }
-                                else
-                                {
-                                    editFailStreak.TryGetValue(editKey, out int streak);
-                                    editFailStreak[editKey] = ++streak;
-
-                                    // Environmental failures (permission denied, file not found) can't be fixed by
-                                    // changing edit strategy — nudging the model to retry with line numbers just
-                                    // loops it. Let the clean client error stand so it surfaces the blocker instead.
-                                    bool environmental =
-                                        result.Contains("Permission denied", StringComparison.OrdinalIgnoreCase) ||
-                                        result.Contains("File not found",    StringComparison.OrdinalIgnoreCase);
-
-                                    if (!environmental)
-                                    {
-                                        if (editedFiles.Contains(editKey))
-                                            result += " This file was already edited earlier this turn — re-read it to see the current content and line numbers before retrying.";
-                                        else if (streak >= 2)
-                                            result += " Re-read the file to get current line numbers, then change these lines with start_line/end_line (one edit_file call with an 'edits' array if several ranges), or rewrite the whole file with write_file. If you still cannot, stop and tell the user what is blocking you.";
-                                    }
-                                    else if (streak >= 2)
-                                    {
-                                        result += " This is a filesystem permission/access problem, not an editing-strategy problem — stop retrying and tell the user the file cannot be written and why.";
-                                    }
-                                }
-                            }
-                            catch { /* ignore */ }
-                        }
-
-                        if (call.Name == "write_file" && result.Contains("Successfully wrote"))
-                        {
-                            try
-                            {
-                                using JsonDocument argDoc = JsonDocument.Parse(call.Args.ToString());
-                                string writePath = NormKey(argDoc.RootElement.GetProperty("path").GetString() ?? "");
-                                editFailStreak.Remove(writePath);
-                                editedFiles.Add(writePath);
-                                writeCounts.TryGetValue(writePath, out int wc);
-                                writeCounts[writePath] = ++wc;
-                                if (wc == 2)
-                                    result += " You have already written this file this turn and that write succeeded. Do NOT write it again unless you have a further, distinct change. If you are unsure the content is correct, use read_file to verify — do not rewrite it blindly.";
-                                else if (wc >= 3)
-                                {
-                                    forceNoMoreTools = true;
-                                    result += " This file has been written too many times this turn. No further tool calls will be accepted — tell the user the file has been updated and stop.";
-                                    Shared.Logger.LogWarning("[{Agent}] ({Thread}) write_file called {Count}x on '{File}' — cutting off tools for this turn.", Name, thread.Key, wc, writePath);
-                                }
-                            }
-                            catch { /* ignore */ }
-                        }
+                        // Code-specific post-processing (cache, circuit breaker, edit/build tracking). May throw
+                        // to abort the turn. See Code.ToolLoop.cs.
+                        result = PostToolProcess(thread, toolTurn, call.Name, argsJson, result);
 
                         if (ToolCallParser.IsError(result))
-                        {
                             Shared.Logger.LogError("[{Agent}] ({Thread}) Tool '{Tool}' failed: {Error}", Name, thread.Key, call.Name, result);
-                            string errLabel = "";
-                            try
-                            {
-                                using JsonDocument argDoc = JsonDocument.Parse(call.Args.ToString());
-                                string p = argDoc.RootElement.TryGetProperty("path",    out var pe)  ? pe.GetString()  ?? "" :
-                                           argDoc.RootElement.TryGetProperty("pattern", out var pte) ? pte.GetString() ?? "" : "";
-                                errLabel = System.IO.Path.GetFileName(p.Trim('"', '\'', ' ', '\\'));
-                            }
-                            catch { /* ignore */ }
-                            contentBuilder.Append($"<!--ari-tool-error:{call.Name}:{errLabel}:{ToolCallParser.EscapeLabel(result)}-->");
-                            if (onDelta is not null) await onDelta(contentBuilder.ToString());
-                        }
                         else if (tool.DisplayAfter is not null)
                         {
-                            contentBuilder.Append(tool.DisplayAfter(call.Args.ToString()));
+                            contentBuilder.Append(tool.DisplayAfter(argsJson));
                             if (onDelta is not null) await onDelta(contentBuilder.ToString());
                         }
-                        toolResults.Add(result);
-                        // Progress = a tool returned real content or mutated a file. Repeated-read nags and
-                        // cached-dup notices start with "[System:"; errors start with "[Error:". A batch of
-                        // only those is "no progress" and feeds the loop-breaker below.
-                        if (!result.StartsWith("[System:", StringComparison.OrdinalIgnoreCase) && !ToolCallParser.IsError(result))
-                            productiveBatch = true;
                     }
                     else
                     {
                         result = $"[Error: tool '{call.Name}' is not registered]";
                         Shared.Logger.LogError("[{Agent}] ({Thread}) Model called unknown tool '{Tool}'", Name, thread.Key, call.Name);
-                        contentBuilder.Append($"<!--ari-tool-error:{call.Name}:{ToolCallParser.EscapeLabel(result)}-->");
+                    }
+
+                    // A guard message ("[System:") or an error renders as an inline tool-error card.
+                    if (result.StartsWith("[System:", StringComparison.Ordinal) || ToolCallParser.IsError(result))
+                    {
+                        string label = "";
+                        try
+                        {
+                            using JsonDocument lDoc = JsonDocument.Parse(argsJson);
+                            string lp = lDoc.RootElement.TryGetProperty("path",    out var lpe)  ? lpe.GetString()  ?? "" :
+                                        lDoc.RootElement.TryGetProperty("pattern", out var lpte) ? lpte.GetString() ?? "" : "";
+                            label = System.IO.Path.GetFileName(lp.Trim('"', '\'', ' ', '\\'));
+                        }
+                        catch { /* ignore */ }
+                        contentBuilder.Append($"<!--ari-tool-error:{call.Name}:{label}:{ToolCallParser.EscapeLabel(result)}-->");
                         if (onDelta is not null) await onDelta(contentBuilder.ToString());
                     }
+
+                    toolResults.Add(result);
+                    // Progress = a tool returned real content or mutated a file. Guard nags start with "[System:"
+                    // and errors with "[Error:"; a batch of only those is "no progress" (feeds the loop-breaker).
+                    if (!result.StartsWith("[System:", StringComparison.OrdinalIgnoreCase) && !ToolCallParser.IsError(result))
+                        productiveBatch = true;
 
                     if (isXmlFallback)
                     {
@@ -1350,51 +987,7 @@ public abstract class Agent
                         messages.Add(new { role = "tool", tool_call_id = call.Id, name = call.Name, content = result });
                         toolResultSlots.Add((addedIndex, call.Id, call.Name));
                         if (thread.liveCallInfo is { } lc) lc.EstimatedInputTokens += result.Length / CHARS_PER_TOKEN;
-
-                        try
-                        {
-                            using JsonDocument hdoc = JsonDocument.Parse(call.Args.ToString());
-                            string hpath = hdoc.RootElement.TryGetProperty("path", out var hpe)
-                                ? (hpe.GetString() ?? "").Trim('"', '\'', ' ', '\\') : "";
-                            if (!string.IsNullOrEmpty(hpath))
-                            {
-                                if (call.Name == "read_file")
-                                {
-                                    // Key by path+range so different ranges of the same file don't stub each other.
-                                    string startStr = hdoc.RootElement.TryGetProperty("start_line", out var sl) ? (sl.GetRawText()) : "0";
-                                    string endStr   = hdoc.RootElement.TryGetProperty("end_line",   out var el) ? (el.GetRawText()) : "0";
-                                    string rangeKey = $"{hpath}:{startStr}-{endStr}";
-                                    if (liveReads.TryGetValue(rangeKey, out var prev))
-                                        StubRead(messages, prev.Index, prev.CallId, hpath);
-                                    if (!result.StartsWith("[System:"))
-                                        liveReads[rangeKey] = (addedIndex, call.Id);
-                                }
-                                else if (call.Name is "edit_file" or "write_file"
-                                         && (result.Contains("Successfully edited") || result.Contains("Successfully wrote")))
-                                {
-                                    // Invalidate all cached ranges for this file after a write.
-                                    foreach (string k in liveReads.Keys.Where(k => k.StartsWith(hpath + ":", StringComparison.OrdinalIgnoreCase)).ToList())
-                                    {
-                                        StubRead(messages, liveReads[k].Index, liveReads[k].CallId, hpath);
-                                        liveReads.Remove(k);
-                                    }
-                                    // The file just changed, so any cached read of it is stale. Drop this file's
-                                    // read counts and cached read/preview output so a follow-up read RE-EXECUTES
-                                    // and returns the NEW content — otherwise the dedup serves the pre-edit copy
-                                    // and the model, seeing its change "missing", loops re-editing.
-                                    string editedKey = NormKey(hpath);
-                                    foreach (string rk in readCounts.Keys.Where(k => k == editedKey || k.StartsWith(editedKey + ":", StringComparison.OrdinalIgnoreCase)).ToList())
-                                        readCounts.Remove(rk);
-                                    foreach (string ck in commandCache.Keys.Where(k => k.StartsWith($"read_file:{editedKey}:", StringComparison.OrdinalIgnoreCase) || k == $"preview_file:{editedKey}").ToList())
-                                        commandCache.Remove(ck);
-                                    // An edit changes build/test state, so any cached run_command result is stale —
-                                    // drop them so a rebuild AFTER a fix re-runs instead of being deduped as "already ran".
-                                    foreach (string ck in commandCache.Keys.Where(k => k.StartsWith("cmd:", StringComparison.Ordinal)).ToList())
-                                        commandCache.Remove(ck);
-                                }
-                            }
-                        }
-                        catch { /* ignore */ }
+                        AfterToolAppended(toolTurn, messages, call.Name, call.Id, argsJson, result, addedIndex);
                     }
                 }
 
@@ -1412,10 +1005,8 @@ public abstract class Agent
                 // file it already read). The per-tool nags only scold; nothing terminates. Under the text
                 // protocol MaxToolCalls doesn't help either — text calls still execute after tools are
                 // "exhausted". So after enough consecutive no-progress batches, end the turn outright.
-                if (productiveBatch) noProgressBatches = 0;
-                else if (++noProgressBatches >= 6)
+                if (OnBatchEndShouldBreak(thread, toolTurn, productiveBatch))
                 {
-                    Shared.Logger.LogWarning("[{Agent}] ({Thread}) loop-break: {N} consecutive tool batches made no progress — ending turn.", Name, thread.Key, noProgressBatches);
                     contentBuilder.Append("\n\n_Stopped — repeated tool calls were not making progress._");
                     if (onDelta is not null) await onDelta(contentBuilder.ToString());
                     break;
@@ -1436,7 +1027,7 @@ public abstract class Agent
                 continue;
             }
 
-            bool toolsStillAvailable = !forceNoMoreTools && !(MaxToolCalls > 0 && toolCallCount >= MaxToolCalls);
+            bool toolsStillAvailable = !toolTurn.ForceNoMoreTools && !(MaxToolCalls > 0 && toolCallCount >= MaxToolCalls);
             if (pendingCalls.Count == 0 && IncompleteTasks(thread) > 0 && todoReminders < 1 && toolsStillAvailable)
             {
                 todoReminders++;
@@ -1630,18 +1221,6 @@ public abstract class Agent
         string.Concat(AriContentBlock.Parse(content).OfType<TextBlock>().Select(b => b.Text))
             .Replace("<!--ari-batch-end-->", "")
             .Trim();
-
-    private static void StubRead(List<object> messages, int index, string callId, string path)
-    {
-        if (index < 0 || index >= messages.Count) return;
-        messages[index] = new
-        {
-            role         = "tool",
-            tool_call_id = callId,
-            name         = "read_file",
-            content      = $"[An earlier copy of {path} was removed here to save context. If it was superseded by a later read, that newer copy is below — work from it. If you edited this file, its line numbers changed: read it once more before editing it again.]"
-        };
-    }
 
     /// <summary>Most-frequent character in s and the fraction of s it makes up — used to detect a
     /// degenerate repeated-character spiral (e.g. runaway backslash escaping) in streamed output.</summary>
