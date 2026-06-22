@@ -137,7 +137,7 @@ internal class Engram : Agent, IDisposable
                   }))
                 : "none";
             string transcript  = BuildTranscript(conversationItems);
-            Thread engramThread = new Thread(ThreadType.Engram, $"engram:{Guid.NewGuid()}");
+            Thread engramThread = new Thread(ThreadPipeline.Dialogue, $"engram:{Guid.NewGuid()}") { Internal = true };
 
             if (context is not null)
                 await context.RebuildFromTranscript(threadKey, transcript);
@@ -374,7 +374,7 @@ internal class Engram : Agent, IDisposable
                     "(Omit newName if the path is not changing. Raw JSON only — no fences, no explanation.)";
 
                 // Fork from the saved context snapshot so each write call starts with the same base.
-                Thread writeThread = new Thread(ThreadType.Engram, $"adhoc:{Guid.NewGuid()}");
+                Thread writeThread = new Thread(ThreadPipeline.Dialogue, $"adhoc:{Guid.NewGuid()}") { Internal = true };
                 writeThread.Seed(savedContext);
                 string writeRaw = await SendPrompt(writeThread, writePrompt, maxTokensOverride: -1);
 
@@ -644,7 +644,7 @@ internal class EngramBuffer
 
             if (queue.Count >= DRAIN_QUEUE_LIMIT)
                 _ = Task.Run(Drain);
-            else if (!threads.Values.Any(t => t.Type == ThreadType.Dialogue && t.State == ThreadState.Active))
+            else if (!threads.Values.Any(t => t.Pipeline == ThreadPipeline.Dialogue && t.State is ThreadState.Idle or ThreadState.Streaming))
                 _ = Task.Run(Drain);
         };
     }
@@ -660,13 +660,13 @@ internal class EngramBuffer
             queuedKeys.Remove(threadKey);
 
             threads.TryGetValue(threadKey, out Thread? thread);
-            if (thread is null || thread.State == ThreadState.Active || thread.State == ThreadState.Deleted)
+            if (thread is null || thread.State is ThreadState.Idle or ThreadState.Streaming or ThreadState.Deleted)
                 continue;
 
             await engram.RunEngram(threadKey, "inactivity");
             if (threads.TryGetValue(threadKey, out Thread? et)) et.MarkEngramProcessed();
 
-            if (threads.Values.Any(t => t.Type == ThreadType.Dialogue && t.State == ThreadState.Active))
+            if (threads.Values.Any(t => t.Pipeline == ThreadPipeline.Dialogue && t.State is ThreadState.Idle or ThreadState.Streaming))
                 return;
         }
     }

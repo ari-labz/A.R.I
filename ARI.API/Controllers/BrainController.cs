@@ -10,7 +10,7 @@ namespace ARI.API.Controllers;
 /// Restore is additive (recreates missing notes, overwrites present ones to the snapshot) and
 /// never deletes, so it is safe to run against a damaged graph.
 /// </summary>
-[Route("api/cp/brain")]
+[Route("admin/brain")]
 [ApiController]
 public class BrainController : ControllerBase
 {

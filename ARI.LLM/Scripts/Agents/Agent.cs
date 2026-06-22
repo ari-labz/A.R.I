@@ -159,12 +159,9 @@ public abstract class Agent
         thread.inactivityTimer?.Dispose();
         thread.inactivityTimer = null;
 
-        if (thread.State != ThreadState.Active)
-        {
-            thread.dormantTimer?.Dispose();
-            thread.dormantTimer = null;
-            thread.State = ThreadState.Active;
-        }
+        thread.dormantTimer?.Dispose();
+        thread.dormantTimer = null;
+        thread.State = ThreadState.Streaming;
 
         if (thread.ariRepliedAt != DateTime.MinValue)
         {
@@ -228,6 +225,9 @@ public abstract class Agent
             ThreadMessage m = collapsed[i];
             messages.Add(new { role = m.Role, content = $"{m.Username}: {m.Content}" });
         }
+
+        if (recallNotes != null)
+            messages.Add(new { role = "system", content = $"[ARI's Memories]\n{(string.IsNullOrWhiteSpace(recallNotes) ? "none" : recallNotes.Trim())}" });
 
         if (collapsed.Count > 0)
         {
@@ -395,10 +395,21 @@ public abstract class Agent
 
         AriResponse ariResponse = new() { Timestamp = DateTime.Now };
         thread.History.Add(ariResponse);
+        thread.RaiseUpdated();
         thread.streamingResponse = ariResponse;
         thread.streamedText      = "";
+        DateTime lastStreamNotify = DateTime.MinValue;
         Func<string, Task>? userDelta = onDelta;
-        onDelta = async text => { thread.streamedText = text; if (userDelta is not null) await userDelta(text); };
+        onDelta = async text => {
+            thread.streamedText    = text;
+            ariResponse.StreamText = text;
+            DateTime now = DateTime.UtcNow;
+            if ((now - lastStreamNotify).TotalMilliseconds >= 150) {
+                lastStreamNotify = now;
+                thread.RaiseStreaming(text);
+            }
+            if (userDelta is not null) await userDelta(text);
+        };
 
         while (true)
         {
@@ -487,6 +498,7 @@ public abstract class Agent
                     body.TryGetValue("max_tokens", out object? mtv) ? mtv : "?",
                     toolSchemas?.Length ?? 0, messages.Count);
             if (dynamicInjected) messages.RemoveAt(messages.Count - 1);   // keep persistent history clean + prefix stable
+            ariResponse.DebugRequestJson = json;
             HttpRequestMessage request = new(HttpMethod.Post, $"{Endpoint}/v1/chat/completions")
             {
                 Content = new StringContent(json, Encoding.UTF8, "application/json")
@@ -1498,6 +1510,7 @@ public abstract class Agent
         thread.liveCallInfo = null;
 
         ariResponse.Content                   = AriContentBlock.Parse(responseText);
+        ariResponse.DebugResponseText         = responseText;
         ariResponse.ThinkingSeconds           = elapsed;
         ariResponse.RecallNotes               = combinedNotes;
         ariResponse.ContextSummary            = contextSummary;
@@ -1509,15 +1522,17 @@ public abstract class Agent
         ariResponse.EstimatedTextPromptTokens = estimatedTextTokens;
         ariResponse.ImageTokenLimit           = 0;
         ariResponse.State                     = AriResponseState.Complete;
+        ariResponse.StreamText               = null;
         thread.streamingResponse              = null;
-        thread.RaiseUpdated();
+        thread.RaiseStreamingFinished();
 
         thread.ariRepliedAt = DateTime.UtcNow;
+        thread.State = ThreadState.Idle;
         thread.inactivityTimer?.Dispose();
         thread.inactivityTimer = new Timer(_ =>
         {
-            if (thread.State != ThreadState.Active) return;
-            thread.State = ThreadState.Inactive;
+            if (thread.State != ThreadState.Idle) return;
+            thread.State = ThreadState.Dormant;
             thread.RaiseBecameInactive();
         }, null, thread.InactivityThreshold, Timeout.InfiniteTimeSpan);
 

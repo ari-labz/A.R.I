@@ -201,6 +201,7 @@ html, body {
 .vs-progress-fill { height: 100%; border-radius: 99px; background: #518c9a; transition: width .4s ease; }
 .vs-progress-fill.done  { background: #16a34a; }
 .vs-progress-fill.error { background: #dc2626; }
+.vs-progress-track.error { background: #fecaca; }
 .vs-time-row { display: flex; gap: 10px; margin-bottom: 8px; }
 .vs-time-chip { font-size: 11px; color: var(--text-dim); background: #f3f4f6; border-radius: 20px; padding: 2px 10px; }
 .vs-detail { font-size: 12px; color: var(--text-dim); min-height: 16px; }
@@ -254,6 +255,82 @@ html, body {
     #sidebar.collapsed { transform: translateX(-100%); }
     #topbar-toggle { display: flex !important; }
 }
+
+/* ── debug thread view ───────────────────────────────────── */
+.dbg-layout { display: flex; height: 100%; overflow: hidden; }
+.dbg-sidebar { width: 220px; min-width: 220px; border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; background: #fafafa; flex-shrink: 0; }
+.dbg-sidebar-head { padding: 12px 14px 10px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+.dbg-sidebar-title { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim); }
+.dbg-thread-list { flex: 1; overflow-y: auto; padding: 6px; }
+.dbg-thread-item { padding: 8px 10px; border-radius: 7px; cursor: pointer; font-size: 12px; margin-bottom: 2px; transition: background .1s; }
+.dbg-thread-item:hover { background: #ebebeb; }
+.dbg-thread-item.active { background: var(--accent); color: #fff; }
+.dbg-thread-key { font-family: ui-monospace, monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dbg-thread-meta { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+.dbg-thread-item.active .dbg-thread-meta { color: rgba(255,255,255,.65); }
+.dbg-view { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+.dbg-view-head { padding: 10px 18px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; flex-shrink: 0; background: #fff; }
+.dbg-view-key { font-size: 12px; font-weight: 600; color: var(--text); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace; }
+.dbg-view-body { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; background: #f1f3f6; }
+.dbg-empty { display: flex; align-items: center; justify-content: center; flex: 1; color: var(--text-dim); font-size: 13px; font-style: italic; }
+
+/* message bubbles */
+.dbg-row { display: flex; gap: 0; }
+.dbg-row.right { justify-content: flex-end; }
+.dbg-row.left  { justify-content: flex-start; }
+.dbg-row.center { justify-content: center; }
+.dbg-bubble { max-width: 76%; border-radius: 11px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,.09); border: 1px solid var(--border); background: #fff; }
+.dbg-bhead { padding: 6px 12px; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.dbg-bbody { font-size: 12.5px; font-family: ui-monospace, monospace; white-space: pre-wrap; word-break: break-word; line-height: 1.55; }
+.dbg-md { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; white-space: normal; }
+.dbg-md h1,.dbg-md h2,.dbg-md h3 { font-weight: 700; margin: .8em 0 .3em; line-height: 1.25; }
+.dbg-md h1 { font-size: 15px; } .dbg-md h2 { font-size: 13.5px; } .dbg-md h3 { font-size: 12.5px; }
+.dbg-md p { margin: .4em 0; }
+.dbg-md ul,.dbg-md ol { margin: .3em 0 .3em 1.4em; padding: 0; }
+.dbg-md li { margin: .15em 0; }
+.dbg-md hr { border: none; border-top: 1px solid #e5e7eb; margin: .7em 0; }
+.dbg-md code { font-family: ui-monospace, monospace; background: #f3f4f6; padding: 1px 4px; border-radius: 3px; font-size: 11.5px; }
+.dbg-md strong { font-weight: 700; }
+.dbg-md em { font-style: italic; }
+/* user */
+.dbg-bubble.user .dbg-bhead { background: #1d4ed8; color: #fff; }
+/* ari */
+.dbg-bubble.ari .dbg-bhead { background: #223742; color: #c8d8df; }
+/* recall memory block */
+.dbg-recall { padding: 8px 12px 9px; background: #fffbeb; border-bottom: 1px solid #fde68a; }
+.dbg-recall-lbl { font-size: 9.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: #92400e; margin-bottom: 4px; }
+.dbg-recall-txt { font-size: 11px; font-family: ui-monospace, monospace; white-space: pre-wrap; color: #78350f; max-height: 140px; overflow-y: auto; }
+/* context summary block */
+.dbg-ctxsum { padding: 8px 12px 9px; background: #f0fdf4; border-bottom: 1px solid #bbf7d0; }
+.dbg-ctxsum-lbl { font-size: 9.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: #14532d; margin-bottom: 4px; }
+.dbg-ctxsum-txt { font-size: 11px; font-family: ui-monospace, monospace; white-space: pre-wrap; color: #15803d; max-height: 80px; overflow-y: auto; }
+/* content segments */
+.dbg-seg-text { padding: 10px 12px; white-space: pre-wrap; word-break: break-word; }
+.dbg-seg-text:not(:last-child) { border-bottom: 1px solid #f0f0f0; }
+.dbg-tool-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 5px; font-size: 11px; font-weight: 600; font-family: ui-monospace, monospace; }
+.dbg-tool-chip.start  { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+.dbg-tool-chip.end    { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
+.dbg-tool-chip.error  { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+.dbg-seg-tool { padding: 4px 12px; }
+.dbg-batch-sep { height: 1px; background: var(--border); margin: 2px 12px; opacity: .5; }
+/* metadata footer */
+.dbg-meta { padding: 6px 12px; border-top: 1px solid var(--border); font-size: 10.5px; color: var(--text-dim); display: flex; gap: 12px; flex-wrap: wrap; background: #f9fafb; }
+/* state badges */
+.dbg-state { font-size: 9.5px; border-radius: 10px; padding: 1px 7px; font-weight: 600; letter-spacing: .02em; }
+.dbg-state.complete   { background: #dcfce7; color: #15803d; }
+.dbg-state.error      { background: #fee2e2; color: #dc2626; }
+.dbg-state.cancelled  { background: #fef3c7; color: #b45309; }
+.dbg-state.streaming  { background: #eff6ff; color: #1d4ed8; }
+/* engram / event bar */
+.dbg-event-bar { padding: 5px 14px; background: #faf5ff; border: 1px solid #e9d5ff; border-radius: 8px; font-size: 11px; color: #7c3aed; display: flex; align-items: center; gap: 8px; max-width: 80%; }
+/* payload toggle + two-pane debug view */
+.dbg-payload-toggle { padding: 5px 12px 6px; font-size: 10.5px; font-weight: 600; color: var(--accent); cursor: pointer; border-top: 1px solid var(--border); letter-spacing: .01em; user-select: none; }
+.dbg-payload-toggle:hover { background: #f0f4ff; }
+.dbg-payload-panes { display: flex; gap: 0; border-top: 1px solid var(--border); max-height: 420px; }
+.dbg-payload-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border); }
+.dbg-payload-pane:last-child { border-right: none; }
+.dbg-payload-lbl { padding: 5px 10px 4px; font-size: 9.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--text-dim); background: #f9fafb; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.dbg-payload-pre { margin: 0; padding: 8px 10px; font-family: ui-monospace, monospace; font-size: 10.5px; white-space: pre-wrap; word-break: break-word; overflow-y: auto; flex: 1; color: #1e293b; line-height: 1.5; }
 </style>
 </head>
 <body>
@@ -272,6 +349,7 @@ html, body {
       </a>
       <div id="cp-sidebar-nav">
         <div class="cp-nav-item top-level active" data-tab="overview">Overview</div>
+        <div class="cp-nav-item top-level" data-tab="debug">Debug Thread</div>
         <div class="cp-nav-group">LLM</div>
         <div class="cp-nav-item" data-tab="servers">Servers</div>
         <div class="cp-nav-item" data-tab="models">Models</div>
@@ -460,8 +538,9 @@ html, body {
         <div class="vs-section-title">Training progress</div>
         <div class="vs-progress-header"><span id="vs-step-label">—</span><span id="vs-pct-label" style="color:var(--text-dim);font-size:12px">0%</span></div>
         <div class="vs-progress-track"><div class="vs-progress-fill" id="vs-progress-fill" style="width:0%"></div></div>
-        <div class="vs-time-row"><span id="vs-elapsed-label" class="vs-time-chip">Elapsed: —</span><span id="vs-eta-label" class="vs-time-chip">ETA: —</span></div>
+        <div class="vs-time-row"><span id="vs-elapsed-label" class="vs-time-chip">Elapsed: —</span><span id="vs-avg-label" class="vs-time-chip">Avg/epoch: —</span><span id="vs-eta-label" class="vs-time-chip">ETA: —</span></div>
         <div id="vs-detail-label" class="vs-detail"></div>
+        <button id="vs-pause-btn" style="display:none;margin-top:10px;font-size:12px;padding:5px 14px;background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-dim);cursor:pointer;" type="button">Pause training</button>
         <div class="cp-widget" style="margin-top:14px;max-height:280px;overflow-y:auto">
           <div class="cp-widget-header"><span class="cp-widget-title">Training log</span><span class="cp-widget-badge" id="vs-log-badge">—</span></div>
           <div class="log-body" id="vs-log-lines" style="max-height:220px;overflow-y:auto"></div>
@@ -528,6 +607,29 @@ html, body {
       </div>
     </div>
 
+    <div id="tab-debug" class="cp-tab" style="display:none;flex:1;overflow:hidden;">
+      <div class="dbg-layout">
+        <div class="dbg-sidebar">
+          <div class="dbg-sidebar-head">
+            <span class="dbg-sidebar-title">Threads</span>
+            <button id="dbg-refresh-btn" title="Refresh thread list" style="background:none;border:none;cursor:pointer;color:var(--text-dim);padding:3px 5px;border-radius:5px;font-size:16px;line-height:1;transition:color .1s;" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--text-dim)'">↻</button>
+          </div>
+          <div class="dbg-thread-list" id="dbg-thread-list">
+            <div class="cp-placeholder" style="padding:10px 12px;">Select a tab to load threads</div>
+          </div>
+        </div>
+        <div class="dbg-view">
+          <div class="dbg-view-head" id="dbg-view-head" style="display:none;">
+            <span class="dbg-view-key" id="dbg-view-key"></span>
+            <button id="dbg-view-refresh" class="mdl-btn-secondary" style="font-size:11px;padding:4px 12px;flex-shrink:0;">↻ Refresh</button>
+          </div>
+          <div class="dbg-view-body" id="dbg-view-body">
+            <div class="dbg-empty">Select a thread to inspect</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="tab-overview" class="cp-tab">
       <div id="cp-grid-wrap">
         <div class="grid-stack">
@@ -573,8 +675,8 @@ html, body {
 // ── tab switching ─────────────────────────────────────────
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), conventions: document.getElementById('tab-conventions'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), llmconfigs: document.getElementById('tab-llmconfigs') };
-const TAB_TITLES = { voice: 'Voice Synthesis', voicesettings: 'Voice Settings', conventions: 'Coding Conventions', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', llmconfigs: 'LLM Configs' };
+const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), conventions: document.getElementById('tab-conventions'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug') };
+const TAB_TITLES = { voice: 'Voice Synthesis', voicesettings: 'Voice Settings', conventions: 'Coding Conventions', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', llmconfigs: 'LLM Configs', debug: 'Debug Thread' };
 
 let srvPollTimer = null;
 function switchTab(name) {
@@ -584,12 +686,14 @@ function switchTab(name) {
     const gw = document.getElementById('cp-grid-wrap');
     if (gw) gw.style.display = name === 'overview' ? '' : 'none';
     if (name !== 'servers') { clearTimeout(srvPollTimer); srvPollTimer = null; }
+    if (name !== 'debug') dbgCloseWatch();
     if (name === 'conventions') loadConventions();
     if (name === 'models') loadModels();
     if (name === 'brain') loadBrain();
     if (name === 'servers') loadServers();
     if (name === 'agents') loadAgents();
     if (name === 'llmconfigs') loadLLMConfigs();
+    if (name === 'debug') loadDebugThreads();
 }
 navItems.forEach(n => n.addEventListener('click', () => switchTab(n.dataset.tab)));
 switchTab('overview');
@@ -602,7 +706,7 @@ async function loadBrain() {
     const list = document.getElementById('brain-backup-list');
     list.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Loading…</span>';
     try {
-        const r = await fetch('/api/cp/brain/backups');
+        const r = await fetch('/admin/brain/backups');
         const backups = await r.json();
         if (!Array.isArray(backups) || backups.length === 0) { list.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">No backups yet.</span>'; return; }
         list.innerHTML = '';
@@ -626,7 +730,7 @@ async function loadBrain() {
 document.getElementById('brain-backup-btn').addEventListener('click', async () => {
     const s = brainStatus(); s.textContent = 'Creating backup…';
     try {
-        const r = await fetch('/api/cp/brain/backup', { method: 'POST' });
+        const r = await fetch('/admin/brain/backup', { method: 'POST' });
         const d = await r.json();
         s.textContent = d.message || 'Backup created.';
         loadBrain();
@@ -637,7 +741,7 @@ async function restoreBackup(file, count) {
     if (!confirm(`Restore ${count} note(s) from\n${file}?\n\nThis recreates missing notes and overwrites present ones to the snapshot. It does not delete anything.`)) return;
     const s = brainStatus(); s.textContent = 'Restoring…';
     try {
-        const r = await fetch('/api/cp/brain/restore', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ file }) });
+        const r = await fetch('/admin/brain/restore', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ file }) });
         const d = await r.json();
         s.textContent = d.message || 'Restored.';
         loadBrain();
@@ -649,7 +753,7 @@ let conventionsLoaded = false;
 async function loadConventions() {
     if (conventionsLoaded) return;
     try {
-        const r = await fetch('/api/cp/conventions');
+        const r = await fetch('/admin/conventions');
         const d = await r.json();
         document.getElementById('cv-text').value = d.text || '';
         conventionsLoaded = true;
@@ -660,7 +764,7 @@ document.getElementById('cv-save-btn').addEventListener('click', async () => {
     const text   = document.getElementById('cv-text').value;
     status.textContent = 'Saving…';
     try {
-        await fetch('/api/cp/conventions', {
+        await fetch('/admin/conventions', {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
             body:    JSON.stringify({ text }),
@@ -676,7 +780,7 @@ async function loadLLMConfigs() {
     const status = document.getElementById('lcfg-status');
     list.innerHTML = '<span style="color:var(--text-dim);font-size:13px;">Loading…</span>';
     try {
-        const configs = await fetch('/api/cp/llmconfigs').then(r => r.json());
+        const configs = await fetch('/admin/llmconfigs').then(r => r.json());
         if (!configs.length) { list.innerHTML = '<span style="color:var(--text-dim);font-size:13px;">No saved configs yet.</span>'; return; }
         list.innerHTML = '';
         configs.forEach(cfg => {
@@ -696,7 +800,7 @@ async function loadLLMConfigs() {
                 if (!confirm(`Restore "${cfg.name}"?\n\nAll running servers will stop, the config will be applied, then servers with Auto-start will boot.`)) return;
                 status.textContent = 'Restoring…';
                 try {
-                    const r = await fetch(`/api/cp/llmconfigs/${encodeURIComponent(cfg.fileName)}/restore`, { method: 'POST' });
+                    const r = await fetch(`/admin/llmconfigs/${encodeURIComponent(cfg.fileName)}/restore`, { method: 'POST' });
                     if (!r.ok) { const e = await r.json().catch(()=>{}); status.textContent = e?.error ?? 'Restore failed.'; return; }
                     status.textContent = 'Restored. Servers booting…';
                     setTimeout(() => { status.textContent = ''; }, 5000);
@@ -704,7 +808,7 @@ async function loadLLMConfigs() {
             });
             row.querySelector('.lcfg-delete').addEventListener('click', async () => {
                 if (!confirm(`Delete config "${cfg.name}"? This cannot be undone.`)) return;
-                await fetch(`/api/cp/llmconfigs/${encodeURIComponent(cfg.fileName)}`, { method: 'DELETE' });
+                await fetch(`/admin/llmconfigs/${encodeURIComponent(cfg.fileName)}`, { method: 'DELETE' });
                 loadLLMConfigs();
             });
             list.appendChild(row);
@@ -719,7 +823,7 @@ document.getElementById('lcfg-save-btn').addEventListener('click', async () => {
     if (!name) { status.textContent = 'Enter a name first.'; return; }
     status.textContent = 'Saving…';
     try {
-        const r = await fetch('/api/cp/llmconfigs/save', {
+        const r = await fetch('/admin/llmconfigs/save', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, description: desc }),
         });
@@ -842,7 +946,7 @@ function appendLogLine(text) {
     else scrollHint.classList.add('visible');
 }
 (function connectLog() {
-    const es = new EventSource('/api/cp/log');
+    const es = new EventSource('/admin/log');
     es.onopen    = () => { logStatus.textContent = 'live'; logStatus.classList.add('live'); };
     es.onerror   = () => { logStatus.textContent = 'reconnecting…'; logStatus.classList.remove('live'); setTimeout(connectLog, 3000); es.close(); };
     es.onmessage = e  => appendLogLine(e.data.replace(/↵/g, '\n'));
@@ -1080,7 +1184,7 @@ function fmtMbShort(mb) { return mb >= 1024 ? (mb / 1024).toFixed(1) + 'G'  : mb
 let prevLiveKeys = '';
 async function pollRam() {
     try {
-        const res = await fetch('/api/cp/ram');
+        const res = await fetch('/admin/ram');
         const data = await res.json();
         const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         ramLabels.push(now); ramData.push(data.ramMb); swapData.push(data.swapMb ?? 0);
@@ -1099,7 +1203,7 @@ async function pollRam() {
 }
 async function pollStats() {
     try {
-        const res = await fetch('/api/cp/stats');
+        const res = await fetch('/admin/stats');
         const data = await res.json();
         renderTokens(data.calls);
     } catch { /* ignore */ }
@@ -1236,7 +1340,7 @@ async function loadAgents() {
     container.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Loading…</span>';
     let agents, servers;
     try {
-        const [ra, rs] = await Promise.all([fetch('/api/cp/agents'), fetch('/api/cp/models')]);
+        const [ra, rs] = await Promise.all([fetch('/agents'), fetch('/models')]);
         agents  = (await ra.json()).agents  ?? [];
         servers = (await rs.json()).servers ?? [];
     } catch { container.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Failed to load.</span>'; return; }
@@ -1390,7 +1494,7 @@ async function loadAgents() {
                     thinkingBudget:   parseInt2(agThinkBudget, 0),
                 };
                 try {
-                    const r = await fetch(`/api/cp/agents/${encodeURIComponent(a.name)}`, {
+                    const r = await fetch(`/agents/${encodeURIComponent(a.name)}`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(body),
@@ -1413,7 +1517,7 @@ async function loadAgents() {
 async function loadServers() {
     let data;
     try {
-        const r = await fetch('/api/cp/models');
+        const r = await fetch('/models');
         if (!r.ok) { console.error('[loadServers] HTTP', r.status, await r.text()); renderServerCards([]); return; }
         data = await r.json();
     } catch(e) { console.error('[loadServers] fetch/parse error:', e); renderServerCards([]); return; }
@@ -1483,7 +1587,7 @@ function renderServerCards(servers) {
             const modelName = sel.value;
             if (!modelName) return;
             try {
-                const r = await fetch(`/api/cp/servers/${s.id}/startup-model`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ modelName }) });
+                const r = await fetch(`/servers/${s.id}/startup-model`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ modelName }) });
                 if (!r.ok) { const e = await r.json().catch(()=>{}); alert(e?.error ?? 'Update failed.'); sel.value = sel.dataset.current; return; }
                 sel.dataset.current = modelName;
                 hint.style.display = modelName !== s.currentModelName ? '' : 'none';
@@ -1492,7 +1596,7 @@ function renderServerCards(servers) {
         card.querySelector('.srv-edit-btn').addEventListener('click', () => openSrvModal(s));
         card.querySelector('.srv-delete-btn')?.addEventListener('click', async () => {
             if (!confirm(`Delete server "${s.name}"? This cannot be undone.`)) return;
-            await fetch(`/api/cp/servers/${s.id}`, { method:'DELETE' });
+            await fetch(`/servers/${s.id}`, { method:'DELETE' });
             loadServers();
         });
 
@@ -1501,7 +1605,7 @@ function renderServerCards(servers) {
 }
 
 async function srvAction(id, action) {
-    await fetch(`/api/cp/servers/${id}/${action}`, { method:'POST' });
+    await fetch(`/servers/${id}/${action}`, { method:'POST' });
 }
 
 function populateSrvModelSelect(selectedName) {
@@ -1553,7 +1657,7 @@ document.getElementById('srv-modal-save').addEventListener('click', async () => 
         endpoint:       'http://127.0.0.1',
     };
     try {
-        const url    = srvEditId ? `/api/cp/servers/${srvEditId}` : '/api/cp/servers';
+        const url    = srvEditId ? `/servers/${srvEditId}` : '/servers';
         const method = srvEditId ? 'PUT' : 'POST';
         const r = await fetch(url, { method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
         if (!r.ok) { const e = await r.json().catch(()=>{}); srvModalErr.textContent = e?.error ?? 'Save failed.'; return; }
@@ -1574,7 +1678,7 @@ const mdlNoteTimers = {};
 
 async function loadModels() {
     let data;
-    try { const r = await fetch('/api/cp/models'); data = await r.json(); }
+    try { const r = await fetch('/models'); data = await r.json(); }
     catch { return; }
     renderModelCards(data);
     if (data.switching && !mdlSwitchEs) startSwitchProgressSse();
@@ -1686,7 +1790,7 @@ function renderModelCards(data) {
             clearTimeout(mdlNoteTimers[name]);
             mdlNoteTimers[name] = setTimeout(async () => {
                 try {
-                    await fetch('/api/cp/models/notes', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ modelName: name, notes: ta.value }) });
+                    await fetch('/models/notes', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ modelName: name, notes: ta.value }) });
                     saveStatus.textContent = 'Saved.';
                     setTimeout(() => { saveStatus.textContent = ''; }, 2000);
                 } catch { saveStatus.textContent = 'Save failed.'; }
@@ -1699,7 +1803,7 @@ function renderModelCards(data) {
             switchBtn.addEventListener('click', async () => {
                 switchBtn.disabled = true;
                 try {
-                    const r = await fetch('/api/cp/models/switch', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ file: switchBtn.dataset.file }) });
+                    const r = await fetch('/servers/switch', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ file: switchBtn.dataset.file }) });
                     if (!r.ok) { const err = await r.json().catch(()=>({})); alert(err.error ?? 'Switch failed.'); switchBtn.disabled = false; return; }
                     startSwitchProgressSse();
                     loadModels();
@@ -1713,7 +1817,7 @@ function renderModelCards(data) {
             startupBtn.addEventListener('click', async () => {
                 startupBtn.disabled = true;
                 try {
-                    await fetch('/api/cp/models/startup', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ file: startupBtn.dataset.file }) });
+                    await fetch('/models/startup', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ file: startupBtn.dataset.file }) });
                     loadModels();
                 } catch { startupBtn.disabled = false; }
             });
@@ -1726,7 +1830,7 @@ function renderModelCards(data) {
                 if (!confirm(`Remove "${m.name}" from the registry?`)) return;
                 deleteBtn.disabled = true;
                 try {
-                    const r = await fetch(`/api/cp/models/${encodeURIComponent(m.name)}`, { method: 'DELETE' });
+                    const r = await fetch(`/models/${encodeURIComponent(m.name)}`, { method: 'DELETE' });
                     if (!r.ok) { const err = await r.json().catch(()=>({})); alert(err.error ?? 'Delete failed.'); deleteBtn.disabled = false; return; }
                     loadModels();
                 } catch { deleteBtn.disabled = false; }
@@ -1763,7 +1867,7 @@ document.getElementById('mdl-add-btn').addEventListener('click', async () => {
     status.style.color = 'var(--text-dim)';
     status.textContent = 'Saving…';
     try {
-        const r = await fetch('/api/cp/models', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+        const r = await fetch('/models', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
         if (!r.ok) { const err = await r.json().catch(()=>({})); status.style.color='#dc2626'; status.textContent = err.error ?? 'Failed.'; return; }
         document.getElementById('mdl-add-name').value = '';
         document.getElementById('mdl-add-url').value  = '';
@@ -1785,7 +1889,7 @@ function startSwitchProgressSse() {
     mdlFill.className = 'vs-progress-fill';
     const PHASES = { 'idle-wait':'Waiting for active requests to finish…', 'powering-down':'Powering down…', 'powering-up':'Powering up…', 'ready':'Model ready.', 'error':'Switch failed.' };
 
-    mdlSwitchEs = new EventSource('/api/cp/models/switch/progress');
+    mdlSwitchEs = new EventSource('/servers/switch/progress');
     mdlSwitchEs.onmessage = e => {
         try {
             const d = JSON.parse(e.data);
@@ -1820,22 +1924,45 @@ const vsStepLabel = document.getElementById('vs-step-label');
 const vsPctLabel = document.getElementById('vs-pct-label');
 const vsProgFill = document.getElementById('vs-progress-fill');
 const vsElapsedLabel = document.getElementById('vs-elapsed-label');
-const vsEtaLabel = document.getElementById('vs-eta-label');
+const vsAvgLabel     = document.getElementById('vs-avg-label');
+const vsEtaLabel     = document.getElementById('vs-eta-label');
+const vsProgTrack    = vsProgFill.parentElement;
 const vsDetail = document.getElementById('vs-detail-label');
 const vsLogLines = document.getElementById('vs-log-lines');
 const vsLogBadge = document.getElementById('vs-log-badge');
 
-let vsFiles = [], vsProgressEs = null, vsStartTime = null, vsLastPct = 0, vsTimerHandle = null;
+let vsFiles = [], vsProgressEs = null, vsStartTime = null, vsLastPct = 0, vsTimerHandle = null,
+    vsCompletedEpochs = 0, vsTotalEpochs = 0, vsActiveModelName = null;
+
+const vsPauseBtn = document.getElementById('vs-pause-btn');
+
+async function vsPauseTraining() {
+    if (!vsActiveModelName) return;
+    vsPauseBtn.disabled = true;
+    vsPauseBtn.textContent = 'Pausing… (finishes current epoch)';
+    try {
+        const r = await fetch(`/voice/${encodeURIComponent(vsActiveModelName)}/stop`, { method: 'POST' });
+        if (!r.ok) { const e = await r.json().catch(() => ({})); vsPauseBtn.textContent = 'Pause failed: ' + (e.error ?? r.statusText); vsPauseBtn.disabled = false; }
+    } catch (err) { vsPauseBtn.textContent = 'Pause failed: ' + err.message; vsPauseBtn.disabled = false; }
+}
+vsPauseBtn.addEventListener('click', vsPauseTraining);
 
 function fmtDuration(s) { s=Math.round(s); return s<60?s+'s':s<3600?Math.floor(s/60)+'m '+(s%60)+'s':Math.floor(s/3600)+'h '+Math.floor((s%3600)/60)+'m'; }
 function vsTickTimer() {
     if (!vsStartTime) return;
     const elapsed = (Date.now() - vsStartTime) / 1000;
     vsElapsedLabel.textContent = 'Elapsed: ' + fmtDuration(elapsed);
-    if (vsLastPct > 0 && vsLastPct < 100) vsEtaLabel.textContent = 'ETA: ~' + fmtDuration(Math.max(0, elapsed / (vsLastPct / 100) - elapsed));
-    else if (vsLastPct === 0) vsEtaLabel.textContent = 'ETA: —';
+    // avg time per epoch: use completed epochs if any, else treat elapsed as 1 epoch estimate
+    const avgPerEpoch = vsCompletedEpochs > 0 ? elapsed / vsCompletedEpochs : elapsed;
+    vsAvgLabel.textContent = 'Avg/epoch: ' + fmtDuration(avgPerEpoch);
+    if (vsTotalEpochs > 0) {
+        const remaining = Math.max(0, vsTotalEpochs - vsCompletedEpochs);
+        vsEtaLabel.textContent = 'ETA: ~' + fmtDuration(avgPerEpoch * remaining);
+    } else {
+        vsEtaLabel.textContent = 'ETA: —';
+    }
 }
-function vsStartTimer() { vsStartTime = Date.now(); vsLastPct = 0; vsElapsedLabel.textContent = 'Elapsed: 0s'; vsEtaLabel.textContent = 'ETA: —'; if (vsTimerHandle) clearInterval(vsTimerHandle); vsTimerHandle = setInterval(vsTickTimer, 1000); }
+function vsStartTimer() { vsStartTime = Date.now(); vsLastPct = 0; vsCompletedEpochs = 0; vsTotalEpochs = 0; vsElapsedLabel.textContent = 'Elapsed: 0s'; vsAvgLabel.textContent = 'Avg/epoch: —'; vsEtaLabel.textContent = 'ETA: —'; if (vsTimerHandle) clearInterval(vsTimerHandle); vsTimerHandle = setInterval(vsTickTimer, 1000); }
 function vsStopTimer()  { if (vsTimerHandle) { clearInterval(vsTimerHandle); vsTimerHandle = null; } vsTickTimer(); vsEtaLabel.textContent = 'ETA: done'; }
 function fmtBytes(b)    { return b > 1048576 ? (b/1048576).toFixed(1)+' MB' : (b/1024).toFixed(0)+' KB'; }
 
@@ -1859,16 +1986,36 @@ vsDropzone.addEventListener('dragleave', () => vsDropzone.classList.remove('drag
 vsDropzone.addEventListener('drop', e => { e.preventDefault(); vsDropzone.classList.remove('drag-over'); addFiles(e.dataTransfer.files); });
 
 function vsAppendLog(text, cls = '') { const el = document.createElement('div'); el.className = 'log-line ' + (cls || classifyLog(text)); el.textContent = text; vsLogLines.appendChild(el); while (vsLogLines.children.length > 500) vsLogLines.removeChild(vsLogLines.firstChild); vsLogLines.scrollTop = vsLogLines.scrollHeight; }
-function vsSetProgress(step, pct, detail, state) { vsStepLabel.textContent = step; vsPctLabel.textContent = pct + '%'; vsProgFill.style.width = pct + '%'; vsProgFill.className = 'vs-progress-fill' + (state === 'done' ? ' done' : state === 'error' ? ' error' : ''); vsDetail.textContent = detail || ''; if (pct > 0) vsLastPct = pct; }
+function vsSetProgress(step, pct, detail, state) {
+    vsStepLabel.textContent = step;
+    // Parse "Epoch X/Y" from detail to get accurate float percentage
+    const epochMatch = detail && detail.match(/^Epoch\s+(\d+)\/(\d+)$/i);
+    if (epochMatch) {
+        vsCompletedEpochs = parseInt(epochMatch[1], 10);
+        vsTotalEpochs     = parseInt(epochMatch[2], 10);
+        const floatPct = (vsCompletedEpochs / vsTotalEpochs * 100).toFixed(2);
+        vsPctLabel.textContent  = floatPct + '%';
+        vsProgFill.style.width  = floatPct + '%';
+    } else {
+        vsPctLabel.textContent = pct + '%';
+        vsProgFill.style.width = pct + '%';
+    }
+    const isError = state === 'error';
+    vsProgFill.className  = 'vs-progress-fill'  + (state === 'done' ? ' done' : isError ? ' error' : '');
+    vsProgTrack.className = 'vs-progress-track' + (isError ? ' error' : '');
+    vsDetail.textContent = detail || '';
+    if (pct > 0) vsLastPct = pct;
+}
 
 vsTrainBtn.addEventListener('click', async () => {
     if (!vsFiles.length) { alert('Please select at least one audio file.'); return; }
     const modelName = vsModelName.value.trim();
     if (!modelName) { alert('Please enter a model name.'); return; }
     vsTrainBtn.disabled = true; vsProgSec.style.display = ''; vsLogLines.innerHTML = '';
+    vsActiveModelName = modelName; vsPauseBtn.style.display = ''; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training';
     vsLogBadge.textContent = 'uploading…'; vsSetProgress('Uploading files', 0, null, ''); vsStartTimer();
     try {
-        const stageResp = await fetch('/api/cp/voice/stage', { method: 'POST' });
+        const stageResp = await fetch('/voice/stage', { method: 'POST' });
         if (!stageResp.ok) throw new Error('Stage failed: ' + (await stageResp.text()));
         const { stageId, stagingPath } = await stageResp.json();
         const CHUNK = 5 * 1024 * 1024, CONCURRENCY = 4;
@@ -1878,7 +2025,7 @@ vsTrainBtn.addEventListener('click', async () => {
             let done = 0;
             const uploadChunk = async (ci) => {
                 const slice = f.slice(ci * CHUNK, Math.min((ci + 1) * CHUNK, f.size));
-                const url = `/api/cp/voice/upload?stageId=${encodeURIComponent(stageId)}&name=${encodeURIComponent(f.name)}&chunk=${ci}&totalChunks=${totalChunks}`;
+                const url = `/voice/upload?stageId=${encodeURIComponent(stageId)}&name=${encodeURIComponent(f.name)}&chunk=${ci}&totalChunks=${totalChunks}`;
                 const up = await fetch(url, { method: 'POST', body: slice, headers: { 'Content-Type': 'application/octet-stream' } });
                 if (!up.ok) throw new Error(`Upload of ${f.name} chunk ${ci} failed: ` + (await up.text()));
                 done++;
@@ -1889,20 +2036,20 @@ vsTrainBtn.addEventListener('click', async () => {
         }
         vsAppendLog(`All ${vsFiles.length} file(s) uploaded.`);
         vsLogBadge.textContent = 'training…'; vsLogBadge.classList.add('live');
-        const trainResp = await fetch('/api/cp/voice/train', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName, stagingPath, epochs: +vsEpochs.value, saveEveryNEpochs: +vsSaveFreq.value }) });
+        const trainResp = await fetch('/voice/train', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName, stagingPath, epochs: +vsEpochs.value, saveEveryNEpochs: +vsSaveFreq.value }) });
         if (!trainResp.ok) throw new Error('Start failed: ' + (await trainResp.text()));
         let vsDone = false;
         function connectProgressSse() {
             if (vsDone) return;
             if (vsProgressEs) vsProgressEs.close();
-            vsProgressEs = new EventSource('/api/cp/voice/progress');
+            vsProgressEs = new EventSource('/voice/progress');
             vsLogBadge.textContent = 'live'; vsLogBadge.classList.add('live');
             vsProgressEs.onmessage = e => {
                 try {
                     const d = JSON.parse(e.data);
                     vsSetProgress(d.step, d.percent, d.detail, d.done ? (d.success ? 'done' : 'error') : '');
                     if (d.detail) vsAppendLog(d.detail, d.step === 'Error' ? 'log-error' : '');
-                    if (d.done) { vsDone = true; vsProgressEs.close(); vsStopTimer(); vsLogBadge.textContent = d.success ? 'done ✓' : 'failed'; vsLogBadge.classList.remove('live'); vsTrainBtn.disabled = false; if (d.success) vsAppendLog(`✓ Training complete! Model: ${modelName}.pth`); if (d.error) vsAppendLog(`Error: ${d.error}`, 'log-error'); }
+                    if (d.done) { vsDone = true; vsProgressEs.close(); vsStopTimer(); vsLogBadge.textContent = d.success ? 'done ✓' : 'failed'; vsLogBadge.classList.remove('live'); vsTrainBtn.disabled = false; vsPauseBtn.style.display = 'none'; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training'; vsActiveModelName = null; if (d.success) vsAppendLog(`✓ Training complete! Model: ${modelName}.pth`); if (d.error) vsAppendLog(`Error: ${d.error}`, 'log-error'); }
                 } catch { /* ignore */ }
             };
             vsProgressEs.onerror = () => { if (vsDone) return; vsLogBadge.textContent = 'reconnecting…'; vsLogBadge.classList.remove('live'); vsProgressEs.close(); setTimeout(connectProgressSse, 3000); };
@@ -1939,7 +2086,7 @@ const vsTvStatus   = document.getElementById('vs-tv-status');
 
 async function loadVoiceModels() {
     try {
-        const [mr, ar] = await Promise.all([fetch('/api/cp/voice/models'), fetch('/api/cp/voice/active')]);
+        const [mr, ar] = await Promise.all([fetch('/voice/models'), fetch('/voice/active')]);
         const { models } = await mr.json(), { model: activeModel, ready } = await ar.json();
         // Voice settings dropdown
         vsTvModel.innerHTML = models.length
@@ -1984,23 +2131,24 @@ async function vsStartResume(modelName) {
     const btn = document.querySelector(`.vs-resume-btn[data-model="${CSS.escape(modelName)}"]`);
     if (btn) btn.disabled = true;
     vsProgSec.style.display = ''; vsLogLines.innerHTML = '';
+    vsActiveModelName = modelName; vsPauseBtn.style.display = ''; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training';
     vsLogBadge.textContent = 'training…'; vsLogBadge.classList.add('live');
     vsSetProgress('Resuming', 0, `Resuming ${modelName}…`, ''); vsStartTimer();
     try {
-        const resp = await fetch('/api/cp/voice/resume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName }) });
+        const resp = await fetch('/voice/resume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName }) });
         if (!resp.ok) throw new Error((await resp.json().catch(()=>({error:resp.statusText}))).error ?? resp.statusText);
         let vsDone = false;
         function connectResumeProgressSse() {
             if (vsDone) return;
             if (vsProgressEs) vsProgressEs.close();
-            vsProgressEs = new EventSource('/api/cp/voice/progress');
+            vsProgressEs = new EventSource('/voice/progress');
             vsLogBadge.textContent = 'live'; vsLogBadge.classList.add('live');
             vsProgressEs.onmessage = e => {
                 try {
                     const d = JSON.parse(e.data);
                     vsSetProgress(d.step, d.percent, d.detail, d.done ? (d.success ? 'done' : 'error') : '');
                     if (d.detail) vsAppendLog(d.detail, d.step === 'Error' ? 'log-error' : '');
-                    if (d.done) { vsDone = true; vsProgressEs.close(); vsStopTimer(); vsLogBadge.textContent = d.success ? 'done ✓' : 'failed'; vsLogBadge.classList.remove('live'); if (btn) btn.disabled = false; if (d.success) vsAppendLog(`✓ Training complete! Model: ${modelName}`); if (d.error) vsAppendLog(`Error: ${d.error}`, 'log-error'); }
+                    if (d.done) { vsDone = true; vsProgressEs.close(); vsStopTimer(); vsLogBadge.textContent = d.success ? 'done ✓' : 'failed'; vsLogBadge.classList.remove('live'); if (btn) btn.disabled = false; vsPauseBtn.style.display = 'none'; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training'; vsActiveModelName = null; if (d.success) vsAppendLog(`✓ Training complete! Model: ${modelName}`); if (d.error) vsAppendLog(`Error: ${d.error}`, 'log-error'); }
                 } catch { /* ignore */ }
             };
             vsProgressEs.onerror = () => { if (vsDone) return; vsLogBadge.textContent = 'reconnecting…'; vsLogBadge.classList.remove('live'); vsProgressEs.close(); setTimeout(connectResumeProgressSse, 3000); };
@@ -2012,7 +2160,7 @@ async function vsStartResume(modelName) {
 async function vsDeleteModel(modelName) {
     if (!confirm(`Delete "${modelName}" and all its checkpoints? This cannot be undone.`)) return;
     try {
-        const resp = await fetch(`/api/cp/voice/${encodeURIComponent(modelName)}`, { method: 'DELETE' });
+        const resp = await fetch(`/voice/${encodeURIComponent(modelName)}`, { method: 'DELETE' });
         if (!resp.ok) { const e = await resp.json().catch(()=>({error:resp.statusText})); alert('Delete failed: ' + (e.error ?? resp.statusText)); return; }
         await loadVoiceModels();
     } catch(err) { alert('Delete failed: ' + err.message); }
@@ -2023,7 +2171,7 @@ vsTvSpeakBtn.addEventListener('click', async () => {
     if (!text) return;
     vsTvSpeakBtn.disabled = true; vsTvStatus.textContent = 'Synthesising…';
     try {
-        const resp = await fetch('/api/cp/voice/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, modelName }) });
+        const resp = await fetch('/voice/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, modelName }) });
         if (!resp.ok) { const err = await resp.json().catch(() => ({ error: resp.statusText })); vsTvStatus.textContent = 'Error: ' + (err.error ?? resp.statusText); }
         else {
             const audioCtx = new AudioContext();
@@ -2040,6 +2188,309 @@ vsTvSpeakBtn.addEventListener('click', async () => {
     finally { vsTvSpeakBtn.disabled = false; }
 });
 vsTvText.addEventListener('keydown', e => { if (e.key === 'Enter') vsTvSpeakBtn.click(); });
+
+// ── debug thread view ──────────────────────────────────────
+var dbgSelectedThread  = null;
+var dbgWatchEs         = null;
+var dbgReloadTimer     = null;
+var dbgLastRenderCount = 0;  // tracks rendered row count for in-place streaming update
+
+function dbgCloseWatch() {
+    if (dbgWatchEs) { dbgWatchEs.close(); dbgWatchEs = null; }
+    clearTimeout(dbgReloadTimer); dbgReloadTimer = null;
+}
+
+function dbgOpenWatch(key) {
+    dbgCloseWatch();
+    const es = new EventSource(`/threads/${encodeURIComponent(key)}/watch`);
+    es.onmessage = () => {
+        if (dbgSelectedThread !== key) return;
+        clearTimeout(dbgReloadTimer);
+        dbgReloadTimer = setTimeout(() => dbgLoadThread(key), 120);
+    };
+    es.onerror = () => { dbgCloseWatch(); setTimeout(() => { if (dbgSelectedThread === key) dbgOpenWatch(key); }, 3000); };
+    dbgWatchEs = es;
+}
+
+function dbgFmtTime(iso) {
+    try { return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
+    catch { return ''; }
+}
+function dbgFmtAgo(iso) {
+    try {
+        const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+        if (m < 1) return 'just now';
+        if (m < 60) return m + 'm ago';
+        const h = Math.floor(m / 60);
+        if (h < 24) return h + 'h ago';
+        return Math.floor(h / 24) + 'd ago';
+    } catch { return ''; }
+}
+
+async function loadDebugThreads() {
+    const list = document.getElementById('dbg-thread-list');
+    list.innerHTML = '<div class="cp-placeholder" style="padding:10px 12px;">Loading…</div>';
+    try {
+        const r = await fetch('/threads?includeInternal=true');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const threads = await r.json();
+        dbgRenderThreadList(threads);
+    } catch(e) {
+        list.innerHTML = `<div class="cp-placeholder" style="padding:10px 12px;color:#dc2626;">Error: ${escHtml(e.message)}</div>`;
+    }
+}
+
+function dbgRenderThreadList(threads) {
+    const list = document.getElementById('dbg-thread-list');
+    if (!threads.length) {
+        list.innerHTML = '<div class="cp-placeholder" style="padding:10px 12px;">No threads found</div>';
+        return;
+    }
+    list.innerHTML = '';
+    threads.forEach(t => {
+        const item = document.createElement('div');
+        item.className = 'dbg-thread-item' + (t.key === dbgSelectedThread ? ' active' : '');
+        const typeLabel = t.isInternal ? (t.agentName || 'Internal') : (t.isCodeMode ? 'Code' : 'Dialogue');
+        const ago = t.lastMessageAt ? dbgFmtAgo(t.lastMessageAt) : '';
+        item.innerHTML = `
+            <div class="dbg-thread-key">${escHtml(t.key)}</div>
+            <div class="dbg-thread-meta">${escHtml(typeLabel)} · ${t.messageCount || 0} msgs${ago ? ' · ' + ago : ''}</div>`;
+        item.addEventListener('click', () => {
+            dbgSelectedThread = t.key;
+            dbgLastRenderCount = 0;
+            list.querySelectorAll('.dbg-thread-item').forEach(el => el.classList.toggle('active', el === item));
+            dbgOpenWatch(t.key);
+            dbgLoadThread(t.key);
+        });
+        list.appendChild(item);
+    });
+    // Re-select previously selected thread if it's still in the list
+    if (dbgSelectedThread) {
+        const found = threads.find(t => t.key === dbgSelectedThread);
+        if (found) dbgLoadThread(dbgSelectedThread);
+    }
+}
+
+async function dbgLoadThread(key) {
+    const body  = document.getElementById('dbg-view-body');
+    const head  = document.getElementById('dbg-view-head');
+    const keyEl = document.getElementById('dbg-view-key');
+    head.style.display = '';
+    keyEl.textContent = key;
+    body.innerHTML = '<div class="dbg-empty">Loading…</div>';
+    try {
+        const r = await fetch(`/threads/${encodeURIComponent(key)}/debug`);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const items = await r.json();
+        dbgRenderHistory(items, body);
+    } catch(e) {
+        body.innerHTML = `<div class="dbg-empty" style="color:#dc2626;">Error: ${escHtml(e.message)}</div>`;
+    }
+}
+
+function dbgRenderHistory(items, container) {
+    const last = items[items.length - 1];
+
+    // During streaming: only replace the last row in-place to avoid full-DOM flash
+    if (last?.type === 'ariResponse' && last.isStreaming) {
+        const rows = container.querySelectorAll(':scope > .dbg-row');
+        if (rows.length > 0 && rows.length === dbgLastRenderCount) {
+            const newEl = dbgRenderItem(last, items[items.length - 2]);
+            if (newEl) rows[rows.length - 1].replaceWith(newEl);
+            container.scrollTop = container.scrollHeight;
+            return;
+        }
+    }
+
+    // Full rebuild for structural changes (new items, thread switch, completion)
+    container.innerHTML = '';
+    if (!items.length) {
+        container.innerHTML = '<div class="dbg-empty">No messages in this thread</div>';
+        return;
+    }
+    let count = 0;
+    items.forEach((item, i) => {
+        const el = dbgRenderItem(item, items[i + 1]);
+        if (el) { container.appendChild(el); count++; }
+    });
+    dbgLastRenderCount = count;
+    container.scrollTop = container.scrollHeight;
+}
+
+function dbgRenderItem(item, nextItem = null) {
+    const wrap = document.createElement('div');
+    wrap.className = 'dbg-row';
+
+    if (item.type === 'userMessage') {
+        wrap.classList.add('right');
+        const ari = nextItem?.type === 'ariResponse' ? nextItem : null;
+        const promptBody = ari?.debugRequestJson
+            ? `<div class="dbg-bbody dbg-seg-text dbg-md">${marked.parse(dbgFmtMessages(ari.debugRequestJson))}</div>`
+            : `<div class="dbg-bbody dbg-seg-text">${escHtml(item.content || '')}</div>`;
+        wrap.innerHTML = `
+            <div class="dbg-bubble user">
+                <div class="dbg-bhead">
+                    <span>${escHtml(item.username || 'user')}</span>
+                    <span style="font-weight:400;letter-spacing:0;text-transform:none;opacity:.75;">${dbgFmtTime(item.timestamp)}</span>
+                </div>
+                ${promptBody}
+            </div>`;
+
+    } else if (item.type === 'ariResponse') {
+        wrap.classList.add('left');
+        const stateNames = ['streaming', 'complete', 'error', 'cancelled'];
+        const state = typeof item.state === 'number' ? (stateNames[item.state] ?? 'complete') : (item.state || 'complete').toLowerCase();
+        let inner = `
+            <div class="dbg-bhead">
+                <span>ARI</span>
+                <span class="dbg-state ${escHtml(state)}">${escHtml(state)}</span>
+                <span style="font-weight:400;letter-spacing:0;text-transform:none;opacity:.6;">${dbgFmtTime(item.timestamp)}</span>
+            </div>`;
+
+        // Raw LLM response text — falls back to parsed content if debug capture not available
+        if (item.debugResponseText) {
+            inner += `<div class="dbg-bbody dbg-seg-text dbg-md">${marked.parse(item.debugResponseText)}</div>`;
+        } else {
+            inner += `<div class="dbg-bbody">${dbgParseContent(item.content || '')}</div>`;
+        }
+
+        const metaParts = [];
+        if (item.promptTokens)              metaParts.push(`↓ ${item.promptTokens.toLocaleString()} prompt`);
+        if (item.completionTokens)          metaParts.push(`↑ ${item.completionTokens.toLocaleString()} completion`);
+        if (item.thinkingSeconds != null)   metaParts.push(`⏱ ${Number(item.thinkingSeconds).toFixed(1)}s`);
+        if (item.outputTokenLimit)          metaParts.push(`limit ${item.outputTokenLimit.toLocaleString()}`);
+        if (metaParts.length)
+            inner += `<div class="dbg-meta">${metaParts.map(p => `<span>${escHtml(p)}</span>`).join('')}</div>`;
+
+        wrap.innerHTML = `<div class="dbg-bubble ari">${inner}</div>`;
+
+    } else if (item.type === 'engramEvent') {
+        wrap.classList.add('center');
+        const changes = (item.changes || []).map(c =>
+            `${escHtml(c.op === 'created' ? 'added' : 'updated')} "${escHtml(c.title)}"`).join(', ');
+        wrap.innerHTML = `<div class="dbg-event-bar">🧠 Memory: ${changes || 'sweep'}<span style="opacity:.55;margin-left:6px;font-size:10px;">${dbgFmtTime(item.timestamp)}</span></div>`;
+
+    } else if (item.type === 'commandInput') {
+        wrap.classList.add('right');
+        wrap.innerHTML = `
+            <div class="dbg-bubble user" style="opacity:.75;">
+                <div class="dbg-bhead" style="background:#374151;">
+                    <span>CMD</span>
+                    <span style="font-weight:400;letter-spacing:0;text-transform:none;opacity:.75;">${dbgFmtTime(item.timestamp)}</span>
+                </div>
+                <div class="dbg-bbody dbg-seg-text">${escHtml(item.input || '')}</div>
+            </div>`;
+
+    } else if (item.type === 'commandResponse') {
+        wrap.classList.add('left');
+        wrap.innerHTML = `
+            <div class="dbg-bubble ari" style="opacity:.75;">
+                <div class="dbg-bhead" style="background:#374151;">
+                    <span>CMD RESPONSE</span>
+                    <span style="font-weight:400;letter-spacing:0;text-transform:none;opacity:.75;">${dbgFmtTime(item.timestamp)}</span>
+                </div>
+                <div class="dbg-bbody dbg-seg-text">${escHtml(item.response || '')}</div>
+            </div>`;
+
+    } else {
+        return null;
+    }
+    return wrap;
+}
+
+function dbgFmtJson(str) {
+    if (!str) return '';
+    try { return JSON.stringify(JSON.parse(str), null, 2); }
+    catch { return str; }
+}
+
+function dbgFmtMessages(str) {
+    if (!str) return '(no request data)';
+    try {
+        const req = JSON.parse(str);
+        const msgs = req.messages || [];
+        return msgs.map(msg => {
+            let content = '';
+            if (typeof msg.content === 'string') {
+                content = msg.content;
+            } else if (Array.isArray(msg.content)) {
+                content = msg.content.map(b => {
+                    if (b.type === 'text') return b.text;
+                    if (b.type === 'tool_result') {
+                        const c = Array.isArray(b.content)
+                            ? b.content.map(x => x.text || '').join('')
+                            : (b.content || '');
+                        return `[tool_result id=${b.tool_use_id}]\n${c}`;
+                    }
+                    return JSON.stringify(b);
+                }).join('\n');
+            } else {
+                content = JSON.stringify(msg.content ?? '');
+            }
+            let lbl;
+            if (msg.role === 'user') {
+                lbl = 'prompt';
+            } else if (msg.role === 'system' && content.startsWith("[ARI's Memories]")) {
+                lbl = "ARI's Memories";
+                content = content.slice("[ARI's Memories]".length).trimStart();
+            } else {
+                lbl = msg.role;
+            }
+            return `# [${lbl}]\n\n${content.replace(/\n{3,}/g, '\n\n')}`;
+        }).join('\n\n---\n\n');
+    } catch {
+        return str;
+    }
+}
+
+function dbgParseContent(raw) {
+    if (!raw) return '<div class="dbg-seg-text" style="color:var(--text-dim);font-style:italic;">empty</div>';
+
+    const segments = [];
+    // Matches: <!--ari-tool-start:name:label-->, <!--ari-tool-end:name:label|...--> ,
+    //          <!--ari-tool-error:name:rest-->, <!--ari-batch-end-->
+    const re = /<!--ari-tool-(start|end|error):([^:>]+):([^>]*?)-->|<!--ari-batch-end-->/g;
+    let pos = 0, m;
+
+    while ((m = re.exec(raw)) !== null) {
+        if (m.index > pos) {
+            const text = raw.slice(pos, m.index).trim();
+            if (text) segments.push({ kind: 'text', text });
+        }
+        if (m[0].startsWith('<!--ari-batch-end')) {
+            segments.push({ kind: 'sep' });
+        } else {
+            // For end cards the rest is "file|+N|-M|patch"; for error it's "file:escapedMsg"
+            const fileLabel = m[3].split('|')[0].split(':')[0];
+            segments.push({ kind: 'tool', state: m[1], name: m[2], label: fileLabel });
+        }
+        pos = m.index + m[0].length;
+    }
+
+    if (pos < raw.length) {
+        const text = raw.slice(pos).trim();
+        if (text) segments.push({ kind: 'text', text });
+    }
+    if (segments.length === 0) segments.push({ kind: 'text', text: raw });
+
+    return segments.map(seg => {
+        if (seg.kind === 'text') {
+            return `<div class="dbg-seg-text">${escHtml(seg.text)}</div>`;
+        } else if (seg.kind === 'tool') {
+            const icon = seg.state === 'end' ? '✓' : seg.state === 'error' ? '✗' : '…';
+            const labelPart = seg.label ? ` <span style="opacity:.7;">· ${escHtml(seg.label)}</span>` : '';
+            return `<div class="dbg-seg-tool"><span class="dbg-tool-chip ${escHtml(seg.state)}">${icon} ${escHtml(seg.name)}${labelPart}</span></div>`;
+        } else if (seg.kind === 'sep') {
+            return '<div class="dbg-batch-sep"></div>';
+        }
+        return '';
+    }).join('');
+}
+
+document.getElementById('dbg-refresh-btn').addEventListener('click', loadDebugThreads);
+document.getElementById('dbg-view-refresh').addEventListener('click', () => {
+    if (dbgSelectedThread) dbgLoadThread(dbgSelectedThread);
+});
 
 </script>
 </body>

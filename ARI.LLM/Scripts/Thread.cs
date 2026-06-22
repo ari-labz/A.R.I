@@ -3,10 +3,10 @@ using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
-public enum ThreadState { Active, Inactive, Dormant, Deleted }
+public enum ThreadState { Idle, Streaming, Dormant, CleanupNeeded, Deleted }
 
 /// <summary>The pipeline a thread belongs to. Determines how its prompts are processed.</summary>
-public enum ThreadType { Dialogue, Code, Memory, Engram, Context, Refactor, Classifier }
+public enum ThreadPipeline { Dialogue, Code }
 
 public class Thread
 {
@@ -18,16 +18,16 @@ public class Thread
     private readonly string threadKey;
 
     /// <summary>The pipeline this thread runs on.</summary>
-    public ThreadType Type { get; }
+    public ThreadPipeline Pipeline { get; }
     /// <summary>Whether this is an internal working thread, hidden from the user.</summary>
-    public bool Internal => Type is not (ThreadType.Dialogue or ThreadType.Code);
+    public bool Internal { get; init; }
 
     public readonly List<ThreadItem> History = new();
 
     internal readonly Dictionary<string, (object Schema, Func<string, Task<string>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter, Func<string, string?>? StreamingDisplay)> tools = new();
 
     // ── Lifecycle ──────────────────────────────────────────────────────────────
-    public ThreadState               State           = ThreadState.Active;
+    public ThreadState               State           = ThreadState.Idle;
     internal readonly List<TimeSpan> responseSamples = new();
     internal DateTime                ariRepliedAt    = DateTime.MinValue;
     internal Timer?                  inactivityTimer;
@@ -71,6 +71,9 @@ public class Thread
     internal AriResponse? streamingResponse;
     internal string       streamedText = "";
 
+    /// <summary>The accumulated text of the response currently being generated, or null when idle.</summary>
+    public string? StreamingText => streamingResponse?.StreamText;
+
     internal void SetLiveCall(LiveCallInfo liveCall) => liveCallInfo = liveCall;
     internal void ClearLiveCall()                    => liveCallInfo = null;
 
@@ -86,17 +89,21 @@ public class Thread
     internal event Action<string, string>? ExchangeCompleted;
     internal event Action? BecameInactive;
     internal event Action? Deleted;
+    internal event Action<string>? Streaming;
+    internal event Action? StreamingFinished;
 
     internal void RaiseUpdated()                              => Updated?.Invoke();
     internal void RaiseBecameInactive()                       => BecameInactive?.Invoke();
     internal void RaiseExchangeCompleted(string p, string r)  => ExchangeCompleted?.Invoke(p, r);
     internal void RaiseBufferFull()                           => BufferFull?.Invoke();
+    internal void RaiseStreaming(string text)                 => Streaming?.Invoke(text);
+    internal void RaiseStreamingFinished()                    => StreamingFinished?.Invoke();
 
     // ── Constructor ─────────────────────────────────────────────────────────────
 
-    internal Thread(ThreadType type, string threadKey, string? platformContext = null)
+    internal Thread(ThreadPipeline pipeline, string threadKey, string? platformContext = null)
     {
-        Type            = type;
+        Pipeline        = pipeline;
         this.threadKey  = threadKey;
         PlatformContext = platformContext;
     }
@@ -142,20 +149,20 @@ public class Thread
 
     internal void ResetInactivityTimer()
     {
-        if (State != ThreadState.Active) return;
+        if (State is ThreadState.CleanupNeeded or ThreadState.Deleted) return;
         inactivityTimer?.Dispose();
         inactivityTimer = new Timer(_ =>
         {
-            if (State != ThreadState.Active) return;
-            State = ThreadState.Inactive;
+            if (State != ThreadState.Idle) return;
+            State = ThreadState.Dormant;
             BecameInactive?.Invoke();
         }, null, InactivityThreshold, Timeout.InfiniteTimeSpan);
     }
 
     internal void MarkEngramProcessed()
     {
-        State = ThreadState.Dormant;
-        Shared.Logger.LogInformation("[Thread] ({ThreadKey}) dormant — scheduled for deletion in {Minutes:F1} minutes.", threadKey, DormantDuration.TotalMinutes);
+        State = ThreadState.CleanupNeeded;
+        Shared.Logger.LogInformation("[Thread] ({ThreadKey}) cleanup needed — scheduled for deletion in {Minutes:F1} minutes.", threadKey, DormantDuration.TotalMinutes);
         dormantTimer = new Timer(_ =>
         {
             State = ThreadState.Deleted;

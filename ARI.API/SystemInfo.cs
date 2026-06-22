@@ -25,16 +25,28 @@ public class SystemInfo
 
         try
         {
-            var psi = new ProcessStartInfo("/bin/sh", "-c \"vm_stat\"")
+            // Total physical unified memory (CPU + GPU share the same pool on Apple Silicon)
+            var psiHw = new ProcessStartInfo("/bin/sh", "-c \"sysctl -n hw.memsize\"")
             {
                 RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true
             };
-            using Process p = Process.Start(psi)!;
+            using Process hw = Process.Start(psiHw)!;
+            string hwOut = hw.StandardOutput.ReadToEnd().Trim();
+            hw.WaitForExit();
+            if (!long.TryParse(hwOut, out long totalPhysical))
+                throw new Exception("hw.memsize parse failed");
+
+            // Free + speculative pages are the only truly unused unified memory
+            var psiVm = new ProcessStartInfo("/bin/sh", "-c \"vm_stat\"")
+            {
+                RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true
+            };
+            using Process p = Process.Start(psiVm)!;
             string output = p.StandardOutput.ReadToEnd();
             p.WaitForExit();
 
             long pageSize = 16384;
-            long active = 0, wired = 0, compressed = 0;
+            long free = 0, speculative = 0;
             foreach (string line in output.Split('\n'))
             {
                 if (line.StartsWith("Mach Virtual Memory Statistics") && line.Contains("page size of "))
@@ -44,11 +56,10 @@ public class SystemInfo
                     if (e > s && long.TryParse(line[s..e], out long ps)) pageSize = ps;
                 }
                 static long Pages(string l) { string v = l[(l.LastIndexOf(':') + 1)..].Trim().TrimEnd('.'); return long.TryParse(v, out long n) ? n : 0; }
-                if (line.StartsWith("Pages active:"))                active     = Pages(line);
-                if (line.StartsWith("Pages wired down:"))            wired      = Pages(line);
-                if (line.StartsWith("Pages occupied by compressor:")) compressed = Pages(line);
+                if (line.StartsWith("Pages free:"))        free        = Pages(line);
+                if (line.StartsWith("Pages speculative:")) speculative = Pages(line);
             }
-            return (active + wired + compressed) * pageSize;
+            return totalPhysical - (free + speculative) * pageSize;
         }
         catch { return Process.GetCurrentProcess().WorkingSet64; }
     }
@@ -91,11 +102,13 @@ public class SystemInfo
             }
         }
 
+        // Take the largest Python process only — DataLoader workers fork from the main process
+        // and each independently reports the same Metal/MPS allocations in phys_footprint.
         long pythonBytes = 0;
         foreach (Process p in Process.GetProcessesByName("python")
             .Concat(Process.GetProcessesByName("python3"))
             .Concat(Process.GetProcessesByName("Python")))
-            try { pythonBytes += PhysFootprint(p.Id); } catch { }
+            try { long fp = PhysFootprint(p.Id); if (fp > pythonBytes) pythonBytes = fp; } catch { }
         accounted += pythonBytes;
 
         const long OsBaselineBytes = 2_684_354_560L;

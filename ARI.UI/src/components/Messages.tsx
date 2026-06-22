@@ -21,7 +21,7 @@ function getVolume(): number {
 // Decoding happens in parallel with synthesis of other sentences.
 async function synthesise(sentence: string, signal: AbortSignal): Promise<AudioBuffer | null> {
     try {
-        const resp = await fetch("/api/cp/voice/speak", {
+        const resp = await fetch("/voice/speak", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ text: sentence }),
@@ -72,7 +72,7 @@ async function speakResponse(content: string, setSpeaking: (v: boolean) => void)
     setSpeaking(true)
 
     try {
-        const splitRes = await fetch("/api/cp/voice/split-sentences", {
+        const splitRes = await fetch("/voice/split-sentences", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ text: content }),
@@ -184,7 +184,7 @@ function UserMessage({ item, activeThread }: { item: ThreadItem; activeThread: s
                             <img className="msg-image" src={
                                 a.content
                                     ? `data:${a.mimeType ?? "image/jpeg"};base64,${a.content}`
-                                    : `/api/threads/${activeThread}/msg-attachment?name=${encodeURIComponent(a.name)}`
+                                    : `/threads/${activeThread}/msg-attachment?name=${encodeURIComponent(a.name)}`
                             } alt={a.name} />
                         ) : (
                             <div className="file-card">

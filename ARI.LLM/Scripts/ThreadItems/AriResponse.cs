@@ -14,9 +14,17 @@ public class AriResponse : ThreadItem
     [JsonIgnore]
     public List<AriContentBlock> Content { get; set; } = new();
 
-    /// <summary>The rendered string sent to clients — the blocks joined back together.</summary>
+    /// <summary>Accumulated text during streaming; null once the response is complete.</summary>
+    [JsonIgnore]
+    internal string? StreamText { get; set; }
+
+    /// <summary>The rendered string sent to clients — live text while streaming, parsed blocks once complete.</summary>
     [JsonPropertyName("content")]
-    public string ContentText => string.Concat(Content.Select(b => b.ToString()));
+    public string ContentText => StreamText ?? string.Concat(Content.Select(b => b.ToString()));
+
+    /// <summary>True while the response is being generated; serialised so watching clients can show a typing indicator.</summary>
+    [JsonPropertyName("isStreaming")]
+    public bool IsStreamingJson => State == AriResponseState.Streaming;
 
     public double?          ThinkingSeconds { get; set; }
     public string?          RecallNotes     { get; set; }
@@ -42,6 +50,13 @@ public class AriResponse : ThreadItem
               .Replace("<!--ari-batch-end-->", "")
               .Trim()
         : null;
+
+    /// <summary>The full JSON body sent to /v1/chat/completions for the final turn. Debug only — never sent to the LLM or included in normal history serialisation.</summary>
+    [JsonIgnore]
+    public string? DebugRequestJson  { get; set; }
+    /// <summary>The assembled model response text for the final turn. Debug only — never sent to the LLM or included in normal history serialisation.</summary>
+    [JsonIgnore]
+    public string? DebugResponseText { get; set; }
 
     public override string ToString()
     {

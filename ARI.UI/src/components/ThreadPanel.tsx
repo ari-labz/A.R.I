@@ -13,7 +13,7 @@ export default function ThreadPanel({ open, attachments, activeThread, onClose, 
     function downloadLog() {
         if (!activeThread) return
         const a = document.createElement("a")
-        a.href = `/api/threads/${activeThread}/export`
+        a.href = `/threads/${activeThread}/export`
         a.click()
     }
 

@@ -335,7 +335,7 @@ internal class Refactor : Agent
         List<NoteData> hubNotes,
         List<string> allTitles)
     {
-        Thread refactorThread = new Thread(ThreadType.Refactor, $"refactor-folder-{folder}:{Guid.NewGuid()}");
+        Thread refactorThread = new Thread(ThreadPipeline.Dialogue, $"refactor-folder-{folder}:{Guid.NewGuid()}") { Internal = true };
         string prompt         = BuildFolderPrompt(folder, notes, hubNotes, allTitles);
 
         Shared.Logger.LogInformation("[Refactor] Folder '{Folder}': single-pass LLM call ({Count} notes).", folder, notes.Count);
@@ -370,7 +370,7 @@ internal class Refactor : Agent
         List<string> allTitles)
     {
         // Pass 1 — Cluster detection (titles + short excerpt per note)
-        Thread p1Thread = new Thread(ThreadType.Refactor, $"refactor-clusters-{folder}:{Guid.NewGuid()}");
+        Thread p1Thread = new Thread(ThreadPipeline.Dialogue, $"refactor-clusters-{folder}:{Guid.NewGuid()}") { Internal = true };
         string p1Prompt = ClusterDetectionPrompt(folder, notes, hubNotes);
 
         Shared.Logger.LogInformation("[Refactor] Folder '{Folder}': cluster detection pass ({Count} notes).", folder, notes.Count);
@@ -402,7 +402,7 @@ internal class Refactor : Agent
             NoteData? existingHub = hubNotes.FirstOrDefault(h =>
                 string.Equals(h.Title, cluster.HubName, StringComparison.OrdinalIgnoreCase));
 
-            Thread p2Thread = new Thread(ThreadType.Refactor, $"refactor-cluster-{cluster.Theme}:{Guid.NewGuid()}");
+            Thread p2Thread = new Thread(ThreadPipeline.Dialogue, $"refactor-cluster-{cluster.Theme}:{Guid.NewGuid()}") { Internal = true };
             string p2Prompt = ClusterAnalysisPrompt(cluster, clusterNotes, existingHub, hubNotes, allTitles);
 
             Shared.Logger.LogInformation("[Refactor] Cluster '{Theme}' ({Count} notes).", cluster.Theme, clusterNotes.Count);

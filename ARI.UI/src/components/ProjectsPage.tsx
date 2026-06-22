@@ -53,7 +53,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
         if (!name.trim()) return
         setSaving(true); setError(null)
         try {
-            const res = await fetch("/api/projects", {
+            const res = await fetch("/projects", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ name: name.trim(), description: description.trim(), instructions: instructions.trim(), forceCodePipeline: forceCode }),
@@ -86,7 +86,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
 
     async function loadAttachments(projectId: string) {
         try {
-            const res = await fetch(`/api/projects/${projectId}/attachments`)
+            const res = await fetch(`/projects/${projectId}/attachments`)
             if (res.ok) setAttachments(await res.json())
         } catch { /* ignore */ }
     }
@@ -113,7 +113,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
         if (!selected || !editName.trim()) return
         setEditSaving(true); setEditError(null)
         try {
-            const res = await fetch(`/api/projects/${selected.id}`, {
+            const res = await fetch(`/projects/${selected.id}`, {
                 method: "PUT",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ name: editName.trim(), description: editDescription.trim(), instructions: editInstructions.trim(), forceCodePipeline: editForceCode }),
@@ -128,7 +128,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
     async function handleDelete() {
         if (!selected) return
         if (!confirm(`Delete "${selected.name}"? This cannot be undone.`)) return
-        await fetch(`/api/projects/${selected.id}`, { method: "DELETE" })
+        await fetch(`/projects/${selected.id}`, { method: "DELETE" })
         setSelected(null)
         onProjectCreated()
     }
@@ -138,7 +138,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
         setAttUploading(true)
         for (const file of [...e.target.files]) {
             const fd = new FormData(); fd.append("file", file)
-            await fetch(`/api/projects/${selected.id}/attachments`, { method: "POST", body: fd })
+            await fetch(`/projects/${selected.id}/attachments`, { method: "POST", body: fd })
         }
         e.target.value = ""
         await loadAttachments(selected.id)
@@ -147,7 +147,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
 
     async function handleRemoveAttachment(name: string) {
         if (!selected) return
-        await fetch(`/api/projects/${selected.id}/attachments/${encodeURIComponent(name)}`, { method: "DELETE" })
+        await fetch(`/projects/${selected.id}/attachments/${encodeURIComponent(name)}`, { method: "DELETE" })
         await loadAttachments(selected.id)
     }
 

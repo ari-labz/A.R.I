@@ -81,13 +81,13 @@ function createSplash() {
 const WAIT_TIMEOUT_MS = 60_000
 
 async function waitForAri(endpoint) {
-    log.info(`Waiting for ARI server at ${endpoint}/api/threads (timeout ${WAIT_TIMEOUT_MS / 1000}s) …`)
+    log.info(`Waiting for ARI server at ${endpoint}/threads (timeout ${WAIT_TIMEOUT_MS / 1000}s) …`)
     const deadline = Date.now() + WAIT_TIMEOUT_MS
     let attempt = 0
     while (true) {
         attempt++
         try {
-            const res = await fetch(`${endpoint}/api/threads`)
+            const res = await fetch(`${endpoint}/threads`)
             log.info(`Health check attempt ${attempt}: HTTP ${res.status}`)
             if (res.status < 500) {
                 // Any non-5xx means the ARI server (or its auth layer) responded — it's up
