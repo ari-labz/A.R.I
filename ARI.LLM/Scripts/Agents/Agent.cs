@@ -416,7 +416,12 @@ public abstract class Agent
             bool   textTools   = toolSchemas is not null && !NativeTools;
             string toolCatalog = textTools ? BuildToolCatalog(toolSchemas!) : "";
 
-            messages[0] = new { role = "system", content = baseSystem + toolCatalog + RenderDynamicContextBlock(thread) + thinkSuffix };
+            // Keep the system message (and thus the whole prompt prefix) STATIC across turns so the server's
+            // KV cache is reused — the volatile per-turn checklist is injected as a transient LAST message at
+            // request time instead (see below). Putting changing content here at position 0 invalidates the
+            // entire cache every turn, forcing a full re-process of the context (the dominant cost on a dense
+            // model: ~100 t/s prompt-eval vs ~19 t/s generation).
+            messages[0] = new { role = "system", content = baseSystem + toolCatalog + thinkSuffix };
 
             CompactToolOutput(messages, toolResultSlots, MaxContextTokens);
 
@@ -468,12 +473,20 @@ public abstract class Agent
             if (nativeTools)             body["tools"] = toolSchemas;
             if (Slot.HasValue)           body["id_slot"] = Slot.Value;
 
+            // Cache-friendly dynamic context: append the volatile checklist as a transient LAST message just
+            // for this request, then remove it so the persistent history (and its cached prefix) stays stable.
+            // Only this small block + genuinely new tokens are re-processed each turn instead of the whole context.
+            string dynamicBlock   = RenderDynamicContextBlock(thread);
+            bool   dynamicInjected = dynamicBlock.Length > 0;
+            if (dynamicInjected) messages.Add(new { role = "system", content = dynamicBlock });
+
             string             json    = JsonSerializer.Serialize(body);
             if (!QuietLogging)
                 Shared.Logger.LogInformation("[{Agent}] ({Thread}) → request (step {Step}): max_tokens={MT}, tools={N}, msgs={Msgs}",
                     Name, thread.Key, toolCallCount,
                     body.TryGetValue("max_tokens", out object? mtv) ? mtv : "?",
                     toolSchemas?.Length ?? 0, messages.Count);
+            if (dynamicInjected) messages.RemoveAt(messages.Count - 1);   // keep persistent history clean + prefix stable
             HttpRequestMessage request = new(HttpMethod.Post, $"{Endpoint}/v1/chat/completions")
             {
                 Content = new StringContent(json, Encoding.UTF8, "application/json")

@@ -1,36 +1,32 @@
 {
   "DockerComposePath": "Compose.yaml",
-  "Modules": 
-  {
-    "API": 
-    {
+  "Modules": {
+    "API": {
       "Enabled": true,
       "Port": 5074,
       "EvalToken": "ari-eval-local-2026",
       "Google": {
         "ClientId": "886723798260-eapta34u4n4bug81ut10bq2399leu9vn.apps.googleusercontent.com",
         "ClientSecret": "[REDACTED]",
-        "AllowedEmails": ["owner@example.com"]
+        "AllowedEmails": [
+          "owner@example.com"
+        ]
       }
     },
-    "LLM": 
-    {
+    "LLM": {
       "Enabled": true,
       "ModelsPath": "/Users/user/Documents/GitHub/A.R.I/Models"
     },
-    "VoiceSynthesis":
-    {
-      "Enabled": true,
+    "VoiceSynthesis": {
+      "Enabled": false,
       "StyleTtsPath": "../../../../External/StyleTTS2",
       "VoicesPath": "../../../../Voices"
     },
-    "Voice": 
-    {
-      "Enabled": true,
+    "Voice": {
+      "Enabled": false,
       "ModelName": "Voice v1"
     },
-    "Brain": 
-    {
+    "Brain": {
       "Enabled": true,
       "TriliumUrl": "http://localhost:8080",
       "EtapiToken": "[REDACTED]",
@@ -39,22 +35,18 @@
       "BackupPath": "./Backups",
       "MaxBackups": 5
     },
-    "Discord": 
-    {
+    "Discord": {
       "Enabled": true,
       "Token": "[REDACTED]",
       "OwnerId": 0,
-      "WhitelistedUserIds": 
-      [
+      "WhitelistedUserIds": [
         0,
         0
       ],
-      "WatchedChannelIds": 
-      [
+      "WatchedChannelIds": [
         0
       ],
-      "AllowedGuildIds": 
-      [
+      "AllowedGuildIds": [
         0
       ]
     }

@@ -44,6 +44,21 @@ internal class Code : Agent
 
     // ── Context building ─────────────────────────────────────────────────────
 
+    // Always-on working principles for the code pipeline. Lives in the static (cached) system context so it
+    // costs nothing per step. WHY: the model's biggest failure mode is context bloat — slurping whole files
+    // and re-reading — which makes long tasks crawl and can stall the stream. Steer it toward minimal,
+    // targeted context use without ever banning a read it genuinely needs.
+    private const string WorkingPrinciples =
+        "## Working efficiently\n" +
+        "Keep your context lean — it is the main driver of both speed and answer quality.\n" +
+        "- To find code, use search_files (regex, returns file:line) or preview_file (outline) FIRST. " +
+        "Then read_file ONLY the line range you need (start_line/end_line). Read a whole file only when it is small or you truly need all of it.\n" +
+        "- Edit only the lines that must change. Batch all edits to one file into a single edit_file 'edits' array. " +
+        "edit_file returns the updated lines around your change, so you do not need to re-read to verify.\n" +
+        "- Do not re-read or re-search for something already in your context.\n" +
+        "- Be concise: spend the minimum tokens needed to finish. Don't restate your plan every step or add filler. " +
+        "Use as much room as a large task genuinely needs, but no more.";
+
     private string BuildStaticContext(CodeThreadState s)
     {
         StringBuilder sb = new();
@@ -52,6 +67,7 @@ internal class Code : Agent
             if (string.IsNullOrWhiteSpace(body)) return;
             sb.Append("\n\n").Append(title).Append('\n').Append(body.Trim());
         }
+        sb.Append("\n\n").Append(WorkingPrinciples);
         Block("## Coding conventions", s.CodingConventions);
         Block("## Project rules",      s.ProjectRules);
         Block("## Project map",        s.ProjectMap);

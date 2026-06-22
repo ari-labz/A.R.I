@@ -23,6 +23,11 @@ public static class ClientWebSocket
         public ConcurrentDictionary<string, byte> DirtyFiles   { get; } = new(StringComparer.OrdinalIgnoreCase);
         // Consecutive edit_file failures per file. Reset on read_file.
         public ConcurrentDictionary<string, int>  EditFailures { get; } = new(StringComparer.OrdinalIgnoreCase);
+        // Line ranges already read per file this session. WHY: re-reading a range the model already has in
+        // context re-injects thousands of UNCACHED tokens (a single big re-read measured ~150s of prompt
+        // processing) and adds nothing. We short-circuit a covered re-read with a pointer instead. Cleared
+        // when the file is edited (line numbers shift, so a fresh read is legitimate).
+        public ConcurrentDictionary<string, List<(int Start, int End)>> ReadRanges { get; } = new(StringComparer.OrdinalIgnoreCase);
     }
 
     public static async Task HandleAsync(WebSocket ws, HttpContext ctx, LLMModule llm, ILogger log)
@@ -97,11 +102,16 @@ public static class ClientWebSocket
 
         RegisterTool(thread, ws, log,
             name: "read_file",
-            description: "Read the contents of a file from the user's project.",
-            parameters: new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" } }, required = new[] { "path" } },
+            description: "Read a file from the user's project. Lines come back numbered so you can edit_file by line number afterwards. Read ONLY the part you need: pass start_line and end_line to read a specific range, and use preview_file or search_files first to locate that range. Omitting both reads the whole file — fine for a small file, but on a large file it wastes context, so read a range instead. You rarely need to re-read a file you already have, or to re-read after editing (edit_file returns the updated lines around your change).",
+            parameters: new { type = "object", properties = new {
+                path       = new { type = "string",  description = "File path relative to project root" },
+                start_line = new { type = "integer", description = "First line to read (1-based, inclusive). Omit to read from the start." },
+                end_line   = new { type = "integer", description = "Last line to read (1-based, inclusive). Omit to read to the end." }
+            }, required = new[] { "path" } },
             displayVerb: "Reading", displayDoneVerb: "Read",
             labelField: "path",
-            postHook: (argsJson, result) => { ClearDirtyAndFailures(argsJson, fileState); return null; });
+            preCheck: argsJson => CheckRedundantRead(argsJson, fileState),
+            postHook: (argsJson, result) => ReadPostHook(argsJson, result, fileState));
 
         RegisterTool(thread, ws, log,
             name: "list_directory",
@@ -112,14 +122,14 @@ public static class ClientWebSocket
 
         RegisterTool(thread, ws, log,
             name: "search_files",
-            description: "Search for a string across files in the project. Returns matching lines with file path and line number.",
-            parameters: new { type = "object", properties = new { pattern = new { type = "string", description = "Text to search for (case-insensitive)" }, path = new { type = "string", description = "Directory to search in, relative to project root." }, glob = new { type = "string", description = "File filter e.g. '*.cs'. Defaults to all files." } }, required = new[] { "pattern" } },
+            description: "Search file contents with a regular expression. Returns each match as 'path:line: text' — the line numbers let you edit_file directly WITHOUT reading the whole file. Case-sensitive by default; set ignore_case for a case-insensitive search. Use this to find every call site / definition before changing a symbol.",
+            parameters: new { type = "object", properties = new { pattern = new { type = "string", description = "Regular expression to search for, e.g. 'GrantAccess\\(' or 'class\\s+Token'." }, path = new { type = "string", description = "Directory to search in, relative to project root." }, glob = new { type = "string", description = "File filter e.g. '*.cs'. Defaults to all files." }, ignore_case = new { type = "boolean", description = "Set true for a case-insensitive match. Defaults to false." } }, required = new[] { "pattern" } },
             displayVerb: "Searching", displayDoneVerb: "Searched",
             labelField: "pattern");
 
         RegisterTool(thread, ws, log,
             name: "edit_file",
-            description: "Edit a file by replacing one or more line ranges with new text. REQUIREMENT: read_file the file first — you edit BY LINE NUMBER using the 1-based line numbers shown by read_file/search_files. Set start_line and end_line (inclusive) and new_string (the replacement text only; an empty string deletes the range). You never retype existing code — you point at the lines you can already see. To change several places at once, pass an 'edits' array of {start_line, end_line, new_string}; they all resolve against the file as you last read it, so line numbers don't shift between them. Use write_file for a new file or a full rewrite.",
+            description: "Edit a file by replacing one or more line ranges with new text. REQUIREMENT: read_file the file first — you edit BY LINE NUMBER using the 1-based line numbers shown by read_file/search_files. Set start_line and end_line (inclusive) and new_string (the replacement text only; an empty string deletes the range). You never retype existing code — you point at the lines you can already see. To change several places at once, pass an 'edits' array of {start_line, end_line, new_string}; they all resolve against the file as you last read it, so line numbers don't shift between them. Batch every change to one file into a single call's 'edits' array — that way you don't have to re-read between edits. After a successful edit you get back the updated, re-numbered lines around your change; read those instead of re-reading the file to verify it landed. Use write_file for a new file or a full rewrite.",
             parameters: new { type = "object", properties = new {
                 path       = new { type = "string",  description = "File path relative to project root" },
                 start_line = new { type = "integer", description = "First line to replace (1-based, inclusive, exactly as shown by read_file/search_files)." },
@@ -297,20 +307,25 @@ public static class ClientWebSocket
         }
         else if (!result.StartsWith("[Error:", StringComparison.OrdinalIgnoreCase))
         {
-            // Successful edit — mark dirty, reset failure counter
+            // Successful edit — mark dirty, reset failure counter, and forget prior read ranges:
+            // the edit shifted line numbers, so a fresh read is legitimate (not a redundant re-read).
             fileState.EditFailures.TryRemove(path, out _);
             fileState.DirtyFiles.TryAdd(path, 0);
+            fileState.ReadRanges.TryRemove(path, out _);
         }
 
         return null;
     }
 
-    /// <summary>On successful write_file, marks the file as dirty.</summary>
+    /// <summary>On successful write_file, marks the file as dirty and forgets prior read ranges.</summary>
     private static void MarkWriteDirty(string argsJson, string result, FileToolState fileState)
     {
         string path = ExtractToolPath(argsJson);
         if (!string.IsNullOrEmpty(path) && result.StartsWith("Successfully", StringComparison.OrdinalIgnoreCase))
+        {
             fileState.DirtyFiles.TryAdd(path, 0);
+            fileState.ReadRanges.TryRemove(path, out _);
+        }
     }
 
     private static string ExtractToolPath(string argsJson)
@@ -321,6 +336,90 @@ public static class ClientWebSocket
             return (doc.RootElement.TryGetProperty("path", out var pe) ? pe.GetString() ?? "" : "").Trim();
         }
         catch { return ""; }
+    }
+
+    /// <summary>
+    /// Parses a read_file range. Missing start_line means "from the top" (1); missing end_line means
+    /// "to the end" (int.MaxValue). A read with neither is the whole file (1..MaxValue).
+    /// </summary>
+    private static (int Start, int End) ExtractReadRange(string argsJson)
+    {
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            JsonElement root = doc.RootElement;
+            int start = root.TryGetProperty("start_line", out JsonElement se) && se.TryGetInt32(out int s) && s > 0 ? s : 1;
+            int end   = root.TryGetProperty("end_line",   out JsonElement ee) && ee.TryGetInt32(out int e) && e > 0 ? e : int.MaxValue;
+            if (end < start) end = start;
+            return (start, end);
+        }
+        catch { return (1, int.MaxValue); }
+    }
+
+    /// <summary>
+    /// Soft dedup for read_file. If the requested range is already fully covered by a range read earlier
+    /// (and the file has NOT been edited since — line numbers still valid), short-circuits with a pointer
+    /// instead of re-sending the bytes. WHY: a covered re-read re-injects uncached tokens (a big re-read
+    /// measured ~150s of prompt processing) and tells the model nothing new. This nudges, it does not ban:
+    /// the model can still read a different/wider range, and any read is allowed after an edit.
+    /// </summary>
+    private static string? CheckRedundantRead(string argsJson, FileToolState fileState)
+    {
+        string path = ExtractToolPath(argsJson);
+        if (string.IsNullOrEmpty(path)) return null;
+        if (fileState.DirtyFiles.ContainsKey(path)) return null; // edited since — a fresh read is legitimate
+        if (!fileState.ReadRanges.TryGetValue(path, out List<(int Start, int End)>? ranges) || ranges is null) return null;
+
+        (int reqStart, int reqEnd) = ExtractReadRange(argsJson);
+        lock (ranges)
+        {
+            foreach ((int s, int e) in ranges)
+            {
+                if (s <= reqStart && e >= reqEnd)
+                {
+                    string seen = e == int.MaxValue ? $"from line {s} to the end" : $"lines {s}-{e}";
+                    return $"[Already read] You already read {seen} of '{path}' earlier in this conversation — scroll up to that result rather than re-reading it. If you need a different part, read a different range; if you just edited it, read again for fresh line numbers.";
+                }
+            }
+        }
+        return null;
+    }
+
+    /// <summary>Records a successfully read range so a later covered re-read can be short-circuited.</summary>
+    private static void RecordRead(string argsJson, FileToolState fileState)
+    {
+        string path = ExtractToolPath(argsJson);
+        if (string.IsNullOrEmpty(path)) return;
+        (int start, int end) = ExtractReadRange(argsJson);
+        List<(int Start, int End)> ranges = fileState.ReadRanges.GetOrAdd(path, _ => new List<(int, int)>());
+        lock (ranges) ranges.Add((start, end));
+    }
+
+    // Upper bound on a single read_file result entering the model's context (~6k tokens). WHY: one oversized
+    // read dumps thousands of UNCACHED tokens into context (a ~6k-token read measured ~150s of prompt
+    // processing). Bounding each read keeps every step cheap; the model reads the next window or searches.
+    private const int MaxReadChars = 24000;
+
+    /// <summary>
+    /// read_file post-processing: clear the dirty/failure flags, cap an oversized result so a single read
+    /// can't blow the per-step context cost, and record the range for dedup. A capped read is NOT recorded —
+    /// the model only received part of it, so a follow-up read of the rest must not be blocked.
+    /// </summary>
+    private static string? ReadPostHook(string argsJson, string result, FileToolState fileState)
+    {
+        ClearDirtyAndFailures(argsJson, fileState);
+
+        if (result.Length <= MaxReadChars)
+        {
+            RecordRead(argsJson, fileState);
+            return null; // unchanged
+        }
+
+        // Truncate on a line boundary near the cap so numbered lines stay intact, then close the code fence.
+        int cut = result.LastIndexOf('\n', Math.Min(MaxReadChars, result.Length - 1));
+        if (cut <= 0) cut = Math.Min(MaxReadChars, result.Length);
+        return result[..cut] +
+               "\n```\n[Truncated to keep context lean — this read was large. Read a narrower range with start_line/end_line, or use search_files to jump straight to what you need.]";
     }
 
     // ── End guardrail helpers ────────────────────────────────────────────────────
