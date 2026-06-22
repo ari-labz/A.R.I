@@ -34,7 +34,7 @@ ARI_PORT="${ARI_PORT%%/*}"
 ARI_PORT="${ARI_PORT:-5074}"
 
 log "Waiting for ARI on port $ARI_PORT..."
-until curl -sf "http://localhost:$ARI_PORT/api/threads" -o /dev/null 2>/dev/null; do
+until curl -sf "http://localhost:$ARI_PORT/threads" -o /dev/null 2>/dev/null; do
   sleep 1
 done
 log "ARI is online."

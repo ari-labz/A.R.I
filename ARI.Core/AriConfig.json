@@ -18,12 +18,12 @@
       "ModelsPath": "/Users/user/Documents/GitHub/A.R.I/Models"
     },
     "VoiceSynthesis": {
-      "Enabled": false,
+      "Enabled": true,
       "StyleTtsPath": "../../../../External/StyleTTS2",
       "VoicesPath": "../../../../Voices"
     },
     "Voice": {
-      "Enabled": false,
+      "Enabled": true,
       "ModelName": "Voice v1"
     },
     "Brain": {

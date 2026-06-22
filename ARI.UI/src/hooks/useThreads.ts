@@ -24,7 +24,7 @@ export function useThreads() {
 
     const load = useCallback(async () => {
         try {
-            const res = await fetch("/api/threads")
+            const res = await fetch("/threads")
             if (!res.ok) return
             const data: ThreadEntry[] = await res.json()
             setThreads(data)
@@ -67,7 +67,7 @@ export interface Attachment {
 }
 
 export async function createThread(projectId?: string | null): Promise<string> {
-    const res = await fetch("/api/threads", {
+    const res = await fetch("/threads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectId: projectId ?? null }),
@@ -77,10 +77,54 @@ export async function createThread(projectId?: string | null): Promise<string> {
 }
 
 export async function loadHistory(key: string, raw = false): Promise<ThreadItem[]> {
-    const url = raw ? `/api/threads/${key}/history?raw=true` : `/api/threads/${key}/history`
+    const url = raw ? `/threads/${key}/history?raw=true` : `/threads/${key}/history`
     const res = await fetch(url)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     return res.json()
+}
+
+export interface ThreadDetail {
+    key:           string
+    state:         string  // "idle" | "streaming" | "dormant" | "cleanupneeded" | "deleted"
+    pipeline:      string  // "dialogue" | "code"
+    isInternal:    boolean
+    lastMessageAt: string
+    history:       ThreadItem[]
+}
+
+export async function fetchThread(key: string): Promise<ThreadDetail | null> {
+    try {
+        const res = await fetch(`/threads/${key}`)
+        if (!res.ok) return null
+        return res.json()
+    } catch { return null }
+}
+
+/** Polls GET /threads/{key} every 150ms until state is no longer "streaming", calling onUpdate each tick.
+ *  Returns a stop function. Safe to call stop() multiple times. */
+export function pollThreadWhileStreaming(
+    key: string,
+    onUpdate: (detail: ThreadDetail) => void,
+): () => void {
+    let active = true
+    let handle: ReturnType<typeof setTimeout>
+
+    async function tick() {
+        if (!active) return
+        const detail = await fetchThread(key)
+        if (!active) return
+        if (detail) {
+            onUpdate(detail)
+            if (detail.state === "streaming") {
+                handle = setTimeout(tick, 150)
+                return
+            }
+        }
+        active = false
+    }
+
+    tick()
+    return () => { active = false; clearTimeout(handle) }
 }
 
 export function openWatchStream(
@@ -88,7 +132,7 @@ export function openWatchStream(
     onEvent: (data: WatchEvent) => void,
     onError: () => void,
 ): EventSource {
-    const es = new EventSource(`/api/threads/${key}/watch`)
+    const es = new EventSource(`/threads/${key}/watch`)
     es.onmessage = e => {
         try { onEvent(JSON.parse(e.data)) } catch { /* ignore */ }
     }
@@ -97,14 +141,32 @@ export function openWatchStream(
 }
 
 export interface WatchEvent {
-    deleted?:    boolean
-    isProcessing?: boolean
+    deleted?:       boolean
+    isProcessing?:  boolean
     isRemembering?: boolean
-    isCodeMode?: boolean
+    isCodeMode?:    boolean
+}
+
+export interface AppEvent {
+    type:       "newThread" | "streaming" | "streamingFinished" | "threadDeleted" | "threadUpdated"
+    threadKey:  string
+    text?:      string | null
+}
+
+export function openEventStream(
+    onEvent: (data: AppEvent) => void,
+    onError: () => void,
+): EventSource {
+    const es = new EventSource("/events")
+    es.onmessage = e => {
+        try { onEvent(JSON.parse(e.data)) } catch { /* ignore */ }
+    }
+    es.onerror = onError
+    return es
 }
 
 export async function cancelProcessing(key: string) {
-    await fetch(`/api/threads/${key}/processing`, { method: "DELETE" })
+    await fetch(`/threads/${key}/processing`, { method: "DELETE" })
 }
 
 export function useTypingHeartbeat(getThreadKey: () => string | null) {
@@ -113,7 +175,7 @@ export function useTypingHeartbeat(getThreadKey: () => string | null) {
     function send() {
         const key = getThreadKey()
         if (!key) return
-        fetch(`/api/threads/${key}/typing`, { method: "POST" }).catch(() => {})
+        fetch(`/threads/${key}/typing`, { method: "POST" }).catch(() => {})
     }
 
     function start() {

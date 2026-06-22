@@ -9,6 +9,9 @@ namespace ARI.LLM;
 /// </summary>
 public abstract class AriContentBlock
 {
+    /// <summary>True while this block is still being written to by the streaming loop.</summary>
+    public bool IsStreaming { get; set; }
+
     public abstract override string ToString();
 
     // Recognises the tool markers the streaming loop emits. Everything else is prose.

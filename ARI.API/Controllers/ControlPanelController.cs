@@ -19,7 +19,7 @@ public class ControlPanelController : Controller
     public IActionResult Index() => Redirect("/controlpanel.html");
 }
 
-[Route("api/cp")]
+[Route("admin")]
 [ApiController]
 public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, PersistentData persistentData) : ControllerBase
 {
@@ -103,11 +103,11 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
         if (Llm is not null)
         {
             foreach (KeyValuePair<string, ARI.LLM.Thread> kvp in Llm.Threads
-                         .Where(t => t.Value.Type == ARI.LLM.ThreadType.Code || t.Value.Type == ARI.LLM.ThreadType.Dialogue))
+                         .Where(t => t.Value.Pipeline == ARI.LLM.ThreadPipeline.Code || t.Value.Pipeline == ARI.LLM.ThreadPipeline.Dialogue))
             {
                 (int used, int limit) = Llm.GetContextStats(kvp.Key);
                 if (used <= 0) continue;
-                string agentName = kvp.Value.Type == ARI.LLM.ThreadType.Code ? "Code" : "Dialogue";
+                string agentName = kvp.Value.Pipeline == ARI.LLM.ThreadPipeline.Code ? "Code" : "Dialogue";
                 context.Add(new { threadKey = kvp.Key, agentName, used, limit, pct = limit > 0 ? (int)(used * 100.0 / limit) : 0 });
             }
         }
@@ -181,11 +181,11 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
             // Collect all user-facing threads across Dialogue and Code, deduped by key.
             // For threads present in both agents, prefer the Code label.
             foreach (KeyValuePair<string, ARI.LLM.Thread> kvp in Llm.Threads
-                         .Where(t => t.Value.Type == ARI.LLM.ThreadType.Code || t.Value.Type == ARI.LLM.ThreadType.Dialogue))
+                         .Where(t => t.Value.Pipeline == ARI.LLM.ThreadPipeline.Code || t.Value.Pipeline == ARI.LLM.ThreadPipeline.Dialogue))
             {
                 (int used, int limit) = Llm.GetContextStats(kvp.Key);
                 if (used <= 0) continue;
-                string agentName = kvp.Value.Type == ARI.LLM.ThreadType.Code ? "Code" : "Dialogue";
+                string agentName = kvp.Value.Pipeline == ARI.LLM.ThreadPipeline.Code ? "Code" : "Dialogue";
                 contextStats.Add(new
                 {
                     threadKey = kvp.Key,
@@ -222,16 +222,24 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
 
     private static string EscapeSse(string s) => s.Replace("\n", "↵").Replace("\r", "");
 
-    // ── Agent assignment ─────────────────────────────────────────────────────────
+}
 
-    [HttpGet("agents")]
+// ── Agents API ────────────────────────────────────────────────────────────────
+
+[Route("agents")]
+[ApiController]
+public class AgentsApiController(PersistentData persistentData) : ControllerBase
+{
+    private LLMModule? Llm => (LLMModule?)Modules.Llm;
+
+    [HttpGet]
     public IActionResult GetAgents()
     {
         var agents = persistentData.GetAgents();
         return Ok(new { agents });
     }
 
-    [HttpPut("agents/{name}")]
+    [HttpPut("{name}")]
     public IActionResult UpdateAgent(string name, [FromBody] AgentDefinition req)
     {
         req.Name = name;
@@ -239,7 +247,6 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
         if (!persistentData.UpdateAgent(req))
             return NotFound(new { error = $"Agent '{name}' not found." });
 
-        // Apply server/slot changes live if LLM is running
         if (Llm is not null)
         {
             Llm.AssignAgentServer(name, req.ServerName);
@@ -252,7 +259,7 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
 
 // ── Voice Synthesis API ───────────────────────────────────────────────────────
 
-[Route("api/cp/voice")]
+[Route("voice")]
 [ApiController]
 public class VoiceController(
     VoiceSynthesisConfig vsConfig,
@@ -563,6 +570,28 @@ public class VoiceController(
         return Ok(new { deleted = modelName });
     }
 
+    /// <summary>
+    /// Signal a running training job to pause after the current epoch.
+    /// Writes a .stop_training sentinel file that train_finetune.py polls for.
+    /// The process saves a checkpoint then exits cleanly — safe to resume later.
+    /// </summary>
+    [HttpPost("{modelName}/stop")]
+    public IActionResult StopTraining(string modelName)
+    {
+        if (string.IsNullOrEmpty(vsConfig.VoicesPath))
+            return StatusCode(503, new { error = "VoiceSynthesis not configured." });
+
+        string dir = Path.Combine(vsConfig.VoicesPath, modelName);
+        if (!dir.StartsWith(vsConfig.VoicesPath, StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { error = "Invalid model name." });
+        if (!Directory.Exists(dir))
+            return NotFound(new { error = $"Model '{modelName}' not found." });
+
+        System.IO.File.WriteAllText(Path.Combine(dir, ".stop_training"), "");
+        logger.LogInformation("[Voice] Pause requested for model '{ModelName}'", modelName);
+        return Ok(new { stopping = modelName });
+    }
+
     // Returns the highest epoch number found in the model's Checkpoints folder,
     // or from loose epoch_2nd_*.pth files if Checkpoints doesn't exist yet.
     private static int? LatestSavedEpoch(string modelDir)
@@ -661,7 +690,7 @@ public class VoiceController(
 
 // ── LLM Models & Servers API ──────────────────────────────────────────────────
 
-[Route("api/cp/models")]
+[Route("models")]
 [ApiController]
 public class ModelsApiController(PersistentData persistentData) : ControllerBase
 {
@@ -754,9 +783,26 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
         return Ok(new { ok = true });
     }
 
-    // ── Server CRUD ───────────────────────────────────────────────────────────
+    [HttpPut("notes")]
+    public IActionResult SaveNotes([FromBody] ModelNotesRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.ModelName))
+            return BadRequest(new { error = "modelName is required." });
 
-    [HttpPost("/api/cp/servers")]
+        persistentData.SetNote(req.ModelName, req.Notes ?? "");
+        return Ok(new { ok = true });
+    }
+}
+
+// ── Servers API ───────────────────────────────────────────────────────────────
+
+[Route("servers")]
+[ApiController]
+public class ServersApiController(PersistentData persistentData) : ControllerBase
+{
+    private LLMModule? llm => (LLMModule?)Modules.Llm;
+
+    [HttpPost]
     public IActionResult AddServer([FromBody] Server server)
     {
         if (string.IsNullOrWhiteSpace(server.Name))
@@ -767,7 +813,7 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
         return Ok(server);
     }
 
-    [HttpPut("/api/cp/servers/{id:guid}")]
+    [HttpPut("{id:guid}")]
     public IActionResult UpdateServer(Guid id, [FromBody] Server server)
     {
         Server? existing = persistentData.GetServers().FirstOrDefault(s => s.Id == id);
@@ -775,14 +821,13 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
             return NotFound(new { error = "Server not found." });
         llm?.UpdateServer(server);
 
-        // If the server was renamed, repoint any agents that referenced the old name.
         if (existing is not null && existing.Name != server.Name)
             persistentData.RenameServerInAgents(existing.Name, server.Name);
 
         return Ok(server);
     }
 
-    [HttpDelete("/api/cp/servers/{id:guid}")]
+    [HttpDelete("{id:guid}")]
     public IActionResult DeleteServer(Guid id)
     {
         Server? live = llm?.Servers.FirstOrDefault(s => s.Id == id);
@@ -793,9 +838,7 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
         return Ok(new { ok = true });
     }
 
-    // ── Server lifecycle ──────────────────────────────────────────────────────
-
-    [HttpPost("/api/cp/servers/{id:guid}/start")]
+    [HttpPost("{id:guid}/start")]
     public IActionResult StartServer(Guid id)
     {
         Server? server = llm?.Servers.FirstOrDefault(s => s.Id == id);
@@ -809,7 +852,7 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
         return Ok(new { ok = true });
     }
 
-    [HttpPost("/api/cp/servers/{id:guid}/stop")]
+    [HttpPost("{id:guid}/stop")]
     public IActionResult StopServer(Guid id)
     {
         Server? server = llm?.Servers.FirstOrDefault(s => s.Id == id);
@@ -818,7 +861,7 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
         return Ok(new { ok = true });
     }
 
-    [HttpPost("/api/cp/servers/{id:guid}/restart")]
+    [HttpPost("{id:guid}/restart")]
     public IActionResult RestartServer(Guid id)
     {
         Server? server = llm?.Servers.FirstOrDefault(s => s.Id == id);
@@ -826,8 +869,6 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
         _ = Task.Run(() => server.RestartAsync());
         return Ok(new { ok = true });
     }
-
-    // ── Model switching & notes ───────────────────────────────────────────────
 
     [HttpPost("switch")]
     public IActionResult Switch([FromBody] SwitchModelRequest req)
@@ -855,7 +896,7 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
         return Ok(new { ok = true });
     }
 
-    [HttpPut("/api/cp/servers/{id:guid}/startup-model")]
+    [HttpPut("{id:guid}/startup-model")]
     public IActionResult SetStartupModel(Guid id, [FromBody] SetStartupModelRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.ModelName))
@@ -863,16 +904,6 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
         if (persistentData.GetServer(id) is null)
             return NotFound(new { error = "Server not found." });
         persistentData.SetServerCurrentModel(id, req.ModelName);
-        return Ok(new { ok = true });
-    }
-
-    [HttpPut("notes")]
-    public IActionResult SaveNotes([FromBody] ModelNotesRequest req)
-    {
-        if (string.IsNullOrWhiteSpace(req.ModelName))
-            return BadRequest(new { error = "modelName is required." });
-
-        persistentData.SetNote(req.ModelName, req.Notes ?? "");
         return Ok(new { ok = true });
     }
 }

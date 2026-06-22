@@ -7,6 +7,12 @@ using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
+/// <summary>An event broadcast to all connected SSE clients over /api/events.</summary>
+/// <param name="Type">newThread | streaming | streamingFinished | threadDeleted | threadUpdated</param>
+/// <param name="ThreadKey">The thread this event relates to.</param>
+/// <param name="Text">Accumulated streaming text — only present for "streaming" events.</param>
+public record AppEvent(string Type, string ThreadKey, string? Text = null);
+
 public class LLMModule : ILLMModule, IDisposable
 {
     //pipelines
@@ -25,10 +31,10 @@ public class LLMModule : ILLMModule, IDisposable
     
     
     private readonly CommandService    commands;
-    private readonly ConcurrentDictionary<string, CancellationTokenSource>                      processingThreads = new();
-    private readonly ConcurrentDictionary<string, LiveCallInfo>                                  liveCalls         = new();
-    private readonly ConcurrentDictionary<string, ConcurrentDictionary<Guid, Channel<bool?>>>   threadWatchers    = new();
-    private readonly Dictionary<string, Agent>                                                   agentMap          = new();
+    private readonly ConcurrentDictionary<string, CancellationTokenSource>  processingThreads  = new();
+    private readonly ConcurrentDictionary<string, LiveCallInfo>            liveCalls           = new();
+    private readonly ConcurrentDictionary<Guid, Channel<AppEvent>>         globalSubscribers   = new();
+    private readonly Dictionary<string, Agent>                             agentMap            = new();
     private readonly HashSet<string>                                                              forcedCodeThreads = new();
     private readonly ConcurrentDictionary<string, Thread>                                         threads           = new();
 
@@ -44,7 +50,7 @@ public class LLMModule : ILLMModule, IDisposable
     /// <summary>All active agents, keyed by name. Navigate here to access threads and their data.</summary>
     public IReadOnlyDictionary<string, Agent> Agents => agentMap;
 
-    /// <summary>Every thread across all pipelines, keyed by thread key. Each carries its <see cref="ThreadType"/>.</summary>
+    /// <summary>Every thread across all pipelines, keyed by thread key.</summary>
     public IReadOnlyDictionary<string, Thread> Threads => threads;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -193,16 +199,18 @@ public class LLMModule : ILLMModule, IDisposable
 
     // ── Thread registry ──────────────────────────────────────────────────────────
 
-    private Thread GetOrCreateThread(ThreadType type, string threadKey, string? platformContext = null)
+    private Thread GetOrCreateThread(ThreadPipeline type, string threadKey, string? platformContext = null)
     {
         if (threads.TryGetValue(threadKey, out Thread? existing)) return existing;
         Thread thread = new Thread(type, threadKey, platformContext);
         threads[threadKey] = thread;
-        thread.Updated += () => NotifyWatchers(threadKey);
-        thread.Deleted += () => { threads.TryRemove(threadKey, out _); NotifyThreadDeleted(threadKey); };
-        if (type == ThreadType.Code)
+        thread.Updated          += () => Broadcast(new AppEvent("threadUpdated", threadKey));
+        thread.Deleted          += () => { threads.TryRemove(threadKey, out _); Broadcast(new AppEvent("threadDeleted", threadKey)); };
+        thread.Streaming        += text => Broadcast(new AppEvent("streaming", threadKey, text));
+        thread.StreamingFinished += () => Broadcast(new AppEvent("streamingFinished", threadKey));
+        if (type == ThreadPipeline.Code)
             thread.BecameInactive += () => thread.MarkEngramProcessed();
-        if (type == ThreadType.Dialogue && dialogue is not null)
+        if (type == ThreadPipeline.Dialogue && dialogue is not null)
         {
             thread.Deleted        += () => dialogue.RaiseThreadDeleted(threadKey);
             thread.BufferFull     += () => dialogue.RaiseThreadBufferFull(threadKey);
@@ -210,6 +218,7 @@ public class LLMModule : ILLMModule, IDisposable
             if (context is not null)
                 thread.ExchangeCompleted += (user, asst) => _ = context.Update(threadKey, user, asst);
         }
+        Broadcast(new AppEvent("newThread", threadKey));
         return thread;
     }
 
@@ -316,7 +325,7 @@ public class LLMModule : ILLMModule, IDisposable
     public void ForceCodeThread(string threadKey)
     {
         forcedCodeThreads.Add(threadKey);
-        GetOrCreateThread(ThreadType.Code, threadKey);
+        GetOrCreateThread(ThreadPipeline.Code, threadKey);
     }
 
     public Task<string> Prompt(string threadKey, string prompt, string username, string? platformContext = null, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null)
@@ -347,13 +356,13 @@ public class LLMModule : ILLMModule, IDisposable
                             || threadKey.StartsWith("guild:", StringComparison.OrdinalIgnoreCase);
         if (isDiscordThread || classifier is null)
         {
-            Thread dlgThread = GetOrCreateThread(ThreadType.Dialogue, threadKey, platformContext);
+            Thread dlgThread = GetOrCreateThread(ThreadPipeline.Dialogue, threadKey, platformContext);
             return await dialoguePipeline!.ExecuteAsync(dlgThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments);
         }
 
         // if the thread already exists, its type tells us which pipeline owns it
         threads.TryGetValue(threadKey, out Thread? existing);
-        string? agent = existing?.Type.ToString();
+        string? agent = existing?.Pipeline.ToString();
         bool hasMessages = existing is { History.Count: > 0 };
 
         // new or empty thread (may exist for attachment staging) needs classifying
@@ -372,19 +381,19 @@ public class LLMModule : ILLMModule, IDisposable
 
             // Pre-create the thread so watchers receive isCodeMode before the LLM starts responding.
             if (agent == "Code")
-                GetOrCreateThread(ThreadType.Code, threadKey, platformContext);
+                GetOrCreateThread(ThreadPipeline.Code, threadKey, platformContext);
         }
 
         switch (agent)
         {
             case "Code":
             {
-                Thread codeThread = GetOrCreateThread(ThreadType.Code, threadKey, platformContext);
+                Thread codeThread = GetOrCreateThread(ThreadPipeline.Code, threadKey, platformContext);
                 return await (codePipeline ?? (Pipeline)dialoguePipeline!).ExecuteAsync(codeThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments, localPath);
             }
             default:
             {
-                Thread dlgThread = GetOrCreateThread(ThreadType.Dialogue, threadKey, platformContext);
+                Thread dlgThread = GetOrCreateThread(ThreadPipeline.Dialogue, threadKey, platformContext);
                 return await dialoguePipeline!.ExecuteAsync(dlgThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments);
             }
         }
@@ -422,30 +431,32 @@ public class LLMModule : ILLMModule, IDisposable
         return result;
     }
 
-    // ── Internal watcher infrastructure ────────────────────────────────────────
+    // ── Global event bus ────────────────────────────────────────────────────────
 
-    private void NotifyWatchers(string threadKey)
+    private void Broadcast(AppEvent evt)
     {
-        if (!threadWatchers.TryGetValue(threadKey, out ConcurrentDictionary<Guid, Channel<bool?>>? watchers)) return;
-        foreach (Channel<bool?> ch in watchers.Values)
-            ch.Writer.TryWrite(true);
+        foreach (Channel<AppEvent> ch in globalSubscribers.Values)
+            ch.Writer.TryWrite(evt);
     }
 
-    private void NotifyThreadDeleted(string threadKey)
+    /// <summary>Subscribe to the global event stream. Dispose the returned handle to unsubscribe.</summary>
+    public IDisposable Subscribe(Channel<AppEvent> channel)
     {
-        if (!threadWatchers.TryGetValue(threadKey, out ConcurrentDictionary<Guid, Channel<bool?>>? watchers)) return;
-        foreach (Channel<bool?> ch in watchers.Values)
-            ch.Writer.TryWrite(null);
+        Guid id = Guid.NewGuid();
+        globalSubscribers[id] = channel;
+        return new SubscriberHandle(globalSubscribers, id, channel);
     }
 
-    private sealed class WatcherHandle(
-        ConcurrentDictionary<string, ConcurrentDictionary<Guid, Channel<bool?>>> registry,
-        string threadKey, Guid id, Channel<bool?> channel) : IDisposable
+    // Kept for the per-thread debug-panel watch endpoint — translates global events into a bool? signal.
+    private void NotifyWatchers(string threadKey) => Broadcast(new AppEvent("threadUpdated", threadKey));
+
+    private sealed class SubscriberHandle(
+        ConcurrentDictionary<Guid, Channel<AppEvent>> registry,
+        Guid id, Channel<AppEvent> channel) : IDisposable
     {
         public void Dispose()
         {
-            if (registry.TryGetValue(threadKey, out ConcurrentDictionary<Guid, Channel<bool?>>? watchers))
-                watchers.TryRemove(id, out _);
+            registry.TryRemove(id, out _);
             channel.Writer.TryComplete();
         }
     }
@@ -475,7 +486,7 @@ public class LLMModule : ILLMModule, IDisposable
             foreach (ThreadItem item in entry.Value.History)
             {
                 if (item is AriResponse resp && (resp.CompletionTokens > 0 || resp.PromptTokens > 0))
-                    result.Add(new LlmCallStat(entry.Value.Type.ToString(), entry.Key, resp.Timestamp,
+                    result.Add(new LlmCallStat(entry.Value.Pipeline.ToString(), entry.Key, resp.Timestamp,
                         resp.CompletionTokens, resp.OutputTokenLimit,
                         resp.PromptTokens, resp.ContextTokenLimit,
                         resp.HadImageAttachments, resp.EstimatedTextPromptTokens,
@@ -488,9 +499,23 @@ public class LLMModule : ILLMModule, IDisposable
 
     public IDisposable WatchThread(string threadKey, Channel<bool?> channel)
     {
-        Guid id = Guid.NewGuid();
-        threadWatchers.GetOrAdd(threadKey, _ => new())[id] = channel;
-        return new WatcherHandle(threadWatchers, threadKey, id, channel);
+        Channel<AppEvent> appCh = Channel.CreateUnbounded<AppEvent>(new UnboundedChannelOptions { SingleReader = true });
+        IDisposable handle = Subscribe(appCh);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (AppEvent evt in appCh.Reader.ReadAllAsync())
+                {
+                    if (evt.ThreadKey != threadKey) continue;
+                    channel.Writer.TryWrite(evt.Type == "threadDeleted" ? null : true);
+                    if (evt.Type == "threadDeleted") break;
+                }
+            }
+            catch { /* channel completed */ }
+            channel.Writer.TryComplete();
+        });
+        return handle;
     }
 
     public bool IsThreadProcessing(string threadKey) => processingThreads.ContainsKey(threadKey);
@@ -506,11 +531,11 @@ public class LLMModule : ILLMModule, IDisposable
     public Thread GetOrCreateCodeThread(string threadKey)
     {
         if (code is null) throw new InvalidOperationException("Code agent not loaded");
-        return GetOrCreateThread(ThreadType.Code, threadKey);
+        return GetOrCreateThread(ThreadPipeline.Code, threadKey);
     }
 
     public Thread GetOrCreateDialogueThread(string threadKey)
-        => GetOrCreateThread(ThreadType.Dialogue, threadKey);
+        => GetOrCreateThread(ThreadPipeline.Dialogue, threadKey);
 
     public void SetCodeThreadContext(string threadKey, string? projectMap, string? conventions, string? rules)
         => code?.SetThreadContext(threadKey, projectMap, conventions, rules);
@@ -537,7 +562,7 @@ public class LLMModule : ILLMModule, IDisposable
             ? CancellationTokenSource.CreateLinkedTokenSource(ct)
             : new CancellationTokenSource();
         processingThreads[threadKey] = cts;
-        Thread codeThread = GetOrCreateThread(ThreadType.Code, threadKey, platformContext);
+        Thread codeThread = GetOrCreateThread(ThreadPipeline.Code, threadKey, platformContext);
         return codePipeline!.ExecuteAsync(codeThread, threadKey, prompt, username, platformContext, onDelta, cts, localPath: localPath);
     }
 

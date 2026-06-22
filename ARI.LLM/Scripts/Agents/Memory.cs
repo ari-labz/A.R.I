@@ -68,7 +68,7 @@ internal class Memory : Agent
     {
         if (RecursiveBrainSearchDepth <= 0) return null;
 
-        Thread memThread = new Thread(ThreadType.Memory, $"memory:{Guid.NewGuid()}");
+        Thread memThread = new Thread(ThreadPipeline.Dialogue, $"memory:{Guid.NewGuid()}") { Internal = true };
 
         // Skip for short messages with no question or memory/personal signal.
         if (incomingPrompt.Length < MIN_RECALL_LENGTH && !incomingPrompt.Contains('?'))

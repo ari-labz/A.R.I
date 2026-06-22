@@ -7,7 +7,7 @@ using System.Text.Json;
 
 namespace ARI.API.Controllers;
 
-[Route("api/cp/llmconfigs")]
+[Route("admin/llmconfigs")]
 [ApiController]
 public class LLMConfigController(PersistentData persistentData) : ControllerBase
 {

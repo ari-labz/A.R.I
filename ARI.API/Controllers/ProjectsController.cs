@@ -4,7 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace ARI.API.Controllers;
 
-[Route("api/projects")]
+[Route("projects")]
 [ApiController]
 public class ProjectsController(ProjectStore store) : ControllerBase
 {
