@@ -20,6 +20,7 @@ public class StyleTtsSynthesiser(string styleTtsPath, string modelPath, string c
         string python = Path.Combine(styleTtsPath, "venv", "bin", "python");
         string script = Path.Combine(styleTtsPath, SERVER_SCRIPT);
 
+        KillPortOwner(SERVER_PORT);
         WriteServerScript(script);
 
         ProcessStartInfo info = new()
@@ -42,7 +43,7 @@ public class StyleTtsSynthesiser(string styleTtsPath, string modelPath, string c
 
     public async Task Warmup(CancellationToken ct = default)
     {
-        await Speak("Ready.", ct);
+        await Speak("Voice synthesis is ready.", ct);
     }
 
     public async Task<byte[]> Speak(string text, CancellationToken ct = default)
@@ -62,6 +63,23 @@ public class StyleTtsSynthesiser(string styleTtsPath, string modelPath, string c
         http.Dispose();
         try { server?.Kill(entireProcessTree: true); } catch { }
         server?.Dispose();
+    }
+
+    private static void KillPortOwner(int port)
+    {
+        try
+        {
+            ProcessStartInfo info = new()
+            {
+                FileName               = "bash",
+                Arguments              = $"-c \"lsof -ti:{port} | xargs kill -9 2>/dev/null; true\"",
+                UseShellExecute        = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError  = true,
+            };
+            Process.Start(info)?.WaitForExit(3000);
+        }
+        catch { }
     }
 
     private async Task WaitUntilReady(CancellationToken ct)
@@ -126,6 +144,17 @@ args = parser.parse_args()
 repo_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, repo_root)
 os.chdir(repo_root)
+
+# Exit when the parent process (ARI) dies, even on SIGKILL.
+import threading, time as _time
+def _watch_parent(ppid=os.getppid()):
+    while True:
+        _time.sleep(2)
+        try:
+            os.kill(ppid, 0)
+        except ProcessLookupError:
+            os._exit(0)
+threading.Thread(target=_watch_parent, daemon=True).start()
 
 import torch
 _orig_load = torch.load

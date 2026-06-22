@@ -515,15 +515,147 @@ public class VoiceController(
     public IActionResult GetModels()
     {
         if (string.IsNullOrEmpty(vsConfig.VoicesPath) || !Directory.Exists(vsConfig.VoicesPath))
-            return Ok(new { models = Array.Empty<string>() });
+            return Ok(new { models = Array.Empty<object>() });
 
-        string[] models = Directory.GetDirectories(vsConfig.VoicesPath)
-            .Select(Path.GetFileName)
-            .Where(n => n != null)
-            .OrderBy(n => n)
-            .ToArray()!;
+        var models = Directory.GetDirectories(vsConfig.VoicesPath)
+            .Select(dir =>
+            {
+                string? name = Path.GetFileName(dir);
+                if (name is null) return null;
+                string settingsFile = Path.Combine(dir, "training.json");
+                TrainingSettings? settings = null;
+                if (System.IO.File.Exists(settingsFile))
+                {
+                    try { settings = JsonSerializer.Deserialize<TrainingSettings>(System.IO.File.ReadAllText(settingsFile)); }
+                    catch { /* ignore corrupt file */ }
+                }
+                return (object)new
+                {
+                    name,
+                    hasResume    = settings is not null,
+                    audioPath    = settings?.AudioPath,
+                    epochs       = settings?.Epochs,
+                    saveEveryN   = settings?.SaveEveryNEpochs,
+                    latestEpoch  = LatestSavedEpoch(dir),
+                };
+            })
+            .Where(m => m is not null)
+            .OrderBy(m => (string)((dynamic)m!).name)
+            .ToArray();
 
         return Ok(new { models });
+    }
+
+    [HttpDelete("{modelName}")]
+    public IActionResult DeleteModel(string modelName)
+    {
+        if (string.IsNullOrWhiteSpace(modelName) || modelName.Contains('/') || modelName.Contains('\\'))
+            return BadRequest(new { error = "Invalid model name." });
+        if (string.IsNullOrEmpty(vsConfig.VoicesPath))
+            return StatusCode(503, new { error = "VoiceSynthesis not configured." });
+
+        string dir = Path.Combine(vsConfig.VoicesPath, modelName);
+        if (!Directory.Exists(dir))
+            return NotFound(new { error = $"Model '{modelName}' not found." });
+
+        Directory.Delete(dir, recursive: true);
+        logger.LogInformation("[Voice] Deleted model '{ModelName}'", modelName);
+        return Ok(new { deleted = modelName });
+    }
+
+    // Returns the highest epoch number found in the model's Checkpoints folder,
+    // or from loose epoch_2nd_*.pth files if Checkpoints doesn't exist yet.
+    private static int? LatestSavedEpoch(string modelDir)
+    {
+        // Check organised Checkpoints/<N>_epochs/ folder names first
+        string checkpointsDir = Path.Combine(modelDir, "Checkpoints");
+        if (Directory.Exists(checkpointsDir))
+        {
+            int? fromFolders = Directory.GetDirectories(checkpointsDir)
+                .Select(d => {
+                    string folderName = Path.GetFileName(d);
+                    string numPart = folderName.Replace("_epochs", "").Trim();
+                    return int.TryParse(numPart, out int n) ? (int?)n : null;
+                })
+                .Where(n => n is not null)
+                .OrderByDescending(n => n)
+                .FirstOrDefault();
+            if (fromFolders is not null) return fromFolders;
+        }
+
+        // Fall back to loose epoch_2nd_NNNNN.pth files (mid-training)
+        return Directory.GetFiles(modelDir, "epoch_2nd_*.pth")
+            .Select(f => {
+                string num = Path.GetFileNameWithoutExtension(f).Split('_').Last();
+                return int.TryParse(num, out int n) ? (int?)(n + 1) : null;
+            })
+            .Where(n => n is not null)
+            .OrderByDescending(n => n)
+            .FirstOrDefault();
+    }
+
+    [HttpPost("resume")]
+    public IActionResult ResumeTraining([FromBody] ResumeRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.ModelName))
+            return BadRequest(new { error = "modelName is required." });
+        if (string.IsNullOrEmpty(vsConfig.StyleTtsPath) || string.IsNullOrEmpty(vsConfig.VoicesPath))
+            return StatusCode(503, new { error = "VoiceSynthesis module is not configured." });
+        if (voiceTraining?.IsSetupComplete != true)
+            return StatusCode(503, new { error = "StyleTTS2 is still installing. Please wait." });
+
+        string settingsFile = Path.Combine(vsConfig.VoicesPath, req.ModelName, "training.json");
+        if (!System.IO.File.Exists(settingsFile))
+            return NotFound(new { error = $"No saved training settings found for '{req.ModelName}'." });
+
+        TrainingSettings? settings;
+        try { settings = JsonSerializer.Deserialize<TrainingSettings>(System.IO.File.ReadAllText(settingsFile)); }
+        catch { return StatusCode(500, new { error = "Could not parse training settings." }); }
+        if (settings is null)
+            return StatusCode(500, new { error = "Could not parse training settings." });
+
+        TrainingJob job;
+        try
+        {
+            StyleTtsTrainer trainer = new(
+                styleTtsPath:    vsConfig.StyleTtsPath,
+                voicesPath:      vsConfig.VoicesPath,
+                audioPath:       settings.AudioPath,
+                modelName:       settings.ModelName,
+                epochs:          settings.Epochs,
+                saveEveryNEpochs: settings.SaveEveryNEpochs,
+                logger:          logger);
+
+            job = voiceTraining!.Start(trainer, settings.ModelName, lifetime.ApplicationStopping);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { error = ex.Message });
+        }
+
+        logger.LogInformation(
+            "[Voice] Resume training started — model: {ModelName}, epochs: {Epochs}",
+            settings.ModelName, settings.Epochs);
+
+        string modelName = settings.ModelName;
+        _ = Task.Run(async () =>
+        {
+            if (llm is not null) await llm.StopAllServersAsync();
+            while (job.IsRunning) await Task.Delay(2000);
+            if (job.IsSuccess)
+            {
+                logger.LogInformation("[Voice] Voice Synthesis of {ModelName} complete", modelName);
+                if (Modules.Discord is not null)
+                    await Modules.Discord.NotifyOwner($"> Voice Synthesis of {modelName} complete");
+            }
+            else
+            {
+                logger.LogWarning("[Voice] Training failed for {ModelName}: {Error}", modelName, job.Error);
+            }
+            if (llm is not null) await llm.RestartAllServersAsync();
+        });
+
+        return Ok(new { jobId = job.JobId, modelName = job.ModelName });
     }
 }
 
@@ -759,3 +891,4 @@ public record TrainRequest(
 
 public record SpeakRequest(string Text, string? ModelName = null);
 public record SplitSentencesRequest(string Text);
+public record ResumeRequest(string ModelName);

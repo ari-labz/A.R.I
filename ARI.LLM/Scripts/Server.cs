@@ -167,6 +167,23 @@ public class Server : IDisposable
 
     public void Dispose() => Stop();
 
+    private static void KillPortOwner(int port)
+    {
+        try
+        {
+            ProcessStartInfo info = new()
+            {
+                FileName               = "bash",
+                Arguments              = $"-c \"lsof -ti:{port} | xargs kill -9 2>/dev/null; true\"",
+                UseShellExecute        = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError  = true,
+            };
+            Process.Start(info)?.WaitForExit(3000);
+        }
+        catch { }
+    }
+
     // ── Model file download ────────────────────────────────────────────────────
 
     private async Task EnsureModelFilesAsync(Model model)
@@ -240,6 +257,7 @@ public class Server : IDisposable
 
     private void Launch(Model? model, int? vQuantOverride = null)
     {
+        KillPortOwner(Port);
         string kvQuantK = KvQuantLabel(KvCacheQuantK);
         // V quant comes from the startup step-up ladder (see StartAsync): a quantized V cache needs
         // Flash Attention, so when a model can't use FA the ladder steps to a less-compressed V until
@@ -261,6 +279,10 @@ public class Server : IDisposable
                 ? $"--mmproj \"{System.IO.Path.Combine(_modelsPath, model.MmprojPath)}\""
                 : "",
             mtp ? "--spec-type draft-mtp --spec-draft-n-max 3" : "",
+            "--flash-attn on",
+            // Larger physical/logical batch speeds prompt-processing (the dominant cost with a long system
+            // prompt on a slow dense model). Flash-attention above keeps the extra batch's memory in check.
+            "-b 4096 -ub 1024",
             $"--cache-type-k {kvQuantK} --cache-type-v {kvQuantV}",
             $"-c {ContextSize}",
             "--n-predict -1",

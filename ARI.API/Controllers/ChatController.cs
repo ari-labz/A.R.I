@@ -557,28 +557,64 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
             }
         }
 
+        // Heartbeat: while the model processes (prompt-processing a large context, running tools, thinking) no
+        // content deltas are produced, so the SSE connection sits idle. Proxies/tunnels (e.g. Cloudflare's
+        // ~100s idle cap) then cut it and the client shows "[connection error]". An SSE comment line (":")
+        // every 15s keeps the connection warm; the client ignores comment lines. All writes to the response
+        // body are serialised through writeLock so the heartbeat and the content callback never issue
+        // concurrent writes (which would corrupt the stream).
+        using SemaphoreSlim writeLock = new(1, 1);
+        using CancellationTokenSource heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        async Task WriteEventAsync(string payload)
+        {
+            await writeLock.WaitAsync(cancellationToken);
+            try
+            {
+                await Response.WriteAsync(payload, cancellationToken);
+                await Response.Body.FlushAsync(cancellationToken);
+            }
+            finally { writeLock.Release(); }
+        }
+
+        Task heartbeat = Task.Run(async () =>
+        {
+            try
+            {
+                while (!heartbeatCts.Token.IsCancellationRequested)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(15), heartbeatCts.Token);
+                    await WriteEventAsync(": keepalive\n\n");
+                }
+            }
+            catch (OperationCanceledException) { /* normal shutdown */ }
+            catch { /* a broken pipe here is harmless — the main path reports the error */ }
+        });
+
         try
         {
             string username = GetUsername();
             await Llm.PromptStreaming(threadKey, prompt, username, platformContext, async accumulated =>
             {
                 string escaped = accumulated.Replace("\n", "\\n").Replace("\r", "");
-                await Response.WriteAsync($"data: {escaped}\n\n", cancellationToken);
-                await Response.Body.FlushAsync(cancellationToken);
+                await WriteEventAsync($"data: {escaped}\n\n");
             }, cancellationToken, messageAttachments: msgAtts, threadAttachments: threadAtts,
                localPath: string.IsNullOrWhiteSpace(body.LocalPath) ? null : body.LocalPath);
-            await Response.WriteAsync("data: [DONE]\n\n", cancellationToken);
+            await WriteEventAsync("data: [DONE]\n\n");
         }
         catch (OperationCanceledException)
         {
-            await Response.WriteAsync("data: [CANCELLED]\n\n", cancellationToken);
+            await WriteEventAsync("data: [CANCELLED]\n\n");
         }
         catch (Exception ex)
         {
-            await Response.WriteAsync($"data: [ERROR] {ex.Message}\n\n", cancellationToken);
+            await WriteEventAsync($"data: [ERROR] {ex.Message}\n\n");
         }
-
-        await Response.Body.FlushAsync(cancellationToken);
+        finally
+        {
+            heartbeatCts.Cancel();
+            try { await heartbeat; } catch { /* ignore */ }
+        }
     }
 }
 

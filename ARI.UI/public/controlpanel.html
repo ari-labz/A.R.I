@@ -426,6 +426,10 @@ html, body {
 
     <!-- Voice Synthesis tab -->
     <div id="tab-voice" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div id="vs-resume-section" class="vs-section" style="display:none">
+        <div class="vs-section-title">Saved Runs</div>
+        <div id="vs-resume-list"></div>
+      </div>
       <div class="vs-section">
         <div class="vs-section-title">Train a Voice Model</div>
         <div id="vs-dropzone" class="vs-dropzone">
@@ -1933,17 +1937,86 @@ const vsTvModel    = document.getElementById('vs-tv-model');
 const vsTvSpeakBtn = document.getElementById('vs-tv-speak-btn');
 const vsTvStatus   = document.getElementById('vs-tv-status');
 
-async function loadVoiceSettingsModels() {
+async function loadVoiceModels() {
     try {
         const [mr, ar] = await Promise.all([fetch('/api/cp/voice/models'), fetch('/api/cp/voice/active')]);
         const { models } = await mr.json(), { model: activeModel, ready } = await ar.json();
+        // Voice settings dropdown
         vsTvModel.innerHTML = models.length
-            ? models.map(m => `<option value="${escHtml(m)}"${m===activeModel?' selected':''}>${escHtml(m)}${m===activeModel?' ✓':''}</option>`).join('')
+            ? models.map(m => `<option value="${escHtml(m.name)}"${m.name===activeModel?' selected':''}>${escHtml(m.name)}${m.name===activeModel?' ✓':''}</option>`).join('')
             : '<option value="">No models found</option>';
         vsTvStatus.textContent = ready ? `Active: ${activeModel}` : 'Voice module not running';
+        // Resume section
+        const resumable = models.filter(m => m.hasResume);
+        const vsResumeSec = document.getElementById('vs-resume-section');
+        const vsResumeList = document.getElementById('vs-resume-list');
+        if (resumable.length) {
+            vsResumeList.innerHTML = resumable.map(m => {
+                const epochLine = m.latestEpoch != null
+                    ? `up to epoch ${m.latestEpoch} · target ${m.epochs} · save every ${m.saveEveryN}`
+                    : `${m.epochs} epochs · save every ${m.saveEveryN}`;
+                return `
+              <div style="display:flex;align-items:center;gap:14px;padding:10px 0;border-bottom:1px solid var(--border);flex-wrap:wrap;" data-model="${escHtml(m.name)}">
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:13px;font-weight:600;color:var(--text)">${escHtml(m.name)}</div>
+                  <div style="font-size:11px;color:var(--text-dim);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(m.audioPath??'')}">${escHtml(m.audioPath??'—')}</div>
+                  <div style="font-size:11px;color:var(--text-dim);margin-top:1px;">${epochLine}</div>
+                </div>
+                <button class="vs-btn-primary vs-resume-btn" style="font-size:12px;padding:6px 18px;flex-shrink:0" data-model="${escHtml(m.name)}">Resume</button>
+                <button class="vs-delete-btn" style="font-size:12px;padding:6px 12px;flex-shrink:0;background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-dim);cursor:pointer;" data-model="${escHtml(m.name)}" title="Delete this saved run">✕</button>
+              </div>`;
+            }).join('');
+            vsResumeSec.style.display = '';
+            vsResumeList.querySelectorAll('.vs-resume-btn').forEach(btn => {
+                btn.addEventListener('click', () => vsStartResume(btn.dataset.model));
+            });
+            vsResumeList.querySelectorAll('.vs-delete-btn').forEach(btn => {
+                btn.addEventListener('click', () => vsDeleteModel(btn.dataset.model));
+            });
+        } else {
+            vsResumeSec.style.display = 'none';
+        }
     } catch { vsTvModel.innerHTML = '<option value="">Failed to load</option>'; }
 }
-loadVoiceSettingsModels();
+loadVoiceModels();
+
+async function vsStartResume(modelName) {
+    const btn = document.querySelector(`.vs-resume-btn[data-model="${CSS.escape(modelName)}"]`);
+    if (btn) btn.disabled = true;
+    vsProgSec.style.display = ''; vsLogLines.innerHTML = '';
+    vsLogBadge.textContent = 'training…'; vsLogBadge.classList.add('live');
+    vsSetProgress('Resuming', 0, `Resuming ${modelName}…`, ''); vsStartTimer();
+    try {
+        const resp = await fetch('/api/cp/voice/resume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName }) });
+        if (!resp.ok) throw new Error((await resp.json().catch(()=>({error:resp.statusText}))).error ?? resp.statusText);
+        let vsDone = false;
+        function connectResumeProgressSse() {
+            if (vsDone) return;
+            if (vsProgressEs) vsProgressEs.close();
+            vsProgressEs = new EventSource('/api/cp/voice/progress');
+            vsLogBadge.textContent = 'live'; vsLogBadge.classList.add('live');
+            vsProgressEs.onmessage = e => {
+                try {
+                    const d = JSON.parse(e.data);
+                    vsSetProgress(d.step, d.percent, d.detail, d.done ? (d.success ? 'done' : 'error') : '');
+                    if (d.detail) vsAppendLog(d.detail, d.step === 'Error' ? 'log-error' : '');
+                    if (d.done) { vsDone = true; vsProgressEs.close(); vsStopTimer(); vsLogBadge.textContent = d.success ? 'done ✓' : 'failed'; vsLogBadge.classList.remove('live'); if (btn) btn.disabled = false; if (d.success) vsAppendLog(`✓ Training complete! Model: ${modelName}`); if (d.error) vsAppendLog(`Error: ${d.error}`, 'log-error'); }
+                } catch { /* ignore */ }
+            };
+            vsProgressEs.onerror = () => { if (vsDone) return; vsLogBadge.textContent = 'reconnecting…'; vsLogBadge.classList.remove('live'); vsProgressEs.close(); setTimeout(connectResumeProgressSse, 3000); };
+        }
+        connectResumeProgressSse();
+    } catch(err) { vsStopTimer(); vsAppendLog('Error: ' + err.message, 'log-error'); vsLogBadge.textContent = 'failed'; vsLogBadge.classList.remove('live'); if (btn) btn.disabled = false; }
+}
+
+async function vsDeleteModel(modelName) {
+    if (!confirm(`Delete "${modelName}" and all its checkpoints? This cannot be undone.`)) return;
+    try {
+        const resp = await fetch(`/api/cp/voice/${encodeURIComponent(modelName)}`, { method: 'DELETE' });
+        if (!resp.ok) { const e = await resp.json().catch(()=>({error:resp.statusText})); alert('Delete failed: ' + (e.error ?? resp.statusText)); return; }
+        await loadVoiceModels();
+    } catch(err) { alert('Delete failed: ' + err.message); }
+}
 
 vsTvSpeakBtn.addEventListener('click', async () => {
     const text = vsTvText.value.trim(), modelName = vsTvModel.value;
