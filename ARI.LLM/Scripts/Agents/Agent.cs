@@ -342,6 +342,7 @@ public abstract class Agent
         StringBuilder   contentBuilder   = new();
         Stopwatch       sw               = Stopwatch.StartNew();
         bool            wasThinking      = false;
+        int             reasoningChars   = 0;
         int             completionTokens = 0;
         int             promptTokens     = 0;
         bool            hadImages        = msgAtts.Any(a => a.IsImage) || threadAtts.Any(a => a.IsImage);
@@ -446,6 +447,14 @@ public abstract class Agent
                 body["thinking_budget"]      = budget;
                 body["chat_template_kwargs"] = new { enable_thinking = true, thinking_budget = budget };
             }
+            else
+            {
+                // Think on, no budget cap → deterministic unbounded-thinking toggle. The budget cap is
+                // not reliably honoured by this model, so we don't depend on it: just turn thinking on.
+                body["thinking"]             = true;
+                body["enable_thinking"]      = true;
+                body["chat_template_kwargs"] = new { enable_thinking = true };
+            }
 
             // Native mode: hand the server the OpenAI `tools` field so its --jinja template formats and
             // parses tool calls. Text mode deliberately omits it (tools are in the system prompt instead)
@@ -463,10 +472,12 @@ public abstract class Agent
 
             string             json    = JsonSerializer.Serialize(body);
             if (!QuietLogging)
-                Shared.Logger.LogInformation("[{Agent}] ({Thread}) → request (step {Step}): max_tokens={MT}, tools={N}, msgs={Msgs}",
+                Shared.Logger.LogInformation("[{Agent}] ({Thread}) → request (step {Step}): max_tokens={MT}, tools={N}, msgs={Msgs}, think={Think} (et={ET}/budget={B})",
                     Name, thread.Key, toolCallCount,
                     body.TryGetValue("max_tokens", out object? mtv) ? mtv : "?",
-                    toolSchemas?.Length ?? 0, messages.Count);
+                    toolSchemas?.Length ?? 0, messages.Count,
+                    Think, body.TryGetValue("enable_thinking", out object? etv) ? etv : "unset",
+                    body.TryGetValue("thinking_budget", out object? bv) ? bv : "none");
             if (dynamicInjected) messages.RemoveAt(messages.Count - 1);   // keep persistent history clean + prefix stable
             ariResponse.DebugRequestJson = json;
             HttpRequestMessage request = new(HttpMethod.Post, $"{Endpoint}/v1/chat/completions")
@@ -582,8 +593,11 @@ public abstract class Agent
                         {
                             if (!Think)
                                 Shared.Logger.LogWarning("[{Agent}] ({Thread}) thinking chain detected — <|think_off|> may not be working.", Name, thread.Key);
+                            else
+                                Shared.Logger.LogInformation("[{Agent}] ({Thread}) reasoning engaged (thinking on).", Name, thread.Key);
                             wasThinking = true;
                         }
+                        if (!string.IsNullOrEmpty(thinkDelta)) reasoningChars += thinkDelta.Length;
                     }
 
                     if (delta.TryGetProperty("tool_calls", out JsonElement toolCallsEl))
@@ -712,8 +726,8 @@ public abstract class Agent
             if (!QuietLogging)
             {
                 int doneArgChars = pendingCalls.Values.Sum(c => c.Args.Length);
-                Shared.Logger.LogInformation("[{Agent}] ({Thread}) ← stream done: finish={FR}, completion_tokens={CT}, {PC} native call(s) [{Names}], {CC} content chars, {AC} arg chars",
-                    Name, thread.Key, finishReason ?? "null", completionTokens, pendingCalls.Count,
+                Shared.Logger.LogInformation("[{Agent}] ({Thread}) ← stream done: finish={FR}, completion_tokens={CT}, reasoning_chars={RC}, {PC} native call(s) [{Names}], {CC} content chars, {AC} arg chars",
+                    Name, thread.Key, finishReason ?? "null", completionTokens, reasoningChars, pendingCalls.Count,
                     string.Join(",", pendingCalls.Values.Select(c => c.Name)), responseBuilder.Length, doneArgChars);
                 if (responseBuilder.Length > 0)
                 {
@@ -1050,12 +1064,20 @@ public abstract class Agent
                         @"(?i)\b(let me|let's|i'll|i will|i'm going to|i need to|now i'll|first,? i|next,? i)\b[^.!?]{0,100}$"));
                 bool mentionsVerb = System.Text.RegularExpressions.Regex.IsMatch(tail,
                     @"(?i)\b(read|check|run|build|test|look|examine|open|search|edit|create|add|update|fix|verify|inspect|modify|write|review|rebuild|re-?run)\b");
-                if (promisesAction && mentionsVerb)
+                // Empty-turn-after-reasoning: in thinking mode this model sometimes spends a whole turn inside
+                // the reasoning block and stops with NO answer and NO tool call (responseBuilder empty). That
+                // is never a real completion — re-prompt it to actually act. (The narrate-without-acting case
+                // above only fires when there IS content; this catches the zero-content case.)
+                bool emptyTurn = tail.Length == 0;
+                if ((promisesAction && mentionsVerb) || emptyTurn)
                 {
                     continueNudges++;
-                    Shared.Logger.LogInformation("[{Agent}] ({Thread}) premature-stop nudge — model announced an action without performing it.", Name, thread.Key);
+                    string why = emptyTurn
+                        ? "Your reasoning finished but you produced no answer and no tool call — the turn was empty"
+                        : "You described an action but didn't perform it — no tool call was made";
+                    Shared.Logger.LogInformation("[{Agent}] ({Thread}) premature-stop nudge ({Kind}).", Name, thread.Key, emptyTurn ? "empty-turn-after-reasoning" : "narrated-no-action");
                     messages.Add(new { role = "user", content =
-                        "[System: You described an action but didn't perform it — no tool call was made. Either issue that tool call now and keep working until the task is fully done AND verified (build the project you changed; re-read what you edited), or, if you are genuinely finished, stop and give the user a short summary of what you changed. Do not narrate without acting, and do not repeat a tool call you have already made.]" });
+                        $"[System: {why}. Don't stop here: take the next concrete action now — issue the tool call to make the change (and keep working until the task is done AND the project builds), or if you are genuinely finished, give the user a short summary of what you changed. Do not reply with nothing, and do not repeat a tool call you already made.]" });
                     responseBuilder.Clear();
                     continue;
                 }

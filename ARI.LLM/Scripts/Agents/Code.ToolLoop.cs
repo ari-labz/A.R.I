@@ -14,6 +14,9 @@ internal partial class Code
     // After this many reads of the SAME file in one turn, every further read is handed back with a firm
     // "stop verifying" directive. Set above a legitimate preview+few-ranges+one-post-edit-check (~4-5).
     private const int READ_LOOP_CEILING        = 6;
+    // Total search_files calls per turn (reset on edit, since line numbers shift) before every further
+    // search is bounced with a "stop verifying in circles" directive. Above a legit exploration pass (~6-8).
+    private const int SEARCH_LOOP_CEILING      = 9;
     // Stop the turn after this many "[omitted]" placeholder edit/write refusals — the copy-forward loop.
     private const int MAX_PLACEHOLDER_REFUSALS = 3;
 
@@ -36,6 +39,10 @@ internal partial class Code
         public readonly Dictionary<string, (int Index, string CallId)> LiveReads = new(StringComparer.OrdinalIgnoreCase);
         public          int                     NoProgressBatches;
         public readonly HashSet<string>         EditedPathsThisBatch = new(StringComparer.OrdinalIgnoreCase);
+        // search_files dedup + loop guard. Keyed by normalized pattern; SearchTotal is the per-turn count.
+        // Both reset on a successful edit (line numbers shift → re-searching is legitimate again).
+        public readonly Dictionary<string, int> SearchCounts        = new(StringComparer.Ordinal);
+        public          int                     SearchTotal;
     }
 
     // ── Static helpers (only meaningful for the tool loop) ───────────────────────
@@ -44,6 +51,9 @@ internal partial class Code
     // these entries can be cleared on an edit (a rebuild after a fix must re-run, not dedup).
     private static string NormCmd(string argsJson) => "cmd:" + Regex.Replace(
         (ToolCallParser.TryExtractJsonString(argsJson, "command") ?? argsJson).Trim(), @"\s+", " ");
+    // Dedup key for search_files: the normalized regex pattern. Prefixed "search:" so it can be cleared on edit.
+    private static string NormSearch(string argsJson) => "search:" + Regex.Replace(
+        (ToolCallParser.TryExtractJsonString(argsJson, "pattern") ?? "").Trim('"', '\'', ' '), @"\s+", " ");
     private static bool IsBuildCmd(string c) => Regex.IsMatch(c,
         @"(?i)\b(dotnet\s+(build|publish|msbuild)|msbuild|make|cargo\s+build|go\s+build|npm\s+run\s+build|yarn\s+build|tsc)\b");
     private static bool IsTestCmd(string c) => Regex.IsMatch(c,
@@ -155,6 +165,23 @@ internal partial class Code
                 }
             }
             catch { /* ignore */ }
+        }
+
+        if (toolName == "search_files")
+        {
+            string skey = NormSearch(argsJson);
+            state.SearchTotal++;
+            state.SearchCounts.TryGetValue(skey, out int sc);
+            state.SearchCounts[skey] = sc + 1;
+            if (sc >= 1)
+            {
+                string cachedSearch = state.CommandCache.TryGetValue(skey, out var scv) ? scv.Result : "";
+                return string.IsNullOrEmpty(cachedSearch)
+                    ? "[System: You already ran this exact search this turn — its results are in the context above and the files have not changed. Don't repeat the same search; act on what you found, or read the specific lines you need.]"
+                    : $"[System: You already searched for this exact pattern this turn — repeating the results; do not run it again:\n\n{cachedSearch}]";
+            }
+            if (state.SearchTotal >= SEARCH_LOOP_CEILING)
+                return $"[System: You have run {state.SearchTotal} searches this turn — more than the task needs, and a sign you are verifying in circles. You already have enough to act. Stop searching: make your next edit now, or if the change is complete, stop and write your summary. (To confirm one symbol exists, read its definition once — don't keep searching.)]";
         }
 
         if (toolName == "edit_file")
@@ -306,6 +333,10 @@ internal partial class Code
             catch { /* ignore */ }
         }
 
+        if (toolName == "search_files" && !ToolCallParser.IsError(result)
+            && !result.StartsWith("[System:", StringComparison.Ordinal))
+            state.CommandCache[NormSearch(argsJson)] = (result, 1);
+
         if (toolName == "edit_file")
         {
             try
@@ -404,6 +435,12 @@ internal partial class Code
                     state.CommandCache.Remove(ck);
                 foreach (string ck in state.CommandCache.Keys.Where(k => k.StartsWith("cmd:", StringComparison.Ordinal)).ToList())
                     state.CommandCache.Remove(ck);
+                // Search results referenced pre-edit line numbers — drop them and reset the per-turn search
+                // budget so the model can re-locate shifted call sites without tripping the loop guard.
+                foreach (string ck in state.CommandCache.Keys.Where(k => k.StartsWith("search:", StringComparison.Ordinal)).ToList())
+                    state.CommandCache.Remove(ck);
+                state.SearchCounts.Clear();
+                state.SearchTotal = 0;
             }
         }
         catch { /* ignore */ }
