@@ -41,19 +41,42 @@ public class StyleTtsTrainer(
             JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true }),
             ct);
 
-        string[] sourceFiles = Directory.Exists(audioPath)
-            ? Directory.GetFiles(audioPath, "*.wav")
-            : new[] { audioPath };
+        string[] existingChunks = Directory.GetFiles(audioDir, "*.wav");
+        if (existingChunks.Length > 0)
+        {
+            // Chunks already exist from a previous run — skip re-chunking (original audio may be gone).
+            progress?.Report(new TrainingProgress("Chunking", 5, $"Using {existingChunks.Length} existing clip(s)"));
+        }
+        else
+        {
+            string[] sourceFiles = Directory.Exists(audioPath)
+                ? Directory.GetFiles(audioPath, "*.wav")
+                : new[] { audioPath };
 
-        if (sourceFiles.Length == 0)
-            throw new FileNotFoundException($"No WAV files found in {audioPath}");
+            if (sourceFiles.Length == 0)
+                throw new FileNotFoundException($"No WAV files found in {audioPath}");
 
-        progress?.Report(new TrainingProgress("Chunking", 5, $"Splitting {sourceFiles.Length} file(s) into clips"));
-        foreach (string source in sourceFiles)
-            await ChunkAudio(source, audioDir, ct);
+            progress?.Report(new TrainingProgress("Chunking", 5, $"Splitting {sourceFiles.Length} file(s) into clips"));
+            foreach (string source in sourceFiles)
+                await ChunkAudio(source, audioDir, ct);
+        }
 
-        progress?.Report(new TrainingProgress("Transcribing", 15, "Transcribing audio with Whisper"));
-        string trainList = await Transcribe(audioDir, workDir, ct);
+        string savedTrainList = Path.Combine(outputDir, "train_list.txt");
+        string trainList;
+        if (File.Exists(savedTrainList))
+        {
+            // Reuse the transcription from the original run — avoids Whisper hallucination drift on resume.
+            trainList = Path.Combine(workDir, "train_list.txt");
+            File.Copy(savedTrainList, trainList, overwrite: true);
+            progress?.Report(new TrainingProgress("Transcribing", 15, "Using saved transcription"));
+        }
+        else
+        {
+            progress?.Report(new TrainingProgress("Transcribing", 15, "Transcribing audio with Whisper"));
+            trainList = await Transcribe(audioDir, workDir, ct);
+            // Save alongside the model so resume can reuse it.
+            File.Copy(trainList, savedTrainList, overwrite: true);
+        }
 
         progress?.Report(new TrainingProgress("Preparing", 25, "Downloading pretrained model if needed"));
         string baseModel = await EnsurePretrainedModel(ct);
@@ -457,7 +480,7 @@ slmadv_params:
         ProcessStartInfo info = new()
         {
             FileName               = whisper,
-            Arguments              = $"\"{wavFile}\" --model base.en --output_format txt --output_dir \"{outDir}\" --fp16 False",
+            Arguments              = $"\"{wavFile}\" --model base.en --output_format txt --output_dir \"{outDir}\" --fp16 False --condition_on_previous_text False",
             RedirectStandardOutput = true,
             RedirectStandardError  = true,
             UseShellExecute        = false,
