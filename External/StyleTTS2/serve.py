@@ -150,6 +150,25 @@ import gruut
 
 textcleaner = TextCleaner()
 
+import re as _re
+
+# Word substitutions applied before phonemization.
+# Keys are regex patterns (case-insensitive), values are replacement spellings
+# that gruut will phonemize correctly.
+_WORD_SUBS = [
+    (r'\bARI\b',  'arree'),   # "are-ree" — gruut reads 'arr' as /ɑːr/
+    (r'\bA\.R\.I\b\.?', 'arree'),
+]
+
+def preprocess(text):
+    for pattern, replacement in _WORD_SUBS:
+        text = _re.sub(pattern, replacement, text, flags=_re.IGNORECASE)
+    # Ensure trailing punctuation so the duration predictor doesn't clip the last word
+    text = text.strip()
+    if text and text[-1] not in '.!?,;:':
+        text += '.'
+    return text
+
 def phonemize(text):
     words = []
     for sentence in gruut.sentences(text, lang='en-us'):
@@ -163,7 +182,7 @@ def length_to_mask(lengths):
     return torch.gt(mask + 1, lengths.unsqueeze(1))
 
 def synthesise_text(text, alpha=0.3, beta=0.7, diffusion_steps=5, embedding_scale=1.0):
-    text = text.strip().replace('"', '')
+    text = preprocess(text.replace('"', ''))
     tokens = textcleaner(phonemize(text))
     tokens.insert(0, 0)
     tokens = torch.LongTensor(tokens).to(device).unsqueeze(0)
@@ -216,12 +235,44 @@ def handle_500(e):
 def health():
     return jsonify({'status': 'ok'})
 
+import threading as _threading
+_model_lock = _threading.Lock()
+
+@app.route('/load_model', methods=['POST'])
+def load_model():
+    path = request.json['path']
+    with _model_lock:
+        ckpt = torch.load(path, map_location='cpu')
+        params = ckpt['net'] if 'net' in ckpt else ckpt
+        for k in model:
+            if k in params:
+                try:
+                    model[k].load_state_dict(params[k])
+                except Exception:
+                    from collections import OrderedDict
+                    sd = OrderedDict((n[7:], v) for n, v in params[k].items())
+                    model[k].load_state_dict(sd, strict=False)
+        import gc as _gc2
+        del ckpt, params
+        _gc2.collect()
+        if torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+    import sys as _sys2
+    _sys2.stderr.write(f'[load_model] loaded {path}\n'); _sys2.stderr.flush()
+    return jsonify({'ok': True})
+
 @app.route('/synthesise', methods=['POST'])
 def synthesise():
-    text = request.json['text']
+    data = request.json
+    text             = data['text']
+    diffusion_steps  = int(data.get('diffusion_steps', 5))
+    alpha            = float(data.get('alpha', 0.3))
+    beta             = float(data.get('beta', 0.7))
+    embedding_scale  = float(data.get('embedding_scale', 1.0))
     import sys as _sys
-    _sys.stderr.write(f'[synthesise] text={repr(text)}\n'); _sys.stderr.flush()
-    wav = synthesise_text(text)
+    _sys.stderr.write(f'[synthesise] text={repr(text)} steps={diffusion_steps} alpha={alpha} beta={beta} scale={embedding_scale}\n'); _sys.stderr.flush()
+    with _model_lock:
+        wav = synthesise_text(text, alpha=alpha, beta=beta, diffusion_steps=diffusion_steps, embedding_scale=embedding_scale)
     _raw_peak = np.abs(wav).max()
     _raw_nans = int(np.isnan(wav).sum())
     _sys.stderr.write(f'[synthesise] raw shape={wav.shape} peak={_raw_peak:.4f} nans={_raw_nans}\n'); _sys.stderr.flush()

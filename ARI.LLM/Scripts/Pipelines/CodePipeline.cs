@@ -37,13 +37,15 @@ internal sealed class CodePipeline : Pipeline
         if (!string.IsNullOrWhiteSpace(localPath))
         {
             string resolvedRoot = Path.GetFullPath(localPath);
+            FileSnapshots snapshots = new();
             new PreviewFile(resolvedRoot, cts.Token).Register(thread);
             new ReadFile(resolvedRoot, cts.Token).Register(thread);
             new ListDirectory(resolvedRoot, cts.Token).Register(thread);
             new SearchFiles(resolvedRoot, cts.Token).Register(thread);
             new FindFiles(resolvedRoot, cts.Token).Register(thread);
-            new EditFile(resolvedRoot, cts.Token).Register(thread);
+            new EditFile(resolvedRoot, cts.Token, snapshots).Register(thread);
             new WriteFile(resolvedRoot, cts.Token).Register(thread);
+            new RevertFile(resolvedRoot, cts.Token, snapshots).Register(thread);
             new DeleteFile(resolvedRoot, cts.Token).Register(thread);
             new MoveFile(resolvedRoot, cts.Token).Register(thread);
             new UpdateTodos(code, thread).Register(thread);

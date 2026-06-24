@@ -4,7 +4,10 @@ namespace ARI.LLM;
 
 internal sealed class EditFile : FileTool
 {
-    internal EditFile(string root, CancellationToken ct) : base(root, ct) { }
+    private readonly FileSnapshots? snapshots;
+
+    internal EditFile(string root, CancellationToken ct, FileSnapshots? snapshots = null) : base(root, ct)
+        => this.snapshots = snapshots;
 
     internal override string Name => "edit_file";
 
@@ -207,6 +210,7 @@ internal sealed class EditFile : FileTool
             if (open0 == close0 && open1 != close1)
                 return $"Refused: this edit would leave {relPath} with unbalanced braces ({open1} `{{` vs {close1} `}}`) — it was balanced before, so a brace was dropped or added and the file would not compile. Nothing was written. Check the braces in your new_string: add a COMPLETE block with matching `{{` and `}}` (use insert_after to add a whole method/class), and don't replace or omit an existing brace line.";
 
+            snapshots?.TakeSnapshot(absPath, content);
             await WriteWithRetry(absPath, buf.Replace("\n", nl));
 
             string[] lines = buf.Split('\n');

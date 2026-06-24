@@ -18,7 +18,8 @@ public interface IVoiceModule
 {
     bool    IsReady     { get; }
     string? ActiveModel { get; }
-    Task<byte[]> Synthesise(string text, CancellationToken ct);
+    Task<byte[]> Synthesise(string text, CancellationToken ct, int diffusionSteps = 5, float alpha = 0.3f, float beta = 0.7f, float embeddingScale = 1.0f);
+    Task<byte[]> SynthesiseWithCheckpoint(string text, string checkpointPath, CancellationToken ct, int diffusionSteps = 5, float alpha = 0.3f, float beta = 0.7f, float embeddingScale = 1.0f);
 }
 
 public interface IVoiceSynthesisModule
