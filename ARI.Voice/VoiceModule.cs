@@ -18,8 +18,11 @@ public class VoiceModule : IVoiceModule
         ActiveModel      = modelName;
     }
 
-    public Task<byte[]> Synthesise(string text, CancellationToken ct = default)
-        => synthesiser.Speak(text, ct);
+    public Task<byte[]> Synthesise(string text, CancellationToken ct = default, int diffusionSteps = 5, float alpha = 0.3f, float beta = 0.7f, float embeddingScale = 1.0f)
+        => synthesiser.Speak(text, ct, diffusionSteps, alpha, beta, embeddingScale);
+
+    public Task<byte[]> SynthesiseWithCheckpoint(string text, string checkpointPath, CancellationToken ct = default, int diffusionSteps = 5, float alpha = 0.3f, float beta = 0.7f, float embeddingScale = 1.0f)
+        => synthesiser.SpeakWithCheckpoint(text, checkpointPath, ct, diffusionSteps, alpha, beta, embeddingScale);
 
     public void Speak(string text) => queue.Enqueue(text);
 }

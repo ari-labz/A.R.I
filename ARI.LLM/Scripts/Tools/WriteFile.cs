@@ -43,6 +43,9 @@ internal sealed class WriteFile : FileTool
             string? absPath = Resolve(relPath);
             if (absPath is null)
                 return "Access denied: path traversal is not allowed.";
+            if (File.Exists(absPath))
+                return $"Refused: {relPath} already exists. Use edit_file to change an existing file — write_file is only for creating new files. " +
+                       "If an edit has left the file in a broken state, use revert_file to restore it to its last clean snapshot, then re-read and try the edit again.";
             string? dir = Path.GetDirectoryName(absPath);
             if (dir is not null) Directory.CreateDirectory(dir);
             await File.WriteAllTextAsync(absPath, content, ct);

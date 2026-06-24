@@ -362,9 +362,9 @@ internal partial class Code
                     if (!environmental)
                     {
                         if (state.EditedFiles.Contains(editKey))
-                            result += " This file was already edited earlier this turn — re-read it to see the current content and line numbers before retrying.";
+                            result += " This file was already edited earlier this turn — re-read it to see the current content and line numbers before retrying. If the file is in a broken state, use revert_file to restore it to its last clean snapshot, then re-read and plan the edit from scratch.";
                         else if (streak >= 2)
-                            result += " Re-read the file to get current line numbers, then change these lines with start_line/end_line (one edit_file call with an 'edits' array if several ranges), or rewrite the whole file with write_file. If you still cannot, stop and tell the user what is blocking you.";
+                            result += " Two edits in a row have failed on this file. Consider using revert_file to restore it to its last clean snapshot, then re-read and plan the edit again from scratch — that is faster and safer than continuing to patch a potentially inconsistent state.";
                     }
                     else if (streak >= 2)
                     {

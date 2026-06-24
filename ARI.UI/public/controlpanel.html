@@ -496,9 +496,39 @@ html, body {
         <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
           <label class="vs-label" style="flex:1;min-width:180px;">Text<input type="text" id="vs-tv-text" class="vs-input" placeholder="Type something to say…" autocomplete="off"></label>
           <label class="vs-label" style="min-width:140px;">Voice model<select id="vs-tv-model" class="vs-input"></select></label>
+          <label class="vs-label" style="min-width:140px;">Checkpoint<select id="vs-tv-epoch" class="vs-input"><option value="">latest</option></select></label>
           <button class="vs-btn-primary" id="vs-tv-speak-btn" type="button">Speak</button>
         </div>
         <span id="vs-tv-status" style="font-size:12px;color:var(--text-dim);margin-top:6px;display:block;"></span>
+      </div>
+      <div class="vs-section">
+        <div class="vs-section-title">Synthesis Parameters</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px 28px;margin-top:8px;">
+          <label class="vs-label">Diffusion steps <span style="color:var(--text-dim);font-size:11px;">noise vs quality</span>
+            <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
+              <input type="range" id="sp-diffusion-steps" min="1" max="30" step="1" value="5" style="flex:1;accent-color:var(--accent,#223742);">
+              <span id="sp-diffusion-steps-val" style="min-width:24px;text-align:right;font-size:13px;">5</span>
+            </div>
+          </label>
+          <label class="vs-label">Embedding scale <span style="color:var(--text-dim);font-size:11px;">expressiveness</span>
+            <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
+              <input type="range" id="sp-embedding-scale" min="0.5" max="2.5" step="0.05" value="1.0" style="flex:1;accent-color:var(--accent,#223742);">
+              <span id="sp-embedding-scale-val" style="min-width:32px;text-align:right;font-size:13px;">1.00</span>
+            </div>
+          </label>
+          <label class="vs-label">Alpha <span style="color:var(--text-dim);font-size:11px;">ref timbre influence</span>
+            <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
+              <input type="range" id="sp-alpha" min="0" max="1" step="0.05" value="0.3" style="flex:1;accent-color:var(--accent,#223742);">
+              <span id="sp-alpha-val" style="min-width:32px;text-align:right;font-size:13px;">0.30</span>
+            </div>
+          </label>
+          <label class="vs-label">Beta <span style="color:var(--text-dim);font-size:11px;">ref prosody influence</span>
+            <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
+              <input type="range" id="sp-beta" min="0" max="1" step="0.05" value="0.7" style="flex:1;accent-color:var(--accent,#223742);">
+              <span id="sp-beta-val" style="min-width:32px;text-align:right;font-size:13px;">0.70</span>
+            </div>
+          </label>
+        </div>
       </div>
     </div>
 
@@ -1932,7 +1962,8 @@ const vsLogLines = document.getElementById('vs-log-lines');
 const vsLogBadge = document.getElementById('vs-log-badge');
 
 let vsFiles = [], vsProgressEs = null, vsStartTime = null, vsLastPct = 0, vsTimerHandle = null,
-    vsCompletedEpochs = 0, vsTotalEpochs = 0, vsActiveModelName = null;
+    vsCompletedEpochs = 0, vsTotalEpochs = 0, vsActiveModelName = null,
+    vsStartEpoch = 0, vsSessionEpochs = 0;
 
 const vsPauseBtn = document.getElementById('vs-pause-btn');
 
@@ -1953,7 +1984,7 @@ function vsTickTimer() {
     const elapsed = (Date.now() - vsStartTime) / 1000;
     vsElapsedLabel.textContent = 'Elapsed: ' + fmtDuration(elapsed);
     // avg time per epoch: use completed epochs if any, else treat elapsed as 1 epoch estimate
-    const avgPerEpoch = vsCompletedEpochs > 0 ? elapsed / vsCompletedEpochs : elapsed;
+    const avgPerEpoch = vsSessionEpochs > 0 ? elapsed / vsSessionEpochs : elapsed;
     vsAvgLabel.textContent = 'Avg/epoch: ' + fmtDuration(avgPerEpoch);
     if (vsTotalEpochs > 0) {
         const remaining = Math.max(0, vsTotalEpochs - vsCompletedEpochs);
@@ -1962,7 +1993,7 @@ function vsTickTimer() {
         vsEtaLabel.textContent = 'ETA: —';
     }
 }
-function vsStartTimer() { vsStartTime = Date.now(); vsLastPct = 0; vsCompletedEpochs = 0; vsTotalEpochs = 0; vsElapsedLabel.textContent = 'Elapsed: 0s'; vsAvgLabel.textContent = 'Avg/epoch: —'; vsEtaLabel.textContent = 'ETA: —'; if (vsTimerHandle) clearInterval(vsTimerHandle); vsTimerHandle = setInterval(vsTickTimer, 1000); }
+function vsStartTimer() { vsStartTime = Date.now(); vsLastPct = 0; vsCompletedEpochs = 0; vsTotalEpochs = 0; vsStartEpoch = 0; vsSessionEpochs = 0; vsElapsedLabel.textContent = 'Elapsed: 0s'; vsAvgLabel.textContent = 'Avg/epoch: —'; vsEtaLabel.textContent = 'ETA: —'; if (vsTimerHandle) clearInterval(vsTimerHandle); vsTimerHandle = setInterval(vsTickTimer, 1000); }
 function vsStopTimer()  { if (vsTimerHandle) { clearInterval(vsTimerHandle); vsTimerHandle = null; } vsTickTimer(); vsEtaLabel.textContent = 'ETA: done'; }
 function fmtBytes(b)    { return b > 1048576 ? (b/1048576).toFixed(1)+' MB' : (b/1024).toFixed(0)+' KB'; }
 
@@ -1993,6 +2024,8 @@ function vsSetProgress(step, pct, detail, state) {
     if (epochMatch) {
         vsCompletedEpochs = parseInt(epochMatch[1], 10);
         vsTotalEpochs     = parseInt(epochMatch[2], 10);
+        if (vsStartEpoch === 0) vsStartEpoch = vsCompletedEpochs - 1;
+        vsSessionEpochs = vsCompletedEpochs - vsStartEpoch;
         const floatPct = (vsCompletedEpochs / vsTotalEpochs * 100).toFixed(2);
         vsPctLabel.textContent  = floatPct + '%';
         vsProgFill.style.width  = floatPct + '%';
@@ -2081,8 +2114,29 @@ if (volSlider && volNumber) {
 // ── Voice Settings — Test Voice ───────────────────────────
 const vsTvText     = document.getElementById('vs-tv-text');
 const vsTvModel    = document.getElementById('vs-tv-model');
+const vsTvEpoch    = document.getElementById('vs-tv-epoch');
 const vsTvSpeakBtn = document.getElementById('vs-tv-speak-btn');
 const vsTvStatus   = document.getElementById('vs-tv-status');
+
+async function loadCheckpoints(modelName) {
+    vsTvEpoch.innerHTML = '<option value="">latest</option>';
+    if (!modelName) return;
+    try {
+        const r = await fetch(`/voice/${encodeURIComponent(modelName)}/checkpoints`);
+        if (!r.ok) return;
+        const { checkpoints } = await r.json();
+        // skip the first entry (latest/model.pth) since we already have it as default
+        for (const c of checkpoints) {
+            if (!c.epoch) continue;
+            const opt = document.createElement('option');
+            opt.value = c.path;
+            opt.textContent = `epoch ${c.epoch}`;
+            vsTvEpoch.appendChild(opt);
+        }
+    } catch { /* ignore */ }
+}
+
+vsTvModel.addEventListener('change', () => loadCheckpoints(vsTvModel.value));
 
 async function loadVoiceModels() {
     try {
@@ -2103,14 +2157,17 @@ async function loadVoiceModels() {
                     ? `up to epoch ${m.latestEpoch} · target ${m.epochs} · save every ${m.saveEveryN}`
                     : `${m.epochs} epochs · save every ${m.saveEveryN}`;
                 return `
-              <div style="display:flex;align-items:center;gap:14px;padding:10px 0;border-bottom:1px solid var(--border);flex-wrap:wrap;" data-model="${escHtml(m.name)}">
-                <div style="flex:1;min-width:0">
-                  <div style="font-size:13px;font-weight:600;color:var(--text)">${escHtml(m.name)}</div>
-                  <div style="font-size:11px;color:var(--text-dim);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(m.audioPath??'')}">${escHtml(m.audioPath??'—')}</div>
-                  <div style="font-size:11px;color:var(--text-dim);margin-top:1px;">${epochLine}</div>
+              <div style="padding:10px 0;border-bottom:1px solid var(--border);" data-model="${escHtml(m.name)}">
+                <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+                  <div style="flex:1;min-width:0">
+                    <div style="font-size:13px;font-weight:600;color:var(--text)">${escHtml(m.name)}</div>
+                    <div style="font-size:11px;color:var(--text-dim);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(m.audioPath??'')}">${escHtml(m.audioPath??'—')}</div>
+                    <div style="font-size:11px;color:var(--text-dim);margin-top:1px;">${epochLine}</div>
+                  </div>
+                  <label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:6px;">Epochs<input type="number" class="vs-input vs-resume-epochs" data-model="${escHtml(m.name)}" value="${m.epochs ?? 365}" min="1" max="9999" style="width:70px;font-size:12px;padding:4px 8px;"></label>
+                  <button class="vs-btn-primary vs-resume-btn" style="font-size:12px;padding:6px 18px;flex-shrink:0" data-model="${escHtml(m.name)}">Resume</button>
+                  <button class="vs-delete-btn" style="font-size:12px;padding:6px 12px;flex-shrink:0;background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-dim);cursor:pointer;" data-model="${escHtml(m.name)}" title="Delete this saved run">✕</button>
                 </div>
-                <button class="vs-btn-primary vs-resume-btn" style="font-size:12px;padding:6px 18px;flex-shrink:0" data-model="${escHtml(m.name)}">Resume</button>
-                <button class="vs-delete-btn" style="font-size:12px;padding:6px 12px;flex-shrink:0;background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-dim);cursor:pointer;" data-model="${escHtml(m.name)}" title="Delete this saved run">✕</button>
               </div>`;
             }).join('');
             vsResumeSec.style.display = '';
@@ -2124,18 +2181,21 @@ async function loadVoiceModels() {
             vsResumeSec.style.display = 'none';
         }
     } catch { vsTvModel.innerHTML = '<option value="">Failed to load</option>'; }
+    await loadCheckpoints(vsTvModel.value);
 }
 loadVoiceModels();
 
 async function vsStartResume(modelName) {
     const btn = document.querySelector(`.vs-resume-btn[data-model="${CSS.escape(modelName)}"]`);
+    const epochInput = document.querySelector(`.vs-resume-epochs[data-model="${CSS.escape(modelName)}"]`);
+    const epochs = epochInput ? parseInt(epochInput.value, 10) || null : null;
     if (btn) btn.disabled = true;
     vsProgSec.style.display = ''; vsLogLines.innerHTML = '';
     vsActiveModelName = modelName; vsPauseBtn.style.display = ''; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training';
     vsLogBadge.textContent = 'training…'; vsLogBadge.classList.add('live');
     vsSetProgress('Resuming', 0, `Resuming ${modelName}…`, ''); vsStartTimer();
     try {
-        const resp = await fetch('/voice/resume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName }) });
+        const resp = await fetch('/voice/resume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName, epochs }) });
         if (!resp.ok) throw new Error((await resp.json().catch(()=>({error:resp.statusText}))).error ?? resp.statusText);
         let vsDone = false;
         function connectResumeProgressSse() {
@@ -2166,12 +2226,34 @@ async function vsDeleteModel(modelName) {
     } catch(err) { alert('Delete failed: ' + err.message); }
 }
 
+// ── Synthesis parameter sliders ───────────────────────────
+function bindSlider(id, valId, decimals = 0) {
+    const slider = document.getElementById(id), val = document.getElementById(valId);
+    const fmt = v => decimals > 0 ? parseFloat(v).toFixed(decimals) : v;
+    val.textContent = fmt(slider.value);
+    slider.addEventListener('input', () => { val.textContent = fmt(slider.value); });
+}
+bindSlider('sp-diffusion-steps', 'sp-diffusion-steps-val', 0);
+bindSlider('sp-embedding-scale', 'sp-embedding-scale-val', 2);
+bindSlider('sp-alpha',           'sp-alpha-val',           2);
+bindSlider('sp-beta',            'sp-beta-val',            2);
+
+function getSynthParams() {
+    return {
+        diffusionSteps:   parseInt(document.getElementById('sp-diffusion-steps').value, 10),
+        embeddingScale:   parseFloat(document.getElementById('sp-embedding-scale').value),
+        alpha:            parseFloat(document.getElementById('sp-alpha').value),
+        beta:             parseFloat(document.getElementById('sp-beta').value),
+    };
+}
+
 vsTvSpeakBtn.addEventListener('click', async () => {
     const text = vsTvText.value.trim(), modelName = vsTvModel.value;
     if (!text) return;
     vsTvSpeakBtn.disabled = true; vsTvStatus.textContent = 'Synthesising…';
     try {
-        const resp = await fetch('/voice/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, modelName }) });
+        const checkpointPath = vsTvEpoch.value || null;
+        const resp = await fetch('/voice/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, modelName, checkpointPath, ...getSynthParams() }) });
         if (!resp.ok) { const err = await resp.json().catch(() => ({ error: resp.statusText })); vsTvStatus.textContent = 'Error: ' + (err.error ?? resp.statusText); }
         else {
             const audioCtx = new AudioContext();

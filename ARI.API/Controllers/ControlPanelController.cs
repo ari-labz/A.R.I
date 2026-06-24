@@ -500,9 +500,58 @@ public class VoiceController(
         if (voiceService?.IsReady != true)
             return StatusCode(503, new { error = "Voice module is not running." });
 
-        byte[] wav = await voiceService.Synthesise(req.Text, ct);
-        logger.LogInformation("[Voice/Speak] '{Text}' → {Bytes} bytes", req.Text, wav.Length);
+        byte[] wav;
+        if (!string.IsNullOrWhiteSpace(req.CheckpointPath))
+        {
+            if (!System.IO.File.Exists(req.CheckpointPath))
+                return NotFound(new { error = $"Checkpoint not found: {req.CheckpointPath}" });
+            wav = await voiceService.SynthesiseWithCheckpoint(req.Text, req.CheckpointPath, ct, req.DiffusionSteps, req.Alpha, req.Beta, req.EmbeddingScale);
+            logger.LogInformation("[Voice/Speak] checkpoint={Checkpoint} '{Text}' → {Bytes} bytes", req.CheckpointPath, req.Text, wav.Length);
+        }
+        else
+        {
+            wav = await voiceService.Synthesise(req.Text, ct, req.DiffusionSteps, req.Alpha, req.Beta, req.EmbeddingScale);
+            logger.LogInformation("[Voice/Speak] '{Text}' → {Bytes} bytes", req.Text, wav.Length);
+        }
         return File(wav, "audio/wav");
+    }
+
+    [HttpGet("{modelName}/checkpoints")]
+    public IActionResult GetCheckpoints(string modelName)
+    {
+        if (string.IsNullOrWhiteSpace(modelName) || modelName.Contains('/') || modelName.Contains('\\'))
+            return BadRequest(new { error = "Invalid model name." });
+        if (string.IsNullOrEmpty(vsConfig.VoicesPath))
+            return StatusCode(503, new { error = "VoiceSynthesis not configured." });
+
+        string modelDir = Path.Combine(vsConfig.VoicesPath, modelName);
+        if (!Directory.Exists(modelDir))
+            return NotFound(new { error = $"Model '{modelName}' not found." });
+
+        var checkpoints = new List<object>();
+
+        string modelPth = Path.Combine(modelDir, "model.pth");
+        if (System.IO.File.Exists(modelPth))
+            checkpoints.Add(new { label = "latest", epoch = (int?)null, path = modelPth });
+
+        string checkpointsDir = Path.Combine(modelDir, "Checkpoints");
+        if (Directory.Exists(checkpointsDir))
+        {
+            var epochEntries = Directory.GetDirectories(checkpointsDir)
+                .Select(d => {
+                    string folderName = Path.GetFileName(d);
+                    string numPart = folderName.Replace("_epochs", "").Trim();
+                    if (!int.TryParse(numPart, out int epoch)) return null;
+                    string? pth = Directory.GetFiles(d, "*.pth").FirstOrDefault();
+                    return pth is null ? null : new { label = $"epoch {epoch}", epoch = (int?)epoch, path = pth };
+                })
+                .Where(e => e is not null)
+                .OrderByDescending(e => e!.epoch)
+                .ToList();
+            checkpoints.AddRange(epochEntries!);
+        }
+
+        return Ok(new { checkpoints });
     }
 
     [HttpPost("split-sentences")]
@@ -643,17 +692,27 @@ public class VoiceController(
         if (settings is null)
             return StatusCode(500, new { error = "Could not parse training settings." });
 
+        int effectiveEpochs      = req.Epochs      ?? settings.Epochs;
+        int effectiveSaveEveryN  = req.SaveEveryNEpochs ?? settings.SaveEveryNEpochs;
+
+        // Persist updated targets so a future resume picks them up
+        if (req.Epochs.HasValue || req.SaveEveryNEpochs.HasValue)
+        {
+            TrainingSettings updated = settings with { Epochs = effectiveEpochs, SaveEveryNEpochs = effectiveSaveEveryN };
+            System.IO.File.WriteAllText(settingsFile, JsonSerializer.Serialize(updated));
+        }
+
         TrainingJob job;
         try
         {
             StyleTtsTrainer trainer = new(
-                styleTtsPath:    vsConfig.StyleTtsPath,
-                voicesPath:      vsConfig.VoicesPath,
-                audioPath:       settings.AudioPath,
-                modelName:       settings.ModelName,
-                epochs:          settings.Epochs,
-                saveEveryNEpochs: settings.SaveEveryNEpochs,
-                logger:          logger);
+                styleTtsPath:     vsConfig.StyleTtsPath,
+                voicesPath:       vsConfig.VoicesPath,
+                audioPath:        settings.AudioPath,
+                modelName:        settings.ModelName,
+                epochs:           effectiveEpochs,
+                saveEveryNEpochs: effectiveSaveEveryN,
+                logger:           logger);
 
             job = voiceTraining!.Start(trainer, settings.ModelName, lifetime.ApplicationStopping);
         }
@@ -664,7 +723,7 @@ public class VoiceController(
 
         logger.LogInformation(
             "[Voice] Resume training started — model: {ModelName}, epochs: {Epochs}",
-            settings.ModelName, settings.Epochs);
+            settings.ModelName, effectiveEpochs);
 
         string modelName = settings.ModelName;
         _ = Task.Run(async () =>
@@ -920,6 +979,7 @@ public record TrainRequest(
     int    Epochs          = 100,
     int    SaveEveryNEpochs = 10);
 
-public record SpeakRequest(string Text, string? ModelName = null);
+public record SpeakRequest(string Text, string? ModelName = null, string? CheckpointPath = null,
+    int DiffusionSteps = 5, float Alpha = 0.3f, float Beta = 0.7f, float EmbeddingScale = 1.0f);
 public record SplitSentencesRequest(string Text);
-public record ResumeRequest(string ModelName);
+public record ResumeRequest(string ModelName, int? Epochs = null, int? SaveEveryNEpochs = null);

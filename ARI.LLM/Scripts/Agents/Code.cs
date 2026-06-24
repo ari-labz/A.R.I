@@ -56,6 +56,10 @@ internal partial class Code : Agent
         "- Edit only the lines that must change. Batch all edits to one file into a single edit_file 'edits' array. " +
         "edit_file returns the updated lines around your change, so you do not need to re-read to verify.\n" +
         "- Do not re-read or re-search for something already in your context.\n" +
+        "- If an edit produces broken code (brace mismatch, duplicate definition, corrupted string) and you cannot " +
+        "fix it cleanly with one small follow-up edit, use revert_file to restore the file to its pre-edit state, " +
+        "then re-read and plan the edit again. Reverting and starting over is always better than incrementally " +
+        "patching a corrupt file — iterative repair of a bad edit is how small mistakes become total rewrites.\n" +
         "- Be concise: spend the minimum tokens needed to finish. Don't restate your plan every step or add filler. " +
         "Use as much room as a large task genuinely needs, but no more.";
 
