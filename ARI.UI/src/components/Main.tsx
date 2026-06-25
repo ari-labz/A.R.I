@@ -180,6 +180,7 @@ export default function Main({
                         activeThread={activeThread}
                         isInternal={isInternal}
                         agentName={agentName}
+                        processing={isStreaming}
                     />
 
                     <ThreadPanel

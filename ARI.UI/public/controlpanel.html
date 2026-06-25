@@ -268,10 +268,10 @@ html, body {
 .dbg-thread-key { font-family: ui-monospace, monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dbg-thread-meta { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
 .dbg-thread-item.active .dbg-thread-meta { color: rgba(255,255,255,.65); }
-.dbg-view { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+.dbg-view { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; min-height: 0; }
 .dbg-view-head { padding: 10px 18px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; flex-shrink: 0; background: #fff; }
 .dbg-view-key { font-size: 12px; font-weight: 600; color: var(--text); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace; }
-.dbg-view-body { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; background: #f1f3f6; }
+.dbg-view-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; background: #f1f3f6; }
 .dbg-empty { display: flex; align-items: center; justify-content: center; flex: 1; color: var(--text-dim); font-size: 13px; font-style: italic; }
 
 /* message bubbles */
@@ -331,6 +331,30 @@ html, body {
 .dbg-payload-pane:last-child { border-right: none; }
 .dbg-payload-lbl { padding: 5px 10px 4px; font-size: 9.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--text-dim); background: #f9fafb; border-bottom: 1px solid var(--border); flex-shrink: 0; }
 .dbg-payload-pre { margin: 0; padding: 8px 10px; font-family: ui-monospace, monospace; font-size: 10.5px; white-space: pre-wrap; word-break: break-word; overflow-y: auto; flex: 1; color: #1e293b; line-height: 1.5; }
+/* ── deep-inspection trace (prompt → thinking → tool call → result) ── */
+.dbg-bubble.prompt .dbg-bhead { background: #1d4ed8; color: #fff; }
+.dbg-bubble.toolcall { border-color: #bfdbfe; }
+.dbg-bubble.toolcall .dbg-bhead { background: #eff6ff; color: #1d4ed8; }
+.dbg-bubble.toolresult { border-color: #bbf7d0; }
+.dbg-bubble.toolresult .dbg-bhead { background: #f0fdf4; color: #15803d; }
+.dbg-bubble.toolresult.err { border-color: #fecaca; }
+.dbg-bubble.toolresult.err .dbg-bhead { background: #fef2f2; color: #dc2626; }
+.dbg-prompt-body { padding: 10px 12px; max-height: 260px; overflow-y: auto; }
+.dbg-args   { padding: 9px 12px; max-height: 220px; overflow-y: auto; color: #1e293b; }
+.dbg-result { padding: 9px 12px; max-height: 260px; overflow-y: auto; color: #334155; }
+/* thinking cloud */
+.dbg-cloud { max-width: 80%; background: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 16px; box-shadow: 0 1px 5px rgba(109,40,217,.08); position: relative; }
+.dbg-cloud::after { content: ''; position: absolute; left: 22px; bottom: -7px; width: 12px; height: 12px; background: #f5f3ff; border-right: 1px solid #ddd6fe; border-bottom: 1px solid #ddd6fe; border-radius: 0 0 8px 0; transform: rotate(20deg); }
+.dbg-cloud-head { padding: 7px 15px 3px; font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: #6d28d9; }
+.dbg-cloud-body { padding: 2px 15px 12px; font-family: ui-monospace, monospace; font-size: 11.5px; white-space: pre-wrap; word-break: break-word; color: #4c1d95; line-height: 1.55; max-height: 360px; overflow-y: auto; }
+/* nested sub-thread (architect plan / per-task coder) */
+.dbg-subthread { border: 1px solid #cbd5e1; border-radius: 10px; margin: 2px 0; background: #fbfcfe; overflow: hidden; }
+.dbg-sub-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: pointer; background: #eef2f7; font-size: 11px; user-select: none; }
+.dbg-sub-head:hover { background: #e2e8f0; }
+.dbg-sub-caret { color: #64748b; font-size: 10px; width: 10px; }
+.dbg-sub-label { font-weight: 700; color: #334155; }
+.dbg-sub-key { font-family: ui-monospace, monospace; font-size: 10px; color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dbg-sub-body { padding: 11px 12px; display: flex; flex-direction: column; gap: 12px; }
 </style>
 </head>
 <body>
@@ -2276,6 +2300,8 @@ var dbgSelectedThread  = null;
 var dbgWatchEs         = null;
 var dbgReloadTimer     = null;
 var dbgLastRenderCount = 0;  // tracks rendered row count for in-place streaming update
+var dbgCollapsed       = new Set(); // sub-thread keys the user has collapsed (preserved across polls)
+var dbgLastSig         = '';  // structural signature of the last render — skip rebuild when unchanged
 
 function dbgCloseWatch() {
     if (dbgWatchEs) { dbgWatchEs.close(); dbgWatchEs = null; }
@@ -2359,44 +2385,140 @@ async function dbgLoadThread(key) {
     const keyEl = document.getElementById('dbg-view-key');
     head.style.display = '';
     keyEl.textContent = key;
-    body.innerHTML = '<div class="dbg-empty">Loading…</div>';
+    if (!body.dataset.loaded) body.innerHTML = '<div class="dbg-empty">Loading…</div>';
     try {
         const r = await fetch(`/threads/${encodeURIComponent(key)}/debug`);
         if (!r.ok) throw new Error('HTTP ' + r.status);
-        const items = await r.json();
-        dbgRenderHistory(items, body);
+        const thread = await r.json();
+        // /debug now returns a thread tree: { key, label, state, history:[...], children:[...] }.
+        const sig = dbgThreadSig(thread);
+        if (sig === dbgLastSig && body.dataset.loaded) return; // nothing structural changed — preserve scroll/expand
+        dbgLastSig = sig;
+        const prevTop  = body.scrollTop;
+        const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 90;
+        body.innerHTML = '';
+        body.dataset.loaded = '1';
+        dbgRenderThreadNode(thread, body, 0);
+        if (!body.children.length) body.innerHTML = '<div class="dbg-empty">No messages in this thread</div>';
+        // Keep the user where they were; only auto-follow to the bottom if they were already there.
+        body.scrollTop = atBottom ? body.scrollHeight : prevTop;
     } catch(e) {
         body.innerHTML = `<div class="dbg-empty" style="color:#dc2626;">Error: ${escHtml(e.message)}</div>`;
     }
 }
 
-function dbgRenderHistory(items, container) {
-    const last = items[items.length - 1];
+// Recursive structural signature — only rebuild the DOM when an item/trace-step/sub-thread is added,
+// so the 120ms watch poll doesn't flash or lose scroll/expand state between real changes.
+function dbgThreadSig(t) {
+    let s = (t.key || '') + '#' + (t.state || '') + '|' + ((t.history || []).length) + '[';
+    (t.history || []).forEach(it => { s += (it.type || '') + '.' + ((it.trace || []).length) + (it.isStreaming ? 's' : '') + ','; });
+    s += ']';
+    (t.children || []).forEach(c => { s += dbgThreadSig(c); });
+    return s;
+}
 
-    // During streaming: only replace the last row in-place to avoid full-DOM flash
-    if (last?.type === 'ariResponse' && last.isStreaming) {
-        const rows = container.querySelectorAll(':scope > .dbg-row');
-        if (rows.length > 0 && rows.length === dbgLastRenderCount) {
-            const newEl = dbgRenderItem(last, items[items.length - 2]);
-            if (newEl) rows[rows.length - 1].replaceWith(newEl);
-            container.scrollTop = container.scrollHeight;
-            return;
-        }
+// Renders a thread and its sub-threads. depth>0 draws a collapsible labelled sub-thread frame.
+function dbgRenderThreadNode(thread, container, depth) {
+    let host = container;
+    if (depth > 0) {
+        const sub = document.createElement('div');
+        sub.className = 'dbg-subthread';
+        const collapsed = dbgCollapsed.has(thread.key);
+        const label = thread.label || (thread.pipeline ? thread.pipeline + ' sub-thread' : 'sub-thread');
+        const shortKey = (thread.key || '').split(':')[0].split('#').slice(1).join('#') || thread.key;
+        sub.innerHTML = `
+            <div class="dbg-sub-head">
+                <span class="dbg-sub-caret">${collapsed ? '▸' : '▾'}</span>
+                <span class="dbg-sub-label">${escHtml(label)}</span>
+                <span class="dbg-sub-key">${escHtml(shortKey)}</span>
+                <span class="dbg-state ${escHtml(thread.state || '')}" style="margin-left:auto;">${escHtml(thread.state || '')}</span>
+            </div>
+            <div class="dbg-sub-body"></div>`;
+        const headEl = sub.querySelector('.dbg-sub-head');
+        const bodyEl = sub.querySelector('.dbg-sub-body');
+        if (collapsed) bodyEl.style.display = 'none';
+        headEl.addEventListener('click', () => {
+            const show = bodyEl.style.display === 'none';
+            bodyEl.style.display = show ? '' : 'none';
+            sub.querySelector('.dbg-sub-caret').textContent = show ? '▾' : '▸';
+            if (show) dbgCollapsed.delete(thread.key); else dbgCollapsed.add(thread.key);
+        });
+        container.appendChild(sub);
+        host = bodyEl;
     }
 
-    // Full rebuild for structural changes (new items, thread switch, completion)
-    container.innerHTML = '';
-    if (!items.length) {
-        container.innerHTML = '<div class="dbg-empty">No messages in this thread</div>';
-        return;
+    // The CodeArchitect's plan thread is NOT a sub-thread — it's the main thread. A parent that spawned one
+    // is just an orchestration container (its own history is raw chip markup), so we skip the container's
+    // history and render the architect's trace inline. Only the Coder workers become collapsible sub-threads.
+    const planChild = (thread.children || []).find(c => (c.key || '').includes('#plan'));
+    const workers   = (thread.children || []).filter(c => c !== planChild);
+
+    if (!planChild)
+        (thread.history || []).forEach(item => dbgRenderHistoryItem(item, host));
+
+    if (planChild)
+        (planChild.history || []).forEach(item => dbgRenderHistoryItem(item, host));
+
+    workers.forEach(c => dbgRenderThreadNode(c, host, depth + 1));
+}
+
+function dbgRenderHistoryItem(item, host) {
+    // The user message is shown inside the next turn's "Prompt" bubble (as part of the full augmented prompt),
+    // so don't render it again as its own username-headed bubble.
+    if (item.type === 'userMessage') return;
+    if (item.type === 'ariResponse' && Array.isArray(item.trace) && item.trace.length) {
+        dbgRenderTrace(item, host);
+    } else {
+        const el = dbgRenderItem(item, null);
+        if (el) host.appendChild(el);
     }
-    let count = 0;
-    items.forEach((item, i) => {
-        const el = dbgRenderItem(item, items[i + 1]);
-        if (el) { container.appendChild(el); count++; }
+}
+
+// Renders one AriResponse's agent-loop trace as the call-and-response sketch:
+// prompt (right) → thinking cloud (left) → tool call (left) → tool result (right) → … → answer (left).
+function dbgRenderTrace(item, host) {
+    (item.trace || []).forEach(step => {
+        const row = document.createElement('div');
+        row.className = 'dbg-row';
+        if (step.kind === 'prompt') {
+            row.classList.add('right');
+            // Show the FULL augmented prompt the LLM received (system + context + the message), not just the
+            // user's typed text — falls back to the raw step text if the request body wasn't captured.
+            const full = item.debugRequestJson ? dbgFmtPrompt(item.debugRequestJson) : (step.text || '');
+            row.innerHTML = `<div class="dbg-bubble prompt"><div class="dbg-bhead"><span>Prompt</span></div>`
+                + `<div class="dbg-bbody dbg-md dbg-prompt-body">${marked.parse(full)}</div></div>`;
+        } else if (step.kind === 'reasoning') {
+            row.classList.add('left');
+            const len = (step.text || '').length;
+            row.innerHTML = `<div class="dbg-cloud"><div class="dbg-cloud-head">🧠 thinking · ${len.toLocaleString()} chars</div>`
+                + `<div class="dbg-cloud-body">${escHtml(step.text || '')}</div></div>`;
+        } else if (step.kind === 'tool_call') {
+            row.classList.add('left');
+            row.innerHTML = `<div class="dbg-bubble toolcall"><div class="dbg-bhead"><span>→ ${escHtml(step.name || 'tool')}</span></div>`
+                + `<div class="dbg-bbody dbg-args">${escHtml(dbgFmtJson(step.args || ''))}</div></div>`;
+        } else if (step.kind === 'tool_result') {
+            row.classList.add('right');
+            const err = /^\[(Error|System:)/.test((step.text || '').trimStart());
+            row.innerHTML = `<div class="dbg-bubble toolresult${err ? ' err' : ''}"><div class="dbg-bhead"><span>← ${escHtml(step.name || 'tool')}</span></div>`
+                + `<div class="dbg-bbody dbg-result">${escHtml(step.text || '')}</div></div>`;
+        } else if (step.kind === 'text') {
+            row.classList.add('left');
+            row.innerHTML = `<div class="dbg-bubble ari"><div class="dbg-bhead"><span>ARI</span></div>`
+                + `<div class="dbg-bbody dbg-md dbg-seg-text">${marked.parse(step.text || '')}</div></div>`;
+        } else { return; }
+        host.appendChild(row);
     });
-    dbgLastRenderCount = count;
-    container.scrollTop = container.scrollHeight;
+
+    const metaParts = [];
+    if (item.promptTokens)            metaParts.push(`↓ ${item.promptTokens.toLocaleString()} prompt`);
+    if (item.completionTokens)        metaParts.push(`↑ ${item.completionTokens.toLocaleString()} completion`);
+    if (item.thinkingSeconds != null) metaParts.push(`⏱ ${Number(item.thinkingSeconds).toFixed(1)}s`);
+    if (metaParts.length) {
+        const m = document.createElement('div');
+        m.className = 'dbg-row left';
+        m.innerHTML = `<div class="dbg-meta" style="border:none;background:none;padding:2px 4px;">${metaParts.map(p => `<span>${escHtml(p)}</span>`).join('')}</div>`;
+        host.appendChild(m);
+    }
 }
 
 function dbgRenderItem(item, nextItem = null) {
@@ -2486,43 +2608,56 @@ function dbgFmtJson(str) {
     catch { return str; }
 }
 
+function dbgFmtMsgArray(msgs) {
+    return msgs.map(msg => {
+        let content = '';
+        if (typeof msg.content === 'string') {
+            content = msg.content;
+        } else if (Array.isArray(msg.content)) {
+            content = msg.content.map(b => {
+                if (b.type === 'text') return b.text;
+                if (b.type === 'tool_result') {
+                    const c = Array.isArray(b.content)
+                        ? b.content.map(x => x.text || '').join('')
+                        : (b.content || '');
+                    return `[tool_result id=${b.tool_use_id}]\n${c}`;
+                }
+                return JSON.stringify(b);
+            }).join('\n');
+        } else {
+            content = JSON.stringify(msg.content ?? '');
+        }
+        let lbl;
+        if (msg.role === 'user') {
+            lbl = 'user message';
+        } else if (msg.role === 'system' && content.startsWith("[ARI's Memories]")) {
+            lbl = "ARI's Memories";
+            content = content.slice("[ARI's Memories]".length).trimStart();
+        } else {
+            lbl = msg.role;
+        }
+        return `**[${lbl}]**\n\n${content.replace(/\n{3,}/g, '\n\n')}`;
+    }).join('\n\n---\n\n');
+}
+
 function dbgFmtMessages(str) {
     if (!str) return '(no request data)';
+    try { return dbgFmtMsgArray(JSON.parse(str).messages || []); }
+    catch { return str; }
+}
+
+// The augmented prompt the LLM actually received to START this turn: the system message(s) + conversation up
+// to and including the turn's triggering user message. The intra-turn assistant tool-calls / tool-results that
+// come AFTER it are dropped here — the trace already shows those as their own bubbles.
+function dbgFmtPrompt(str) {
+    if (!str) return '';
     try {
-        const req = JSON.parse(str);
-        const msgs = req.messages || [];
-        return msgs.map(msg => {
-            let content = '';
-            if (typeof msg.content === 'string') {
-                content = msg.content;
-            } else if (Array.isArray(msg.content)) {
-                content = msg.content.map(b => {
-                    if (b.type === 'text') return b.text;
-                    if (b.type === 'tool_result') {
-                        const c = Array.isArray(b.content)
-                            ? b.content.map(x => x.text || '').join('')
-                            : (b.content || '');
-                        return `[tool_result id=${b.tool_use_id}]\n${c}`;
-                    }
-                    return JSON.stringify(b);
-                }).join('\n');
-            } else {
-                content = JSON.stringify(msg.content ?? '');
-            }
-            let lbl;
-            if (msg.role === 'user') {
-                lbl = 'prompt';
-            } else if (msg.role === 'system' && content.startsWith("[ARI's Memories]")) {
-                lbl = "ARI's Memories";
-                content = content.slice("[ARI's Memories]".length).trimStart();
-            } else {
-                lbl = msg.role;
-            }
-            return `# [${lbl}]\n\n${content.replace(/\n{3,}/g, '\n\n')}`;
-        }).join('\n\n---\n\n');
-    } catch {
-        return str;
-    }
+        let msgs = JSON.parse(str).messages || [];
+        let lastUser = -1;
+        msgs.forEach((m, i) => { if (m.role === 'user') lastUser = i; });
+        if (lastUser >= 0) msgs = msgs.slice(0, lastUser + 1);
+        return dbgFmtMsgArray(msgs);
+    } catch { return str; }
 }
 
 function dbgParseContent(raw) {

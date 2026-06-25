@@ -300,8 +300,8 @@ import re as _re
 # Keys are regex patterns (case-insensitive), values are replacement spellings
 # that gruut will phonemize correctly.
 _WORD_SUBS = [
-    (r'\bARI\b',  'arree'),   # "are-ree" — gruut reads 'arr' as /ɑːr/
-    (r'\bA\.R\.I\b\.?', 'arree'),
+    (r'\bA\.R\.I\.?\b', 'are-ree'),  # A.R.I. → /ɑɹ ɹi/
+    (r'\bARI\b',        'are-ree'),  # ARI → /ɑɹ ɹi/
 ]
 
 def preprocess(text):
