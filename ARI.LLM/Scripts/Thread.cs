@@ -19,8 +19,45 @@ public class Thread
 
     /// <summary>The pipeline this thread runs on.</summary>
     public ThreadPipeline Pipeline { get; }
-    /// <summary>Whether this is an internal working thread, hidden from the user.</summary>
+    /// <summary>
+    /// Whether this thread is kept off the flat user thread list (e.g. an internal worker or a
+    /// Coder sub-thread). Note: "off the list" is NOT the same as "hidden" — sub-threads remain
+    /// individually pollable and are surfaced live under their <see cref="Parent"/>.
+    /// </summary>
     public bool Internal { get; init; }
+
+    /// <summary>The thread that spawned this one (e.g. a CodeArchitect plan), or null for a top-level thread.</summary>
+    public Thread? Parent { get; init; }
+
+    /// <summary>True when this thread was spawned by another thread.</summary>
+    public bool IsSubThread => Parent is not null;
+
+    /// <summary>Human-readable label for a sub-thread (e.g. the atomic step it executes). Shown in the parent's live child overview.</summary>
+    public string? Label { get; init; }
+
+    private readonly List<Thread> children = new();
+
+    /// <summary>
+    /// Sub-threads this thread has spawned (e.g. per-step Coder executors under a CodeArchitect plan).
+    /// Ownership + introspection only — orchestration logic lives in the agent, not here.
+    /// </summary>
+    public IReadOnlyList<Thread> Children
+    {
+        get { lock (children) { return children.ToList().AsReadOnly(); } }
+    }
+
+    internal void AddChild(Thread child)
+    {
+        lock (children) { children.Add(child); }
+        Updated?.Invoke();
+    }
+
+    /// <summary>
+    /// File names (basename) whose current content was supplied to this thread up-front (e.g. a Coder step
+    /// seeded with the located range by the CodeArchitect). The Coder's "edit before read" precheck treats
+    /// these as already-read, so it can edit directly from the seed without a redundant exploratory read.
+    /// </summary>
+    public readonly HashSet<string> PreReadPaths = new(StringComparer.OrdinalIgnoreCase);
 
     public readonly List<ThreadItem> History = new();
 

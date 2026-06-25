@@ -444,9 +444,24 @@ function animateDiffBadges(root: HTMLElement) {
 export default function Messages({ items, isRemembering, activeThread, isInternal, agentName }: Props) {
     const bottomRef  = useRef<HTMLDivElement>(null)
     const messagesEl = useRef<HTMLDivElement>(null)
+    // Whether to keep following the tail. True while the user is parked near the bottom; flips off the
+    // moment they scroll up, so streaming updates never yank them back down.
+    const stick = useRef(true)
+
+    // Reset to bottom-follow when switching threads.
+    useEffect(() => { stick.current = true }, [activeThread])
+
+    // Track the user's scroll position: "near bottom" (within 80px) means keep auto-scrolling.
+    useEffect(() => {
+        const el = messagesEl.current
+        if (!el) return
+        const onScroll = () => { stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80 }
+        el.addEventListener("scroll", onScroll, { passive: true })
+        return () => el.removeEventListener("scroll", onScroll)
+    }, [])
 
     useEffect(() => {
-        bottomRef.current?.scrollIntoView({ behavior: "smooth" })
+        if (stick.current) bottomRef.current?.scrollIntoView({ behavior: "smooth" })
     }, [items, isRemembering])
 
     useEffect(() => {

@@ -9,14 +9,19 @@ namespace ARI.LLM;
 // Code-specific tool-loop behaviour. The generic LLM request/stream/execute/append loop lives in Agent;
 // everything here is exercised ONLY by tool-bearing Code threads, so per the project's OOP rules it belongs
 // on the subclass rather than the base. Agent calls these as virtual hooks (see Agent.cs).
-internal partial class Code
+internal partial class Coder
 {
     // After this many reads of the SAME file in one turn, every further read is handed back with a firm
-    // "stop verifying" directive. Set above a legitimate preview+few-ranges+one-post-edit-check (~4-5).
-    private const int READ_LOOP_CEILING        = 6;
+    // "stop verifying" directive. Set just above a legit preview+few-ranges+one-post-edit-check (~4).
+    // (Cycle 12: 6→4 — re-reading the same file ≥4× in a turn is churn, not need.)
+    private const int READ_LOOP_CEILING        = 4;
     // Total search_files calls per turn (reset on edit, since line numbers shift) before every further
     // search is bounced with a "stop verifying in circles" directive. Above a legit exploration pass (~6-8).
     private const int SEARCH_LOOP_CEILING      = 9;
+    // Cycle 12: catch cross-file READ churn that the per-file ceiling misses (the extreme tests read 20–24
+    // DISTINCT-ish files/ranges and never started editing). After this many total reads in a turn, append a
+    // one-time soft "you have enough — start editing" nudge. Non-blocking (legit large rollouts can continue).
+    private const int TOTAL_READ_NUDGE         = 12;
     // Stop the turn after this many "[omitted]" placeholder edit/write refusals — the copy-forward loop.
     private const int MAX_PLACEHOLDER_REFUSALS = 3;
 
@@ -36,9 +41,15 @@ internal partial class Code
         public readonly HashSet<string>         TurnEditPaths       = new(StringComparer.OrdinalIgnoreCase);
         public          bool                    TodoNudged;
         public          int                     PlaceholderRefusals;
+        // Cycle 12: per-turn total read count + one-shot nudge flag (cross-file read-churn brake).
+        public          int                     TotalReads;
+        public          bool                    TotalReadNudged;
         public readonly Dictionary<string, (int Index, string CallId)> LiveReads = new(StringComparer.OrdinalIgnoreCase);
         public          int                     NoProgressBatches;
         public readonly HashSet<string>         EditedPathsThisBatch = new(StringComparer.OrdinalIgnoreCase);
+        // Cross-turn identical-edit guard: counts byte-identical edit_file calls across the WHOLE turn
+        // (each request is its own batch, so EditedPathsThisBatch can't catch a turn-to-turn repeat).
+        public readonly Dictionary<string, int> EditSignatures      = new(StringComparer.Ordinal);
         // search_files dedup + loop guard. Keyed by normalized pattern; SearchTotal is the per-turn count.
         // Both reset on a successful edit (line numbers shift → re-searching is legitimate again).
         public readonly Dictionary<string, int> SearchCounts        = new(StringComparer.Ordinal);
@@ -105,6 +116,7 @@ internal partial class Code
         string ekey = NormKey(editPath);
         bool readThisTurn = state.ReadCounts.ContainsKey(ekey)
             || state.EditedFiles.Contains(ekey)
+            || thread.PreReadPaths.Contains(ekey)
             || threadAtts.Any(a => NormKey(a.Name) == ekey)
             || msgAtts.Any(a => NormKey(a.Name) == ekey);
         bool readInBatch = pendingReadPaths.Any(rp => NormKey(rp) == ekey);
@@ -153,6 +165,7 @@ internal partial class Code
                 state.ReadCounts[rpath] = pathRc + 1;
                 state.FileReadTotals.TryGetValue(rpath, out int fileTotalRc);
                 state.FileReadTotals[rpath] = fileTotalRc + 1;
+                state.TotalReads++;
                 state.BlindFirstRead = pathRc == 0 && !state.CommandCache.ContainsKey($"preview_file:{rpath}");
                 if (rc >= 1)
                 {
@@ -186,6 +199,18 @@ internal partial class Code
 
         if (toolName == "edit_file")
         {
+            // Cross-turn identical-edit guard. A think-off Coder can spiral, re-issuing the EXACT same
+            // edit every turn (each its own batch). Refuse a byte-identical edit we already applied this
+            // turn — re-applying it is a no-op or duplicates the line — and force-stop on the 3rd attempt.
+            string esig    = Regex.Replace(argsJson.Trim(), @"\s+", " ");
+            int    seenSig = state.EditSignatures.TryGetValue(esig, out int sc) ? sc : 0;
+            state.EditSignatures[esig] = seenSig + 1;
+            if (seenSig >= 1)
+            {
+                if (seenSig >= 2) state.ForceNoMoreTools = true;
+                return "[System: You already made this exact edit this turn — it is done. Re-applying an identical edit changes nothing (or duplicates the line). Do NOT repeat it. If the change is complete, STOP and write your summary now.]";
+            }
+
             string? editPath = null;
             try
             {
@@ -284,6 +309,16 @@ internal partial class Code
             && !result.StartsWith("[System:", StringComparison.OrdinalIgnoreCase)
             && !ToolCallParser.IsError(result))
             result += "\n[System: You read this file without previewing it first. For an unfamiliar file, call preview_file to see its structure and line numbers, then read only the range you need — and use search_files to locate specific call sites instead of scrolling.]";
+
+        // Cycle 12: cross-file read-churn brake. One-time soft nudge once total reads in a turn cross the
+        // threshold — the extreme tests read 12–24 files/ranges and never started editing. Non-blocking so a
+        // genuinely large rollout can keep going, but pushes the model from exploring to acting.
+        if (toolName == "read_file" && !state.TotalReadNudged && state.TotalReads >= TOTAL_READ_NUDGE
+            && !ToolCallParser.IsError(result))
+        {
+            state.TotalReadNudged = true;
+            result += $"\n[System: You have now read {state.TotalReads} files/ranges this turn — that is almost certainly enough to act. Stop exploring and START EDITING now. If you have a multi-step plan, make the first edit; you can read a genuinely new file later only if a specific edit needs it. Do not re-open files you have already seen.]";
+        }
 
         if (toolName == "read_file" && !ToolCallParser.IsError(result))
         {

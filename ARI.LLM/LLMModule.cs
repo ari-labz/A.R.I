@@ -21,7 +21,8 @@ public class LLMModule : ILLMModule, IDisposable
     
     //agents
     private readonly Dialogue?         dialogue;
-    private readonly Code?             code;
+    private readonly Coder?            code;
+    private readonly CodeArchitect?    codeArchitect;
     private readonly Memory?           memory;
     private readonly Context?          context;
     private readonly Engram?           engram;
@@ -133,11 +134,18 @@ public class LLMModule : ILLMModule, IDisposable
             agentMap["Dialogue"] = dialogue;
         }
 
-        if (rawAgents.TryGetValue("Code", out JsonElement codeEl))
+        if (rawAgents.TryGetValue("Coder", out JsonElement codeEl))
         {
-            code = Deserialize<Code>(codeEl);
+            code = Deserialize<Coder>(codeEl);
             agentMap["Code"] = code;
-            _logger.LogInformation("Code agent is active. MaxContext: {Ctx} tokens.", code.MaxContextTokens);
+            _logger.LogInformation("Coder agent is active. MaxContext: {Ctx} tokens.", code.MaxContextTokens);
+        }
+
+        if (rawAgents.TryGetValue("CodeArchitect", out JsonElement architectEl))
+        {
+            codeArchitect = Deserialize<CodeArchitect>(architectEl);
+            agentMap["CodeArchitect"] = codeArchitect;
+            _logger.LogInformation("CodeArchitect agent is active. MaxContext: {Ctx} tokens.", codeArchitect.MaxContextTokens);
         }
 
         if (rawAgents.TryGetValue("Classifier", out JsonElement classifierEl))
@@ -194,7 +202,7 @@ public class LLMModule : ILLMModule, IDisposable
         }
 
         if (code is not null)
-            codePipeline = new CodePipeline(code, processingThreads, liveCalls, NotifyWatchers);
+            codePipeline = new CodePipeline(code, codeArchitect, processingThreads, liveCalls, NotifyWatchers);
     }
 
     // ── Thread registry ──────────────────────────────────────────────────────────
@@ -573,6 +581,12 @@ public class LLMModule : ILLMModule, IDisposable
     {
         if (processingThreads.TryGetValue(threadKey, out CancellationTokenSource? cts))
             cts.Cancel();
+
+        // Cancel-cascade: aborting a parent must deterministically abort any live sub-threads
+        // (e.g. in-flight Coder steps under a CodeArchitect plan). Recurses through grandchildren.
+        if (threads.TryGetValue(threadKey, out Thread? thread))
+            foreach (Thread child in thread.Children)
+                Cancel(child.Key);
     }
 
     public void Interrupt(string threadKey)
