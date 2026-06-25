@@ -18,6 +18,10 @@ public abstract class Agent
     [JsonPropertyName("maxToolCalls")]  public int     MaxToolCalls  { get; init; }
     [JsonPropertyName("think")]         public bool    Think         { get; init; }
     [JsonPropertyName("thinkingBudget")]public int     ThinkingBudget{ get; init; }
+    // Hard per-turn reasoning cap (chars), enforced at the stream level since this model ignores the
+    // soft thinking_budget. Once cumulative reasoning in a turn crosses this, thinking is force-disabled
+    // for the rest of the turn so the model must commit to output. 0 = no cap. Only the planner uses it.
+    [JsonPropertyName("reasoningCharCap")] public int  ReasoningCharCap { get; init; }
     [JsonPropertyName("slot")]          public int?    Slot          { get; set; }
     [JsonPropertyName("temperature")]   public double? Temperature   { get; init; }
     [JsonPropertyName("topP")]          public double? TopP          { get; init; }
@@ -343,6 +347,9 @@ public abstract class Agent
         Stopwatch       sw               = Stopwatch.StartNew();
         bool            wasThinking      = false;
         int             reasoningChars   = 0;
+        // Hard reasoning cap: once cumulative reasoning crosses ReasoningCharCap, latch thinking off for the
+        // rest of the turn (the body builder reads thinkingCapReached) so the model must produce output.
+        bool            thinkingCapReached = false;
         int             completionTokens = 0;
         int             promptTokens     = 0;
         bool            hadImages        = msgAtts.Any(a => a.IsImage) || threadAtts.Any(a => a.IsImage);
@@ -435,7 +442,7 @@ public abstract class Agent
             if (PresencePenalty.HasValue)  body["presence_penalty"]  = PresencePenalty.Value;
             if (FrequencyPenalty.HasValue) body["frequency_penalty"] = FrequencyPenalty.Value;
 
-            if (!Think)
+            if (!Think || thinkingCapReached)
             {
                 body["thinking"]             = false;
                 body["enable_thinking"]      = false;
@@ -522,6 +529,7 @@ public abstract class Agent
             HashSet<int> precheckedCalls = new();
             int? runawayCall = null;   // a native call whose args ran away (model looping / leaking text-format markers)
             bool contentRunaway = false; // text content degenerated into a repeated-character spiral (e.g. backslashes)
+            bool reasoningCapBreak = false; // this request's reasoning crossed ReasoningCharCap — stop the stream
 
             DateTime lastProgress = DateTime.UtcNow;
             string? line;
@@ -598,7 +606,18 @@ public abstract class Agent
                             wasThinking = true;
                         }
                         if (!string.IsNullOrEmpty(thinkDelta)) reasoningChars += thinkDelta.Length;
+                        // Hard cap: this model ignores thinking_budget, so enforce it ourselves. Once cumulative
+                        // reasoning crosses the cap, stop the stream and latch thinking off; the empty-turn nudge
+                        // below then re-prompts and the next request (thinking disabled) must produce the plan.
+                        if (ReasoningCharCap > 0 && !thinkingCapReached && reasoningChars >= ReasoningCharCap)
+                        {
+                            thinkingCapReached = true;
+                            reasoningCapBreak  = true;
+                            Shared.Logger.LogWarning("[{Agent}] ({Thread}) reasoning cap hit ({RC} >= {Cap} chars) — forcing thinking off for the rest of the turn.",
+                                Name, thread.Key, reasoningChars, ReasoningCharCap);
+                        }
                     }
+                    if (reasoningCapBreak) break;
 
                     if (delta.TryGetProperty("tool_calls", out JsonElement toolCallsEl))
                     {

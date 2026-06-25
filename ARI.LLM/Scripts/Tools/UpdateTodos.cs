@@ -8,10 +8,10 @@ namespace ARI.LLM;
 /// to the model as a persistent context block and to the user as a checklist card.</summary>
 internal sealed class UpdateTodos : Tool
 {
-    private readonly Code   code;
+    private readonly Coder  code;
     private readonly Thread thread;
 
-    internal UpdateTodos(Code code, Thread thread) { this.code = code; this.thread = thread; }
+    internal UpdateTodos(Coder code, Thread thread) { this.code = code; this.thread = thread; }
 
     internal override string Name => "update_todos";
 
