@@ -139,7 +139,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
             return NotFound();
 
         List<ThreadItem> history = thread.History
-            .Where(i => i is not AriResponse { State: AriResponseState.Cancelled })
+            .Where(i => !i.ChatHidden && i is not AriResponse { State: AriResponseState.Cancelled })
             .ToList();
 
         return Ok(new
@@ -154,7 +154,10 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     }
 
     /// <summary>
-    /// Returns thread history with DebugRequestJson and DebugResponseText exposed on AriResponse items.
+    /// Returns thread history with DebugRequestJson, DebugResponseText and Reasoning exposed on AriResponse
+    /// items, plus any spawned sub-threads (a CodeArchitect's plan + per-task Coder threads) nested under
+    /// <c>children</c> so the otherwise-invisible orchestration is fully inspectable. Shape:
+    /// <c>{ key, label, isInternal, pipeline, history: [...], children: [ {same shape}, ... ] }</c>.
     /// Used exclusively by the control-panel Debug Threads pane — not for normal clients.
     /// </summary>
     [HttpGet("{threadKey}/debug")]
@@ -165,34 +168,47 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         if (!Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? thread))
             return NotFound();
 
-        List<object> items = thread.History
-            .Select<ThreadItem, object>(item =>
-                item is AriResponse r
-                    ? new
-                    {
-                        type                      = "ariResponse",
-                        timestamp                 = r.Timestamp,
-                        state                     = r.State.ToString().ToLowerInvariant(),
-                        content                   = r.ContentText,
-                        isStreaming               = r.IsStreamingJson,
-                        thinkingSeconds           = r.ThinkingSeconds,
-                        recallNotes               = r.RecallNotes,
-                        contextSummary            = r.ContextSummary,
-                        completionTokens          = r.CompletionTokens,
-                        outputTokenLimit          = r.OutputTokenLimit,
-                        promptTokens              = r.PromptTokens,
-                        contextTokenLimit         = r.ContextTokenLimit,
-                        estimatedTextPromptTokens = r.EstimatedTextPromptTokens,
-                        hadImageAttachments       = r.HadImageAttachments,
-                        imageTokenLimit           = r.ImageTokenLimit,
-                        debugRequestJson          = r.DebugRequestJson,
-                        debugResponseText         = r.DebugResponseText,
-                    }
-                    : (object)item)
-            .ToList();
-
-        return Ok(items);
+        return Ok(SerializeDebugThread(thread));
     }
+
+    /// <summary>Recursively serialises a thread for the Debug pane: its history (with reasoning + raw
+    /// request/response) and every sub-thread it spawned. Debug-only.</summary>
+    private static object SerializeDebugThread(ARI.LLM.Thread thread) => new
+    {
+        key        = thread.Key,
+        label      = thread.Label,
+        isInternal = thread.Internal,
+        pipeline   = thread.Pipeline.ToString().ToLowerInvariant(),
+        state      = thread.State.ToString().ToLowerInvariant(),
+        history    = thread.History.Select(DebugItem).ToList(),
+        children   = thread.Children.Select(SerializeDebugThread).ToList(),
+    };
+
+    private static object DebugItem(ThreadItem item)
+        => item is AriResponse r
+            ? new
+            {
+                type                      = "ariResponse",
+                timestamp                 = r.Timestamp,
+                state                     = r.State.ToString().ToLowerInvariant(),
+                content                   = r.ContentText,
+                isStreaming               = r.IsStreamingJson,
+                thinkingSeconds           = r.ThinkingSeconds,
+                recallNotes               = r.RecallNotes,
+                contextSummary            = r.ContextSummary,
+                completionTokens          = r.CompletionTokens,
+                outputTokenLimit          = r.OutputTokenLimit,
+                promptTokens              = r.PromptTokens,
+                contextTokenLimit         = r.ContextTokenLimit,
+                estimatedTextPromptTokens = r.EstimatedTextPromptTokens,
+                hadImageAttachments       = r.HadImageAttachments,
+                imageTokenLimit           = r.ImageTokenLimit,
+                debugRequestJson          = r.DebugRequestJson,
+                debugResponseText         = r.DebugResponseText,
+                reasoning                 = r.Reasoning,
+                trace                     = r.Trace,
+            }
+            : (object)item;
 
     [HttpGet("{threadKey}/history")]
     public IActionResult GetHistory(string threadKey, [FromQuery] bool raw = false)
@@ -204,7 +220,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         List<ThreadItem> items = raw
             ? FindAnyThread(threadKey)?.History ?? new()
             : (FindThread(threadKey)?.History ?? new())
-                .Where(i => i is not AriResponse { State: AriResponseState.Cancelled })
+                .Where(i => !i.ChatHidden && i is not AriResponse { State: AriResponseState.Cancelled })
                 .ToList();
 
         return Ok(items);

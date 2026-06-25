@@ -25,6 +25,142 @@ internal sealed class CodeArchitect : Agent
     private sealed record CodePlan(List<string> Decisions, List<CodeStep> Steps);
     private sealed record CodeStep(string File, string Range, string Change);
 
+    // ── Architect-driven loop: architect runs ON the main thread and approves each task ────────────
+    /// <summary>
+    /// The architect plans on the MAIN thread (its reasoning, tool calls and task list ARE the thread), then
+    /// for each task commissions a Coder on a sub-thread whose work live-streams into the main thread. After
+    /// each task the architect gets a lean SUMMARY (not the Coder's full trace), approves, and proceeds — and
+    /// may inject a fix step. Every architect turn is a real main-thread turn, so the debug viewer shows the
+    /// whole orchestration and we can confirm the approvals don't re-reason.
+    /// </summary>
+    internal async Task<string> RunLoop(
+        Thread parent, string threadKey, string prompt, string username,
+        Coder coder, string root, FileSnapshots snapshots, CancellationTokenSource cts, Func<string, Task>? onDelta)
+    {
+        // 1. PLAN — the architect's first turn, on the main thread: explore + emit the task list.
+        new PreviewFile(root, cts.Token).Register(parent);
+        new ReadFile(root, cts.Token).Register(parent);
+        new ListDirectory(root, cts.Token).Register(parent);
+        new SearchFiles(root, cts.Token).Register(parent);
+        new FindFiles(root, cts.Token).Register(parent);
+
+        string planText = await SendPrompt(parent, prompt, username, ct: cts.Token, userMessagePreadded: true, onDelta: onDelta);
+        CodePlan? plan = ParsePlan(planText);
+        if (plan is null || plan.Steps.Count == 0)
+        {
+            Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) no task list — returning architect reply.", threadKey);
+            return planText;   // architect answered or asked a question; nothing to execute
+        }
+        Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) plan: {N} task(s), {D} decision(s).", threadKey, plan.Steps.Count, plan.Decisions.Count);
+
+        // Replace the plan response the USER sees with a clean, readable plan — strip the machine-readable JSON
+        // and the architect's exploration chips (the full text stays in the debug trace).
+        AriResponse? planResp = parent.History.OfType<AriResponse>().LastOrDefault();
+        if (planResp is not null)
+        {
+            string chatPlan = PlanChatText(planText);
+            if (chatPlan.Length == 0)
+                chatPlan = "I'll make the following changes:\n" +
+                    string.Join("\n", plan.Steps.Select((s, i) => $"{i + 1}. {s.Change}"));
+            planResp.Content = AriContentBlock.Parse(chatPlan);
+            parent.RaiseUpdated();
+        }
+
+        // 2. EXECUTE — one Coder sub-thread per task; feed each summary back for the architect to approve.
+        //    The "[System] Task N…" feedback prompts and the PROCEED/DONE approvals are CHAT-HIDDEN internal
+        //    orchestration (still in the debug view + the architect's context), so the user sees only:
+        //    plan → each task's work → final summary.
+        Queue<CodeStep> tasks = new(plan.Steps);
+        int n = 0;
+        while (tasks.Count > 0)
+        {
+            cts.Token.ThrowIfCancellationRequested();
+            CodeStep task = tasks.Dequeue();
+            n++;
+
+            string summary = await RunTask(parent, threadKey, n, task, plan, username, coder, root, snapshots, cts, onDelta);
+
+            Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) task {N} done → architect approval (hidden).", threadKey, n);
+            string approval = await SendPrompt(parent,
+                $"[System] Task {n} is complete. Result reported by the Coder:\n{summary}\n\n" +
+                "Do NOT re-plan or re-read the codebase — you already planned this. If the result looks correct, " +
+                "reply with exactly: PROCEED. If it needs a fix or an extra step, give that step as a single ```json " +
+                "step block. When the entire original request is finished, reply with exactly: DONE.",
+                username, ct: cts.Token, userMessagePreadded: false, onDelta: null, chatHidden: true);
+
+            if (System.Text.RegularExpressions.Regex.IsMatch(approval, @"\bDONE\b", RegexOptions.IgnoreCase)) break;
+            CodePlan? extra = ParsePlan(approval);   // architect may inject a fix / extra task
+            if (extra is not null)
+                foreach (CodeStep s in extra.Steps) tasks.Enqueue(s);
+        }
+
+        // 3. SUMMARISE — a final user-facing message (shown). The instruction is chat-hidden; the reply is shown.
+        const string sumInstruction = "[System] All tasks are complete. Write a brief, friendly summary for the " +
+            "user of what you changed across the codebase (a sentence or a short numbered list). Plain English " +
+            "only — no JSON, no tool calls.";
+        parent.History.Add(new UserMessage { Username = username, Content = sumInstruction, Timestamp = DateTime.Now, ChatHidden = true });
+        string finalSummary = await SendPrompt(parent, sumInstruction, username, ct: cts.Token,
+            userMessagePreadded: true, onDelta: onDelta, chatHidden: false);
+        return finalSummary;
+    }
+
+    /// <summary>The readable plan the user sees in chat — the architect's prose with the machine-readable JSON
+    /// task list and the exploration tool-chips removed (those remain in the debug trace).</summary>
+    private static string PlanChatText(string planText)
+    {
+        string s = StripPlanJson(planText);
+        s = Regex.Replace(s, "<div class=\"tool-use\">[\\s\\S]*?</div>", "");
+        s = Regex.Replace(s, @"<!--ari-[\s\S]*?-->", "");
+        return s.Trim();
+    }
+
+    /// <summary>Runs one task on a Coder sub-thread, mirroring its live output into a UI-only main-thread
+    /// response (the user watches it work), and returns a lean summary for the architect's context.</summary>
+    private async Task<string> RunTask(
+        Thread parent, string threadKey, int n, CodeStep task, CodePlan plan, string username,
+        Coder coder, string root, FileSnapshots snapshots, CancellationTokenSource cts, Func<string, Task>? onDelta)
+    {
+        // UI-only mirror on the MAIN thread: shows the Coder's work live but never enters the architect's context.
+        AriResponse mirror = new() { Timestamp = DateTime.Now, State = AriResponseState.Streaming, UiOnly = true };
+        parent.History.Add(mirror);
+        parent.streamingResponse = mirror;
+        parent.State = ThreadState.Streaming;
+        parent.RaiseUpdated();
+
+        Thread child = new(ThreadPipeline.Code, $"{threadKey}#task{n}:{Guid.NewGuid():N}")
+            { Internal = true, Parent = parent, Label = $"Task {n}: {task.Change}" };
+        parent.AddChild(child);
+        RegisterCoderTools(child, root, snapshots, cts.Token);
+
+        string seed = ReadNumberedView(root, task.File, new List<CodeStep> { task });
+        if (seed.Length > 0) child.PreReadPaths.Add(Path.GetFileName(task.File));
+
+        async Task Push(string live)
+        {
+            mirror.StreamText = live;
+            parent.RaiseStreaming(live);
+            if (onDelta is not null) await onDelta(live);
+        }
+
+        await coder.SendPrompt(child, BuildFilePrompt(plan, task.File, new List<CodeStep> { task }, seed),
+            username, ct: cts.Token, userMessagePreadded: false, onDelta: async t => await Push(t));
+
+        AriResponse? coderResp = child.History.OfType<AriResponse>().LastOrDefault();
+        string childContent = coderResp?.ContentText?.Trim() ?? "";
+
+        mirror.Content           = AriContentBlock.Parse(childContent);
+        mirror.StreamText        = null;
+        mirror.State             = AriResponseState.Complete;
+        parent.streamingResponse = null;
+        parent.State             = ThreadState.Idle;
+        parent.RaiseUpdated();
+
+        // Lean summary for the architect = the Coder's own closing prose (its trace stays on the sub-thread).
+        string prose = coderResp is null ? "" :
+            string.Concat(coderResp.Content.OfType<TextBlock>().Select(b => b.Text)).Trim();
+        return prose.Length > 0 ? prose : $"Edited {task.File} (task {n}).";
+    }
+
     /// <summary>
     /// Plan→execute orchestration. Streams a single, JSON-free parent response: the architect's tool
     /// chips, then each Coder step's chips + result, inline — indistinguishable from a normal thread.
@@ -61,7 +197,7 @@ internal sealed class CodeArchitect : Agent
         {
             // 1. PLAN — architect explores on an internal sub-thread. Only its tool chips reach the parent
             //    stream (prose/JSON filtered out), so no JSON ever appears, even while streaming.
-            Thread planThread = new(ThreadPipeline.Code, $"{threadKey}#plan:{Guid.NewGuid():N}") { Internal = true, Parent = parent };
+            Thread planThread = new(ThreadPipeline.Code, $"{threadKey}#plan:{Guid.NewGuid():N}") { Internal = true, Parent = parent, Label = "Planning (architect)" };
             parent.AddChild(planThread);
             new PreviewFile(root, cts.Token).Register(planThread);
             new ReadFile(root, cts.Token).Register(planThread);

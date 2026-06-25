@@ -46,11 +46,11 @@ internal sealed class CodePipeline : Pipeline
         string        resolvedRoot = Path.GetFullPath(localPath);
         FileSnapshots snapshots    = new();
 
-        // Architect path: the CodeArchitect explores + plans on an internal sub-thread, then commissions
-        // a Coder per atomic step. It manages the parent's single visible response itself (tool registration
-        // happens on the sub-threads), so the whole flow renders as one continuous, JSON-free thread.
+        // Architect path: the CodeArchitect runs ON the main thread — it plans, then commissions a Coder
+        // sub-thread per task whose work live-streams back, and approves each task's summary before proceeding.
+        // (The older Orchestrate, which ran the architect on a hidden sub-thread, is kept as a fallback.)
         if (architect is not null)
-            return architect.Orchestrate(thread, threadKey, effectivePrompt, username, code, resolvedRoot, snapshots, cts, onDelta);
+            return architect.RunLoop(thread, threadKey, effectivePrompt, username, code, resolvedRoot, snapshots, cts, onDelta);
 
         // Fallback (no CodeArchitect configured): degraded solo Coder with the full edit toolset.
         Shared.Logger.LogWarning("[Code] ({Thread}) CodeArchitect not configured — running solo Coder.", threadKey);

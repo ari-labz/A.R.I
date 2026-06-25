@@ -119,7 +119,7 @@ public class Thread
     private readonly List<Attachment> pendingMessageAtts = new();
 
     internal string? PlatformContext { get; init; }
-    internal string  Key             => threadKey;
+    public   string  Key             => threadKey;
 
     internal event Action? Updated;
     internal event Action? BufferFull;

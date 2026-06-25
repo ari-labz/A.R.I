@@ -118,12 +118,13 @@ public abstract class Agent
         CancellationToken   ct                     = default,
         bool                userMessagePreadded    = false,
         Func<string, Task>? onDelta                = null,
-        int                 thinkingBudgetOverride = 0)
+        int                 thinkingBudgetOverride = 0,
+        bool                chatHidden             = false)
     {
         await thread.sendLock.WaitAsync(ct);
         try
         {
-            return await Send(thread, prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded, onDelta, thinkingBudgetOverride);
+            return await Send(thread, prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded, onDelta, thinkingBudgetOverride, chatHidden);
         }
         catch (OperationCanceledException)
         {
@@ -174,7 +175,8 @@ public abstract class Agent
         CancellationToken   ct,
         bool                userMessagePreadded,
         Func<string, Task>? onDelta               = null,
-        int                 thinkingBudgetOverride = 0)
+        int                 thinkingBudgetOverride = 0,
+        bool                chatHidden             = false)
     {
         thread.LastMessageAt = DateTime.UtcNow;
 
@@ -214,7 +216,8 @@ public abstract class Agent
                 Username    = username,
                 Content     = prompt,
                 Timestamp   = DateTime.Now,
-                Attachments = msgAtts.Count > 0 ? msgAtts.ToList() : null
+                Attachments = msgAtts.Count > 0 ? msgAtts.ToList() : null,
+                ChatHidden  = chatHidden
             });
             thread.RaiseUpdated();
         }
@@ -347,6 +350,8 @@ public abstract class Agent
         Stopwatch       sw               = Stopwatch.StartNew();
         bool            wasThinking      = false;
         int             reasoningChars   = 0;
+        // Full reasoning/chain-of-thought text for this turn (debug viewer only — never re-sent to the LLM).
+        StringBuilder   reasoningBuilder = new();
         // Hard reasoning cap: once cumulative reasoning crosses ReasoningCharCap, latch thinking off for the
         // rest of the turn (the body builder reads thinkingCapReached) so the model must produce output.
         bool            thinkingCapReached = false;
@@ -371,7 +376,10 @@ public abstract class Agent
             thread.liveCallInfo = new LiveCallInfo(Name, thread.Key, estimatedTextTokens, maxTokens, MaxContextTokens, hadImages: hadImages);
         }
 
-        AriResponse ariResponse = new() { Timestamp = DateTime.Now };
+        AriResponse ariResponse = new() { Timestamp = DateTime.Now, ChatHidden = chatHidden };
+        // Live trace for the deep-inspection panel — assigned now so the debug viewer sees it grow mid-stream.
+        List<TraceStep> trace = new() { new TraceStep { Kind = "prompt", Text = prompt } };
+        ariResponse.Trace = trace;
         thread.History.Add(ariResponse);
         thread.RaiseUpdated();
         thread.streamingResponse = ariResponse;
@@ -379,12 +387,19 @@ public abstract class Agent
         DateTime lastStreamNotify = DateTime.MinValue;
         Func<string, Task>? userDelta = onDelta;
         onDelta = async text => {
-            thread.streamedText    = text;
             ariResponse.StreamText = text;
-            DateTime now = DateTime.UtcNow;
-            if ((now - lastStreamNotify).TotalMilliseconds >= 150) {
-                lastStreamNotify = now;
-                thread.RaiseStreaming(text);
+            // ChatHidden turns are internal orchestration (the architect's task-approvals): they must NOT push
+            // live text to the chat — that broadcast (LLMModule wires thread.Streaming → the "streaming" SSE)
+            // is what made the hidden approval turn overwrite the user's view. The debug view re-polls /debug
+            // and still sees it; the response itself still builds via ariResponse.StreamText above.
+            if (!chatHidden)
+            {
+                thread.streamedText = text;
+                DateTime now = DateTime.UtcNow;
+                if ((now - lastStreamNotify).TotalMilliseconds >= 150) {
+                    lastStreamNotify = now;
+                    thread.RaiseStreaming(text);
+                }
             }
             if (userDelta is not null) await userDelta(text);
         };
@@ -530,6 +545,7 @@ public abstract class Agent
             int? runawayCall = null;   // a native call whose args ran away (model looping / leaking text-format markers)
             bool contentRunaway = false; // text content degenerated into a repeated-character spiral (e.g. backslashes)
             bool reasoningCapBreak = false; // this request's reasoning crossed ReasoningCharCap — stop the stream
+            int  reasoningStartLen = reasoningBuilder.Length; // for slicing THIS request's reasoning into the trace
 
             DateTime lastProgress = DateTime.UtcNow;
             string? line;
@@ -605,7 +621,7 @@ public abstract class Agent
                                 Shared.Logger.LogInformation("[{Agent}] ({Thread}) reasoning engaged (thinking on).", Name, thread.Key);
                             wasThinking = true;
                         }
-                        if (!string.IsNullOrEmpty(thinkDelta)) reasoningChars += thinkDelta.Length;
+                        if (!string.IsNullOrEmpty(thinkDelta)) { reasoningChars += thinkDelta.Length; reasoningBuilder.Append(thinkDelta); }
                         // Hard cap: this model ignores thinking_budget, so enforce it ourselves. Once cumulative
                         // reasoning crosses the cap, stop the stream and latch thinking off; the empty-turn nudge
                         // below then re-prompts and the next request (thinking disabled) must produce the plan.
@@ -741,6 +757,12 @@ public abstract class Agent
                     }
                 }
             }
+
+            // Deep-inspection trace: record THIS request's reasoning (the chunk added since the request began)
+            // as its own step, so the panel can show a "thinking" cloud before each tool-call batch.
+            if (reasoningBuilder.Length > reasoningStartLen)
+                trace.Add(new TraceStep { Kind = "reasoning",
+                    Text = reasoningBuilder.ToString(reasoningStartLen, reasoningBuilder.Length - reasoningStartLen) });
 
             if (!QuietLogging)
             {
@@ -945,6 +967,8 @@ public abstract class Agent
                     string argsJson = call.Args.ToString();
                     string result;
 
+                    trace.Add(new TraceStep { Kind = "tool_call", Name = call.Name, Args = argsJson });
+
                     // Code-specific pre-execute guards (dedup / nudges / build-before-test / command cache).
                     // Returns a short-circuit result, or null to run the tool. See Code.ToolLoop.cs.
                     string? guard = PreToolGuard(thread, toolTurn, call.Name, call.Id, argsJson);
@@ -1003,6 +1027,7 @@ public abstract class Agent
                     }
 
                     toolResults.Add(result);
+                    trace.Add(new TraceStep { Kind = "tool_result", Name = call.Name, Text = result });
                     // Progress = a tool returned real content or mutated a file. Guard nags start with "[System:"
                     // and errors with "[Error:"; a batch of only those is "no progress" (feeds the loop-breaker).
                     if (!result.StartsWith("[System:", StringComparison.OrdinalIgnoreCase) && !ToolCallParser.IsError(result))
@@ -1118,6 +1143,11 @@ public abstract class Agent
         if (string.IsNullOrWhiteSpace(responseText))
             throw new LlmRequestFailedException("LLM response was empty.");
 
+        // Closing prose for the trace — strip the UI tool-card markup so only the model's own words remain.
+        string traceText = System.Text.RegularExpressions.Regex.Replace(responseText, @"<!--ari-[\s\S]*?-->", "");
+        traceText = System.Text.RegularExpressions.Regex.Replace(traceText, "<div class=\"tool-use\">[\\s\\S]*?</div>", "").Trim();
+        if (traceText.Length > 0) trace.Add(new TraceStep { Kind = "text", Text = traceText });
+
         double elapsed   = sw.Elapsed.TotalSeconds;
         double tokPerSec = completionTokens > 0 ? completionTokens / elapsed : 0;
 
@@ -1143,6 +1173,7 @@ public abstract class Agent
 
         ariResponse.Content                   = AriContentBlock.Parse(responseText);
         ariResponse.DebugResponseText         = responseText;
+        ariResponse.Reasoning                 = reasoningBuilder.Length > 0 ? reasoningBuilder.ToString() : null;
         ariResponse.ThinkingSeconds           = elapsed;
         ariResponse.RecallNotes               = combinedNotes;
         ariResponse.ContextSummary            = contextSummary;
