@@ -1,15 +1,11 @@
 ## ── ARI custom ignores ──────────────────────────────────────────────
 ## External vendored repos — subdirectory gitignores handle per-project exclusions.
 External/*/.git
-## Code-agent eval run artifacts (diffs, logs, thread history) — regenerated per run.
-eval/results/
+## Eval/research workspace — entirely local (harness scripts, prompts, results, scores). Not shipped.
+eval/
 ## Markdown files — only the root README is tracked.
 *.md
 !README.md
-## Dialogue eval scores + eval/research harness scripts (NOT app code — the build/dev .sh under ARI.* stay tracked).
-eval/dialogue/scores/
-eval/*.sh
-eval/dialogue/*.sh
 ## Generated runtime logs — the ARI/Logs and ARI/chat_history dirs keep themselves via their own inner .gitignore.
 *.log
 
