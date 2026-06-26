@@ -78,6 +78,11 @@ internal class Memory : Agent
             if (!hasSignal)
             {
                 Shared.Logger.LogInformation("[Memory] skipped");
+                RunLogger.Write("Memory", "skipped", new[] { ("Recall thread", memThread) }, new[]
+                {
+                    $"Incoming prompt: {RunLogger.Trunc(incomingPrompt)}",
+                    "Outcome: skipped — short message with no question or memory/personal signal",
+                });
                 return string.Empty;
             }
         }
@@ -149,6 +154,14 @@ internal class Memory : Agent
         if (ranked.Count == 0)
         {
             Shared.Logger.LogInformation("[Memory] complete 0.0s, 0 tokens, 0.0 t/s — no memories recalled");
+            RunLogger.Write("Memory", "no-candidates", new[] { ("Recall thread", memThread) }, new[]
+            {
+                $"Incoming prompt: {RunLogger.Trunc(incomingPrompt)}",
+                $"Context summary: {RunLogger.Trunc(contextSummary)}",
+                $"Search tokens: {string.Join(", ", tokenList)}",
+                $"Seeds: {seeds.Count}",
+                "Outcome: no candidate notes found — nothing shown to the model",
+            });
             return string.Empty;
         }
 
@@ -252,6 +265,15 @@ internal class Memory : Agent
         {
             Shared.Logger.LogInformation("[Memory] complete {Seconds}s, {Tokens} tokens, {TokPerSec} t/s — no memories recalled",
                 totalTimer.Elapsed.TotalSeconds.ToString("F1"), totalTokens, totalTokPerSec.ToString("F1"));
+            RunLogger.Write("Memory", "no-recall", new[] { ("Recall thread", memThread) }, new[]
+            {
+                $"Incoming prompt: {RunLogger.Trunc(incomingPrompt)}",
+                $"Context summary: {RunLogger.Trunc(contextSummary)}",
+                $"Search tokens: {string.Join(", ", tokenList)}",
+                $"Seeds: {seeds.Count} · ranked candidates: {ranked.Count} ({directFetch.Count} direct, {indirect.Count} indirect)",
+                $"Total: {totalTimer.Elapsed.TotalSeconds:F1}s, {totalTokens} tokens, {totalTokPerSec:F1} t/s",
+                "Outcome: model declined to fetch any candidate — no memories recalled",
+            });
             return string.Empty;
         }
 
@@ -269,6 +291,15 @@ internal class Memory : Agent
 
         Shared.Logger.LogInformation("[Memory] complete {Seconds}s, {Tokens} tokens, {TokPerSec} t/s",
             totalTimer.Elapsed.TotalSeconds.ToString("F1"), totalTokens, totalTokPerSec.ToString("F1"));
+        RunLogger.Write("Memory", "recalled", new[] { ("Recall thread", memThread) }, new[]
+        {
+            $"Incoming prompt: {RunLogger.Trunc(incomingPrompt)}",
+            $"Context summary: {RunLogger.Trunc(contextSummary)}",
+            $"Search tokens: {string.Join(", ", tokenList)}",
+            $"Seeds: {seeds.Count} · ranked candidates: {ranked.Count} ({directFetch.Count} direct, {indirect.Count} indirect)",
+            $"Total: {totalTimer.Elapsed.TotalSeconds:F1}s, {totalTokens} tokens, {totalTokPerSec:F1} t/s",
+            $"Recalled {noteContents.Count} note(s): {string.Join(", ", noteContents.Keys)}",
+        });
         return result.ToString().TrimEnd();
     }
 

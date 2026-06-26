@@ -107,6 +107,13 @@ internal class Engram : Agent, IDisposable
         if (!IsEnabled) return;
         if (!await engramLock.WaitAsync(0)) return;
         sweepingThreads[threadKey] = 0;
+
+        // --- Run-log capture (ARI/Logs): every sweep records its full thought process for offline analysis. ---
+        Thread?                            engramThread = null;
+        List<(string Title, Thread Thread)> writeThreads = new();
+        List<string>                       runMeta      = new() { $"Trigger: {trigger}", $"Thread: {threadKey}" };
+        string                             outcome      = "incomplete (unexpected exit)";
+
         try
         {
             List<ThreadItem> allItems = threads.TryGetValue(threadKey, out Thread? dialogueThread) ? dialogueThread.History : new List<ThreadItem>();
@@ -122,7 +129,12 @@ internal class Engram : Agent, IDisposable
 
             // --- Phase 1: Classify ---
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] phase 1 — classifying conversation...", threadKey);
-            if (!await Classify(recentItems, trigger)) return;
+            runMeta.Add($"Classified transcript: {RunLogger.Trunc(BuildTranscript(recentItems), 600)}");
+            if (!await Classify(recentItems, trigger))
+            {
+                outcome = "skipped — classified as task-only (or no new messages)";
+                return;
+            }
 
             // --- Phase 2: Fetch ---
             List<string> existingNotes  = await brain.GetNotePaths();
@@ -137,7 +149,7 @@ internal class Engram : Agent, IDisposable
                   }))
                 : "none";
             string transcript  = BuildTranscript(conversationItems);
-            Thread engramThread = new Thread(ThreadPipeline.Dialogue, $"engram:{Guid.NewGuid()}") { Internal = true };
+            engramThread = new Thread(ThreadPipeline.Dialogue, $"engram:{Guid.NewGuid()}") { Internal = true };
 
             if (context is not null)
                 await context.RebuildFromTranscript(threadKey, transcript);
@@ -325,14 +337,18 @@ internal class Engram : Agent, IDisposable
             if (plan.Count == 0)
             {
                 Shared.Logger.LogInformation("[Engram] [{ThreadKey}] plan is empty — nothing to store.", threadKey);
+                outcome = "no changes — plan was empty";
                 return;
             }
 
+            string planSummary = string.Join(", ", plan.Select(p =>
+                string.IsNullOrWhiteSpace(p.NewName)
+                    ? $"{p.Name} ({p.Op})"
+                    : $"{p.Name} → {p.NewName} ({p.Op})"));
+            runMeta.Add($"Plan ({plan.Count}): {RunLogger.Trunc(planSummary, 600)}");
+
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] plan: {Count} change(s) — [{Notes}]",
-                threadKey, plan.Count, string.Join(", ", plan.Select(p =>
-                    string.IsNullOrWhiteSpace(p.NewName)
-                        ? $"{p.Name} ({p.Op})"
-                        : $"{p.Name} → {p.NewName} ({p.Op})")));
+                threadKey, plan.Count, planSummary);
 
             // Snapshot the engram thread's context at this point so each per-note write forks from it.
             IReadOnlyList<ThreadMessage> savedContext = ContextSnapshot(engramThread);
@@ -376,6 +392,7 @@ internal class Engram : Agent, IDisposable
                 // Fork from the saved context snapshot so each write call starts with the same base.
                 Thread writeThread = new Thread(ThreadPipeline.Dialogue, $"adhoc:{Guid.NewGuid()}") { Internal = true };
                 writeThread.Seed(savedContext);
+                writeThreads.Add(($"Note write {i + 1}/{plan.Count}: {item.Name} ({item.Op})", writeThread));
                 string writeRaw = await SendPrompt(writeThread, writePrompt, maxTokensOverride: -1);
 
                 (List<EngramAdd> noteAdds, List<EngramEdit> noteEdits) = ParseEngramOutput(writeRaw);
@@ -427,6 +444,7 @@ internal class Engram : Agent, IDisposable
 
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] phase 4 complete: {Success} saved, {Fail} failed.",
                 threadKey, successCount, failCount);
+            outcome = $"{successCount} saved, {failCount} failed";
 
             if (queueChanges.Count > 0)
                 Shared.Logger.LogInformation("[Engram] [{ThreadKey}] {Count} note change(s): {Changes}",
@@ -436,6 +454,12 @@ internal class Engram : Agent, IDisposable
         }
         finally
         {
+            runMeta.Add($"Outcome: {outcome}");
+            List<(string Title, Thread Thread)> logThreads = new();
+            if (engramThread is not null) logThreads.Add(("Fetch + plan (engram thread)", engramThread));
+            logThreads.AddRange(writeThreads);
+            RunLogger.Write("Engram", threadKey, logThreads, runMeta);
+
             sweepingThreads.TryRemove(threadKey, out _);
             engramLock.Release();
             SweepCompleted?.Invoke(threadKey);

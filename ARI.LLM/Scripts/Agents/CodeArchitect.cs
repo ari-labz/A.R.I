@@ -86,7 +86,7 @@ internal sealed class CodeArchitect : Agent
                 "Do NOT re-plan or re-read the codebase — you already planned this. If the result looks correct, " +
                 "reply with exactly: PROCEED. If it needs a fix or an extra step, give that step as a single ```json " +
                 "step block. When the entire original request is finished, reply with exactly: DONE.",
-                username, ct: cts.Token, userMessagePreadded: false, onDelta: null, chatHidden: true);
+                username, ct: cts.Token, userMessagePreadded: false, onDelta: null, chatHidden: true, thinkOverride: false);
 
             if (System.Text.RegularExpressions.Regex.IsMatch(approval, @"\bDONE\b", RegexOptions.IgnoreCase)) break;
             CodePlan? extra = ParsePlan(approval);   // architect may inject a fix / extra task
@@ -100,7 +100,7 @@ internal sealed class CodeArchitect : Agent
             "only — no JSON, no tool calls.";
         parent.History.Add(new UserMessage { Username = username, Content = sumInstruction, Timestamp = DateTime.Now, ChatHidden = true });
         string finalSummary = await SendPrompt(parent, sumInstruction, username, ct: cts.Token,
-            userMessagePreadded: true, onDelta: onDelta, chatHidden: false);
+            userMessagePreadded: true, onDelta: onDelta, chatHidden: false, thinkOverride: false);
         return finalSummary;
     }
 
