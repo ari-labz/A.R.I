@@ -216,6 +216,8 @@ public class LLMModule : ILLMModule, IDisposable
         thread.Deleted          += () => { threads.TryRemove(threadKey, out _); Broadcast(new AppEvent("threadDeleted", threadKey)); };
         thread.Streaming        += text => Broadcast(new AppEvent("streaming", threadKey, text));
         thread.StreamingFinished += () => Broadcast(new AppEvent("streamingFinished", threadKey));
+        // Persist a plain-text transcript to ARI/chat_history after every completed exchange.
+        thread.ExchangeCompleted += (_, _) => ChatHistoryLogger.Write(thread);
         if (type == ThreadPipeline.Code)
             thread.BecameInactive += () => thread.MarkEngramProcessed();
         if (type == ThreadPipeline.Dialogue && dialogue is not null)

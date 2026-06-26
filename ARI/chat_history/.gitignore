@@ -1,0 +1,4 @@
+# Per-thread chat transcripts are generated at runtime for debugging — not source.
+# Keep the folder in git, ignore everything written into it.
+*
+!.gitignore

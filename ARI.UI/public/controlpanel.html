@@ -675,6 +675,7 @@ html, body {
         <div class="dbg-view">
           <div class="dbg-view-head" id="dbg-view-head" style="display:none;">
             <span class="dbg-view-key" id="dbg-view-key"></span>
+            <button id="dbg-view-download" class="mdl-btn-secondary" title="Download the full debug thread (prompts, reasoning, tool calls, results, sub-threads) as a text file" style="font-size:11px;padding:4px 12px;flex-shrink:0;">⬇ Download</button>
             <button id="dbg-view-refresh" class="mdl-btn-secondary" style="font-size:11px;padding:4px 12px;flex-shrink:0;">↻ Refresh</button>
           </div>
           <div class="dbg-view-body" id="dbg-view-body">
@@ -2704,10 +2705,82 @@ function dbgParseContent(raw) {
     }).join('');
 }
 
+// ── Download the full debug thread as a plain-text file (everything the LLM ever saw + produced) ──
+function dbgIndent(text, ind) {
+    return String(text == null ? '' : text).replace(/\r?\n/g, '\n' + ind);
+}
+function dbgResponseToText(item, ind) {
+    let out = '\n' + ind + '--- ARI RESPONSE (' + (item.state || '') ;
+    const meta = [];
+    if (item.promptTokens)            meta.push('↓' + item.promptTokens + ' prompt');
+    if (item.completionTokens)        meta.push('↑' + item.completionTokens + ' completion');
+    if (item.thinkingSeconds != null) meta.push(Number(item.thinkingSeconds).toFixed(1) + 's');
+    out += (meta.length ? ', ' + meta.join(', ') : '') + ') ---\n';
+    const trace = item.trace || [];
+    if (trace.length) {
+        trace.forEach(s => {
+            if (s.kind === 'prompt') {
+                const full = item.debugRequestJson ? dbgFmtPrompt(item.debugRequestJson) : (s.text || '');
+                out += '\n' + ind + '[PROMPT — full augmented input]\n' + ind + dbgIndent(full, ind) + '\n';
+            } else if (s.kind === 'reasoning') {
+                out += '\n' + ind + '[THINKING — ' + (s.text || '').length + ' chars]\n' + ind + dbgIndent(s.text, ind) + '\n';
+            } else if (s.kind === 'tool_call') {
+                out += '\n' + ind + '[→ TOOL CALL: ' + (s.name || '') + ']\n' + ind + dbgIndent(dbgFmtJson(s.args || ''), ind) + '\n';
+            } else if (s.kind === 'tool_result') {
+                out += '\n' + ind + '[← TOOL RESULT: ' + (s.name || '') + ']\n' + ind + dbgIndent(s.text, ind) + '\n';
+            } else if (s.kind === 'text') {
+                out += '\n' + ind + '[ARI TEXT]\n' + ind + dbgIndent(s.text, ind) + '\n';
+            }
+        });
+    } else if (item.debugResponseText) {
+        out += '\n' + ind + '[RAW RESPONSE]\n' + ind + dbgIndent(item.debugResponseText, ind) + '\n';
+    } else if (item.content) {
+        out += '\n' + ind + '[CONTENT]\n' + ind + dbgIndent(item.content, ind) + '\n';
+    }
+    return out;
+}
+function dbgThreadToText(thread, depth) {
+    const ind = '  '.repeat(depth);
+    let out = '\n' + ind + '='.repeat(70) + '\n';
+    out += ind + (depth === 0 ? 'MAIN THREAD' : 'SUB-THREAD') + ': ' + (thread.label || '(no label)')
+         + '  [' + (thread.key || '') + ']  state=' + (thread.state || '') + '\n';
+    out += ind + '='.repeat(70) + '\n';
+    (thread.history || []).forEach(item => {
+        if (item.type === 'ariResponse') {
+            out += dbgResponseToText(item, ind);
+        } else if (item.type === 'userMessage') {
+            out += '\n' + ind + '[USER MESSAGE' + (item.chatHidden ? ' (chat-hidden)' : '') + ']\n' + ind + dbgIndent(item.content, ind) + '\n';
+        } else {
+            out += '\n' + ind + '[' + (item.type || 'item') + '] ' + JSON.stringify(item).slice(0, 300) + '\n';
+        }
+    });
+    (thread.children || []).forEach(c => { out += dbgThreadToText(c, depth + 1); });
+    return out;
+}
+async function dbgDownloadThread() {
+    if (!dbgSelectedThread) return;
+    try {
+        const r = await fetch('/threads/' + encodeURIComponent(dbgSelectedThread) + '/debug');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const thread = await r.json();
+        const text = 'DEBUG THREAD EXPORT\nthread: ' + dbgSelectedThread + '\ngenerated: ' + new Date().toISOString()
+                   + '\n' + dbgThreadToText(thread, 0);
+        const blob = new Blob([text], { type: 'text/plain' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'debug-thread-' + dbgSelectedThread.slice(0, 20) + '.txt';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    } catch (e) {
+        alert('Download failed: ' + e.message);
+    }
+}
+
 document.getElementById('dbg-refresh-btn').addEventListener('click', loadDebugThreads);
 document.getElementById('dbg-view-refresh').addEventListener('click', () => {
     if (dbgSelectedThread) dbgLoadThread(dbgSelectedThread);
 });
+document.getElementById('dbg-view-download').addEventListener('click', dbgDownloadThread);
 
 </script>
 </body>

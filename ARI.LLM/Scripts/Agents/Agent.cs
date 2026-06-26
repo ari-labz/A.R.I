@@ -119,12 +119,13 @@ public abstract class Agent
         bool                userMessagePreadded    = false,
         Func<string, Task>? onDelta                = null,
         int                 thinkingBudgetOverride = 0,
-        bool                chatHidden             = false)
+        bool                chatHidden             = false,
+        bool?               thinkOverride          = null)
     {
         await thread.sendLock.WaitAsync(ct);
         try
         {
-            return await Send(thread, prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded, onDelta, thinkingBudgetOverride, chatHidden);
+            return await Send(thread, prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded, onDelta, thinkingBudgetOverride, chatHidden, thinkOverride);
         }
         catch (OperationCanceledException)
         {
@@ -176,8 +177,12 @@ public abstract class Agent
         bool                userMessagePreadded,
         Func<string, Task>? onDelta               = null,
         int                 thinkingBudgetOverride = 0,
-        bool                chatHidden             = false)
+        bool                chatHidden             = false,
+        bool?               thinkOverride          = null)
     {
+        // Per-request thinking toggle: a caller can force think on/off for THIS turn (e.g. the architect
+        // thinks while planning but not on approval/summary turns); null = use the agent's configured Think.
+        bool effectiveThink = thinkOverride ?? Think;
         thread.LastMessageAt = DateTime.UtcNow;
 
         thread.inactivityTimer?.Dispose();
@@ -241,7 +246,7 @@ public abstract class Agent
             ? SystemPrompt
             : $"{SystemPrompt}\n\n{thread.PlatformContext}";
         baseSystem += BuildPersistentContext(thread);
-        string thinkSuffix = Think ? "" : "\n<|think_off|>";
+        string thinkSuffix = effectiveThink ? "" : "\n<|think_off|>";
 
         List<object> messages = new List<object> { new { role = "system", content = baseSystem + thinkSuffix } };
 
@@ -457,7 +462,7 @@ public abstract class Agent
             if (PresencePenalty.HasValue)  body["presence_penalty"]  = PresencePenalty.Value;
             if (FrequencyPenalty.HasValue) body["frequency_penalty"] = FrequencyPenalty.Value;
 
-            if (!Think || thinkingCapReached)
+            if (!effectiveThink || thinkingCapReached)
             {
                 body["thinking"]             = false;
                 body["enable_thinking"]      = false;
