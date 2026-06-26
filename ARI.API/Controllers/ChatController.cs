@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Channels;
 using ARI.API;
+using ARI.Common;
 using ARI.LLM;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -13,11 +14,11 @@ using Microsoft.Net.Http.Headers;
 namespace ARI.API.Controllers;
 
 
-[Route("api/threads")]
+[Route("threads")]
 [ApiController]
-public class ThreadsController(LlmServiceHolder holder, ProjectStore projectStore) : ControllerBase
+public class ThreadsController(ProjectStore projectStore) : ControllerBase
 {
-    private LlmService? Llm => holder.Service;
+    private LLMModule? Llm => (LLMModule?)Modules.Llm;
 
     // Maps threadKey → projectId — backed by a persistent JSON file so it survives rebuilds
     private static ConcurrentDictionary<string, string>? _threadProjects;
@@ -48,26 +49,27 @@ public class ThreadsController(LlmServiceHolder holder, ProjectStore projectStor
     // ── Thread navigation helpers ───────────────────────────────────────────────
 
     /// <summary>Finds an existing user-facing thread (Dialogue or Code) by key.</summary>
-    private ARI.LLM.Thread? GetThread(string threadKey)
-        => Llm?.Agents.GetValueOrDefault("Dialogue")?.GetThread(threadKey)
-        ?? Llm?.Agents.GetValueOrDefault("Code")?.GetThread(threadKey);
-
-    /// <summary>Finds an existing internal agent thread (Engram, Refactor, etc.) by key.</summary>
-    private ARI.LLM.Thread? GetInternalThread(string threadKey)
+    private ARI.LLM.Thread? FindThread(string threadKey)
     {
-        foreach (string name in new[] { "Engram", "Refactor", "Context", "Memory" })
-        {
-            ARI.LLM.Thread? t = Llm?.Agents.GetValueOrDefault(name)?.GetThread(threadKey);
-            if (t is not null) return t;
-        }
-        return null;
+        if (Llm is null) return null;
+        Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? t);
+        return t;
+    }
+
+    /// <summary>Finds any thread (including internal) by key.</summary>
+    private ARI.LLM.Thread? FindAnyThread(string threadKey)
+    {
+        if (Llm is null) return null;
+        Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? t);
+        return t;
     }
 
     /// <summary>Gets or creates the correct thread for the given key, routing to Code or Dialogue.</summary>
     private ARI.LLM.Thread GetOrCreateThread(string threadKey)
     {
-        string agentName = Llm!.Agents.GetValueOrDefault("Code")?.Threads.ContainsKey(threadKey) == true ? "Code" : "Dialogue";
-        return Llm.Agents[agentName].GetOrCreateThread(threadKey);
+        bool isCode = Llm!.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? existing)
+                      && existing.Pipeline == ARI.LLM.ThreadPipeline.Code;
+        return isCode ? Llm.GetOrCreateCodeThread(threadKey) : Llm.GetOrCreateDialogueThread(threadKey);
     }
 
     // ── Thread endpoints ────────────────────────────────────────────────────────
@@ -77,51 +79,30 @@ public class ThreadsController(LlmServiceHolder holder, ProjectStore projectStor
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
 
-        Agent? dialogueAgent = Llm.Agents.GetValueOrDefault("Dialogue");
-        Agent? codeAgent     = Llm.Agents.GetValueOrDefault("Code");
+        var allThreads = Llm.Threads;
 
-        // Collect all user-facing thread keys from both agents, deduped
-        var allKeys = new Dictionary<string, (DateTime lastMessageAt, int count, string state, bool isCode)>();
-
-        if (dialogueAgent is not null)
-        {
-            foreach (var kvp in dialogueAgent.Threads)
-            {
-                bool isCode = codeAgent?.Threads.ContainsKey(kvp.Key) == true;
-                allKeys[kvp.Key] = (kvp.Value.LastMessageAt, kvp.Value.History.Count(m => m is UserMessage or AriResponse),
-                    kvp.Value.State.ToString().ToLowerInvariant(), isCode);
-            }
-        }
-        if (codeAgent is not null)
-        {
-            foreach (var kvp in codeAgent.Threads)
-            {
-                if (!allKeys.ContainsKey(kvp.Key))
-                    allKeys[kvp.Key] = (kvp.Value.LastMessageAt, kvp.Value.History.Count(m => m is UserMessage or AriResponse),
-                        kvp.Value.State.ToString().ToLowerInvariant(), true);
-            }
-        }
-
-        List<ThreadEntry> threads = allKeys
+        List<ThreadEntry> threads = allThreads
+            .Where(kvp => kvp.Value.Pipeline == ARI.LLM.ThreadPipeline.Dialogue || kvp.Value.Pipeline == ARI.LLM.ThreadPipeline.Code)
             .Select(kvp =>
             {
                 string? projectId   = ThreadProjects.TryGetValue(kvp.Key, out string? pid) ? pid : null;
                 string? projectName = projectId is not null ? projectStore.Get(projectId)?.Name : null;
                 return new ThreadEntry(kvp.Key, AgentName: null, IsInternal: false,
-                    LastMessageAt: kvp.Value.lastMessageAt, MessageCount: kvp.Value.count,
-                    State: kvp.Value.state, IsCodeMode: kvp.Value.isCode,
+                    LastMessageAt: kvp.Value.LastMessageAt,
+                    MessageCount: kvp.Value.History.Count(m => m is UserMessage or AriResponse),
+                    State: kvp.Value.State.ToString().ToLowerInvariant(),
+                    IsCodeMode: kvp.Value.Pipeline == ARI.LLM.ThreadPipeline.Code,
                     ProjectName: projectName, ProjectId: projectId);
             })
             .ToList();
 
         if (includeInternal)
         {
-            HashSet<string> userKeys = new(dialogueAgent?.Threads.Keys ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
-            IEnumerable<ThreadEntry> internalThreads = Llm.Agents
-                .Where(kvp => kvp.Key != "Dialogue" && kvp.Key != "Code")
-                .SelectMany(kvp => kvp.Value.Threads
-                    .Where(t => !userKeys.Contains(t.Key))
-                    .Select(t => new ThreadEntry(t.Key, kvp.Key, IsInternal: true, t.Value.LastMessageAt, t.Value.History.Count)));
+            HashSet<string> userKeys = new(threads.Select(t => t.Key), StringComparer.OrdinalIgnoreCase);
+            IEnumerable<ThreadEntry> internalThreads = allThreads
+                .Where(kvp => !userKeys.Contains(kvp.Key))
+                .Select(kvp => new ThreadEntry(kvp.Key, kvp.Value.Pipeline.ToString(), IsInternal: true,
+                    kvp.Value.LastMessageAt, kvp.Value.History.Count));
             threads.AddRange(internalThreads);
         }
 
@@ -138,20 +119,108 @@ public class ThreadsController(LlmServiceHolder holder, ProjectStore projectStor
             ThreadProjects[key] = req.ProjectId;
             PersistThreadProjects();
         }
+        // Pre-register in LLMModule so the newThread event fires immediately and
+        // all sidebar observers see the thread without waiting for the first message.
+        Llm.GetOrCreateDialogueThread(key);
         return Ok(new { key });
     }
+
+    /// <summary>
+    /// Returns thread metadata plus full history. The primary polling endpoint for streaming threads.
+    /// Poll at ~150ms while thread.state == "streaming"; stop on "idle" or "dormant".
+    /// DebugRequestJson / DebugResponseText are excluded here — use GET /threads/{key}/debug for those.
+    /// </summary>
+    [HttpGet("{threadKey}")]
+    public IActionResult GetThread(string threadKey)
+    {
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+
+        if (!Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? thread))
+            return NotFound();
+
+        List<ThreadItem> history = thread.History
+            .Where(i => !i.ChatHidden && i is not AriResponse { State: AriResponseState.Cancelled })
+            .ToList();
+
+        return Ok(new
+        {
+            key           = threadKey,
+            state         = thread.State.ToString().ToLowerInvariant(),
+            pipeline      = thread.Pipeline.ToString().ToLowerInvariant(),
+            isInternal    = thread.Internal,
+            lastMessageAt = thread.LastMessageAt,
+            history,
+        });
+    }
+
+    /// <summary>
+    /// Returns thread history with DebugRequestJson, DebugResponseText and Reasoning exposed on AriResponse
+    /// items, plus any spawned sub-threads (a CodeArchitect's plan + per-task Coder threads) nested under
+    /// <c>children</c> so the otherwise-invisible orchestration is fully inspectable. Shape:
+    /// <c>{ key, label, isInternal, pipeline, history: [...], children: [ {same shape}, ... ] }</c>.
+    /// Used exclusively by the control-panel Debug Threads pane — not for normal clients.
+    /// </summary>
+    [HttpGet("{threadKey}/debug")]
+    public IActionResult GetThreadDebug(string threadKey)
+    {
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+
+        if (!Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? thread))
+            return NotFound();
+
+        return Ok(SerializeDebugThread(thread));
+    }
+
+    /// <summary>Recursively serialises a thread for the Debug pane: its history (with reasoning + raw
+    /// request/response) and every sub-thread it spawned. Debug-only.</summary>
+    private static object SerializeDebugThread(ARI.LLM.Thread thread) => new
+    {
+        key        = thread.Key,
+        label      = thread.Label,
+        isInternal = thread.Internal,
+        pipeline   = thread.Pipeline.ToString().ToLowerInvariant(),
+        state      = thread.State.ToString().ToLowerInvariant(),
+        history    = thread.History.Select(DebugItem).ToList(),
+        children   = thread.Children.Select(SerializeDebugThread).ToList(),
+    };
+
+    private static object DebugItem(ThreadItem item)
+        => item is AriResponse r
+            ? new
+            {
+                type                      = "ariResponse",
+                timestamp                 = r.Timestamp,
+                state                     = r.State.ToString().ToLowerInvariant(),
+                content                   = r.ContentText,
+                isStreaming               = r.IsStreamingJson,
+                thinkingSeconds           = r.ThinkingSeconds,
+                recallNotes               = r.RecallNotes,
+                contextSummary            = r.ContextSummary,
+                completionTokens          = r.CompletionTokens,
+                outputTokenLimit          = r.OutputTokenLimit,
+                promptTokens              = r.PromptTokens,
+                contextTokenLimit         = r.ContextTokenLimit,
+                estimatedTextPromptTokens = r.EstimatedTextPromptTokens,
+                hadImageAttachments       = r.HadImageAttachments,
+                imageTokenLimit           = r.ImageTokenLimit,
+                debugRequestJson          = r.DebugRequestJson,
+                debugResponseText         = r.DebugResponseText,
+                reasoning                 = r.Reasoning,
+                trace                     = r.Trace,
+            }
+            : (object)item;
 
     [HttpGet("{threadKey}/history")]
     public IActionResult GetHistory(string threadKey, [FromQuery] bool raw = false)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
 
-        // Hidden states (a still-streaming response, or one superseded by a newer prompt) are
-        // never shown in the normal thread view; the raw/internal view keeps everything.
+        // Cancelled responses are hidden from normal view; streaming responses are included so
+        // watching clients can render the in-progress reply. Raw view keeps everything.
         List<ThreadItem> items = raw
-            ? GetInternalThread(threadKey)?.History ?? new()
-            : (GetThread(threadKey)?.History ?? new())
-                .Where(i => i is not AriResponse { State: AriResponseState.Streaming or AriResponseState.Cancelled })
+            ? FindAnyThread(threadKey)?.History ?? new()
+            : (FindThread(threadKey)?.History ?? new())
+                .Where(i => !i.ChatHidden && i is not AriResponse { State: AriResponseState.Cancelled })
                 .ToList();
 
         return Ok(items);
@@ -161,7 +230,7 @@ public class ThreadsController(LlmServiceHolder holder, ProjectStore projectStor
     public IActionResult ExportLog(string threadKey)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
-        List<ThreadItem> items = GetThread(threadKey)?.History ?? new();
+        List<ThreadItem> items = FindThread(threadKey)?.History ?? new();
         string log = string.Join("\n\n", items.Select(i => i.ToString()));
         var bytes = System.Text.Encoding.UTF8.GetBytes(log);
         return File(bytes, "text/plain", $"ari-{threadKey}-{DateTime.Now:yyyyMMdd-HHmm}.txt");
@@ -175,9 +244,47 @@ public class ThreadsController(LlmServiceHolder holder, ProjectStore projectStor
     }
 
     /// <summary>
-    /// SSE endpoint — one connection per client per thread.
-    /// Sends an update event whenever the thread's history changes, plus a keep-alive ping every 20s.
-    /// Payload: { "isProcessing": bool }
+    /// Global SSE event stream — one connection per client, covers all threads.
+    /// Event types: newThread | streaming | streamingFinished | threadDeleted | threadUpdated
+    /// </summary>
+    [HttpGet("~/events")]
+    public async Task Events(CancellationToken cancellationToken)
+    {
+        Response.Headers[HeaderNames.ContentType]  = "text/event-stream";
+        Response.Headers[HeaderNames.CacheControl] = "no-cache";
+        Response.Headers["X-Accel-Buffering"]      = "no";
+
+        if (Llm is null)
+        {
+            await Response.WriteAsync("data: {\"error\":\"not ready\"}\n\n", cancellationToken);
+            return;
+        }
+
+        Channel<AppEvent> channel = Channel.CreateUnbounded<AppEvent>(new UnboundedChannelOptions { SingleReader = true });
+        using IDisposable sub = Llm.Subscribe(channel);
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(20));
+
+            AppEvent? evt;
+            try { evt = await channel.Reader.ReadAsync(timeoutCts.Token); }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                await Response.WriteAsync(": ping\n\n", cancellationToken);
+                await Response.Body.FlushAsync(cancellationToken);
+                continue;
+            }
+
+            string payload = JsonSerializer.Serialize(evt);
+            await Response.WriteAsync($"data: {payload}\n\n", cancellationToken);
+            await Response.Body.FlushAsync(cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Per-thread SSE endpoint — kept for debug panel / legacy consumers.
     /// </summary>
     [HttpGet("{threadKey}/watch")]
     public async Task Watch(string threadKey, CancellationToken cancellationToken)
@@ -232,13 +339,13 @@ public class ThreadsController(LlmServiceHolder holder, ProjectStore projectStor
     {
         bool isProcessing  = Llm?.IsThreadProcessing(threadKey)  ?? false;
         bool isRemembering = Llm?.IsEngramSweeping(threadKey)     ?? false;
-        bool isCodeMode    = Llm?.Agents.GetValueOrDefault("Code")?.Threads.ContainsKey(threadKey) == true;
+        bool isCodeMode    = Llm?.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? wt) == true && wt?.Pipeline == ARI.LLM.ThreadPipeline.Code;
         string payload     = JsonSerializer.Serialize(new { isProcessing, isRemembering, isCodeMode });
         await Response.WriteAsync($"data: {payload}\n\n", ct);
         await Response.Body.FlushAsync(ct);
     }
 
-    [HttpPost("~/api/commands")]
+    [HttpPost("~/commands")]
     public async Task<IActionResult> RunCommand([FromBody] CommandRequest req)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
@@ -359,7 +466,7 @@ public class ThreadsController(LlmServiceHolder holder, ProjectStore projectStor
     {
         if (pendingAttachments.TryGetValue(threadKey, out List<Attachment>? list))
             list.RemoveAll(a => a.Name == name);
-        GetThread(threadKey)?.RemoveAttachment(name);
+        FindThread(threadKey)?.RemoveAttachment(name);
         return Ok();
     }
 
@@ -367,7 +474,7 @@ public class ThreadsController(LlmServiceHolder holder, ProjectStore projectStor
     public IActionResult GetAttachments(string threadKey)
     {
         List<Attachment> staged  = pendingAttachments.TryGetValue(threadKey, out List<Attachment>? list) ? list : new();
-        List<Attachment> onThread = GetThread(threadKey)?.GetAttachments().ToList() ?? new();
+        List<Attachment> onThread = FindThread(threadKey)?.GetAttachments().ToList() ?? new();
         IEnumerable<Attachment> all = staged.Concat(onThread.Where(a => staged.All(s => s.Name != a.Name)));
         return Ok(all.Select(a => new { a.Name, a.IsImage, a.MimeType }));
     }
@@ -432,7 +539,7 @@ public class ThreadsController(LlmServiceHolder holder, ProjectStore projectStor
     {
         if (Llm is null) return StatusCode(503);
 
-        List<ThreadItem> items = GetThread(threadKey)?.History ?? new();
+        List<ThreadItem> items = FindThread(threadKey)?.History ?? new();
         foreach (ThreadItem item in items)
         {
             if (item is not UserMessage msg || msg.Attachments is null) continue;
@@ -468,7 +575,7 @@ public class ThreadsController(LlmServiceHolder holder, ProjectStore projectStor
         Attachment att = new() { Name = req.Name, Content = req.Content, IsImage = false, MimeType = "text/plain" };
 
         // If the thread already exists in an agent, add directly so it persists permanently
-        ARI.LLM.Thread? thread = GetThread(threadKey);
+        ARI.LLM.Thread? thread = FindThread(threadKey);
         if (thread is not null)
         {
             thread.AddAttachment(att);
@@ -515,8 +622,7 @@ public class ThreadsController(LlmServiceHolder holder, ProjectStore projectStor
 
         // Safeguard: reject prompts that are clearly too large for the context window.
         // Estimate at 4 chars/token; limit comes from the thread's configured MaxContextTokens (0 = unconfigured).
-        Agent? dialogueAgent = Llm.Agents.GetValueOrDefault("Dialogue");
-        (int _, int contextLimit) = dialogueAgent?.GetContextStats(dialogueAgent.GetThread(threadKey)) ?? (0, 0);
+        (int _, int contextLimit) = Llm.GetContextStats(threadKey);
         int effectiveLimit    = contextLimit > 0 ? contextLimit : 8000;
         int estimatedTokens   = prompt.Length / 4;
         if (estimatedTokens > effectiveLimit)
@@ -549,7 +655,7 @@ public class ThreadsController(LlmServiceHolder holder, ProjectStore projectStor
                 platformContext = ctx.ToString().TrimEnd();
 
                 // Force code pipeline before the classifier runs (first message only)
-                bool isFirstMessage = GetThread(threadKey)?.History.Count is null or 0;
+                bool isFirstMessage = FindThread(threadKey)?.History.Count is null or 0;
                 if (isFirstMessage && project.ForceCodePipeline)
                     Llm.ForceCodeThread(threadKey);
 
@@ -577,31 +683,74 @@ public class ThreadsController(LlmServiceHolder holder, ProjectStore projectStor
             }
         }
 
+        // Heartbeat: while the model processes (prompt-processing a large context, running tools, thinking) no
+        // content deltas are produced, so the SSE connection sits idle. Proxies/tunnels (e.g. Cloudflare's
+        // ~100s idle cap) then cut it and the client shows "[connection error]". An SSE comment line (":")
+        // every 15s keeps the connection warm; the client ignores comment lines. All writes to the response
+        // body are serialised through writeLock so the heartbeat and the content callback never issue
+        // concurrent writes (which would corrupt the stream).
+        using SemaphoreSlim writeLock = new(1, 1);
+        using CancellationTokenSource heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        async Task WriteEventAsync(string payload)
+        {
+            // Use None so a client disconnect doesn't throw — LLM must keep running.
+            await writeLock.WaitAsync(CancellationToken.None);
+            try
+            {
+                if (cancellationToken.IsCancellationRequested) return;
+                await Response.WriteAsync(payload, CancellationToken.None);
+                await Response.Body.FlushAsync(CancellationToken.None);
+            }
+            catch { /* swallow broken pipe — client navigated away */ }
+            finally { writeLock.Release(); }
+        }
+
+        Task heartbeat = Task.Run(async () =>
+        {
+            try
+            {
+                while (!heartbeatCts.Token.IsCancellationRequested)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(15), heartbeatCts.Token);
+                    await WriteEventAsync(": keepalive\n\n");
+                }
+            }
+            catch (OperationCanceledException) { /* normal shutdown */ }
+            catch { /* a broken pipe here is harmless — the main path reports the error */ }
+        });
+
         try
         {
             string username = GetUsername();
+            // Pass CancellationToken.None so HTTP client disconnect does NOT cancel the LLM.
+            // The LLM runs to completion; explicit cancel via DELETE /processing still works
+            // because LLMModule.Cancel() cancels the thread's internal CTS directly.
             await Llm.PromptStreaming(threadKey, prompt, username, platformContext, async accumulated =>
             {
                 string escaped = accumulated.Replace("\n", "\\n").Replace("\r", "");
-                await Response.WriteAsync($"data: {escaped}\n\n", cancellationToken);
-                await Response.Body.FlushAsync(cancellationToken);
-            }, cancellationToken, messageAttachments: msgAtts, threadAttachments: threadAtts);
-            await Response.WriteAsync("data: [DONE]\n\n", cancellationToken);
+                await WriteEventAsync($"data: {escaped}\n\n");
+            }, CancellationToken.None, messageAttachments: msgAtts, threadAttachments: threadAtts,
+               localPath: string.IsNullOrWhiteSpace(body.LocalPath) ? null : body.LocalPath);
+            await WriteEventAsync("data: [DONE]\n\n");
         }
         catch (OperationCanceledException)
         {
-            await Response.WriteAsync("data: [CANCELLED]\n\n", cancellationToken);
+            await WriteEventAsync("data: [CANCELLED]\n\n");
         }
         catch (Exception ex)
         {
-            await Response.WriteAsync($"data: [ERROR] {ex.Message}\n\n", cancellationToken);
+            await WriteEventAsync($"data: [ERROR] {ex.Message}\n\n");
         }
-
-        await Response.Body.FlushAsync(cancellationToken);
+        finally
+        {
+            heartbeatCts.Cancel();
+            try { await heartbeat; } catch { /* ignore */ }
+        }
     }
 }
 
-public record StreamRequest(string Prompt);
+public record StreamRequest(string Prompt, string? LocalPath = null);
 public record CommandRequest(string? ThreadKey, string Input);
 public record NewThreadRequest(string? ProjectId);
 public record InjectContextRequest(string Name, string Content);

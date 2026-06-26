@@ -17,6 +17,13 @@ public abstract class ThreadItem
 {
     public DateTime Timestamp { get; init; } = DateTime.Now;
 
+    /// <summary>Hidden from the normal chat UI but still shown in the Debug Thread view and (per
+    /// <see cref="ContextText"/>) still available to the LLM. Used for internal orchestration messages —
+    /// the architect↔Coder task summaries and the architect's PROCEED/DONE approvals — so the user sees
+    /// a clean narrative (plan → each task's work → final summary) while the debug view shows everything.</summary>
+    [JsonIgnore]
+    public bool ChatHidden { get; set; }
+
     /// <summary>
     /// The text this item contributes to the LLM context window.
     /// Null means this item is UI-only and is never passed to any LLM.

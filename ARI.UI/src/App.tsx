@@ -3,19 +3,21 @@ import Sidebar from "./components/Sidebar"
 import Main from "./components/Main"
 import ProjectsPage from "./components/ProjectsPage"
 import {
-    useThreads, createThread, loadHistory, openWatchStream, cancelProcessing,
-    useTypingHeartbeat,
-    type ThreadItem, type ThreadEntry, type WatchEvent, type Attachment, type Project,
+    useThreads, createThread, loadHistory, fetchThread, pollThreadWhileStreaming,
+    openEventStream, cancelProcessing, useTypingHeartbeat,
+    type ThreadItem, type ThreadEntry, type AppEvent, type Attachment, type Project,
 } from "./hooks/useThreads"
 import { env } from "./env"
 import "./styles/app.css"
 
 export type AppMode = "idle" | "active"
 
-function buildSafetyDiff(oldStr: string, newStr: string): string {
-    const removed = oldStr.split("\n").map(l => `- ${l}`).join("\n")
-    const added   = newStr.split("\n").map(l => `+ ${l}`).join("\n")
-    return `\`\`\`diff\n${removed}\n${added}\n\`\`\``
+function buildSafetyDiff(newStr: string, startLine?: number, endLine?: number): string {
+    const range = startLine != null
+        ? ` (replacing lines ${startLine}${endLine != null && endLine !== startLine ? `–${endLine}` : ""})`
+        : ""
+    const added = newStr.split("\n").map(l => `+ ${l}`).join("\n")
+    return `\`\`\`diff\n# proposed${range}\n${added}\n\`\`\``
 }
 
 export interface PendingAttachment {
@@ -203,17 +205,17 @@ export default function App() {
     const [clientVersion,  setClientVersion]  = useState<string | null>(null)
     const [outdated,       setOutdated]       = useState(false)
 
-    const watchEsRef  = useRef<EventSource | null>(null)
-    const abortRef    = useRef<AbortController | null>(null)
+    const globalEsRef      = useRef<EventSource | null>(null)
+    const abortRef         = useRef<AbortController | null>(null)
     const pendingMsgRef    = useRef<string | null>(null)
     const preSendCountRef  = useRef(0)
-    const watchRenderedRef = useRef(false)
-    const activeThreadRef   = useRef<string | null>(null)
+    const activeThreadRef  = useRef<string | null>(null)
     const streamingRef      = useRef(false)
     const activeProjectRef  = useRef<string | null>(null)
     const treeInjectedRef   = useRef<Set<string>>(new Set())
     const toolSocketRef     = useRef<WebSocket | null>(null)
     const toolSocketKeyRef  = useRef<string | null>(null)   // threadKey the socket is bound to
+    const stopPollRef       = useRef<(() => void) | null>(null)  // stops the active fast-poll loop
 
     // Keep refs in sync
     useEffect(() => { activeThreadRef.current = activeThread }, [activeThread])
@@ -230,24 +232,77 @@ export default function App() {
 
     const loadProjects = useCallback(async () => {
         try {
-            const res = await fetch("/api/projects")
+            const res = await fetch("/projects")
             if (res.ok) setProjects(await res.json())
         } catch { /* ignore */ }
     }, [])
+
+    // ── global event stream ───────────────────────────────
+    function openGlobalStream() {
+        globalEsRef.current?.close()
+        const es = openEventStream(
+            (data: AppEvent) => {
+                switch (data.type) {
+                    case "newThread":
+                        loadThreads()
+                        break
+                    case "threadUpdated":
+                        loadThreads()
+                        // Refresh active thread content when it changes (new message, etc.)
+                        if (data.threadKey === activeThreadRef.current && !streamingRef.current)
+                            loadHistory(data.threadKey).then(hist => setItems(hist)).catch(() => {})
+                        break
+                    case "streaming":
+                        if (data.threadKey === activeThreadRef.current && !streamingRef.current) {
+                            setItems(prev => {
+                                for (let i = prev.length - 1; i >= 0; i--) {
+                                    if (prev[i].type === "ariResponse" && prev[i].isStreaming) {
+                                        const next = [...prev]
+                                        next[i] = { ...prev[i], content: data.text ?? "" }
+                                        return next
+                                    }
+                                }
+                                return prev
+                            })
+                        }
+                        break
+                    case "streamingFinished":
+                        loadThreads()
+                        if (data.threadKey === activeThreadRef.current && !streamingRef.current)
+                            loadHistory(data.threadKey).then(hist => setItems(hist)).catch(() => {})
+                        break
+                    case "threadDeleted":
+                        loadThreads()
+                        if (data.threadKey === activeThreadRef.current) {
+                            setActiveThread(null); setIsRemembering(false)
+                            setMode("idle"); setCodeMode(false); setItems([])
+                        }
+                        break
+                }
+            },
+            () => {
+                globalEsRef.current?.close(); globalEsRef.current = null
+                setTimeout(openGlobalStream, 3000)
+            },
+        )
+        globalEsRef.current = es
+    }
 
     // ── init ─────────────────────────────────────────────
     useEffect(() => {
         async function waitAndInit() {
             while (true) {
-                const res = await fetch("/api/threads").catch(() => null)
+                const res = await fetch("/threads").catch(() => null)
                 if (res && res.status !== 503) break
                 await new Promise(r => setTimeout(r, 2000))
             }
             await Promise.all([loadThreads(), loadProjects()])
+            openGlobalStream()
             window.electronBridge?.markReady()
         }
         waitAndInit()
-        const pollId = setInterval(loadThreads, 5000)
+        // Long fallback poll — events drive updates; this is only a safety net.
+        const pollId = setInterval(loadThreads, 60_000)
 
         async function checkVersion(ver: string) {
             const res = await fetch("/api/info/version").catch(() => null)
@@ -264,7 +319,7 @@ export default function App() {
             return () => clearInterval(versionPollId)
         })
 
-        return () => clearInterval(pollId)
+        return () => { clearInterval(pollId); globalEsRef.current?.close() }
     }, [loadThreads, loadProjects])
 
     // ── toast ─────────────────────────────────────────────
@@ -289,54 +344,12 @@ export default function App() {
     // ── load thread attachments ───────────────────────────
     const refreshThreadAttach = useCallback(async (key: string) => {
         try {
-            const res = await fetch(`/api/threads/${key}/attachments`)
+            const res = await fetch(`/threads/${key}/attachments`)
             if (res.ok) setThreadAttach(await res.json())
             else setThreadAttach([])
         } catch { setThreadAttach([]) }
     }, [])
 
-    // ── watch connection ──────────────────────────────────
-    const openWatch = useCallback((key: string, agName: string | null) => {
-        watchRenderedRef.current = false
-        watchEsRef.current?.close()
-
-        const es = openWatchStream(
-            key,
-            async (data: WatchEvent) => {
-                if (activeThreadRef.current !== key) { es.close(); return }
-                if (data.deleted) {
-                    es.close(); watchEsRef.current = null
-                    setActiveThread(null)
-                    setIsRemembering(false)
-                    setMode("idle")
-                    setCodeMode(false)
-                    setItems([])
-                    await loadThreads()
-                    return
-                }
-                const targetCodeMode = data.isCodeMode ?? false
-                setCodeMode(targetCodeMode)
-                if (!streamingRef.current) {
-                    const hist = await loadHistory(key, false).catch(() => null)
-                    if (hist) {
-                        setItems(hist)
-                        const hasResponse = hist.some(i => i.type === "ariResponse")
-                        if (hasResponse) watchRenderedRef.current = true
-                    }
-                    setIsRemembering(!!(data.isRemembering && !data.isProcessing))
-                }
-            },
-            () => {
-                if (activeThreadRef.current !== key) return
-                es.close(); watchEsRef.current = null
-                setTimeout(() => {
-                    if (activeThreadRef.current === key)
-                        openWatch(key, agName)
-                }, 3000)
-            },
-        )
-        watchEsRef.current = es
-    }, [loadThreads])
 
     // ── open thread ───────────────────────────────────────
     // ── File system bridge (Electron + Code mode + project localPath) ─────────────
@@ -355,7 +368,7 @@ export default function App() {
             if (tree.length > MAX_PATHS) { tree = tree.slice(0, MAX_PATHS); truncated = true }
             const header = `Project: ${project.name}\nRoot: ${localPath}\nFiles (${tree.length}${truncated ? "+" : ""}):\n`
             const content = header + tree.join("\n") + (truncated ? "\n... (truncated)" : "")
-            const res = await fetch(`/api/threads/${threadKey}/inject-context`, {
+            const res = await fetch(`/threads/${threadKey}/inject-context`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ name: "_project_tree.txt", content }),
@@ -468,7 +481,7 @@ export default function App() {
                         if (lim < total) { end = lim; capped = true }
                     }
 
-                    // Number lines from their real position so old_strings and edit_file snippets line up.
+                    // Number lines from their real position so edit_file line ranges and snippets line up.
                     const slice    = all.slice(start - 1, end)
                     const numbered = slice.map((l, i) => `${String(start + i).padStart(6)}: ${l}`).join("\n")
                     const header   = (start === 1 && end === total)
@@ -498,23 +511,24 @@ export default function App() {
                     ws.send(JSON.stringify({ type: "file_content", callId, content: result }))
 
                 } else if (type === "edit_file") {
-                    // edit_file accepts a single old/new pair OR a MultiEdit-style batch via `edits`.
-                    const rawEdits = (params as unknown as { edits?: { old_string?: string; new_string?: string; replace_all?: boolean; start_line?: number; end_line?: number }[] }).edits
+                    // edit_file edits BY LINE NUMBER — a single start_line/end_line/new_string, or a
+                    // MultiEdit-style batch via `edits` (each {start_line, end_line, new_string}).
+                    const rawEdits = (params as unknown as { edits?: { new_string?: string; start_line?: number; end_line?: number }[] }).edits
                     const editsArr = Array.isArray(rawEdits) && rawEdits.length > 0 ? rawEdits : null
-                    const replaceAll = String((params as unknown as { replace_all?: unknown }).replace_all) === "true"
-                        || (params as unknown as { replace_all?: unknown }).replace_all === true
                     if (safetyModeRef.current) {
                         const diff = editsArr
-                            ? editsArr.map((e, i) => `--- edit ${i + 1} ---\n${buildSafetyDiff(e.old_string ?? "", e.new_string ?? "")}`).join("\n\n")
-                            : buildSafetyDiff(params.old_string ?? "", params.new_string ?? "")
+                            ? editsArr.map((e, i) => `--- edit ${i + 1} ---\n${buildSafetyDiff(e.new_string ?? "", e.start_line, e.end_line)}`).join("\n\n")
+                            : buildSafetyDiff(
+                                params.new_string ?? "",
+                                Number((params as unknown as { start_line?: unknown }).start_line) || undefined,
+                                Number((params as unknown as { end_line?: unknown }).end_line) || undefined)
                         console.warn(`[ToolSocket] → file_content (edit_file BLOCKED by safety)  callId=${callId}`)
                         ws.send(JSON.stringify({ type: "file_error", callId, error: `SAFETY MODE — file was NOT modified. Do not call edit_file or write_file again. Respond to the user now: tell them safety mode is on, show the proposed changes as a code block, and say they can disable safety mode (shield icon) to apply them.\n\nProposed diff for ${params.path}:\n\n${diff}` }))
                     } else {
                         const sl = Number((params as unknown as { start_line?: unknown }).start_line)
                         const el = Number((params as unknown as { end_line?: unknown }).end_line)
-                        const res = await window.electronBridge!.editFile(localPath, params.path, params.old_string, params.new_string, {
+                        const res = await window.electronBridge!.editFile(localPath, params.path, params.new_string, {
                             edits: editsArr ?? undefined,
-                            replaceAll,
                             startLine: Number.isFinite(sl) ? sl : undefined,
                             endLine:   Number.isFinite(el) ? el : undefined,
                         })
@@ -668,36 +682,52 @@ export default function App() {
         projectId: string | null = null,
     ) => {
         abortRef.current?.abort(); abortRef.current = null
-        watchEsRef.current?.close(); watchEsRef.current = null
-        watchRenderedRef.current = false
+        stopPollRef.current?.(); stopPollRef.current = null
 
         setActiveThread(key)
         setIsInternal(internal)
         setAgentName(agName)
         setCodeMode(isCode)
-        setIsStreaming(false)
         setIsRemembering(false)
         activeProjectRef.current = projectId
         setSelectedProject(projectId)
 
-        const hist = await loadHistory(key, internal).catch(() => [])
+        // Fetch the thread (state + history) via the new polling endpoint
+        const detail = await fetchThread(key).catch(() => null)
+        const hist = detail?.history ?? await loadHistory(key, internal).catch(() => [])
         setItems(hist)
         activate(hist.length > 0)
 
+        // If the thread is already streaming (e.g. user switches to it mid-generation),
+        // start fast-poll so the view stays live without waiting for the next SSE event.
+        if (detail?.state === "streaming") {
+            setIsStreaming(true)
+            stopPollRef.current = pollThreadWhileStreaming(key, d => {
+                if (activeThreadRef.current !== key) return
+                setItems(d.history)  // server already excludes cancelled items
+                if (d.state !== "streaming") {
+                    setIsStreaming(false)
+                    loadThreads()
+                    stopPollRef.current = null
+                }
+            })
+        } else {
+            setIsStreaming(false)
+        }
+
         if (!internal) {
-            openWatch(key, agName)
             await refreshThreadAttach(key)
             if (projectId) {
                 await injectFileTree(key, projectId)
                 await openToolSocket(key, projectId)
             }
         }
-    }, [openWatch, refreshThreadAttach, injectFileTree, openToolSocket])
+    }, [refreshThreadAttach, injectFileTree, openToolSocket, loadThreads])
 
     // ── new chat ──────────────────────────────────────────
     function newChat() {
         abortRef.current?.abort(); abortRef.current = null
-        watchEsRef.current?.close(); watchEsRef.current = null
+        stopPollRef.current?.(); stopPollRef.current = null
         toolSocketRef.current?.close(); toolSocketRef.current = null; toolSocketKeyRef.current = null
         setActiveThread(null); setIsInternal(false); setAgentName(null)
         setCodeMode(false); setIsStreaming(false); setIsRemembering(false)
@@ -751,7 +781,7 @@ export default function App() {
             key = await createThread(selectedProject)
             setActiveThread(key)
             activeProjectRef.current = selectedProject
-            openWatch(key, null)
+            loadThreads()
             if (selectedProject) {
                 await injectFileTree(key, selectedProject)
             }
@@ -768,7 +798,7 @@ export default function App() {
 
         if (prompt.startsWith("/")) {
             try {
-                const res = await fetch("/api/commands", {
+                const res = await fetch("/commands", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ threadKey: key, input: prompt }),
@@ -807,7 +837,6 @@ export default function App() {
                 },
             ])
             setIsStreaming(true)
-            watchRenderedRef.current = false
         }
 
         const ctrl = new AbortController()
@@ -816,7 +845,7 @@ export default function App() {
 
         async function runStream() {
             try {
-                const resp = await fetch(`/api/threads/${keyForStream}/stream`, {
+                const resp = await fetch(`/threads/${keyForStream}/stream`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ prompt }),
@@ -837,8 +866,9 @@ export default function App() {
                         setIsStreaming(false)
                         loadThreads()
                         // Replace the optimistic streaming item with the finalized server history
-                        loadHistory(keyForStream).then(hist => {
-                            setItems(hist)
+                        fetchThread(keyForStream).then(detail => {
+                            if (!detail) return loadHistory(keyForStream).then(hist => { if (activeThreadRef.current === keyForStream) setItems(hist) }).catch(() => {})
+                            if (activeThreadRef.current === keyForStream) setItems(detail.history)
                         }).catch(() => {})
                         return
                     }
@@ -858,8 +888,6 @@ export default function App() {
                         abortRef.current = null; setIsStreaming(false)
                         return
                     }
-                    if (watchRenderedRef.current) return
-
                     const text = data.replace(/\\n/g, "\n")
 
                     // Update the last ariResponse item in place (it was pre-added with isStreaming: true)
@@ -892,34 +920,34 @@ export default function App() {
         }
 
         runStream()
-    }, [isStreaming, pendingAttach, items.length, mode, openWatch, loadThreads, selectedProject, injectFileTree, openToolSocket])
+    }, [isStreaming, pendingAttach, items.length, mode, loadThreads, selectedProject, injectFileTree, openToolSocket])
 
     // ── upload thread attachment ──────────────────────────
     const uploadThreadFiles = useCallback(async (files: File[]) => {
         let key = activeThreadRef.current
-        if (!key) { key = await createThread(); setActiveThread(key); openWatch(key, null); activate() }
+        if (!key) { key = await createThread(); setActiveThread(key); activate() }
 
         const succeeded: string[] = []
         for (const file of files) {
             const fd = new FormData(); fd.append("file", file)
-            const res = await fetch(`/api/threads/${key}/attachments`, { method: "POST", body: fd })
+            const res = await fetch(`/threads/${key}/attachments`, { method: "POST", body: fd })
             if (res.ok) succeeded.push(file.name)
             else { const err = await res.json().catch(() => null); showToast(err?.error ?? `Could not attach ${file.name}.`) }
         }
         if (succeeded.length) await refreshThreadAttach(key)
         return succeeded
-    }, [openWatch, refreshThreadAttach, showToast])
+    }, [refreshThreadAttach, showToast])
 
     const removeThreadAttachment = useCallback(async (name: string) => {
         if (!activeThreadRef.current) return
-        await fetch(`/api/threads/${activeThreadRef.current}/attachments/${encodeURIComponent(name)}`, { method: "DELETE" })
+        await fetch(`/threads/${activeThreadRef.current}/attachments/${encodeURIComponent(name)}`, { method: "DELETE" })
         await refreshThreadAttach(activeThreadRef.current)
     }, [refreshThreadAttach])
 
     // ── upload message attachment ─────────────────────────
     const uploadMessageFiles = useCallback(async (files: File[]) => {
         let key = activeThreadRef.current
-        if (!key) { key = await createThread(); setActiveThread(key); openWatch(key, null) }
+        if (!key) { key = await createThread(); setActiveThread(key) }
 
         const uploading = files.map(f => ({
             name: f.name, isImage: false, mimeType: null, content: null, uploading: true,
@@ -931,7 +959,7 @@ export default function App() {
 
         for (const file of files) {
             const fd = new FormData(); fd.append("file", file)
-            const res = await fetch(`/api/threads/${key}/message-attachments`, { method: "POST", body: fd })
+            const res = await fetch(`/threads/${key}/message-attachments`, { method: "POST", body: fd })
             if (res.ok) {
                 const data = await res.json()
                 setPendingAttach(prev => [
@@ -944,11 +972,11 @@ export default function App() {
                 showToast(err?.error ?? `Could not attach ${file.name}.`)
             }
         }
-    }, [openWatch, showToast])
+    }, [showToast])
 
     const removeMessageAttachment = useCallback(async (name: string) => {
         if (!activeThreadRef.current) return
-        await fetch(`/api/threads/${activeThreadRef.current}/message-attachments/${encodeURIComponent(name)}`, { method: "DELETE" })
+        await fetch(`/threads/${activeThreadRef.current}/message-attachments/${encodeURIComponent(name)}`, { method: "DELETE" })
         setPendingAttach(prev => prev.filter(a => a.name !== name))
     }, [])
 

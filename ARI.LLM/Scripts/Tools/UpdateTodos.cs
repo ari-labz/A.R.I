@@ -8,9 +8,10 @@ namespace ARI.LLM;
 /// to the model as a persistent context block and to the user as a checklist card.</summary>
 internal sealed class UpdateTodos : Tool
 {
+    private readonly Coder  code;
     private readonly Thread thread;
 
-    internal UpdateTodos(Thread thread) => this.thread = thread;
+    internal UpdateTodos(Coder code, Thread thread) { this.code = code; this.thread = thread; }
 
     internal override string Name => "update_todos";
 
@@ -46,7 +47,12 @@ internal sealed class UpdateTodos : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson) => Task.FromResult(thread.ReplaceTodos(argsJson));
+    internal override Task<string> Execute(string argsJson)
+    {
+        string result = code.ReplaceTodos(thread.Key, argsJson);
+        thread.RaiseUpdated();
+        return Task.FromResult(result);
+    }
 
     // Start marker (instant), then an end marker carrying the list base64-encoded as
     // "status\tcontent" lines — the UI decodes it into a checklist card.

@@ -14,5 +14,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ARI.LLM\ARI.LLM.csproj" />
+    <ProjectReference Include="..\ARI.Common\ARI.Common.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Scripts\" />
   </ItemGroup>
 </Project>

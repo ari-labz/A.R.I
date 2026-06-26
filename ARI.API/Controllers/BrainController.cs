@@ -1,4 +1,6 @@
 using ARI.Brain;
+using ARI.Common;
+using ARI.LLM;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ARI.API.Controllers;
@@ -8,11 +10,11 @@ namespace ARI.API.Controllers;
 /// Restore is additive (recreates missing notes, overwrites present ones to the snapshot) and
 /// never deletes, so it is safe to run against a damaged graph.
 /// </summary>
-[Route("api/cp/brain")]
+[Route("admin/brain")]
 [ApiController]
-public class BrainController(LlmServiceHolder holder) : ControllerBase
+public class BrainController : ControllerBase
 {
-    private ARI.LLM.LlmService? Llm => holder.Service;
+    private LLMModule? Llm => (LLMModule?)Modules.Llm;
 
     /// <summary>Lists available backups, newest first.</summary>
     [HttpGet("backups")]

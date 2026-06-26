@@ -8,7 +8,7 @@ namespace ARI.API;
 public static class ConventionsStore
 {
     private static readonly string FilePath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "coding_conventions.md");
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "Server", "PersistentData", "coding_conventions.md");
     private static readonly object Lock = new();
 
     public static string Get()
