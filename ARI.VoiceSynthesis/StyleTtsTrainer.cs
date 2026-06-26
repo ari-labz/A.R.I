@@ -1,23 +1,26 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 
 namespace ARI.VoiceSynthesis;
 
 public record TrainingProgress(string Step, int Percent, string? Detail = null);
+public record TrainingSettings(string AudioPath, string ModelName, int Epochs, int SaveEveryNEpochs);
 
 public class StyleTtsTrainer(
     string   styleTtsPath,
     string   voicesPath,
     string   audioPath,
     string   modelName,
-    int      epochs           = 50,
+    int      epochs           = 500,
     int      saveEveryNEpochs = 5,
     ILogger? logger           = null)
 {
     private static string VenvPython  => OperatingSystem.IsWindows() ? @"venv\Scripts\python.exe" : "venv/bin/python";
     private static string VenvWhisper => OperatingSystem.IsWindows() ? @"venv\Scripts\whisper.exe" : "venv/bin/whisper";
-    private const int    CHUNK_SECS   = 15;
+    private const int    CHUNK_SECS   = 8;
+    private const int    MIN_CHUNK_SECS = 2;
 
     // Pretrained LibriTTS model — downloaded automatically if missing
     private const string PRETRAINED_URL = "https://huggingface.co/yl4579/StyleTTS2-LibriTTS/resolve/main/Models/LibriTTS/epochs_2nd_00020.pth";
@@ -31,19 +34,49 @@ public class StyleTtsTrainer(
         Directory.CreateDirectory(audioDir);
         Directory.CreateDirectory(outputDir);
 
-        string[] sourceFiles = Directory.Exists(audioPath)
-            ? Directory.GetFiles(audioPath, "*.wav")
-            : new[] { audioPath };
+        // Persist settings so the user can resume later without re-uploading.
+        var settings = new TrainingSettings(audioPath, modelName, epochs, saveEveryNEpochs);
+        await File.WriteAllTextAsync(
+            Path.Combine(outputDir, "training.json"),
+            JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true }),
+            ct);
 
-        if (sourceFiles.Length == 0)
-            throw new FileNotFoundException($"No WAV files found in {audioPath}");
+        string[] existingChunks = Directory.GetFiles(audioDir, "*.wav");
+        if (existingChunks.Length > 0)
+        {
+            // Chunks already exist from a previous run — skip re-chunking (original audio may be gone).
+            progress?.Report(new TrainingProgress("Chunking", 5, $"Using {existingChunks.Length} existing clip(s)"));
+        }
+        else
+        {
+            string[] sourceFiles = Directory.Exists(audioPath)
+                ? Directory.GetFiles(audioPath, "*.wav")
+                : new[] { audioPath };
 
-        progress?.Report(new TrainingProgress("Chunking", 5, $"Splitting {sourceFiles.Length} file(s) into clips"));
-        foreach (string source in sourceFiles)
-            await ChunkAudio(source, audioDir, ct);
+            if (sourceFiles.Length == 0)
+                throw new FileNotFoundException($"No WAV files found in {audioPath}");
 
-        progress?.Report(new TrainingProgress("Transcribing", 15, "Transcribing audio with Whisper"));
-        string trainList = await Transcribe(audioDir, workDir, ct);
+            progress?.Report(new TrainingProgress("Chunking", 5, $"Splitting {sourceFiles.Length} file(s) into clips"));
+            foreach (string source in sourceFiles)
+                await ChunkAudio(source, audioDir, ct);
+        }
+
+        string savedTrainList = Path.Combine(outputDir, "train_list.txt");
+        string trainList;
+        if (File.Exists(savedTrainList))
+        {
+            // Reuse the transcription from the original run — avoids Whisper hallucination drift on resume.
+            trainList = Path.Combine(workDir, "train_list.txt");
+            File.Copy(savedTrainList, trainList, overwrite: true);
+            progress?.Report(new TrainingProgress("Transcribing", 15, "Using saved transcription"));
+        }
+        else
+        {
+            progress?.Report(new TrainingProgress("Transcribing", 15, "Transcribing audio with Whisper"));
+            trainList = await Transcribe(audioDir, workDir, ct);
+            // Save alongside the model so resume can reuse it.
+            File.Copy(trainList, savedTrainList, overwrite: true);
+        }
 
         progress?.Report(new TrainingProgress("Preparing", 25, "Downloading pretrained model if needed"));
         string baseModel = await EnsurePretrainedModel(ct);
@@ -54,10 +87,14 @@ public class StyleTtsTrainer(
         if (pretrainedModel == existingModel)
             logger?.LogInformation("[StyleTTS2-Train] Resuming from existing checkpoint: {Path}", existingModel);
 
-        string configPath = WriteTrainingConfig(workDir, trainList, audioDir, outputDir, pretrainedModel);
+        bool isResume = pretrainedModel == existingModel;
+        string configPath = WriteTrainingConfig(workDir, trainList, audioDir, outputDir, pretrainedModel, isResume);
+
+        // Clean up any loose .pth files left over from a previous interrupted run
+        MoveLooseCheckpoints(outputDir);
 
         progress?.Report(new TrainingProgress("Training", 0, $"Fine-tuning StyleTTS2 for {epochs} epochs"));
-        await FineTune(configPath, progress, ct);
+        await FineTune(configPath, outputDir, progress, ct);
 
         // Copy first training clip as reference audio for inference
         string[] trainingWavs = Directory.GetFiles(audioDir, "*.wav");
@@ -73,7 +110,7 @@ public class StyleTtsTrainer(
     {
         string python     = Path.Combine(styleTtsPath, VenvPython);
         string scriptPath = Path.Combine(Path.GetTempPath(), "ari_chunk.py");
-        await File.WriteAllTextAsync(scriptPath, BuildChunkScript(source, audioDir, CHUNK_SECS), ct);
+        await File.WriteAllTextAsync(scriptPath, BuildChunkScript(source, audioDir, CHUNK_SECS, MIN_CHUNK_SECS), ct);
         await RunPython(python, scriptPath, null, ct);
     }
 
@@ -124,7 +161,7 @@ public class StyleTtsTrainer(
     }
 
     private string WriteTrainingConfig(
-        string workDir, string trainList, string audioDir, string outputDir, string pretrainedModel)
+        string workDir, string trainList, string audioDir, string outputDir, string pretrainedModel, bool isResume = false)
     {
         string configPath = Path.Combine(workDir, "config_ft.yml");
 
@@ -138,7 +175,7 @@ batch_size: 2
 max_len: 400
 pretrained_model: "{pretrainedModel}"
 second_stage_load_pretrained: true
-load_only_params: true
+load_only_params: {(isResume ? "false" : "true")}
 
 F0_path: "Utils/JDC/bst.t7"
 ASR_config: "Utils/ASR/config.yml"
@@ -208,13 +245,13 @@ loss_params:
   lambda_ce: 20.
   lambda_sty: 1.
   lambda_diff: 1.
-  diff_epoch: 10
-  joint_epoch: 30
+  diff_epoch: 50
+  joint_epoch: 150
 
 optimizer_params:
-  lr: 0.0001
-  bert_lr: 0.00001
-  ft_lr: 0.0001
+  lr: 0.00005
+  bert_lr: 0.000005
+  ft_lr: 0.00005
 
 slmadv_params:
   min_len: 400
@@ -232,17 +269,24 @@ slmadv_params:
 
     private async Task FineTune(
         string configPath,
+        string outputDir,
         IProgress<TrainingProgress>? progress,
         CancellationToken ct)
     {
         string python      = Path.Combine(styleTtsPath, VenvPython);
         string trainScript = Path.Combine(Path.GetTempPath(), "ari_train_stt2.py");
         await File.WriteAllTextAsync(trainScript,
+            // MPS fallback: ops not natively supported on Apple GPU fall back to CPU instead of crashing.
+            "import os; os.environ.setdefault('PYTORCH_ENABLE_MPS_FALLBACK', '1')\n" +
             "import torch, sys\n" +
-            $"sys.path.insert(0, r'{styleTtsPath}')\n" +
+            $"sys.path.insert(0, r'{Path.GetFullPath(styleTtsPath)}')\n" +
             // PyTorch 2.6 changed torch.load default to weights_only=True — patch it back for StyleTTS2
             "_orig = torch.load\n" +
             "torch.load = lambda *a, **kw: _orig(*a, **{**kw, 'weights_only': False})\n" +
+            // empty_cache: flush MPS allocator (cuda version is a no-op on MPS)
+            "if torch.backends.mps.is_available():\n" +
+            "    _orig_empty = torch.cuda.empty_cache\n" +
+            "    torch.cuda.empty_cache = lambda: (torch.mps.empty_cache(), _orig_empty())\n" +
             // WavLM (microsoft/wavlm-base-plus) only supports CUDA/CPU, not MPS.
             // We patch train_finetune.WavLMLoss (its module-global) after import but before main() runs.
             // IMPORTANT: do NOT replace losses.WavLMLoss — the original __init__ does
@@ -286,7 +330,20 @@ slmadv_params:
             try { process.Kill(entireProcessTree: true); } catch { }
         });
 
-        _ = Task.Run(async () =>
+        // Move epoch .pth files into Checkpoints/ as they're created so the voice
+        // directory never accumulates loose checkpoint files during a long training run.
+        using var cleanupCts = new CancellationTokenSource();
+        Task cleanupTask = Task.Run(async () =>
+        {
+            while (!cleanupCts.Token.IsCancellationRequested)
+            {
+                try { await Task.Delay(30_000, cleanupCts.Token); }
+                catch (OperationCanceledException) { break; }
+                MoveLooseCheckpoints(outputDir);
+            }
+        }, CancellationToken.None);
+
+        Task stdoutTask = Task.Run(async () =>
         {
             string? line;
             while ((line = await process.StandardOutput.ReadLineAsync(CancellationToken.None)) != null)
@@ -300,59 +357,99 @@ slmadv_params:
         }, CancellationToken.None);
 
         var stderrLines = new System.Text.StringBuilder();
-        _ = Task.Run(async () =>
+        Task stderrTask = Task.Run(async () =>
         {
             string? line;
             while ((line = await process.StandardError.ReadLineAsync(CancellationToken.None)) != null)
             {
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 stderrLines.AppendLine(line);
-                logger?.LogInformation("[StyleTTS2-Train] {Line}", line);
+                logger?.LogWarning("[StyleTTS2-Train] [stderr] {Line}", line);
             }
         }, CancellationToken.None);
 
         await process.WaitForExitAsync(CancellationToken.None);
+        await Task.WhenAll(stdoutTask, stderrTask);
+
+        await cleanupCts.CancelAsync();
+        await cleanupTask.ConfigureAwait(false);
+
+        logger?.LogInformation("[StyleTTS2-Train] Process exited with code {Code}", process.ExitCode);
 
         if (process.ExitCode != 0 && !ct.IsCancellationRequested)
             throw new Exception($"StyleTTS2 training failed:\n{stderrLines}");
     }
 
-    private static string OrganiseCheckpoints(string outputDir)
+    // Moves any loose epoch_2nd_*.pth files from outputDir into Checkpoints/ subfolders
+    // and updates model.pth to the highest-epoch checkpoint found. Safe to call at any
+    // time — skips files still being written and is a no-op when nothing is loose.
+    private static void MoveLooseCheckpoints(string outputDir)
     {
-        // Move each epoch_2nd_NNNNN.pth → Checkpoints/<epoch>_epochs/epoch_2nd_NNNNN.pth
+        string[] loose = [
+            ..Directory.GetFiles(outputDir, "epoch_2nd_*.pth"),
+            ..Directory.GetFiles(outputDir, "epoch_*.pth").Where(f => !f.Contains("epoch_2nd_")),
+        ];
+        if (loose.Length == 0) return;
+
         string checkpointsDir = Path.Combine(outputDir, "Checkpoints");
         Directory.CreateDirectory(checkpointsDir);
 
-        string[] rawCheckpoints = Directory.GetFiles(outputDir, "epoch_2nd_*.pth");
-        if (rawCheckpoints.Length == 0)
-            rawCheckpoints = Directory.GetFiles(outputDir, "epoch_*.pth");
-
-        foreach (string pth in rawCheckpoints)
+        foreach (string pth in loose)
         {
-            string fname = Path.GetFileNameWithoutExtension(pth);
-            // epoch_2nd_00004 → index 4 → human epoch 5
-            string numPart = fname.Split('_').Last();
-            int humanEpoch = int.TryParse(numPart, out int idx) ? idx + 1 : 0;
-            string epochDir = Path.Combine(checkpointsDir, $"{humanEpoch}_epochs");
+            string fname     = Path.GetFileNameWithoutExtension(pth);
+            string numPart   = fname.Split('_').Last();
+            int humanEpoch   = int.TryParse(numPart, out int idx) ? idx + 1 : 0;
+            string epochDir  = Path.Combine(checkpointsDir, $"{humanEpoch}_epochs");
             Directory.CreateDirectory(epochDir);
-            File.Move(pth, Path.Combine(epochDir, Path.GetFileName(pth)), overwrite: true);
+            string dest = Path.Combine(epochDir, Path.GetFileName(pth));
+            try
+            {
+                // Skip if the file is still open for writing by Python
+                using (new FileStream(pth, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }
+                File.Move(pth, dest, overwrite: true);
+            }
+            catch { /* will retry on next cycle */ }
         }
 
-        // Best = highest epoch in Checkpoints
+        UpdateModelPth(outputDir, checkpointsDir);
+    }
+
+    // Moves any remaining loose checkpoints and sets model.pth to the highest-epoch
+    // checkpoint across all Checkpoints/ subfolders.
+    private static string OrganiseCheckpoints(string outputDir)
+    {
+        MoveLooseCheckpoints(outputDir);
+
+        string checkpointsDir = Path.Combine(outputDir, "Checkpoints");
         string[] all = Directory.GetFiles(checkpointsDir, "*.pth", SearchOption.AllDirectories);
         if (all.Length == 0)
-            throw new FileNotFoundException($"No checkpoint found in {outputDir}");
+            throw new FileNotFoundException($"No checkpoint found in {checkpointsDir}");
 
-        string best = all.OrderByDescending(File.GetLastWriteTime).First();
-        string modelDest = Path.Combine(outputDir, "model.pth");
-        File.Copy(best, modelDest, overwrite: true);
+        UpdateModelPth(outputDir, checkpointsDir);
 
         // Promote config so the voice module finds config.yml
         string configFt = Path.Combine(outputDir, "config_ft.yml");
         if (File.Exists(configFt))
             File.Copy(configFt, Path.Combine(outputDir, "config.yml"), overwrite: true);
 
-        return modelDest;
+        return Path.Combine(outputDir, "model.pth");
+    }
+
+    // Copies the highest-epoch checkpoint in Checkpoints/ to model.pth.
+    private static void UpdateModelPth(string outputDir, string checkpointsDir)
+    {
+        string[] all = Directory.GetFiles(checkpointsDir, "*.pth", SearchOption.AllDirectories);
+        if (all.Length == 0) return;
+
+        // Pick highest epoch by the numeric suffix in the filename (not file time,
+        // which can be wrong after moves or on resumed runs).
+        string best = all.OrderByDescending(f =>
+        {
+            string num = Path.GetFileNameWithoutExtension(f).Split('_').Last();
+            return int.TryParse(num, out int n) ? n : 0;
+        }).First();
+
+        File.Copy(best, Path.Combine(outputDir, "model.pth"), overwrite: true);
     }
 
     private async Task RunPython(string python, string scriptPath, string? workDir, CancellationToken ct)
@@ -383,7 +480,7 @@ slmadv_params:
         ProcessStartInfo info = new()
         {
             FileName               = whisper,
-            Arguments              = $"\"{wavFile}\" --model base.en --output_format txt --output_dir \"{outDir}\" --fp16 False",
+            Arguments              = $"\"{wavFile}\" --model base.en --output_format txt --output_dir \"{outDir}\" --fp16 False --condition_on_previous_text False",
             RedirectStandardOutput = true,
             RedirectStandardError  = true,
             UseShellExecute        = false,
@@ -428,7 +525,7 @@ slmadv_params:
         return "cuda";
     }
 
-    private static string BuildChunkScript(string source, string outDir, int chunkSecs)
+    private static string BuildChunkScript(string source, string outDir, int chunkSecs, int minChunkSecs)
     {
         return
             "import soundfile as sf, numpy as np, os, torch, torchaudio\n" +
@@ -442,7 +539,7 @@ slmadv_params:
             $"chunk_samples = sr * {chunkSecs}\n" +
             "for i, start in enumerate(range(0, len(data), chunk_samples)):\n" +
             "    chunk = data[start:start + chunk_samples]\n" +
-            "    if len(chunk) < sr * 3: continue\n" +
+            $"    if len(chunk) < sr * {minChunkSecs}: continue\n" +
             $"    out = os.path.join(r'{outDir}', f'chunk_{{i:04d}}.wav')\n" +
             "    sf.write(out, chunk, sr)\n";
     }

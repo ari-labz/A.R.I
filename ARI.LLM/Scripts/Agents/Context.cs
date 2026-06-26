@@ -1,3 +1,4 @@
+using ARI.Common;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -16,14 +17,17 @@ internal class Context : Agent
     private readonly HttpClient httpClient;
     private readonly Dictionary<string, string> contexts = new();
     private readonly SemaphoreSlim updateLock = new(1, 1);
-    private readonly string resolvedPrompt;
+    private string resolvedPrompt;
 
-    internal override ThreadType Type => ThreadType.Context;
-
-    internal Context(AgentConfig config, int shortTermMemoryLimit) : base(config)
+    public Context()
     {
-        httpClient     = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
-        resolvedPrompt = config.SystemPrompt.Replace("{memoryLimit}", shortTermMemoryLimit.ToString());
+        httpClient = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+        resolvedPrompt = "";
+    }
+
+    internal void Init(int shortTermMemoryLimit)
+    {
+        resolvedPrompt = SystemPrompt.Replace("{memoryLimit}", shortTermMemoryLimit.ToString());
     }
 
     internal string GetContext(string threadKey)
@@ -77,12 +81,12 @@ internal class Context : Agent
             if (!string.IsNullOrWhiteSpace(updated))
             {
                 contexts[threadKey] = updated;
-                Common.Logger.LogInformation("[Context] ({Thread}) context updated:\n{Context}", threadKey, updated);
+                Shared.Logger.LogInformation("[Context] ({Thread}) context updated:\n{Context}", threadKey, updated);
             }
         }
         catch (Exception ex)
         {
-            Common.Logger.LogWarning("[Context] Failed to update context for [{ThreadKey}]: {Error}", threadKey, ex.Message);
+            Shared.Logger.LogWarning("[Context] Failed to update context for [{ThreadKey}]: {Error}", threadKey, ex.Message);
         }
         finally
         {
@@ -124,7 +128,7 @@ internal class Context : Agent
                 Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json")
             };
 
-            Common.Logger.LogInformation("[Engram] [Context] analysing...");
+            Shared.Logger.LogInformation("[Engram] [Context] analysing...");
             Stopwatch sw = Stopwatch.StartNew();
             HttpResponseMessage response = await httpClient.SendAsync(request);
             sw.Stop();
@@ -148,18 +152,18 @@ internal class Context : Agent
             if (!string.IsNullOrWhiteSpace(updated))
             {
                 contexts[threadKey] = updated;
-                Common.Logger.LogInformation("[Engram] [Context] analysed context ({Tokens} tokens, {TokPerSec} t/s)\n{Context}",
+                Shared.Logger.LogInformation("[Engram] [Context] analysed context ({Tokens} tokens, {TokPerSec} t/s)\n{Context}",
                     tokens, tokPerSec.ToString("F1"), updated);
             }
             else
             {
-                Common.Logger.LogInformation("[Engram] [Context] no context generated ({Tokens} tokens, {TokPerSec} t/s)",
+                Shared.Logger.LogInformation("[Engram] [Context] no context generated ({Tokens} tokens, {TokPerSec} t/s)",
                     tokens, tokPerSec.ToString("F1"));
             }
         }
         catch (Exception ex)
         {
-            Common.Logger.LogWarning("[Engram] [Context] failed to rebuild context for [{ThreadKey}]: {Error}", threadKey, ex.Message);
+            Shared.Logger.LogWarning("[Engram] [Context] failed to rebuild context for [{ThreadKey}]: {Error}", threadKey, ex.Message);
         }
         finally
         {

@@ -34,6 +34,16 @@ internal sealed class ReadFile : FileTool
         }
     };
 
+    // Models emit line numbers as quoted strings ("275") under the text tool protocol; GetInt32() throws
+    // on a String element. Cast tolerantly — accept a number or a numeric string, error only if neither.
+    static bool TryGetLineArg(JsonElement el, out int value)
+    {
+        if (el.ValueKind == JsonValueKind.Number) return el.TryGetInt32(out value);
+        if (el.ValueKind == JsonValueKind.String) return int.TryParse(el.GetString()?.Trim('"', '\'', ' '), out value);
+        value = 0;
+        return false;
+    }
+
     internal override async Task<string> Execute(string argsJson)
     {
         try
@@ -50,16 +60,19 @@ internal sealed class ReadFile : FileTool
 
             bool hasStart = doc.RootElement.TryGetProperty("start_line", out JsonElement startEl);
             bool hasEnd   = doc.RootElement.TryGetProperty("end_line",   out JsonElement endEl);
-            int startLine = hasStart ? startEl.GetInt32() : 1;
-            int endLine   = hasEnd   ? endEl.GetInt32()   : totalLines;
+            int startLine = 1, endLine = totalLines;
+            if (hasStart && !TryGetLineArg(startEl, out startLine))
+                return $"Error reading file: start_line must be an integer (got '{startEl}').";
+            if (hasEnd && !TryGetLineArg(endEl, out endLine))
+                return $"Error reading file: end_line must be an integer (got '{endEl}').";
 
             startLine = Math.Max(1,         Math.Min(startLine, totalLines));
             endLine   = Math.Max(startLine, Math.Min(endLine,   totalLines));
 
             // Cap whole-file reads so a single read can't blow the context window.
             // Targeted reads (start_line/end_line supplied) are not capped — the caller chose the range.
-            const int READ_MAX_LINES = 400;
-            const int READ_MAX_CHARS = 20000;
+            const int READ_MAX_LINES = 800;
+            const int READ_MAX_CHARS = 48000;
             bool capped = false;
             if (!hasStart && !hasEnd && totalLines > 0)
             {
@@ -105,8 +118,9 @@ internal sealed class ReadFile : FileTool
 
             string suffix = "";
             if (doc.RootElement.TryGetProperty("start_line", out JsonElement s) &&
-                doc.RootElement.TryGetProperty("end_line",   out JsonElement e))
-                suffix = $" ({s.GetInt32()}–{e.GetInt32()})";
+                doc.RootElement.TryGetProperty("end_line",   out JsonElement e) &&
+                TryGetLineArg(s, out int sl) && TryGetLineArg(e, out int el))
+                suffix = $" ({sl}–{el})";
 
             return $"<div class=\"tool-use\">Reading {safe}{suffix}</div>\n";
         }

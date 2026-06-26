@@ -1,3 +1,4 @@
+using ARI.Common;
 using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
@@ -80,14 +81,14 @@ internal class CommandService
     {
         if (refactor is null) return "Refactor is not loaded.";
         bool allNotes = sub == "all";
-        Common.Logger.LogInformation("[Commands] Refactor requested (mode: {Mode}).", allNotes ? "all" : "dirty");
+        Shared.Logger.LogInformation("[Commands] Refactor requested (mode: {Mode}).", allNotes ? "all" : "dirty");
         return await refactor.Run(allNotes);
     }
 
     private async Task<string> HandlePurge()
     {
         if (purgeNotes is null) return "Brain is not available.";
-        Common.Logger.LogInformation("[Commands] Brain purge requested.");
+        Shared.Logger.LogInformation("[Commands] Brain purge requested.");
         int deleted = await purgeNotes();
         return $"Purged {deleted} note(s) from the brain.";
     }
@@ -95,7 +96,7 @@ internal class CommandService
     private async Task<string> HandleBackup()
     {
         if (backupBrain is null) return "Brain is not available.";
-        Common.Logger.LogInformation("[Commands] Brain backup requested.");
+        Shared.Logger.LogInformation("[Commands] Brain backup requested.");
         return await backupBrain();
     }
 

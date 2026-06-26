@@ -35,13 +35,38 @@ internal static class ToolCallParser
             foreach (Match p in Regex.Matches(callBody, @"<parameter=(\w+)>\s*(.*?)\s*</parameter>", RegexOptions.Singleline))
             {
                 if (!first) argsBuilder.Append(',');
-                argsBuilder.Append($"\"{p.Groups[1].Value}\":\"{p.Groups[2].Value.Trim()}\"");
+                string pName = p.Groups[1].Value;
+                string pVal  = p.Groups[2].Value.Trim();
+                argsBuilder.Append(JsonSerializer.Serialize(pName));
+                argsBuilder.Append(':');
+                // Structured params (edit_file's `edits`, update_todos' `todos`) are emitted by the model as
+                // a JSON array. Embed them as raw JSON so the executor receives an array, not a stringified
+                // one (which the executor would reject as missing start_line/end_line). All other
+                // values (code in new_string/content, paths, patterns) are serialized as JSON strings so
+                // their quotes/newlines/backslashes can't break the args JSON.
+                if (IsStructuredParam(pName) && IsJsonArrayOrObject(pVal))
+                    argsBuilder.Append(pVal);
+                else
+                    argsBuilder.Append(JsonSerializer.Serialize(pVal));
                 first = false;
             }
             argsBuilder.Append('}');
             calls.Add(new Call($"fallback_{++index}", name, argsBuilder.ToString()));
         }
         return calls;
+    }
+
+    /// <summary>Tool parameters whose value the model emits as a JSON array/object (not a string).</summary>
+    private static bool IsStructuredParam(string name) =>
+        name.Equals("edits", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("todos", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>True if the trimmed value is parseable JSON that starts as an array or object.</summary>
+    private static bool IsJsonArrayOrObject(string s)
+    {
+        if (s.Length < 2 || (s[0] != '[' && s[0] != '{')) return false;
+        try { using JsonDocument _ = JsonDocument.Parse(s); return true; }
+        catch { return false; }
     }
 
     /// <summary>Parses the Qwen3 XML tool-call format: &lt;tool_name&gt;&lt;param&gt;value&lt;/param&gt;...&lt;/tool_name&gt;. Null if none.</summary>
@@ -165,6 +190,47 @@ internal static class ToolCallParser
     }
 
     /// <summary>
+    /// Salvages a native tool call's arguments when the model leaked text-format markers
+    /// (&lt;function=…&gt;, &lt;parameter=…&gt;, &lt;tool_call&gt;) into what should be pure JSON — a
+    /// repetition/format-mix runaway. Truncates at the first marker and balances any dangling
+    /// string/object so the prefix parses (e.g. {"pattern":"foo → {"pattern":"foo"}).
+    /// </summary>
+    internal static string SalvageNativeArgs(string raw)
+    {
+        // Cut at the first leaked text-format marker, then rebuild clean JSON from the field values
+        // in the prefix — stripping leaked whitespace/control chars out of each value and properly
+        // escaping it. This recovers the first call's real arguments (e.g. a read_file path) from a
+        // runaway native-arg blob, producing JSON that always parses.
+        int cut = raw.Length;
+        foreach (string m in new[] { "<tool_call", "</tool_call", "<function", "</function", "<parameter", "</parameter" })
+        {
+            int i = raw.IndexOf(m, StringComparison.OrdinalIgnoreCase);
+            if (i >= 0 && i < cut) cut = i;
+        }
+        string s = raw[..cut];
+
+        List<string> fields = new();
+        // Capture each "key":"value" preserving the model's existing JSON escaping — the value body
+        // matches proper JSON string syntax ((?:\\.|[^"\\])*: an escape sequence, or any non-quote/
+        // non-backslash char), so \". and \\ inside the value are kept intact and the match stops at
+        // the first *unescaped* closing quote. We emit the value VERBATIM (no re-escaping — re-escaping
+        // already-valid content double-escapes regex backslashes, e.g. "\\.IsAdmin" → "\\\\.IsAdmin").
+        // We only strip real control chars (invalid in JSON) and trailing truncation noise (a dangling
+        // \n/\r/\t or whitespace left where the runaway tail was cut).
+        foreach (Match m in Regex.Matches(s, "\"(\\w+)\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)", RegexOptions.Singleline))
+        {
+            string val = m.Groups[2].Value
+                .Replace("\r", "").Replace("\n", " ").Replace("\t", " ");
+            val = Regex.Replace(val, @"(?:\\[nrt]|\s)+$", "");
+            fields.Add($"\"{m.Groups[1].Value}\":\"{val}\"");
+        }
+        foreach (Match m in Regex.Matches(s, "\"(\\w+)\"\\s*:\\s*(-?\\d+)"))
+            fields.Add($"\"{m.Groups[1].Value}\":{m.Groups[2].Value}");
+
+        return fields.Count == 0 ? "{}" : "{" + string.Join(",", fields) + "}";
+    }
+
+    /// <summary>
     /// Strips large content fields from write_file / edit_file args before they go into the
     /// messages array, so they don't bloat the context window on subsequent LLM turns.
     /// </summary>
@@ -175,17 +241,33 @@ internal static class ToolCallParser
         {
             using JsonDocument doc = JsonDocument.Parse(argsJson);
             JsonElement root = doc.RootElement;
-            Dictionary<string, object?> trimmed = new();
+            // Build the object by hand. Kept fields are emitted as their RAW JSON text — they are
+            // already valid JSON, so re-serializing them (e.g. via a Dictionary<string,string> of
+            // GetRawText()) double-encodes: path:"foo" → path:"\"foo\"", start_line:81 → "81". That
+            // double-encoding was the escape-spiral root cause (the model imitates the quoting each
+            // turn and it compounds). Only the omitted payload fields are emitted as fresh strings.
+            StringBuilder sb = new();
+            sb.Append('{');
+            bool first = true;
             foreach (JsonProperty prop in root.EnumerateObject())
             {
+                if (!first) sb.Append(',');
+                first = false;
+                sb.Append(JsonSerializer.Serialize(prop.Name));
+                sb.Append(':');
+                // Only write_file content is omitted (it can be a whole file). edit_file payloads are
+                // deliberately KEPT in full: they are small (tight edits, capped at MAX_REPLACE_SPAN lines)
+                // so they cost almost nothing, and omitting them caused a doom loop — the model copies the
+                // "[omitted]" placeholder from its own prior edit call in history back as the new_string,
+                // the edit guard refuses it, the model re-reads history, sees "[omitted]" again, and re-sends
+                // forever. Keeping the real edit content means there is no placeholder for it to copy.
                 if (toolName == "write_file" && prop.Name == "content")
-                    trimmed[prop.Name] = "[content omitted]";
-                else if (toolName == "edit_file" && prop.Name is "old_string" or "new_string" or "edits")
-                    trimmed[prop.Name] = "[omitted]";
+                    sb.Append("\"[content omitted]\"");
                 else
-                    trimmed[prop.Name] = prop.Value.GetRawText();
+                    sb.Append(prop.Value.GetRawText());
             }
-            return JsonSerializer.Serialize(trimmed);
+            sb.Append('}');
+            return sb.ToString();
         }
         catch { return argsJson; }
     }

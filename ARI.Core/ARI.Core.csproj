@@ -13,21 +13,17 @@
       <UiDir>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\ARI.UI'))</UiDir>
       <WwwrootDir>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\ARI.API\wwwroot'))</WwwrootDir>
     </PropertyGroup>
-    <Exec Command="&quot;$(UserProfile)/.bun/bin/bun&quot; run build" WorkingDirectory="$(UiDir)"
-          Condition="'$(OS)' == 'Windows_NT'" />
-    <Exec Command="&quot;$(HOME)/.bun/bin/bun&quot; run build" WorkingDirectory="$(UiDir)"
-          Condition="'$(OS)' != 'Windows_NT'" />
+    <Exec Command="&quot;$(UserProfile)/.bun/bin/bun&quot; run build" WorkingDirectory="$(UiDir)" Condition="'$(OS)' == 'Windows_NT'" />
+    <Exec Command="&quot;$(HOME)/.bun/bin/bun&quot; run build" WorkingDirectory="$(UiDir)" Condition="'$(OS)' != 'Windows_NT'" />
     <ItemGroup>
       <UiDistFiles Include="$(UiDir)\dist\**\*" />
     </ItemGroup>
-    <Copy SourceFiles="@(UiDistFiles)"
-          DestinationFiles="@(UiDistFiles->'$(WwwrootDir)\%(RecursiveDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(UiDistFiles)" DestinationFiles="@(UiDistFiles->'$(WwwrootDir)\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
     <Message Text="UI built and synced to wwwroot" Importance="high" />
   </Target>
 
   <ItemGroup>
-  	<Content Include="..\compose.yaml">
+<Content Include="..\compose.yaml">
   		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
   		<Link>compose.yaml</Link>
   	</Content>
@@ -58,6 +54,7 @@
     <ProjectReference Include="..\ARI.API\ARI.API.csproj" />
     <ProjectReference Include="..\ARI.VoiceSynthesis\ARI.VoiceSynthesis.csproj" />
     <ProjectReference Include="..\ARI.Voice\ARI.Voice.csproj" />
+    <ProjectReference Include="..\ARI.Common\ARI.Common.csproj" />
   </ItemGroup>
 
 </Project>

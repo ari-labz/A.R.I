@@ -11,6 +11,7 @@
   <script src="/js/gridstack-all.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3/dist/chartjs-plugin-annotation.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@13/marked.min.js"></script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -69,9 +70,11 @@ html, body {
 #btn-back svg { flex-shrink: 0; opacity: .7; }
 
 #cp-sidebar-nav { padding: 0 8px; }
-.cp-nav-item { padding: 9px 12px; border-radius: 7px; font-size: 14px; color: var(--sidebar-text); cursor: pointer; transition: background .1s; }
+.cp-nav-item { padding: 7px 12px 7px 20px; border-radius: 7px; font-size: 13.5px; color: var(--sidebar-text); cursor: pointer; transition: background .1s; }
 .cp-nav-item:hover  { background: var(--sidebar-hover); }
 .cp-nav-item.active { background: var(--sidebar-active); color: #fff; }
+.cp-nav-group { padding: 14px 12px 4px; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--sidebar-dim); user-select: none; }
+.cp-nav-item.top-level { padding-left: 12px; font-size: 14px; }
 
 /* ── main ────────────────────────────────────────────── */
 #main { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; background: #fff; }
@@ -198,6 +201,7 @@ html, body {
 .vs-progress-fill { height: 100%; border-radius: 99px; background: #518c9a; transition: width .4s ease; }
 .vs-progress-fill.done  { background: #16a34a; }
 .vs-progress-fill.error { background: #dc2626; }
+.vs-progress-track.error { background: #fecaca; }
 .vs-time-row { display: flex; gap: 10px; margin-bottom: 8px; }
 .vs-time-chip { font-size: 11px; color: var(--text-dim); background: #f3f4f6; border-radius: 20px; padding: 2px 10px; }
 .vs-detail { font-size: 12px; color: var(--text-dim); min-height: 16px; }
@@ -205,6 +209,15 @@ html, body {
 
 /* ── model cards ──────────────────────────────────────── */
 .mdl-card { background:#fff; border:1px solid var(--border); border-radius:12px; padding:20px 22px; box-shadow:0 1px 4px rgba(0,0,0,.04); }
+.ag-sysprompt-preview h1,.ag-sysprompt-preview h2,.ag-sysprompt-preview h3 { font-weight:700; margin:.6em 0 .3em; }
+.ag-sysprompt-preview h1 { font-size:15px; } .ag-sysprompt-preview h2 { font-size:14px; } .ag-sysprompt-preview h3 { font-size:13px; }
+.ag-sysprompt-preview p { margin:.4em 0; }
+.ag-sysprompt-preview ul,.ag-sysprompt-preview ol { padding-left:1.4em; margin:.4em 0; }
+.ag-sysprompt-preview li { margin:.2em 0; }
+.ag-sysprompt-preview code { font-family:ui-monospace,monospace; font-size:12px; background:#f3f4f6; padding:1px 4px; border-radius:3px; }
+.ag-sysprompt-preview pre { background:#f3f4f6; border-radius:6px; padding:8px 10px; overflow-x:auto; font-size:12px; margin:.4em 0; }
+.ag-sysprompt-preview pre code { background:none; padding:0; }
+.ag-sysprompt-preview strong { font-weight:700; } .ag-sysprompt-preview em { font-style:italic; }
 .mdl-card.active { border-color:#518c9a; box-shadow:0 0 0 3px rgba(81,140,154,.12); }
 .mdl-card-header { display:flex; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap; }
 .mdl-card-name { font-size:15px; font-weight:700; color:var(--text); flex:1; min-width:0; }
@@ -242,6 +255,106 @@ html, body {
     #sidebar.collapsed { transform: translateX(-100%); }
     #topbar-toggle { display: flex !important; }
 }
+
+/* ── debug thread view ───────────────────────────────────── */
+.dbg-layout { display: flex; height: 100%; overflow: hidden; }
+.dbg-sidebar { width: 220px; min-width: 220px; border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; background: #fafafa; flex-shrink: 0; }
+.dbg-sidebar-head { padding: 12px 14px 10px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+.dbg-sidebar-title { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim); }
+.dbg-thread-list { flex: 1; overflow-y: auto; padding: 6px; }
+.dbg-thread-item { padding: 8px 10px; border-radius: 7px; cursor: pointer; font-size: 12px; margin-bottom: 2px; transition: background .1s; }
+.dbg-thread-item:hover { background: #ebebeb; }
+.dbg-thread-item.active { background: var(--accent); color: #fff; }
+.dbg-thread-key { font-family: ui-monospace, monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dbg-thread-meta { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+.dbg-thread-item.active .dbg-thread-meta { color: rgba(255,255,255,.65); }
+.dbg-view { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; min-height: 0; }
+.dbg-view-head { padding: 10px 18px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; flex-shrink: 0; background: #fff; }
+.dbg-view-key { font-size: 12px; font-weight: 600; color: var(--text); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace; }
+.dbg-view-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; background: #f1f3f6; }
+.dbg-empty { display: flex; align-items: center; justify-content: center; flex: 1; color: var(--text-dim); font-size: 13px; font-style: italic; }
+
+/* message bubbles */
+.dbg-row { display: flex; gap: 0; }
+.dbg-row.right { justify-content: flex-end; }
+.dbg-row.left  { justify-content: flex-start; }
+.dbg-row.center { justify-content: center; }
+.dbg-bubble { max-width: 76%; border-radius: 11px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,.09); border: 1px solid var(--border); background: #fff; }
+.dbg-bhead { padding: 6px 12px; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.dbg-bbody { font-size: 12.5px; font-family: ui-monospace, monospace; white-space: pre-wrap; word-break: break-word; line-height: 1.55; }
+.dbg-md { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; white-space: normal; }
+.dbg-md h1,.dbg-md h2,.dbg-md h3 { font-weight: 700; margin: .8em 0 .3em; line-height: 1.25; }
+.dbg-md h1 { font-size: 15px; } .dbg-md h2 { font-size: 13.5px; } .dbg-md h3 { font-size: 12.5px; }
+.dbg-md p { margin: .4em 0; }
+.dbg-md ul,.dbg-md ol { margin: .3em 0 .3em 1.4em; padding: 0; }
+.dbg-md li { margin: .15em 0; }
+.dbg-md hr { border: none; border-top: 1px solid #e5e7eb; margin: .7em 0; }
+.dbg-md code { font-family: ui-monospace, monospace; background: #f3f4f6; padding: 1px 4px; border-radius: 3px; font-size: 11.5px; }
+.dbg-md strong { font-weight: 700; }
+.dbg-md em { font-style: italic; }
+/* user */
+.dbg-bubble.user .dbg-bhead { background: #1d4ed8; color: #fff; }
+/* ari */
+.dbg-bubble.ari .dbg-bhead { background: #223742; color: #c8d8df; }
+/* recall memory block */
+.dbg-recall { padding: 8px 12px 9px; background: #fffbeb; border-bottom: 1px solid #fde68a; }
+.dbg-recall-lbl { font-size: 9.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: #92400e; margin-bottom: 4px; }
+.dbg-recall-txt { font-size: 11px; font-family: ui-monospace, monospace; white-space: pre-wrap; color: #78350f; max-height: 140px; overflow-y: auto; }
+/* context summary block */
+.dbg-ctxsum { padding: 8px 12px 9px; background: #f0fdf4; border-bottom: 1px solid #bbf7d0; }
+.dbg-ctxsum-lbl { font-size: 9.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: #14532d; margin-bottom: 4px; }
+.dbg-ctxsum-txt { font-size: 11px; font-family: ui-monospace, monospace; white-space: pre-wrap; color: #15803d; max-height: 80px; overflow-y: auto; }
+/* content segments */
+.dbg-seg-text { padding: 10px 12px; white-space: pre-wrap; word-break: break-word; }
+.dbg-seg-text:not(:last-child) { border-bottom: 1px solid #f0f0f0; }
+.dbg-tool-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 5px; font-size: 11px; font-weight: 600; font-family: ui-monospace, monospace; }
+.dbg-tool-chip.start  { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+.dbg-tool-chip.end    { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
+.dbg-tool-chip.error  { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+.dbg-seg-tool { padding: 4px 12px; }
+.dbg-batch-sep { height: 1px; background: var(--border); margin: 2px 12px; opacity: .5; }
+/* metadata footer */
+.dbg-meta { padding: 6px 12px; border-top: 1px solid var(--border); font-size: 10.5px; color: var(--text-dim); display: flex; gap: 12px; flex-wrap: wrap; background: #f9fafb; }
+/* state badges */
+.dbg-state { font-size: 9.5px; border-radius: 10px; padding: 1px 7px; font-weight: 600; letter-spacing: .02em; }
+.dbg-state.complete   { background: #dcfce7; color: #15803d; }
+.dbg-state.error      { background: #fee2e2; color: #dc2626; }
+.dbg-state.cancelled  { background: #fef3c7; color: #b45309; }
+.dbg-state.streaming  { background: #eff6ff; color: #1d4ed8; }
+/* engram / event bar */
+.dbg-event-bar { padding: 5px 14px; background: #faf5ff; border: 1px solid #e9d5ff; border-radius: 8px; font-size: 11px; color: #7c3aed; display: flex; align-items: center; gap: 8px; max-width: 80%; }
+/* payload toggle + two-pane debug view */
+.dbg-payload-toggle { padding: 5px 12px 6px; font-size: 10.5px; font-weight: 600; color: var(--accent); cursor: pointer; border-top: 1px solid var(--border); letter-spacing: .01em; user-select: none; }
+.dbg-payload-toggle:hover { background: #f0f4ff; }
+.dbg-payload-panes { display: flex; gap: 0; border-top: 1px solid var(--border); max-height: 420px; }
+.dbg-payload-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border); }
+.dbg-payload-pane:last-child { border-right: none; }
+.dbg-payload-lbl { padding: 5px 10px 4px; font-size: 9.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--text-dim); background: #f9fafb; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.dbg-payload-pre { margin: 0; padding: 8px 10px; font-family: ui-monospace, monospace; font-size: 10.5px; white-space: pre-wrap; word-break: break-word; overflow-y: auto; flex: 1; color: #1e293b; line-height: 1.5; }
+/* ── deep-inspection trace (prompt → thinking → tool call → result) ── */
+.dbg-bubble.prompt .dbg-bhead { background: #1d4ed8; color: #fff; }
+.dbg-bubble.toolcall { border-color: #bfdbfe; }
+.dbg-bubble.toolcall .dbg-bhead { background: #eff6ff; color: #1d4ed8; }
+.dbg-bubble.toolresult { border-color: #bbf7d0; }
+.dbg-bubble.toolresult .dbg-bhead { background: #f0fdf4; color: #15803d; }
+.dbg-bubble.toolresult.err { border-color: #fecaca; }
+.dbg-bubble.toolresult.err .dbg-bhead { background: #fef2f2; color: #dc2626; }
+.dbg-prompt-body { padding: 10px 12px; max-height: 260px; overflow-y: auto; }
+.dbg-args   { padding: 9px 12px; max-height: 220px; overflow-y: auto; color: #1e293b; }
+.dbg-result { padding: 9px 12px; max-height: 260px; overflow-y: auto; color: #334155; }
+/* thinking cloud */
+.dbg-cloud { max-width: 80%; background: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 16px; box-shadow: 0 1px 5px rgba(109,40,217,.08); position: relative; }
+.dbg-cloud::after { content: ''; position: absolute; left: 22px; bottom: -7px; width: 12px; height: 12px; background: #f5f3ff; border-right: 1px solid #ddd6fe; border-bottom: 1px solid #ddd6fe; border-radius: 0 0 8px 0; transform: rotate(20deg); }
+.dbg-cloud-head { padding: 7px 15px 3px; font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: #6d28d9; }
+.dbg-cloud-body { padding: 2px 15px 12px; font-family: ui-monospace, monospace; font-size: 11.5px; white-space: pre-wrap; word-break: break-word; color: #4c1d95; line-height: 1.55; max-height: 360px; overflow-y: auto; }
+/* nested sub-thread (architect plan / per-task coder) */
+.dbg-subthread { border: 1px solid #cbd5e1; border-radius: 10px; margin: 2px 0; background: #fbfcfe; overflow: hidden; }
+.dbg-sub-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: pointer; background: #eef2f7; font-size: 11px; user-select: none; }
+.dbg-sub-head:hover { background: #e2e8f0; }
+.dbg-sub-caret { color: #64748b; font-size: 10px; width: 10px; }
+.dbg-sub-label { font-weight: 700; color: #334155; }
+.dbg-sub-key { font-family: ui-monospace, monospace; font-size: 10px; color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dbg-sub-body { padding: 11px 12px; display: flex; flex-direction: column; gap: 12px; }
 </style>
 </head>
 <body>
@@ -259,11 +372,18 @@ html, body {
         Back
       </a>
       <div id="cp-sidebar-nav">
-        <div class="cp-nav-item active" data-tab="overview">Overview</div>
+        <div class="cp-nav-item top-level active" data-tab="overview">Overview</div>
+        <div class="cp-nav-item top-level" data-tab="debug">Debug Thread</div>
+        <div class="cp-nav-group">LLM</div>
+        <div class="cp-nav-item" data-tab="servers">Servers</div>
         <div class="cp-nav-item" data-tab="models">Models</div>
+        <div class="cp-nav-item" data-tab="agents">Agents</div>
+        <div class="cp-nav-item" data-tab="conventions">Coding Conventions</div>
+        <div class="cp-nav-item" data-tab="llmconfigs">Configs</div>
+        <div class="cp-nav-group">Voice</div>
         <div class="cp-nav-item" data-tab="voicesettings">Voice Settings</div>
         <div class="cp-nav-item" data-tab="voice">Voice Synthesis</div>
-        <div class="cp-nav-item" data-tab="conventions">Coding Conventions</div>
+        <div class="cp-nav-group">Memory</div>
         <div class="cp-nav-item" data-tab="brain">Brain</div>
       </div>
     </div>
@@ -280,6 +400,73 @@ html, body {
       <span id="cp-title">Overview</span>
     </div>
 
+    <!-- Servers tab -->
+    <div id="tab-servers" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+        <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);">LLM Servers</div>
+        <button class="vs-btn-primary" id="srv-add-btn" type="button" style="font-size:12px;padding:6px 16px;">+ New server</button>
+      </div>
+      <div id="srv-cards" style="display:flex;flex-direction:column;gap:16px;"></div>
+
+      <!-- Create / Edit modal -->
+      <div id="srv-modal-overlay" style="display:none;position:fixed;inset:0;z-index:400;background:rgba(0,0,0,.45);align-items:center;justify-content:center;">
+        <div style="background:#fff;border-radius:14px;padding:28px 28px 22px;width:480px;max-width:calc(100vw - 32px);box-shadow:0 8px 40px rgba(0,0,0,.18);max-height:90vh;overflow-y:auto;">
+          <div style="font-size:15px;font-weight:700;margin-bottom:20px;" id="srv-modal-title">New server</div>
+          <div style="display:flex;flex-direction:column;gap:14px;">
+            <label class="vs-label">Name<input type="text" id="srv-f-name" class="vs-input" placeholder="e.g. Logic" autocomplete="off"></label>
+            <div style="display:flex;gap:12px;">
+              <label class="vs-label" style="flex:1;">Port<input type="number" id="srv-f-port" class="vs-input" value="8081" min="1" max="65535"></label>
+              <label class="vs-label" style="flex:1;">Parallel slots<input type="number" id="srv-f-slots" class="vs-input" value="1" min="1" max="32"></label>
+            </div>
+            <div class="vs-label" style="gap:8px;">
+              Context size
+              <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
+                <input type="range" id="srv-f-ctx-slider" min="0" max="6" step="1" value="3"
+                  style="flex:1;accent-color:var(--accent,#223742);">
+                <input type="text" id="srv-f-ctx" class="vs-input" value="32K"
+                  style="width:72px;text-align:center;" placeholder="e.g. 48K">
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-dim);margin-top:2px;padding:0 1px;">
+                <span>4K</span><span>8K</span><span>16K</span><span>32K</span><span>64K</span><span>128K</span><span>256K</span>
+              </div>
+              <label style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;cursor:pointer;">
+                <span style="font-size:13px;color:var(--text);font-weight:400;">Unified cache</span>
+                <span style="position:relative;display:inline-block;width:44px;height:26px;flex-shrink:0;">
+                  <input type="checkbox" id="srv-f-unified" style="opacity:0;width:0;height:0;position:absolute;">
+                  <span id="srv-f-unified-track" style="position:absolute;inset:0;border-radius:13px;background:#d1d5db;transition:background .2s;"></span>
+                  <span id="srv-f-unified-thumb" style="position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .2s;"></span>
+                </span>
+              </label>
+            </div>
+            <div style="display:flex;gap:12px;">
+              <label class="vs-label" style="flex:1;">KV quant K<select id="srv-f-kvk" class="vs-input"><option value="4">Q4</option><option value="8">Q8</option><option value="16">F16</option></select></label>
+              <label class="vs-label" style="flex:1;">KV quant V<select id="srv-f-kvv" class="vs-input"><option value="4">Q4</option><option value="8">Q8</option><option value="16">F16</option></select></label>
+            </div>
+            <label class="vs-label">Startup model<select id="srv-f-model" class="vs-input"><option value="">— none —</option></select></label>
+            <div style="display:flex;gap:24px;">
+              <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:var(--text);">
+                <input type="checkbox" id="srv-f-boot" style="width:15px;height:15px;accent-color:var(--accent,#223742);">
+                Auto-start on boot
+              </label>
+            </div>
+          </div>
+          <div id="srv-ram-estimate" style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-size:12px;color:var(--text-dim);margin-top:4px;display:none;">
+            <div style="font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;color:var(--text-dim);">Estimated RAM</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px 16px;">
+              <div>Model weights<br><span id="srv-ram-weights" style="font-size:13px;font-weight:700;color:var(--text);">—</span></div>
+              <div>KV cache<br><span id="srv-ram-kv" style="font-size:13px;font-weight:700;color:var(--text);">—</span></div>
+              <div>Total<br><span id="srv-ram-total" style="font-size:13px;font-weight:700;color:#0369a1;">—</span></div>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;margin-top:22px;justify-content:flex-end;">
+            <button class="mdl-btn-secondary" id="srv-modal-cancel" type="button">Cancel</button>
+            <button class="vs-btn-primary" id="srv-modal-save" type="button">Save</button>
+          </div>
+          <div id="srv-modal-err" style="font-size:12px;color:#dc2626;margin-top:8px;min-height:16px;"></div>
+        </div>
+      </div>
+    </div>
+
     <!-- Models tab -->
     <div id="tab-models" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
 
@@ -291,6 +478,27 @@ html, body {
         </div>
         <div class="vs-progress-track"><div class="vs-progress-fill" id="mdl-switch-fill" style="width:0%"></div></div>
         <div id="mdl-switch-msg" style="font-size:12px;color:var(--text-dim);margin-top:6px;min-height:16px;"></div>
+      </div>
+
+      <!-- Add model toggle -->
+      <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:16px;">
+        <button class="vs-btn-primary" id="mdl-toggle-add-btn" type="button">+ Add Model</button>
+      </div>
+
+      <!-- Add model form (hidden by default) -->
+      <div class="vs-section" id="mdl-add-panel" style="display:none;margin-bottom:20px;">
+        <div class="vs-section-title">Register Model</div>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">
+          <div style="display:flex;gap:10px;">
+            <input id="mdl-add-name" class="vs-input" type="text" placeholder="Name (e.g. Qwen3-30B-A3B)" style="flex:1;font-size:13px;">
+            <input id="mdl-add-url" class="vs-input" type="text" placeholder="HuggingFace URL (.gguf)" style="flex:3;font-size:13px;">
+          </div>
+          <div style="display:flex;gap:10px;">
+            <input id="mdl-add-mmproj-url" class="vs-input" type="text" placeholder="mmproj URL (optional, for vision)" style="flex:4;font-size:13px;">
+            <button class="vs-btn-primary" id="mdl-add-btn" type="button" style="white-space:nowrap;">Register</button>
+          </div>
+          <div id="mdl-add-status" style="font-size:12px;color:var(--text-dim);min-height:16px;"></div>
+        </div>
       </div>
 
       <!-- Model cards -->
@@ -312,14 +520,48 @@ html, body {
         <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
           <label class="vs-label" style="flex:1;min-width:180px;">Text<input type="text" id="vs-tv-text" class="vs-input" placeholder="Type something to say…" autocomplete="off"></label>
           <label class="vs-label" style="min-width:140px;">Voice model<select id="vs-tv-model" class="vs-input"></select></label>
+          <label class="vs-label" style="min-width:140px;">Checkpoint<select id="vs-tv-epoch" class="vs-input"><option value="">latest</option></select></label>
           <button class="vs-btn-primary" id="vs-tv-speak-btn" type="button">Speak</button>
         </div>
         <span id="vs-tv-status" style="font-size:12px;color:var(--text-dim);margin-top:6px;display:block;"></span>
+      </div>
+      <div class="vs-section">
+        <div class="vs-section-title">Synthesis Parameters</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px 28px;margin-top:8px;">
+          <label class="vs-label">Diffusion steps <span style="color:var(--text-dim);font-size:11px;">noise vs quality</span>
+            <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
+              <input type="range" id="sp-diffusion-steps" min="1" max="30" step="1" value="5" style="flex:1;accent-color:var(--accent,#223742);">
+              <span id="sp-diffusion-steps-val" style="min-width:24px;text-align:right;font-size:13px;">5</span>
+            </div>
+          </label>
+          <label class="vs-label">Embedding scale <span style="color:var(--text-dim);font-size:11px;">expressiveness</span>
+            <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
+              <input type="range" id="sp-embedding-scale" min="0.5" max="2.5" step="0.05" value="1.0" style="flex:1;accent-color:var(--accent,#223742);">
+              <span id="sp-embedding-scale-val" style="min-width:32px;text-align:right;font-size:13px;">1.00</span>
+            </div>
+          </label>
+          <label class="vs-label">Alpha <span style="color:var(--text-dim);font-size:11px;">ref timbre influence</span>
+            <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
+              <input type="range" id="sp-alpha" min="0" max="1" step="0.05" value="0.3" style="flex:1;accent-color:var(--accent,#223742);">
+              <span id="sp-alpha-val" style="min-width:32px;text-align:right;font-size:13px;">0.30</span>
+            </div>
+          </label>
+          <label class="vs-label">Beta <span style="color:var(--text-dim);font-size:11px;">ref prosody influence</span>
+            <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
+              <input type="range" id="sp-beta" min="0" max="1" step="0.05" value="0.7" style="flex:1;accent-color:var(--accent,#223742);">
+              <span id="sp-beta-val" style="min-width:32px;text-align:right;font-size:13px;">0.70</span>
+            </div>
+          </label>
+        </div>
       </div>
     </div>
 
     <!-- Voice Synthesis tab -->
     <div id="tab-voice" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div id="vs-resume-section" class="vs-section" style="display:none">
+        <div class="vs-section-title">Saved Runs</div>
+        <div id="vs-resume-list"></div>
+      </div>
       <div class="vs-section">
         <div class="vs-section-title">Train a Voice Model</div>
         <div id="vs-dropzone" class="vs-dropzone">
@@ -350,8 +592,9 @@ html, body {
         <div class="vs-section-title">Training progress</div>
         <div class="vs-progress-header"><span id="vs-step-label">—</span><span id="vs-pct-label" style="color:var(--text-dim);font-size:12px">0%</span></div>
         <div class="vs-progress-track"><div class="vs-progress-fill" id="vs-progress-fill" style="width:0%"></div></div>
-        <div class="vs-time-row"><span id="vs-elapsed-label" class="vs-time-chip">Elapsed: —</span><span id="vs-eta-label" class="vs-time-chip">ETA: —</span></div>
+        <div class="vs-time-row"><span id="vs-elapsed-label" class="vs-time-chip">Elapsed: —</span><span id="vs-avg-label" class="vs-time-chip">Avg/epoch: —</span><span id="vs-eta-label" class="vs-time-chip">ETA: —</span></div>
         <div id="vs-detail-label" class="vs-detail"></div>
+        <button id="vs-pause-btn" style="display:none;margin-top:10px;font-size:12px;padding:5px 14px;background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-dim);cursor:pointer;" type="button">Pause training</button>
         <div class="cp-widget" style="margin-top:14px;max-height:280px;overflow-y:auto">
           <div class="cp-widget-header"><span class="cp-widget-title">Training log</span><span class="cp-widget-badge" id="vs-log-badge">—</span></div>
           <div class="log-body" id="vs-log-lines" style="max-height:220px;overflow-y:auto"></div>
@@ -376,7 +619,31 @@ html, body {
       </div>
     </div>
 
+    <!-- LLM Configs tab -->
+    <div id="tab-llmconfigs" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div class="vs-section">
+        <div class="vs-section-title">LLM Configurations</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 16px;">
+          Save a snapshot of your Servers, Models, Agents and Coding Conventions. Restoring a config stops all running servers, applies the snapshot, then boots any server with Auto-start on.
+        </p>
+        <div style="display:flex;gap:10px;margin-bottom:24px;">
+          <input id="lcfg-name" class="vs-input" type="text" placeholder="Config name" style="flex:1;font-size:13px;">
+          <input id="lcfg-desc" class="vs-input" type="text" placeholder="Description (optional)" style="flex:2;font-size:13px;">
+          <button class="vs-btn-primary" id="lcfg-save-btn" type="button" style="white-space:nowrap;">Save current</button>
+        </div>
+        <div id="lcfg-status" style="font-size:12px;color:var(--text-dim);margin-bottom:16px;min-height:16px;"></div>
+        <div id="lcfg-list"></div>
+      </div>
+    </div>
+
     <!-- Brain tab -->
+    <div id="tab-agents" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+        <span style="font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--text-dim);text-transform:uppercase;">Agents</span>
+      </div>
+      <div id="agent-cards" style="display:flex;flex-direction:column;gap:12px;"></div>
+    </div>
+
     <div id="tab-brain" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
         <div class="vs-section-title">Backups</div>
@@ -391,6 +658,30 @@ html, body {
           <span id="brain-status" style="font-size:12px;color:var(--text-dim);"></span>
         </div>
         <div id="brain-backup-list" style="display:flex;flex-direction:column;gap:8px;"></div>
+      </div>
+    </div>
+
+    <div id="tab-debug" class="cp-tab" style="display:none;flex:1;overflow:hidden;">
+      <div class="dbg-layout">
+        <div class="dbg-sidebar">
+          <div class="dbg-sidebar-head">
+            <span class="dbg-sidebar-title">Threads</span>
+            <button id="dbg-refresh-btn" title="Refresh thread list" style="background:none;border:none;cursor:pointer;color:var(--text-dim);padding:3px 5px;border-radius:5px;font-size:16px;line-height:1;transition:color .1s;" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--text-dim)'">↻</button>
+          </div>
+          <div class="dbg-thread-list" id="dbg-thread-list">
+            <div class="cp-placeholder" style="padding:10px 12px;">Select a tab to load threads</div>
+          </div>
+        </div>
+        <div class="dbg-view">
+          <div class="dbg-view-head" id="dbg-view-head" style="display:none;">
+            <span class="dbg-view-key" id="dbg-view-key"></span>
+            <button id="dbg-view-download" class="mdl-btn-secondary" title="Download the full debug thread (prompts, reasoning, tool calls, results, sub-threads) as a text file" style="font-size:11px;padding:4px 12px;flex-shrink:0;">⬇ Download</button>
+            <button id="dbg-view-refresh" class="mdl-btn-secondary" style="font-size:11px;padding:4px 12px;flex-shrink:0;">↻ Refresh</button>
+          </div>
+          <div class="dbg-view-body" id="dbg-view-body">
+            <div class="dbg-empty">Select a thread to inspect</div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -439,18 +730,25 @@ html, body {
 // ── tab switching ─────────────────────────────────────────
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), conventions: document.getElementById('tab-conventions'), models: document.getElementById('tab-models'), brain: document.getElementById('tab-brain') };
-const TAB_TITLES = { voice: 'Voice Synthesis', voicesettings: 'Voice Settings', conventions: 'Coding Conventions', overview: 'Overview', models: 'Models', brain: 'Brain' };
+const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), conventions: document.getElementById('tab-conventions'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug') };
+const TAB_TITLES = { voice: 'Voice Synthesis', voicesettings: 'Voice Settings', conventions: 'Coding Conventions', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', llmconfigs: 'LLM Configs', debug: 'Debug Thread' };
 
+let srvPollTimer = null;
 function switchTab(name) {
     navItems.forEach(n => n.classList.toggle('active', n.dataset.tab === name));
     Object.entries(tabs).forEach(([k, el]) => { if (el) el.style.display = k === name ? '' : 'none'; });
     cpTitle.textContent = TAB_TITLES[name] || 'Overview';
     const gw = document.getElementById('cp-grid-wrap');
     if (gw) gw.style.display = name === 'overview' ? '' : 'none';
+    if (name !== 'servers') { clearTimeout(srvPollTimer); srvPollTimer = null; }
+    if (name !== 'debug') dbgCloseWatch();
     if (name === 'conventions') loadConventions();
     if (name === 'models') loadModels();
     if (name === 'brain') loadBrain();
+    if (name === 'servers') loadServers();
+    if (name === 'agents') loadAgents();
+    if (name === 'llmconfigs') loadLLMConfigs();
+    if (name === 'debug') loadDebugThreads();
 }
 navItems.forEach(n => n.addEventListener('click', () => switchTab(n.dataset.tab)));
 switchTab('overview');
@@ -463,7 +761,7 @@ async function loadBrain() {
     const list = document.getElementById('brain-backup-list');
     list.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Loading…</span>';
     try {
-        const r = await fetch('/api/cp/brain/backups');
+        const r = await fetch('/admin/brain/backups');
         const backups = await r.json();
         if (!Array.isArray(backups) || backups.length === 0) { list.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">No backups yet.</span>'; return; }
         list.innerHTML = '';
@@ -487,7 +785,7 @@ async function loadBrain() {
 document.getElementById('brain-backup-btn').addEventListener('click', async () => {
     const s = brainStatus(); s.textContent = 'Creating backup…';
     try {
-        const r = await fetch('/api/cp/brain/backup', { method: 'POST' });
+        const r = await fetch('/admin/brain/backup', { method: 'POST' });
         const d = await r.json();
         s.textContent = d.message || 'Backup created.';
         loadBrain();
@@ -498,7 +796,7 @@ async function restoreBackup(file, count) {
     if (!confirm(`Restore ${count} note(s) from\n${file}?\n\nThis recreates missing notes and overwrites present ones to the snapshot. It does not delete anything.`)) return;
     const s = brainStatus(); s.textContent = 'Restoring…';
     try {
-        const r = await fetch('/api/cp/brain/restore', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ file }) });
+        const r = await fetch('/admin/brain/restore', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ file }) });
         const d = await r.json();
         s.textContent = d.message || 'Restored.';
         loadBrain();
@@ -510,7 +808,7 @@ let conventionsLoaded = false;
 async function loadConventions() {
     if (conventionsLoaded) return;
     try {
-        const r = await fetch('/api/cp/conventions');
+        const r = await fetch('/admin/conventions');
         const d = await r.json();
         document.getElementById('cv-text').value = d.text || '';
         conventionsLoaded = true;
@@ -521,13 +819,75 @@ document.getElementById('cv-save-btn').addEventListener('click', async () => {
     const text   = document.getElementById('cv-text').value;
     status.textContent = 'Saving…';
     try {
-        await fetch('/api/cp/conventions', {
+        await fetch('/admin/conventions', {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
             body:    JSON.stringify({ text }),
         });
         status.textContent = 'Saved — applies to new coding threads.';
         setTimeout(() => { status.textContent = ''; }, 4000);
+    } catch { status.textContent = 'Save failed.'; }
+});
+
+// ── LLM Configs ───────────────────────────────────────────
+async function loadLLMConfigs() {
+    const list   = document.getElementById('lcfg-list');
+    const status = document.getElementById('lcfg-status');
+    list.innerHTML = '<span style="color:var(--text-dim);font-size:13px;">Loading…</span>';
+    try {
+        const configs = await fetch('/admin/llmconfigs').then(r => r.json());
+        if (!configs.length) { list.innerHTML = '<span style="color:var(--text-dim);font-size:13px;">No saved configs yet.</span>'; return; }
+        list.innerHTML = '';
+        configs.forEach(cfg => {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px;margin-bottom:8px;';
+            const savedAt = cfg.savedAt ? new Date(cfg.savedAt).toLocaleString() : '';
+            const kb = cfg.sizeBytes ? `${(cfg.sizeBytes/1024).toFixed(1)} KB` : '';
+            row.innerHTML = `
+                <div style="flex:1;min-width:0;">
+                    <div style="font-weight:600;font-size:14px;color:var(--text);">${escHtml(cfg.name)}</div>
+                    ${cfg.description ? `<div style="font-size:12px;color:var(--text-dim);margin-top:2px;">${escHtml(cfg.description)}</div>` : ''}
+                    <div style="font-size:11px;color:var(--text-dim);margin-top:4px;">${savedAt}${kb ? ' · ' + kb : ''}</div>
+                </div>
+                <button class="mdl-btn-secondary lcfg-restore" data-file="${escHtml(cfg.fileName)}" style="font-size:12px;color:#d97706;border-color:#d97706;">Restore</button>
+                <button class="mdl-btn-secondary lcfg-delete"  data-file="${escHtml(cfg.fileName)}" style="font-size:12px;color:#dc2626;border-color:#fca5a5;">Delete</button>`;
+            row.querySelector('.lcfg-restore').addEventListener('click', async () => {
+                if (!confirm(`Restore "${cfg.name}"?\n\nAll running servers will stop, the config will be applied, then servers with Auto-start will boot.`)) return;
+                status.textContent = 'Restoring…';
+                try {
+                    const r = await fetch(`/admin/llmconfigs/${encodeURIComponent(cfg.fileName)}/restore`, { method: 'POST' });
+                    if (!r.ok) { const e = await r.json().catch(()=>{}); status.textContent = e?.error ?? 'Restore failed.'; return; }
+                    status.textContent = 'Restored. Servers booting…';
+                    setTimeout(() => { status.textContent = ''; }, 5000);
+                } catch { status.textContent = 'Restore failed.'; }
+            });
+            row.querySelector('.lcfg-delete').addEventListener('click', async () => {
+                if (!confirm(`Delete config "${cfg.name}"? This cannot be undone.`)) return;
+                await fetch(`/admin/llmconfigs/${encodeURIComponent(cfg.fileName)}`, { method: 'DELETE' });
+                loadLLMConfigs();
+            });
+            list.appendChild(row);
+        });
+    } catch { list.innerHTML = '<span style="color:#dc2626;font-size:13px;">Failed to load configs.</span>'; }
+}
+
+document.getElementById('lcfg-save-btn').addEventListener('click', async () => {
+    const name   = document.getElementById('lcfg-name').value.trim();
+    const desc   = document.getElementById('lcfg-desc').value.trim();
+    const status = document.getElementById('lcfg-status');
+    if (!name) { status.textContent = 'Enter a name first.'; return; }
+    status.textContent = 'Saving…';
+    try {
+        const r = await fetch('/admin/llmconfigs/save', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, description: desc }),
+        });
+        if (!r.ok) { const e = await r.json().catch(()=>{}); status.textContent = e?.error ?? 'Save failed.'; return; }
+        status.textContent = 'Saved.';
+        document.getElementById('lcfg-name').value = '';
+        document.getElementById('lcfg-desc').value = '';
+        setTimeout(() => { status.textContent = ''; }, 3000);
+        loadLLMConfigs();
     } catch { status.textContent = 'Save failed.'; }
 });
 
@@ -641,7 +1001,7 @@ function appendLogLine(text) {
     else scrollHint.classList.add('visible');
 }
 (function connectLog() {
-    const es = new EventSource('/api/cp/log');
+    const es = new EventSource('/admin/log');
     es.onopen    = () => { logStatus.textContent = 'live'; logStatus.classList.add('live'); };
     es.onerror   = () => { logStatus.textContent = 'reconnecting…'; logStatus.classList.remove('live'); setTimeout(connectLog, 3000); es.close(); };
     es.onmessage = e  => appendLogLine(e.data.replace(/↵/g, '\n'));
@@ -686,19 +1046,34 @@ const ramChart = new Chart(ramCtx, {
 });
 
 // ── RAM pie chart ─────────────────────────────────────────
-const PIE_COLORS = {
-    Logic:    ['#518c9a', '#a8d5dd'],
-    Dialogue: ['#7c5cbf', '#c4b5fd'],
-    TTS:      ['#4a9e6c'],
-};
-function pieColor(serverName, idx) {
-    const p = PIE_COLORS[serverName] ?? ['#6b7280', '#9ca3af'];
-    return p[idx] ?? p[p.length - 1];
+// ARI base hue: ~190° (teal). All servers including StyleTTS2 share the rotation.
+const ARI_BASE_HUE = 190;
+
+// Build hue assignments fresh each time the server list changes.
+// N servers → hues spaced 360/N apart, starting at ARI_BASE_HUE.
+let _serverHueCache = {}; // serverName → hue°
+let _lastServerKey  = '';
+
+function buildServerHues(serverNames) {
+    const key = serverNames.join(',');
+    if (key === _lastServerKey) return;
+    _lastServerKey = key;
+    _serverHueCache = {};
+    const n = serverNames.length;
+    serverNames.forEach((name, i) => {
+        _serverHueCache[name] = (ARI_BASE_HUE + i * (360 / Math.max(n, 1))) % 360;
+    });
 }
+
+function hslForServer(serverName, isKv) {
+    const h = _serverHueCache[serverName] ?? ARI_BASE_HUE;
+    return isKv ? `hsl(${h},38%,55%)` : `hsl(${h},38%,30%)`;
+}
+
 const ramPieCtx = document.getElementById('ram-pie-chart').getContext('2d');
 const ramPieChart = new Chart(ramPieCtx, {
     type: 'doughnut',
-    data: { labels: [], datasets: [{ data: [], backgroundColor: [], borderWidth: 1, borderColor: 'rgba(0,0,0,.08)' }] },
+    data: { labels: [], datasets: [{ data: [], backgroundColor: [], borderWidth: 2, borderColor: 'rgba(0,0,0,.12)' }] },
     options: {
         animation: false, responsive: true, maintainAspectRatio: false, cutout: '58%',
         plugins: {
@@ -713,22 +1088,37 @@ function updateRamPie(breakdown) {
     const json = JSON.stringify(breakdown);
     if (json === lastBreakdownJson) return;
     lastBreakdownJson = json;
-    const serverIdx = {}, labels = [], values = [], colors = [];
+
+    // All unique server names in stable order (excluding generic 'System' fallback)
+    const allServers = [...new Set(breakdown.map(s => s.serverName).filter(n => n !== 'System'))];
+    buildServerHues(allServers);
+
+    const labels = [], values = [], colors = [];
+    const serverSegCount = {};
     breakdown.forEach(seg => {
-        const i = serverIdx[seg.serverName] ?? 0;
-        serverIdx[seg.serverName] = i + 1;
-        labels.push(seg.label); values.push(seg.mb); colors.push(pieColor(seg.serverName, i));
+        const segIdx = serverSegCount[seg.serverName] ?? 0;
+        serverSegCount[seg.serverName] = segIdx + 1;
+        const isKv = segIdx > 0; // first segment per server = model weights, subsequent = KV cache
+        labels.push(seg.label);
+        values.push(seg.mb);
+        colors.push(hslForServer(seg.serverName, isKv));
     });
+
     ramPieChart.data.labels = labels;
     ramPieChart.data.datasets[0].data = values;
     ramPieChart.data.datasets[0].backgroundColor = colors;
     ramPieChart.update('none');
+
     ramPieLegend.innerHTML = '';
     breakdown.forEach((seg, i) => {
+        const isKv = colors[i] === hslForServer(seg.serverName, true) && i > 0;
+        const segIdx = breakdown.slice(0, i).filter(s => s.serverName === seg.serverName).length;
+        const kvRow  = segIdx > 0;
         const row = document.createElement('div');
         row.className = 'pie-legend-row';
-        row.innerHTML = `<span class="pie-legend-swatch" style="background:${colors[i]}"></span>`
-            + `<span class="pie-legend-label" title="${escHtml(seg.label)}">${escHtml(seg.label)}</span>`
+        if (kvRow) row.style.cssText = 'padding-left:4px;';
+        row.innerHTML = `<span class="pie-legend-swatch" style="background:${colors[i]};opacity:${kvRow?.75:1}"></span>`
+            + `<span class="pie-legend-label" title="${escHtml(seg.label)}" style="color:${kvRow?'var(--text-dim)':'var(--text)'}">${escHtml(seg.label)}</span>`
             + `<span class="pie-legend-val">${fmtMb(seg.mb)}</span>`;
         ramPieLegend.appendChild(row);
     });
@@ -849,7 +1239,7 @@ function fmtMbShort(mb) { return mb >= 1024 ? (mb / 1024).toFixed(1) + 'G'  : mb
 let prevLiveKeys = '';
 async function pollRam() {
     try {
-        const res = await fetch('/api/cp/ram');
+        const res = await fetch('/admin/ram');
         const data = await res.json();
         const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         ramLabels.push(now); ramData.push(data.ramMb); swapData.push(data.swapMb ?? 0);
@@ -868,13 +1258,468 @@ async function pollRam() {
 }
 async function pollStats() {
     try {
-        const res = await fetch('/api/cp/stats');
+        const res = await fetch('/admin/stats');
         const data = await res.json();
         renderTokens(data.calls);
     } catch { /* ignore */ }
 }
 pollRam(); setInterval(pollRam, 1000);
 pollStats(); setInterval(pollStats, 5000);
+
+// ── Servers ───────────────────────────────────────────────
+const srvCards      = document.getElementById('srv-cards');
+const srvModalOverlay = document.getElementById('srv-modal-overlay');
+const srvModalTitle  = document.getElementById('srv-modal-title');
+const srvModalErr    = document.getElementById('srv-modal-err');
+const srvFName       = document.getElementById('srv-f-name');
+const srvFPort       = document.getElementById('srv-f-port');
+const srvFSlots      = document.getElementById('srv-f-slots');
+const srvFCtx        = document.getElementById('srv-f-ctx');
+const srvFCtxSlider  = document.getElementById('srv-f-ctx-slider');
+const srvFKvk        = document.getElementById('srv-f-kvk');
+const srvFKvv        = document.getElementById('srv-f-kvv');
+const srvFModel      = document.getElementById('srv-f-model');
+const srvFBoot       = document.getElementById('srv-f-boot');
+const srvFUnified    = document.getElementById('srv-f-unified');
+const srvFUnifiedTrack = document.getElementById('srv-f-unified-track');
+const srvFUnifiedThumb = document.getElementById('srv-f-unified-thumb');
+const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#223742';
+function syncUnifiedToggle() {
+    const on = srvFUnified.checked;
+    srvFUnifiedTrack.style.background = on ? accent : '#d1d5db';
+    srvFUnifiedThumb.style.transform  = on ? 'translateX(18px)' : 'translateX(0)';
+}
+srvFUnified.addEventListener('change', () => { syncUnifiedToggle(); updateSrvRamEstimate(); });
+
+const CTX_STEPS = [4096, 8192, 16384, 32768, 65536, 131072, 262144];
+
+function ctxTokensToText(tokens) { return (tokens / 1024).toFixed(0) + 'K'; }
+function ctxTextToTokens(text) {
+    const m = text.trim().match(/^(\d+(?:\.\d+)?)\s*[Kk]?$/);
+    if (!m) return null;
+    const n = parseFloat(m[1]);
+    return text.trim().toUpperCase().endsWith('K') ? Math.round(n * 1024) : Math.round(n);
+}
+function ctxSliderIndex(tokens) {
+    let best = 0;
+    for (let i = 0; i < CTX_STEPS.length; i++) if (CTX_STEPS[i] <= tokens) best = i;
+    return best;
+}
+
+srvFCtxSlider.addEventListener('input', () => {
+    const tokens = CTX_STEPS[parseInt(srvFCtxSlider.value, 10)];
+    srvFCtx.value = ctxTokensToText(tokens);
+    updateSrvRamEstimate();
+});
+srvFCtx.addEventListener('change', () => {
+    const tokens = ctxTextToTokens(srvFCtx.value);
+    if (tokens) {
+        srvFCtxSlider.value = ctxSliderIndex(tokens);
+        srvFCtx.value = ctxTokensToText(tokens);
+    }
+    updateSrvRamEstimate();
+});
+
+function fmtRamMb(mb) {
+    return mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB';
+}
+
+function updateSrvRamEstimate() {
+    const ctx     = ctxTextToTokens(srvFCtx.value) ?? 32768;
+    const slots   = Math.max(1, parseInt(srvFSlots.value, 10) || 1);
+    const kBits   = parseInt(srvFKvk.value, 10) || 4;
+    const vBits   = parseInt(srvFKvv.value, 10) || 4;
+    // Unified cache shares one KV pool across all slots — only pay for 1 slot's worth.
+    const kvSlots = srvFUnified.checked ? 1 : slots;
+
+    const modelName = srvFModel.value;
+    const modelObj  = srvAllModels.find(m => m.name === modelName);
+    const weightsMb = modelObj?.fileSizeMb ?? 0;
+
+    // KV cache: n_layers * n_kv_heads * head_dim * 2 (K+V) * bytes_per_element * ctx * slots
+    // Use exact arch params from GGUF when available; fall back to param-count heuristic.
+    let kvMb = null;
+    const arch = modelObj?.kvArch;
+    if (arch) {
+        const bytesPerElem = (kBits + vBits) / 8 / 2; // avg of K and V quant in bytes
+        const bytesPerToken = arch.nLayers * arch.nKvHeads * arch.headDim * 2 * bytesPerElem;
+        kvMb = (bytesPerToken * ctx * kvSlots) / (1024 * 1024);
+    } else if (weightsMb > 0) {
+        // Fallback: estimate param count from file size at ~4.5 bpw, then use 7B MHA reference
+        // 7B dense MHA (32L × 32kv × 128d): 524288 bytes/token at f16 = 500 MB/K-tokens
+        const totalP = weightsMb * 8 / (4.5 * 1000);
+        const kvPerKtokPerSlotF16 = (totalP / 7) * 500;
+        const quantScale = (kBits + vBits) / 32;
+        kvMb = (ctx / 1024) * kvSlots * kvPerKtokPerSlotF16 * quantScale;
+    }
+
+    const ramEl   = document.getElementById('srv-ram-estimate');
+    const wEl     = document.getElementById('srv-ram-weights');
+    const kvEl    = document.getElementById('srv-ram-kv');
+    const totEl   = document.getElementById('srv-ram-total');
+
+    ramEl.style.display = '';
+    wEl.textContent  = weightsMb > 0 ? fmtRamMb(weightsMb) : '—';
+    kvEl.textContent = kvMb !== null ? '~' + fmtRamMb(kvMb) : '—';
+    if (weightsMb > 0 && kvMb !== null) {
+        totEl.textContent = '~' + fmtRamMb(weightsMb + kvMb);
+    } else if (kvMb !== null) {
+        totEl.textContent = '~' + fmtRamMb(kvMb) + ' (KV only)';
+    } else if (weightsMb > 0) {
+        totEl.textContent = fmtRamMb(weightsMb) + ' (weights only)';
+    } else {
+        totEl.textContent = '—';
+    }
+}
+
+let srvEditId = null;
+let srvAllModels = [];
+
+// Wire up live RAM estimate updates
+['srv-f-slots', 'srv-f-kvk', 'srv-f-kvv', 'srv-f-model'].forEach(id => {
+    document.getElementById(id).addEventListener('change', updateSrvRamEstimate);
+});
+document.getElementById('srv-f-slots').addEventListener('input', updateSrvRamEstimate);
+
+function srvStatusColor(s) {
+    return { Online:'#16a34a', Starting:'#ca8a04', Stopping:'#ca8a04', Offline:'#9ca3af' }[s] ?? '#9ca3af';
+}
+function srvStatusBg(s) {
+    return { Online:'#dcfce7', Starting:'#fef9c3', Stopping:'#fef9c3', Offline:'#f3f4f6' }[s] ?? '#f3f4f6';
+}
+
+// ── Agents ────────────────────────────────────────────────────────────────────
+
+async function loadAgents() {
+    const container = document.getElementById('agent-cards');
+    container.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Loading…</span>';
+    let agents, servers;
+    try {
+        const [ra, rs] = await Promise.all([fetch('/agents'), fetch('/models')]);
+        agents  = (await ra.json()).agents  ?? [];
+        servers = (await rs.json()).servers ?? [];
+    } catch { container.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Failed to load.</span>'; return; }
+
+    container.innerHTML = '';
+    agents.forEach(a => {
+        const card = document.createElement('div');
+        card.className = 'mdl-card';
+        card.style.cssText = 'padding:18px 20px;';
+
+        const serverOpts = servers.map(s =>
+            `<option value="${escHtml(s.name)}" ${s.name === a.serverName ? 'selected' : ''}>${escHtml(s.name)}</option>`
+        ).join('');
+
+        const fv = (v, def = '') => v != null ? v : def;
+        const enabledStyle = a.enabled
+            ? 'background:#dcfce7;color:#166534;'
+            : 'background:#f3f4f6;color:#6b7280;';
+
+        card.innerHTML = `
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <span style="font-weight:700;font-size:14px;">${escHtml(a.name)}</span>
+                    <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text-dim);cursor:pointer;">
+                        <input type="checkbox" class="ag-enabled" ${a.enabled ? 'checked' : ''}> Enabled
+                    </label>
+                </div>
+                <button class="ag-expand-btn" style="font-size:11px;padding:3px 10px;border:1px solid var(--border);border-radius:4px;background:transparent;color:var(--text-dim);cursor:pointer;">Details ▾</button>
+            </div>
+            <div style="display:grid;grid-template-columns:2fr 1fr;gap:8px;align-items:end;">
+                <label class="vs-label" style="font-size:12px;">Server
+                    <select class="vs-input ag-server" style="font-size:12px;padding:5px 8px;margin-top:3px;">${serverOpts}</select>
+                </label>
+                <label class="vs-label" style="font-size:12px;">Slot
+                    <input class="vs-input ag-slot" type="number" min="0" value="${fv(a.slot, 0)}" style="font-size:12px;padding:5px 8px;margin-top:3px;">
+                </label>
+            </div>
+            <div class="ag-details" style="display:none;border-top:1px solid var(--border);padding-top:14px;margin-top:12px;">
+                <div style="font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em;">System Prompt</div>
+                <div class="ag-sysprompt-tabs" style="display:flex;gap:6px;margin-bottom:8px;">
+                    <button class="ag-tab-edit vs-btn-primary" style="font-size:11px;padding:3px 10px;">Edit</button>
+                    <button class="ag-tab-preview" style="font-size:11px;padding:3px 10px;border:1px solid var(--border);border-radius:4px;background:transparent;color:var(--text-dim);cursor:pointer;">Preview</button>
+                </div>
+                <textarea class="vs-input ag-sysprompt" rows="7" style="font-size:12px;padding:6px 8px;font-family:monospace;resize:vertical;width:100%;margin-bottom:8px;">${escHtml(fv(a.systemPrompt, ''))}</textarea>
+                <div class="ag-sysprompt-preview" style="display:none;border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-size:13px;line-height:1.6;min-height:80px;max-height:320px;overflow-y:auto;margin-bottom:8px;"></div>
+                <div style="font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:8px;margin-top:4px;text-transform:uppercase;letter-spacing:.06em;">Sampling</div>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px;">
+                    <label class="vs-label" style="font-size:12px;">Temperature<input class="vs-input ag-temp" type="number" step="0.05" min="0" max="2" value="${fv(a.temperature, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
+                    <label class="vs-label" style="font-size:12px;">Top-P<input class="vs-input ag-topp" type="number" step="0.01" min="0" max="1" value="${fv(a.topP, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
+                    <label class="vs-label" style="font-size:12px;">Top-K<input class="vs-input ag-topk" type="number" min="0" value="${fv(a.topK, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px;">
+                    <label class="vs-label" style="font-size:12px;">Repeat penalty<input class="vs-input ag-rep" type="number" step="0.01" min="0" value="${fv(a.repeatPenalty, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
+                    <label class="vs-label" style="font-size:12px;">Presence penalty<input class="vs-input ag-pres" type="number" step="0.01" value="${fv(a.presencePenalty, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
+                    <label class="vs-label" style="font-size:12px;">Frequency penalty<input class="vs-input ag-freq" type="number" step="0.01" value="${fv(a.frequencyPenalty, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
+                </div>
+                <div style="font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:8px;text-transform:uppercase;letter-spacing:.06em;">Limits</div>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px;">
+                    <label class="vs-label" style="font-size:12px;">Max tokens<input class="vs-input ag-maxtok" type="number" min="-1" value="${fv(a.maxTokens, -1)}" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
+                    <label class="vs-label" style="font-size:12px;">Max context<input class="vs-input ag-maxctx" type="number" min="0" value="${fv(a.maxContextTokens, 0)}" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
+                    <label class="vs-label" style="font-size:12px;">Max tool calls<input class="vs-input ag-maxtool" type="number" min="0" value="${fv(a.maxToolCalls, 0)}" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
+                </div>
+                <div style="display:flex;align-items:center;gap:16px;">
+                    <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text-dim);cursor:pointer;">
+                        <input type="checkbox" class="ag-think" ${a.think ? 'checked' : ''}> Think
+                    </label>
+                    <label class="vs-label" style="font-size:12px;flex-direction:row;align-items:center;gap:8px;margin:0;">
+                        Thinking budget <input class="vs-input ag-thinkbudget" type="number" min="0" value="${fv(a.thinkingBudget, 0)}" style="font-size:12px;padding:5px 8px;width:90px;">
+                    </label>
+                </div>
+            </div>
+            <div class="ag-save-status" style="font-size:11px;color:var(--text-dim);margin-top:6px;min-height:14px;"></div>`;
+
+        const agServer    = card.querySelector('.ag-server');
+        const agSlot      = card.querySelector('.ag-slot');
+        const agEnabled   = card.querySelector('.ag-enabled');
+        const agSysprompt = card.querySelector('.ag-sysprompt');
+        const agTemp      = card.querySelector('.ag-temp');
+        const agTopP      = card.querySelector('.ag-topp');
+        const agTopK      = card.querySelector('.ag-topk');
+        const agRep       = card.querySelector('.ag-rep');
+        const agPres      = card.querySelector('.ag-pres');
+        const agFreq      = card.querySelector('.ag-freq');
+        const agMaxTok    = card.querySelector('.ag-maxtok');
+        const agMaxCtx    = card.querySelector('.ag-maxctx');
+        const agMaxTool   = card.querySelector('.ag-maxtool');
+        const agThink     = card.querySelector('.ag-think');
+        const agThinkBudget = card.querySelector('.ag-thinkbudget');
+        const agDetails   = card.querySelector('.ag-details');
+        const agExpandBtn = card.querySelector('.ag-expand-btn');
+        const saveStatus  = card.querySelector('.ag-save-status');
+        let saveTimer;
+
+        agExpandBtn.addEventListener('click', () => {
+            const open = agDetails.style.display === 'none';
+            agDetails.style.display = open ? '' : 'none';
+            agExpandBtn.textContent = open ? 'Details ▴' : 'Details ▾';
+        });
+
+        const agTabEdit    = card.querySelector('.ag-tab-edit');
+        const agTabPreview = card.querySelector('.ag-tab-preview');
+        const agPreviewDiv = card.querySelector('.ag-sysprompt-preview');
+
+        function showEditTab() {
+            agSysprompt.style.display = '';
+            agPreviewDiv.style.display = 'none';
+            agTabEdit.style.opacity = '1';
+            agTabPreview.style.opacity = '.5';
+        }
+        function showPreviewTab() {
+            agPreviewDiv.innerHTML = typeof marked !== 'undefined'
+                ? marked.parse(agSysprompt.value || '_No system prompt set._')
+                : `<pre style="white-space:pre-wrap">${escHtml(agSysprompt.value)}</pre>`;
+            agSysprompt.style.display = 'none';
+            agPreviewDiv.style.display = '';
+            agTabEdit.style.opacity = '.5';
+            agTabPreview.style.opacity = '1';
+        }
+        agTabEdit.addEventListener('click', showEditTab);
+        agTabPreview.addEventListener('click', showPreviewTab);
+        showEditTab();
+
+        const parseNum = (el, fallback = null) => {
+            const v = parseFloat(el.value);
+            return isNaN(v) ? fallback : v;
+        };
+        const parseInt2 = (el, fallback = null) => {
+            const v = parseInt(el.value, 10);
+            return isNaN(v) ? fallback : v;
+        };
+
+        async function saveAgent() {
+            clearTimeout(saveTimer);
+            saveTimer = setTimeout(async () => {
+                const body = {
+                    name:             a.name,
+                    serverName:       agServer.value,
+                    slot:             parseInt2(agSlot, 0),
+                    enabled:          agEnabled.checked,
+                    systemPrompt:     agSysprompt.value,
+                    temperature:      parseNum(agTemp),
+                    topP:             parseNum(agTopP),
+                    topK:             parseInt2(agTopK),
+                    repeatPenalty:    parseNum(agRep),
+                    presencePenalty:  parseNum(agPres),
+                    frequencyPenalty: parseNum(agFreq),
+                    maxTokens:        parseInt2(agMaxTok, -1),
+                    maxContextTokens: parseInt2(agMaxCtx, 0),
+                    maxToolCalls:     parseInt2(agMaxTool, 0),
+                    think:            agThink.checked,
+                    thinkingBudget:   parseInt2(agThinkBudget, 0),
+                };
+                try {
+                    const r = await fetch(`/agents/${encodeURIComponent(a.name)}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body),
+                    });
+                    if (!r.ok) throw new Error();
+                    saveStatus.textContent = 'Saved.';
+                    setTimeout(() => { saveStatus.textContent = ''; }, 2000);
+                } catch { saveStatus.textContent = 'Save failed.'; }
+            }, 600);
+        }
+
+        [agServer, agSlot, agEnabled, agThink].forEach(el => el.addEventListener('change', saveAgent));
+        [agSysprompt, agTemp, agTopP, agTopK, agRep, agPres, agFreq, agMaxTok, agMaxCtx, agMaxTool, agThinkBudget]
+            .forEach(el => el.addEventListener('input', saveAgent));
+
+        container.appendChild(card);
+    });
+}
+
+async function loadServers() {
+    let data;
+    try {
+        const r = await fetch('/models');
+        if (!r.ok) { console.error('[loadServers] HTTP', r.status, await r.text()); renderServerCards([]); return; }
+        data = await r.json();
+    } catch(e) { console.error('[loadServers] fetch/parse error:', e); renderServerCards([]); return; }
+    srvAllModels = data.models ?? [];
+    renderServerCards(data.servers ?? []);
+    clearTimeout(srvPollTimer);
+    const hasTransient = (data.servers ?? []).some(s => s.status === 'Starting' || s.status === 'Stopping');
+    srvPollTimer = setTimeout(loadServers, hasTransient ? 1500 : 6000);
+}
+
+function renderServerCards(servers) {
+    srvCards.innerHTML = '';
+    if (servers.length === 0) {
+        srvCards.innerHTML = '<div class="cp-placeholder">No servers configured. Click "+ New server" to add one.</div>';
+        return;
+    }
+    servers.forEach(s => {
+        const card = document.createElement('div');
+        card.className = 'mdl-card';
+        const statusColor = srvStatusColor(s.status);
+        const statusBg    = srvStatusBg(s.status);
+        const isOnline  = s.status === 'Online';
+        const isOffline = s.status === 'Offline';
+        const isBusy    = s.status === 'Starting' || s.status === 'Stopping';
+
+        const activeModel = s.activeModelName ? escHtml(s.activeModelName) : '<span style="color:var(--text-dim);font-style:italic">idle</span>';
+        const startupModel = s.currentModelName ? escHtml(s.currentModelName) : '<span style="color:var(--text-dim);font-style:italic">none</span>';
+
+        card.innerHTML = `
+            <div class="mdl-card-header" style="margin-bottom:14px;">
+                <span class="mdl-card-name">${escHtml(s.name)}</span>
+                <span style="font-size:11px;font-weight:600;border-radius:20px;padding:2px 10px;background:${statusBg};color:${statusColor};">${escHtml(s.status)}</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 20px;font-size:12px;color:var(--text-dim);margin-bottom:14px;">
+                <div>Port <span style="color:var(--text);font-weight:600;">${s.port}</span></div>
+                <div>Slots <span style="color:var(--text);font-weight:600;">${s.parallelSlots}</span></div>
+                <div>Context <span style="color:var(--text);font-weight:600;">${(s.contextSize/1024).toFixed(0)}K${s.unifiedCache ? ' <span style="color:#0369a1;">(unified)</span>' : ''}</span></div>
+                <div>KV <span style="color:var(--text);font-weight:600;">K${s.kvCacheQuantK}/V${s.kvCacheQuantV}</span></div>
+                <div>Active model <span style="color:var(--text);font-weight:600;">${activeModel}</span></div>
+                <div>Startup model <span style="color:var(--text);font-weight:600;">${startupModel}</span></div>
+                <div>Auto-start <span style="color:var(--text);font-weight:600;">${s.autoStart ? 'Yes' : 'No'}</span></div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <button class="vs-btn-primary srv-start-btn" data-id="${s.id}" ${!isOffline?'disabled':''} style="font-size:12px;padding:6px 14px;background:${isOffline?'#16a34a':'#6b9e7a'};border-color:${isOffline?'#16a34a':'#6b9e7a'};color:#fff;opacity:${isOffline?'1':'0.6'};">Start</button>
+                <button class="mdl-btn-secondary srv-stop-btn"    data-id="${s.id}" ${!isOnline?'disabled':''} style="font-size:12px;background:#c0392b;border-color:#c0392b;color:#fff;">Stop</button>
+                <button class="mdl-btn-secondary srv-restart-btn" data-id="${s.id}" ${!isOnline?'disabled':''} style="font-size:12px;background:#d68910;border-color:#d68910;color:#fff;">Restart</button>
+                <select class="vs-input srv-model-select" data-id="${s.id}" data-current="${escHtml(s.currentModelName??'')}" style="font-size:12px;padding:5px 8px;flex:1;min-width:140px;">
+                    ${srvAllModels.map(m => `<option value="${escHtml(m.name)}" ${m.name===s.currentModelName?'selected':''}>${escHtml(m.name)}</option>`).join('')}
+                </select>
+                <button class="mdl-btn-secondary srv-edit-btn"   data-id="${s.id}" style="font-size:12px;">Edit</button>
+                ${isOffline ? `<button class="mdl-btn-secondary srv-delete-btn" data-id="${s.id}" style="font-size:12px;color:#dc2626;border-color:#fca5a5;">Delete</button>` : ''}
+            </div>
+            <div class="srv-model-hint" style="display:none;font-size:11px;color:var(--text-dim);margin-top:6px;">Restart the server for changes to take effect.</div>`;
+
+        card.querySelector('.srv-start-btn').addEventListener('click', async btn => {
+            await srvAction(s.id, 'start'); loadServers();
+        });
+        card.querySelector('.srv-stop-btn').addEventListener('click', async () => {
+            await srvAction(s.id, 'stop'); loadServers();
+        });
+        card.querySelector('.srv-restart-btn').addEventListener('click', async () => {
+            await srvAction(s.id, 'restart'); loadServers();
+        });
+        card.querySelector('.srv-model-select').addEventListener('change', async () => {
+            const sel  = card.querySelector('.srv-model-select');
+            const hint = card.querySelector('.srv-model-hint');
+            const modelName = sel.value;
+            if (!modelName) return;
+            try {
+                const r = await fetch(`/servers/${s.id}/startup-model`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ modelName }) });
+                if (!r.ok) { const e = await r.json().catch(()=>{}); alert(e?.error ?? 'Update failed.'); sel.value = sel.dataset.current; return; }
+                sel.dataset.current = modelName;
+                hint.style.display = modelName !== s.currentModelName ? '' : 'none';
+            } catch { sel.value = sel.dataset.current; }
+        });
+        card.querySelector('.srv-edit-btn').addEventListener('click', () => openSrvModal(s));
+        card.querySelector('.srv-delete-btn')?.addEventListener('click', async () => {
+            if (!confirm(`Delete server "${s.name}"? This cannot be undone.`)) return;
+            await fetch(`/servers/${s.id}`, { method:'DELETE' });
+            loadServers();
+        });
+
+        srvCards.appendChild(card);
+    });
+}
+
+async function srvAction(id, action) {
+    await fetch(`/servers/${id}/${action}`, { method:'POST' });
+}
+
+function populateSrvModelSelect(selectedName) {
+    srvFModel.innerHTML = '<option value="">— none —</option>'
+        + srvAllModels.map(m => `<option value="${escHtml(m.name)}" ${m.name === selectedName ? 'selected' : ''}>${escHtml(m.name)}</option>`).join('');
+}
+
+function openSrvModal(server) {
+    srvEditId = server?.id ?? null;
+    srvModalTitle.textContent = server ? 'Edit server' : 'New server';
+    srvModalErr.textContent = '';
+    srvFName.value  = server?.name ?? '';
+    srvFPort.value  = server?.port ?? 8081;
+    srvFSlots.value = server?.parallelSlots ?? 1;
+    const ctxTokens = server?.contextSize ?? 32768;
+    srvFCtx.value = ctxTokensToText(ctxTokens);
+    srvFCtxSlider.value = ctxSliderIndex(ctxTokens);
+    srvFKvk.value   = server?.kvCacheQuantK ?? 4;
+    srvFKvv.value   = server?.kvCacheQuantV ?? 4;
+    srvFBoot.checked    = server?.autoStart    ?? true;
+    srvFUnified.checked = server?.unifiedCache ?? false; syncUnifiedToggle();
+    populateSrvModelSelect(server?.currentModelName ?? '');
+    srvModalOverlay.style.display = 'flex';
+    srvFName.focus();
+    updateSrvRamEstimate();
+}
+
+function closeSrvModal() { srvModalOverlay.style.display = 'none'; srvEditId = null; }
+
+document.getElementById('srv-add-btn').addEventListener('click', () => openSrvModal(null));
+document.getElementById('srv-modal-cancel').addEventListener('click', closeSrvModal);
+srvModalOverlay.addEventListener('click', e => { if (e.target === srvModalOverlay) closeSrvModal(); });
+
+document.getElementById('srv-modal-save').addEventListener('click', async () => {
+    srvModalErr.textContent = '';
+    const name = srvFName.value.trim();
+    if (!name) { srvModalErr.textContent = 'Name is required.'; return; }
+    const body = {
+        id: srvEditId ?? '00000000-0000-0000-0000-000000000000',
+        name,
+        port:           parseInt(srvFPort.value, 10),
+        parallelSlots:  parseInt(srvFSlots.value, 10),
+        kvCache:        ctxTextToTokens(srvFCtx.value) ?? 32768,
+        kvCacheQuantK:  parseInt(srvFKvk.value, 10),
+        kvCacheQuantV:  parseInt(srvFKvv.value, 10),
+        currentModelName: srvFModel.value || null,
+        bootStartup:    srvFBoot.checked,
+        unifiedCache:   srvFUnified.checked,
+        endpoint:       'http://127.0.0.1',
+    };
+    try {
+        const url    = srvEditId ? `/servers/${srvEditId}` : '/servers';
+        const method = srvEditId ? 'PUT' : 'POST';
+        const r = await fetch(url, { method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+        if (!r.ok) { const e = await r.json().catch(()=>{}); srvModalErr.textContent = e?.error ?? 'Save failed.'; return; }
+        closeSrvModal();
+        loadServers();
+    } catch (ex) { srvModalErr.textContent = 'Network error.'; }
+});
 
 // ── Models ────────────────────────────────────────────────
 let mdlSwitchEs = null;
@@ -888,7 +1733,7 @@ const mdlNoteTimers = {};
 
 async function loadModels() {
     let data;
-    try { const r = await fetch('/api/cp/models'); data = await r.json(); }
+    try { const r = await fetch('/models'); data = await r.json(); }
     catch { return; }
     renderModelCards(data);
     if (data.switching && !mdlSwitchEs) startSwitchProgressSse();
@@ -900,7 +1745,7 @@ function fmtSize(mb) {
 }
 
 function parseModelTags(m) {
-    const fname = (m.file || '').split('/').pop().replace(/\.gguf$/i, '');
+    const fname = (m.name || '').replace(/\.gguf$/i, '');
     const tags = [];
 
     // Total params: 35B, 7B, 0.5B — not preceded by A (active params marker)
@@ -920,16 +1765,14 @@ function parseModelTags(m) {
         : { label: 'Dense', cls: 'dense', title: 'Dense transformer architecture' });
 
     // Vision: hasMmproj = active, supportsVision = capable but mmproj not configured
-    if (m.hasMmproj) {
-        tags.push({ label: 'Vision', cls: 'vision', title: 'Vision active (mmproj configured)' });
-    } else if (m.supportsVision) {
-        tags.push({ label: 'Vision', cls: 'dim', title: 'Vision capable — mmproj not configured' });
+    if (m.mmprojDownloadLink) {
+        tags.push({ label: 'Vision', cls: 'vision', title: 'Vision capable (mmproj available)' });
     } else {
         tags.push({ label: 'No Vision', cls: 'dim', title: 'Text-only model' });
     }
 
     // MTP — from backend flag or filename
-    const hasMTP = m.hasMtp || /[_\-]mtp([_\-\.]|$)/i.test(fname);
+    const hasMTP = m.mtp || /[_\-]mtp([_\-\.]|$)/i.test(fname);
     tags.push(hasMTP
         ? { label: 'MTP',    cls: 'mtp', title: 'Multi-Token Prediction enabled' }
         : { label: 'No MTP', cls: 'dim', title: 'Standard single-token prediction' });
@@ -969,15 +1812,10 @@ function renderModelCards(data) {
         if (m.isStartup)    badges += '<span class="mdl-badge startup">Startup</span>';
         if (!m.downloaded)  badges += '<span class="mdl-badge notdl">Not downloaded</span>';
 
-        const sizeStr = fmtSize(m.sizeMb);
+        const sizeStr = fmtSize(m.fileSizeMb);
 
         // Footer buttons
-        let footer = '';
-        if (!m.active && !switching && m.downloaded)
-            footer += `<button class="vs-btn-primary mdl-switch-btn" data-file="${escHtml(m.file)}" style="font-size:12px;padding:7px 18px;">Load model</button>`;
-        if (!m.isStartup)
-            footer += `<button class="mdl-btn-secondary mdl-startup-btn" data-file="${escHtml(m.file)}">Set as startup</button>`;
-        footer += `<span class="mdl-save-status" style="font-size:12px;color:var(--text-dim);"></span>`;
+        let footer = `<span class="mdl-save-status" style="font-size:12px;color:var(--text-dim);"></span><button class="mdl-delete-btn" style="margin-left:auto;font-size:12px;color:#dc2626;border:1px solid #fca5a5;background:none;border-radius:4px;padding:3px 10px;cursor:pointer;">Remove</button>`;
 
         const tagHtml = parseModelTags(m)
             .map(t => `<span class="mdl-tag mdl-tag-${t.cls}" title="${escHtml(t.title ?? '')}">${escHtml(t.label)}</span>`)
@@ -988,14 +1826,14 @@ function renderModelCards(data) {
                 <span class="mdl-card-name">${escHtml(m.name)}</span>
                 <div class="mdl-card-badges">${badges}</div>
             </div>
-            ${m.downloadUrl
-                ? `<div class="mdl-card-file"><a href="${escHtml(m.downloadUrl)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;border-bottom:1px dashed var(--border);">${escHtml(m.downloadUrl)}</a></div>`
-                : `<div class="mdl-card-file">${escHtml(m.file)}</div>`}
+            ${m.downloadLink
+                ? `<div class="mdl-card-file"><a href="${escHtml(m.downloadLink)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;border-bottom:1px dashed var(--border);">${escHtml(m.downloadLink)}</a></div>`
+                : ''}
             ${sizeStr ? `<div class="mdl-card-size">${escHtml(sizeStr)}</div>` : ''}
             <div class="mdl-tags">${tagHtml}</div>
             <div class="mdl-card-notes">
                 <label>Notes</label>
-                <textarea placeholder="What is this model good or bad at? Any observations…" data-file="${escHtml(m.file)}">${escHtml(m.notes ?? '')}</textarea>
+                <textarea placeholder="What is this model good or bad at? Any observations…" data-name="${escHtml(m.name)}">${escHtml(m.notes ?? '')}</textarea>
             </div>
             <div class="mdl-card-footer">${footer}</div>`;
 
@@ -1003,11 +1841,11 @@ function renderModelCards(data) {
         const ta = card.querySelector('textarea');
         const saveStatus = card.querySelector('.mdl-save-status');
         ta.addEventListener('input', () => {
-            const file = ta.dataset.file;
-            clearTimeout(mdlNoteTimers[file]);
-            mdlNoteTimers[file] = setTimeout(async () => {
+            const name = ta.dataset.name;
+            clearTimeout(mdlNoteTimers[name]);
+            mdlNoteTimers[name] = setTimeout(async () => {
                 try {
-                    await fetch('/api/cp/models/notes', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ modelFile: file, notes: ta.value }) });
+                    await fetch('/models/notes', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ modelName: name, notes: ta.value }) });
                     saveStatus.textContent = 'Saved.';
                     setTimeout(() => { saveStatus.textContent = ''; }, 2000);
                 } catch { saveStatus.textContent = 'Save failed.'; }
@@ -1020,7 +1858,7 @@ function renderModelCards(data) {
             switchBtn.addEventListener('click', async () => {
                 switchBtn.disabled = true;
                 try {
-                    const r = await fetch('/api/cp/models/switch', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ file: switchBtn.dataset.file }) });
+                    const r = await fetch('/servers/switch', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ file: switchBtn.dataset.file }) });
                     if (!r.ok) { const err = await r.json().catch(()=>({})); alert(err.error ?? 'Switch failed.'); switchBtn.disabled = false; return; }
                     startSwitchProgressSse();
                     loadModels();
@@ -1034,9 +1872,23 @@ function renderModelCards(data) {
             startupBtn.addEventListener('click', async () => {
                 startupBtn.disabled = true;
                 try {
-                    await fetch('/api/cp/models/startup', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ file: startupBtn.dataset.file }) });
+                    await fetch('/models/startup', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ file: startupBtn.dataset.file }) });
                     loadModels();
                 } catch { startupBtn.disabled = false; }
+            });
+        }
+
+        // Delete model button
+        const deleteBtn = card.querySelector('.mdl-delete-btn');
+        if (deleteBtn) {
+            deleteBtn.addEventListener('click', async () => {
+                if (!confirm(`Remove "${m.name}" from the registry?`)) return;
+                deleteBtn.disabled = true;
+                try {
+                    const r = await fetch(`/models/${encodeURIComponent(m.name)}`, { method: 'DELETE' });
+                    if (!r.ok) { const err = await r.json().catch(()=>({})); alert(err.error ?? 'Delete failed.'); deleteBtn.disabled = false; return; }
+                    loadModels();
+                } catch { deleteBtn.disabled = false; }
             });
         }
 
@@ -1044,13 +1896,55 @@ function renderModelCards(data) {
     });
 }
 
+document.getElementById('mdl-toggle-add-btn').addEventListener('click', () => {
+    const panel = document.getElementById('mdl-add-panel');
+    const btn   = document.getElementById('mdl-toggle-add-btn');
+    const open  = panel.style.display === 'none';
+    panel.style.display = open ? '' : 'none';
+    btn.textContent = open ? '✕ Cancel' : '+ Add Model';
+});
+
+document.getElementById('mdl-add-btn').addEventListener('click', async () => {
+    const name   = document.getElementById('mdl-add-name').value.trim();
+    const url    = document.getElementById('mdl-add-url').value.trim();
+    const mmproj = document.getElementById('mdl-add-mmproj-url').value.trim();
+    const status = document.getElementById('mdl-add-status');
+
+    if (!name)  { status.style.color = '#dc2626'; status.textContent = 'Name is required.'; return; }
+    if (!url)   { status.style.color = '#dc2626'; status.textContent = 'Download URL is required.'; return; }
+
+    const filename      = url.split('/').pop().split('?')[0];
+    const mmprojFilename = mmproj ? mmproj.split('/').pop().split('?')[0] : '';
+
+    const body = { name, downloadLink: url, path: filename };
+    if (mmproj) { body.mmprojDownloadLink = mmproj; body.mmprojPath = mmprojFilename; }
+
+    status.style.color = 'var(--text-dim)';
+    status.textContent = 'Saving…';
+    try {
+        const r = await fetch('/models', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+        if (!r.ok) { const err = await r.json().catch(()=>({})); status.style.color='#dc2626'; status.textContent = err.error ?? 'Failed.'; return; }
+        document.getElementById('mdl-add-name').value = '';
+        document.getElementById('mdl-add-url').value  = '';
+        document.getElementById('mdl-add-mmproj-url').value = '';
+        status.style.color = 'var(--text-dim)';
+        status.textContent = 'Model registered.';
+        setTimeout(() => {
+            status.textContent = '';
+            document.getElementById('mdl-add-panel').style.display = 'none';
+            document.getElementById('mdl-toggle-add-btn').textContent = '+ Add Model';
+        }, 1500);
+        loadModels();
+    } catch { status.style.color = '#dc2626'; status.textContent = 'Request failed.'; }
+});
+
 function startSwitchProgressSse() {
     if (mdlSwitchEs) mdlSwitchEs.close();
     mdlBanner.style.display = '';
     mdlFill.className = 'vs-progress-fill';
     const PHASES = { 'idle-wait':'Waiting for active requests to finish…', 'powering-down':'Powering down…', 'powering-up':'Powering up…', 'ready':'Model ready.', 'error':'Switch failed.' };
 
-    mdlSwitchEs = new EventSource('/api/cp/models/switch/progress');
+    mdlSwitchEs = new EventSource('/servers/switch/progress');
     mdlSwitchEs.onmessage = e => {
         try {
             const d = JSON.parse(e.data);
@@ -1085,22 +1979,46 @@ const vsStepLabel = document.getElementById('vs-step-label');
 const vsPctLabel = document.getElementById('vs-pct-label');
 const vsProgFill = document.getElementById('vs-progress-fill');
 const vsElapsedLabel = document.getElementById('vs-elapsed-label');
-const vsEtaLabel = document.getElementById('vs-eta-label');
+const vsAvgLabel     = document.getElementById('vs-avg-label');
+const vsEtaLabel     = document.getElementById('vs-eta-label');
+const vsProgTrack    = vsProgFill.parentElement;
 const vsDetail = document.getElementById('vs-detail-label');
 const vsLogLines = document.getElementById('vs-log-lines');
 const vsLogBadge = document.getElementById('vs-log-badge');
 
-let vsFiles = [], vsProgressEs = null, vsStartTime = null, vsLastPct = 0, vsTimerHandle = null;
+let vsFiles = [], vsProgressEs = null, vsStartTime = null, vsLastPct = 0, vsTimerHandle = null,
+    vsCompletedEpochs = 0, vsTotalEpochs = 0, vsActiveModelName = null,
+    vsStartEpoch = 0, vsSessionEpochs = 0;
+
+const vsPauseBtn = document.getElementById('vs-pause-btn');
+
+async function vsPauseTraining() {
+    if (!vsActiveModelName) return;
+    vsPauseBtn.disabled = true;
+    vsPauseBtn.textContent = 'Pausing… (finishes current epoch)';
+    try {
+        const r = await fetch(`/voice/${encodeURIComponent(vsActiveModelName)}/stop`, { method: 'POST' });
+        if (!r.ok) { const e = await r.json().catch(() => ({})); vsPauseBtn.textContent = 'Pause failed: ' + (e.error ?? r.statusText); vsPauseBtn.disabled = false; }
+    } catch (err) { vsPauseBtn.textContent = 'Pause failed: ' + err.message; vsPauseBtn.disabled = false; }
+}
+vsPauseBtn.addEventListener('click', vsPauseTraining);
 
 function fmtDuration(s) { s=Math.round(s); return s<60?s+'s':s<3600?Math.floor(s/60)+'m '+(s%60)+'s':Math.floor(s/3600)+'h '+Math.floor((s%3600)/60)+'m'; }
 function vsTickTimer() {
     if (!vsStartTime) return;
     const elapsed = (Date.now() - vsStartTime) / 1000;
     vsElapsedLabel.textContent = 'Elapsed: ' + fmtDuration(elapsed);
-    if (vsLastPct > 0 && vsLastPct < 100) vsEtaLabel.textContent = 'ETA: ~' + fmtDuration(Math.max(0, elapsed / (vsLastPct / 100) - elapsed));
-    else if (vsLastPct === 0) vsEtaLabel.textContent = 'ETA: —';
+    // avg time per epoch: use completed epochs if any, else treat elapsed as 1 epoch estimate
+    const avgPerEpoch = vsSessionEpochs > 0 ? elapsed / vsSessionEpochs : elapsed;
+    vsAvgLabel.textContent = 'Avg/epoch: ' + fmtDuration(avgPerEpoch);
+    if (vsTotalEpochs > 0) {
+        const remaining = Math.max(0, vsTotalEpochs - vsCompletedEpochs);
+        vsEtaLabel.textContent = 'ETA: ~' + fmtDuration(avgPerEpoch * remaining);
+    } else {
+        vsEtaLabel.textContent = 'ETA: —';
+    }
 }
-function vsStartTimer() { vsStartTime = Date.now(); vsLastPct = 0; vsElapsedLabel.textContent = 'Elapsed: 0s'; vsEtaLabel.textContent = 'ETA: —'; if (vsTimerHandle) clearInterval(vsTimerHandle); vsTimerHandle = setInterval(vsTickTimer, 1000); }
+function vsStartTimer() { vsStartTime = Date.now(); vsLastPct = 0; vsCompletedEpochs = 0; vsTotalEpochs = 0; vsStartEpoch = 0; vsSessionEpochs = 0; vsElapsedLabel.textContent = 'Elapsed: 0s'; vsAvgLabel.textContent = 'Avg/epoch: —'; vsEtaLabel.textContent = 'ETA: —'; if (vsTimerHandle) clearInterval(vsTimerHandle); vsTimerHandle = setInterval(vsTickTimer, 1000); }
 function vsStopTimer()  { if (vsTimerHandle) { clearInterval(vsTimerHandle); vsTimerHandle = null; } vsTickTimer(); vsEtaLabel.textContent = 'ETA: done'; }
 function fmtBytes(b)    { return b > 1048576 ? (b/1048576).toFixed(1)+' MB' : (b/1024).toFixed(0)+' KB'; }
 
@@ -1124,16 +2042,38 @@ vsDropzone.addEventListener('dragleave', () => vsDropzone.classList.remove('drag
 vsDropzone.addEventListener('drop', e => { e.preventDefault(); vsDropzone.classList.remove('drag-over'); addFiles(e.dataTransfer.files); });
 
 function vsAppendLog(text, cls = '') { const el = document.createElement('div'); el.className = 'log-line ' + (cls || classifyLog(text)); el.textContent = text; vsLogLines.appendChild(el); while (vsLogLines.children.length > 500) vsLogLines.removeChild(vsLogLines.firstChild); vsLogLines.scrollTop = vsLogLines.scrollHeight; }
-function vsSetProgress(step, pct, detail, state) { vsStepLabel.textContent = step; vsPctLabel.textContent = pct + '%'; vsProgFill.style.width = pct + '%'; vsProgFill.className = 'vs-progress-fill' + (state === 'done' ? ' done' : state === 'error' ? ' error' : ''); vsDetail.textContent = detail || ''; if (pct > 0) vsLastPct = pct; }
+function vsSetProgress(step, pct, detail, state) {
+    vsStepLabel.textContent = step;
+    // Parse "Epoch X/Y" from detail to get accurate float percentage
+    const epochMatch = detail && detail.match(/^Epoch\s+(\d+)\/(\d+)$/i);
+    if (epochMatch) {
+        vsCompletedEpochs = parseInt(epochMatch[1], 10);
+        vsTotalEpochs     = parseInt(epochMatch[2], 10);
+        if (vsStartEpoch === 0) vsStartEpoch = vsCompletedEpochs - 1;
+        vsSessionEpochs = vsCompletedEpochs - vsStartEpoch;
+        const floatPct = (vsCompletedEpochs / vsTotalEpochs * 100).toFixed(2);
+        vsPctLabel.textContent  = floatPct + '%';
+        vsProgFill.style.width  = floatPct + '%';
+    } else {
+        vsPctLabel.textContent = pct + '%';
+        vsProgFill.style.width = pct + '%';
+    }
+    const isError = state === 'error';
+    vsProgFill.className  = 'vs-progress-fill'  + (state === 'done' ? ' done' : isError ? ' error' : '');
+    vsProgTrack.className = 'vs-progress-track' + (isError ? ' error' : '');
+    vsDetail.textContent = detail || '';
+    if (pct > 0) vsLastPct = pct;
+}
 
 vsTrainBtn.addEventListener('click', async () => {
     if (!vsFiles.length) { alert('Please select at least one audio file.'); return; }
     const modelName = vsModelName.value.trim();
     if (!modelName) { alert('Please enter a model name.'); return; }
     vsTrainBtn.disabled = true; vsProgSec.style.display = ''; vsLogLines.innerHTML = '';
+    vsActiveModelName = modelName; vsPauseBtn.style.display = ''; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training';
     vsLogBadge.textContent = 'uploading…'; vsSetProgress('Uploading files', 0, null, ''); vsStartTimer();
     try {
-        const stageResp = await fetch('/api/cp/voice/stage', { method: 'POST' });
+        const stageResp = await fetch('/voice/stage', { method: 'POST' });
         if (!stageResp.ok) throw new Error('Stage failed: ' + (await stageResp.text()));
         const { stageId, stagingPath } = await stageResp.json();
         const CHUNK = 5 * 1024 * 1024, CONCURRENCY = 4;
@@ -1143,7 +2083,7 @@ vsTrainBtn.addEventListener('click', async () => {
             let done = 0;
             const uploadChunk = async (ci) => {
                 const slice = f.slice(ci * CHUNK, Math.min((ci + 1) * CHUNK, f.size));
-                const url = `/api/cp/voice/upload?stageId=${encodeURIComponent(stageId)}&name=${encodeURIComponent(f.name)}&chunk=${ci}&totalChunks=${totalChunks}`;
+                const url = `/voice/upload?stageId=${encodeURIComponent(stageId)}&name=${encodeURIComponent(f.name)}&chunk=${ci}&totalChunks=${totalChunks}`;
                 const up = await fetch(url, { method: 'POST', body: slice, headers: { 'Content-Type': 'application/octet-stream' } });
                 if (!up.ok) throw new Error(`Upload of ${f.name} chunk ${ci} failed: ` + (await up.text()));
                 done++;
@@ -1154,20 +2094,20 @@ vsTrainBtn.addEventListener('click', async () => {
         }
         vsAppendLog(`All ${vsFiles.length} file(s) uploaded.`);
         vsLogBadge.textContent = 'training…'; vsLogBadge.classList.add('live');
-        const trainResp = await fetch('/api/cp/voice/train', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName, stagingPath, epochs: +vsEpochs.value, saveEveryNEpochs: +vsSaveFreq.value }) });
+        const trainResp = await fetch('/voice/train', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName, stagingPath, epochs: +vsEpochs.value, saveEveryNEpochs: +vsSaveFreq.value }) });
         if (!trainResp.ok) throw new Error('Start failed: ' + (await trainResp.text()));
         let vsDone = false;
         function connectProgressSse() {
             if (vsDone) return;
             if (vsProgressEs) vsProgressEs.close();
-            vsProgressEs = new EventSource('/api/cp/voice/progress');
+            vsProgressEs = new EventSource('/voice/progress');
             vsLogBadge.textContent = 'live'; vsLogBadge.classList.add('live');
             vsProgressEs.onmessage = e => {
                 try {
                     const d = JSON.parse(e.data);
                     vsSetProgress(d.step, d.percent, d.detail, d.done ? (d.success ? 'done' : 'error') : '');
                     if (d.detail) vsAppendLog(d.detail, d.step === 'Error' ? 'log-error' : '');
-                    if (d.done) { vsDone = true; vsProgressEs.close(); vsStopTimer(); vsLogBadge.textContent = d.success ? 'done ✓' : 'failed'; vsLogBadge.classList.remove('live'); vsTrainBtn.disabled = false; if (d.success) vsAppendLog(`✓ Training complete! Model: ${modelName}.pth`); if (d.error) vsAppendLog(`Error: ${d.error}`, 'log-error'); }
+                    if (d.done) { vsDone = true; vsProgressEs.close(); vsStopTimer(); vsLogBadge.textContent = d.success ? 'done ✓' : 'failed'; vsLogBadge.classList.remove('live'); vsTrainBtn.disabled = false; vsPauseBtn.style.display = 'none'; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training'; vsActiveModelName = null; if (d.success) vsAppendLog(`✓ Training complete! Model: ${modelName}.pth`); if (d.error) vsAppendLog(`Error: ${d.error}`, 'log-error'); }
                 } catch { /* ignore */ }
             };
             vsProgressEs.onerror = () => { if (vsDone) return; vsLogBadge.textContent = 'reconnecting…'; vsLogBadge.classList.remove('live'); vsProgressEs.close(); setTimeout(connectProgressSse, 3000); };
@@ -1199,27 +2139,146 @@ if (volSlider && volNumber) {
 // ── Voice Settings — Test Voice ───────────────────────────
 const vsTvText     = document.getElementById('vs-tv-text');
 const vsTvModel    = document.getElementById('vs-tv-model');
+const vsTvEpoch    = document.getElementById('vs-tv-epoch');
 const vsTvSpeakBtn = document.getElementById('vs-tv-speak-btn');
 const vsTvStatus   = document.getElementById('vs-tv-status');
 
-async function loadVoiceSettingsModels() {
+async function loadCheckpoints(modelName) {
+    vsTvEpoch.innerHTML = '<option value="">latest</option>';
+    if (!modelName) return;
     try {
-        const [mr, ar] = await Promise.all([fetch('/api/cp/voice/models'), fetch('/api/cp/voice/active')]);
+        const r = await fetch(`/voice/${encodeURIComponent(modelName)}/checkpoints`);
+        if (!r.ok) return;
+        const { checkpoints } = await r.json();
+        // skip the first entry (latest/model.pth) since we already have it as default
+        for (const c of checkpoints) {
+            if (!c.epoch) continue;
+            const opt = document.createElement('option');
+            opt.value = c.path;
+            opt.textContent = `epoch ${c.epoch}`;
+            vsTvEpoch.appendChild(opt);
+        }
+    } catch { /* ignore */ }
+}
+
+vsTvModel.addEventListener('change', () => loadCheckpoints(vsTvModel.value));
+
+async function loadVoiceModels() {
+    try {
+        const [mr, ar] = await Promise.all([fetch('/voice/models'), fetch('/voice/active')]);
         const { models } = await mr.json(), { model: activeModel, ready } = await ar.json();
+        // Voice settings dropdown
         vsTvModel.innerHTML = models.length
-            ? models.map(m => `<option value="${escHtml(m)}"${m===activeModel?' selected':''}>${escHtml(m)}${m===activeModel?' ✓':''}</option>`).join('')
+            ? models.map(m => `<option value="${escHtml(m.name)}"${m.name===activeModel?' selected':''}>${escHtml(m.name)}${m.name===activeModel?' ✓':''}</option>`).join('')
             : '<option value="">No models found</option>';
         vsTvStatus.textContent = ready ? `Active: ${activeModel}` : 'Voice module not running';
+        // Resume section
+        const resumable = models.filter(m => m.hasResume);
+        const vsResumeSec = document.getElementById('vs-resume-section');
+        const vsResumeList = document.getElementById('vs-resume-list');
+        if (resumable.length) {
+            vsResumeList.innerHTML = resumable.map(m => {
+                const epochLine = m.latestEpoch != null
+                    ? `up to epoch ${m.latestEpoch} · target ${m.epochs} · save every ${m.saveEveryN}`
+                    : `${m.epochs} epochs · save every ${m.saveEveryN}`;
+                return `
+              <div style="padding:10px 0;border-bottom:1px solid var(--border);" data-model="${escHtml(m.name)}">
+                <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+                  <div style="flex:1;min-width:0">
+                    <div style="font-size:13px;font-weight:600;color:var(--text)">${escHtml(m.name)}</div>
+                    <div style="font-size:11px;color:var(--text-dim);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(m.audioPath??'')}">${escHtml(m.audioPath??'—')}</div>
+                    <div style="font-size:11px;color:var(--text-dim);margin-top:1px;">${epochLine}</div>
+                  </div>
+                  <label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:6px;">Epochs<input type="number" class="vs-input vs-resume-epochs" data-model="${escHtml(m.name)}" value="${m.epochs ?? 365}" min="1" max="9999" style="width:70px;font-size:12px;padding:4px 8px;"></label>
+                  <button class="vs-btn-primary vs-resume-btn" style="font-size:12px;padding:6px 18px;flex-shrink:0" data-model="${escHtml(m.name)}">Resume</button>
+                  <button class="vs-delete-btn" style="font-size:12px;padding:6px 12px;flex-shrink:0;background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-dim);cursor:pointer;" data-model="${escHtml(m.name)}" title="Delete this saved run">✕</button>
+                </div>
+              </div>`;
+            }).join('');
+            vsResumeSec.style.display = '';
+            vsResumeList.querySelectorAll('.vs-resume-btn').forEach(btn => {
+                btn.addEventListener('click', () => vsStartResume(btn.dataset.model));
+            });
+            vsResumeList.querySelectorAll('.vs-delete-btn').forEach(btn => {
+                btn.addEventListener('click', () => vsDeleteModel(btn.dataset.model));
+            });
+        } else {
+            vsResumeSec.style.display = 'none';
+        }
     } catch { vsTvModel.innerHTML = '<option value="">Failed to load</option>'; }
+    await loadCheckpoints(vsTvModel.value);
 }
-loadVoiceSettingsModels();
+loadVoiceModels();
+
+async function vsStartResume(modelName) {
+    const btn = document.querySelector(`.vs-resume-btn[data-model="${CSS.escape(modelName)}"]`);
+    const epochInput = document.querySelector(`.vs-resume-epochs[data-model="${CSS.escape(modelName)}"]`);
+    const epochs = epochInput ? parseInt(epochInput.value, 10) || null : null;
+    if (btn) btn.disabled = true;
+    vsProgSec.style.display = ''; vsLogLines.innerHTML = '';
+    vsActiveModelName = modelName; vsPauseBtn.style.display = ''; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training';
+    vsLogBadge.textContent = 'training…'; vsLogBadge.classList.add('live');
+    vsSetProgress('Resuming', 0, `Resuming ${modelName}…`, ''); vsStartTimer();
+    try {
+        const resp = await fetch('/voice/resume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName, epochs }) });
+        if (!resp.ok) throw new Error((await resp.json().catch(()=>({error:resp.statusText}))).error ?? resp.statusText);
+        let vsDone = false;
+        function connectResumeProgressSse() {
+            if (vsDone) return;
+            if (vsProgressEs) vsProgressEs.close();
+            vsProgressEs = new EventSource('/voice/progress');
+            vsLogBadge.textContent = 'live'; vsLogBadge.classList.add('live');
+            vsProgressEs.onmessage = e => {
+                try {
+                    const d = JSON.parse(e.data);
+                    vsSetProgress(d.step, d.percent, d.detail, d.done ? (d.success ? 'done' : 'error') : '');
+                    if (d.detail) vsAppendLog(d.detail, d.step === 'Error' ? 'log-error' : '');
+                    if (d.done) { vsDone = true; vsProgressEs.close(); vsStopTimer(); vsLogBadge.textContent = d.success ? 'done ✓' : 'failed'; vsLogBadge.classList.remove('live'); if (btn) btn.disabled = false; vsPauseBtn.style.display = 'none'; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training'; vsActiveModelName = null; if (d.success) vsAppendLog(`✓ Training complete! Model: ${modelName}`); if (d.error) vsAppendLog(`Error: ${d.error}`, 'log-error'); }
+                } catch { /* ignore */ }
+            };
+            vsProgressEs.onerror = () => { if (vsDone) return; vsLogBadge.textContent = 'reconnecting…'; vsLogBadge.classList.remove('live'); vsProgressEs.close(); setTimeout(connectResumeProgressSse, 3000); };
+        }
+        connectResumeProgressSse();
+    } catch(err) { vsStopTimer(); vsAppendLog('Error: ' + err.message, 'log-error'); vsLogBadge.textContent = 'failed'; vsLogBadge.classList.remove('live'); if (btn) btn.disabled = false; }
+}
+
+async function vsDeleteModel(modelName) {
+    if (!confirm(`Delete "${modelName}" and all its checkpoints? This cannot be undone.`)) return;
+    try {
+        const resp = await fetch(`/voice/${encodeURIComponent(modelName)}`, { method: 'DELETE' });
+        if (!resp.ok) { const e = await resp.json().catch(()=>({error:resp.statusText})); alert('Delete failed: ' + (e.error ?? resp.statusText)); return; }
+        await loadVoiceModels();
+    } catch(err) { alert('Delete failed: ' + err.message); }
+}
+
+// ── Synthesis parameter sliders ───────────────────────────
+function bindSlider(id, valId, decimals = 0) {
+    const slider = document.getElementById(id), val = document.getElementById(valId);
+    const fmt = v => decimals > 0 ? parseFloat(v).toFixed(decimals) : v;
+    val.textContent = fmt(slider.value);
+    slider.addEventListener('input', () => { val.textContent = fmt(slider.value); });
+}
+bindSlider('sp-diffusion-steps', 'sp-diffusion-steps-val', 0);
+bindSlider('sp-embedding-scale', 'sp-embedding-scale-val', 2);
+bindSlider('sp-alpha',           'sp-alpha-val',           2);
+bindSlider('sp-beta',            'sp-beta-val',            2);
+
+function getSynthParams() {
+    return {
+        diffusionSteps:   parseInt(document.getElementById('sp-diffusion-steps').value, 10),
+        embeddingScale:   parseFloat(document.getElementById('sp-embedding-scale').value),
+        alpha:            parseFloat(document.getElementById('sp-alpha').value),
+        beta:             parseFloat(document.getElementById('sp-beta').value),
+    };
+}
 
 vsTvSpeakBtn.addEventListener('click', async () => {
     const text = vsTvText.value.trim(), modelName = vsTvModel.value;
     if (!text) return;
     vsTvSpeakBtn.disabled = true; vsTvStatus.textContent = 'Synthesising…';
     try {
-        const resp = await fetch('/api/cp/voice/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, modelName }) });
+        const checkpointPath = vsTvEpoch.value || null;
+        const resp = await fetch('/voice/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, modelName, checkpointPath, ...getSynthParams() }) });
         if (!resp.ok) { const err = await resp.json().catch(() => ({ error: resp.statusText })); vsTvStatus.textContent = 'Error: ' + (err.error ?? resp.statusText); }
         else {
             const audioCtx = new AudioContext();
@@ -1236,6 +2295,492 @@ vsTvSpeakBtn.addEventListener('click', async () => {
     finally { vsTvSpeakBtn.disabled = false; }
 });
 vsTvText.addEventListener('keydown', e => { if (e.key === 'Enter') vsTvSpeakBtn.click(); });
+
+// ── debug thread view ──────────────────────────────────────
+var dbgSelectedThread  = null;
+var dbgWatchEs         = null;
+var dbgReloadTimer     = null;
+var dbgLastRenderCount = 0;  // tracks rendered row count for in-place streaming update
+var dbgCollapsed       = new Set(); // sub-thread keys the user has collapsed (preserved across polls)
+var dbgLastSig         = '';  // structural signature of the last render — skip rebuild when unchanged
+
+function dbgCloseWatch() {
+    if (dbgWatchEs) { dbgWatchEs.close(); dbgWatchEs = null; }
+    clearTimeout(dbgReloadTimer); dbgReloadTimer = null;
+}
+
+function dbgOpenWatch(key) {
+    dbgCloseWatch();
+    const es = new EventSource(`/threads/${encodeURIComponent(key)}/watch`);
+    es.onmessage = () => {
+        if (dbgSelectedThread !== key) return;
+        clearTimeout(dbgReloadTimer);
+        dbgReloadTimer = setTimeout(() => dbgLoadThread(key), 120);
+    };
+    es.onerror = () => { dbgCloseWatch(); setTimeout(() => { if (dbgSelectedThread === key) dbgOpenWatch(key); }, 3000); };
+    dbgWatchEs = es;
+}
+
+function dbgFmtTime(iso) {
+    try { return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
+    catch { return ''; }
+}
+function dbgFmtAgo(iso) {
+    try {
+        const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+        if (m < 1) return 'just now';
+        if (m < 60) return m + 'm ago';
+        const h = Math.floor(m / 60);
+        if (h < 24) return h + 'h ago';
+        return Math.floor(h / 24) + 'd ago';
+    } catch { return ''; }
+}
+
+async function loadDebugThreads() {
+    const list = document.getElementById('dbg-thread-list');
+    list.innerHTML = '<div class="cp-placeholder" style="padding:10px 12px;">Loading…</div>';
+    try {
+        const r = await fetch('/threads?includeInternal=true');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const threads = await r.json();
+        dbgRenderThreadList(threads);
+    } catch(e) {
+        list.innerHTML = `<div class="cp-placeholder" style="padding:10px 12px;color:#dc2626;">Error: ${escHtml(e.message)}</div>`;
+    }
+}
+
+function dbgRenderThreadList(threads) {
+    const list = document.getElementById('dbg-thread-list');
+    if (!threads.length) {
+        list.innerHTML = '<div class="cp-placeholder" style="padding:10px 12px;">No threads found</div>';
+        return;
+    }
+    list.innerHTML = '';
+    threads.forEach(t => {
+        const item = document.createElement('div');
+        item.className = 'dbg-thread-item' + (t.key === dbgSelectedThread ? ' active' : '');
+        const typeLabel = t.isInternal ? (t.agentName || 'Internal') : (t.isCodeMode ? 'Code' : 'Dialogue');
+        const ago = t.lastMessageAt ? dbgFmtAgo(t.lastMessageAt) : '';
+        item.innerHTML = `
+            <div class="dbg-thread-key">${escHtml(t.key)}</div>
+            <div class="dbg-thread-meta">${escHtml(typeLabel)} · ${t.messageCount || 0} msgs${ago ? ' · ' + ago : ''}</div>`;
+        item.addEventListener('click', () => {
+            dbgSelectedThread = t.key;
+            dbgLastRenderCount = 0;
+            list.querySelectorAll('.dbg-thread-item').forEach(el => el.classList.toggle('active', el === item));
+            dbgOpenWatch(t.key);
+            dbgLoadThread(t.key);
+        });
+        list.appendChild(item);
+    });
+    // Re-select previously selected thread if it's still in the list
+    if (dbgSelectedThread) {
+        const found = threads.find(t => t.key === dbgSelectedThread);
+        if (found) dbgLoadThread(dbgSelectedThread);
+    }
+}
+
+async function dbgLoadThread(key) {
+    const body  = document.getElementById('dbg-view-body');
+    const head  = document.getElementById('dbg-view-head');
+    const keyEl = document.getElementById('dbg-view-key');
+    head.style.display = '';
+    keyEl.textContent = key;
+    if (!body.dataset.loaded) body.innerHTML = '<div class="dbg-empty">Loading…</div>';
+    try {
+        const r = await fetch(`/threads/${encodeURIComponent(key)}/debug`);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const thread = await r.json();
+        // /debug now returns a thread tree: { key, label, state, history:[...], children:[...] }.
+        const sig = dbgThreadSig(thread);
+        if (sig === dbgLastSig && body.dataset.loaded) return; // nothing structural changed — preserve scroll/expand
+        dbgLastSig = sig;
+        const prevTop  = body.scrollTop;
+        const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 90;
+        body.innerHTML = '';
+        body.dataset.loaded = '1';
+        dbgRenderThreadNode(thread, body, 0);
+        if (!body.children.length) body.innerHTML = '<div class="dbg-empty">No messages in this thread</div>';
+        // Keep the user where they were; only auto-follow to the bottom if they were already there.
+        body.scrollTop = atBottom ? body.scrollHeight : prevTop;
+    } catch(e) {
+        body.innerHTML = `<div class="dbg-empty" style="color:#dc2626;">Error: ${escHtml(e.message)}</div>`;
+    }
+}
+
+// Recursive structural signature — only rebuild the DOM when an item/trace-step/sub-thread is added,
+// so the 120ms watch poll doesn't flash or lose scroll/expand state between real changes.
+function dbgThreadSig(t) {
+    let s = (t.key || '') + '#' + (t.state || '') + '|' + ((t.history || []).length) + '[';
+    (t.history || []).forEach(it => { s += (it.type || '') + '.' + ((it.trace || []).length) + (it.isStreaming ? 's' : '') + ','; });
+    s += ']';
+    (t.children || []).forEach(c => { s += dbgThreadSig(c); });
+    return s;
+}
+
+// Renders a thread and its sub-threads. depth>0 draws a collapsible labelled sub-thread frame.
+function dbgRenderThreadNode(thread, container, depth) {
+    let host = container;
+    if (depth > 0) {
+        const sub = document.createElement('div');
+        sub.className = 'dbg-subthread';
+        const collapsed = dbgCollapsed.has(thread.key);
+        const label = thread.label || (thread.pipeline ? thread.pipeline + ' sub-thread' : 'sub-thread');
+        const shortKey = (thread.key || '').split(':')[0].split('#').slice(1).join('#') || thread.key;
+        sub.innerHTML = `
+            <div class="dbg-sub-head">
+                <span class="dbg-sub-caret">${collapsed ? '▸' : '▾'}</span>
+                <span class="dbg-sub-label">${escHtml(label)}</span>
+                <span class="dbg-sub-key">${escHtml(shortKey)}</span>
+                <span class="dbg-state ${escHtml(thread.state || '')}" style="margin-left:auto;">${escHtml(thread.state || '')}</span>
+            </div>
+            <div class="dbg-sub-body"></div>`;
+        const headEl = sub.querySelector('.dbg-sub-head');
+        const bodyEl = sub.querySelector('.dbg-sub-body');
+        if (collapsed) bodyEl.style.display = 'none';
+        headEl.addEventListener('click', () => {
+            const show = bodyEl.style.display === 'none';
+            bodyEl.style.display = show ? '' : 'none';
+            sub.querySelector('.dbg-sub-caret').textContent = show ? '▾' : '▸';
+            if (show) dbgCollapsed.delete(thread.key); else dbgCollapsed.add(thread.key);
+        });
+        container.appendChild(sub);
+        host = bodyEl;
+    }
+
+    // The CodeArchitect's plan thread is NOT a sub-thread — it's the main thread. A parent that spawned one
+    // is just an orchestration container (its own history is raw chip markup), so we skip the container's
+    // history and render the architect's trace inline. Only the Coder workers become collapsible sub-threads.
+    const planChild = (thread.children || []).find(c => (c.key || '').includes('#plan'));
+    const workers   = (thread.children || []).filter(c => c !== planChild);
+
+    if (!planChild)
+        (thread.history || []).forEach(item => dbgRenderHistoryItem(item, host));
+
+    if (planChild)
+        (planChild.history || []).forEach(item => dbgRenderHistoryItem(item, host));
+
+    workers.forEach(c => dbgRenderThreadNode(c, host, depth + 1));
+}
+
+function dbgRenderHistoryItem(item, host) {
+    // The user message is shown inside the next turn's "Prompt" bubble (as part of the full augmented prompt),
+    // so don't render it again as its own username-headed bubble.
+    if (item.type === 'userMessage') return;
+    if (item.type === 'ariResponse' && Array.isArray(item.trace) && item.trace.length) {
+        dbgRenderTrace(item, host);
+    } else {
+        const el = dbgRenderItem(item, null);
+        if (el) host.appendChild(el);
+    }
+}
+
+// Renders one AriResponse's agent-loop trace as the call-and-response sketch:
+// prompt (right) → thinking cloud (left) → tool call (left) → tool result (right) → … → answer (left).
+function dbgRenderTrace(item, host) {
+    (item.trace || []).forEach(step => {
+        const row = document.createElement('div');
+        row.className = 'dbg-row';
+        if (step.kind === 'prompt') {
+            row.classList.add('right');
+            // Show the FULL augmented prompt the LLM received (system + context + the message), not just the
+            // user's typed text — falls back to the raw step text if the request body wasn't captured.
+            const full = item.debugRequestJson ? dbgFmtPrompt(item.debugRequestJson) : (step.text || '');
+            row.innerHTML = `<div class="dbg-bubble prompt"><div class="dbg-bhead"><span>Prompt</span></div>`
+                + `<div class="dbg-bbody dbg-md dbg-prompt-body">${marked.parse(full)}</div></div>`;
+        } else if (step.kind === 'reasoning') {
+            row.classList.add('left');
+            const len = (step.text || '').length;
+            row.innerHTML = `<div class="dbg-cloud"><div class="dbg-cloud-head">🧠 thinking · ${len.toLocaleString()} chars</div>`
+                + `<div class="dbg-cloud-body">${escHtml(step.text || '')}</div></div>`;
+        } else if (step.kind === 'tool_call') {
+            row.classList.add('left');
+            row.innerHTML = `<div class="dbg-bubble toolcall"><div class="dbg-bhead"><span>→ ${escHtml(step.name || 'tool')}</span></div>`
+                + `<div class="dbg-bbody dbg-args">${escHtml(dbgFmtJson(step.args || ''))}</div></div>`;
+        } else if (step.kind === 'tool_result') {
+            row.classList.add('right');
+            const err = /^\[(Error|System:)/.test((step.text || '').trimStart());
+            row.innerHTML = `<div class="dbg-bubble toolresult${err ? ' err' : ''}"><div class="dbg-bhead"><span>← ${escHtml(step.name || 'tool')}</span></div>`
+                + `<div class="dbg-bbody dbg-result">${escHtml(step.text || '')}</div></div>`;
+        } else if (step.kind === 'text') {
+            row.classList.add('left');
+            row.innerHTML = `<div class="dbg-bubble ari"><div class="dbg-bhead"><span>ARI</span></div>`
+                + `<div class="dbg-bbody dbg-md dbg-seg-text">${marked.parse(step.text || '')}</div></div>`;
+        } else { return; }
+        host.appendChild(row);
+    });
+
+    const metaParts = [];
+    if (item.promptTokens)            metaParts.push(`↓ ${item.promptTokens.toLocaleString()} prompt`);
+    if (item.completionTokens)        metaParts.push(`↑ ${item.completionTokens.toLocaleString()} completion`);
+    if (item.thinkingSeconds != null) metaParts.push(`⏱ ${Number(item.thinkingSeconds).toFixed(1)}s`);
+    if (metaParts.length) {
+        const m = document.createElement('div');
+        m.className = 'dbg-row left';
+        m.innerHTML = `<div class="dbg-meta" style="border:none;background:none;padding:2px 4px;">${metaParts.map(p => `<span>${escHtml(p)}</span>`).join('')}</div>`;
+        host.appendChild(m);
+    }
+}
+
+function dbgRenderItem(item, nextItem = null) {
+    const wrap = document.createElement('div');
+    wrap.className = 'dbg-row';
+
+    if (item.type === 'userMessage') {
+        wrap.classList.add('right');
+        const ari = nextItem?.type === 'ariResponse' ? nextItem : null;
+        const promptBody = ari?.debugRequestJson
+            ? `<div class="dbg-bbody dbg-seg-text dbg-md">${marked.parse(dbgFmtMessages(ari.debugRequestJson))}</div>`
+            : `<div class="dbg-bbody dbg-seg-text">${escHtml(item.content || '')}</div>`;
+        wrap.innerHTML = `
+            <div class="dbg-bubble user">
+                <div class="dbg-bhead">
+                    <span>${escHtml(item.username || 'user')}</span>
+                    <span style="font-weight:400;letter-spacing:0;text-transform:none;opacity:.75;">${dbgFmtTime(item.timestamp)}</span>
+                </div>
+                ${promptBody}
+            </div>`;
+
+    } else if (item.type === 'ariResponse') {
+        wrap.classList.add('left');
+        const stateNames = ['streaming', 'complete', 'error', 'cancelled'];
+        const state = typeof item.state === 'number' ? (stateNames[item.state] ?? 'complete') : (item.state || 'complete').toLowerCase();
+        let inner = `
+            <div class="dbg-bhead">
+                <span>ARI</span>
+                <span class="dbg-state ${escHtml(state)}">${escHtml(state)}</span>
+                <span style="font-weight:400;letter-spacing:0;text-transform:none;opacity:.6;">${dbgFmtTime(item.timestamp)}</span>
+            </div>`;
+
+        // Raw LLM response text — falls back to parsed content if debug capture not available
+        if (item.debugResponseText) {
+            inner += `<div class="dbg-bbody dbg-seg-text dbg-md">${marked.parse(item.debugResponseText)}</div>`;
+        } else {
+            inner += `<div class="dbg-bbody">${dbgParseContent(item.content || '')}</div>`;
+        }
+
+        const metaParts = [];
+        if (item.promptTokens)              metaParts.push(`↓ ${item.promptTokens.toLocaleString()} prompt`);
+        if (item.completionTokens)          metaParts.push(`↑ ${item.completionTokens.toLocaleString()} completion`);
+        if (item.thinkingSeconds != null)   metaParts.push(`⏱ ${Number(item.thinkingSeconds).toFixed(1)}s`);
+        if (item.outputTokenLimit)          metaParts.push(`limit ${item.outputTokenLimit.toLocaleString()}`);
+        if (metaParts.length)
+            inner += `<div class="dbg-meta">${metaParts.map(p => `<span>${escHtml(p)}</span>`).join('')}</div>`;
+
+        wrap.innerHTML = `<div class="dbg-bubble ari">${inner}</div>`;
+
+    } else if (item.type === 'engramEvent') {
+        wrap.classList.add('center');
+        const changes = (item.changes || []).map(c =>
+            `${escHtml(c.op === 'created' ? 'added' : 'updated')} "${escHtml(c.title)}"`).join(', ');
+        wrap.innerHTML = `<div class="dbg-event-bar">🧠 Memory: ${changes || 'sweep'}<span style="opacity:.55;margin-left:6px;font-size:10px;">${dbgFmtTime(item.timestamp)}</span></div>`;
+
+    } else if (item.type === 'commandInput') {
+        wrap.classList.add('right');
+        wrap.innerHTML = `
+            <div class="dbg-bubble user" style="opacity:.75;">
+                <div class="dbg-bhead" style="background:#374151;">
+                    <span>CMD</span>
+                    <span style="font-weight:400;letter-spacing:0;text-transform:none;opacity:.75;">${dbgFmtTime(item.timestamp)}</span>
+                </div>
+                <div class="dbg-bbody dbg-seg-text">${escHtml(item.input || '')}</div>
+            </div>`;
+
+    } else if (item.type === 'commandResponse') {
+        wrap.classList.add('left');
+        wrap.innerHTML = `
+            <div class="dbg-bubble ari" style="opacity:.75;">
+                <div class="dbg-bhead" style="background:#374151;">
+                    <span>CMD RESPONSE</span>
+                    <span style="font-weight:400;letter-spacing:0;text-transform:none;opacity:.75;">${dbgFmtTime(item.timestamp)}</span>
+                </div>
+                <div class="dbg-bbody dbg-seg-text">${escHtml(item.response || '')}</div>
+            </div>`;
+
+    } else {
+        return null;
+    }
+    return wrap;
+}
+
+function dbgFmtJson(str) {
+    if (!str) return '';
+    try { return JSON.stringify(JSON.parse(str), null, 2); }
+    catch { return str; }
+}
+
+function dbgFmtMsgArray(msgs) {
+    return msgs.map(msg => {
+        let content = '';
+        if (typeof msg.content === 'string') {
+            content = msg.content;
+        } else if (Array.isArray(msg.content)) {
+            content = msg.content.map(b => {
+                if (b.type === 'text') return b.text;
+                if (b.type === 'tool_result') {
+                    const c = Array.isArray(b.content)
+                        ? b.content.map(x => x.text || '').join('')
+                        : (b.content || '');
+                    return `[tool_result id=${b.tool_use_id}]\n${c}`;
+                }
+                return JSON.stringify(b);
+            }).join('\n');
+        } else {
+            content = JSON.stringify(msg.content ?? '');
+        }
+        let lbl;
+        if (msg.role === 'user') {
+            lbl = 'user message';
+        } else if (msg.role === 'system' && content.startsWith("[ARI's Memories]")) {
+            lbl = "ARI's Memories";
+            content = content.slice("[ARI's Memories]".length).trimStart();
+        } else {
+            lbl = msg.role;
+        }
+        return `**[${lbl}]**\n\n${content.replace(/\n{3,}/g, '\n\n')}`;
+    }).join('\n\n---\n\n');
+}
+
+function dbgFmtMessages(str) {
+    if (!str) return '(no request data)';
+    try { return dbgFmtMsgArray(JSON.parse(str).messages || []); }
+    catch { return str; }
+}
+
+// The augmented prompt the LLM actually received to START this turn: the system message(s) + conversation up
+// to and including the turn's triggering user message. The intra-turn assistant tool-calls / tool-results that
+// come AFTER it are dropped here — the trace already shows those as their own bubbles.
+function dbgFmtPrompt(str) {
+    if (!str) return '';
+    try {
+        let msgs = JSON.parse(str).messages || [];
+        let lastUser = -1;
+        msgs.forEach((m, i) => { if (m.role === 'user') lastUser = i; });
+        if (lastUser >= 0) msgs = msgs.slice(0, lastUser + 1);
+        return dbgFmtMsgArray(msgs);
+    } catch { return str; }
+}
+
+function dbgParseContent(raw) {
+    if (!raw) return '<div class="dbg-seg-text" style="color:var(--text-dim);font-style:italic;">empty</div>';
+
+    const segments = [];
+    // Matches: <!--ari-tool-start:name:label-->, <!--ari-tool-end:name:label|...--> ,
+    //          <!--ari-tool-error:name:rest-->, <!--ari-batch-end-->
+    const re = /<!--ari-tool-(start|end|error):([^:>]+):([^>]*?)-->|<!--ari-batch-end-->/g;
+    let pos = 0, m;
+
+    while ((m = re.exec(raw)) !== null) {
+        if (m.index > pos) {
+            const text = raw.slice(pos, m.index).trim();
+            if (text) segments.push({ kind: 'text', text });
+        }
+        if (m[0].startsWith('<!--ari-batch-end')) {
+            segments.push({ kind: 'sep' });
+        } else {
+            // For end cards the rest is "file|+N|-M|patch"; for error it's "file:escapedMsg"
+            const fileLabel = m[3].split('|')[0].split(':')[0];
+            segments.push({ kind: 'tool', state: m[1], name: m[2], label: fileLabel });
+        }
+        pos = m.index + m[0].length;
+    }
+
+    if (pos < raw.length) {
+        const text = raw.slice(pos).trim();
+        if (text) segments.push({ kind: 'text', text });
+    }
+    if (segments.length === 0) segments.push({ kind: 'text', text: raw });
+
+    return segments.map(seg => {
+        if (seg.kind === 'text') {
+            return `<div class="dbg-seg-text">${escHtml(seg.text)}</div>`;
+        } else if (seg.kind === 'tool') {
+            const icon = seg.state === 'end' ? '✓' : seg.state === 'error' ? '✗' : '…';
+            const labelPart = seg.label ? ` <span style="opacity:.7;">· ${escHtml(seg.label)}</span>` : '';
+            return `<div class="dbg-seg-tool"><span class="dbg-tool-chip ${escHtml(seg.state)}">${icon} ${escHtml(seg.name)}${labelPart}</span></div>`;
+        } else if (seg.kind === 'sep') {
+            return '<div class="dbg-batch-sep"></div>';
+        }
+        return '';
+    }).join('');
+}
+
+// ── Download the full debug thread as a plain-text file (everything the LLM ever saw + produced) ──
+function dbgIndent(text, ind) {
+    return String(text == null ? '' : text).replace(/\r?\n/g, '\n' + ind);
+}
+function dbgResponseToText(item, ind) {
+    let out = '\n' + ind + '--- ARI RESPONSE (' + (item.state || '') ;
+    const meta = [];
+    if (item.promptTokens)            meta.push('↓' + item.promptTokens + ' prompt');
+    if (item.completionTokens)        meta.push('↑' + item.completionTokens + ' completion');
+    if (item.thinkingSeconds != null) meta.push(Number(item.thinkingSeconds).toFixed(1) + 's');
+    out += (meta.length ? ', ' + meta.join(', ') : '') + ') ---\n';
+    const trace = item.trace || [];
+    if (trace.length) {
+        trace.forEach(s => {
+            if (s.kind === 'prompt') {
+                const full = item.debugRequestJson ? dbgFmtPrompt(item.debugRequestJson) : (s.text || '');
+                out += '\n' + ind + '[PROMPT — full augmented input]\n' + ind + dbgIndent(full, ind) + '\n';
+            } else if (s.kind === 'reasoning') {
+                out += '\n' + ind + '[THINKING — ' + (s.text || '').length + ' chars]\n' + ind + dbgIndent(s.text, ind) + '\n';
+            } else if (s.kind === 'tool_call') {
+                out += '\n' + ind + '[→ TOOL CALL: ' + (s.name || '') + ']\n' + ind + dbgIndent(dbgFmtJson(s.args || ''), ind) + '\n';
+            } else if (s.kind === 'tool_result') {
+                out += '\n' + ind + '[← TOOL RESULT: ' + (s.name || '') + ']\n' + ind + dbgIndent(s.text, ind) + '\n';
+            } else if (s.kind === 'text') {
+                out += '\n' + ind + '[ARI TEXT]\n' + ind + dbgIndent(s.text, ind) + '\n';
+            }
+        });
+    } else if (item.debugResponseText) {
+        out += '\n' + ind + '[RAW RESPONSE]\n' + ind + dbgIndent(item.debugResponseText, ind) + '\n';
+    } else if (item.content) {
+        out += '\n' + ind + '[CONTENT]\n' + ind + dbgIndent(item.content, ind) + '\n';
+    }
+    return out;
+}
+function dbgThreadToText(thread, depth) {
+    const ind = '  '.repeat(depth);
+    let out = '\n' + ind + '='.repeat(70) + '\n';
+    out += ind + (depth === 0 ? 'MAIN THREAD' : 'SUB-THREAD') + ': ' + (thread.label || '(no label)')
+         + '  [' + (thread.key || '') + ']  state=' + (thread.state || '') + '\n';
+    out += ind + '='.repeat(70) + '\n';
+    (thread.history || []).forEach(item => {
+        if (item.type === 'ariResponse') {
+            out += dbgResponseToText(item, ind);
+        } else if (item.type === 'userMessage') {
+            out += '\n' + ind + '[USER MESSAGE' + (item.chatHidden ? ' (chat-hidden)' : '') + ']\n' + ind + dbgIndent(item.content, ind) + '\n';
+        } else {
+            out += '\n' + ind + '[' + (item.type || 'item') + '] ' + JSON.stringify(item).slice(0, 300) + '\n';
+        }
+    });
+    (thread.children || []).forEach(c => { out += dbgThreadToText(c, depth + 1); });
+    return out;
+}
+async function dbgDownloadThread() {
+    if (!dbgSelectedThread) return;
+    try {
+        const r = await fetch('/threads/' + encodeURIComponent(dbgSelectedThread) + '/debug');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const thread = await r.json();
+        const text = 'DEBUG THREAD EXPORT\nthread: ' + dbgSelectedThread + '\ngenerated: ' + new Date().toISOString()
+                   + '\n' + dbgThreadToText(thread, 0);
+        const blob = new Blob([text], { type: 'text/plain' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'debug-thread-' + dbgSelectedThread.slice(0, 20) + '.txt';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    } catch (e) {
+        alert('Download failed: ' + e.message);
+    }
+}
+
+document.getElementById('dbg-refresh-btn').addEventListener('click', loadDebugThreads);
+document.getElementById('dbg-view-refresh').addEventListener('click', () => {
+    if (dbgSelectedThread) dbgLoadThread(dbgSelectedThread);
+});
+document.getElementById('dbg-view-download').addEventListener('click', dbgDownloadThread);
 
 </script>
 </body>

@@ -2,21 +2,12 @@ namespace ARI.LLM;
 
 internal class Classifier : Agent
 {
-    internal Classifier(AgentConfig config) : base(config) { }
-
-    internal override ThreadType Type => ThreadType.Classifier;
+    public Classifier() { }
 
     internal async Task<string> Classify(string message, CancellationToken ct = default)
     {
-        string ephemeralKey = $"__classify_{Guid.NewGuid():N}";
-        try
-        {
-            string result = await Prompt(ephemeralKey, message, ct: ct);
-            return result.Trim().StartsWith("CODE", StringComparison.OrdinalIgnoreCase) ? "Code" : "Dialogue";
-        }
-        finally
-        {
-            RemoveThread(ephemeralKey);
-        }
+        Thread ephemeral = new Thread(ThreadPipeline.Dialogue, $"__classify_{Guid.NewGuid():N}") { Internal = true };
+        string result    = await SendPrompt(ephemeral, message, ct: ct);
+        return result.Trim().StartsWith("CODE", StringComparison.OrdinalIgnoreCase) ? "Code" : "Dialogue";
     }
 }

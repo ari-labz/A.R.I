@@ -324,6 +324,18 @@ html, body {
     z-index: 9999;
     -webkit-app-region: drag;
     app-region: drag;
+    pointer-events: none;
+}
+
+/* Hide drag handle in PWA / home-screen standalone mode */
+@media (display-mode: standalone) {
+    #titlebar-drag { display: none; }
+}
+
+/* All interactive elements must opt out of the drag region */
+button, a, input, select, textarea, label, [role="button"] {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
 }
 
 /* ── Windows window controls ────────────────────────────── */
@@ -1099,7 +1111,7 @@ details.tool-card summary::-webkit-details-marker { display: none; }
         transform: translateX(-100%);
         transition: transform .25s ease, box-shadow .25s ease; box-shadow: none;
     }
-    #sidebar.mobile-open { transform: translateX(0); box-shadow: 4px 0 24px rgba(0,0,0,.35); }
+    #sidebar:not(.collapsed) { transform: translateX(0); box-shadow: 4px 0 24px rgba(0,0,0,.35); }
     #sidebar.collapsed { transform: translateX(-100%); }
     #main { width: 100%; }
     #topbar-toggle { display: flex !important; }

@@ -26,13 +26,13 @@ internal sealed class FindFiles : FileTool
         function = new
         {
             name        = "find_files",
-            description = "Find files by name with a glob pattern, e.g. '*.cs', 'Token*.cs', or '**/Security/*.cs'. Returns paths relative to the project root. Build/VCS directories are skipped. Use search_files to match file contents.",
+            description = "Find files by name with a glob pattern, e.g. '*.cs', 'User*.cs', or '**/Services/*.cs'. Returns paths relative to the project root. Build/VCS directories are skipped. Use search_files to match file contents.",
             parameters  = new
             {
                 type       = "object",
                 properties = new
                 {
-                    pattern = new { type = "string", description = "Glob pattern, e.g. '*.cs' or '**/Token*.cs'." },
+                    pattern = new { type = "string", description = "Glob pattern, e.g. '*.cs' or '**/User*.cs'." },
                     path    = new { type = "string", description = "Directory to search under, relative to project root. Defaults to root." }
                 },
                 required = new[] { "pattern" }

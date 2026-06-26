@@ -21,7 +21,7 @@ function getVolume(): number {
 // Decoding happens in parallel with synthesis of other sentences.
 async function synthesise(sentence: string, signal: AbortSignal): Promise<AudioBuffer | null> {
     try {
-        const resp = await fetch("/api/cp/voice/speak", {
+        const resp = await fetch("/voice/speak", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ text: sentence }),
@@ -72,7 +72,7 @@ async function speakResponse(content: string, setSpeaking: (v: boolean) => void)
     setSpeaking(true)
 
     try {
-        const splitRes = await fetch("/api/cp/voice/split-sentences", {
+        const splitRes = await fetch("/voice/split-sentences", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ text: content }),
@@ -152,6 +152,7 @@ interface Props {
     activeThread: string | null
     isInternal:   boolean
     agentName:    string | null
+    processing?:  boolean
 }
 
 function fileExtLabel(name: string) {
@@ -184,7 +185,7 @@ function UserMessage({ item, activeThread }: { item: ThreadItem; activeThread: s
                             <img className="msg-image" src={
                                 a.content
                                     ? `data:${a.mimeType ?? "image/jpeg"};base64,${a.content}`
-                                    : `/api/threads/${activeThread}/msg-attachment?name=${encodeURIComponent(a.name)}`
+                                    : `/threads/${activeThread}/msg-attachment?name=${encodeURIComponent(a.name)}`
                             } alt={a.name} />
                         ) : (
                             <div className="file-card">
@@ -441,12 +442,27 @@ function animateDiffBadges(root: HTMLElement) {
     })
 }
 
-export default function Messages({ items, isRemembering, activeThread, isInternal, agentName }: Props) {
+export default function Messages({ items, isRemembering, activeThread, isInternal, agentName, processing }: Props) {
     const bottomRef  = useRef<HTMLDivElement>(null)
     const messagesEl = useRef<HTMLDivElement>(null)
+    // Whether to keep following the tail. True while the user is parked near the bottom; flips off the
+    // moment they scroll up, so streaming updates never yank them back down.
+    const stick = useRef(true)
+
+    // Reset to bottom-follow when switching threads.
+    useEffect(() => { stick.current = true }, [activeThread])
+
+    // Track the user's scroll position: "near bottom" (within 80px) means keep auto-scrolling.
+    useEffect(() => {
+        const el = messagesEl.current
+        if (!el) return
+        const onScroll = () => { stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80 }
+        el.addEventListener("scroll", onScroll, { passive: true })
+        return () => el.removeEventListener("scroll", onScroll)
+    }, [])
 
     useEffect(() => {
-        bottomRef.current?.scrollIntoView({ behavior: "smooth" })
+        if (stick.current) bottomRef.current?.scrollIntoView({ behavior: "smooth" })
     }, [items, isRemembering])
 
     useEffect(() => {
@@ -460,23 +476,48 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
         return () => observer.disconnect()
     }, [])
 
+    // Group consecutive ARI responses into ONE message. The architect's plan, each task's work, and the
+    // final summary are separate backend turns, but to the user they are a single reply — so they share one
+    // bubble and one footer (timestamp / "thought for Xs" / playback), which only appears once the whole
+    // thread has stopped processing (not after each internal turn).
+    type Unit =
+        | { kind: "item"; item: ThreadItem; key: number }
+        | { kind: "ari";  parts: ThreadItem[]; key: number }
+    const units: Unit[] = []
+    items.forEach((item, i) => {
+        if (item.type === "ariResponse") {
+            const last = units[units.length - 1]
+            if (last && last.kind === "ari") last.parts.push(item)
+            else units.push({ kind: "ari", parts: [item], key: i })
+        } else {
+            units.push({ kind: "item", item, key: i })
+        }
+    })
+
     return (
         <div id="messages" ref={messagesEl}>
-            {items.map((item, i) => {
-                switch (item.type) {
-                    case "userMessage":
-                        return <UserMessage key={i} item={item} activeThread={activeThread} />
-                    case "ariResponse":
-                        return <AriResponse key={i} item={item} isInternal={isInternal} agentName={agentName} msgIndex={i} />
-                    case "commandInput":
-                        return <CommandInput key={i} item={item} />
-                    case "commandResponse":
-                        return <CommandResponse key={i} item={item} />
-                    case "engramEvent":
-                        return <MemoryEvent key={i} item={item} />
-                    default:
-                        return null
+            {units.map((u, ui) => {
+                if (u.kind === "item") {
+                    switch (u.item.type) {
+                        case "userMessage":     return <UserMessage key={u.key} item={u.item} activeThread={activeThread} />
+                        case "commandInput":    return <CommandInput key={u.key} item={u.item} />
+                        case "commandResponse": return <CommandResponse key={u.key} item={u.item} />
+                        case "engramEvent":     return <MemoryEvent key={u.key} item={u.item} />
+                        default:                return null
+                    }
                 }
+                // Merge the group: concatenated content, summed thinking time, and kept "open" (no footer)
+                // while any part is still streaming OR the whole thread is still processing the reply.
+                const last = u.parts[u.parts.length - 1] as ThreadItem & Record<string, unknown>
+                const anyStreaming = u.parts.some(p => (p as { isStreaming?: boolean }).isStreaming)
+                const thinking = u.parts.reduce((s, p) => s + (((p as { thinkingSeconds?: number }).thinkingSeconds) || 0), 0)
+                const merged = {
+                    ...last,
+                    content: u.parts.map(p => (p as { content?: string }).content).filter(Boolean).join("\n\n"),
+                    isStreaming: anyStreaming || (ui === units.length - 1 && !!processing),
+                    thinkingSeconds: thinking > 0 ? thinking : undefined,
+                } as ThreadItem
+                return <AriResponse key={u.key} item={merged} isInternal={isInternal} agentName={agentName} msgIndex={u.key} />
             })}
 
             {isRemembering && (

@@ -96,7 +96,7 @@ export default function Main({
     useEffect(() => {
         function onKey(e: KeyboardEvent) {
             if (e.key !== "Escape" || !isStreaming || !activeThread) return
-            fetch(`/api/threads/${activeThread}/processing`, { method: "DELETE" }).catch(() => {})
+            fetch(`/threads/${activeThread}/processing`, { method: "DELETE" }).catch(() => {})
         }
         document.addEventListener("keydown", onKey)
         return () => document.removeEventListener("keydown", onKey)
@@ -180,6 +180,7 @@ export default function Main({
                         activeThread={activeThread}
                         isInternal={isInternal}
                         agentName={agentName}
+                        processing={isStreaming}
                     />
 
                     <ThreadPanel

@@ -1,6 +1,8 @@
+using ARI.Common;
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using ARI.Brain;
 using Microsoft.Extensions.Logging;
@@ -11,18 +13,23 @@ internal class Engram : Agent, IDisposable
 {
     private const int ENGRAM_TRIGGER_DELAY = 5;
 
-    private readonly Dialogue    dialogue;
-    private readonly BrainService brain;
-    private readonly Context?    context;
-    private readonly string      brainPublicUrl;
-    private readonly EngramBuffer buffer;
+    [JsonIgnore] internal Dialogue?    dialogue       { get; set; }
+    [JsonIgnore] internal BrainModule? brain          { get; set; }
+    [JsonIgnore] internal Context?     context        { get; set; }
+    [JsonIgnore] internal string       brainPublicUrl { get; set; } = "";
+
+    private EngramBuffer? buffer;
+
+    [JsonPropertyName("recursiveBrainSearchDepth")] public int RecursiveBrainSearchDepth { get; init; } = 7;
+    [JsonPropertyName("sweepIntervalMinutes")]      public int SweepIntervalMinutes       { get; init; }
 
     private readonly Dictionary<string, DateTime>       lastRun          = new();
     private readonly Dictionary<string, int>            lastHistoryCount = new();
     private readonly SemaphoreSlim                      engramLock       = new(1, 1);
     private readonly ConcurrentDictionary<string, byte> sweepingThreads  = new(StringComparer.OrdinalIgnoreCase);
-    private readonly int                                fetchDepth;
     private readonly HttpClient                         httpClient       = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+
+    private ConcurrentDictionary<string, Thread> threads = new();
 
     internal event Action<string>? SweepCompleted;
 
@@ -47,17 +54,17 @@ internal class Engram : Agent, IDisposable
         await tcs.Task;
     }
 
-    internal override ThreadType Type => ThreadType.Engram;
+    public Engram() { }
 
-    internal Engram(AgentConfig config, Dialogue dialogue, BrainService brain, Context? context, int fetchDepth = 7, string brainPublicUrl = "") : base(config)
+    internal void Init(Dialogue dialogue, BrainModule brain, Context? context, string brainPublicUrl, ConcurrentDictionary<string, Thread> threads)
     {
         this.dialogue       = dialogue;
         this.brain          = brain;
         this.context        = context;
-        this.fetchDepth     = fetchDepth;
         this.brainPublicUrl = brainPublicUrl;
+        this.threads        = threads;
 
-        buffer = new EngramBuffer(dialogue, this);
+        buffer = new EngramBuffer(dialogue, this, threads);
 
         dialogue.ThreadBufferFull += threadKey =>
         {
@@ -78,13 +85,13 @@ internal class Engram : Agent, IDisposable
     internal void Enable()
     {
         IsEnabled = true;
-        Common.Logger.LogInformation("[Engram] Enabled.");
+        Shared.Logger.LogInformation("[Engram] Enabled.");
     }
 
     internal void Disable()
     {
         IsEnabled = false;
-        Common.Logger.LogInformation("[Engram] Disabled.");
+        Shared.Logger.LogInformation("[Engram] Disabled.");
     }
 
     internal Task<int> PurgeNotes() => brain.PurgeAllNotes();
@@ -100,9 +107,16 @@ internal class Engram : Agent, IDisposable
         if (!IsEnabled) return;
         if (!await engramLock.WaitAsync(0)) return;
         sweepingThreads[threadKey] = 0;
+
+        // --- Run-log capture (ARI/Logs): every sweep records its full thought process for offline analysis. ---
+        Thread?                            engramThread = null;
+        List<(string Title, Thread Thread)> writeThreads = new();
+        List<string>                       runMeta      = new() { $"Trigger: {trigger}", $"Thread: {threadKey}" };
+        string                             outcome      = "incomplete (unexpected exit)";
+
         try
         {
-            List<ThreadItem> allItems = dialogue.GetThread(threadKey)?.History ?? new List<ThreadItem>();
+            List<ThreadItem> allItems = threads.TryGetValue(threadKey, out Thread? dialogueThread) ? dialogueThread.History : new List<ThreadItem>();
             List<ThreadItem> conversationItems = allItems.Where(i => i is UserMessage or AriResponse).ToList();
 
             int lastCount = lastHistoryCount.TryGetValue(threadKey, out int c) ? c : 0;
@@ -111,11 +125,16 @@ internal class Engram : Agent, IDisposable
             lastRun[threadKey]          = DateTime.UtcNow;
             lastHistoryCount[threadKey] = conversationItems.Count;
 
-            Common.Logger.LogInformation("[Engram] [{ThreadKey}] sweep triggered (trigger: {Trigger})", threadKey, trigger);
+            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] sweep triggered (trigger: {Trigger})", threadKey, trigger);
 
             // --- Phase 1: Classify ---
-            Common.Logger.LogInformation("[Engram] [{ThreadKey}] phase 1 — classifying conversation...", threadKey);
-            if (!await Classify(recentItems, trigger)) return;
+            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] phase 1 — classifying conversation...", threadKey);
+            runMeta.Add($"Classified transcript: {RunLogger.Trunc(BuildTranscript(recentItems), 600)}");
+            if (!await Classify(recentItems, trigger))
+            {
+                outcome = "skipped — classified as task-only (or no new messages)";
+                return;
+            }
 
             // --- Phase 2: Fetch ---
             List<string> existingNotes  = await brain.GetNotePaths();
@@ -129,15 +148,15 @@ internal class Engram : Agent, IDisposable
                           : p;
                   }))
                 : "none";
-            string transcript           = BuildTranscript(conversationItems);
-            string engramThreadKey      = $"engram:{Guid.NewGuid()}";
+            string transcript  = BuildTranscript(conversationItems);
+            engramThread = new Thread(ThreadPipeline.Dialogue, $"engram:{Guid.NewGuid()}") { Internal = true };
 
             if (context is not null)
                 await context.RebuildFromTranscript(threadKey, transcript);
 
             string contextSummary = context?.GetContext(threadKey) ?? string.Empty;
 
-            Common.Logger.LogInformation("[Engram] [{ThreadKey}] phase 2 — fetch (aware of {Count} existing note(s) with full paths)",
+            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] phase 2 — fetch (aware of {Count} existing note(s) with full paths)",
                 threadKey, existingNotes.Count);
 
             string contextBlock = string.IsNullOrWhiteSpace(contextSummary)
@@ -157,15 +176,15 @@ internal class Engram : Agent, IDisposable
                 "Any note you intend to update must be fetched first.\n" +
                 "Respond with bare note TITLES (the last segment of the path): {\"fetch\": [\"[REDACT]\"]} — or {\"fetch\": []} to proceed straight to extraction.";
 
-            string initialRaw    = await Prompt(engramThreadKey, initialFetchPrompt);
+            string initialRaw    = await SendPrompt(engramThread, initialFetchPrompt);
             List<string> toFetch = ParseFetchList(initialRaw).Where(n => !alreadyFetched.Contains(n)).ToList();
 
             if (toFetch.Count == 0)
-                Common.Logger.LogInformation("[Engram] [{ThreadKey}] fetch round 1: no notes requested, proceeding to plan.", threadKey);
+                Shared.Logger.LogInformation("[Engram] [{ThreadKey}] fetch round 1: no notes requested, proceeding to plan.", threadKey);
 
-            for (int depth = 0; depth < fetchDepth && toFetch.Count > 0; depth++)
+            for (int depth = 0; depth < RecursiveBrainSearchDepth && toFetch.Count > 0; depth++)
             {
-                Common.Logger.LogInformation("[Engram] [{ThreadKey}] fetch round {Round}: requesting [{Notes}]",
+                Shared.Logger.LogInformation("[Engram] [{ThreadKey}] fetch round {Round}: requesting [{Notes}]",
                     threadKey, depth + 1, string.Join(", ", toFetch));
 
                 StringBuilder sb = new();
@@ -181,7 +200,7 @@ internal class Engram : Agent, IDisposable
 
                 if (sb.Length == 0) break;
 
-                bool atLimit = depth + 1 >= fetchDepth;
+                bool atLimit = depth + 1 >= RecursiveBrainSearchDepth;
                 string deliverPrompt = atLimit
                     ? $"Here are the notes you requested:\n\n{sb}\n\n(Fetch limit reached — proceeding to planning.)"
                     : $"Here are the notes you requested:\n\n{sb}\n\n" +
@@ -189,21 +208,21 @@ internal class Engram : Agent, IDisposable
                       "If any of those notes reference further notes you need to read (e.g. a [[link]]), request them now. " +
                       "Respond with {\"fetch\": [\"Name\"]} to request more, or {\"fetch\": []} to proceed to planning.";
 
-                string deliverRaw = await Prompt(engramThreadKey, deliverPrompt);
+                string deliverRaw = await SendPrompt(engramThread, deliverPrompt);
                 toFetch = atLimit
                     ? new List<string>()
                     : ParseFetchList(deliverRaw).Where(n => !alreadyFetched.Contains(n)).ToList();
 
                 if (toFetch.Count == 0)
-                    Common.Logger.LogInformation("[Engram] [{ThreadKey}] fetch round {Round}: no further notes requested.", threadKey, depth + 2);
+                    Shared.Logger.LogInformation("[Engram] [{ThreadKey}] fetch round {Round}: no further notes requested.", threadKey, depth + 2);
             }
 
             if (alreadyFetched.Count > 0)
-                Common.Logger.LogInformation("[Engram] [{ThreadKey}] fetch complete: read {Count} note(s): [{Notes}]",
+                Shared.Logger.LogInformation("[Engram] [{ThreadKey}] fetch complete: read {Count} note(s): [{Notes}]",
                     threadKey, alreadyFetched.Count, string.Join(", ", alreadyFetched));
 
             // --- Phase 3: Plan ---
-            Common.Logger.LogInformation("[Engram] [{ThreadKey}] phase 3 — planning changes...", threadKey);
+            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] phase 3 — planning changes...", threadKey);
 
             string contextPreamble = string.IsNullOrWhiteSpace(contextSummary)
                 ? string.Empty
@@ -312,28 +331,30 @@ internal class Engram : Agent, IDisposable
                 "{\"plan\": [{\"op\": \"add\", \"name\": \"People/[Person]'s Family/Immediate Family/[Name]\", \"summary\": \"...\"}]}\n" +
                 "If nothing needs to be stored: {\"plan\": []}";
 
-            string planRaw = await Prompt(engramThreadKey, planPrompt);
+            string planRaw = await SendPrompt(engramThread, planPrompt);
             List<EngramPlanItem> plan = ParsePlanManifest(planRaw);
 
             if (plan.Count == 0)
             {
-                Common.Logger.LogInformation("[Engram] [{ThreadKey}] plan is empty — nothing to store.", threadKey);
+                Shared.Logger.LogInformation("[Engram] [{ThreadKey}] plan is empty — nothing to store.", threadKey);
+                outcome = "no changes — plan was empty";
                 return;
             }
 
-            Common.Logger.LogInformation("[Engram] [{ThreadKey}] plan: {Count} change(s) — [{Notes}]",
-                threadKey, plan.Count, string.Join(", ", plan.Select(p =>
-                    string.IsNullOrWhiteSpace(p.NewName)
-                        ? $"{p.Name} ({p.Op})"
-                        : $"{p.Name} → {p.NewName} ({p.Op})")));
+            string planSummary = string.Join(", ", plan.Select(p =>
+                string.IsNullOrWhiteSpace(p.NewName)
+                    ? $"{p.Name} ({p.Op})"
+                    : $"{p.Name} → {p.NewName} ({p.Op})"));
+            runMeta.Add($"Plan ({plan.Count}): {RunLogger.Trunc(planSummary, 600)}");
+
+            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] plan: {Count} change(s) — [{Notes}]",
+                threadKey, plan.Count, planSummary);
 
             // Snapshot the engram thread's context at this point so each per-note write forks from it.
-            IReadOnlyList<ThreadMessage> savedContext = Threads.TryGetValue(engramThreadKey, out Thread? engramThread)
-                ? ContextSnapshot(engramThread)
-                : Array.Empty<ThreadMessage>();
+            IReadOnlyList<ThreadMessage> savedContext = ContextSnapshot(engramThread);
 
             // --- Phase 4: Write notes one at a time ---
-            Common.Logger.LogInformation("[Engram] [{ThreadKey}] phase 4 — writing {Count} note(s)...", threadKey, plan.Count);
+            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] phase 4 — writing {Count} note(s)...", threadKey, plan.Count);
 
             StringBuilder sweepSummary = new();
             int successCount = 0;
@@ -343,7 +364,7 @@ internal class Engram : Agent, IDisposable
             for (int i = 0; i < plan.Count; i++)
             {
                 EngramPlanItem item = plan[i];
-                Common.Logger.LogInformation("[Engram] [{ThreadKey}] writing ({Current}/{Total}): {Name} ({Op})",
+                Shared.Logger.LogInformation("[Engram] [{ThreadKey}] writing ({Current}/{Total}): {Name} ({Op})",
                     threadKey, i + 1, plan.Count, item.Name, item.Op);
 
                 string moveInstruction = string.IsNullOrWhiteSpace(item.NewName)
@@ -369,9 +390,10 @@ internal class Engram : Agent, IDisposable
                     "(Omit newName if the path is not changing. Raw JSON only — no fences, no explanation.)";
 
                 // Fork from the saved context snapshot so each write call starts with the same base.
-                Thread writeThread = new Thread(Type, $"adhoc:{Guid.NewGuid()}");
+                Thread writeThread = new Thread(ThreadPipeline.Dialogue, $"adhoc:{Guid.NewGuid()}") { Internal = true };
                 writeThread.Seed(savedContext);
-                string writeRaw = await writeThread.SendPrompt(this, writePrompt, maxTokensOverride: -1);
+                writeThreads.Add(($"Note write {i + 1}/{plan.Count}: {item.Name} ({item.Op})", writeThread));
+                string writeRaw = await SendPrompt(writeThread, writePrompt, maxTokensOverride: -1);
 
                 (List<EngramAdd> noteAdds, List<EngramEdit> noteEdits) = ParseEngramOutput(writeRaw);
 
@@ -381,7 +403,7 @@ internal class Engram : Agent, IDisposable
 
                 if (noteAdds.Count == 0 && noteEdits.Count == 0)
                 {
-                    Common.Logger.LogError("[Engram] [{ThreadKey}] failed to parse note ({Current}/{Total}): {Name}. Raw response: {Raw}",
+                    Shared.Logger.LogError("[Engram] [{ThreadKey}] failed to parse note ({Current}/{Total}): {Name}. Raw response: {Raw}",
                         threadKey, i + 1, plan.Count, item.Name, writeRaw);
                     failCount++;
                     continue;
@@ -416,20 +438,28 @@ internal class Engram : Agent, IDisposable
                 successCount++;
 
                 string savedName = noteAdds.Count > 0 ? noteAdds[0].NoteName : noteEdits[0].NoteName;
-                Common.Logger.LogInformation("[Engram] [{ThreadKey}] saved ({Current}/{Total}): {Name}",
+                Shared.Logger.LogInformation("[Engram] [{ThreadKey}] saved ({Current}/{Total}): {Name}",
                     threadKey, i + 1, plan.Count, savedName);
             }
 
-            Common.Logger.LogInformation("[Engram] [{ThreadKey}] phase 4 complete: {Success} saved, {Fail} failed.",
+            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] phase 4 complete: {Success} saved, {Fail} failed.",
                 threadKey, successCount, failCount);
+            outcome = $"{successCount} saved, {failCount} failed";
 
             if (queueChanges.Count > 0)
-                dialogue.LogEngram(threadKey, queueChanges);
+                Shared.Logger.LogInformation("[Engram] [{ThreadKey}] {Count} note change(s): {Changes}",
+                    threadKey, queueChanges.Count, string.Join(", ", queueChanges.Select(c => $"{c.Op}:{c.Title}")));
 
-            Common.Logger.LogInformation("[Engram] [{ThreadKey}] sweep complete.", threadKey);
+            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] sweep complete.", threadKey);
         }
         finally
         {
+            runMeta.Add($"Outcome: {outcome}");
+            List<(string Title, Thread Thread)> logThreads = new();
+            if (engramThread is not null) logThreads.Add(("Fetch + plan (engram thread)", engramThread));
+            logThreads.AddRange(writeThreads);
+            RunLogger.Write("Engram", threadKey, logThreads, runMeta);
+
             sweepingThreads.TryRemove(threadKey, out _);
             engramLock.Release();
             SweepCompleted?.Invoke(threadKey);
@@ -441,7 +471,7 @@ internal class Engram : Agent, IDisposable
         string transcript = BuildTranscript(recentItems);
         if (string.IsNullOrWhiteSpace(transcript))
         {
-            Common.Logger.LogInformation("[Engram] [{Trigger}] no new messages to classify, skipping.", trigger);
+            Shared.Logger.LogInformation("[Engram] [{Trigger}] no new messages to classify, skipping.", trigger);
             return false;
         }
 
@@ -482,12 +512,12 @@ internal class Engram : Agent, IDisposable
 
             bool worthStoring = answer.Trim().StartsWith("yes", StringComparison.OrdinalIgnoreCase);
             if (!worthStoring)
-                Common.Logger.LogInformation("[Engram] [{Trigger}] classified as task-only, skipping extraction.", trigger);
+                Shared.Logger.LogInformation("[Engram] [{Trigger}] classified as task-only, skipping extraction.", trigger);
             return worthStoring;
         }
         catch (Exception ex)
         {
-            Common.Logger.LogWarning("[Engram] Classification failed ({Error}), proceeding with extraction.", ex.Message);
+            Shared.Logger.LogWarning("[Engram] Classification failed ({Error}), proceeding with extraction.", ex.Message);
             return true;
         }
     }
@@ -533,7 +563,7 @@ internal class Engram : Agent, IDisposable
         }
         catch (Exception ex)
         {
-            Common.Logger.LogError("[Engram] Failed to parse plan manifest: {Error}. Raw: {Raw}", ex.Message, raw);
+            Shared.Logger.LogError("[Engram] Failed to parse plan manifest: {Error}. Raw: {Raw}", ex.Message, raw);
             return new();
         }
     }
@@ -597,7 +627,7 @@ internal class Engram : Agent, IDisposable
         }
         catch (Exception ex)
         {
-            Common.Logger.LogError("[Engram] Failed to parse note output: {Error}. Raw: {Raw}", ex.Message, raw);
+            Shared.Logger.LogError("[Engram] Failed to parse note output: {Error}. Raw: {Raw}", ex.Message, raw);
             return (new(), new());
         }
     }
@@ -620,13 +650,15 @@ internal class EngramBuffer
 
     private readonly Dialogue      dialogue;
     private readonly Engram        engram;
+    private readonly ConcurrentDictionary<string, Thread> threads;
     private readonly Queue<string> queue            = new();
     private readonly HashSet<string> queuedKeys     = new();
 
-    internal EngramBuffer(Dialogue dialogue, Engram engram)
+    internal EngramBuffer(Dialogue dialogue, Engram engram, ConcurrentDictionary<string, Thread> threads)
     {
         this.dialogue = dialogue;
         this.engram   = engram;
+        this.threads  = threads;
 
         dialogue.ThreadBecameInactive += threadKey =>
         {
@@ -636,7 +668,7 @@ internal class EngramBuffer
 
             if (queue.Count >= DRAIN_QUEUE_LIMIT)
                 _ = Task.Run(Drain);
-            else if (!dialogue.OwnThreads.Any(t => t.State == ThreadState.Active))
+            else if (!threads.Values.Any(t => t.Pipeline == ThreadPipeline.Dialogue && t.State is ThreadState.Idle or ThreadState.Streaming))
                 _ = Task.Run(Drain);
         };
     }
@@ -651,14 +683,14 @@ internal class EngramBuffer
             string threadKey = queue.Dequeue();
             queuedKeys.Remove(threadKey);
 
-            Thread? thread = dialogue.GetThread(threadKey);
-            if (thread is null || thread.State == ThreadState.Active || thread.State == ThreadState.Deleted)
+            threads.TryGetValue(threadKey, out Thread? thread);
+            if (thread is null || thread.State is ThreadState.Idle or ThreadState.Streaming or ThreadState.Deleted)
                 continue;
 
             await engram.RunEngram(threadKey, "inactivity");
-            dialogue.GetThread(threadKey)?.MarkEngramProcessed();
+            if (threads.TryGetValue(threadKey, out Thread? et)) et.MarkEngramProcessed();
 
-            if (dialogue.OwnThreads.Any(t => t.State == ThreadState.Active))
+            if (threads.Values.Any(t => t.Pipeline == ThreadPipeline.Dialogue && t.State is ThreadState.Idle or ThreadState.Streaming))
                 return;
         }
     }

@@ -18,4 +18,13 @@ internal abstract class FileTool : Tool
         string absPath = Path.GetFullPath(Path.Combine(root, relPath));
         return absPath.StartsWith(root, StringComparison.OrdinalIgnoreCase) ? absPath : null;
     }
+
+    /// <summary>True if the text is one of ARI's history-redaction placeholders. History compaction
+    /// hides earlier write/edit payloads behind these; a weak model can copy the placeholder back as
+    /// real content and erase a file, so write/edit must refuse it.</summary>
+    protected static bool IsRedactionPlaceholder(string? s)
+    {
+        string t = (s ?? "").Trim();
+        return t is "[content omitted]" or "[omitted]";
+    }
 }

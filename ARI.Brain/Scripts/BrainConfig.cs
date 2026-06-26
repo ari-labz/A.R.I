@@ -4,6 +4,8 @@ namespace ARI.Brain;
 
 public class BrainConfig
 {
+    public bool Enabled { get; init; }
+
     [JsonPropertyName("TriliumUrl")]
     public string TriliumUrl { get; set; } = "http://localhost:8080";
 
