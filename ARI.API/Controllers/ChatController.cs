@@ -113,7 +113,8 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     public IActionResult NewThread([FromBody] NewThreadRequest? req = null)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
-        string key = $"web-{Guid.NewGuid():N}";
+        // Desktop (Electron) clients get a "client-" key so they're distinguishable from browser ("web-") threads.
+        string key = $"{(req?.Desktop == true ? "client" : "web")}-{Guid.NewGuid():N}";
         Project? project = !string.IsNullOrWhiteSpace(req?.ProjectId) ? projectStore.Get(req.ProjectId) : null;
         if (project is not null)
         {
@@ -757,6 +758,6 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 
 public record StreamRequest(string Prompt, string? LocalPath = null);
 public record CommandRequest(string? ThreadKey, string Input);
-public record NewThreadRequest(string? ProjectId);
+public record NewThreadRequest(string? ProjectId, bool Desktop = false);
 public record InjectContextRequest(string Name, string Content);
 public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active", bool IsCodeMode = false, string? ProjectName = null, string? ProjectId = null);

@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from "react"
+import { env } from "../env"
 
 export interface ThreadEntry {
     key:          string
@@ -70,7 +71,7 @@ export async function createThread(projectId?: string | null): Promise<string> {
     const res = await fetch("/threads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: projectId ?? null }),
+        body: JSON.stringify({ projectId: projectId ?? null, desktop: env.isDesktop }),
     })
     const { key } = await res.json()
     return key
