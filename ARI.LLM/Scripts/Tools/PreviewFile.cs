@@ -14,7 +14,8 @@ internal sealed class PreviewFile : FileTool
     private const int PREVIEW_HEAD_LINES = 8;
     private const int MAX_OUTLINE_ITEMS  = 80;
 
-    internal PreviewFile(string root, CancellationToken ct) : base(root, ct) { }
+    private readonly FileSnapshots? gate;
+    internal PreviewFile(string root, CancellationToken ct, FileSnapshots? gate = null) : base(root, ct) { this.gate = gate; }
 
     internal override string Name => "preview_file";
 
@@ -52,6 +53,7 @@ internal sealed class PreviewFile : FileTool
 
             if (absPath is null)       return "Access denied: path traversal is not allowed.";
             if (!File.Exists(absPath)) return $"File not found: {relPath}";
+            gate?.MarkPreviewed(absPath);   // read_file on this file is now allowed
 
             string[] lines     = await File.ReadAllLinesAsync(absPath, ct);
             long     sizeBytes = new FileInfo(absPath).Length;
@@ -89,7 +91,11 @@ internal sealed class PreviewFile : FileTool
             }
 
             sb.AppendLine();
-            sb.Append("Use read_file with start_line/end_line to read a specific section.");
+            sb.AppendLine($"[{lines.Length} lines total]");
+            if (lines.Length > 400)
+                sb.Append("Warning: this is a large file. Read ONLY the line ranges you need with read_file (start_line/end_line). Do not read the whole file.");
+            else
+                sb.Append("Use read_file with start_line/end_line to read a specific section.");
             return sb.ToString();
         }
         catch (Exception ex)

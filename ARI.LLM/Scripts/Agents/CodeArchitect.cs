@@ -38,8 +38,8 @@ internal sealed class CodeArchitect : Agent
         Coder coder, string root, FileSnapshots snapshots, CancellationTokenSource cts, Func<string, Task>? onDelta)
     {
         // 1. PLAN — the architect's first turn, on the main thread: explore + emit the task list.
-        new PreviewFile(root, cts.Token).Register(parent);
-        new ReadFile(root, cts.Token).Register(parent);
+        new PreviewFile(root, cts.Token, snapshots).Register(parent);
+        new ReadFile(root, cts.Token, snapshots).Register(parent);
         new ListDirectory(root, cts.Token).Register(parent);
         new SearchFiles(root, cts.Token).Register(parent);
         new FindFiles(root, cts.Token).Register(parent);
@@ -199,8 +199,8 @@ internal sealed class CodeArchitect : Agent
             //    stream (prose/JSON filtered out), so no JSON ever appears, even while streaming.
             Thread planThread = new(ThreadPipeline.Code, $"{threadKey}#plan:{Guid.NewGuid():N}") { Internal = true, Parent = parent, Label = "Planning (architect)" };
             parent.AddChild(planThread);
-            new PreviewFile(root, cts.Token).Register(planThread);
-            new ReadFile(root, cts.Token).Register(planThread);
+            new PreviewFile(root, cts.Token, snapshots).Register(planThread);
+            new ReadFile(root, cts.Token, snapshots).Register(planThread);
             new ListDirectory(root, cts.Token).Register(planThread);
             new SearchFiles(root, cts.Token).Register(planThread);
             new FindFiles(root, cts.Token).Register(planThread);
@@ -357,10 +357,11 @@ internal sealed class CodeArchitect : Agent
 
     private static void RegisterCoderTools(Thread child, string root, FileSnapshots snapshots, CancellationToken ct)
     {
-        // Lean executor toolset: read the assigned range, edit, recover. Deliberately NO search/preview/list —
-        // the architect already located the change; with thinking off, exploration tools just make the Coder
-        // wander and spiral on search instead of editing.
-        new ReadFile(root, ct).Register(child);
+        // Lean executor toolset: preview → read the assigned range, edit, recover. No search/list (with thinking
+        // off those make the Coder wander); preview_file IS included so it can satisfy the preview-before-read
+        // gate and keep context lean even on its assigned file.
+        new PreviewFile(root, ct, snapshots).Register(child);
+        new ReadFile(root, ct, snapshots).Register(child);
         new EditFile(root, ct, snapshots).Register(child);
         new WriteFile(root, ct).Register(child);
         new RevertFile(root, ct, snapshots).Register(child);
