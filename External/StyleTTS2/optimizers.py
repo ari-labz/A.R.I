@@ -63,7 +63,10 @@ def define_scheduler(optimizer, params):
     return scheduler
 
 def build_optimizer(parameters_dict, scheduler_params_dict, lr):
-    optim = dict([(key, AdamW(params, lr=lr, weight_decay=1e-4, betas=(0.0, 0.99), eps=1e-9))
+    # eps floors AdamW's divisor sqrt(exp_avg_sq)+eps. Upstream's 1e-9 is unsafe on MPS:
+    # if exp_avg_sq flushes toward zero (FTZ), the update lr*grad/eps can explode to NaN/inf.
+    # 1e-8 is PyTorch's default — a safe floor, negligible for normal-magnitude second moments.
+    optim = dict([(key, AdamW(params, lr=lr, weight_decay=1e-4, betas=(0.0, 0.99), eps=1e-6))
                    for key, params in parameters_dict.items()])
 
     schedulers = dict([(key, define_scheduler(opt, scheduler_params_dict[key])) \

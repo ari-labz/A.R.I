@@ -43,16 +43,18 @@ class STFTLoss(torch.nn.Module):
             Tensor: Spectral convergence loss value.
             Tensor: Log STFT magnitude loss value.
         """
-        x_mag = self.to_mel(x)
+        # torchaudio's MelSpectrogram calls torch.stft internally; on MPS that is a known NaN
+        # source. Run the mel transform on CPU (filterbank+window moved with it) and bring the
+        # normalised magnitudes back to the input device. Autograd flows across the copy.
+        dev = x.device
+        self.to_mel = self.to_mel.cpu()
+        x, y = x.cpu(), y.cpu()
         mean, std = -4, 4
-        x_mag = (torch.log(1e-5 + x_mag) - mean) / std
-        
-        y_mag = self.to_mel(y)
-        mean, std = -4, 4
-        y_mag = (torch.log(1e-5 + y_mag) - mean) / std
-        
-        sc_loss = self.spectral_convergenge_loss(x_mag, y_mag)    
-        return sc_loss
+        x_mag = (torch.log(1e-5 + self.to_mel(x)) - mean) / std
+        y_mag = (torch.log(1e-5 + self.to_mel(y)) - mean) / std
+
+        sc_loss = self.spectral_convergenge_loss(x_mag, y_mag)
+        return sc_loss.to(dev)
 
 
 class MultiResolutionSTFTLoss(torch.nn.Module):

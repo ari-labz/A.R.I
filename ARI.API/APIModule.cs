@@ -52,6 +52,8 @@ public class APIModule : IAsyncDisposable
 
     public async Task Start(CancellationToken cancellationToken)
     {
+        VoiceController.ClearStaging();   // voice uploads/processing output are non-persistent
+
         string exeDir     = AppContext.BaseDirectory;
         string uiDist     = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "..", "..", "ARI.UI", "dist"));
         string wwwrootDir = Directory.Exists(uiDist) ? uiDist : Path.Combine(exeDir, "wwwroot");

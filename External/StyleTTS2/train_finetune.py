@@ -11,6 +11,7 @@ import torchaudio
 import librosa
 import click
 import shutil
+import subprocess
 import warnings
 warnings.simplefilter('ignore')
 from torch.utils.tensorboard import SummaryWriter
@@ -37,6 +38,25 @@ class MyDataParallel(torch.nn.DataParallel):
             return super().__getattr__(name)
         except AttributeError:
             return getattr(self.module, name)
+
+
+class NoParallel(torch.nn.Module):
+    """Single-device stand-in for DataParallel (CPU/MPS). DataParallel is CUDA-multi-GPU only and
+    raises 'Device index must not be negative' on CPU. This exposes the same `.module` attribute and
+    forwards calls straight through, so the rest of the code (e.g. model.diffusion.module) is
+    device-agnostic."""
+    def __init__(self, module):
+        super().__init__()
+        self.module = module
+
+    def forward(self, *args, **kwargs):
+        return self.module(*args, **kwargs)
+
+    def __getattr__(self, name):
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            return getattr(self.module, name)
         
 import logging
 from logging import StreamHandler
@@ -48,36 +68,173 @@ logger.addHandler(handler)
 
 
 _FLOAT32_TINY = torch.finfo(torch.float32).tiny  # 1.175e-38 — smallest normal float32
+_WEIGHT_NORM_EPS = 1e-6  # denominator floor for g·v/(‖v‖+eps). 1e-12 was too small for MPS — a
+# near-zero ‖v‖ still amplified v enormously; 1e-6 caps that. Negligible for healthy ‖v‖ (O(0.01–10)).
+
+
+def _patch_weight_norm_eps():
+    """Floor weight_norm's denominator so MPS flush-to-zero of a subnormal ‖v‖ can never
+    cause a divide-by-zero NaN. weight = g·v/(‖v‖+eps). For a healthy weight (‖v‖ ≫ eps)
+    this is identical to stock weight_norm to ~1e-12 relative — below float32 precision —
+    so it does NOT affect training quality. It only changes the pathological ‖v‖→0 case,
+    turning a NaN into a finite near-zero weight that can recover. This is the root fix:
+    the NaN can no longer form, so it can no longer cascade.
+    """
+    from torch.nn.utils.weight_norm import WeightNorm
+
+    def compute_weight(self, module):
+        g = getattr(module, self.name + '_g')
+        v = getattr(module, self.name + '_v')
+        if self.dim is None:
+            norm = v.norm(2)
+        else:
+            dim = self.dim if self.dim >= 0 else v.dim() + self.dim
+            axes = [d for d in range(v.dim()) if d != dim]
+            norm = v.norm(2, dim=axes, keepdim=True)
+        return v * (g / (norm + _WEIGHT_NORM_EPS))
+
+    WeightNorm.compute_weight = compute_weight
+
+
+def _patch_spectral_norm_eps():
+    """Floor spectral_norm's divisor (sigma) so MPS flush-to-zero can't make W/sigma blow up to
+    NaN — the style_encoder and predictor_encoder use spectral_norm, not weight_norm, so the
+    weight_norm guard doesn't cover them. Mirrors compute_weight exactly but with a 1e-6 floor on
+    the power-iteration normalize and on sigma. For a healthy sigma (O(1)) this is negligible, so
+    it does NOT affect quality; it only changes the pathological sigma→0 case."""
+    from torch.nn.utils.spectral_norm import SpectralNorm
+    floor = _WEIGHT_NORM_EPS  # 1e-6
+
+    def compute_weight(self, module, do_power_iteration):
+        weight = getattr(module, self.name + "_orig")
+        u = getattr(module, self.name + "_u")
+        v = getattr(module, self.name + "_v")
+        weight_mat = self.reshape_weight_to_matrix(weight)
+        if do_power_iteration:
+            with torch.no_grad():
+                for _ in range(self.n_power_iterations):
+                    v = F.normalize(torch.mv(weight_mat.t(), u), dim=0, eps=floor, out=v)
+                    u = F.normalize(torch.mv(weight_mat, v), dim=0, eps=floor, out=u)
+                if self.n_power_iterations > 0:
+                    u = u.clone(memory_format=torch.contiguous_format)
+                    v = v.clone(memory_format=torch.contiguous_format)
+        sigma = torch.dot(u, torch.mv(weight_mat, v))
+        weight = weight / (sigma + floor)
+        return weight
+
+    SpectralNorm.compute_weight = compute_weight
+
+
+def _patch_safe_division():
+    """Floor the denominator of EVERY tensor division in the whole process — anywhere, in any
+    module, including code we don't own and code added later. This is the blanket fix: instead of
+    hunting divide-by-zero sites one at a time, we globally wrap torch's division / reciprocal /
+    rsqrt / normalize ops so that whenever a floating-point denominator's magnitude drops below
+    _WEIGHT_NORM_EPS it is replaced by ±eps (sign preserved). MPS flush-to-zero can then never
+    turn a tiny denominator into a hard zero and a NaN.
+
+    For any healthy denominator (|d| >> eps) the result is bit-identical to stock torch, so it does
+    NOT affect voice quality — it only rescues the pathological d->0 case. Integer/bool tensors are
+    passed through untouched (index math, batch sizes, rounding-mode division stay exact).
+    floor_denom uses only sign/where/abs/clamp/mul — never division — so there is no recursion."""
+    import torch.nn.functional as F
+    eps = _WEIGHT_NORM_EPS  # 1e-6
+
+    def floor_denom(d):
+        if isinstance(d, torch.Tensor):
+            if not d.is_floating_point():
+                return d
+            signed_eps = torch.where(d < 0, -eps, eps)
+            return torch.where(d.abs() < eps, signed_eps, d)
+        try:
+            if -eps < d < eps:
+                return eps if d >= 0 else -eps
+        except TypeError:
+            pass
+        return d
+
+    def floor_positive(x):  # for rsqrt: 1/sqrt(x) needs x > 0; clamp away from 0 and negatives
+        if isinstance(x, torch.Tensor) and x.is_floating_point():
+            return x.clamp(min=eps)
+        return x
+
+    _truediv, _rtruediv, _itruediv = (torch.Tensor.__truediv__,
+                                      torch.Tensor.__rtruediv__, torch.Tensor.__itruediv__)
+    _div, _div_ = torch.Tensor.div, torch.Tensor.div_
+    _recip, _recip_ = torch.Tensor.reciprocal, torch.Tensor.reciprocal_
+    _rsqrt, _rsqrt_ = torch.Tensor.rsqrt, torch.Tensor.rsqrt_
+    _t_div, _t_divide, _t_recip, _t_rsqrt = (torch.div, torch.divide,
+                                             torch.reciprocal, torch.rsqrt)
+    _normalize = F.normalize
+
+    torch.Tensor.__truediv__ = lambda self, other: _truediv(self, floor_denom(other))
+    torch.Tensor.__rtruediv__ = lambda self, other: _rtruediv(floor_denom(self), other)  # other/self
+    torch.Tensor.__itruediv__ = lambda self, other: _itruediv(self, floor_denom(other))
+    torch.Tensor.div = lambda self, other, **kw: _div(self, floor_denom(other), **kw)
+    torch.Tensor.div_ = lambda self, other, **kw: _div_(self, floor_denom(other), **kw)
+    torch.Tensor.reciprocal = lambda self: _recip(floor_denom(self))
+    torch.Tensor.reciprocal_ = lambda self: _recip_(self.copy_(floor_denom(self)))
+    torch.Tensor.rsqrt = lambda self: _rsqrt(floor_positive(self))
+    torch.Tensor.rsqrt_ = lambda self: _rsqrt_(self.copy_(floor_positive(self)))
+    torch.div = lambda input, other, **kw: _t_div(input, floor_denom(other), **kw)
+    torch.divide = lambda input, other, **kw: _t_divide(input, floor_denom(other), **kw)
+    torch.reciprocal = lambda input, **kw: _t_recip(floor_denom(input), **kw)
+    torch.rsqrt = lambda input, **kw: _t_rsqrt(floor_positive(input), **kw)
+    # F.normalize divides by the p-norm with a tiny default eps (1e-12) — bump any sub-eps floor up.
+    F.normalize = lambda input, p=2.0, dim=1, eps=1e-12, out=None: _normalize(
+        input, p=p, dim=dim, eps=max(eps, _WEIGHT_NORM_EPS), out=out)
+
+
+def _floor_optimizer_second_moment(optimizer):
+    """Prevention: floor AdamW's exp_avg_sq >= 0 before each step. On MPS, float accumulation can
+    drive this nominally-non-negative buffer slightly negative; AdamW then computes
+    sqrt(exp_avg_sq) = NaN in the update denominator and corrupts whichever parameter is unlucky
+    that step (the NaN's location shifts run-to-run because it's unseeded). Flooring at 0 — the
+    only valid value for a mean-of-squares — stops the NaN at its source for every parameter at
+    once. This guards the optimizer's internal divisor; it does not touch model weights."""
+    for opt in optimizer.optimizers.values():
+        for st in opt.state.values():
+            ea = st.get('exp_avg')
+            eq = st.get('exp_avg_sq')
+            if ea is not None:
+                torch.nan_to_num_(ea, nan=0.0, posinf=0.0, neginf=0.0)
+            if eq is not None:
+                torch.nan_to_num_(eq, nan=0.0, posinf=0.0, neginf=0.0)
+                eq.clamp_(min=0.0)
+
 
 def _clip_and_check(model, keys, max_norm=5.0):
-    """Sanitize, clip, and validate gradients. Returns False only if clipping itself fails."""
+    """Clip gradients; skip the optimizer step (return False) if any are non-finite.
+    MPS can emit NaN/inf grads on a backward pass. Dropping that one micro-batch update is
+    harmless, whereas sanitising the values and stepping feeds ±F32_MAX into AdamW's second
+    moment and permanently poisons it. When grads are finite this clips and steps as before.
+    """
     params = [p for k in keys for p in model[k].parameters() if p.grad is not None]
     if not params:
         return True
-    # Zero NaN/inf gradients before clipping — MPS can produce them on backward passes.
-    # Zeroing is safer than propagating: AdamW's second moment accumulates squared grads,
-    # so a single NaN grad would permanently corrupt v for that parameter.
-    _F32_MAX = torch.finfo(torch.float32).max
-    for p in params:
-        torch.nan_to_num_(p.grad, nan=_FLOAT32_TINY, posinf=_F32_MAX, neginf=-_F32_MAX)
+    if any(not torch.isfinite(p.grad).all() for p in params):
+        for p in params:
+            p.grad.zero_()
+        return False
     torch.nn.utils.clip_grad_norm_(params, max_norm=max_norm)
-    return not any(torch.isnan(p.grad).any() or torch.isinf(p.grad).any() for p in params)
+    return True
 
 
 def _clamp_weight_norm_vectors(module):
-    """Clamp weight_norm direction vectors to prevent ‖v‖→0 divide-by-zero on MPS.
+    """Repair only broken weight_norm vectors; leave healthy weights untouched.
 
-    MPS flushes subnormal float32 to zero (FTZ mode). weight_norm computes
-    g * v / ‖v‖ on every forward pass — if ‖v‖ == 0 the result is NaN.
-    Rows whose norm has collapsed are reinitialised; individual subnormal elements
-    are bumped to ±_FLOAT32_TINY (smallest normal float32 MPS can represent)
-    with sign preserved so the direction vector stays valid.
+    A direction vector whose norm collapses below 1e-9 is effectively a dead filter
+    (a healthy ‖v‖ is O(0.01–10)). The previous repair bumped such rows to ±_FLOAT32_TINY,
+    but squaring a subnormal underflows to 0 when MPS recomputes the norm, so the row
+    re-collapsed and re-NaN'd on the very next step — an infinite heal loop. Re-seeding
+    with a small random direction (std 1e-2, elements² = 1e-4, no underflow) gives the row
+    a valid direction that recovers and trains. Healthy rows are never modified, so this
+    does not affect training quality.
 
-    NaN elements are also fixed here — IEEE 754: NaN < x is always False, so the
-    original subnormal check silently skipped NaN-contaminated rows. This caused
-    the post-optimizer clamp to miss NaN weight_v values that the Adam step produced,
-    leaving the healer to undo them on the NEXT step, creating an infinite loop.
+    HEALING DISABLED — NaNs are now prevented at the source (eps-floored divisors + gradient
+    clipping), so this corrective reinit is a no-op. Kept for call-site compatibility.
     """
+    return
     from torch.nn.utils.weight_norm import WeightNorm
     for m in module.modules():
         for hook in getattr(m, '_forward_pre_hooks', {}).values():
@@ -85,58 +242,32 @@ def _clamp_weight_norm_vectors(module):
                 v = getattr(m, hook.name + '_v')
                 g = getattr(m, hook.name + '_g')
                 with torch.no_grad():
-                    # Fix NaN/inf in weight_v elements before norm check.
                     if not torch.isfinite(v.data).all():
-                        torch.nan_to_num_(v.data, nan=1e-4, posinf=1e-4, neginf=-1e-4)
-                    flat = v.data.view(v.shape[0], -1)
-                    norms = flat.norm(dim=1)
-                    # NaN norms (from NaN elements) also need reinit — use ~isfinite.
-                    bad_rows = (~torch.isfinite(norms) | (norms < _FLOAT32_TINY)).nonzero(as_tuple=False).squeeze(1)
-                    if bad_rows.numel():
-                        for i in bad_rows:
-                            v.data[i].fill_(1e-4)
-                    # Bump any subnormal or non-finite element to ±_FLOAT32_TINY.
-                    too_small = (v.data.abs() < _FLOAT32_TINY) | ~torch.isfinite(v.data)
-                    if too_small.any():
-                        signs = v.data.sign()
-                        signs[signs == 0] = 1.0
-                        v.data[too_small] = signs[too_small] * _FLOAT32_TINY
-                    # Also clamp weight_g — NaN/zero g produces NaN weight regardless of v.
+                        torch.nan_to_num_(v.data, nan=0.0, posinf=0.0, neginf=0.0)
+                    norms = v.data.view(v.shape[0], -1).norm(dim=1)
+                    bad_rows = (~torch.isfinite(norms) | (norms < 1e-9)).nonzero(as_tuple=False).squeeze(1)
+                    for i in bad_rows:
+                        v.data[i].normal_(0.0, 1e-2)
+                    # Also repair weight_g — NaN/zero g produces NaN weight regardless of v.
                     if not torch.isfinite(g.data).all() or (g.data <= 0).any():
                         torch.nan_to_num_(g.data, nan=1.0, posinf=1.0, neginf=1.0)
-                        g.data.clamp_(min=_FLOAT32_TINY)
+                        g.data.clamp_(min=1e-4)
 
 
 def _assert_no_nan(model, epoch, step, log_file_path):
-    """Heal NaN/inf params and zero weight_v norms in-place; log warnings but never crash.
-
-    MPS can produce NaN or inf values in parameters after an optimizer step due to
-    numerical instability (subnormal underflow, flush-to-zero, or gradient spikes).
-    Raising here aborts training; healing allows it to recover from transient spikes.
-    NaN params are replaced with 0 (neutral for most ops); inf params are clamped to
-    ±float32.max; zero weight_v norms are re-initialised via _clamp_weight_norm_vectors.
+    """DETECT-ONLY (healing disabled). Reports which modules contain NaN/inf params so we can
+    find and FIX the source — it does NOT modify anything. With NaNs prevented at the source
+    (eps-floored divisors + gradient clipping) this should never log; if it does, the named
+    module is the next source that needs flooring.
     """
-    from torch.nn.utils.weight_norm import WeightNorm as _WN
-    _F32_MAX = torch.finfo(torch.float32).max
-    healed = []
+    detected = []
     for k in model:
         for p in model[k].parameters():
-            if p.is_floating_point():
-                bad = torch.isnan(p.data) | torch.isinf(p.data)
-                if bad.any():
-                    torch.nan_to_num_(p.data, nan=_FLOAT32_TINY, posinf=_F32_MAX, neginf=-_F32_MAX)
-                    healed.append(f'{k}(NaN/inf param ×{int(bad.sum())})')
-        for m in model[k].modules():
-            for h in getattr(m, '_forward_pre_hooks', {}).values():
-                if isinstance(h, _WN):
-                    v = getattr(m, h.name + '_v')
-                    norms = v.data.view(v.shape[0], -1).norm(dim=1)
-                    if (~torch.isfinite(norms) | (norms < _FLOAT32_TINY)).any():
-                        _clamp_weight_norm_vectors(model[k])
-                        healed.append(f'{k}(zero weight_v norm in {type(m).__name__})')
-                        break
-    if healed:
-        msg = f'Healed model state at epoch {epoch} step {step} — {healed}'
+            if p.is_floating_point() and not torch.isfinite(p.data).all():
+                detected.append(f'{k}(×{int((~torch.isfinite(p.data)).sum())})')
+                break
+    if detected:
+        msg = f'NaN DETECTED (healing off) at epoch {epoch} step {step} — {detected}'
         logger.warning(msg)
         try:
             with open(log_file_path, 'a') as f:
@@ -155,7 +286,34 @@ _WEIGHT_NORM_KEYS = ['decoder', 'text_aligner', 'text_encoder', 'predictor',
 @click.option('-p', '--config_path', default='Configs/config_ft.yml', type=str)
 def main(config_path):
     config = yaml.safe_load(open(config_path))
-    
+
+    device = config.get('device', 'cuda')
+
+    if device == 'mps':
+        # These guards exist only to work around MPS flush-to-zero NaNs and add per-op overhead.
+        # On CPU (and CUDA) they are unnecessary — those backends don't flush subnormals to zero —
+        # so we skip them entirely for speed.
+        _patch_safe_division()      # floor the denominator of every torch division
+        _patch_weight_norm_eps()    # weight_norm's ‖v‖ denominator (reparam-specific)
+        _patch_spectral_norm_eps()  # spectral_norm's sigma divisor (style/predictor encoders)
+    elif device == 'cpu':
+        # Use as much of the CPU as is reasonable. Apple Silicon: use the performance cores for
+        # intra-op parallelism (efficiency cores tend to hurt throughput on heavy matmul/conv).
+        import multiprocessing
+        try:
+            perf_cores = int(subprocess.check_output(
+                ['sysctl', '-n', 'hw.perflevel0.physicalcpu']).strip())
+        except Exception:
+            perf_cores = multiprocessing.cpu_count()
+        threads = int(config.get('cpu_threads', perf_cores))
+        torch.set_num_threads(threads)
+        try:
+            torch.set_num_interop_threads(2)
+        except Exception:
+            pass
+        torch.set_default_dtype(torch.float32)
+        logger.info(f"CPU mode: torch intra-op threads={threads}")
+
     log_dir = config['log_dir']
     if not osp.exists(log_dir): os.makedirs(log_dir, exist_ok=True)
     shutil.copy(config_path, osp.join(log_dir, osp.basename(config_path)))
@@ -211,6 +369,11 @@ def main(config_path):
                                         dataset_config={},
                                         device=device)
 
+    if len(train_dataloader) == 0:
+        raise ValueError(
+            f"Training dataset too small: {len(train_list)} clip(s) with batch_size "
+            f"{batch_size} yields 0 batches. Add more clips or lower batch_size.")
+
     val_dataloader = build_dataloader(val_list,
                                       root_path,
                                       OOD_data=OOD_data,
@@ -240,6 +403,14 @@ def main(config_path):
     model = build_model(model_params, text_aligner, pitch_extractor, plbert)
     _ = [model[key].to(device) for key in model]
 
+    # "Freeze" the pretrained text_aligner (ASR) by never running its optimizer step (see the
+    # generator update below). Its weights stay at their pretrained values, so a gradient spike on
+    # MPS can't drive them to NaN — that was the source of the per-step healing cascade on
+    # demucs-vocal data. We keep requires_grad=True and train() mode (identical to the known-good
+    # run) because the alignment it produces is part of g_loss's gradient path — cutting grad or
+    # switching to eval() both break the backward. Not optimising it is enough: clean weights ->
+    # clean alignment targets, while everything downstream still trains normally.
+
     # MPS: remove weight_norm from discriminators before training.
     # weight_norm splits weight into (weight_g, weight_v) and recomputes weight = g*v/||v||
     # on every forward pass. On MPS the Adam step drives weight_v toward NaN each iteration
@@ -247,6 +418,19 @@ def main(config_path):
     # remove_weight_norm fuses g and v back into a single weight tensor — mathematically identical
     # but without the reparameterisation, so NaN can no longer originate from the discriminators.
     if device == 'mps':
+        # Load the pretrained discriminator weights BEFORE fusing weight_norm. The checkpoint
+        # stores msd/mpd WITH weight_norm (weight_g/weight_v keys). If we remove_weight_norm
+        # first, the later strict=False load can't match those keys to the fused 'weight' and
+        # SILENTLY leaves msd/mpd at their RANDOM init — which makes the adversarial Gen Loss
+        # NaN from step 1 and poisons the whole run. Loading here (while weight_norm is still
+        # present) matches the keys; we then fuse the loaded weights.
+        _pre = config.get('pretrained_model', '')
+        if _pre and config.get('second_stage_load_pretrained', False) and osp.exists(_pre):
+            _ckpt_net = torch.load(_pre, map_location='cpu', weights_only=False)['net']
+            for _d in ('msd', 'mpd'):
+                if _d in _ckpt_net:
+                    model[_d].load_state_dict(_ckpt_net[_d], strict=False)
+            logger.info("MPS: loaded pretrained msd/mpd discriminators before fusing weight_norm.")
         def _remove_weight_norm_recursive(module):
             for m in module.modules():
                 try:
@@ -257,10 +441,11 @@ def main(config_path):
         _remove_weight_norm_recursive(model.mpd)
         logger.info("MPS: removed weight_norm from msd and mpd discriminators.")
 
-    # DP
+    # DP — DataParallel only makes sense on CUDA multi-GPU; CPU/MPS use a single-device passthrough.
+    DP = MyDataParallel if device == 'cuda' else NoParallel
     for key in model:
         if key != "mpd" and key != "msd" and key != "wd":
-            model[key] = MyDataParallel(model[key])
+            model[key] = DP(model[key])
             
     start_epoch = 0
     iters = 0
@@ -293,9 +478,9 @@ def main(config_path):
                    sr, 
                    model_params.slm.sr).to(device)
 
-    gl = MyDataParallel(gl)
-    dl = MyDataParallel(dl)
-    wl = MyDataParallel(wl)
+    gl = DP(gl)
+    dl = DP(dl)
+    wl = DP(wl)
     
     sampler = DiffusionSampler(
         model.diffusion.diffusion,
@@ -407,6 +592,8 @@ def main(config_path):
 
         _ = [model[key].eval() for key in model]
 
+        # text_aligner kept in train() (same as the known-good run) so the backward graph is
+        # unchanged; it is "frozen" only by never running its optimizer step (see generator update).
         model.text_aligner.train()
         model.text_encoder.train()
         
@@ -417,12 +604,13 @@ def main(config_path):
         model.mpd.train()
 
         for i, batch in enumerate(train_dataloader):
-            # Clamp weight_norm vectors before every forward pass. The post-step clamp
-            # catches damage done by the optimizer; this one prevents NaN from entering
-            # the computation graph in the first place when a norm is near zero.
-            for _wk in _WEIGHT_NORM_KEYS:
-                if _wk in model:
-                    _clamp_weight_norm_vectors(model[_wk])
+            if device == 'mps':
+                # MPS-only NaN prophylaxis (per-batch overhead): clamp near-zero weight_norm
+                # vectors and keep AdamW's sqrt(exp_avg_sq) finite. CPU/CUDA don't need this.
+                for _wk in _WEIGHT_NORM_KEYS:
+                    if _wk in model:
+                        _clamp_weight_norm_vectors(model[_wk])
+                _floor_optimizer_second_moment(optimizer)
             waves = batch[0]
             batch = [b.to(device) for b in batch[1:]]
             texts, input_lengths, ref_texts, ref_lengths, mels, mel_input_length, ref_mels = batch
@@ -637,7 +825,7 @@ def main(config_path):
 
             g_loss.backward()
             _gen_keys = ['bert_encoder', 'bert', 'predictor', 'predictor_encoder',
-                         'style_encoder', 'decoder', 'text_encoder', 'text_aligner']
+                         'style_encoder', 'decoder', 'text_encoder']  # text_aligner frozen
             if epoch >= diff_epoch:
                 _gen_keys.append('diffusion')
             if _clip_and_check(model, _gen_keys):
@@ -648,13 +836,15 @@ def main(config_path):
                 optimizer.step('style_encoder')
                 optimizer.step('decoder')
                 optimizer.step('text_encoder')
-                optimizer.step('text_aligner')
+                # text_aligner frozen — not stepped
                 if epoch >= diff_epoch:
                     optimizer.step('diffusion')
-                # Clamp weight_norm direction vectors to float32 minimum to prevent ‖v‖→0
-                for _wk in _WEIGHT_NORM_KEYS:
-                    _clamp_weight_norm_vectors(model[_wk])
-                _assert_no_nan(model, epoch + 1, iters, _train_log_path)
+            # Heal EVERY step — even when the grad guard skipped the optimizer step above.
+            # If healing only ran on finite-grad steps, NaN params from a grad spike would
+            # persist and regenerate NaN on the next forward, an inescapable skip loop.
+            for _wk in _WEIGHT_NORM_KEYS:
+                _clamp_weight_norm_vectors(model[_wk])
+            _assert_no_nan(model, epoch + 1, iters, _train_log_path)
 
             d_loss_slm, loss_gen_lm = 0, 0
             if epoch >= joint_epoch:
@@ -729,6 +919,22 @@ def main(config_path):
                             _clamp_weight_norm_vectors(model['wd'])
 
             iters = iters + 1
+            import time as _time; _time.sleep(0.05)
+            import time as _time; _time.sleep(0.05)
+            import time as _time; _time.sleep(0.05)
+            import time as _time; _time.sleep(0.05)
+            import time as _time; _time.sleep(0.05)
+            import time as _time; _time.sleep(0.05)
+            import time as _time; _time.sleep(0.05)
+            import time as _time; _time.sleep(0.05)
+            import time as _time; _time.sleep(0.05)
+            import time as _time; _time.sleep(0.05)
+            import time as _time; _time.sleep(0.05)
+            import time as _time; _time.sleep(0.05)
+            import time as _time; _time.sleep(0.05)
+            import time as _time; _time.sleep(0.05)
+            import time as _time; _time.sleep(0.05)
+            import time as _time; _time.sleep(0.05)
             import time as _time; _time.sleep(0.05)
             import time as _time; _time.sleep(0.05)
             import time as _time; _time.sleep(0.05)

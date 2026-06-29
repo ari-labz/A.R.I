@@ -168,13 +168,14 @@ public class Thread
             string? content = item.ContextText;
             if (string.IsNullOrEmpty(content)) continue;
 
-            int itemLen = item.AuthorName.Length + 2 + content.Length;
+            string author  = item.AuthorName ?? string.Empty;
+            int    itemLen = author.Length + 2 + content.Length;
             if (maxChars > 0 && charCount + itemLen > maxChars) break;
 
             charCount += itemLen;
             result.Add(new ThreadMessage(
-                Role:     item.AuthorName == "ARI" ? "assistant" : "user",
-                Username: item.AuthorName,
+                Role:     author == "ARI" ? "assistant" : "user",
+                Username: author,
                 Content:  content));
         }
 
