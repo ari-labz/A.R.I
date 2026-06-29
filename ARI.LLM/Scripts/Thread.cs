@@ -59,6 +59,11 @@ public class Thread
     /// </summary>
     public readonly HashSet<string> PreReadPaths = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Plan→confirm→execute gate: true while the CodeArchitect has presented a plain-English plan and
+    /// is waiting for the user to approve (or adjust) it. The plan prose itself lives in History; this is just
+    /// the "a plan is on the table" flag. Cleared once the approved plan is formalised into tasks and executed.</summary>
+    public bool AwaitingPlanApproval;
+
     public readonly List<ThreadItem> History = new();
 
     internal readonly Dictionary<string, (object Schema, Func<string, Task<string>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter, Func<string, string?>? StreamingDisplay)> tools = new();

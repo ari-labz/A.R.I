@@ -920,6 +920,8 @@ def main(config_path):
 
             iters = iters + 1
             import time as _time; _time.sleep(0.05)
+            import time as _time; _time.sleep(0.05)
+            import time as _time; _time.sleep(0.05)
             time.sleep(0.05)  # give macOS a moment to handle signals (prevents long-run crashes)
             
             if (i+1)%log_interval == 0:
