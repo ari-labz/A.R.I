@@ -288,7 +288,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
         List<LlmAttachment>? attachments = message.Attachments.Count > 0
             ? await UploadDiscordAttachments(message.Attachments)
             : null;
-        await SendLlmReply(message, conversationKey, prompt, attachments: attachments);
+        await SendLlmReply(message, conversationKey, prompt, message.Author.Username, attachments: attachments);
     }
 
     private async Task HandleServerMessage(SocketMessage message, SocketGuildChannel guildChannel)
@@ -325,7 +325,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
         List<LlmAttachment>? attachments = message.Attachments.Count > 0
             ? await UploadDiscordAttachments(message.Attachments)
             : null;
-        await SendLlmReply(message, conversationKey, prompt, ServerPlatformContext, attachments);
+        await SendLlmReply(message, conversationKey, prompt, message.Author.Username, ServerPlatformContext, attachments);
     }
 
     private async Task<List<LlmAttachment>> UploadDiscordAttachments(IReadOnlyCollection<DiscordAttachment> attachments)
@@ -352,14 +352,14 @@ public class DiscordModule : BackgroundService, IDiscordModule
         return result;
     }
 
-    private async Task SendLlmReply(SocketMessage message, string conversationKey, string prompt, string? platformContext = null, List<LlmAttachment>? attachments = null)
+    private async Task SendLlmReply(SocketMessage message, string conversationKey, string prompt, string username, string? platformContext = null, List<LlmAttachment>? attachments = null)
     {
         using CancellationTokenSource typingCts = new();
         _ = KeepTyping(message.Channel, typingCts.Token);
 
         try
         {
-            string response = await llmModule.Prompt(conversationKey, prompt, platformContext, messageAttachments: attachments);
+            string response = await llmModule.Prompt(conversationKey, prompt, username, platformContext, messageAttachments: attachments);
             typingCts.Cancel();
 
             if (response.Trim() == PassToken)

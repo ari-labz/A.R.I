@@ -19,12 +19,14 @@ def stft(x, fft_size, hop_size, win_length, window):
     Returns:
         Tensor: Magnitude spectrogram (B, #frames, fft_size // 2 + 1).
     """
-    x_stft = torch.stft(x, fft_size, hop_size, win_length, window,
+    # MPS torch.stft + complex abs are a known NaN source — run on CPU, return real magnitude to
+    # the original device. Autograd flows across the device copy.
+    dev = x.device
+    win = window.cpu() if torch.is_tensor(window) else window
+    x_stft = torch.stft(x.cpu(), fft_size, hop_size, win_length, win,
             return_complex=True)
-    real = x_stft[..., 0]
-    imag = x_stft[..., 1]
 
-    return torch.abs(x_stft).transpose(2, 1)
+    return torch.abs(x_stft).transpose(2, 1).to(dev)
 
 class SpecDiscriminator(nn.Module):
     """docstring for Discriminator."""
@@ -50,7 +52,7 @@ class SpecDiscriminator(nn.Module):
 
         fmap = []
         y = y.squeeze(1)
-        y = stft(y, self.fft_size, self.shift_size, self.win_length, self.window.to(y.get_device()))
+        y = stft(y, self.fft_size, self.shift_size, self.win_length, self.window.to(y.device))
         y = y.unsqueeze(1)
         for i, d in enumerate(self.discriminators):
             y = d(y)

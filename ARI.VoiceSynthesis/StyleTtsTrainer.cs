@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
@@ -41,41 +42,50 @@ public class StyleTtsTrainer(
             JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true }),
             ct);
 
-        string[] existingChunks = Directory.GetFiles(audioDir, "*.wav");
-        if (existingChunks.Length > 0)
+        string savedTrainList = Path.Combine(outputDir, "train_list.txt");
+        string trainList      = Path.Combine(workDir, "train_list.txt");
+
+        // A fresh upload always wins: rebuild from it so leftovers from a previous failed run
+        // for the same model name can't poison the dataset. Reusing on-disk chunks is only a
+        // fallback for resume, where the original upload is already gone.
+        string? metadataPath = Directory.Exists(audioPath) ? PrepareDataset(audioPath) : null;
+        bool    hasRawUpload = Directory.Exists(audioPath)
+            ? Directory.GetFiles(audioPath, "*.wav").Length > 0
+            : File.Exists(audioPath);
+
+        if (metadataPath is not null)
         {
-            // Chunks already exist from a previous run — skip re-chunking (original audio may be gone).
-            progress?.Report(new TrainingProgress("Chunking", 5, $"Using {existingChunks.Length} existing clip(s)"));
+            // Prepared dataset from the Dataset Builder: clips are already split and transcribed,
+            // so copy them straight in and skip both chunking and Whisper.
+            ResetDir(audioDir);
+            progress?.Report(new TrainingProgress("Preparing", 15, "Using prepared dataset (skipping split + transcription)"));
+            BuildPreparedList(metadataPath, audioDir, trainList);
+            File.Copy(trainList, savedTrainList, overwrite: true);
         }
-        else
+        else if (hasRawUpload)
         {
+            ResetDir(audioDir);
             string[] sourceFiles = Directory.Exists(audioPath)
                 ? Directory.GetFiles(audioPath, "*.wav")
                 : new[] { audioPath };
 
-            if (sourceFiles.Length == 0)
-                throw new FileNotFoundException($"No WAV files found in {audioPath}");
-
             progress?.Report(new TrainingProgress("Chunking", 5, $"Splitting {sourceFiles.Length} file(s) into clips"));
             foreach (string source in sourceFiles)
                 await ChunkAudio(source, audioDir, ct);
-        }
 
-        string savedTrainList = Path.Combine(outputDir, "train_list.txt");
-        string trainList;
-        if (File.Exists(savedTrainList))
-        {
-            // Reuse the transcription from the original run — avoids Whisper hallucination drift on resume.
-            trainList = Path.Combine(workDir, "train_list.txt");
-            File.Copy(savedTrainList, trainList, overwrite: true);
-            progress?.Report(new TrainingProgress("Transcribing", 15, "Using saved transcription"));
+            progress?.Report(new TrainingProgress("Transcribing", 15, "Transcribing audio with Whisper"));
+            trainList = await Transcribe(audioDir, workDir, ct);
+            File.Copy(trainList, savedTrainList, overwrite: true);
         }
         else
         {
-            progress?.Report(new TrainingProgress("Transcribing", 15, "Transcribing audio with Whisper"));
-            trainList = await Transcribe(audioDir, workDir, ct);
-            // Save alongside the model so resume can reuse it.
-            File.Copy(trainList, savedTrainList, overwrite: true);
+            // Resume: original upload is gone — reuse the chunks + transcription already on disk.
+            string[] existingChunks = Directory.GetFiles(audioDir, "*.wav");
+            if (existingChunks.Length == 0 || !File.Exists(savedTrainList))
+                throw new FileNotFoundException($"No audio found to train '{modelName}'. Upload clips and try again.");
+            progress?.Report(new TrainingProgress("Chunking", 5, $"Using {existingChunks.Length} existing clip(s)"));
+            File.Copy(savedTrainList, trainList, overwrite: true);
+            progress?.Report(new TrainingProgress("Transcribing", 15, "Using saved transcription"));
         }
 
         progress?.Report(new TrainingProgress("Preparing", 25, "Downloading pretrained model if needed"));
@@ -112,6 +122,55 @@ public class StyleTtsTrainer(
         string scriptPath = Path.Combine(Path.GetTempPath(), "ari_chunk.py");
         await File.WriteAllTextAsync(scriptPath, BuildChunkScript(source, audioDir, CHUNK_SECS, MIN_CHUNK_SECS), ct);
         await RunPython(python, scriptPath, null, ct);
+    }
+
+    // Clears a directory so a fresh dataset never mixes with a previous run's leftover clips.
+    private static void ResetDir(string dir)
+    {
+        if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        Directory.CreateDirectory(dir);
+    }
+
+    // Detects a Dataset Builder export in the staging dir: extracts any .zip, then returns the
+    // metadata.csv path if present. Returns null for raw-audio uploads (the chunking path).
+    private static string? PrepareDataset(string stagingDir)
+    {
+        if (!Directory.Exists(stagingDir)) return null;
+
+        foreach (string zip in Directory.GetFiles(stagingDir, "*.zip"))
+            ZipFile.ExtractToDirectory(zip, stagingDir, overwriteFiles: true);
+
+        return Directory.GetFiles(stagingDir, "metadata.csv", SearchOption.AllDirectories).FirstOrDefault();
+    }
+
+    // Builds the training list straight from a prepared metadata.csv ("name.wav|transcript"),
+    // copying each referenced clip into the training wavs/ folder. No chunking, no Whisper.
+    private void BuildPreparedList(string metadataPath, string audioDir, string trainList)
+    {
+        string        datasetDir = Path.GetDirectoryName(metadataPath)!;
+        StringBuilder list       = new();
+        int           count      = 0;
+
+        foreach (string line in File.ReadAllLines(metadataPath))
+        {
+            string[] columns = line.Split('|');
+            if (columns.Length < 2) continue;
+            string name       = Path.GetFileName(columns[0].Trim());
+            string transcript = columns[1].Trim();
+            if (name.Length == 0 || transcript.Length == 0) continue;
+
+            string nested = Path.Combine(datasetDir, "wavs", name);
+            string source = File.Exists(nested) ? nested : Path.Combine(datasetDir, name);
+            if (!File.Exists(source)) continue;
+
+            string dest = Path.Combine(audioDir, name);
+            File.Copy(source, dest, overwrite: true);
+            list.AppendLine($"{dest}|{transcript}|0");
+            count++;
+        }
+
+        File.WriteAllText(trainList, list.ToString());
+        logger?.LogInformation("[StyleTTS2-Train] Prepared dataset: {Count} clip(s)", count);
     }
 
     private async Task<string> Transcribe(string audioDir, string workDir, CancellationToken ct)
@@ -171,7 +230,7 @@ save_freq: {saveEveryNEpochs}
 log_interval: 10
 device: "{DetectDevice()}"
 epochs: {epochs}
-batch_size: 2
+batch_size: 4
 max_len: 400
 pretrained_model: "{pretrainedModel}"
 second_stage_load_pretrained: true
@@ -520,13 +579,20 @@ slmadv_params:
 
     private static string DetectDevice()
     {
-        // Checked at trainer construction time on the host machine
-        if (OperatingSystem.IsMacOS()) return "mps";
+        // Checked at trainer construction time on the host machine.
+        // macOS: train on CPU, not MPS. Apple's MPS backend has flush-to-zero / broken-kernel
+        // bugs (esp. torch.stft and weight/spectral-norm) that drive training to NaN; CPU is
+        // numerically reliable. train_finetune.py maxes out CPU threads to compensate.
+        if (OperatingSystem.IsMacOS()) return "cpu";
         return "cuda";
     }
 
     private static string BuildChunkScript(string source, string outDir, int chunkSecs, int minChunkSecs)
     {
+        // Prefix chunks with the source filename so multiple uploaded files don't overwrite
+        // each other's chunk_0000.wav in the shared wavs/ folder.
+        string stem = new string(Path.GetFileNameWithoutExtension(source)
+            .Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
         return
             "import soundfile as sf, numpy as np, os, torch, torchaudio\n" +
             $"data, sr = sf.read(r'{source}')\n" +
@@ -540,7 +606,7 @@ slmadv_params:
             "for i, start in enumerate(range(0, len(data), chunk_samples)):\n" +
             "    chunk = data[start:start + chunk_samples]\n" +
             $"    if len(chunk) < sr * {minChunkSecs}: continue\n" +
-            $"    out = os.path.join(r'{outDir}', f'chunk_{{i:04d}}.wav')\n" +
+            $"    out = os.path.join(r'{outDir}', f'chunk_{stem}_{{i:04d}}.wav')\n" +
             "    sf.write(out, chunk, sr)\n";
     }
 }

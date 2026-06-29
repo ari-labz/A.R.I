@@ -270,9 +270,18 @@ public class VoiceController(
     private VoiceSynthesisModule? voiceTraining => (VoiceSynthesisModule?)Modules.VoiceSynthesis;
     private VoiceModule?          voiceService  => (VoiceModule?)Modules.Voice;
     private LLMModule?            llm           => (LLMModule?)Modules.Llm;
+    private const int DATASET_POLL_MS = 2000;
     private static readonly string StagingRoot = Path.Combine(Path.GetTempPath(), "ari-voice-staging");
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> chunkCounters = new();
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> assembleLocks = new();
+
+    /// <summary>Wipes all staging data. Called on startup so uploads/processing output
+    /// never persist across restarts or reboots — the user keeps only the zip they download.</summary>
+    public static void ClearStaging()
+    {
+        try { if (Directory.Exists(StagingRoot)) Directory.Delete(StagingRoot, recursive: true); }
+        catch { /* best-effort cleanup */ }
+    }
 
     [HttpPost("stage")]
     public IActionResult CreateStage()
@@ -745,6 +754,76 @@ public class VoiceController(
 
         return Ok(new { jobId = job.JobId, modelName = job.ModelName });
     }
+
+    // ── Dataset Builder ───────────────────────────────────────────────────────
+    // Processes uploaded clips (demucs + Whisper, split into parts) so the panel can
+    // A/B the original against the cleaned variant and download a chosen dataset.
+
+    [HttpPost("dataset/process")]
+    public IActionResult ProcessDataset([FromBody] DatasetProcessRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.StageId))
+            return BadRequest(new { error = "stageId is required." });
+
+        string stageDir = Path.Combine(StagingRoot, req.StageId);
+        if (!Directory.Exists(stageDir))
+            return BadRequest(new { error = "Unknown stageId. Call /stage first." });
+        if (string.IsNullOrEmpty(vsConfig.StyleTtsPath))
+            return StatusCode(503, new { error = "VoiceSynthesis module is not configured." });
+        if (voiceTraining?.IsSetupComplete != true)
+            return StatusCode(503, new { error = "StyleTTS2 is still installing. Please wait." });
+
+        DatasetBuilder builder;
+        try { builder = DatasetBuilder.Start(vsConfig.StyleTtsPath, stageDir, logger, lifetime.ApplicationStopping); }
+        catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
+
+        logger.LogInformation("[Voice] Dataset processing started for stage {StageId}", req.StageId);
+
+        // Free RAM/GPU while demucs + Whisper run, then bring the llama servers back.
+        _ = Task.Run(async () =>
+        {
+            if (llm is not null) await llm.StopAllServersAsync();
+            while (builder.IsRunning) await Task.Delay(DATASET_POLL_MS);
+            if (llm is not null) await llm.RestartAllServersAsync();
+        });
+
+        return Ok(new { started = true });
+    }
+
+    [HttpGet("dataset/status")]
+    public IActionResult DatasetStatus()
+    {
+        DatasetBuilder? builder = DatasetBuilder.Current;
+        if (builder is null)
+            return Ok(new { step = "Idle", percent = 0, running = false, parts = Array.Empty<object>() });
+
+        return Ok(new
+        {
+            step    = builder.Step,
+            percent = builder.Percent,
+            running = builder.IsRunning,
+            success = builder.IsSuccess,
+            error   = builder.Error,
+            parts   = builder.Parts,
+        });
+    }
+
+    [HttpGet("dataset/audio")]
+    public IActionResult DatasetAudio([FromQuery] string name, [FromQuery] string variant)
+    {
+        string? path = DatasetBuilder.Current?.VariantPath(name, variant);
+        return path is null ? NotFound() : PhysicalFile(path, "audio/wav");
+    }
+
+    [HttpPost("dataset/build")]
+    public IActionResult BuildDataset([FromBody] DatasetBuildRequest req)
+    {
+        DatasetBuilder? builder = DatasetBuilder.Current;
+        if (builder is null || builder.IsRunning)
+            return BadRequest(new { error = "No completed dataset to build." });
+
+        return File(builder.BuildZip(req.Selections), "application/zip", "dataset.zip");
+    }
 }
 
 // ── LLM Models & Servers API ──────────────────────────────────────────────────
@@ -983,3 +1062,5 @@ public record SpeakRequest(string Text, string? ModelName = null, string? Checkp
     int DiffusionSteps = 5, float Alpha = 0.3f, float Beta = 0.7f, float EmbeddingScale = 1.0f);
 public record SplitSentencesRequest(string Text);
 public record ResumeRequest(string ModelName, int? Epochs = null, int? SaveEveryNEpochs = null);
+public record DatasetProcessRequest(string StageId);
+public record DatasetBuildRequest(DatasetSelection[] Selections);

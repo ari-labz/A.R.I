@@ -67,9 +67,14 @@ internal sealed class DialoguePipeline : Pipeline
                 List<ThreadMessage> chatHistory = thread.GetChatHistory();
                 recallBlock = await memory.GetNotes(chatHistory, effectivePrompt, contextSummary, cts.Token);
             }
+            catch (OperationCanceledException) when (cts.IsCancellationRequested)
+            {
+                // Superseded by a newer message (common on Discord) — abort quietly, don't surface as an error.
+                throw;
+            }
             catch (Exception ex)
             {
-                Shared.Logger.LogError("[Memory] Failed to retrieve memories: {Error}", ex.Message);
+                Shared.Logger.LogError(ex, "[Memory] ({Thread}) Failed to retrieve memories from {Platform}: {Error}", threadKey, platformContext ?? "unknown", ex.Message);
                 string errorMessage = "> error retrieving memories";
                 if (onDelta is not null) await onDelta(errorMessage);
                 return errorMessage;

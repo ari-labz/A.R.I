@@ -186,6 +186,26 @@ html, body {
 .vs-file-size { flex-shrink: 0; font-size: 11px; }
 .vs-form-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin-bottom: 18px; }
 @media (max-width: 900px) { .vs-form-grid { grid-template-columns: 1fr 1fr; } }
+
+/* ── dataset builder A/B grid ─────────────────────────── */
+.ds-compare-head { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--text-dim); padding: 0 4px 8px; }
+.ds-part { margin-bottom: 14px; }
+.ds-part.skipped .ds-card { opacity: .4; }
+.ds-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.ds-row-label { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--text-dim); margin-bottom: 6px; }
+.ds-row-label .ds-flag { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 4px; background: #fef3c7; color: #b45309; }
+.ds-skip-btn { margin-left: auto; font-size: 11px; padding: 3px 12px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--text-dim); cursor: pointer; }
+.ds-skip-btn.active { background: #6b7280; border-color: #6b7280; color: #fff; }
+.ds-card { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; transition: border-color .12s, background .12s; }
+.ds-card.selected { border-color: #16a34a; background: rgba(22,163,74,.06); }
+.ds-play { flex-shrink: 0; width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--border); background: none; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text); }
+.ds-play:hover { border-color: #518c9a; color: #518c9a; }
+.ds-play.playing { background: #518c9a; color: #fff; border-color: #518c9a; }
+.ds-card-meta { flex: 1; min-width: 0; font-size: 12px; color: var(--text-dim); }
+.ds-card-meta .ds-text { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ds-select-btn { flex-shrink: 0; font-size: 12px; padding: 5px 14px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--text-dim); cursor: pointer; }
+.ds-select-btn.selected { background: #16a34a; border-color: #16a34a; color: #fff; }
+.ds-build-bar { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); font-size: 13px; }
 .vs-label { font-size: 12px; color: var(--text-dim); display: flex; flex-direction: column; gap: 5px; }
 .vs-input { font-family: inherit; font-size: 13px; color: var(--text); background: #f9fafb; border: 1px solid var(--border); border-radius: 7px; padding: 8px 10px; outline: none; transition: border-color .12s; }
 .vs-input:focus { border-color: #518c9a; background: #fff; }
@@ -381,8 +401,9 @@ html, body {
         <div class="cp-nav-item" data-tab="conventions">Coding Conventions</div>
         <div class="cp-nav-item" data-tab="llmconfigs">Configs</div>
         <div class="cp-nav-group">Voice</div>
-        <div class="cp-nav-item" data-tab="voicesettings">Voice Settings</div>
+        <div class="cp-nav-item" data-tab="dataset">Dataset Builder</div>
         <div class="cp-nav-item" data-tab="voice">Voice Synthesis</div>
+        <div class="cp-nav-item" data-tab="voicesettings">Voice Settings</div>
         <div class="cp-nav-group">Memory</div>
         <div class="cp-nav-item" data-tab="brain">Brain</div>
       </div>
@@ -566,9 +587,9 @@ html, body {
         <div class="vs-section-title">Train a Voice Model</div>
         <div id="vs-dropzone" class="vs-dropzone">
           <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:.4"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          <p>Drag &amp; drop audio files here<br><span style="font-size:12px;color:var(--text-dim)">.wav, .mp3, .flac, .ogg</span></p>
+          <p>Drag &amp; drop audio files here<br><span style="font-size:12px;color:var(--text-dim)">.wav, .mp3, .flac, .ogg — or a Dataset Builder .zip</span></p>
           <button class="vs-btn-outline" id="vs-browse-btn" type="button">Browse files</button>
-          <input type="file" id="vs-file-input" multiple accept=".wav,.mp3,.flac,.ogg" style="display:none" />
+          <input type="file" id="vs-file-input" multiple accept=".wav,.mp3,.flac,.ogg,.zip,.csv" style="display:none" />
         </div>
         <div id="vs-file-list" style="display:none">
           <div class="vs-file-list-header">
@@ -598,6 +619,43 @@ html, body {
         <div class="cp-widget" style="margin-top:14px;max-height:280px;overflow-y:auto">
           <div class="cp-widget-header"><span class="cp-widget-title">Training log</span><span class="cp-widget-badge" id="vs-log-badge">—</span></div>
           <div class="log-body" id="vs-log-lines" style="max-height:220px;overflow-y:auto"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Dataset Builder tab -->
+    <div id="tab-dataset" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div class="vs-section">
+        <div class="vs-section-title">Build a Voice Dataset</div>
+        <div id="ds-dropzone" class="vs-dropzone">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:.4"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <p>Drag &amp; drop audio clips here<br><span style="font-size:12px;color:var(--text-dim)">each clip is isolated, split into parts, and transcribed</span></p>
+          <button class="vs-btn-outline" id="ds-browse-btn" type="button">Browse files</button>
+          <input type="file" id="ds-file-input" multiple accept=".wav,.mp3,.flac,.ogg" style="display:none" />
+        </div>
+        <div id="ds-file-list" style="display:none">
+          <div class="vs-file-list-header">
+            <span id="ds-file-count">0 files selected</span>
+            <button class="vs-btn-text" id="ds-clear-files" type="button">Clear</button>
+          </div>
+          <div id="ds-file-items"></div>
+        </div>
+        <button class="vs-btn-primary" id="ds-process-btn" type="button" style="margin-top:14px">Process clips</button>
+      </div>
+
+      <div id="ds-progress-section" class="vs-section" style="display:none">
+        <div class="vs-section-title">Processing</div>
+        <div class="vs-progress-header"><span id="ds-step-label">—</span><span id="ds-pct-label" style="color:var(--text-dim);font-size:12px">0%</span></div>
+        <div class="vs-progress-track"><div class="vs-progress-fill" id="ds-progress-fill" style="width:0%"></div></div>
+      </div>
+
+      <div id="ds-compare-section" class="vs-section" style="display:none">
+        <div class="vs-section-title">Pick a variant for every part</div>
+        <div class="ds-compare-head"><span>Original</span><span>Processed (demucs)</span></div>
+        <div id="ds-compare-list"></div>
+        <div class="ds-build-bar">
+          <span id="ds-select-count">0 / 0 parts selected</span>
+          <button class="vs-btn-primary" id="ds-build-btn" type="button" disabled>Build &amp; download dataset</button>
         </div>
       </div>
     </div>
@@ -730,8 +788,8 @@ html, body {
 // ── tab switching ─────────────────────────────────────────
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), conventions: document.getElementById('tab-conventions'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug') };
-const TAB_TITLES = { voice: 'Voice Synthesis', voicesettings: 'Voice Settings', conventions: 'Coding Conventions', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', llmconfigs: 'LLM Configs', debug: 'Debug Thread' };
+const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug') };
+const TAB_TITLES = { voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', llmconfigs: 'LLM Configs', debug: 'Debug Thread' };
 
 let srvPollTimer = null;
 function switchTab(name) {
@@ -2030,7 +2088,7 @@ function renderFiles() {
     vsDropzone.style.display = vsFiles.length ? 'none' : '';
 }
 function addFiles(fileList) {
-    const allowed = new Set(['.wav','.mp3','.flac','.ogg']);
+    const allowed = new Set(['.wav','.mp3','.flac','.ogg','.zip','.csv']);
     vsFiles = [...vsFiles, ...Array.from(fileList).filter(f => allowed.has(f.name.slice(f.name.lastIndexOf('.')).toLowerCase()))];
     renderFiles();
 }
@@ -2114,6 +2172,201 @@ vsTrainBtn.addEventListener('click', async () => {
         }
         connectProgressSse();
     } catch (err) { vsStopTimer(); vsAppendLog('Error: ' + err.message, 'log-error'); vsLogBadge.textContent = 'failed'; vsLogBadge.classList.remove('live'); vsTrainBtn.disabled = false; }
+});
+
+// ── Dataset Builder ───────────────────────────────────────
+const dsDropzone   = document.getElementById('ds-dropzone');
+const dsFileInput  = document.getElementById('ds-file-input');
+const dsFileList   = document.getElementById('ds-file-list');
+const dsFileItems  = document.getElementById('ds-file-items');
+const dsFileCount  = document.getElementById('ds-file-count');
+const dsClearBtn   = document.getElementById('ds-clear-files');
+const dsBrowseBtn  = document.getElementById('ds-browse-btn');
+const dsProcessBtn = document.getElementById('ds-process-btn');
+const dsProgSec    = document.getElementById('ds-progress-section');
+const dsStepLabel  = document.getElementById('ds-step-label');
+const dsPctLabel   = document.getElementById('ds-pct-label');
+const dsProgFill   = document.getElementById('ds-progress-fill');
+const dsCompareSec = document.getElementById('ds-compare-section');
+const dsCompareList = document.getElementById('ds-compare-list');
+const dsSelectCount = document.getElementById('ds-select-count');
+const dsBuildBtn   = document.getElementById('ds-build-btn');
+
+let dsFiles = [], dsSelections = new Map(), dsParts = [], dsStatusTimer = null,
+    dsRenderedNames = new Set(), dsDone = false;
+const dsAudio = new Audio();
+
+function dsRenderFiles() {
+    dsFileItems.innerHTML = '';
+    dsFiles.forEach(f => { const el = document.createElement('div'); el.className = 'vs-file-item'; el.innerHTML = `<span class="vs-file-name">${escHtml(f.name)}</span><span class="vs-file-size">${fmtBytes(f.size)}</span>`; dsFileItems.appendChild(el); });
+    dsFileCount.textContent = `${dsFiles.length} file${dsFiles.length !== 1 ? 's' : ''} selected`;
+    dsFileList.style.display = dsFiles.length ? '' : 'none';
+    dsDropzone.style.display = dsFiles.length ? 'none' : '';
+}
+function dsAddFiles(fileList) {
+    const allowed = new Set(['.wav','.mp3','.flac','.ogg']);
+    dsFiles = [...dsFiles, ...Array.from(fileList).filter(f => allowed.has(f.name.slice(f.name.lastIndexOf('.')).toLowerCase()))];
+    dsRenderFiles();
+}
+dsBrowseBtn.addEventListener('click', () => dsFileInput.click());
+dsFileInput.addEventListener('change', () => { dsAddFiles(dsFileInput.files); dsFileInput.value = ''; });
+dsClearBtn.addEventListener('click', () => { dsFiles = []; dsRenderFiles(); });
+dsDropzone.addEventListener('dragover', e => { e.preventDefault(); dsDropzone.classList.add('drag-over'); });
+dsDropzone.addEventListener('dragleave', () => dsDropzone.classList.remove('drag-over'));
+dsDropzone.addEventListener('drop', e => { e.preventDefault(); dsDropzone.classList.remove('drag-over'); dsAddFiles(e.dataTransfer.files); });
+
+function dsPlay(btn, name, variant) {
+    const src = `/voice/dataset/audio?name=${encodeURIComponent(name)}&variant=${variant}`;
+    const wasPlaying = btn.classList.contains('playing');
+    document.querySelectorAll('.ds-play.playing').forEach(b => b.classList.remove('playing'));
+    dsAudio.pause();
+    if (wasPlaying) return;
+    dsAudio.src = src; dsAudio.play();
+    btn.classList.add('playing');
+    dsAudio.onended = () => btn.classList.remove('playing');
+}
+
+function dsUpdateCount() {
+    const chosen = [...dsSelections.values()].filter(v => v !== 'skip').length;
+    const decided = dsSelections.size;
+    const tail = dsDone ? '' : ' (processing…)';
+    dsSelectCount.textContent = `${chosen} in dataset · ${decided} / ${dsParts.length} parts decided${tail}`;
+    dsBuildBtn.disabled = !dsDone || dsParts.length === 0 || decided !== dsParts.length;
+}
+
+function dsCard(part, variant) {
+    const card = document.createElement('div');
+    card.className = 'ds-card';
+    card.innerHTML =
+        `<button class="ds-play" type="button" title="Play"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>` +
+        `<div class="ds-card-meta"><div class="ds-text" title="${escHtml(part.transcript || '')}">${escHtml(part.transcript || '—')}</div>${part.duration.toFixed(1)}s${variant === 'processed' ? ` · bg ${part.bgRatio}` : ''}</div>` +
+        `<button class="ds-select-btn" type="button">Select</button>`;
+    card.querySelector('.ds-play').addEventListener('click', e => dsPlay(e.currentTarget, part.name, variant));
+    const selectBtn = card.querySelector('.ds-select-btn');
+    selectBtn.addEventListener('click', () => dsSelect(part.name, variant));
+    card.dataset.variant = variant;
+    return card;
+}
+
+function dsSelect(name, variant) {
+    dsSelections.set(name, variant);
+    const wrap = dsCompareList.querySelector(`[data-row="${CSS.escape(name)}"]`);
+    wrap.classList.remove('skipped');
+    wrap.querySelector('.ds-skip-btn').classList.remove('active');
+    wrap.querySelectorAll('.ds-card').forEach(card => {
+        const chosen = card.dataset.variant === variant;
+        card.classList.toggle('selected', chosen);
+        const btn = card.querySelector('.ds-select-btn');
+        btn.classList.toggle('selected', chosen);
+        btn.textContent = chosen ? 'Selected' : 'Select';
+    });
+    dsUpdateCount();
+}
+
+function dsSkip(name) {
+    const wrap = dsCompareList.querySelector(`[data-row="${CSS.escape(name)}"]`);
+    if (dsSelections.get(name) === 'skip') {   // toggle off → undecided again
+        dsSelections.delete(name);
+        wrap.classList.remove('skipped');
+        wrap.querySelector('.ds-skip-btn').classList.remove('active');
+        dsUpdateCount();
+        return;
+    }
+    dsSelections.set(name, 'skip');
+    wrap.classList.add('skipped');
+    wrap.querySelector('.ds-skip-btn').classList.add('active');
+    wrap.querySelectorAll('.ds-card').forEach(card => {
+        card.classList.remove('selected');
+        const btn = card.querySelector('.ds-select-btn');
+        btn.classList.remove('selected');
+        btn.textContent = 'Select';
+    });
+    dsUpdateCount();
+}
+
+function dsAppendParts(parts) {
+    parts.forEach(part => {
+        if (dsRenderedNames.has(part.name)) return;
+        dsRenderedNames.add(part.name);
+        dsParts.push(part);
+        const wrap = document.createElement('div');
+        wrap.className = 'ds-part';
+        wrap.dataset.row = part.name;
+        const label = document.createElement('div');
+        label.className = 'ds-row-label';
+        label.innerHTML = `<span>${escHtml(part.name)} <span style="color:var(--text-dim);font-weight:400">(${part.language})</span>` +
+            (part.flags || []).map(f => `<span class="ds-flag">${f}</span>`).join('') + `</span>` +
+            `<button class="ds-skip-btn" type="button">Skip both</button>`;
+        label.querySelector('.ds-skip-btn').addEventListener('click', () => dsSkip(part.name));
+        const row = document.createElement('div');
+        row.className = 'ds-row';
+        row.appendChild(dsCard(part, 'original'));
+        row.appendChild(dsCard(part, 'processed'));
+        wrap.appendChild(label);
+        wrap.appendChild(row);
+        dsCompareList.appendChild(wrap);
+    });
+    dsUpdateCount();
+}
+
+function dsPollStatus() {
+    dsStatusTimer = setInterval(async () => {
+        try {
+            const d = await fetch('/voice/dataset/status').then(r => r.json());
+            dsStepLabel.textContent = d.step;
+            dsPctLabel.textContent  = d.percent + '%';
+            dsProgFill.style.width  = d.percent + '%';
+            if (d.parts && d.parts.length) { dsCompareSec.style.display = ''; dsAppendParts(d.parts); }
+            if (!d.running) {
+                clearInterval(dsStatusTimer); dsStatusTimer = null;
+                dsProcessBtn.disabled = false; dsDone = true;
+                if (d.error) { dsStepLabel.textContent = 'Error: ' + d.error; dsProgFill.className = 'vs-progress-fill error'; return; }
+                dsProgFill.className = 'vs-progress-fill done';
+                dsUpdateCount();
+            }
+        } catch { /* keep polling */ }
+    }, 1500);
+}
+
+dsProcessBtn.addEventListener('click', async () => {
+    if (!dsFiles.length) { alert('Please add at least one audio clip.'); return; }
+    dsProcessBtn.disabled = true; dsCompareSec.style.display = 'none';
+    dsParts = []; dsSelections.clear(); dsRenderedNames.clear(); dsDone = false; dsCompareList.innerHTML = '';
+    dsProgSec.style.display = ''; dsProgFill.className = 'vs-progress-fill';
+    dsStepLabel.textContent = 'Uploading'; dsPctLabel.textContent = '0%'; dsProgFill.style.width = '0%';
+    try {
+        const { stageId } = await fetch('/voice/stage', { method: 'POST' }).then(r => r.json());
+        const CHUNK = 5 * 1024 * 1024, CONCURRENCY = 4;
+        for (let fi = 0; fi < dsFiles.length; fi++) {
+            const f = dsFiles[fi], totalChunks = Math.max(1, Math.ceil(f.size / CHUNK));
+            const uploadChunk = async (ci) => {
+                const slice = f.slice(ci * CHUNK, Math.min((ci + 1) * CHUNK, f.size));
+                const url = `/voice/upload?stageId=${encodeURIComponent(stageId)}&name=${encodeURIComponent(f.name)}&chunk=${ci}&totalChunks=${totalChunks}`;
+                const up = await fetch(url, { method: 'POST', body: slice, headers: { 'Content-Type': 'application/octet-stream' } });
+                if (!up.ok) throw new Error(`Upload of ${f.name} failed`);
+            };
+            for (let ci = 0; ci < totalChunks; ci += CONCURRENCY) { await Promise.all(Array.from({ length: Math.min(CONCURRENCY, totalChunks - ci) }, (_, i) => uploadChunk(ci + i))); }
+            dsStepLabel.textContent = `Uploaded ${fi + 1} / ${dsFiles.length}`;
+        }
+        const r = await fetch('/voice/dataset/process', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stageId }) });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Process failed');
+        dsStepLabel.textContent = 'Processing'; dsPollStatus();
+    } catch (err) { dsStepLabel.textContent = 'Error: ' + err.message; dsProgFill.className = 'vs-progress-fill error'; dsProcessBtn.disabled = false; }
+});
+
+dsBuildBtn.addEventListener('click', async () => {
+    dsBuildBtn.disabled = true; dsBuildBtn.textContent = 'Building…';
+    try {
+        const selections = [...dsSelections].filter(([, variant]) => variant !== 'skip').map(([name, variant]) => ({ name, variant }));
+        const r = await fetch('/voice/dataset/build', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selections }) });
+        if (!r.ok) throw new Error('Build failed');
+        const blob = await r.blob();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob); a.download = 'dataset.zip'; a.click();
+        URL.revokeObjectURL(a.href);
+    } catch (err) { alert(err.message); }
+    dsBuildBtn.disabled = false; dsBuildBtn.textContent = 'Build & download dataset';
+    dsUpdateCount();
 });
 
 // ── Volume ────────────────────────────────────────────────
