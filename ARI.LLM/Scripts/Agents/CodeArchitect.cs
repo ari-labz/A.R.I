@@ -33,43 +33,102 @@ internal sealed class CodeArchitect : Agent
     /// may inject a fix step. Every architect turn is a real main-thread turn, so the debug viewer shows the
     /// whole orchestration and we can confirm the approvals don't re-reason.
     /// </summary>
+    // PLAN → CONFIRM → EXECUTE gate. The architect first presents a plain-English plan and waits; only once the
+    // user approves does it formalise that plan as the JSON task list the Coders execute. parent.AwaitingPlanApproval
+    // carries the "a plan is on the table" state across user turns — the plan prose itself lives in History, so
+    // nothing is stashed. Routing is here (not in CodePipeline): each user turn re-enters RunLoop.
     internal async Task<string> RunLoop(
         Thread parent, string threadKey, string prompt, string username,
         Coder coder, string root, FileSnapshots snapshots, CancellationTokenSource cts, Func<string, Task>? onDelta)
     {
-        // 1. PLAN — the architect's first turn, on the main thread: explore + emit the task list.
+        // Explore tools for the architect's planning / re-planning turns (shared by both phases).
         new PreviewFile(root, cts.Token, snapshots).Register(parent);
         new ReadFile(root, cts.Token, snapshots).Register(parent);
         new ListDirectory(root, cts.Token).Register(parent);
         new SearchFiles(root, cts.Token).Register(parent);
         new FindFiles(root, cts.Token).Register(parent);
 
-        string planText = await SendPrompt(parent, prompt, username, ct: cts.Token, userMessagePreadded: true, onDelta: onDelta);
-        CodePlan? plan = ParsePlan(planText);
+        return parent.AwaitingPlanApproval
+            ? await ResumePlan(parent, threadKey, prompt, username, coder, root, snapshots, cts, onDelta)
+            : await PresentPlan(parent, threadKey, prompt, username, cts, onDelta);
+    }
+
+    // PLAN turn: explore + present a plain-English plan (no JSON, no edits), then wait for the user to approve.
+    private async Task<string> PresentPlan(
+        Thread parent, string threadKey, string prompt, string username,
+        CancellationTokenSource cts, Func<string, Task>? onDelta)
+    {
+        const string planInstruction =
+            "Plan this change. Explore the codebase as needed (preview_file before read_file), then present your " +
+            "plan to the user in plain English — a short numbered list of the concrete steps you will take, naming " +
+            "the files involved. Do NOT write a JSON task list and do NOT edit anything yet: the user reviews and " +
+            "approves the plan first.";
+        string planText = await SendPrompt(parent, prompt, username,
+            augmentedPrompt: $"{prompt}\n\n[System: {planInstruction}]",
+            ct: cts.Token, userMessagePreadded: true, onDelta: onDelta);
+
+        PresentProse(parent, planText);
+        parent.AwaitingPlanApproval = true;
+        Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) plan presented — awaiting user approval.", threadKey);
+        return planText;
+    }
+
+    // RESUME turn: the user has replied to a presented plan. The architect either formalises the approved plan as
+    // the JSON task list (→ execute) or revises the plain-English plan (→ keep waiting).
+    private async Task<string> ResumePlan(
+        Thread parent, string threadKey, string prompt, string username,
+        Coder coder, string root, FileSnapshots snapshots, CancellationTokenSource cts, Func<string, Task>? onDelta)
+    {
+        const string resumeInstruction =
+            "The user just responded to the plan you presented. If they APPROVED it (or told you to go ahead), output " +
+            "the plan now as the ```json task list the Coders will execute — the JSON format from your instructions, " +
+            "and nothing else. If they asked for CHANGES, revise and present your plan again in plain English (NO " +
+            "JSON), then wait for approval. Do not edit any files yourself.";
+        string reply = await SendPrompt(parent, prompt, username,
+            augmentedPrompt: $"{prompt}\n\n[System: {resumeInstruction}]",
+            ct: cts.Token, userMessagePreadded: true, onDelta: onDelta);
+
+        CodePlan? plan = ParsePlan(reply);
         if (plan is null || plan.Steps.Count == 0)
         {
-            Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) no task list — returning architect reply.", threadKey);
-            return planText;   // architect answered or asked a question; nothing to execute
+            // Still planning — a revised plan or a clarifying question. Show the prose and keep waiting.
+            PresentProse(parent, reply);
+            Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) plan revised — still awaiting approval.", threadKey);
+            return reply;
         }
-        Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) plan: {N} task(s), {D} decision(s).", threadKey, plan.Steps.Count, plan.Decisions.Count);
 
-        // Replace the plan response the USER sees with a clean, readable plan — strip the machine-readable JSON
-        // and the architect's exploration chips (the full text stays in the debug trace).
-        AriResponse? planResp = parent.History.OfType<AriResponse>().LastOrDefault();
-        if (planResp is not null)
+        // Approved → formalised into a task list. Hide the raw JSON from the user, clear the gate, execute.
+        parent.AwaitingPlanApproval = false;
+        AriResponse? resp = parent.History.OfType<AriResponse>().LastOrDefault();
+        if (resp is not null)
         {
-            string chatPlan = PlanChatText(planText);
-            if (chatPlan.Length == 0)
-                chatPlan = "I'll make the following changes:\n" +
-                    string.Join("\n", plan.Steps.Select((s, i) => $"{i + 1}. {s.Change}"));
-            planResp.Content = AriContentBlock.Parse(chatPlan);
+            resp.Content = AriContentBlock.Parse("Got it — applying the changes now.");
             parent.RaiseUpdated();
         }
+        Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) plan approved: {N} task(s) — executing.", threadKey, plan.Steps.Count);
+        return await Execute(parent, threadKey, plan, username, coder, root, snapshots, cts, onDelta);
+    }
 
-        // 2. EXECUTE — one Coder sub-thread per task; feed each summary back for the architect to approve.
-        //    The "[System] Task N…" feedback prompts and the PROCEED/DONE approvals are CHAT-HIDDEN internal
-        //    orchestration (still in the debug view + the architect's context), so the user sees only:
-        //    plan → each task's work → final summary.
+    // Show the architect's prose plan to the user: strip any JSON / exploration chips it may have included (those
+    // stay in the debug trace) and append the approve/adjust prompt. Used by both the plan and re-plan turns.
+    private static void PresentProse(Thread parent, string text)
+    {
+        AriResponse? resp = parent.History.OfType<AriResponse>().LastOrDefault();
+        if (resp is null) return;
+        string prose = PlanChatText(text);
+        if (prose.Length == 0) prose = text.Trim();
+        resp.Content = AriContentBlock.Parse(prose +
+            "\n\n*Reply to approve and I'll make these changes, or tell me what to adjust.*");
+        parent.RaiseUpdated();
+    }
+
+    // EXECUTE — one Coder sub-thread per task; feed each summary back for the architect to approve, then a final
+    // user-facing summary. The "[System] Task N…" feedback prompts and PROCEED/DONE approvals are CHAT-HIDDEN
+    // orchestration, so the user sees only: each task's work → final summary.
+    private async Task<string> Execute(
+        Thread parent, string threadKey, CodePlan plan, string username,
+        Coder coder, string root, FileSnapshots snapshots, CancellationTokenSource cts, Func<string, Task>? onDelta)
+    {
         Queue<CodeStep> tasks = new(plan.Steps);
         int n = 0;
         while (tasks.Count > 0)
@@ -94,7 +153,7 @@ internal sealed class CodeArchitect : Agent
                 foreach (CodeStep s in extra.Steps) tasks.Enqueue(s);
         }
 
-        // 3. SUMMARISE — a final user-facing message (shown). The instruction is chat-hidden; the reply is shown.
+        // SUMMARISE — a final user-facing message (shown). The instruction is chat-hidden; the reply is shown.
         const string sumInstruction = "[System] All tasks are complete. Write a brief, friendly summary for the " +
             "user of what you changed across the codebase (a sentence or a short numbered list). Plain English " +
             "only — no JSON, no tool calls.";
