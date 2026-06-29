@@ -52,7 +52,8 @@ export default function Sidebar({ threads, activeThread, activeView, onNewChat, 
                     {threads.map(t => {
                         const baseName = t.isInternal
                             ? (t.agentName ?? "Internal")
-                            : t.key.startsWith("web-") ? "Web chat" : "Discord"
+                            : t.key.startsWith("client-") ? "Desktop"
+                            : t.key.startsWith("web-")    ? "Web chat" : "Discord"
                         const time = t.lastMessageAt && !t.lastMessageAt.startsWith("0001")
                             ? new Date(t.lastMessageAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
                             : ""
