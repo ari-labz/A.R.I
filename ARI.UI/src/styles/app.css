@@ -346,6 +346,7 @@ button, a, input, select, textarea, label, [role="button"] {
     display: flex; align-items: stretch;
     -webkit-app-region: no-drag;
     app-region: no-drag;
+    pointer-events: auto;
 }
 #win-controls button {
     width: 46px; height: 100%;

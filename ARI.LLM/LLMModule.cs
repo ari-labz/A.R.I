@@ -232,6 +232,28 @@ public class LLMModule : ILLMModule, IDisposable
         return thread;
     }
 
+    /// <summary>
+    /// Ensures the thread runs on the given pipeline, converting it if it currently runs on another.
+    /// The thread is rebuilt as the target type (so it gets that type's event wiring) with its history
+    /// and attachments carried over. A no-op when the thread already runs on that pipeline, and equivalent
+    /// to GetOrCreateThread when no thread exists yet. Safe to call at any point in a thread's life — the
+    /// classifier currently only invokes it on the first message, but nothing here assumes that.
+    /// </summary>
+    private Thread Recategorise(ThreadPipeline type, string threadKey, string? platformContext = null)
+    {
+        if (!threads.TryGetValue(threadKey, out Thread? existing))
+            return GetOrCreateThread(type, threadKey, platformContext);
+        if (existing.Pipeline == type)
+            return existing;
+
+        threads.TryRemove(threadKey, out _);
+        Thread converted = GetOrCreateThread(type, threadKey, platformContext);
+        converted.History.AddRange(existing.History);
+        foreach (Attachment attachment in existing.GetAttachments())
+            converted.AddAttachment(attachment);
+        return converted;
+    }
+
     // ── Agent assignment ─────────────────────────────────────────────────────────
 
     /// <summary>
@@ -389,21 +411,18 @@ public class LLMModule : ILLMModule, IDisposable
                 _logger.LogInformation($"[Classifier] ({threadKey}) → {agent}");
             }
 
-            // Pre-create the thread so watchers receive isCodeMode before the LLM starts responding.
-            if (agent == "Code")
-                GetOrCreateThread(ThreadPipeline.Code, threadKey, platformContext);
         }
 
         switch (agent)
         {
             case "Code":
             {
-                Thread codeThread = GetOrCreateThread(ThreadPipeline.Code, threadKey, platformContext);
+                Thread codeThread = Recategorise(ThreadPipeline.Code, threadKey, platformContext);
                 return await (codePipeline ?? (Pipeline)dialoguePipeline!).ExecuteAsync(codeThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments, localPath);
             }
             default:
             {
-                Thread dlgThread = GetOrCreateThread(ThreadPipeline.Dialogue, threadKey, platformContext);
+                Thread dlgThread = Recategorise(ThreadPipeline.Dialogue, threadKey, platformContext);
                 return await dialoguePipeline!.ExecuteAsync(dlgThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments);
             }
         }
