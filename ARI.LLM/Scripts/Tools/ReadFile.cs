@@ -5,7 +5,8 @@ namespace ARI.LLM;
 
 internal sealed class ReadFile : FileTool
 {
-    internal ReadFile(string root, CancellationToken ct) : base(root, ct) { }
+    private readonly FileSnapshots? gate;
+    internal ReadFile(string root, CancellationToken ct, FileSnapshots? gate = null) : base(root, ct) { this.gate = gate; }
 
     internal override string Name => "read_file";
 
@@ -54,6 +55,10 @@ internal sealed class ReadFile : FileTool
 
             if (absPath is null)        return "Access denied: path traversal is not allowed.";
             if (!File.Exists(absPath))  return $"File not found: {relPath}";
+            // Preview-before-read: keeps context lean by forcing the model to see the line count and the
+            // large-file warning (and pick a range) before pulling content. preview_file marks the file.
+            if (gate is not null && !gate.WasPreviewed(absPath))
+                return $"[System: Call preview_file on {relPath} first — it shows the line count and warns if the file is large — then read_file only the line ranges you need. This keeps context lean.]";
 
             string[] lines      = await File.ReadAllLinesAsync(absPath, ct);
             int      totalLines = lines.Length;

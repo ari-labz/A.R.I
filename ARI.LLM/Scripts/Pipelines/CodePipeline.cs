@@ -39,9 +39,13 @@ internal sealed class CodePipeline : Pipeline
     {
         Shared.Logger.LogInformation("[Code] ({Thread}) prompt\n\"{Prompt}\"", threadKey, effectivePrompt);
 
-        // No project root → nothing to edit; answer as plain chat (no tools).
+        // No project root → no filesystem access. Tell the model plainly so it asks for
+        // attachments instead of pretending to have read the codebase (#61). The note goes to
+        // the model only (augmentedPrompt) — the user still sees just their own message.
         if (string.IsNullOrWhiteSpace(localPath))
-            return code.SendPrompt(thread, effectivePrompt, username, ct: cts.Token, userMessagePreadded: true, onDelta: onDelta);
+            return code.SendPrompt(thread, effectivePrompt, username,
+                augmentedPrompt: $"[System: You do not have file access. Ask the user to attach any files needed.]\n\n{effectivePrompt}",
+                ct: cts.Token, userMessagePreadded: true, onDelta: onDelta);
 
         string        resolvedRoot = Path.GetFullPath(localPath);
         FileSnapshots snapshots    = new();
@@ -54,8 +58,8 @@ internal sealed class CodePipeline : Pipeline
 
         // Fallback (no CodeArchitect configured): degraded solo Coder with the full edit toolset.
         Shared.Logger.LogWarning("[Code] ({Thread}) CodeArchitect not configured — running solo Coder.", threadKey);
-        new PreviewFile(resolvedRoot, cts.Token).Register(thread);
-        new ReadFile(resolvedRoot, cts.Token).Register(thread);
+        new PreviewFile(resolvedRoot, cts.Token, snapshots).Register(thread);
+        new ReadFile(resolvedRoot, cts.Token, snapshots).Register(thread);
         new ListDirectory(resolvedRoot, cts.Token).Register(thread);
         new SearchFiles(resolvedRoot, cts.Token).Register(thread);
         new FindFiles(resolvedRoot, cts.Token).Register(thread);
