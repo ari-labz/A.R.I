@@ -114,14 +114,19 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
         string key = $"web-{Guid.NewGuid():N}";
-        if (!string.IsNullOrWhiteSpace(req?.ProjectId) && projectStore.Get(req.ProjectId) is not null)
+        Project? project = !string.IsNullOrWhiteSpace(req?.ProjectId) ? projectStore.Get(req.ProjectId) : null;
+        if (project is not null)
         {
-            ThreadProjects[key] = req.ProjectId;
+            ThreadProjects[key] = req!.ProjectId!;
             PersistThreadProjects();
         }
         // Pre-register in LLMModule so the newThread event fires immediately and
         // all sidebar observers see the thread without waiting for the first message.
-        Llm.GetOrCreateDialogueThread(key);
+        // Projects with ForceCodePipeline start the thread as Code so it opens in code-mode.
+        if (project?.ForceCodePipeline == true)
+            Llm.ForceCodeThread(key);
+        else
+            Llm.GetOrCreateDialogueThread(key);
         return Ok(new { key });
     }
 
