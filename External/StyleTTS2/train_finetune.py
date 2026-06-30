@@ -524,6 +524,11 @@ def main(config_path):
     if load_pretrained:
         model, optimizer, start_epoch, iters = load_checkpoint(model,  optimizer, config['pretrained_model'],
                                     load_only_params=config.get('load_only_params', True))
+        # Adjust epoch targets so config values are relative offsets from the resume point,
+        # matching the same convention used for first_stage_path loads above.
+        diff_epoch += start_epoch
+        joint_epoch += start_epoch
+        epochs += start_epoch
         # Sanitize optimizer momentum buffers — a previous NaN-corrupted run poisons
         # exp_avg / exp_avg_sq which then propagates NaN into every subsequent step.
         for _opt in optimizer.optimizers.values():
@@ -920,9 +925,6 @@ def main(config_path):
 
             iters = iters + 1
             import time as _time; _time.sleep(0.05)
-            import time as _time; _time.sleep(0.05)
-            import time as _time; _time.sleep(0.05)
-            time.sleep(0.05)  # give macOS a moment to handle signals (prevents long-run crashes)
             
             if (i+1)%log_interval == 0:
                 _stat_line = ('Epoch [%d/%d], Step [%d/%d], Loss: %.5f, Disc Loss: %.5f, Dur Loss: %.5f, CE Loss: %.5f, Norm Loss: %.5f, F0 Loss: %.5f, LM Loss: %.5f, Gen Loss: %.5f, Sty Loss: %.5f, Diff Loss: %.5f, DiscLM Loss: %.5f, GenLM Loss: %.5f, SLoss: %.5f, S2S Loss: %.5f, Mono Loss: %.5f'

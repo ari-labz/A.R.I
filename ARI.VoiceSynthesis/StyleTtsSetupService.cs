@@ -55,14 +55,18 @@ public class StyleTtsSetupService(string styleTtsPath, ILogger? logger = null)
                 .Replace(
                     "from IPython.core.debugger import set_trace\n                set_trace()",
                     "continue")
-                // yield GPU briefly each step so WindowServer can check in and avoid kernel panic
-                .Replace(
-                    "iters = iters + 1",
-                    "iters = iters + 1\n            import time as _time; _time.sleep(0.05)")
                 // validation loop may have 0 iters if all batches are skipped; guard division
                 .Replace(
                     "logger.info('Validation loss: %.3f, Dur loss: %.3f, F0 loss: %.3f' % (loss_test / iters_test, loss_align / iters_test, loss_f / iters_test) + '\\n\\n\\n')\n        print('\\n\\n\\n')\n        writer.add_scalar('eval/mel_loss', loss_test / iters_test, epoch + 1)\n        writer.add_scalar('eval/dur_loss', loss_test / iters_test, epoch + 1)\n        writer.add_scalar('eval/F0_loss', loss_f / iters_test, epoch + 1)",
                     "if iters_test > 0:\n            logger.info('Validation loss: %.3f, Dur loss: %.3f, F0 loss: %.3f' % (loss_test / iters_test, loss_align / iters_test, loss_f / iters_test) + '\\n\\n\\n')\n            writer.add_scalar('eval/mel_loss', loss_test / iters_test, epoch + 1)\n            writer.add_scalar('eval/dur_loss', loss_test / iters_test, epoch + 1)\n            writer.add_scalar('eval/F0_loss', loss_f / iters_test, epoch + 1)\n        print('\\n\\n\\n')");
+            // yield GPU briefly each step so WindowServer can check in and avoid kernel panic. This anchor SURVIVES
+            // its own replacement (the new text keeps "iters = iters + 1"), so chaining it would stack another sleep
+            // line on EVERY setup run. Guard it so it applies exactly once.
+            if (!patched.Contains("_time.sleep(0.05)"))
+                patched = patched.Replace(
+                    "iters = iters + 1",
+                    "iters = iters + 1\n            import time as _time; _time.sleep(0.05)");
+
             if (patched != src)
                 File.WriteAllText(trainScript, patched);
         }
