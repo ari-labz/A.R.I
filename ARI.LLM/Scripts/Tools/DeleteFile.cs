@@ -2,11 +2,11 @@ using System.Text.Json;
 
 namespace ARI.LLM;
 
-/// <summary>Deletes a file within the project root. On the desktop path the renderer gates this
-/// behind a user confirmation; the server-side (localPath) path deletes directly.</summary>
-internal sealed class DeleteFile : FileTool
+/// <summary>delete_file tool — thin wrapper that delegates to the thread's <see cref="FileSystem"/>.</summary>
+internal sealed class DeleteFile : Tool
 {
-    internal DeleteFile(string root, CancellationToken ct) : base(root, ct) { }
+    private readonly FileSystem fs;
+    internal DeleteFile(FileSystem fs) => this.fs = fs;
 
     internal override string Name => "delete_file";
 
@@ -26,20 +26,7 @@ internal sealed class DeleteFile : FileTool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
-    {
-        try
-        {
-            using JsonDocument doc = JsonDocument.Parse(argsJson);
-            string relPath = (doc.RootElement.GetProperty("path").GetString() ?? "").Trim('"', '\'', ' ');
-            string? abs = Resolve(relPath);
-            if (abs is null)         return Task.FromResult("Access denied: path traversal is not allowed.");
-            if (!File.Exists(abs))   return Task.FromResult($"File not found: {relPath}");
-            File.Delete(abs);
-            return Task.FromResult($"Deleted {relPath}.");
-        }
-        catch (Exception ex) { return Task.FromResult($"Error deleting file: {ex.Message}"); }
-    }
+    internal override Task<string> Execute(string argsJson) => fs.Delete(argsJson);
 
     internal override Func<string, string>? Display => args =>
     {

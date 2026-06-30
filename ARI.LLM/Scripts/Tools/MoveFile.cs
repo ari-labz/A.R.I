@@ -2,10 +2,11 @@ using System.Text.Json;
 
 namespace ARI.LLM;
 
-/// <summary>Moves or renames a file within the project root. Refuses to overwrite an existing file.</summary>
-internal sealed class MoveFile : FileTool
+/// <summary>move_file tool — thin wrapper that delegates to the thread's <see cref="FileSystem"/>.</summary>
+internal sealed class MoveFile : Tool
 {
-    internal MoveFile(string root, CancellationToken ct) : base(root, ct) { }
+    private readonly FileSystem fs;
+    internal MoveFile(FileSystem fs) => this.fs = fs;
 
     internal override string Name => "move_file";
 
@@ -29,25 +30,7 @@ internal sealed class MoveFile : FileTool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
-    {
-        try
-        {
-            using JsonDocument doc = JsonDocument.Parse(argsJson);
-            string src = (doc.RootElement.GetProperty("source").GetString()      ?? "").Trim('"', '\'', ' ');
-            string dst = (doc.RootElement.GetProperty("destination").GetString() ?? "").Trim('"', '\'', ' ');
-            string? absSrc = Resolve(src);
-            string? absDst = Resolve(dst);
-            if (absSrc is null || absDst is null) return Task.FromResult("Access denied: path traversal is not allowed.");
-            if (!File.Exists(absSrc))             return Task.FromResult($"Source not found: {src}");
-            if (File.Exists(absDst))              return Task.FromResult($"Destination already exists: {dst}. Choose a different name or delete it first.");
-            string? dir = Path.GetDirectoryName(absDst);
-            if (dir is not null) Directory.CreateDirectory(dir);
-            File.Move(absSrc, absDst);
-            return Task.FromResult($"Moved {src} → {dst}.");
-        }
-        catch (Exception ex) { return Task.FromResult($"Error moving file: {ex.Message}"); }
-    }
+    internal override Task<string> Execute(string argsJson) => fs.Move(argsJson);
 
     internal override Func<string, string>? Display => args =>
     {

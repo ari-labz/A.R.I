@@ -58,16 +58,17 @@ internal sealed class CodePipeline : Pipeline
 
         // Fallback (no CodeArchitect configured): degraded solo Coder with the full edit toolset.
         Shared.Logger.LogWarning("[Code] ({Thread}) CodeArchitect not configured — running solo Coder.", threadKey);
-        new PreviewFile(resolvedRoot, cts.Token, snapshots).Register(thread);
-        new ReadFile(resolvedRoot, cts.Token, snapshots).Register(thread);
-        new ListDirectory(resolvedRoot, cts.Token).Register(thread);
-        new SearchFiles(resolvedRoot, cts.Token).Register(thread);
-        new FindFiles(resolvedRoot, cts.Token).Register(thread);
-        new EditFile(resolvedRoot, cts.Token, snapshots).Register(thread);
-        new WriteFile(resolvedRoot, cts.Token).Register(thread);
-        new RevertFile(resolvedRoot, cts.Token, snapshots).Register(thread);
-        new DeleteFile(resolvedRoot, cts.Token).Register(thread);
-        new MoveFile(resolvedRoot, cts.Token).Register(thread);
+        ServerFileSystem fs = new(resolvedRoot, cts.Token, snapshots);
+        new PreviewFile(fs).Register(thread);
+        new ReadFile(fs).Register(thread);
+        new ListDirectory(fs).Register(thread);
+        new SearchFiles(fs).Register(thread);
+        new FindFiles(fs).Register(thread);
+        new EditFile(fs).Register(thread);
+        new WriteFile(fs).Register(thread);
+        new RevertFile(resolvedRoot, cts.Token, snapshots).Register(thread);   // snapshot-tied — not via FileSystem yet
+        new DeleteFile(fs).Register(thread);
+        new MoveFile(fs).Register(thread);
         new UpdateTodos(code, thread).Register(thread);
 
         return code.SendPrompt(thread, effectivePrompt, username, ct: cts.Token, userMessagePreadded: true, onDelta: onDelta);

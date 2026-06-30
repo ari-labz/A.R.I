@@ -28,6 +28,7 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly Engram?           engram;
     private readonly Refactor?         refactor;
     private readonly Classifier?       classifier;
+    private readonly Appraisal?        appraiser;
     private readonly BrainModule?      brain;
     
     
@@ -153,6 +154,15 @@ public class LLMModule : ILLMModule, IDisposable
             classifier = Deserialize<Classifier>(classifierEl);
             _logger.LogInformation("Classifier is active.");
         }
+
+        if (rawAgents.TryGetValue("Appraisal", out JsonElement appraiserEl))
+        {
+            appraiser = Deserialize<Appraisal>(appraiserEl);
+            _logger.LogInformation("Appraisal is active.");
+        }
+
+        // The architect appraises each plan turn to decide its thinking budget (null appraiser ⇒ no thinking).
+        if (codeArchitect is not null) codeArchitect.Appraisal = appraiser;
 
         if (brain is not null && rawAgents.TryGetValue("Memory", out JsonElement memoryEl))
         {
