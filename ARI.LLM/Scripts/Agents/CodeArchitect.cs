@@ -101,7 +101,7 @@ internal sealed class CodeArchitect : Agent
             r.Content = AriContentBlock.Parse(cp.Length > 0 ? cp : planText.Trim());
             parent.RaiseUpdated();
         }
-        return await Execute(parent, threadKey, plan, username, coder, root, snapshots, cts, onDelta);
+        return await Execute(parent, threadKey, plan, username, coder, root, snapshots, cts, onDelta, thinkSeconds);
     }
 
     // PLAN turn: explore + present a plain-English plan (no JSON, no edits), then wait for the user to approve.
@@ -158,7 +158,8 @@ internal sealed class CodeArchitect : Agent
             parent.RaiseUpdated();
         }
         Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) plan approved: {N} task(s) — executing.", threadKey, plan.Steps.Count);
-        return await Execute(parent, threadKey, plan, username, coder, root, snapshots, cts, onDelta);
+        // Gated path doesn't carry the appraisal budget forward; build-fix re-reasoning falls back to plain think-on.
+        return await Execute(parent, threadKey, plan, username, coder, root, snapshots, cts, onDelta, null);
     }
 
     // Show the architect's prose plan to the user: strip any JSON / exploration chips it may have included (those
@@ -179,7 +180,8 @@ internal sealed class CodeArchitect : Agent
     // orchestration, so the user sees only: each task's work → final summary.
     private async Task<string> Execute(
         Thread parent, string threadKey, CodePlan plan, string username,
-        Coder coder, string root, FileSnapshots snapshots, CancellationTokenSource cts, Func<string, Task>? onDelta)
+        Coder coder, string root, FileSnapshots snapshots, CancellationTokenSource cts, Func<string, Task>? onDelta,
+        int? thinkSeconds)
     {
         Queue<CodeStep> tasks = new(plan.Steps);
         int n = 0;
@@ -210,7 +212,7 @@ internal sealed class CodeArchitect : Agent
         // when execution moved to per-task approval. Conditional, NOT unconditional: it only builds when .cs files
         // were edited and skips cleanly when the project can't build here — so non-code changes never trigger it.
         await BuildVerify(parent, threadKey, username, coder, root, snapshots, plan, cts, "",
-            async s => { if (onDelta is not null) await onDelta(s); });
+            async s => { if (onDelta is not null) await onDelta(s); }, thinkSeconds);
 
         // SUMMARISE — a final user-facing message (shown). The instruction is chat-hidden; the reply is shown.
         const string sumInstruction = "[System] All tasks are complete. Write a brief, friendly summary for the " +
@@ -384,7 +386,7 @@ internal sealed class CodeArchitect : Agent
             // 3. VERIFY — build the touched project(s); on real compile errors, dispatch a fix Coder per file
             //    and rebuild once. Catches incomplete/broken edits the way Claude does (build → read errors →
             //    fix). Skips gracefully when the project can't build on this machine (e.g. WPF on macOS).
-            baked = await BuildVerify(parent, threadKey, username, coder, root, snapshots, plan, cts, baked, Push);
+            baked = await BuildVerify(parent, threadKey, username, coder, root, snapshots, plan, cts, baked, Push, null);
 
             Finalize(resp, parent, baked);
             return baked;
@@ -624,7 +626,8 @@ internal sealed class CodeArchitect : Agent
     /// Coder per affected file and rebuilds once. Returns the updated visible content. No-ops cleanly when the
     /// project can't be built here (e.g. a WPF project on macOS) so it never blocks or fabricates a result.</summary>
     private async Task<string> BuildVerify(Thread parent, string threadKey, string username, Coder coder,
-        string root, FileSnapshots snapshots, CodePlan plan, CancellationTokenSource cts, string baked, Func<string, Task> push)
+        string root, FileSnapshots snapshots, CodePlan plan, CancellationTokenSource cts, string baked, Func<string, Task> push,
+        int? thinkSeconds)
     {
         List<string> editedAbs = plan.Steps
             .Select(s => { try { return Path.GetFullPath(Path.Combine(root, s.File)); } catch { return ""; } })
@@ -636,7 +639,8 @@ internal sealed class CodeArchitect : Agent
                                          .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (projects.Count == 0) return baked;   // not a dotnet project we can build — skip verification
 
-        for (int round = 0; round < 2; round++)
+        const int MAX_FIX_ATTEMPTS = 3;   // architect-reasoned fix attempts before leaving it for review
+        for (int attempt = 0; ; attempt++)
         {
             cts.Token.ThrowIfCancellationRequested();
             await push(baked + (baked.Length > 0 ? "\n\n" : "") + "_Building…_");
@@ -659,51 +663,77 @@ internal sealed class CodeArchitect : Agent
 
             if (errors.Count == 0)
             {
-                Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) build verify clean ({N} project(s)).", threadKey, projects.Count);
+                Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) build verify clean ({N} project(s)){After}.",
+                    threadKey, projects.Count, attempt > 0 ? $" after {attempt} fix attempt(s)" : "");
                 baked += (baked.Length > 0 ? "\n\n" : "") + "**Build:** ✓ compiles cleanly.";
                 await push(baked);
                 return baked;
             }
 
-            if (round == 1)
+            if (attempt >= MAX_FIX_ATTEMPTS)
             {
-                // Already ran a fix round; this rebuild still fails. Stop rather than loop.
-                Shared.Logger.LogWarning("[CodeArchitect] ({Thread}) build still failing after fix round ({N} file(s)).", threadKey, errors.Count);
-                baked += (baked.Length > 0 ? "\n\n" : "") + $"**Build:** still failing in {errors.Count} file(s) after a fix attempt — left for review.";
+                Shared.Logger.LogWarning("[CodeArchitect] ({Thread}) build still failing after {N} fix attempt(s) ({F} file(s)).", threadKey, MAX_FIX_ATTEMPTS, errors.Count);
+                baked += (baked.Length > 0 ? "\n\n" : "") + $"**Build:** still failing in {errors.Count} file(s) after {MAX_FIX_ATTEMPTS} fix attempts — left for review.";
                 await push(baked);
                 return baked;
             }
 
+            // The architect RE-REASONS over the build errors (not a thinking-off fix Coder): it can read the real
+            // API / signatures and produce a targeted fix plan, so its knowledge reaches the Coder. Reuses the
+            // original turn's thinking budget; the deadline timer resets per SendPrompt call, so it gets it fresh.
             int totalErr = errors.Sum(e => e.Value.Count);
-            Shared.Logger.LogWarning("[CodeArchitect] ({Thread}) build verify: {E} error(s) across {F} file(s) — dispatching fixes.", threadKey, totalErr, errors.Count);
-            baked += (baked.Length > 0 ? "\n\n" : "") + $"**Build:** {totalErr} error(s) — fixing.";
+            Shared.Logger.LogWarning("[CodeArchitect] ({Thread}) build verify: {E} error(s) across {F} file(s) — architect re-reasoning (attempt {A}/{Max}).",
+                threadKey, totalErr, errors.Count, attempt + 1, MAX_FIX_ATTEMPTS);
+            baked += (baked.Length > 0 ? "\n\n" : "") + $"**Build:** {totalErr} error(s) — fixing (attempt {attempt + 1}).";
             await push(baked);
 
-            foreach ((string relFile, List<string> errList) in errors)
+            StringBuilder errBlock = new();
+            foreach ((string ef, List<string> el) in errors)
+            {
+                errBlock.AppendLine($"`{ef}`:");
+                foreach (string e in el) errBlock.AppendLine($"  - {e}");
+            }
+
+            string fixInstruction =
+                "[System] The build FAILED after the edits, with these compiler errors:\n" + errBlock +
+                "\nReview ONLY these errors. If a symbol, API, type, or method signature is wrong or missing, use " +
+                "read_file / search_files to find the CORRECT one already used elsewhere in the codebase — do NOT " +
+                "guess. Then output the fix as your ```json task list (the normal format), with the smallest changes " +
+                "needed to make it compile, and nothing else.";
+
+            string fixReply = await SendPrompt(parent, fixInstruction, username, ct: cts.Token,
+                userMessagePreadded: false, onDelta: async t => await push(baked + ChipsOnly(t)),
+                thinkSeconds: thinkSeconds);
+
+            CodePlan? fixPlan = ParsePlan(fixReply);
+            if (fixPlan is null || fixPlan.Steps.Count == 0)
+            {
+                Shared.Logger.LogWarning("[CodeArchitect] ({Thread}) build-fix: architect produced no fix plan — leaving for review.", threadKey);
+                baked += (baked.Length > 0 ? "\n\n" : "") + "**Build:** still failing — could not plan a fix.";
+                await push(baked);
+                return baked;
+            }
+
+            // Execute the architect's fix plan — one Coder per file, carrying its reasoned change instruction.
+            foreach ((string file, List<CodeStep> steps) in GroupByFile(fixPlan.Steps))
             {
                 cts.Token.ThrowIfCancellationRequested();
-                Thread fix = new(ThreadPipeline.Code, $"{threadKey}#fix:{Guid.NewGuid():N}")
-                    { Internal = true, Parent = parent, Label = $"Fix build errors in {relFile}" };
+                Thread fix = new(ThreadPipeline.Code, $"{threadKey}#fix{attempt + 1}:{Guid.NewGuid():N}")
+                    { Internal = true, Parent = parent, Label = $"Fix build errors in {file}" };
                 parent.AddChild(fix);
                 RegisterCoderTools(fix, root, snapshots, cts.Token);
 
-                // Seed windows around the error lines so a large file isn't dumped whole.
-                List<CodeStep> errSteps = errList
-                    .Select(e => Regex.Match(e, @"line\s+(\d+)"))
-                    .Where(m => m.Success).Select(m => new CodeStep(relFile, m.Groups[1].Value, "")).ToList();
-                string seed = ReadNumberedView(root, relFile, errSteps);
-                if (seed.Length > 0) fix.PreReadPaths.Add(Path.GetFileName(relFile));
+                string seed = ReadNumberedView(root, file, steps);
+                if (seed.Length > 0) fix.PreReadPaths.Add(Path.GetFileName(file));
 
                 string prefix = baked.Length > 0 ? baked + "\n" : "";
-                await coder.SendPrompt(fix, BuildFixPrompt(relFile, errList, seed), username, ct: cts.Token,
+                await coder.SendPrompt(fix, BuildFilePrompt(fixPlan, file, steps, seed), username, ct: cts.Token,
                     userMessagePreadded: false, onDelta: async t => await push(prefix + t));
 
-                string fc = fix.History.OfType<AriResponse>().LastOrDefault()?.ContentText?.Trim() ?? "";
-                baked = prefix + fc;
+                baked = prefix + (fix.History.OfType<AriResponse>().LastOrDefault()?.ContentText?.Trim() ?? "");
                 await push(baked);
             }
         }
-        return baked;
     }
 
     private static string BuildFixPrompt(string file, List<string> errors, string seed)
