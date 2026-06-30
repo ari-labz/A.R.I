@@ -120,12 +120,13 @@ public abstract class Agent
         Func<string, Task>? onDelta                = null,
         int                 thinkingBudgetOverride = 0,
         bool                chatHidden             = false,
-        bool?               thinkOverride          = null)
+        bool?               thinkOverride          = null,
+        int?                thinkSeconds           = null)
     {
         await thread.sendLock.WaitAsync(ct);
         try
         {
-            return await Send(thread, prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded, onDelta, thinkingBudgetOverride, chatHidden, thinkOverride);
+            return await Send(thread, prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded, onDelta, thinkingBudgetOverride, chatHidden, thinkOverride, thinkSeconds);
         }
         catch (OperationCanceledException)
         {
@@ -165,6 +166,165 @@ public abstract class Agent
         }
     }
 
+    /// <summary>True if the reasoning buffer ends on a sentence boundary (. ! ? or newline), ignoring trailing
+    /// whitespace — the point at which it is safe to cut thinking off gracefully (see the #35 time budget).</summary>
+    private static bool EndsSentence(System.Text.StringBuilder sb)
+    {
+        int i = sb.Length - 1;
+        while (i >= 0 && (sb[i] == ' ' || sb[i] == '\t' || sb[i] == '\r')) i--;
+        if (i < 0) return false;
+        char c = sb[i];
+        return c is '.' or '!' or '?' or '\n';
+    }
+
+    // Mid-thought budget nudges, injected INSIDE <think> (hidden from the user; visible only in the debug trace).
+    private const string Nudge70 = "\n[System: You've used 70% of your thinking budget — please start wrapping up your chain of thought.]\n";
+    private const string Nudge90 = "\n[System: You've used 90% of your thinking budget — finish your thought and move on.]\n";
+
+    // Grade-10 (unlimited budget) periodic time-awareness nudge — injected every 30s of reasoning.
+    private static string PeriodicNudge(int seconds) =>
+        $"\n[System: You have been thinking for {seconds} seconds. The user is waiting — long silences are a poor experience. Reach your conclusion as soon as you reasonably can.]\n";
+
+    /// <summary>POST the turn's messages to llama.cpp /apply-template → the formatted prompt (ends at the assistant
+    /// generation point, i.e. "…assistant\n&lt;think&gt;\n"), which we extend to continue a thought mid-stream.</summary>
+    private async Task<string> ApplyTemplate(IEnumerable<object> messages, HttpClient http, CancellationToken ct)
+    {
+        HttpRequestMessage req = new(HttpMethod.Post, $"{Endpoint}/apply-template")
+            { Content = new StringContent(JsonSerializer.Serialize(new { messages }), Encoding.UTF8, "application/json") };
+        using HttpResponseMessage resp = await http.SendAsync(req, ct);
+        resp.EnsureSuccessStatusCode();
+        using JsonDocument doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+        return doc.RootElement.TryGetProperty("prompt", out JsonElement p) ? p.GetString() ?? "" : "";
+    }
+
+    /// <summary>
+    /// Mid-thought budget warnings. The chat API can't continue a thought, so we drop to raw /completion: re-feed
+    /// the reasoning so far + a nudge INSIDE &lt;think&gt;, let the model keep thinking, then stream the post-
+    /// &lt;/think&gt; answer. Loops for the later (90%) nudge and force-closes &lt;/think&gt; at the hard deadline.
+    /// Reasoning stays hidden (appended to reasoningBuilder for the trace only); only the answer reaches onDelta,
+    /// so it's invisible in the chat UI. Returns when the answer is complete; contentBuilder holds it for the
+    /// caller's normal (text-mode) post-stream parsing.
+    /// </summary>
+    private async Task ContinueThinking(
+        IEnumerable<object> messages, IReadOnlyDictionary<string, object> body, HttpClient http, Thread thread,
+        StringBuilder reasoningBuilder, StringBuilder responseBuilder, StringBuilder contentBuilder,
+        string firstNudge, DateTime reasoningStart, int thinkDeadlineSec, bool warned90Already,
+        int lastPeriodicSec, Func<string, Task>? onDelta, CancellationToken ct)
+    {
+        string basePrompt    = await ApplyTemplate(messages, http, ct);
+        string suffix        = firstNudge;
+        bool   warned90      = warned90Already;
+        bool   startInContent = false;   // true when the suffix already closed </think>
+
+        while (true)
+        {
+            string contPrompt = basePrompt + reasoningBuilder.ToString() + suffix;
+
+            var cbody = new Dictionary<string, object>
+            {
+                ["prompt"]       = contPrompt,
+                ["stream"]       = true,
+                ["cache_prompt"] = true,
+                ["n_predict"]    = body.TryGetValue("max_tokens", out object? mt) ? mt : 4096,
+            };
+            foreach (string k in new[] { "temperature", "top_p", "top_k", "min_p", "repeat_penalty", "presence_penalty", "frequency_penalty" })
+                if (body.TryGetValue(k, out object? v)) cbody[k] = v;
+            if (Slot.HasValue) cbody["id_slot"] = Slot.Value;
+
+            HttpRequestMessage req = new(HttpMethod.Post, $"{Endpoint}/completion")
+                { Content = new StringContent(JsonSerializer.Serialize(cbody), Encoding.UTF8, "application/json") };
+            using HttpResponseMessage resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+            resp.EnsureSuccessStatusCode();
+            using Stream stream = await resp.Content.ReadAsStreamAsync(ct);
+            using StreamReader reader = new(stream);
+
+            bool    inContent  = startInContent;
+            string  carry      = "";          // hold-back to catch </think> spanning chunks
+            string? nextSuffix = null;         // set when a threshold fires mid-round → loop with this suffix
+            string? line;
+            while ((line = await reader.ReadLineAsync(ct)) is not null)
+            {
+                if (!line.StartsWith("data: ", StringComparison.Ordinal)) continue;
+                string payload = line["data: ".Length..];
+                if (payload == "[DONE]") break;
+                string piece; bool stop;
+                try
+                {
+                    using JsonDocument d = JsonDocument.Parse(payload);
+                    piece = d.RootElement.TryGetProperty("content", out JsonElement c) ? c.GetString() ?? "" : "";
+                    stop  = d.RootElement.TryGetProperty("stop", out JsonElement st) && st.ValueKind == JsonValueKind.True;
+                }
+                catch { continue; }
+
+                if (piece.Length > 0)
+                {
+                    if (!inContent)
+                    {
+                        string buf = carry + piece;
+                        int idx = buf.IndexOf("</think>", StringComparison.Ordinal);
+                        if (idx >= 0)
+                        {
+                            reasoningBuilder.Append(buf[..idx]);
+                            inContent = true; carry = "";
+                            string after = buf[(idx + "</think>".Length)..];
+                            if (after.Length > 0) { responseBuilder.Append(after); if (onDelta is not null) await onDelta(contentBuilder.ToString() + responseBuilder.ToString()); }
+                        }
+                        else
+                        {
+                            int safe = Math.Max(0, buf.Length - 7);   // hold back a possible partial "</think>"
+                            reasoningBuilder.Append(buf[..safe]);
+                            carry = buf[safe..];
+                        }
+                    }
+                    else
+                    {
+                        responseBuilder.Append(piece);
+                        if (onDelta is not null) await onDelta(contentBuilder.ToString() + responseBuilder.ToString());
+                    }
+                }
+
+                // Threshold checks while still thinking.
+                if (!inContent && thinkDeadlineSec < 0)
+                {
+                    // Grade 10 (unlimited): no deadline, just a time-awareness nudge every 30s.
+                    int el = (int)(DateTime.UtcNow - reasoningStart).TotalSeconds;
+                    if (el - lastPeriodicSec >= 30)
+                    {
+                        lastPeriodicSec = el;
+                        reasoningBuilder.Append(carry); carry = "";
+                        nextSuffix = PeriodicNudge(el);
+                        break;
+                    }
+                }
+                else if (!inContent && thinkDeadlineSec > 0)
+                {
+                    double frac = (DateTime.UtcNow - reasoningStart).TotalSeconds / thinkDeadlineSec;
+                    if (frac >= 1.0 && (EndsSentence(reasoningBuilder) || frac >= 1.5))
+                    {
+                        reasoningBuilder.Append(carry); carry = "";
+                        nextSuffix = "</think>\n\n";   // hard deadline → force the answer
+                        break;
+                    }
+                    if (frac >= 0.90 && !warned90)
+                    {
+                        warned90 = true;
+                        reasoningBuilder.Append(carry); carry = "";
+                        nextSuffix = Nudge90;
+                        break;
+                    }
+                }
+
+                if (stop) { reasoningBuilder.Append(carry); carry = ""; break; }
+            }
+
+            if (nextSuffix is null) return;   // round finished naturally — the answer is complete
+            suffix         = nextSuffix;
+            startInContent = nextSuffix.StartsWith("</think>", StringComparison.Ordinal);
+            Shared.Logger.LogInformation("[{Agent}] ({Thread}) thinking continuation: {Why}.",
+                Name, thread.Key, startInContent ? "deadline → forced </think>" : "90% nudge");
+        }
+    }
+
     private async Task<string> Send(
         Thread              thread,
         string              prompt,
@@ -178,11 +338,14 @@ public abstract class Agent
         Func<string, Task>? onDelta               = null,
         int                 thinkingBudgetOverride = 0,
         bool                chatHidden             = false,
-        bool?               thinkOverride          = null)
+        bool?               thinkOverride          = null,
+        int?                thinkSeconds           = null)
     {
         // Per-request thinking toggle: a caller can force think on/off for THIS turn (e.g. the architect
         // thinks while planning but not on approval/summary turns); null = use the agent's configured Think.
-        bool effectiveThink = thinkOverride ?? Think;
+        // thinkSeconds (from the Appraisal grade) takes precedence: >0 / -1 (unlimited) → think on; 0 → off.
+        bool effectiveThink = thinkSeconds.HasValue ? thinkSeconds.Value != 0 : (thinkOverride ?? Think);
+        int  thinkDeadlineSec = thinkSeconds.GetValueOrDefault(0);   // >0 = wall-clock reasoning budget (#35); <=0 = none
         thread.LastMessageAt = DateTime.UtcNow;
 
         thread.inactivityTimer?.Dispose();
@@ -357,6 +520,11 @@ public abstract class Agent
         int             reasoningChars   = 0;
         // Full reasoning/chain-of-thought text for this turn (debug viewer only — never re-sent to the LLM).
         StringBuilder   reasoningBuilder = new();
+        DateTime?       reasoningStart   = null;   // stamped on the first reasoning delta (for the #35 time budget)
+        bool            warned70 = false, warned90 = false;   // 70/90% mid-thought budget warnings fired?
+        string?         pendingNudge     = null;   // set when a warning fires → switch to the /completion continuation
+        bool            warningsEnabled  = Environment.GetEnvironmentVariable("ARI_NO_WARNINGS") != "1";   // A/B toggle
+        int             lastPeriodicSec  = 0;   // grade-10 unlimited: elapsed-secs of the last 30s time-awareness nudge
         // Hard reasoning cap: once cumulative reasoning crosses ReasoningCharCap, latch thinking off for the
         // rest of the turn (the body builder reads thinkingCapReached) so the model must produce output.
         bool            thinkingCapReached = false;
@@ -637,8 +805,43 @@ public abstract class Agent
                             Shared.Logger.LogWarning("[{Agent}] ({Thread}) reasoning cap hit ({RC} >= {Cap} chars) — forcing thinking off for the rest of the turn.",
                                 Name, thread.Key, reasoningChars, ReasoningCharCap);
                         }
+                        // Time budget (#35): once the wall-clock reasoning budget is spent, let the model FINISH THE
+                        // CURRENT SENTENCE, then stop thinking — never a mid-thought cut (that's why a bare length cap
+                        // was net-negative). Reuses the existing break → re-request-thinking-off path to produce the
+                        // answer. A 30s grace past the budget hard-stops if no sentence boundary arrives.
+                        reasoningStart ??= DateTime.UtcNow;
+                        // 70/90% budget warnings → break to the /completion continuation, which re-feeds the
+                        // reasoning + nudge and keeps the model THINKING (the chat API can't continue a thought).
+                        // Gated to budgets ≥120s (appraisal grade ≥5): the continuation's SWA re-prefill (~10s) is
+                        // only worth it when the budget is long enough to amortise it; on short budgets it's net-negative.
+                        if (warningsEnabled && thinkDeadlineSec >= 120 && pendingNudge is null && !thinkingCapReached)
+                        {
+                            double frac = (DateTime.UtcNow - reasoningStart.Value).TotalSeconds / thinkDeadlineSec;
+                            if      (frac >= 0.90 && !warned90) { warned90 = true; pendingNudge = Nudge90; }
+                            else if (frac >= 0.70 && !warned70) { warned70 = true; pendingNudge = Nudge70; }
+                        }
+                        // Grade 10 (unlimited budget, thinkDeadlineSec < 0): no deadline, but every 30s inject a
+                        // time-awareness nudge so an open-ended thinker stays mindful the user is waiting.
+                        if (thinkDeadlineSec < 0 && pendingNudge is null && !thinkingCapReached)
+                        {
+                            int el = (int)(DateTime.UtcNow - reasoningStart.Value).TotalSeconds;
+                            if (el - lastPeriodicSec >= 30) { lastPeriodicSec = el; pendingNudge = PeriodicNudge(el); }
+                        }
+                        // Deadline (#35) — fallback for the no-warning case (e.g. an agent with thinkSeconds but
+                        // warnings irrelevant): finish the sentence, then stop thinking via the existing break.
+                        if (thinkDeadlineSec > 0 && pendingNudge is null && !thinkingCapReached)
+                        {
+                            double over = (DateTime.UtcNow - reasoningStart.Value).TotalSeconds - thinkDeadlineSec;
+                            if (over >= 0 && (EndsSentence(reasoningBuilder) || over >= 30))
+                            {
+                                thinkingCapReached = true;
+                                reasoningCapBreak  = true;
+                                Shared.Logger.LogInformation("[{Agent}] ({Thread}) thinking budget {Sec}s spent — wrapped up at a sentence boundary ({RC} reasoning chars).",
+                                    Name, thread.Key, thinkDeadlineSec, reasoningChars);
+                            }
+                        }
                     }
-                    if (reasoningCapBreak) break;
+                    if (reasoningCapBreak || pendingNudge is not null) break;
 
                     if (delta.TryGetProperty("tool_calls", out JsonElement toolCallsEl))
                     {
@@ -761,6 +964,19 @@ public abstract class Agent
                         }
                     }
                 }
+            }
+
+            // If a budget warning fired, the chat stream stopped mid-thought. Continue the chain via raw /completion
+            // (re-feed reasoning + the nudge, keep thinking), then fall through to normal post-stream parsing. The
+            // answer lands in responseBuilder (parsed for tools as usual); reasoning stays hidden (debug trace only).
+            if (pendingNudge is not null)
+            {
+                Shared.Logger.LogInformation("[{Agent}] ({Thread}) budget warning at {RC} reasoning chars — continuing via /completion.", Name, thread.Key, reasoningChars);
+                await ContinueThinking(messages, body, httpClient, thread, reasoningBuilder, responseBuilder, contentBuilder,
+                    pendingNudge, reasoningStart!.Value, thinkDeadlineSec, warned90, lastPeriodicSec, onDelta, ct);
+                pendingNudge   = null;
+                finishReason ??= "stop";
+                reasoningChars = reasoningBuilder.Length;
             }
 
             // Deep-inspection trace: record THIS request's reasoning (the chunk added since the request began)

@@ -22,6 +22,9 @@ internal sealed class CodeArchitect : Agent
     // Coding prompts are verbose and already logged by the pipeline; don't double-log them.
     [JsonIgnore] internal override bool SuppressPromptLog => true;
 
+    /// <summary>Grades how much thinking the plan turn needs (set by LLMModule). Null = no appraisal → no thinking.</summary>
+    [JsonIgnore] internal Appraisal? Appraisal { get; set; }
+
     private sealed record CodePlan(List<string> Decisions, List<CodeStep> Steps);
     private sealed record CodeStep(string File, string Range, string Change);
 
@@ -42,21 +45,69 @@ internal sealed class CodeArchitect : Agent
         Coder coder, string root, FileSnapshots snapshots, CancellationTokenSource cts, Func<string, Task>? onDelta)
     {
         // Explore tools for the architect's planning / re-planning turns (shared by both phases).
-        new PreviewFile(root, cts.Token, snapshots).Register(parent);
-        new ReadFile(root, cts.Token, snapshots).Register(parent);
-        new ListDirectory(root, cts.Token).Register(parent);
-        new SearchFiles(root, cts.Token).Register(parent);
-        new FindFiles(root, cts.Token).Register(parent);
+        ServerFileSystem fs = new(root, cts.Token, snapshots);
+        new PreviewFile(fs).Register(parent);
+        new ReadFile(fs).Register(parent);
+        new ListDirectory(fs).Register(parent);
+        new SearchFiles(fs).Register(parent);
+        new FindFiles(fs).Register(parent);
 
-        return parent.AwaitingPlanApproval
-            ? await ResumePlan(parent, threadKey, prompt, username, coder, root, snapshots, cts, onDelta)
-            : await PresentPlan(parent, threadKey, prompt, username, cts, onDelta);
+        bool bypass = Environment.GetEnvironmentVariable("ARI_GATE_BYPASS") == "1";
+
+        // A resume turn (user replying to a presented plan) is NOT a fresh coding request — don't re-appraise.
+        if (parent.AwaitingPlanApproval && !bypass)
+            return await ResumePlan(parent, threadKey, prompt, username, coder, root, snapshots, cts, onDelta);
+
+        // Appraisal runs at the START of the coding request: grade the prompt → the thinking budget for the plan turn.
+        (int? thinkSeconds, string awareness) = await AppraiseThinking(prompt, threadKey, cts.Token);
+
+        // Eval/verification hook: ARI_GATE_BYPASS=1 runs the old one-shot plan→execute (no approval gate).
+        if (bypass)
+            return await PlanAndExecuteOneShot(parent, threadKey, prompt, username, coder, root, snapshots, cts, onDelta, thinkSeconds, awareness);
+
+        return await PresentPlan(parent, threadKey, prompt, username, cts, onDelta, thinkSeconds, awareness);
+    }
+
+    // Appraise how much thinking the request needs → wall-clock budget (seconds) + an awareness line the model is
+    // told so it self-paces. Null appraiser ⇒ (null, "") = today's behaviour. Runs once at the start of the request.
+    private async Task<(int? thinkSeconds, string awareness)> AppraiseThinking(string prompt, string threadKey, CancellationToken ct)
+    {
+        if (Appraisal is null) return (null, "");
+        int grade = await Appraisal.Appraise(prompt, ct);
+        int secs  = Appraisal.GradeToSeconds(grade);
+        string awareness = secs == 0 ? ""
+            : secs < 0 ? " You may think as long as you need."
+            : $" You have about {secs} seconds to think — be concise and reach your conclusion within it.";
+        Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) appraisal grade {G} → {S}s thinking budget.", threadKey, grade, secs);
+        return (secs, awareness);
+    }
+
+    // One-shot plan→execute (the pre-gate behaviour), used only when ARI_GATE_BYPASS=1 so the single-prompt
+    // eval can run end-to-end. The architect plans (its default prose+JSON), we strip the JSON for display, then execute.
+    private async Task<string> PlanAndExecuteOneShot(
+        Thread parent, string threadKey, string prompt, string username,
+        Coder coder, string root, FileSnapshots snapshots, CancellationTokenSource cts, Func<string, Task>? onDelta,
+        int? thinkSeconds, string awareness)
+    {
+        string? aug = awareness.Length > 0 ? $"{prompt}\n\n[System:{awareness}]" : null;
+        string planText = await SendPrompt(parent, prompt, username, augmentedPrompt: aug,
+            ct: cts.Token, userMessagePreadded: true, onDelta: onDelta, thinkSeconds: thinkSeconds);
+        CodePlan? plan = ParsePlan(planText);
+        if (plan is null || plan.Steps.Count == 0) return planText;
+        AriResponse? r = parent.History.OfType<AriResponse>().LastOrDefault();
+        if (r is not null)
+        {
+            string cp = PlanChatText(planText);
+            r.Content = AriContentBlock.Parse(cp.Length > 0 ? cp : planText.Trim());
+            parent.RaiseUpdated();
+        }
+        return await Execute(parent, threadKey, plan, username, coder, root, snapshots, cts, onDelta);
     }
 
     // PLAN turn: explore + present a plain-English plan (no JSON, no edits), then wait for the user to approve.
     private async Task<string> PresentPlan(
         Thread parent, string threadKey, string prompt, string username,
-        CancellationTokenSource cts, Func<string, Task>? onDelta)
+        CancellationTokenSource cts, Func<string, Task>? onDelta, int? thinkSeconds, string awareness)
     {
         const string planInstruction =
             "Plan this change. Explore the codebase as needed (preview_file before read_file), then present your " +
@@ -64,8 +115,9 @@ internal sealed class CodeArchitect : Agent
             "the files involved. Do NOT write a JSON task list and do NOT edit anything yet: the user reviews and " +
             "approves the plan first.";
         string planText = await SendPrompt(parent, prompt, username,
-            augmentedPrompt: $"{prompt}\n\n[System: {planInstruction}]",
-            ct: cts.Token, userMessagePreadded: true, onDelta: onDelta);
+            augmentedPrompt: $"{prompt}\n\n[System: {planInstruction}{awareness}]",
+            ct: cts.Token, userMessagePreadded: true, onDelta: onDelta,
+            thinkSeconds: thinkSeconds);
 
         PresentProse(parent, planText);
         parent.AwaitingPlanApproval = true;
@@ -152,6 +204,13 @@ internal sealed class CodeArchitect : Agent
             if (extra is not null)
                 foreach (CodeStep s in extra.Steps) tasks.Enqueue(s);
         }
+
+        // VERIFY — build the touched project(s); on real compile errors, dispatch a fix Coder per file and rebuild
+        // (BuildVerify). This is the build → read errors → fix loop; it was orphaned in the dead Orchestrate path
+        // when execution moved to per-task approval. Conditional, NOT unconditional: it only builds when .cs files
+        // were edited and skips cleanly when the project can't build here — so non-code changes never trigger it.
+        await BuildVerify(parent, threadKey, username, coder, root, snapshots, plan, cts, "",
+            async s => { if (onDelta is not null) await onDelta(s); });
 
         // SUMMARISE — a final user-facing message (shown). The instruction is chat-hidden; the reply is shown.
         const string sumInstruction = "[System] All tasks are complete. Write a brief, friendly summary for the " +
@@ -258,11 +317,12 @@ internal sealed class CodeArchitect : Agent
             //    stream (prose/JSON filtered out), so no JSON ever appears, even while streaming.
             Thread planThread = new(ThreadPipeline.Code, $"{threadKey}#plan:{Guid.NewGuid():N}") { Internal = true, Parent = parent, Label = "Planning (architect)" };
             parent.AddChild(planThread);
-            new PreviewFile(root, cts.Token, snapshots).Register(planThread);
-            new ReadFile(root, cts.Token, snapshots).Register(planThread);
-            new ListDirectory(root, cts.Token).Register(planThread);
-            new SearchFiles(root, cts.Token).Register(planThread);
-            new FindFiles(root, cts.Token).Register(planThread);
+            ServerFileSystem fs = new(root, cts.Token, snapshots);
+            new PreviewFile(fs).Register(planThread);
+            new ReadFile(fs).Register(planThread);
+            new ListDirectory(fs).Register(planThread);
+            new SearchFiles(fs).Register(planThread);
+            new FindFiles(fs).Register(planThread);
 
             string planText = await SendPrompt(planThread, prompt, username, ct: cts.Token, userMessagePreadded: false,
                 onDelta: async t => await Push(baked + ChipsOnly(t)));
@@ -419,13 +479,14 @@ internal sealed class CodeArchitect : Agent
         // Lean executor toolset: preview → read the assigned range, edit, recover. No search/list (with thinking
         // off those make the Coder wander); preview_file IS included so it can satisfy the preview-before-read
         // gate and keep context lean even on its assigned file.
-        new PreviewFile(root, ct, snapshots).Register(child);
-        new ReadFile(root, ct, snapshots).Register(child);
-        new EditFile(root, ct, snapshots).Register(child);
-        new WriteFile(root, ct).Register(child);
-        new RevertFile(root, ct, snapshots).Register(child);
-        new DeleteFile(root, ct).Register(child);
-        new MoveFile(root, ct).Register(child);
+        ServerFileSystem fs = new(root, ct, snapshots);
+        new PreviewFile(fs).Register(child);
+        new ReadFile(fs).Register(child);
+        new EditFile(fs).Register(child);
+        new WriteFile(fs).Register(child);
+        new RevertFile(root, ct, snapshots).Register(child);   // RevertFile is snapshot-tied — not via FileSystem yet
+        new DeleteFile(fs).Register(child);
+        new MoveFile(fs).Register(child);
     }
 
     /// <summary>Groups plan steps by file, preserving first-appearance order so dependency ordering between

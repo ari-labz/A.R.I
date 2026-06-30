@@ -11,4 +11,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <!-- The API layer hosts the client (WebSocket) FileSystem backend, which subclasses the internal
+       ARI.LLM.FileSystem. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="ARI.API" />
+  </ItemGroup>
+
 </Project>
