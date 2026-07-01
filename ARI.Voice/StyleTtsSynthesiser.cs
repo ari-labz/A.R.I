@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using ARI.Common;
 using Microsoft.Extensions.Logging;
 
 namespace ARI.Voice;
@@ -53,10 +54,14 @@ public class StyleTtsSynthesiser(string styleTtsPath, string modelPath, string c
 
         KillPortOwner(SERVER_PORT);
 
+        // ARI's phonemization overrides live in the ARI project (copied next to the executable),
+        // NOT in the submodule — pass the path so serve.py loads it in place.
+        string subsArg = PhonemeSubstitutions.Path is { } p ? $" --phoneme_subs \"{p}\"" : "";
+
         ProcessStartInfo info = new()
         {
             FileName               = python,
-            Arguments              = $"\"{script}\" --model \"{modelPath}\" --config \"{configPath}\" --ref_audio \"{refAudioPath}\" --port {SERVER_PORT}",
+            Arguments              = $"\"{script}\" --model \"{modelPath}\" --config \"{configPath}\" --ref_audio \"{refAudioPath}\" --port {SERVER_PORT}{subsArg}",
             RedirectStandardOutput = true,
             RedirectStandardError  = true,
             UseShellExecute        = false,
