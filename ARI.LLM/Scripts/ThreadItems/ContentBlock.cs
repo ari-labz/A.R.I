@@ -22,7 +22,6 @@ namespace ARI.LLM;
 [JsonDerivedType(typeof(Running),    "running")]
 [JsonDerivedType(typeof(Delegating), "delegating")]
 [JsonDerivedType(typeof(Building),   "building")]
-[JsonDerivedType(typeof(TodoList),  "todolist")]
 [JsonDerivedType(typeof(Editing),   "editing")]
 [JsonDerivedType(typeof(Writing),   "writing")]
 [JsonDerivedType(typeof(Subthread), "subthread")]
@@ -168,7 +167,6 @@ public abstract class ContentBlock
         "find_files"     => new Finding(),
         "delete_file"    => new Deleting(),
         "move_file"      => new Moving(),
-        "update_todos"   => new TodoList(),
         _                => null
     };
 
@@ -306,15 +304,6 @@ public sealed class Building : Card
     protected override string Label => Project;
     protected override (string, string) Verbs => ("Building", "Built");
     protected internal override void Fill(string label) => Project = label;
-}
-
-/// <summary>The task checklist card. The label carries the list base64-encoded; the frontend decodes and renders
-/// it via its own marker, so it does not use the verb/flip rendering.</summary>
-public sealed class TodoList : Card
-{
-    public string Encoded { get; set; } = "";
-    protected override (string, string) Verbs => ("Tasks", "Tasks");
-    protected internal override void Fill(string label) => Encoded = label;
 }
 
 /// <summary>A file card that also carries diff stats and an optional patch (edit/write). Renders as the enriched

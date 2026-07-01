@@ -69,7 +69,6 @@ internal sealed class CodePipeline : Pipeline
         new RevertFile(resolvedRoot, cts.Token, snapshots).Register(thread);   // snapshot-tied — not via FileSystem yet
         new DeleteFile(fs).Register(thread);
         new MoveFile(fs).Register(thread);
-        new UpdateTodos(code, thread).Register(thread);
 
         return code.SendPrompt(thread, effectivePrompt, username, ct: cts.Token, userMessagePreadded: true, onDelta: onDelta);
     }

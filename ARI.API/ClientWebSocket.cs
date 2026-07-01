@@ -58,7 +58,7 @@ public static class ClientWebSocket
             return;
         }
 
-        RegisterTools(codeThread, ws, log, fileState, llm);
+        RegisterTools(codeThread, ws, log, fileState);
 
         try
         {
@@ -79,9 +79,9 @@ public static class ClientWebSocket
 
     private static readonly string[] ClientToolNames =
         { "preview_file", "read_file", "list_directory", "search_files", "find_files", "edit_file", "write_file",
-          "delete_file", "move_file", "run_command", "update_todos" };
+          "delete_file", "move_file", "run_command" };
 
-    private static void RegisterTools(ARI.LLM.Thread thread, WebSocket ws, ILogger log, FileToolState fileState, LLMModule llm)
+    private static void RegisterTools(ARI.LLM.Thread thread, WebSocket ws, ILogger log, FileToolState fileState)
     {
         RegisterTool(thread, ws, log,
             name: "run_command",
@@ -228,9 +228,6 @@ public static class ClientWebSocket
             parameters: new { type = "object", properties = new { source = new { type = "string", description = "Current file path relative to project root." }, destination = new { type = "string", description = "New file path relative to project root." } }, required = new[] { "source", "destination" } },
             displayVerb: "Moving", displayDoneVerb: "Moved",
             labelField: "source");
-
-        // The checklist lives on the thread and must execute IN-PROCESS — never round-trip to the client.
-        llm.RegisterUpdateTodos(thread);
     }
 
     // ── File-tool guardrail helpers ──────────────────────────────────────────────
@@ -813,7 +810,7 @@ public static class ClientWebSocket
                                         codeThread.UnregisterTool(tool);
                                     codeThread = llm.GetOrCreateCodeThread(bindKey);
                                     FileToolState reboundFileState = threadFileState.GetOrAdd(bindKey, _ => new FileToolState());
-                                    RegisterTools(codeThread, ws, log, reboundFileState, llm);
+                                    RegisterTools(codeThread, ws, log, reboundFileState);
                                     threadKey = bindKey;
                                 }
                             }

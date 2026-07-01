@@ -39,7 +39,6 @@ internal partial class Coder
         public readonly Dictionary<string, int> WriteCounts         = new(StringComparer.OrdinalIgnoreCase);
         public readonly Dictionary<string, (string Result, int Count)> CommandCache = new(StringComparer.Ordinal);
         public readonly HashSet<string>         TurnEditPaths       = new(StringComparer.OrdinalIgnoreCase);
-        public          bool                    TodoNudged;
         public          int                     PlaceholderRefusals;
         // Cycle 12: per-turn total read count + one-shot nudge flag (cross-file read-churn brake).
         public          int                     TotalReads;
@@ -227,23 +226,7 @@ internal partial class Coder
             }
         }
 
-        if (!state.TodoNudged && !HasTasks(thread) && toolName is "edit_file" or "write_file")
-        {
-            string? tp = null;
-            try
-            {
-                using JsonDocument tdoc = JsonDocument.Parse(argsJson);
-                tp = NormKey(tdoc.RootElement.GetProperty("path").GetString() ?? "");
-            }
-            catch { /* skip the nudge */ }
-            if (!string.IsNullOrEmpty(tp) && state.TurnEditPaths.Count >= 1 && !state.TurnEditPaths.Contains(tp))
-            {
-                state.TodoNudged = true;
-                return $"[System: You are now changing a second file ({tp}) but have no task checklist. Before this edit, call update_todos with the full plan — one item per file/change, and include updating call sites, tests, and building as their own items. Then make this edit. Maintaining the checklist is required for multi-file work.]";
-            }
-            if (!string.IsNullOrEmpty(tp)) state.TurnEditPaths.Add(tp);
-        }
-        else if (toolName is "edit_file" or "write_file")
+        if (toolName is "edit_file" or "write_file")
         {
             try
             {
