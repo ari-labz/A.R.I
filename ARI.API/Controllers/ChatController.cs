@@ -89,7 +89,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                 string? projectName = projectId is not null ? projectStore.Get(projectId)?.Name : null;
                 return new ThreadEntry(kvp.Key, AgentName: null, IsInternal: false,
                     LastMessageAt: kvp.Value.LastMessageAt,
-                    MessageCount: kvp.Value.History.Count(m => m is UserMessage or AriResponse),
+                    MessageCount: kvp.Value.History.Count(m => m is Prompt or ARI.LLM.Response),
                     State: kvp.Value.State.ToString().ToLowerInvariant(),
                     IsCodeMode: kvp.Value.Pipeline == ARI.LLM.ThreadPipeline.Code,
                     ProjectName: projectName, ProjectId: projectId);
@@ -145,7 +145,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
             return NotFound();
 
         List<ThreadItem> history = thread.History
-            .Where(i => !i.ChatHidden && i is not AriResponse { State: AriResponseState.Cancelled })
+            .Where(i => i.IsVisible && i is not Response { State: State.Cancelled })
             .ToList();
 
         return Ok(new
@@ -160,7 +160,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     }
 
     /// <summary>
-    /// Returns thread history with DebugRequestJson, DebugResponseText and Reasoning exposed on AriResponse
+    /// Returns thread history with DebugRequestJson, DebugResponseText and Reasoning exposed on Response
     /// items, plus any spawned sub-threads (a CodeArchitect's plan + per-task Coder threads) nested under
     /// <c>children</c> so the otherwise-invisible orchestration is fully inspectable. Shape:
     /// <c>{ key, label, isInternal, pipeline, history: [...], children: [ {same shape}, ... ] }</c>.
@@ -191,7 +191,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     };
 
     private static object DebugItem(ThreadItem item)
-        => item is AriResponse r
+        => item is Response r
             ? new
             {
                 type                      = "ariResponse",
@@ -202,15 +202,15 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                 thinkingSeconds           = r.ThinkingSeconds,
                 recallNotes               = r.RecallNotes,
                 contextSummary            = r.ContextSummary,
-                completionTokens          = r.CompletionTokens,
-                outputTokenLimit          = r.OutputTokenLimit,
-                promptTokens              = r.PromptTokens,
-                contextTokenLimit         = r.ContextTokenLimit,
-                estimatedTextPromptTokens = r.EstimatedTextPromptTokens,
-                hadImageAttachments       = r.HadImageAttachments,
-                imageTokenLimit           = r.ImageTokenLimit,
-                debugRequestJson          = r.DebugRequestJson,
-                debugResponseText         = r.DebugResponseText,
+                completionTokens          = r.Data.CompletionTokens,
+                outputTokenLimit          = r.Data.OutputTokenLimit,
+                promptTokens              = r.Data.PromptTokens,
+                contextTokenLimit         = r.Data.ContextTokenLimit,
+                estimatedTextPromptTokens = r.Data.EstimatedTextPromptTokens,
+                hadImageAttachments       = r.Data.HadImageAttachments,
+                imageTokenLimit           = r.Data.ImageTokenLimit,
+                debugRequestJson          = r.Data.DebugRequestJson,
+                debugResponseText         = r.Data.DebugResponseText,
                 reasoning                 = r.Reasoning,
                 trace                     = r.Trace,
             }
@@ -226,7 +226,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         List<ThreadItem> items = raw
             ? FindAnyThread(threadKey)?.History ?? new()
             : (FindThread(threadKey)?.History ?? new())
-                .Where(i => !i.ChatHidden && i is not AriResponse { State: AriResponseState.Cancelled })
+                .Where(i => i.IsVisible && i is not Response { State: State.Cancelled })
                 .ToList();
 
         return Ok(items);
@@ -548,7 +548,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         List<ThreadItem> items = FindThread(threadKey)?.History ?? new();
         foreach (ThreadItem item in items)
         {
-            if (item is not UserMessage msg || msg.Attachments is null) continue;
+            if (item is not Prompt msg || msg.Attachments is null) continue;
             Attachment? att = msg.Attachments.FirstOrDefault(a => a.Name == name);
             if (att is null) continue;
 

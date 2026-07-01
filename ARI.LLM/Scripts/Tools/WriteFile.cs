@@ -2,9 +2,11 @@ using System.Text.Json;
 
 namespace ARI.LLM;
 
-internal sealed class WriteFile : FileTool
+/// <summary>write_file tool — thin wrapper that delegates to the thread's <see cref="FileSystem"/>.</summary>
+internal sealed class WriteFile : Tool
 {
-    internal WriteFile(string root, CancellationToken ct) : base(root, ct) { }
+    private readonly FileSystem fs;
+    internal WriteFile(FileSystem fs) => this.fs = fs;
 
     internal override string Name => "write_file";
 
@@ -28,43 +30,20 @@ internal sealed class WriteFile : FileTool
         }
     };
 
-    internal override async Task<string> Execute(string argsJson)
-    {
-        try
-        {
-            using JsonDocument doc = JsonDocument.Parse(argsJson);
-            string relPath = (doc.RootElement.GetProperty("path").GetString()    ?? "").Trim('"', '\'', ' ');
-            string content = doc.RootElement.GetProperty("content").GetString() ?? "";
-            // Guard: history compaction renders earlier write/edit payloads as "[content omitted]" /
-            // "[omitted]". A weak model can copy that placeholder back as the real content and erase the
-            // file. Never write a redaction placeholder.
-            if (IsRedactionPlaceholder(content))
-                return $"Refused: the content was a placeholder (\"{content.Trim()}\"), not real file content. That text appears in the conversation only because an earlier payload was hidden to save space — it is not the file. Re-send the full, literal content you want written to {relPath}.";
-            string? absPath = Resolve(relPath);
-            if (absPath is null)
-                return "Access denied: path traversal is not allowed.";
-            if (File.Exists(absPath))
-                return $"Refused: {relPath} already exists. Use edit_file to change an existing file — write_file is only for creating new files. " +
-                       "If an edit has left the file in a broken state, use revert_file to restore it to its last clean snapshot, then re-read and try the edit again.";
-            string? dir = Path.GetDirectoryName(absPath);
-            if (dir is not null) Directory.CreateDirectory(dir);
-            await File.WriteAllTextAsync(absPath, content, ct);
-            // Report the line count back as ground truth so the model works from what is now on
-            // disk rather than rewriting the file again from memory.
-            int lineCount = content.Length == 0 ? 0 : content.Count(c => c == '\n') + 1;
-            return $"Successfully wrote {relPath} ({lineCount} lines). The file now contains exactly the content you provided — do not rewrite it unless making a further change.";
-        }
-        catch (Exception ex) { return $"Error writing file: {ex.Message}"; }
-    }
+    internal override Task<string> Execute(string argsJson) => fs.Write(argsJson);
 
+    // Enriched tool-start marker (with the +added diff from args) so the card keeps its badge and flips Writing→Wrote.
     internal override Func<string, string>? Display => args =>
     {
         try
         {
             using JsonDocument doc = JsonDocument.Parse(args);
-            string p = doc.RootElement.GetProperty("path").GetString() ?? "";
-            return $"<div class=\"tool-use\">Writing {p.Replace("&", "&amp;").Replace("<", "&lt;")}</div>\n";
+            JsonElement root = doc.RootElement;
+            string file = Path.GetFileName((root.GetProperty("path").GetString() ?? "").Trim()).Replace("--", "&#45;&#45;");
+            (int added, _) = DiffCounts.Of(root, contentProp: "content");
+            string diff = added > 0 ? $"|+{added}" : "";
+            return $"<!--ari-tool-start:write_file:{file}{diff}-->";
         }
-        catch { return "<div class=\"tool-use\">Writing file</div>\n"; }
+        catch { return "<!--ari-tool-start:write_file:file-->"; }
     };
 }

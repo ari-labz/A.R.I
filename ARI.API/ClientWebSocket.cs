@@ -58,7 +58,7 @@ public static class ClientWebSocket
             return;
         }
 
-        RegisterTools(codeThread, ws, log, fileState, llm);
+        RegisterTools(codeThread, ws, log, fileState);
 
         try
         {
@@ -79,9 +79,9 @@ public static class ClientWebSocket
 
     private static readonly string[] ClientToolNames =
         { "preview_file", "read_file", "list_directory", "search_files", "find_files", "edit_file", "write_file",
-          "delete_file", "move_file", "run_command", "update_todos" };
+          "delete_file", "move_file", "run_command" };
 
-    private static void RegisterTools(ARI.LLM.Thread thread, WebSocket ws, ILogger log, FileToolState fileState, LLMModule llm)
+    private static void RegisterTools(ARI.LLM.Thread thread, WebSocket ws, ILogger log, FileToolState fileState)
     {
         RegisterTool(thread, ws, log,
             name: "run_command",
@@ -228,9 +228,6 @@ public static class ClientWebSocket
             parameters: new { type = "object", properties = new { source = new { type = "string", description = "Current file path relative to project root." }, destination = new { type = "string", description = "New file path relative to project root." } }, required = new[] { "source", "destination" } },
             displayVerb: "Moving", displayDoneVerb: "Moved",
             labelField: "source");
-
-        // The checklist lives on the thread and must execute IN-PROCESS — never round-trip to the client.
-        llm.RegisterUpdateTodos(thread);
     }
 
     // ── File-tool guardrail helpers ──────────────────────────────────────────────
@@ -618,6 +615,79 @@ public static class ClientWebSocket
     }
 
     /// <summary>
+    /// <see cref="ARI.LLM.FileSystem"/> backed by a connected desktop CLIENT over the WebSocket: each op is
+    /// forwarded to the client, which performs it on ITS machine and returns the result. The transport mirrors
+    /// the one the desktop's own file tools use (see <see cref="RegisterTool"/>) — the existing tools are left
+    /// untouched; this is exposed so the architect/Coder file tools can later run over a client machine the
+    /// same way they run over the server's disk (<see cref="ARI.LLM.ServerFileSystem"/>).
+    /// </summary>
+    internal sealed class ClientFileSystem : ARI.LLM.FileSystem
+    {
+        private readonly WebSocket ws;
+        private readonly ILogger   log;
+        internal ClientFileSystem(WebSocket ws, ILogger log) { this.ws = ws; this.log = log; }
+
+        public override Task<string> Read(string a)    => Forward("read_file", a);
+        public override Task<string> Preview(string a) => Forward("preview_file", a);
+        public override Task<string> Edit(string a)    => Forward("edit_file", a);
+        public override Task<string> Write(string a)   => Forward("write_file", a);
+        public override Task<string> Search(string a)  => Forward("search_files", a);
+        public override Task<string> Find(string a)    => Forward("find_files", a);
+        public override Task<string> List(string a)    => Forward("list_directory", a);
+        public override Task<string> Delete(string a)  => Forward("delete_file", a);
+        public override Task<string> Move(string a)    => Forward("move_file", a);
+        public override Task<string> Run(string a)     => Forward("run_command", a);
+
+        private static string LabelField(string tool) => tool switch
+        {
+            "search_files" or "find_files" => "pattern",
+            "move_file"                    => "source",
+            "run_command"                  => "command",
+            _                              => "path"
+        };
+
+        // Send the op to the client and await its reply — the same callId/pendingFileCalls/timeout machinery
+        // the desktop's own tools use, relocated here so a FileSystem-driven agent can reach a client machine.
+        private async Task<string> Forward(string toolName, string argsJson)
+        {
+            argsJson = NormalizePathArg(argsJson);
+            string callId = Guid.NewGuid().ToString("N");
+            string label  = ExtractLogLabel(argsJson, LabelField(toolName));
+            var tcs = new TaskCompletionSource<string>();
+            pendingFileCalls[callId]  = tcs;
+            pendingCallLabels[callId] = label;
+
+            log.LogInformation("[Client] → {Tool}  {Label}  callId={CallId}", toolName, label, callId);
+            await Send(ws, new { type = toolName, callId, args = argsJson });
+
+            int timeoutSeconds = toolName switch
+            {
+                "run_command"               => 900,
+                "write_file" or "edit_file" => 90,
+                _                           => 30
+            };
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+            cts.Token.Register(() => tcs.TrySetCanceled());
+            try
+            {
+                string result = await tcs.Task;
+                log.LogInformation("[Client] ← {Tool}  {Label}  callId={CallId}  bytes={Bytes}", toolName, label, callId, result.Length);
+                return result;
+            }
+            catch (OperationCanceledException)
+            {
+                log.LogWarning("[Client] ← {Tool} TIMEOUT  {Label}  callId={CallId}", toolName, label, callId);
+                return $"[Error: client did not respond to {toolName} within {timeoutSeconds}s]";
+            }
+            finally
+            {
+                pendingFileCalls.TryRemove(callId, out _);
+                pendingCallLabels.TryRemove(callId, out _);
+            }
+        }
+    }
+
+    /// <summary>
     /// Scans partial (streaming) JSON text for the value of a string field.
     /// Stops at the closing quote of the value, handling escape sequences.
     /// Returns empty string if the field has not started arriving yet.
@@ -740,7 +810,7 @@ public static class ClientWebSocket
                                         codeThread.UnregisterTool(tool);
                                     codeThread = llm.GetOrCreateCodeThread(bindKey);
                                     FileToolState reboundFileState = threadFileState.GetOrAdd(bindKey, _ => new FileToolState());
-                                    RegisterTools(codeThread, ws, log, reboundFileState, llm);
+                                    RegisterTools(codeThread, ws, log, reboundFileState);
                                     threadKey = bindKey;
                                 }
                             }
