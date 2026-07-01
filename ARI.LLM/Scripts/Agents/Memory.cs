@@ -305,10 +305,10 @@ internal class Memory : Agent
 
     private void LogRound(Thread memThread, int round, ref int totalTokens, ref double totalSeconds, List<string>? recalled)
     {
-        AriResponse? last = memThread.History.OfType<AriResponse>().LastOrDefault();
+        Response? last = memThread.History.OfType<Response>().LastOrDefault();
         if (last is null) return;
 
-        int    tokens    = last.CompletionTokens;
+        int    tokens    = last.Data.CompletionTokens;
         double elapsed   = last.ThinkingSeconds ?? 0;
         double tokPerSec = elapsed > 0 ? tokens / elapsed : 0;
 

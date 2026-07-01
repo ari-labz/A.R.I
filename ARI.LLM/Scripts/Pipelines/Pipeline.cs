@@ -41,14 +41,14 @@ internal abstract class Pipeline
         liveCalls[threadKey] = liveCall;
         thread.SetLiveCall(liveCall);
 
-        string effectivePrompt = thread.History.Count > 0 && thread.History[^1] is UserMessage prev
-            ? prev.Content + "\n" + prompt
+        string effectivePrompt = thread.History.Count > 0 && thread.History[^1] is Prompt prev
+            ? prev.Text + "\n" + prompt
             : prompt;
 
-        thread.AddItem(new UserMessage
+        thread.AddItem(new Prompt
         {
-            Username    = username,
-            Content     = prompt,
+            AuthorName  = username,
+            Text        = prompt,
             Timestamp   = DateTime.Now,
             Attachments = messageAttachments is { Count: > 0 } ? messageAttachments : null,
         });

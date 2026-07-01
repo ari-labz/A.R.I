@@ -66,6 +66,19 @@ public class Thread
 
     public readonly List<ThreadItem> History = new();
 
+    /// <summary>The flattened display blocks for this thread — every visible <see cref="Response"/>'s blocks in
+    /// order (each Response resolves its own <see cref="Subthread"/> anchors, so nesting recurses naturally).
+    /// This is the DISPLAY projection a parent splices in at a <see cref="Subthread"/> anchor; it carries no
+    /// thread header or timestamp, so a child renders seamlessly inside its parent's single response.</summary>
+    internal List<ContentBlock> DisplayBlocks()
+    {
+        List<ContentBlock> blocks = new();
+        foreach (ThreadItem item in History.ToArray())
+            if (item is Response { IsVisible: true } r)
+                blocks.AddRange(r.Blocks);
+        return blocks;
+    }
+
     internal readonly Dictionary<string, (object Schema, Func<string, Task<string>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter, Func<string, string?>? StreamingDisplay)> tools = new();
 
     // ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -110,8 +123,13 @@ public class Thread
     internal volatile LiveCallInfo? liveCallInfo;
     public LiveCallInfo? LiveCall => liveCallInfo;
 
-    internal AriResponse? streamingResponse;
+    internal Response? streamingResponse;
     internal string       streamedText = "";
+
+    /// <summary>Set by the agent loop only while a tool is executing: lets a long-running tool (e.g. spawn_coder)
+    /// append rendered display content into the agent's in-progress response, so a sub-agent's work shows inline
+    /// and persists. Null when no tool is running.</summary>
+    internal Func<string, Task>? ToolDisplaySink;
 
     /// <summary>The accumulated text of the response currently being generated, or null when idle.</summary>
     public string? StreamingText => streamingResponse?.StreamText;
@@ -238,9 +256,9 @@ public class Thread
         foreach (ThreadMessage m in messages)
         {
             if (m.Role == "assistant")
-                History.Add(new AriResponse { Content = AriContentBlock.Parse(m.Content), Timestamp = DateTime.MinValue, State = AriResponseState.Complete });
+                History.Add(new Response { Content = ContentBlock.Parse(m.Content), Timestamp = DateTime.MinValue, State = global::ARI.LLM.State.Complete });
             else
-                History.Add(new UserMessage { Username = m.Username, Content = m.Content, Timestamp = DateTime.MinValue });
+                History.Add(new Prompt { AuthorName = m.Username, Text = m.Content, Timestamp = DateTime.MinValue });
         }
     }
 
@@ -290,7 +308,7 @@ public class Thread
     {
         if (fromHistory)
         {
-            UserMessage? lastMsg = History.OfType<UserMessage>().LastOrDefault();
+            Prompt? lastMsg = History.OfType<Prompt>().LastOrDefault();
             return lastMsg?.Attachments?.ToList() ?? new();
         }
         lock (pendingMessageAtts) { return pendingMessageAtts.ToList(); }

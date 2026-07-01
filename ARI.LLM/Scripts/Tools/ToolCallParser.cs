@@ -39,7 +39,7 @@ internal static class ToolCallParser
                 string pVal  = p.Groups[2].Value.Trim();
                 argsBuilder.Append(JsonSerializer.Serialize(pName));
                 argsBuilder.Append(':');
-                // Structured params (edit_file's `edits`, update_todos' `todos`) are emitted by the model as
+                // Structured params (e.g. edit_file's `edits`) are emitted by the model as
                 // a JSON array. Embed them as raw JSON so the executor receives an array, not a stringified
                 // one (which the executor would reject as missing start_line/end_line). All other
                 // values (code in new_string/content, paths, patterns) are serialized as JSON strings so

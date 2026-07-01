@@ -9,11 +9,13 @@ using Microsoft.Extensions.Logging;
 namespace ARI.LLM;
 
 /// <summary>
-/// Planning half of the Code pipeline. Explores the codebase (read/search only — never edits) on an
-/// internal sub-thread and decomposes a request into an ordered list of atomic steps, then commissions
-/// a <see cref="Coder"/> for each. The whole flow renders as ONE continuous parent response — the user
-/// never sees the architect/coder split, the plan JSON, or any "sub-thread" markup. Both the LLM planner
-/// (its SystemPrompt) and the C# coordinator (its <see cref="Orchestrate"/> method) live here.
+/// The coding "architect": a conversational agent that runs ON the main thread with exploration tools
+/// (read/search only) plus two execution tools — spawn_coder (dispatch one atomic edit to a <see cref="Coder"/>
+/// sub-agent) and build_project (verify the edits compile). It infers whether a request needs a plan
+/// (refactor / cross-file → present a plain-English plan and wait for approval) or can just be done
+/// (a rename → execute directly), then drives its own tool loop: spawn coders one at a time (only proceeding
+/// when the last succeeded), build, fix its own compile errors, and summarise. The LLM side is its
+/// SystemPrompt; the C# side is <see cref="RunLoop"/>.
 /// </summary>
 internal sealed class CodeArchitect : Agent
 {
@@ -22,395 +24,249 @@ internal sealed class CodeArchitect : Agent
     // Coding prompts are verbose and already logged by the pipeline; don't double-log them.
     [JsonIgnore] internal override bool SuppressPromptLog => true;
 
+    /// <summary>Grades how much thinking the plan turn needs (set by LLMModule). Null = no appraisal → no thinking.</summary>
+    [JsonIgnore] internal Appraisal? Appraisal { get; set; }
+
     private sealed record CodePlan(List<string> Decisions, List<CodeStep> Steps);
     private sealed record CodeStep(string File, string Range, string Change);
 
-    // ── Architect-driven loop: architect runs ON the main thread and approves each task ────────────
-    /// <summary>
-    /// The architect plans on the MAIN thread (its reasoning, tool calls and task list ARE the thread), then
-    /// for each task commissions a Coder on a sub-thread whose work live-streams into the main thread. After
-    /// each task the architect gets a lean SUMMARY (not the Coder's full trace), approves, and proceeds — and
-    /// may inject a fix step. Every architect turn is a real main-thread turn, so the debug viewer shows the
-    /// whole orchestration and we can confirm the approvals don't re-reason.
-    /// </summary>
-    // PLAN → CONFIRM → EXECUTE gate. The architect first presents a plain-English plan and waits; only once the
-    // user approves does it formalise that plan as the JSON task list the Coders execute. parent.AwaitingPlanApproval
-    // carries the "a plan is on the table" state across user turns — the plan prose itself lives in History, so
-    // nothing is stashed. Routing is here (not in CodePipeline): each user turn re-enters RunLoop.
+    // Entry for every user turn on a Code thread (from CodePipeline). Registers the tools and runs one architect
+    // turn; parent.AwaitingPlanApproval carries the "a plan is on the table, awaiting the user" state across turns
+    // (set when a turn ends without spawning any coder). The plan prose itself lives in History — nothing is stashed.
     internal async Task<string> RunLoop(
         Thread parent, string threadKey, string prompt, string username,
         Coder coder, string root, FileSnapshots snapshots, CancellationTokenSource cts, Func<string, Task>? onDelta)
     {
-        // Explore tools for the architect's planning / re-planning turns (shared by both phases).
-        new PreviewFile(root, cts.Token, snapshots).Register(parent);
-        new ReadFile(root, cts.Token, snapshots).Register(parent);
-        new ListDirectory(root, cts.Token).Register(parent);
-        new SearchFiles(root, cts.Token).Register(parent);
-        new FindFiles(root, cts.Token).Register(parent);
+        // The architect is a conversational coding agent driving its OWN tool loop: exploration (read-only) plus
+        // two execution tools — spawn_coder (dispatch one edit) and build_project (verify). It infers whether a
+        // request needs a plan (refactor/cross-file → present + wait) or can just be done (rename → execute).
+        ServerFileSystem fs = new(root, cts.Token, snapshots);
+        new PreviewFile(fs).Register(parent);
+        new ReadFile(fs).Register(parent);
+        new ListDirectory(fs).Register(parent);
+        new SearchFiles(fs).Register(parent);
+        new FindFiles(fs).Register(parent);
 
-        return parent.AwaitingPlanApproval
-            ? await ResumePlan(parent, threadKey, prompt, username, coder, root, snapshots, cts, onDelta)
-            : await PresentPlan(parent, threadKey, prompt, username, cts, onDelta);
-    }
+        // Files changed this request — the success/gating signal (was a file modified?) and the build-error owner tag.
+        HashSet<string> touched = new(StringComparer.OrdinalIgnoreCase);
+        int taskNum = 0;
 
-    // PLAN turn: explore + present a plain-English plan (no JSON, no edits), then wait for the user to approve.
-    private async Task<string> PresentPlan(
-        Thread parent, string threadKey, string prompt, string username,
-        CancellationTokenSource cts, Func<string, Task>? onDelta)
-    {
-        const string planInstruction =
-            "Plan this change. Explore the codebase as needed (preview_file before read_file), then present your " +
-            "plan to the user in plain English — a short numbered list of the concrete steps you will take, naming " +
-            "the files involved. Do NOT write a JSON task list and do NOT edit anything yet: the user reviews and " +
-            "approves the plan first.";
-        string planText = await SendPrompt(parent, prompt, username,
-            augmentedPrompt: $"{prompt}\n\n[System: {planInstruction}]",
-            ct: cts.Token, userMessagePreadded: true, onDelta: onDelta);
+        // spawn_coder(file, change, range?) — dispatch ONE edit to a Coder. Flat args (like read_file) so the
+        // text-tool protocol carries it reliably; the model makes many small calls, never one nested submit.
+        parent.RegisterTool("spawn_coder", SpawnCoderSchema, async argsJson =>
+        {
+            (string? file, string? change, string? range, string? err) = ParseCoderArgs(argsJson);
+            if (err is not null) return err;
+            taskNum++;
+            string? abs = SafeAbs(root, file!);
+            if (abs is not null) touched.Add(abs);
+            (string summary, bool modified) = await RunOneCoder(
+                parent, threadKey, taskNum, new CodeStep(file!, range ?? "", change!), username, coder, root, snapshots, cts, onDelta);
+            return modified
+                ? $"Coder finished task {taskNum} on {file}. Result: {summary}"
+                : $"[System: the Coder made NO change to {file} — this task likely FAILED. Result: {summary}. " +
+                  "Do NOT spawn the next task; re-spawn this one with a clearer instruction, or stop and tell the user.]";
+        },
+        // No pre-card: RunOneCoder drops a <!--ari-subthread--> anchor into the stream itself (with the child
+        // key it mints), and the child renders inline under its own labelled frame.
+        displayFormatter: _ => "");
 
-        PresentProse(parent, planText);
-        parent.AwaitingPlanApproval = true;
-        Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) plan presented — awaiting user approval.", threadKey);
-        return planText;
-    }
+        // build_project() — build the touched project(s); errors grouped by file, tagged yours vs pre-existing.
+        parent.RegisterTool("build_project", BuildProjectSchema,
+            async _ => await BuildTouched(touched, root, cts.Token),
+            displayFormatter: _ => "<div class=\"tool-use\">Building project</div>\n");
 
-    // RESUME turn: the user has replied to a presented plan. The architect either formalises the approved plan as
-    // the JSON task list (→ execute) or revises the plain-English plan (→ keep waiting).
-    private async Task<string> ResumePlan(
-        Thread parent, string threadKey, string prompt, string username,
-        Coder coder, string root, FileSnapshots snapshots, CancellationTokenSource cts, Func<string, Task>? onDelta)
-    {
-        const string resumeInstruction =
-            "The user just responded to the plan you presented. If they APPROVED it (or told you to go ahead), output " +
-            "the plan now as the ```json task list the Coders will execute — the JSON format from your instructions, " +
-            "and nothing else. If they asked for CHANGES, revise and present your plan again in plain English (NO " +
-            "JSON), then wait for approval. Do not edit any files yourself.";
+        bool bypass   = Environment.GetEnvironmentVariable("ARI_GATE_BYPASS") == "1";
+        bool resuming = parent.AwaitingPlanApproval && !bypass;
+
+        // Per-turn nudge (the full workflow lives in the architect's system prompt). The whole turn — plan, the
+        // spawn_coder edits, the build_project check, and the summary — is ONE response made of many blocks.
+        string nudge = resuming
+            ? "The user has responded to the plan you presented. If they approved it, EXECUTE it now with spawn_coder " +
+              "(do not re-plan or re-explore). If they asked for changes, present the revised plan and STOP."
+            : bypass
+                ? "Automated run: write your numbered plan FIRST (before any tool call), then execute it directly with spawn_coder — no approval needed."
+                : "Write your numbered plan to the user FIRST (before any spawn_coder call). Then: a small, localized change " +
+                  "(a rename, a one-line fix) — proceed and spawn_coder now; a larger refactor / cross-file / multi-step / " +
+                  "ambiguous change — STOP after the plan for the user to approve before you spawn any coder.";
+
+        // Resume turns are not a fresh coding request — don't re-appraise the thinking budget.
+        (int? thinkSeconds, string awareness) = resuming ? (null, "") : await AppraiseThinking(prompt, threadKey, cts.Token);
+
         string reply = await SendPrompt(parent, prompt, username,
-            augmentedPrompt: $"{prompt}\n\n[System: {resumeInstruction}]",
-            ct: cts.Token, userMessagePreadded: true, onDelta: onDelta);
+            augmentedPrompt: $"{prompt}\n\n[System: {nudge}{awareness}]",
+            ct: cts.Token, userMessagePreadded: true, onDelta: onDelta, thinkSeconds: thinkSeconds);
 
-        CodePlan? plan = ParsePlan(reply);
-        if (plan is null || plan.Steps.Count == 0)
-        {
-            // Still planning — a revised plan or a clarifying question. Show the prose and keep waiting.
-            PresentProse(parent, reply);
-            Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) plan revised — still awaiting approval.", threadKey);
-            return reply;
-        }
-
-        // Approved → formalised into a task list. Hide the raw JSON from the user, clear the gate, execute.
-        parent.AwaitingPlanApproval = false;
-        AriResponse? resp = parent.History.OfType<AriResponse>().LastOrDefault();
-        if (resp is not null)
-        {
-            resp.Content = AriContentBlock.Parse("Got it — applying the changes now.");
-            parent.RaiseUpdated();
-        }
-        Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) plan approved: {N} task(s) — executing.", threadKey, plan.Steps.Count);
-        return await Execute(parent, threadKey, plan, username, coder, root, snapshots, cts, onDelta);
+        // If it spawned coders it executed → done; otherwise it presented a plan / asked a question → await the user.
+        parent.AwaitingPlanApproval = !bypass && touched.Count == 0;
+        return reply;
     }
 
-    // Show the architect's prose plan to the user: strip any JSON / exploration chips it may have included (those
-    // stay in the debug trace) and append the approve/adjust prompt. Used by both the plan and re-plan turns.
-    private static void PresentProse(Thread parent, string text)
+    // ── spawn_coder / build_project tools ─────────────────────────────────────────
+
+    private static readonly object SpawnCoderSchema = new
     {
-        AriResponse? resp = parent.History.OfType<AriResponse>().LastOrDefault();
-        if (resp is null) return;
-        string prose = PlanChatText(text);
-        if (prose.Length == 0) prose = text.Trim();
-        resp.Content = AriContentBlock.Parse(prose +
-            "\n\n*Reply to approve and I'll make these changes, or tell me what to adjust.*");
-        parent.RaiseUpdated();
+        type = "function",
+        function = new
+        {
+            name = "spawn_coder",
+            description = "Dispatch ONE atomic edit to a Coder sub-agent: one change to one file. Call it once per " +
+                          "task, in dependency order — spawn the next only after the previous succeeded. Flat args: " +
+                          "the file, a one-sentence change instruction, and (if known) the located line range.",
+            parameters = new
+            {
+                type = "object",
+                properties = new
+                {
+                    file   = new { type = "string", description = "Repo-relative path of the file to edit." },
+                    change = new { type = "string", description = "One-sentence instruction describing the single change." },
+                    range  = new { type = "string", description = "Located line range, e.g. \"120-128\" (optional; helps the Coder edit without re-reading)." }
+                },
+                required = new[] { "file", "change" }
+            }
+        }
+    };
+
+    private static readonly object BuildProjectSchema = new
+    {
+        type = "function",
+        function = new
+        {
+            name = "build_project",
+            description = "Build the project(s) containing the files you changed, to verify the edits compile. Call " +
+                          "this once all edits are done. Returns compile errors grouped by file, tagged as ones you " +
+                          "edited (fix them) or pre-existing (leave them, note them in your summary).",
+            parameters = new { type = "object", properties = new { } }
+        }
+    };
+
+    private static string Esc(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+
+    private static string? SafeAbs(string root, string rel)
+    {
+        try { return Path.GetFullPath(Path.Combine(root, rel)); } catch { return null; }
     }
 
-    // EXECUTE — one Coder sub-thread per task; feed each summary back for the architect to approve, then a final
-    // user-facing summary. The "[System] Task N…" feedback prompts and PROCEED/DONE approvals are CHAT-HIDDEN
-    // orchestration, so the user sees only: each task's work → final summary.
-    private async Task<string> Execute(
-        Thread parent, string threadKey, CodePlan plan, string username,
+    private static string SafeRead(string abs) { try { return File.ReadAllText(abs); } catch { return ""; } }
+
+    private static (string? File, string? Change, string? Range, string? Error) ParseCoderArgs(string argsJson)
+    {
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            JsonElement r = doc.RootElement;
+            string? file   = r.TryGetProperty("file",   out JsonElement f) ? f.GetString() : null;
+            string? change = r.TryGetProperty("change", out JsonElement c) ? c.GetString() : null;
+            string? range  = r.TryGetProperty("range",  out JsonElement g) ? g.GetString() : null;
+            if (string.IsNullOrWhiteSpace(file) || string.IsNullOrWhiteSpace(change))
+                return (null, null, null, "[System: spawn_coder needs both 'file' and 'change'.]");
+            return (file!.Trim(), change!.Trim(), range?.Trim(), null);
+        }
+        catch { return (null, null, null, "[System: spawn_coder arguments were not valid JSON — provide 'file' and 'change'.]"); }
+    }
+
+    /// <summary>Runs ONE Coder on its OWN sub-thread for a single edit. The Coder streams into that child thread
+    /// (its edit cards + result live in the child's history); the architect's response only holds a
+    /// <see cref="Subthread"/> anchor pointing at the child, so the child renders inline for display yet never
+    /// enters the architect's context. Returns the lean result summary and whether the target file actually
+    /// changed (the success signal the architect gates on).</summary>
+    private async Task<(string Summary, bool Modified)> RunOneCoder(
+        Thread parent, string threadKey, int n, CodeStep task, string username,
         Coder coder, string root, FileSnapshots snapshots, CancellationTokenSource cts, Func<string, Task>? onDelta)
     {
-        Queue<CodeStep> tasks = new(plan.Steps);
-        int n = 0;
-        while (tasks.Count > 0)
-        {
-            cts.Token.ThrowIfCancellationRequested();
-            CodeStep task = tasks.Dequeue();
-            n++;
+        string? abs    = SafeAbs(root, task.File);
+        string  before = abs is not null && File.Exists(abs) ? SafeRead(abs) : "";
 
-            string summary = await RunTask(parent, threadKey, n, task, plan, username, coder, root, snapshots, cts, onDelta);
-
-            Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) task {N} done → architect approval (hidden).", threadKey, n);
-            string approval = await SendPrompt(parent,
-                $"[System] Task {n} is complete. Result reported by the Coder:\n{summary}\n\n" +
-                "Do NOT re-plan or re-read the codebase — you already planned this. If the result looks correct, " +
-                "reply with exactly: PROCEED. If it needs a fix or an extra step, give that step as a single ```json " +
-                "step block. When the entire original request is finished, reply with exactly: DONE.",
-                username, ct: cts.Token, userMessagePreadded: false, onDelta: null, chatHidden: true, thinkOverride: false);
-
-            if (System.Text.RegularExpressions.Regex.IsMatch(approval, @"\bDONE\b", RegexOptions.IgnoreCase)) break;
-            CodePlan? extra = ParsePlan(approval);   // architect may inject a fix / extra task
-            if (extra is not null)
-                foreach (CodeStep s in extra.Steps) tasks.Enqueue(s);
-        }
-
-        // SUMMARISE — a final user-facing message (shown). The instruction is chat-hidden; the reply is shown.
-        const string sumInstruction = "[System] All tasks are complete. Write a brief, friendly summary for the " +
-            "user of what you changed across the codebase (a sentence or a short numbered list). Plain English " +
-            "only — no JSON, no tool calls.";
-        parent.History.Add(new UserMessage { Username = username, Content = sumInstruction, Timestamp = DateTime.Now, ChatHidden = true });
-        string finalSummary = await SendPrompt(parent, sumInstruction, username, ct: cts.Token,
-            userMessagePreadded: true, onDelta: onDelta, chatHidden: false, thinkOverride: false);
-        return finalSummary;
-    }
-
-    /// <summary>The readable plan the user sees in chat — the architect's prose with the machine-readable JSON
-    /// task list and the exploration tool-chips removed (those remain in the debug trace).</summary>
-    private static string PlanChatText(string planText)
-    {
-        string s = StripPlanJson(planText);
-        s = Regex.Replace(s, "<div class=\"tool-use\">[\\s\\S]*?</div>", "");
-        s = Regex.Replace(s, @"<!--ari-[\s\S]*?-->", "");
-        return s.Trim();
-    }
-
-    /// <summary>Runs one task on a Coder sub-thread, mirroring its live output into a UI-only main-thread
-    /// response (the user watches it work), and returns a lean summary for the architect's context.</summary>
-    private async Task<string> RunTask(
-        Thread parent, string threadKey, int n, CodeStep task, CodePlan plan, string username,
-        Coder coder, string root, FileSnapshots snapshots, CancellationTokenSource cts, Func<string, Task>? onDelta)
-    {
-        // UI-only mirror on the MAIN thread: shows the Coder's work live but never enters the architect's context.
-        AriResponse mirror = new() { Timestamp = DateTime.Now, State = AriResponseState.Streaming, UiOnly = true };
-        parent.History.Add(mirror);
-        parent.streamingResponse = mirror;
-        parent.State = ThreadState.Streaming;
-        parent.RaiseUpdated();
-
-        Thread child = new(ThreadPipeline.Code, $"{threadKey}#task{n}:{Guid.NewGuid():N}")
-            { Internal = true, Parent = parent, Label = $"Task {n}: {task.Change}" };
+        Thread child = new(ThreadPipeline.Code, $"{threadKey}#coder{n}:{Guid.NewGuid():N}")
+            { Internal = true, Parent = parent, Label = $"Coder {n}: {task.Change}" };
         parent.AddChild(child);
         RegisterCoderTools(child, root, snapshots, cts.Token);
+
+        // Anchor the child in the architect's CURRENT response: register it for display resolution, then drop a
+        // subthread marker into the stream at this position (via the tool-display sink active during Execute).
+        // The child's blocks splice in here for display; the architect's context sees only the summary we return.
+        parent.streamingResponse?.Subthreads.TryAdd(child.Key, child);
+        if (parent.ToolDisplaySink is not null)
+            await parent.ToolDisplaySink($"<!--ari-subthread:{child.Key}|{Esc(task.Change)}-->");
 
         string seed = ReadNumberedView(root, task.File, new List<CodeStep> { task });
         if (seed.Length > 0) child.PreReadPaths.Add(Path.GetFileName(task.File));
 
-        async Task Push(string live)
+        // The Coder streams into its OWN thread; poke the parent so watching clients re-poll and pick up the
+        // child's freshly-streamed blocks through the resolved anchor (no flattening into the parent stream).
+        async Task Live(string _)
         {
-            mirror.StreamText = live;
-            parent.RaiseStreaming(live);
-            if (onDelta is not null) await onDelta(live);
+            parent.RaiseStreaming(parent.streamingResponse?.StreamText ?? "");
+            if (onDelta is not null) await onDelta(parent.streamingResponse?.StreamText ?? "");
         }
 
-        await coder.SendPrompt(child, BuildFilePrompt(plan, task.File, new List<CodeStep> { task }, seed),
-            username, ct: cts.Token, userMessagePreadded: false, onDelta: async t => await Push(t));
+        CodePlan lone = new(new List<string>(), new List<CodeStep> { task });
+        await coder.SendPrompt(child, BuildFilePrompt(lone, task.File, new List<CodeStep> { task }, seed),
+            username, ct: cts.Token, userMessagePreadded: false, onDelta: Live);
 
-        AriResponse? coderResp = child.History.OfType<AriResponse>().LastOrDefault();
-        string childContent = coderResp?.ContentText?.Trim() ?? "";
+        Response? resp  = child.History.OfType<Response>().LastOrDefault();
+        string    prose = resp is null ? "" : string.Concat(resp.Content.OfType<TextBlock>().Select(b => b.Text)).Trim();
 
-        mirror.Content           = AriContentBlock.Parse(childContent);
-        mirror.StreamText        = null;
-        mirror.State             = AriResponseState.Complete;
-        parent.streamingResponse = null;
-        parent.State             = ThreadState.Idle;
-        parent.RaiseUpdated();
-
-        // Lean summary for the architect = the Coder's own closing prose (its trace stays on the sub-thread).
-        string prose = coderResp is null ? "" :
-            string.Concat(coderResp.Content.OfType<TextBlock>().Select(b => b.Text)).Trim();
-        return prose.Length > 0 ? prose : $"Edited {task.File} (task {n}).";
+        string after = abs is not null && File.Exists(abs) ? SafeRead(abs) : "";
+        return (prose.Length > 0 ? prose : "(no summary reported)", before != after);
     }
 
-    /// <summary>
-    /// Plan→execute orchestration. Streams a single, JSON-free parent response: the architect's tool
-    /// chips, then each Coder step's chips + result, inline — indistinguishable from a normal thread.
-    /// </summary>
-    internal async Task<string> Orchestrate(
-        Thread                  parent,
-        string                  threadKey,
-        string                  prompt,
-        string                  username,
-        Coder                   coder,
-        string                  root,
-        FileSnapshots           snapshots,
-        CancellationTokenSource cts,
-        Func<string, Task>?     onDelta)
+    /// <summary>Builds the project(s) containing the touched files; groups CS errors by file and tags each file
+    /// as one the architect edited (fix it) or pre-existing (leave it, mention in the summary).</summary>
+    private async Task<string> BuildTouched(HashSet<string> touched, string root, CancellationToken ct)
     {
-        // One continuous parent response we drive by hand, so the live (polled) content shows only tool
-        // chips and prose — never the plan JSON, even mid-stream.
-        AriResponse resp = new() { Timestamp = DateTime.Now, State = AriResponseState.Streaming };
-        parent.History.Add(resp);
-        parent.streamingResponse = resp;
-        parent.State             = ThreadState.Streaming;
-        parent.RaiseUpdated();
+        if (touched.Count == 0) return "[System: no files have been changed yet — spawn a coder first.]";
+        List<string> projects = touched.Select(f => NearestProject(f, root)).OfType<string>()
+                                       .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (projects.Count == 0) return "[System: the changed files aren't in a buildable .NET project — skip the build and write your summary.]";
 
-        string baked = "";   // visible content locked in across phases (architect chips, then coder chips+prose)
-
-        async Task Push(string live)
+        Dictionary<string, List<string>> errors = new(StringComparer.OrdinalIgnoreCase);
+        bool anyRan = false;
+        foreach (string proj in projects)
         {
-            resp.StreamText = live;
-            parent.RaiseStreaming(live);
-            if (onDelta is not null) await onDelta(live);
-        }
-
-        try
-        {
-            // 1. PLAN — architect explores on an internal sub-thread. Only its tool chips reach the parent
-            //    stream (prose/JSON filtered out), so no JSON ever appears, even while streaming.
-            Thread planThread = new(ThreadPipeline.Code, $"{threadKey}#plan:{Guid.NewGuid():N}") { Internal = true, Parent = parent, Label = "Planning (architect)" };
-            parent.AddChild(planThread);
-            new PreviewFile(root, cts.Token, snapshots).Register(planThread);
-            new ReadFile(root, cts.Token, snapshots).Register(planThread);
-            new ListDirectory(root, cts.Token).Register(planThread);
-            new SearchFiles(root, cts.Token).Register(planThread);
-            new FindFiles(root, cts.Token).Register(planThread);
-
-            string planText = await SendPrompt(planThread, prompt, username, ct: cts.Token, userMessagePreadded: false,
-                onDelta: async t => await Push(baked + ChipsOnly(t)));
-
-            AriResponse? planResp = planThread.History.OfType<AriResponse>().LastOrDefault();
-            resp.ThinkingSeconds  = planResp?.ThinkingSeconds;
-            baked                 = ChipsOnly(planResp?.ContentText ?? "");
-            await Push(baked);
-
-            CodePlan? plan = ParsePlan(planText);
-            if (plan is null || plan.Steps.Count == 0)
+            (bool ran, string output) = await DotnetBuild(proj, ct);
+            if (!ran) continue;
+            anyRan = true;
+            foreach (KeyValuePair<string, List<string>> kv in CollectCsErrors(output, root))
             {
-                // No actionable plan — the architect asked a question or hit a blocker. Show its prose
-                // (JSON stripped) as the reply; nothing to execute.
-                string msg = StripPlanJson(planResp?.ContentText ?? planText);
-                Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) no executable plan — returning planner output.", threadKey);
-                Finalize(resp, parent, msg.Length > 0 ? msg : baked);
-                return msg;
+                if (!errors.TryGetValue(kv.Key, out List<string>? l)) errors[kv.Key] = l = new();
+                foreach (string e in kv.Value) if (!l.Contains(e)) l.Add(e);
             }
-
-            Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) plan: {Steps} step(s), {Decisions} decision(s).",
-                threadKey, plan.Steps.Count, plan.Decisions.Count);
-
-            // 2. EXECUTE — one lean Coder per FILE, with all of that file's atomic steps batched into a
-            //    single edit pass. Batching by file turns an N-call-site refactor into ~one pass per file
-            //    (fewer round-trips) and lets the Coder apply every change in one edit_file `edits` array so
-            //    line numbers never shift mid-file. The located range is seeded in so it needn't re-read.
-            List<(string File, List<CodeStep> Steps)> groups = GroupByFile(plan.Steps);
-            int gi = 0;
-            foreach ((string file, List<CodeStep> steps) in groups)
-            {
-                cts.Token.ThrowIfCancellationRequested();
-                gi++;
-
-                string changeLabel = steps.Count == 1 ? steps[0].Change : $"{steps.Count} changes in {file}";
-                Thread child = new(ThreadPipeline.Code, $"{threadKey}#file{gi}:{Guid.NewGuid():N}")
-                    { Internal = true, Parent = parent, Label = $"Step {gi}: {changeLabel}" };
-                parent.AddChild(child);
-                RegisterCoderTools(child, root, snapshots, cts.Token);
-
-                // Seed the located content (#3): give the Coder the file's current line-numbered text so it
-                // edits straight away. Only marks the file "pre-read" (skipping its read-before-edit guard)
-                // when the seed is complete enough to edit from; otherwise the Coder reads it itself.
-                string seed = ReadNumberedView(root, file, steps);
-                if (seed.Length > 0) child.PreReadPaths.Add(Path.GetFileName(file));
-
-                Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) → Coder file {N}/{Total}: {File} ({Steps} change(s), seeded={Seed})",
-                    threadKey, gi, groups.Count, file, steps.Count, seed.Length > 0);
-
-                string prefix = baked.Length > 0 ? baked + "\n" : "";
-                await coder.SendPrompt(child, BuildFilePrompt(plan, file, steps, seed), username, ct: cts.Token,
-                    userMessagePreadded: false, onDelta: async t => await Push(prefix + t));
-
-                string childContent = child.History.OfType<AriResponse>().LastOrDefault()?.ContentText?.Trim() ?? "";
-                baked = prefix + childContent;
-                await Push(baked);
-            }
-
-            // 3. VERIFY — build the touched project(s); on real compile errors, dispatch a fix Coder per file
-            //    and rebuild once. Catches incomplete/broken edits the way Claude does (build → read errors →
-            //    fix). Skips gracefully when the project can't build on this machine (e.g. WPF on macOS).
-            baked = await BuildVerify(parent, threadKey, username, coder, root, snapshots, plan, cts, baked, Push);
-
-            Finalize(resp, parent, baked);
-            return baked;
         }
-        catch
+        if (!anyRan)           return "[System: the project could not be built on this machine — skip the build and write your summary.]";
+        if (errors.Count == 0) return "Build succeeded — no compile errors.";
+
+        StringBuilder sb = new();
+        sb.AppendLine("Build FAILED. Compile errors grouped by file:");
+        bool anyYours = false;
+        foreach ((string file, List<string> errs) in errors)
         {
-            // Don't leave the thread mid-stream — finalise with whatever we have.
-            Finalize(resp, parent, baked);
-            throw;
+            string? absF = SafeAbs(root, file);
+            bool yours   = absF is not null && touched.Contains(absF);
+            if (yours) anyYours = true;
+            sb.AppendLine($"`{file}` {(yours ? "[you edited this file — fix it]" : "[pre-existing — you did NOT touch this file]")}:");
+            foreach (string e in errs) sb.AppendLine($"  - {e}");
         }
+        sb.Append(anyYours
+            ? "\nFix the errors in the file(s) YOU edited by spawning coders, then call build_project again."
+            : "\nEvery error is in a file you did NOT touch — these are pre-existing (common in a large refactor). Do NOT try to fix them; go straight to your summary and state that these pre-existing build errors remain.");
+        return sb.ToString();
     }
 
-    private static void Finalize(AriResponse resp, Thread parent, string content)
+    // Appraise how much thinking the request needs → wall-clock budget (seconds) + an awareness line the model is
+    // told so it self-paces. Null appraiser ⇒ (null, "") = today's behaviour. Runs once at the start of the request.
+    private async Task<(int? thinkSeconds, string awareness)> AppraiseThinking(string prompt, string threadKey, CancellationToken ct)
     {
-        resp.Content             = AriContentBlock.Parse(content);
-        resp.StreamText          = null;
-        resp.State               = AriResponseState.Complete;
-        parent.streamingResponse = null;
-        parent.State             = ThreadState.Idle;
-        parent.RaiseUpdated();
+        if (Appraisal is null) return (null, "");
+        int grade = await Appraisal.Appraise(prompt, ct);
+        int secs  = Appraisal.GradeToSeconds(grade);
+        string awareness = secs == 0 ? ""
+            : secs < 0 ? " You may think as long as you need."
+            : $" You have about {secs} seconds to think — be concise and reach your conclusion within it.";
+        Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) appraisal grade {G} → {S}s thinking budget.", threadKey, grade, secs);
+        return (secs, awareness);
     }
 
-    /// <summary>Keeps only the tool-use card markers from a rendered response, dropping all prose — so the
-    /// architect's exploration shows as chips with no plan JSON or commentary leaking through.</summary>
-    private static string ChipsOnly(string content)
-        => string.Concat(AriContentBlock.Parse(content).Where(b => b is not TextBlock).Select(b => b.ToString()));
-
-    // ── Plan parsing ────────────────────────────────────────────────────────────
-
-    private static CodePlan? ParsePlan(string raw)
-    {
-        string? json = ExtractJsonObject(raw);
-        if (json is null) return null;
-
-        try
-        {
-            using JsonDocument doc = JsonDocument.Parse(json);
-            JsonElement rootEl = doc.RootElement;
-
-            List<string> decisions = new();
-            if (rootEl.TryGetProperty("decisions", out JsonElement dec) && dec.ValueKind == JsonValueKind.Array)
-                decisions = dec.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String)
-                               .Select(e => e.GetString()!).Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
-
-            List<CodeStep> steps = new();
-            if (rootEl.TryGetProperty("steps", out JsonElement st) && st.ValueKind == JsonValueKind.Array)
-            {
-                foreach (JsonElement el in st.EnumerateArray())
-                {
-                    string file   = el.TryGetProperty("file",   out JsonElement f) && f.ValueKind == JsonValueKind.String ? f.GetString()! : "";
-                    string range  = el.TryGetProperty("range",  out JsonElement r) && r.ValueKind == JsonValueKind.String ? r.GetString()! : "";
-                    string change = el.TryGetProperty("change", out JsonElement c) && c.ValueKind == JsonValueKind.String ? c.GetString()! : "";
-                    if (!string.IsNullOrWhiteSpace(file) && !string.IsNullOrWhiteSpace(change))
-                        steps.Add(new CodeStep(file, range, change));
-                }
-            }
-
-            return steps.Count > 0 ? new CodePlan(decisions, steps) : null;
-        }
-        catch { return null; }
-    }
-
-    /// <summary>Pulls the plan object out of the planner's reply: the last ```json fenced block, else
-    /// the first balanced {…} span.</summary>
-    private static string? ExtractJsonObject(string raw)
-    {
-        MatchCollection fenced = Regex.Matches(raw, "```json\\s*(\\{.*?\\})\\s*```", RegexOptions.Singleline);
-        if (fenced.Count > 0) return fenced[^1].Groups[1].Value.Trim();
-
-        int start = raw.IndexOf('{');
-        int end   = raw.LastIndexOf('}');
-        return start >= 0 && end > start ? raw.Substring(start, end - start + 1) : null;
-    }
-
-    /// <summary>Removes the architect's plan JSON from displayed prose (fallback / no-plan path).</summary>
-    private static string StripPlanJson(string content)
-    {
-        content = Regex.Replace(content, "```json\\s*\\{.*?\\}\\s*```", "", RegexOptions.Singleline);
-        int d = content.IndexOf("\"decisions\"", StringComparison.Ordinal);
-        if (d >= 0)
-        {
-            int brace = content.LastIndexOf('{', d);
-            if (brace >= 0) content = content[..brace];
-        }
-        return content.Trim();
-    }
 
     // ── Execution: file batching, content seeding, build verify ───────────────────
 
@@ -419,27 +275,14 @@ internal sealed class CodeArchitect : Agent
         // Lean executor toolset: preview → read the assigned range, edit, recover. No search/list (with thinking
         // off those make the Coder wander); preview_file IS included so it can satisfy the preview-before-read
         // gate and keep context lean even on its assigned file.
-        new PreviewFile(root, ct, snapshots).Register(child);
-        new ReadFile(root, ct, snapshots).Register(child);
-        new EditFile(root, ct, snapshots).Register(child);
-        new WriteFile(root, ct).Register(child);
-        new RevertFile(root, ct, snapshots).Register(child);
-        new DeleteFile(root, ct).Register(child);
-        new MoveFile(root, ct).Register(child);
-    }
-
-    /// <summary>Groups plan steps by file, preserving first-appearance order so dependency ordering between
-    /// files is kept while every step for one file is executed together in a single Coder pass.</summary>
-    private static List<(string File, List<CodeStep> Steps)> GroupByFile(List<CodeStep> steps)
-    {
-        List<(string File, List<CodeStep> Steps)> groups = new();
-        Dictionary<string, int> idx = new(StringComparer.OrdinalIgnoreCase);
-        foreach (CodeStep s in steps)
-        {
-            if (idx.TryGetValue(s.File, out int g)) groups[g].Steps.Add(s);
-            else { idx[s.File] = groups.Count; groups.Add((s.File, new List<CodeStep> { s })); }
-        }
-        return groups;
+        ServerFileSystem fs = new(root, ct, snapshots);
+        new PreviewFile(fs).Register(child);
+        new ReadFile(fs).Register(child);
+        new EditFile(fs).Register(child);
+        new WriteFile(fs).Register(child);
+        new RevertFile(root, ct, snapshots).Register(child);   // RevertFile is snapshot-tied — not via FileSystem yet
+        new DeleteFile(fs).Register(child);
+        new MoveFile(fs).Register(child);
     }
 
     private static (int Start, int End)? ParseRange(string range, int total)
@@ -553,116 +396,6 @@ internal sealed class CodeArchitect : Agent
         else
         {
             sb.AppendLine("Read the relevant range, make the edit(s), then stop. Do not change anything else.");
-        }
-        return sb.ToString();
-    }
-
-    // ── Build verification (Claude-style build → read errors → fix) ───────────────
-
-    /// <summary>After all edits, builds the touched project(s) and, on real compile errors, dispatches a fix
-    /// Coder per affected file and rebuilds once. Returns the updated visible content. No-ops cleanly when the
-    /// project can't be built here (e.g. a WPF project on macOS) so it never blocks or fabricates a result.</summary>
-    private async Task<string> BuildVerify(Thread parent, string threadKey, string username, Coder coder,
-        string root, FileSnapshots snapshots, CodePlan plan, CancellationTokenSource cts, string baked, Func<string, Task> push)
-    {
-        List<string> editedAbs = plan.Steps
-            .Select(s => { try { return Path.GetFullPath(Path.Combine(root, s.File)); } catch { return ""; } })
-            .Where(p => p.Length > 0 && File.Exists(p) && p.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
-            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        if (editedAbs.Count == 0) return baked;
-
-        List<string> projects = editedAbs.Select(f => NearestProject(f, root)).OfType<string>()
-                                         .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        if (projects.Count == 0) return baked;   // not a dotnet project we can build — skip verification
-
-        for (int round = 0; round < 2; round++)
-        {
-            cts.Token.ThrowIfCancellationRequested();
-            await push(baked + (baked.Length > 0 ? "\n\n" : "") + "_Building…_");
-
-            Dictionary<string, List<string>> errors = new(StringComparer.OrdinalIgnoreCase);
-            bool anyRan = false;
-            foreach (string proj in projects)
-            {
-                (bool ran, string output) = await DotnetBuild(proj, cts.Token);
-                if (!ran) continue;
-                anyRan = true;
-                foreach (KeyValuePair<string, List<string>> kv in CollectCsErrors(output, root))
-                {
-                    if (!errors.TryGetValue(kv.Key, out List<string>? l)) errors[kv.Key] = l = new();
-                    foreach (string e in kv.Value) if (!l.Contains(e)) l.Add(e);
-                }
-            }
-
-            if (!anyRan) return baked;   // couldn't build at all (OS/tooling) — don't claim a verdict
-
-            if (errors.Count == 0)
-            {
-                Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) build verify clean ({N} project(s)).", threadKey, projects.Count);
-                baked += (baked.Length > 0 ? "\n\n" : "") + "**Build:** ✓ compiles cleanly.";
-                await push(baked);
-                return baked;
-            }
-
-            if (round == 1)
-            {
-                // Already ran a fix round; this rebuild still fails. Stop rather than loop.
-                Shared.Logger.LogWarning("[CodeArchitect] ({Thread}) build still failing after fix round ({N} file(s)).", threadKey, errors.Count);
-                baked += (baked.Length > 0 ? "\n\n" : "") + $"**Build:** still failing in {errors.Count} file(s) after a fix attempt — left for review.";
-                await push(baked);
-                return baked;
-            }
-
-            int totalErr = errors.Sum(e => e.Value.Count);
-            Shared.Logger.LogWarning("[CodeArchitect] ({Thread}) build verify: {E} error(s) across {F} file(s) — dispatching fixes.", threadKey, totalErr, errors.Count);
-            baked += (baked.Length > 0 ? "\n\n" : "") + $"**Build:** {totalErr} error(s) — fixing.";
-            await push(baked);
-
-            foreach ((string relFile, List<string> errList) in errors)
-            {
-                cts.Token.ThrowIfCancellationRequested();
-                Thread fix = new(ThreadPipeline.Code, $"{threadKey}#fix:{Guid.NewGuid():N}")
-                    { Internal = true, Parent = parent, Label = $"Fix build errors in {relFile}" };
-                parent.AddChild(fix);
-                RegisterCoderTools(fix, root, snapshots, cts.Token);
-
-                // Seed windows around the error lines so a large file isn't dumped whole.
-                List<CodeStep> errSteps = errList
-                    .Select(e => Regex.Match(e, @"line\s+(\d+)"))
-                    .Where(m => m.Success).Select(m => new CodeStep(relFile, m.Groups[1].Value, "")).ToList();
-                string seed = ReadNumberedView(root, relFile, errSteps);
-                if (seed.Length > 0) fix.PreReadPaths.Add(Path.GetFileName(relFile));
-
-                string prefix = baked.Length > 0 ? baked + "\n" : "";
-                await coder.SendPrompt(fix, BuildFixPrompt(relFile, errList, seed), username, ct: cts.Token,
-                    userMessagePreadded: false, onDelta: async t => await push(prefix + t));
-
-                string fc = fix.History.OfType<AriResponse>().LastOrDefault()?.ContentText?.Trim() ?? "";
-                baked = prefix + fc;
-                await push(baked);
-            }
-        }
-        return baked;
-    }
-
-    private static string BuildFixPrompt(string file, List<string> errors, string seed)
-    {
-        StringBuilder sb = new();
-        sb.AppendLine($"The project failed to compile after edits to `{file}`. Fix ONLY these compiler errors, with the smallest possible edits — do not refactor or touch anything unrelated:");
-        foreach (string e in errors) sb.AppendLine($"- {e}");
-        sb.AppendLine();
-        if (seed.Length > 0)
-        {
-            sb.AppendLine($"Current content of `{file}` — live line numbers, you already have it:");
-            sb.AppendLine("```");
-            sb.AppendLine(seed);
-            sb.AppendLine("```");
-            sb.AppendLine();
-            sb.AppendLine("Make the fix with edit_file against the line numbers above, then stop. If the file is badly broken, use revert_file to restore it and redo the change cleanly.");
-        }
-        else
-        {
-            sb.AppendLine("Read the lines named in the errors, fix them, then stop.");
         }
         return sb.ToString();
     }

@@ -1,13 +1,14 @@
-using System.Text;
 using System.Text.Json;
 
 namespace ARI.LLM;
 
-internal sealed class ListDirectory : FileTool
+/// <summary>list_directory tool — thin wrapper that delegates to the thread's <see cref="FileSystem"/>.</summary>
+internal sealed class ListDirectory : Tool
 {
     private const int MAX_ENTRIES = 200;
 
-    internal ListDirectory(string root, CancellationToken ct) : base(root, ct) { }
+    private readonly FileSystem fs;
+    internal ListDirectory(FileSystem fs) => this.fs = fs;
 
     internal override string Name => "list_directory";
 
@@ -32,61 +33,7 @@ internal sealed class ListDirectory : FileTool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
-    {
-        try
-        {
-            using JsonDocument doc = JsonDocument.Parse(argsJson);
-
-            string relPath  = doc.RootElement.TryGetProperty("path",      out JsonElement pathEl) ? (pathEl.GetString() ?? ".").Trim('"', '\'', ' ') : ".";
-            bool   recurse  = doc.RootElement.TryGetProperty("recursive", out JsonElement recEl)  && recEl.GetBoolean();
-            string? absPath = Resolve(relPath);
-
-            if (absPath is null)             return Task.FromResult("Access denied: path traversal is not allowed.");
-            if (!Directory.Exists(absPath))  return Task.FromResult($"Directory not found: {relPath}");
-
-            if (!recurse)
-            {
-                IEnumerable<string> entries = Directory.GetFileSystemEntries(absPath)
-                    .Select(e => Path.GetFileName(e) + (Directory.Exists(e) ? "/" : ""))
-                    .OrderBy(e => e);
-                return Task.FromResult($"[directory: \"{relPath}\"]\n{string.Join("\n", entries)}");
-            }
-
-            StringBuilder sb        = new();
-            int           count     = 0;
-            bool          truncated = false;
-
-            sb.AppendLine($"[directory: \"{relPath}\" (recursive)]");
-            BuildTree(sb, absPath, "", ref count, ref truncated);
-
-            if (truncated)
-                sb.AppendLine($"... (truncated at {MAX_ENTRIES} entries — narrow with path or use search_files)");
-
-            return Task.FromResult(sb.ToString().TrimEnd());
-        }
-        catch (Exception ex) { return Task.FromResult($"Error listing directory: {ex.Message}"); }
-    }
-
-    private void BuildTree(StringBuilder sb, string absDir, string indent, ref int count, ref bool truncated)
-    {
-        if (truncated) return;
-
-        IOrderedEnumerable<string> entries = Directory.GetFileSystemEntries(absDir).OrderBy(Path.GetFileName);
-        foreach (string entry in entries)
-        {
-            if (count >= MAX_ENTRIES) { truncated = true; return; }
-            if (!entry.StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;
-
-            bool   isDir = Directory.Exists(entry);
-            string name  = Path.GetFileName(entry) + (isDir ? "/" : "");
-            sb.AppendLine($"{indent}{name}");
-            count++;
-
-            if (isDir)
-                BuildTree(sb, entry, indent + "  ", ref count, ref truncated);
-        }
-    }
+    internal override Task<string> Execute(string argsJson) => fs.List(argsJson);
 
     internal override Func<string, string>? Display => args =>
     {

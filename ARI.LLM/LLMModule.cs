@@ -28,6 +28,7 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly Engram?           engram;
     private readonly Refactor?         refactor;
     private readonly Classifier?       classifier;
+    private readonly Appraisal?        appraiser;
     private readonly BrainModule?      brain;
     
     
@@ -154,6 +155,15 @@ public class LLMModule : ILLMModule, IDisposable
             _logger.LogInformation("Classifier is active.");
         }
 
+        if (rawAgents.TryGetValue("Appraisal", out JsonElement appraiserEl))
+        {
+            appraiser = Deserialize<Appraisal>(appraiserEl);
+            _logger.LogInformation("Appraisal is active.");
+        }
+
+        // The architect appraises each plan turn to decide its thinking budget (null appraiser ⇒ no thinking).
+        if (codeArchitect is not null) codeArchitect.Appraisal = appraiser;
+
         if (brain is not null && rawAgents.TryGetValue("Memory", out JsonElement memoryEl))
         {
             Memory mem = Deserialize<Memory>(memoryEl);
@@ -216,7 +226,7 @@ public class LLMModule : ILLMModule, IDisposable
         thread.Deleted          += () => { threads.TryRemove(threadKey, out _); Broadcast(new AppEvent("threadDeleted", threadKey)); };
         thread.Streaming        += text => Broadcast(new AppEvent("streaming", threadKey, text));
         thread.StreamingFinished += () => Broadcast(new AppEvent("streamingFinished", threadKey));
-        // Persist a plain-text transcript to ARI/chat_history after every completed exchange.
+        // Persist a plain-text transcript to chat_history after every completed exchange.
         thread.ExchangeCompleted += (_, _) => ChatHistoryLogger.Write(thread);
         if (type == ThreadPipeline.Code)
             thread.BecameInactive += () => thread.MarkEngramProcessed();
@@ -514,12 +524,12 @@ public class LLMModule : ILLMModule, IDisposable
         foreach (KeyValuePair<string, Thread> entry in threads)
             foreach (ThreadItem item in entry.Value.History)
             {
-                if (item is AriResponse resp && (resp.CompletionTokens > 0 || resp.PromptTokens > 0))
+                if (item is Response resp && (resp.Data.CompletionTokens > 0 || resp.Data.PromptTokens > 0))
                     result.Add(new LlmCallStat(entry.Value.Pipeline.ToString(), entry.Key, resp.Timestamp,
-                        resp.CompletionTokens, resp.OutputTokenLimit,
-                        resp.PromptTokens, resp.ContextTokenLimit,
-                        resp.HadImageAttachments, resp.EstimatedTextPromptTokens,
-                        resp.ImageTokenLimit));
+                        resp.Data.CompletionTokens, resp.Data.OutputTokenLimit,
+                        resp.Data.PromptTokens, resp.Data.ContextTokenLimit,
+                        resp.Data.HadImageAttachments, resp.Data.EstimatedTextPromptTokens,
+                        resp.Data.ImageTokenLimit));
             }
 
         result.Sort((a, b) => a.Timestamp.CompareTo(b.Timestamp));
@@ -568,12 +578,6 @@ public class LLMModule : ILLMModule, IDisposable
 
     public void SetCodeThreadContext(string threadKey, string? projectMap, string? conventions, string? rules)
         => code?.SetThreadContext(threadKey, projectMap, conventions, rules);
-
-    public void RegisterUpdateTodos(Thread thread)
-    {
-        if (code is null) return;
-        new UpdateTodos(code, thread).Register(thread);
-    }
 
     /// <summary>Sends a prompt directly through the Code pipeline, bypassing classification.
     /// Used by the desktop client which always needs code-aware responses.</summary>

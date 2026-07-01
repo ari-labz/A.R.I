@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react"
 import type { ThreadItem, Attachment } from "../hooks/useThreads"
-import { setBubbleMd } from "../hooks/useMarkdown"
+import { setBubbleMd, setBubbleBlocks } from "../hooks/useMarkdown"
+import type { ContentBlock } from "../hooks/useThreads"
 
 // ── Speak response ────────────────────────────────────────────────────────────
 let globalSpeakAbort: AbortController | null = null
@@ -165,11 +166,15 @@ function formatTime(ts: string) {
     return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
 }
 
-function MdBubble({ content, className, msgIndex = 0 }: { content: string; className: string; msgIndex?: number }) {
+function MdBubble({ content, className, msgIndex = 0, blocks }: { content: string; className: string; msgIndex?: number; blocks?: ContentBlock[] }) {
     const ref = useRef<HTMLDivElement>(null)
+    // Prefer the typed block list (each block its own DOM segment); fall back to the flattened string.
+    const blocksKey = blocks ? JSON.stringify(blocks) : ""
     useEffect(() => {
-        if (ref.current) setBubbleMd(ref.current, content, msgIndex)
-    }, [content, msgIndex])
+        if (!ref.current) return
+        if (blocks && blocks.length) setBubbleBlocks(ref.current, blocks)
+        else setBubbleMd(ref.current, content, msgIndex)
+    }, [content, msgIndex, blocksKey, blocks])
     return <div ref={ref} className={className} />
 }
 
@@ -237,7 +242,8 @@ function AriResponse({ item, isInternal, agentName, msgIndex }: { item: ThreadIt
     return (
         <div className="msg-row assistant">
             <div className="sender">{senderLabel}</div>
-            {item.content && <MdBubble content={item.content} className="bubble" msgIndex={msgIndex} />}
+            {(item.content || (item.blocks && item.blocks.length > 0)) &&
+                <MdBubble content={item.content} blocks={item.blocks} className="bubble" msgIndex={msgIndex} />}
             {streaming && (
                 <div className="typing-indicator">
                     <span>A·R·I is thinking</span>
@@ -483,12 +489,12 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
     type Unit =
         | { kind: "item"; item: ThreadItem; key: number }
         | { kind: "ari";  parts: ThreadItem[]; key: number }
+    // Each AI response is its own bubble — the architect's plan, each Coder's result, and the final summary are
+    // separate messages (they used to be merged into one; the code pipeline now emits them as distinct responses).
     const units: Unit[] = []
     items.forEach((item, i) => {
         if (item.type === "ariResponse") {
-            const last = units[units.length - 1]
-            if (last && last.kind === "ari") last.parts.push(item)
-            else units.push({ kind: "ari", parts: [item], key: i })
+            units.push({ kind: "ari", parts: [item], key: i })
         } else {
             units.push({ kind: "item", item, key: i })
         }
