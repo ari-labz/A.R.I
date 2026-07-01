@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
+using ARI.Common;
 using Microsoft.Extensions.Logging;
 
 namespace ARI.VoiceSynthesis;
@@ -524,10 +525,15 @@ slmadv_params:
         string scriptPath = Path.Combine(Path.GetTempPath(), "ari_phonemise_list.py");
         string repoRoot   = Path.GetFullPath(styleTtsPath);
         string listPath   = Path.GetFullPath(trainList);
+        // ARI's overrides live in the ARI project; pass the path so the phonemizer loads it in place.
+        string? subsPath  = PhonemeSubstitutions.Path;
+        string configureLine = subsPath is null ? "" : $"_ph.configure(r'{subsPath}')\n";
         string script =
             "import sys\n" +
             $"sys.path.insert(0, r'{repoRoot}')\n" +
-            "from ari_phonemize import preprocess, phonemize\n" +
+            "import phonemize as _ph\n" +
+            configureLine +
+            "from phonemize import preprocess, phonemize\n" +
             $"path = r'{listPath}'\n" +
             "out = []\n" +
             "with open(path, encoding='utf-8') as f:\n" +
