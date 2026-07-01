@@ -60,6 +60,7 @@ public class StyleTtsTrainer(
             ResetDir(audioDir);
             progress?.Report(new TrainingProgress("Preparing", 15, "Using prepared dataset (skipping split + transcription)"));
             BuildPreparedList(metadataPath, audioDir, trainList);
+            await PhonemiseTrainList(trainList, ct);
             File.Copy(trainList, savedTrainList, overwrite: true);
         }
         else if (hasRawUpload)
@@ -75,11 +76,13 @@ public class StyleTtsTrainer(
 
             progress?.Report(new TrainingProgress("Transcribing", 15, "Transcribing audio with Whisper"));
             trainList = await Transcribe(audioDir, workDir, ct);
+            await PhonemiseTrainList(trainList, ct);
             File.Copy(trainList, savedTrainList, overwrite: true);
         }
         else
         {
             // Resume: original upload is gone — reuse the chunks + transcription already on disk.
+            // savedTrainList is already phonemised from the original run — reuse untouched.
             string[] existingChunks = Directory.GetFiles(audioDir, "*.wav");
             if (existingChunks.Length == 0 || !File.Exists(savedTrainList))
                 throw new FileNotFoundException($"No audio found to train '{modelName}'. Upload clips and try again.");
@@ -509,6 +512,39 @@ slmadv_params:
         }).First();
 
         File.Copy(best, Path.Combine(outputDir, "model.pth"), overwrite: true);
+    }
+
+    // Rewrites column 2 (transcript) of train_list.txt with IPA phonemes via the SAME shared
+    // phonemizer the inference server uses (ari_phonemize), so training and inference feed the
+    // model an identical token alphabet. Without this the model learns graphemes but hears IPA
+    // at speak-time and can only approximate (mispronunciations, wrong pitch).
+    private async Task PhonemiseTrainList(string trainList, CancellationToken ct)
+    {
+        string python     = Path.Combine(styleTtsPath, VenvPython);
+        string scriptPath = Path.Combine(Path.GetTempPath(), "ari_phonemise_list.py");
+        string repoRoot   = Path.GetFullPath(styleTtsPath);
+        string listPath   = Path.GetFullPath(trainList);
+        string script =
+            "import sys\n" +
+            $"sys.path.insert(0, r'{repoRoot}')\n" +
+            "from ari_phonemize import preprocess, phonemize\n" +
+            $"path = r'{listPath}'\n" +
+            "out = []\n" +
+            "with open(path, encoding='utf-8') as f:\n" +
+            "    for line in f:\n" +
+            "        line = line.rstrip('\\n')\n" +
+            "        if not line.strip(): continue\n" +
+            "        parts = line.split('|')\n" +
+            "        if len(parts) < 3:\n" +
+            "            out.append(line); continue\n" +
+            "        parts[1] = phonemize(preprocess(parts[1]))\n" +
+            "        out.append('|'.join(parts))\n" +
+            "with open(path, 'w', encoding='utf-8') as f:\n" +
+            "    f.write('\\n'.join(out) + '\\n')\n" +
+            "print(f'phonemised {len(out)} lines')\n";
+        await File.WriteAllTextAsync(scriptPath, script, ct);
+        logger?.LogInformation("[StyleTTS2-Train] Phonemising train list (IPA parity with inference)");
+        await RunPython(python, scriptPath, null, ct);
     }
 
     private async Task RunPython(string python, string scriptPath, string? workDir, CancellationToken ct)

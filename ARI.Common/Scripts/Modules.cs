@@ -18,8 +18,10 @@ public interface IVoiceModule
 {
     bool    IsReady     { get; }
     string? ActiveModel { get; }
-    Task<byte[]> Synthesise(string text, CancellationToken ct, int diffusionSteps = 5, float alpha = 0.3f, float beta = 0.7f, float embeddingScale = 1.0f);
-    Task<byte[]> SynthesiseWithCheckpoint(string text, string checkpointPath, CancellationToken ct, int diffusionSteps = 5, float alpha = 0.3f, float beta = 0.7f, float embeddingScale = 1.0f);
+    Task<byte[]> Synthesise(string text, CancellationToken ct, int diffusionSteps = 5, float alpha = 0.3f, float beta = 0.7f, float embeddingScale = 1.0f, float? speed = null, float? pauseScale = null);
+    Task<byte[]> SynthesiseWithCheckpoint(string text, string checkpointPath, CancellationToken ct, int diffusionSteps = 5, float alpha = 0.3f, float beta = 0.7f, float embeddingScale = 1.0f, float? speed = null, float? pauseScale = null);
+    (float speed, float pauseScale) GetVoiceSettings();
+    void SetVoiceSettings(float speed, float pauseScale);
 }
 
 public interface IVoiceSynthesisModule
