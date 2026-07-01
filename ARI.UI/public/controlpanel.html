@@ -579,6 +579,18 @@ html, body {
               <span id="sp-beta-val" style="min-width:32px;text-align:right;font-size:13px;">0.70</span>
             </div>
           </label>
+          <label class="vs-label">Speed <span style="color:var(--text-dim);font-size:11px;">saved as Ari's live voice</span>
+            <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
+              <input type="range" id="sp-speed" min="0.5" max="2" step="0.05" value="1.0" style="flex:1;accent-color:var(--accent,#223742);">
+              <span id="sp-speed-val" style="min-width:32px;text-align:right;font-size:13px;">1.00</span>
+            </div>
+          </label>
+          <label class="vs-label">Pause length <span style="color:var(--text-dim);font-size:11px;">saved as Ari's live voice</span>
+            <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
+              <input type="range" id="sp-pause" min="0.5" max="3" step="0.1" value="1.0" style="flex:1;accent-color:var(--accent,#223742);">
+              <span id="sp-pause-val" style="min-width:32px;text-align:right;font-size:13px;">1.00</span>
+            </div>
+          </label>
         </div>
       </div>
     </div>
@@ -2521,6 +2533,8 @@ bindSlider('sp-diffusion-steps', 'sp-diffusion-steps-val', 0);
 bindSlider('sp-embedding-scale', 'sp-embedding-scale-val', 2);
 bindSlider('sp-alpha',           'sp-alpha-val',           2);
 bindSlider('sp-beta',            'sp-beta-val',            2);
+bindSlider('sp-speed',           'sp-speed-val',           2);
+bindSlider('sp-pause',           'sp-pause-val',           2);
 
 function getSynthParams() {
     return {
@@ -2528,8 +2542,37 @@ function getSynthParams() {
         embeddingScale:   parseFloat(document.getElementById('sp-embedding-scale').value),
         alpha:            parseFloat(document.getElementById('sp-alpha').value),
         beta:             parseFloat(document.getElementById('sp-beta').value),
+        speed:            parseFloat(document.getElementById('sp-speed').value),
+        pauseScale:       parseFloat(document.getElementById('sp-pause').value),
     };
 }
+
+// Speed & Pause are a persisted server-side default — they change Ari's real conversational
+// voice, not just Test Voice. Load the saved values on start and save on change.
+async function loadVoiceSettings() {
+    try {
+        const r = await fetch('/voice/settings');
+        if (!r.ok) return;
+        const s = await r.json();
+        const speed = document.getElementById('sp-speed'), pause = document.getElementById('sp-pause');
+        speed.value = s.speed; document.getElementById('sp-speed-val').textContent = parseFloat(s.speed).toFixed(2);
+        pause.value = s.pauseScale; document.getElementById('sp-pause-val').textContent = parseFloat(s.pauseScale).toFixed(2);
+    } catch { /* voice module may not be running */ }
+}
+async function saveVoiceSettings() {
+    try {
+        await fetch('/voice/settings', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                speed:      parseFloat(document.getElementById('sp-speed').value),
+                pauseScale: parseFloat(document.getElementById('sp-pause').value),
+            }),
+        });
+    } catch { /* best-effort */ }
+}
+document.getElementById('sp-speed').addEventListener('change', saveVoiceSettings);
+document.getElementById('sp-pause').addEventListener('change', saveVoiceSettings);
+loadVoiceSettings();
 
 vsTvSpeakBtn.addEventListener('click', async () => {
     const text = vsTvText.value.trim(), modelName = vsTvModel.value;

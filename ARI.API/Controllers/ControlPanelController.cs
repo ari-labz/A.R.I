@@ -514,15 +514,34 @@ public class VoiceController(
         {
             if (!System.IO.File.Exists(req.CheckpointPath))
                 return NotFound(new { error = $"Checkpoint not found: {req.CheckpointPath}" });
-            wav = await voiceService.SynthesiseWithCheckpoint(req.Text, req.CheckpointPath, ct, req.DiffusionSteps, req.Alpha, req.Beta, req.EmbeddingScale);
+            wav = await voiceService.SynthesiseWithCheckpoint(req.Text, req.CheckpointPath, ct, req.DiffusionSteps, req.Alpha, req.Beta, req.EmbeddingScale, req.Speed, req.PauseScale);
             logger.LogInformation("[Voice/Speak] checkpoint={Checkpoint} '{Text}' → {Bytes} bytes", req.CheckpointPath, req.Text, wav.Length);
         }
         else
         {
-            wav = await voiceService.Synthesise(req.Text, ct, req.DiffusionSteps, req.Alpha, req.Beta, req.EmbeddingScale);
+            wav = await voiceService.Synthesise(req.Text, ct, req.DiffusionSteps, req.Alpha, req.Beta, req.EmbeddingScale, req.Speed, req.PauseScale);
             logger.LogInformation("[Voice/Speak] '{Text}' → {Bytes} bytes", req.Text, wav.Length);
         }
         return File(wav, "audio/wav");
+    }
+
+    [HttpGet("settings")]
+    public IActionResult GetVoiceSettings()
+    {
+        if (voiceService is null)
+            return StatusCode(503, new { error = "Voice module is not running." });
+        (float speed, float pauseScale) = voiceService.GetVoiceSettings();
+        return Ok(new { speed, pauseScale });
+    }
+
+    [HttpPost("settings")]
+    public IActionResult SetVoiceSettings([FromBody] VoiceSettingsRequest req)
+    {
+        if (voiceService is null)
+            return StatusCode(503, new { error = "Voice module is not running." });
+        voiceService.SetVoiceSettings(req.Speed, req.PauseScale);
+        logger.LogInformation("[Voice/Settings] speed={Speed} pause={Pause}", req.Speed, req.PauseScale);
+        return Ok(new { speed = req.Speed, pauseScale = req.PauseScale });
     }
 
     [HttpGet("{modelName}/checkpoints")]
@@ -1059,7 +1078,9 @@ public record TrainRequest(
     int    SaveEveryNEpochs = 10);
 
 public record SpeakRequest(string Text, string? ModelName = null, string? CheckpointPath = null,
-    int DiffusionSteps = 5, float Alpha = 0.3f, float Beta = 0.7f, float EmbeddingScale = 1.0f);
+    int DiffusionSteps = 5, float Alpha = 0.3f, float Beta = 0.7f, float EmbeddingScale = 1.0f,
+    float Speed = 1.0f, float PauseScale = 1.0f);
+public record VoiceSettingsRequest(float Speed = 1.0f, float PauseScale = 1.0f);
 public record SplitSentencesRequest(string Text);
 public record ResumeRequest(string ModelName, int? Epochs = null, int? SaveEveryNEpochs = null);
 public record DatasetProcessRequest(string StageId);
