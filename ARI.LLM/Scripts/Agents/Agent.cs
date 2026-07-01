@@ -134,12 +134,12 @@ public abstract class Agent
             if (!thread.preserveOnCancel)
             {
                 if (thread.streamingResponse is not null) thread.History.Remove(thread.streamingResponse);
-                if (thread.History.Count > 0 && thread.History[^1] is UserMessage) thread.History.RemoveAt(thread.History.Count - 1);
+                if (thread.History.Count > 0 && thread.History[^1] is Prompt) thread.History.RemoveAt(thread.History.Count - 1);
             }
             else if (thread.streamingResponse is not null)
             {
-                thread.streamingResponse.Content = AriContentBlock.Parse(thread.streamedText);
-                thread.streamingResponse.State   = AriResponseState.Cancelled;
+                thread.streamingResponse.Content = ContentBlock.Parse(thread.streamedText);
+                thread.streamingResponse.State   = State.Cancelled;
             }
             thread.preserveOnCancel  = false;
             thread.streamingResponse = null;
@@ -149,11 +149,11 @@ public abstract class Agent
         {
             if (thread.streamingResponse is not null)
             {
-                thread.streamingResponse.Content = AriContentBlock.Parse(
+                thread.streamingResponse.Content = ContentBlock.Parse(
                     string.IsNullOrWhiteSpace(thread.streamedText)
                         ? $"[Error: {ex.Message}]"
                         : thread.streamedText);
-                thread.streamingResponse.State = AriResponseState.Error;
+                thread.streamingResponse.State = State.Error;
                 thread.RaiseUpdated();
             }
             thread.streamingResponse = null;
@@ -369,7 +369,7 @@ public abstract class Agent
         lock (thread.SnapshotThreadAttachments()) { threadAtts = thread.SnapshotThreadAttachments(); }
         if (userMessagePreadded)
         {
-            UserMessage? lastMsg = thread.History.OfType<UserMessage>().LastOrDefault();
+            Prompt? lastMsg = thread.History.OfType<Prompt>().LastOrDefault();
             msgAtts = lastMsg?.Attachments?.ToList() ?? new();
         }
         else
@@ -379,13 +379,13 @@ public abstract class Agent
 
         if (!userMessagePreadded)
         {
-            thread.History.Add(new UserMessage
+            thread.History.Add(new Prompt
             {
-                Username    = username,
-                Content     = prompt,
+                AuthorName  = username,
+                Text        = prompt,
                 Timestamp   = DateTime.Now,
                 Attachments = msgAtts.Count > 0 ? msgAtts.ToList() : null,
-                ChatHidden  = chatHidden
+                IsVisible   = !chatHidden
             });
             thread.RaiseUpdated();
         }
@@ -549,7 +549,7 @@ public abstract class Agent
             thread.liveCallInfo = new LiveCallInfo(Name, thread.Key, estimatedTextTokens, maxTokens, MaxContextTokens, hadImages: hadImages);
         }
 
-        AriResponse ariResponse = new() { Timestamp = DateTime.Now, ChatHidden = chatHidden };
+        Response ariResponse = new() { Timestamp = DateTime.Now, IsVisible = !chatHidden };
         // Live trace for the deep-inspection panel — assigned now so the debug viewer sees it grow mid-stream.
         List<TraceStep> trace = new() { new TraceStep { Kind = "prompt", Text = prompt } };
         ariResponse.Trace = trace;
@@ -674,7 +674,7 @@ public abstract class Agent
                     Think, body.TryGetValue("enable_thinking", out object? etv) ? etv : "unset",
                     body.TryGetValue("thinking_budget", out object? bv) ? bv : "none");
             if (dynamicInjected) messages.RemoveAt(messages.Count - 1);   // keep persistent history clean + prefix stable
-            ariResponse.DebugRequestJson = json;
+            ariResponse.Data.DebugRequestJson = json;
             HttpRequestMessage request = new(HttpMethod.Post, $"{Endpoint}/v1/chat/completions")
             {
                 Content = new StringContent(json, Encoding.UTF8, "application/json")
@@ -853,6 +853,7 @@ public abstract class Agent
                             if (!isLeakedToolCall && preText.Length > 0)
                             {
                                 contentBuilder.Append(preText + "\n");
+                                trace.Add(new TraceStep { Kind = "text", Text = preText });
                                 if (!QuietLogging)
                                     Shared.Logger.LogInformation("[{Agent}] ({Thread}) \"{Text}\"", Name, thread.Key, preText);
                             }
@@ -1080,7 +1081,7 @@ public abstract class Agent
                                 rb[..tcIdx], "<think>.*?</think>", "",
                                 System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                             pre = pre.Replace("<think>", "").Replace("</think>", "").Trim();
-                            if (pre.Length > 0) contentBuilder.Append(pre);
+                            if (pre.Length > 0) { contentBuilder.Append(pre); trace.Add(new TraceStep { Kind = "text", Text = pre }); }
                         }
                     }
                     int fakeIndex = 0;
@@ -1105,7 +1106,11 @@ public abstract class Agent
                         xmlFallbackOriginalText = responseBuilder.ToString();
 
                         if (xml.FirstIndex > 0)
-                            contentBuilder.Append(xmlFallbackOriginalText[..xml.FirstIndex].TrimEnd());
+                        {
+                            string preXml = xmlFallbackOriginalText[..xml.FirstIndex].TrimEnd();
+                            contentBuilder.Append(preXml);
+                            if (preXml.Length > 0) trace.Add(new TraceStep { Kind = "text", Text = preXml });
+                        }
 
                         int fakeIndex = 0;
                         foreach (ToolCallParser.Call c in xml.Calls)
@@ -1199,23 +1204,66 @@ public abstract class Agent
                     }
                     else if (thread.tools.TryGetValue(call.Name, out var tool))
                     {
-                        if (tool.Display is not null)
+                        // The ACTIVE card marker (present tense). Keep a live streaming marker (if any) as the active
+                        // card so its diff isn't lost; otherwise append the tool's Display marker.
+                        string? activeMarker = null;
+                        if (streamingMarkers.TryGetValue(callIndex, out string? prevStreamMarker))
+                            activeMarker = prevStreamMarker;
+                        else if (tool.Display is not null)
                         {
-                            string finalMarker = tool.Display(argsJson);
-                            if (streamingMarkers.TryGetValue(callIndex, out string? prevStreamMarker))
-                                ReplaceInBuilder(contentBuilder, prevStreamMarker, finalMarker);
-                            else
-                                contentBuilder.Append(finalMarker);
+                            activeMarker = tool.Display(argsJson);
+                            contentBuilder.Append(activeMarker);
                             if (onDelta is not null) await onDelta(contentBuilder.ToString());
                         }
 
-                        result = prelaunched.TryGetValue(callIndex, out Task<string>? pre)
-                            ? await pre
-                            : await tool.Execute(argsJson);
+                        // Let a long-running tool stream rendered display into THIS response while it executes
+                        // (spawn_coder mirrors a Coder sub-agent's edits inline). Cleared immediately after.
+                        thread.ToolDisplaySink = async chunk =>
+                        {
+                            contentBuilder.Append(chunk);
+                            if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                        };
+                        try
+                        {
+                            result = prelaunched.TryGetValue(callIndex, out Task<string>? pre)
+                                ? await pre
+                                : await tool.Execute(argsJson);
+                        }
+                        finally { thread.ToolDisplaySink = null; }
 
                         // Code-specific post-processing (cache, circuit breaker, edit/build tracking). May throw
                         // to abort the turn. See Code.ToolLoop.cs.
                         result = PostToolProcess(thread, toolTurn, call.Name, argsJson, result);
+
+                        // read_file auto-diverted to a preview (result starts with "[preview:", not an error): relabel
+                        // its card to a done "Previewed" card and skip the flip (the preview already completed).
+                        if (activeMarker is not null && call.Name == "read_file" && result.StartsWith("[preview:", StringComparison.Ordinal))
+                        {
+                            string pf = "";
+                            try { using JsonDocument pvd = JsonDocument.Parse(argsJson); pf = System.IO.Path.GetFileName((pvd.RootElement.TryGetProperty("path", out JsonElement ppe) ? ppe.GetString() : null)?.Trim('"', '\'', ' ') ?? ""); }
+                            catch { /* ignore */ }
+                            ReplaceInBuilder(contentBuilder, activeMarker, $"<div class=\"tool-use\">Previewed {pf}</div>\n");
+                            if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                            activeMarker = null;
+                        }
+
+                        // Flip the card to its done (past-tense) form once the tool returns (unless it errored).
+                        // Card.Flip() is the single flip mechanism; each card renders its own done form — a diff card
+                        // keeps its +/- badges (nothing lost), simple cards flip Reading→Read, Delegating→Delegated…
+                        if (activeMarker is not null && !ToolCallParser.IsError(result))
+                        {
+                            Card? doneCard = ContentBlock.Parse(activeMarker).OfType<Card>().FirstOrDefault();
+                            if (doneCard is not null)
+                            {
+                                doneCard.Flip();
+                                string done = doneCard.Render();
+                                if (!string.Equals(done, activeMarker, StringComparison.Ordinal))
+                                {
+                                    ReplaceInBuilder(contentBuilder, activeMarker, done);
+                                    if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                                }
+                            }
+                        }
 
                         if (ToolCallParser.IsError(result))
                             Shared.Logger.LogError("[{Agent}] ({Thread}) Tool '{Tool}' failed: {Error}", Name, thread.Key, call.Name, result);
@@ -1364,10 +1412,14 @@ public abstract class Agent
         if (string.IsNullOrWhiteSpace(responseText))
             throw new LlmRequestFailedException("LLM response was empty.");
 
-        // Closing prose for the trace — strip the UI tool-card markup so only the model's own words remain.
-        string traceText = System.Text.RegularExpressions.Regex.Replace(responseText, @"<!--ari-[\s\S]*?-->", "");
-        traceText = System.Text.RegularExpressions.Regex.Replace(traceText, "<div class=\"tool-use\">[\\s\\S]*?</div>", "").Trim();
-        if (traceText.Length > 0) trace.Add(new TraceStep { Kind = "text", Text = traceText });
+        // Closing prose for the trace — ONLY the trailing summary (responseBuilder), not the whole turn. Prose
+        // the model wrote earlier (e.g. the plan, before the first tool call) was already traced as its own
+        // 'text' step at its real position, so it shows before the coders instead of merging in here.
+        string traceText = System.Text.RegularExpressions.Regex.Replace(responseBuilder.ToString(), @"<!--ari-[\s\S]*?-->", "");
+        traceText = System.Text.RegularExpressions.Regex.Replace(traceText, "<div class=\"tool-use\">[\\s\\S]*?</div>", "");
+        traceText = traceText.Replace("<|think_off|>", "").Replace("<|think_on|>", "").Trim();
+        if (traceText.StartsWith("ARI: ", StringComparison.OrdinalIgnoreCase)) traceText = traceText["ARI: ".Length..];
+        if (traceText.Length > 0) trace.Add(new TraceStep { Kind = "text", Text = traceText.Trim() });
 
         double elapsed   = sw.Elapsed.TotalSeconds;
         double tokPerSec = completionTokens > 0 ? completionTokens / elapsed : 0;
@@ -1392,20 +1444,20 @@ public abstract class Agent
 
         thread.liveCallInfo = null;
 
-        ariResponse.Content                   = AriContentBlock.Parse(responseText);
-        ariResponse.DebugResponseText         = responseText;
+        ariResponse.Content                   = ContentBlock.Parse(responseText);
+        ariResponse.Data.DebugResponseText         = responseText;
         ariResponse.Reasoning                 = reasoningBuilder.Length > 0 ? reasoningBuilder.ToString() : null;
         ariResponse.ThinkingSeconds           = elapsed;
         ariResponse.RecallNotes               = combinedNotes;
         ariResponse.ContextSummary            = contextSummary;
-        ariResponse.CompletionTokens          = completionTokens;
-        ariResponse.OutputTokenLimit          = maxTokens > 0 ? maxTokens : 0;
-        ariResponse.PromptTokens              = promptTokens;
-        ariResponse.ContextTokenLimit         = MaxContextTokens;
-        ariResponse.HadImageAttachments       = hadImages;
-        ariResponse.EstimatedTextPromptTokens = estimatedTextTokens;
-        ariResponse.ImageTokenLimit           = 0;
-        ariResponse.State                     = AriResponseState.Complete;
+        ariResponse.Data.CompletionTokens          = completionTokens;
+        ariResponse.Data.OutputTokenLimit          = maxTokens > 0 ? maxTokens : 0;
+        ariResponse.Data.PromptTokens              = promptTokens;
+        ariResponse.Data.ContextTokenLimit         = MaxContextTokens;
+        ariResponse.Data.HadImageAttachments       = hadImages;
+        ariResponse.Data.EstimatedTextPromptTokens = estimatedTextTokens;
+        ariResponse.Data.ImageTokenLimit           = 0;
+        ariResponse.State                     = State.Complete;
         ariResponse.StreamText               = null;
         thread.streamingResponse              = null;
         thread.RaiseStreamingFinished();
@@ -1511,7 +1563,7 @@ public abstract class Agent
     }
 
     private static string ExtractLogText(string content) =>
-        string.Concat(AriContentBlock.Parse(content).OfType<TextBlock>().Select(b => b.Text))
+        string.Concat(ContentBlock.Parse(content).OfType<TextBlock>().Select(b => b.Text))
             .Replace("<!--ari-batch-end-->", "")
             .Trim();
 

@@ -333,6 +333,12 @@ html, body {
 .dbg-tool-chip.error  { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
 .dbg-seg-tool { padding: 4px 12px; }
 .dbg-batch-sep { height: 1px; background: var(--border); margin: 2px 12px; opacity: .5; }
+/* sub-thread boundary separators in the DTI: a labelled line where a spawn_coder sub-thread begins and a
+   plain line where it ends, so the delegated child DTI is clearly bracketed inside the parent trace. */
+.dbg-sub-sep { display: flex; align-items: center; gap: 8px; margin: 12px 4px 6px; color: var(--accent, #6366f1); font-size: 10.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.dbg-sub-sep::before, .dbg-sub-sep::after { content: ""; flex: 1; height: 2px; background: var(--accent, #6366f1); opacity: .35; border-radius: 2px; }
+.dbg-sub-sep--end { margin: 6px 4px 12px; }
+.dbg-sub-sep--end::before, .dbg-sub-sep--end::after { opacity: .18; }
 /* metadata footer */
 .dbg-meta { padding: 6px 12px; border-top: 1px solid var(--border); font-size: 10.5px; color: var(--text-dim); display: flex; gap: 12px; flex-wrap: wrap; background: #f9fafb; }
 /* state badges */
@@ -393,7 +399,7 @@ html, body {
       </a>
       <div id="cp-sidebar-nav">
         <div class="cp-nav-item top-level active" data-tab="overview">Overview</div>
-        <div class="cp-nav-item top-level" data-tab="debug">Debug Thread</div>
+        <div class="cp-nav-item top-level" data-tab="debug">Deep Thread Inspection (DTI)</div>
         <div class="cp-nav-group">LLM</div>
         <div class="cp-nav-item" data-tab="servers">Servers</div>
         <div class="cp-nav-item" data-tab="models">Models</div>
@@ -789,7 +795,7 @@ html, body {
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
 const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug') };
-const TAB_TITLES = { voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', llmconfigs: 'LLM Configs', debug: 'Debug Thread' };
+const TAB_TITLES = { voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', llmconfigs: 'LLM Configs', debug: 'Deep Thread Inspection (DTI)' };
 
 let srvPollTimer = null;
 function switchTab(name) {
@@ -2703,25 +2709,28 @@ function dbgRenderThreadNode(thread, container, depth) {
 
     // The CodeArchitect's plan thread is NOT a sub-thread — it's the main thread. A parent that spawned one
     // is just an orchestration container (its own history is raw chip markup), so we skip the container's
-    // history and render the architect's trace inline. Only the Coder workers become collapsible sub-threads.
+    // history and render the architect's trace inline. Each Coder worker is rendered as a collapsible
+    // sub-thread frame INLINE, directly beneath the spawn_coder call that created it — so its tool calls and
+    // thinking sit next to their trigger instead of being dumped in a pile at the bottom of the view.
     const planChild = (thread.children || []).find(c => (c.key || '').includes('#plan'));
     const workers   = (thread.children || []).filter(c => c !== planChild);
+    const history   = planChild ? (planChild.history || []) : (thread.history || []);
 
-    if (!planChild)
-        (thread.history || []).forEach(item => dbgRenderHistoryItem(item, host));
+    // Shared cursor into workers[]: dbgRenderTrace consumes one per spawn_coder call it renders.
+    const cursor = { i: 0 };
+    history.forEach(item => dbgRenderHistoryItem(item, host, workers, cursor, depth));
 
-    if (planChild)
-        (planChild.history || []).forEach(item => dbgRenderHistoryItem(item, host));
-
-    workers.forEach(c => dbgRenderThreadNode(c, host, depth + 1));
+    // Any workers not matched to a spawn_coder call (e.g. spawned some other way) render after the trace.
+    for (; cursor.i < workers.length; cursor.i++)
+        dbgRenderThreadNode(workers[cursor.i], host, depth + 1);
 }
 
-function dbgRenderHistoryItem(item, host) {
+function dbgRenderHistoryItem(item, host, workers = [], cursor = { i: 0 }, depth = 0) {
     // The user message is shown inside the next turn's "Prompt" bubble (as part of the full augmented prompt),
     // so don't render it again as its own username-headed bubble.
     if (item.type === 'userMessage') return;
     if (item.type === 'ariResponse' && Array.isArray(item.trace) && item.trace.length) {
-        dbgRenderTrace(item, host);
+        dbgRenderTrace(item, host, workers, cursor, depth);
     } else {
         const el = dbgRenderItem(item, null);
         if (el) host.appendChild(el);
@@ -2730,7 +2739,9 @@ function dbgRenderHistoryItem(item, host) {
 
 // Renders one AriResponse's agent-loop trace as the call-and-response sketch:
 // prompt (right) → thinking cloud (left) → tool call (left) → tool result (right) → … → answer (left).
-function dbgRenderTrace(item, host) {
+// When a spawn_coder result is rendered, the matching Coder sub-thread frame is drawn inline right after it
+// (consuming workers[cursor.i]) so the delegated work appears at the point it was dispatched.
+function dbgRenderTrace(item, host, workers = [], cursor = { i: 0 }, depth = 0) {
     (item.trace || []).forEach(step => {
         const row = document.createElement('div');
         row.className = 'dbg-row';
@@ -2761,6 +2772,27 @@ function dbgRenderTrace(item, host) {
                 + `<div class="dbg-bbody dbg-md dbg-seg-text">${marked.parse(step.text || '')}</div></div>`;
         } else { return; }
         host.appendChild(row);
+
+        // A spawn_coder CALL is where a sub-thread begins — its delegated work lives in a child thread. Render
+        // that child's DTI inline right under the call bubble, wrapped in a start/end separator so the sub-thread
+        // has a clear boundary (── start ── [sub-thread DTI] ── end ──), then the ← result bubble follows.
+        if (step.kind === 'tool_call' && step.name === 'spawn_coder' && cursor.i < workers.length) {
+            const child = workers[cursor.i++];
+            const start = document.createElement('div');
+            start.className = 'dbg-sub-sep dbg-sub-sep--start';
+            start.innerHTML = `<span>sub-thread: ${escHtml(child.label || 'coder')}</span>`;
+            host.appendChild(start);
+            // Render the child's OWN DTI (its reasoning, edit_file call/result, "Done" text) directly between
+            // the separators — the boundary lines already frame it, so no extra collapsible wrapper is needed.
+            const childWorkers = (child.children || []);
+            const childCursor  = { i: 0 };
+            (child.history || []).forEach(it => dbgRenderHistoryItem(it, host, childWorkers, childCursor, depth + 1));
+            for (; childCursor.i < childWorkers.length; childCursor.i++)
+                dbgRenderThreadNode(childWorkers[childCursor.i], host, depth + 2);
+            const end = document.createElement('div');
+            end.className = 'dbg-sub-sep dbg-sub-sep--end';
+            host.appendChild(end);
+        }
     });
 
     const metaParts = [];

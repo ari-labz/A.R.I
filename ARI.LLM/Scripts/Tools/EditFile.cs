@@ -36,14 +36,51 @@ internal sealed class EditFile : Tool
 
     internal override Task<string> Execute(string argsJson) => fs.Edit(argsJson);
 
+    // Emit the enriched tool-start marker (with the +A/-R diff computed from args), not a plain label — so the
+    // committed card keeps its diff badges and the client flips it Editing→Edited via the trailing batch-end.
     internal override Func<string, string>? Display => args =>
     {
         try
         {
             using JsonDocument doc = JsonDocument.Parse(args);
-            string p = doc.RootElement.GetProperty("path").GetString() ?? "";
-            return $"<div class=\"tool-use\">Editing {p.Replace("&", "&amp;").Replace("<", "&lt;")}</div>\n";
+            JsonElement root = doc.RootElement;
+            string file = Path.GetFileName((root.GetProperty("path").GetString() ?? "").Trim()).Replace("--", "&#45;&#45;");
+            (int added, int removed) = DiffCounts.Of(root);
+            string diff = (added > 0 ? $"|+{added}" : "") + (removed > 0 ? $"|-{removed}" : "");
+            return $"<!--ari-tool-start:edit_file:{file}{diff}-->";
         }
-        catch { return "<div class=\"tool-use\">Editing file</div>\n"; }
+        catch { return "<!--ari-tool-start:edit_file:file-->"; }
     };
+}
+
+/// <summary>Computes +added / -removed line counts for an edit/write call from its arguments, for the diff badge
+/// on the tool card. Shared by edit_file and write_file Display.</summary>
+internal static class DiffCounts
+{
+    internal static (int Added, int Removed) Of(JsonElement root, string contentProp = "new_string")
+    {
+        int added = 0, removed = 0;
+        void One(JsonElement e)
+        {
+            if (e.TryGetProperty(contentProp, out JsonElement ns) && ns.ValueKind == JsonValueKind.String)
+            {
+                string s = ns.GetString() ?? "";
+                if (s.Length > 0) added += s.Split('\n').Length;
+            }
+            int sl = Line(e, "start_line"), el = Line(e, "end_line");
+            if (sl > 0 && el >= sl) removed += el - sl + 1;
+        }
+        if (root.TryGetProperty("edits", out JsonElement edits) && edits.ValueKind == JsonValueKind.Array)
+            foreach (JsonElement e in edits.EnumerateArray()) One(e);
+        else One(root);
+        return (added, removed);
+    }
+
+    private static int Line(JsonElement e, string name)
+    {
+        if (!e.TryGetProperty(name, out JsonElement v)) return 0;
+        if (v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out int n)) return n;
+        if (v.ValueKind == JsonValueKind.String && int.TryParse(v.GetString(), out int m)) return m;
+        return 0;
+    }
 }

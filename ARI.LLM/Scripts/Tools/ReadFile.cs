@@ -18,7 +18,8 @@ internal sealed class ReadFile : Tool
             name        = "read_file",
             description =
                 "Read lines from a source file. " +
-                "ALWAYS prefer a specific range over a whole-file read: use search_files first to locate the relevant lines, then read only that range with start_line and end_line. " +
+                "ALWAYS call preview_file on a file BEFORE your first read_file on it — preview shows the line count so you read a lean range, not the whole file. " +
+                "Then prefer a specific range: use search_files to locate the relevant lines and read only that range with start_line and end_line. " +
                 "Only omit start_line/end_line when you genuinely need the whole file (e.g. a short config). " +
                 "Whole-file reads of large files are capped — you will miss content unless you target the right range.",
             parameters  = new

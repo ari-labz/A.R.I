@@ -35,9 +35,33 @@ export function useThreads() {
     return { threads, load }
 }
 
+// One typed block of a Response, serialized polymorphically by the server (`type` discriminator).
+// `state` is the numeric State enum (0=streaming, 1=complete, 2=error, 3=cancelled). Card subtypes carry
+// their own fields (fileName / path / pattern / command / task / project / added / removed / patch / …).
+export interface ContentBlock {
+    type:       string
+    state:      number
+    isVisible:  boolean
+    text?:      string
+    fileName?:  string
+    path?:      string
+    pattern?:   string
+    command?:   string
+    task?:      string
+    project?:   string
+    added?:     number
+    removed?:   number
+    patch?:     string
+    encoded?:   string
+    // subthread anchor: a labelled, inline child thread whose blocks render nested here
+    label?:     string
+    blocks?:    ContentBlock[]
+}
+
 export interface ThreadItem {
     type:            string
     content:         string
+    blocks?:         ContentBlock[]
     username?:       string
     timestamp:       string
     thinkingSeconds?: number

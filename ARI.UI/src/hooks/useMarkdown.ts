@@ -69,6 +69,11 @@ const TOOL_CALL_XML_RE = /<tool_call>[\s\S]*?<\/tool_call>|<tool_call>[\s\S]*$|<
 function preprocessToolCards(content: string, msgIndex = 0): string {
     content = content.replace(TOOL_CALL_XML_RE, "")
 
+    // Isolate raw tool-use div cards as their own block (blank line before/after). Otherwise a card sitting
+    // directly against prose (e.g. "...`File.cs`.<div class=\"tool-use\">…") makes `marked` treat the whole
+    // prose line as a raw HTML block and skip inline markdown — so `code` shows literal backticks (issue #69).
+    content = content.replace(/[ \t]*\n?[ \t]*(<div class="tool-use">[\s\S]*?<\/div>)[ \t]*\n?[ \t]*/g, "\n\n$1\n\n")
+
     // update_todos renders as a checklist card, decoupled from the file start/end pairing logic:
     // drop its start marker and convert its end marker (base64 list) directly into HTML.
     content = content.replace(/<!--ari-tool-start:update_todos:[^>]*?-->/g, "")
@@ -166,6 +171,75 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
     return out
 }
 
+// Present/past verb pairs for the non-diff cards (extends TOOL_VERBS with the orchestration cards).
+const CARD_VERBS: Record<string, { active: string; done: string }> = {
+    reading:    { active: "Reading",    done: "Read" },
+    listing:    { active: "Listing",    done: "Listed" },
+    searching:  { active: "Searching",  done: "Searched" },
+    finding:    { active: "Finding",    done: "Found" },
+    running:    { active: "Running",    done: "Ran" },
+    deleting:   { active: "Deleting",   done: "Deleted" },
+    moving:     { active: "Moving",     done: "Moved" },
+    delegating: { active: "Delegating", done: "Delegated" },
+    building:   { active: "Building",   done: "Built" },
+    editing:    { active: "Editing",    done: "Edited" },
+    writing:    { active: "Writing",    done: "Written" },
+}
+
+// State enum: 0=streaming, 1=complete, 2=error, 3=cancelled.
+type BlockLike = {
+    type: string; state?: number
+    text?: string; fileName?: string; path?: string; pattern?: string; command?: string
+    task?: string; project?: string; added?: number; removed?: number; patch?: string; encoded?: string
+    label?: string; blocks?: BlockLike[]
+}
+
+function diffBadges(added = 0, removed = 0): string {
+    const a = added   > 0 ? `<span class="diff-badge diff-badge--add" data-target="${added}" data-dir="up" data-static="1">+<span class="badge-digits">${added}</span></span>`   : ""
+    const d = removed > 0 ? `<span class="diff-badge diff-badge--del" data-target="${removed}" data-dir="down" data-static="1">-<span class="badge-digits">${removed}</span></span>` : ""
+    return (a || d) ? `<span class="diff-badges">${a}${d}</span>` : ""
+}
+
+// Renders ONE typed ContentBlock to HTML. Text blocks become markdown; cards become their tool-card markup
+// straight from typed fields (no marker pairing) so each block is a self-contained DOM segment.
+export function renderBlockHtml(block: BlockLike): string {
+    const done = (block.state ?? 0) === 1
+    const err  = (block.state ?? 0) === 2
+
+    if (block.type === "text")     return marked.parse(block.text ?? "", { async: false }) as string
+    if (block.type === "thinking") return ""   // reasoning is shown via the thought-block, not inline
+    if (block.type === "todolist") return renderTodoChecklist(block.encoded ?? "")
+
+    // Subthread anchor: a child thread rendered inline. Default-expanded and, when open, styled to look like
+    // the blocks simply belong to the parent (no bubble chrome) — collapsing hides them behind the label.
+    if (block.type === "subthread") {
+        const inner = (block.blocks ?? []).map(renderBlockHtml).filter(h => h.trim().length > 0)
+            .map(h => `<div class="block-seg">${h}</div>`).join("")
+        return `<details class="subthread" open><summary class="subthread-head">${escHtml(block.label ?? "")}</summary><div class="subthread-body">${inner}</div></details>`
+    }
+
+    const verbs = CARD_VERBS[block.type] ?? { active: block.type, done: block.type }
+    const label = block.fileName ?? block.path ?? block.pattern ?? block.command ?? block.task ?? block.project ?? ""
+
+    if (block.type === "editing" || block.type === "writing") {
+        const badges = diffBadges(block.added, block.removed)
+        const cls = err ? "tool-card--error" : done ? "tool-card--done tool-card--diff" : "tool-card--active"
+        if (done && block.patch) {
+            const lines = block.patch.split("\n").map(l =>
+                l.startsWith("+") ? `<div class="diff-line diff-line--add">${escHtml(l)}</div>`
+                : l.startsWith("-") ? `<div class="diff-line diff-line--del">${escHtml(l)}</div>`
+                : `<div class="diff-line">${escHtml(l)}</div>`).join("")
+            return `<details class="tool-card ${cls}"><summary><span>${verbs.done} ${escHtml(label)}</span>${badges}</summary><div class="tool-card-diff">${lines}</div></details>`
+        }
+        const verb = err ? verbs.active : done ? verbs.done : verbs.active
+        return `<div class="tool-card ${cls}"><span>${verb} ${escHtml(label)}</span>${badges}</div>`
+    }
+
+    const cls = err ? "tool-card--error" : done ? "tool-card--done" : "tool-card--active"
+    const verb = err ? verbs.active : done ? verbs.done : verbs.active
+    return `<div class="tool-card ${cls}"><span>${verb} ${escHtml(label)}</span></div>`
+}
+
 export function renderMd(content: string, msgIndex = 0): string {
     const html = marked.parse(preprocessToolCards(content ?? "", msgIndex), { async: false }) as string
     const tmp = document.createElement("div")
@@ -219,5 +293,22 @@ export function attachCopyButtons(el: HTMLElement) {
 
 export function setBubbleMd(el: HTMLElement, content: string, msgIndex = 0) {
     el.innerHTML = renderMd(content, msgIndex)
+    attachCopyButtons(el)
+}
+
+// Renders a Response's typed block list — each block is its own DOM segment, so the plan text, each
+// Coder's card + summary, and the final summary are visually distinct blocks (not one flattened blob).
+export function setBubbleBlocks(el: HTMLElement, blocks: BlockLike[]) {
+    const parts = blocks
+        .filter(b => (b as { isVisible?: boolean }).isVisible !== false)
+        .map(b => renderBlockHtml(b))
+        .filter(h => h.trim().length > 0)
+    el.innerHTML = ""
+    for (const html of parts) {
+        const seg = document.createElement("div")
+        seg.className = "block-seg"
+        seg.innerHTML = html
+        el.appendChild(seg)
+    }
     attachCopyButtons(el)
 }

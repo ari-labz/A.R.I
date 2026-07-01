@@ -108,7 +108,7 @@ internal class Engram : Agent, IDisposable
         if (!await engramLock.WaitAsync(0)) return;
         sweepingThreads[threadKey] = 0;
 
-        // --- Run-log capture (ARI/Logs): every sweep records its full thought process for offline analysis. ---
+        // --- Run-log capture (Logs): every sweep records its full thought process for offline analysis. ---
         Thread?                            engramThread = null;
         List<(string Title, Thread Thread)> writeThreads = new();
         List<string>                       runMeta      = new() { $"Trigger: {trigger}", $"Thread: {threadKey}" };
@@ -117,7 +117,7 @@ internal class Engram : Agent, IDisposable
         try
         {
             List<ThreadItem> allItems = threads.TryGetValue(threadKey, out Thread? dialogueThread) ? dialogueThread.History : new List<ThreadItem>();
-            List<ThreadItem> conversationItems = allItems.Where(i => i is UserMessage or AriResponse).ToList();
+            List<ThreadItem> conversationItems = allItems.Where(i => i is Prompt or Response).ToList();
 
             int lastCount = lastHistoryCount.TryGetValue(threadKey, out int c) ? c : 0;
             List<ThreadItem> recentItems = conversationItems.Skip(lastCount).ToList();
@@ -529,8 +529,8 @@ internal class Engram : Agent, IDisposable
         {
             switch (item)
             {
-                case UserMessage u: sb.AppendLine($"{u.Username}: {u.Content}"); break;
-                case AriResponse r: sb.AppendLine($"ARI: {r.ContentText}");      break;
+                case Prompt u: sb.AppendLine($"{u.AuthorName}: {u.Text}"); break;
+                case Response r: sb.AppendLine($"ARI: {r.ContentText}");      break;
             }
         }
         return sb.ToString();

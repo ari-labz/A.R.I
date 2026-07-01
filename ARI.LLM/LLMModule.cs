@@ -226,7 +226,7 @@ public class LLMModule : ILLMModule, IDisposable
         thread.Deleted          += () => { threads.TryRemove(threadKey, out _); Broadcast(new AppEvent("threadDeleted", threadKey)); };
         thread.Streaming        += text => Broadcast(new AppEvent("streaming", threadKey, text));
         thread.StreamingFinished += () => Broadcast(new AppEvent("streamingFinished", threadKey));
-        // Persist a plain-text transcript to ARI/chat_history after every completed exchange.
+        // Persist a plain-text transcript to chat_history after every completed exchange.
         thread.ExchangeCompleted += (_, _) => ChatHistoryLogger.Write(thread);
         if (type == ThreadPipeline.Code)
             thread.BecameInactive += () => thread.MarkEngramProcessed();
@@ -524,12 +524,12 @@ public class LLMModule : ILLMModule, IDisposable
         foreach (KeyValuePair<string, Thread> entry in threads)
             foreach (ThreadItem item in entry.Value.History)
             {
-                if (item is AriResponse resp && (resp.CompletionTokens > 0 || resp.PromptTokens > 0))
+                if (item is Response resp && (resp.Data.CompletionTokens > 0 || resp.Data.PromptTokens > 0))
                     result.Add(new LlmCallStat(entry.Value.Pipeline.ToString(), entry.Key, resp.Timestamp,
-                        resp.CompletionTokens, resp.OutputTokenLimit,
-                        resp.PromptTokens, resp.ContextTokenLimit,
-                        resp.HadImageAttachments, resp.EstimatedTextPromptTokens,
-                        resp.ImageTokenLimit));
+                        resp.Data.CompletionTokens, resp.Data.OutputTokenLimit,
+                        resp.Data.PromptTokens, resp.Data.ContextTokenLimit,
+                        resp.Data.HadImageAttachments, resp.Data.EstimatedTextPromptTokens,
+                        resp.Data.ImageTokenLimit));
             }
 
         result.Sort((a, b) => a.Timestamp.CompareTo(b.Timestamp));

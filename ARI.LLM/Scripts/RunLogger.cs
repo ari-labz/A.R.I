@@ -5,7 +5,7 @@ using System.Text;
 namespace ARI.LLM;
 
 /// <summary>
-/// Writes a complete, human-readable transcript of a single Engram or Memory run to ARI/Logs.
+/// Writes a complete, human-readable transcript of a single Engram or Memory run to Logs.
 /// One markdown file per run capturing everything the model saw and every reasoning step, tool
 /// call, tool result and decision it made — the same data the Debug Thread view renders.
 ///
@@ -74,27 +74,27 @@ internal static class RunLogger
         // growing payload on every turn while still recording exactly what reached the model.
         int lastResponse = -1;
         for (int i = 0; i < thread.History.Count; i++)
-            if (thread.History[i] is AriResponse) lastResponse = i;
+            if (thread.History[i] is Response) lastResponse = i;
 
         int turn = 0;
         for (int i = 0; i < thread.History.Count; i++)
         {
             switch (thread.History[i])
             {
-                case UserMessage u:
-                    sb.AppendLine($"**{u.Username}:** {u.Content}");
+                case Prompt u:
+                    sb.AppendLine($"**{u.AuthorName}:** {u.Text}");
                     sb.AppendLine();
                     break;
-                case AriResponse r:
+                case Response r:
                     RenderResponse(sb, ++turn, r, dumpRequest: i == lastResponse);
                     break;
             }
         }
     }
 
-    private static void RenderResponse(StringBuilder sb, int turn, AriResponse r, bool dumpRequest)
+    private static void RenderResponse(StringBuilder sb, int turn, Response r, bool dumpRequest)
     {
-        sb.AppendLine($"### Turn {turn} — {r.ThinkingSeconds:F1}s · {r.PromptTokens} prompt / {r.CompletionTokens} completion tokens");
+        sb.AppendLine($"### Turn {turn} — {r.ThinkingSeconds:F1}s · {r.Data.PromptTokens} prompt / {r.Data.CompletionTokens} completion tokens");
         sb.AppendLine();
 
         if (r.Trace is { Count: > 0 })
@@ -120,12 +120,12 @@ internal static class RunLogger
             }
         }
 
-        if (dumpRequest && !string.IsNullOrWhiteSpace(r.DebugRequestJson))
+        if (dumpRequest && !string.IsNullOrWhiteSpace(r.Data.DebugRequestJson))
         {
             sb.AppendLine("<details><summary>Full request the model received (system prompt + all messages)</summary>");
             sb.AppendLine();
             sb.AppendLine("```json");
-            sb.AppendLine(r.DebugRequestJson!.Trim());
+            sb.AppendLine(r.Data.DebugRequestJson!.Trim());
             sb.AppendLine("```");
             sb.AppendLine();
             sb.AppendLine("</details>");

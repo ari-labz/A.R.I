@@ -75,9 +75,18 @@ internal sealed class ServerFileSystem : FileSystem
             if (absPath is null)        return "Access denied: path traversal is not allowed.";
             if (!File.Exists(absPath))  return $"File not found: {relPath}";
             // Preview-before-read: keeps context lean by forcing the model to see the line count and the
-            // large-file warning (and pick a range) before pulling content. preview_file marks the file.
+            // large-file warning (and pick a range) before pulling content. Rather than reject the call and
+            // make the model re-issue preview_file then read_file (a wasted round-trip), we auto-divert: run
+            // preview_file for it (which marks the file previewed), and return that outline with a note telling
+            // it why the call was diverted and to now read the specific range it needs.
             if (gate is not null && !gate.WasPreviewed(absPath))
-                return $"[System: Call preview_file on {relPath} first — it shows the line count and warns if the file is large — then read_file only the line ranges you need. This keeps context lean.]";
+            {
+                // Return the preview outline FIRST (result starts with "[preview:", not "[System:", so the loop
+                // renders it as a normal preview — Agent relabels the read card to "Previewing" — not an error card).
+                string outline = await Preview(argsJson);   // reads the same "path" arg; marks the file previewed
+                return $"{outline}\n\n[Note: you called read_file on {relPath} before previewing it, so the preview " +
+                       $"is shown above. Now call read_file on {relPath} with start_line/end_line to read the section you need.]";
+            }
 
             string[] lines      = await File.ReadAllLinesAsync(absPath, ct);
             int      totalLines = lines.Length;
