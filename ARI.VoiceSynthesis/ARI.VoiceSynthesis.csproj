@@ -14,4 +14,11 @@
     <ProjectReference Include="..\ARI.Common\ARI.Common.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Phonemization overrides copied into the StyleTTS2 submodule at runtime. -->
+    <Content Include="PhonemeSubstitutions.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>
