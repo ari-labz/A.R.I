@@ -1,0 +1,10 @@
+{
+  "_comment": "Phonemization overrides copied into the StyleTTS2 submodule at runtime (see StyleTtsSetupService). 'substitutions' rewrite spellings before gruut (regex, case-insensitive); 'phoneme_overrides' force a word's IPA verbatim (key = lowercased word as gruut sees it).",
+  "substitutions": [
+    { "pattern": "\\bA\\.R\\.I\\.?\\b", "replacement": "Ari" },
+    { "pattern": "\\bARI\\b", "replacement": "Ari" }
+  ],
+  "phoneme_overrides": {
+    "ari": "ˈɑːɹi"
+  }
+}

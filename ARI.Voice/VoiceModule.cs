@@ -18,11 +18,14 @@ public class VoiceModule : IVoiceModule
         ActiveModel      = modelName;
     }
 
-    public Task<byte[]> Synthesise(string text, CancellationToken ct = default, int diffusionSteps = 5, float alpha = 0.3f, float beta = 0.7f, float embeddingScale = 1.0f)
-        => synthesiser.Speak(text, ct, diffusionSteps, alpha, beta, embeddingScale);
+    public Task<byte[]> Synthesise(string text, CancellationToken ct = default, int diffusionSteps = 5, float alpha = 0.3f, float beta = 0.7f, float embeddingScale = 1.0f, float? speed = null, float? pauseScale = null)
+        => synthesiser.Speak(text, ct, diffusionSteps, alpha, beta, embeddingScale, speed, pauseScale);
 
-    public Task<byte[]> SynthesiseWithCheckpoint(string text, string checkpointPath, CancellationToken ct = default, int diffusionSteps = 5, float alpha = 0.3f, float beta = 0.7f, float embeddingScale = 1.0f)
-        => synthesiser.SpeakWithCheckpoint(text, checkpointPath, ct, diffusionSteps, alpha, beta, embeddingScale);
+    public Task<byte[]> SynthesiseWithCheckpoint(string text, string checkpointPath, CancellationToken ct = default, int diffusionSteps = 5, float alpha = 0.3f, float beta = 0.7f, float embeddingScale = 1.0f, float? speed = null, float? pauseScale = null)
+        => synthesiser.SpeakWithCheckpoint(text, checkpointPath, ct, diffusionSteps, alpha, beta, embeddingScale, speed, pauseScale);
+
+    public (float speed, float pauseScale) GetVoiceSettings() => (synthesiser.Speed, synthesiser.PauseScale);
+    public void SetVoiceSettings(float speed, float pauseScale) => synthesiser.SaveSettings(speed, pauseScale);
 
     public void Speak(string text) => queue.Enqueue(text);
 }
