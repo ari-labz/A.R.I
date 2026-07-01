@@ -32,14 +32,18 @@ internal sealed class WriteFile : Tool
 
     internal override Task<string> Execute(string argsJson) => fs.Write(argsJson);
 
+    // Enriched tool-start marker (with the +added diff from args) so the card keeps its badge and flips Writing→Wrote.
     internal override Func<string, string>? Display => args =>
     {
         try
         {
             using JsonDocument doc = JsonDocument.Parse(args);
-            string p = doc.RootElement.GetProperty("path").GetString() ?? "";
-            return $"<div class=\"tool-use\">Writing {p.Replace("&", "&amp;").Replace("<", "&lt;")}</div>\n";
+            JsonElement root = doc.RootElement;
+            string file = Path.GetFileName((root.GetProperty("path").GetString() ?? "").Trim()).Replace("--", "&#45;&#45;");
+            (int added, _) = DiffCounts.Of(root, contentProp: "content");
+            string diff = added > 0 ? $"|+{added}" : "";
+            return $"<!--ari-tool-start:write_file:{file}{diff}-->";
         }
-        catch { return "<div class=\"tool-use\">Writing file</div>\n"; }
+        catch { return "<!--ari-tool-start:write_file:file-->"; }
     };
 }

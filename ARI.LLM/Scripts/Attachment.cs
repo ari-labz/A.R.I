@@ -4,7 +4,7 @@ namespace ARI.LLM;
 
 /// <summary>
 /// A file attached to either a thread (persistent) or a message (ephemeral).
-/// Owner determines scope — Thread.Attachments vs UserMessage.Attachments.
+/// Owner determines scope — Thread.Attachments vs Prompt.Attachments.
 /// </summary>
 public class Attachment
 {

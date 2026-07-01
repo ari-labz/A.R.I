@@ -900,6 +900,22 @@ details.tool-card summary,
 }
 
 /* expandable diff tool card */
+/* Separate segments of one A·R·I response (plan / per-coder summary / final summary) and inline sub-threads. */
+.block-seg + .block-seg { margin-top: 10px; }
+
+/* A sub-thread rendered inline inside the parent response. Default-expanded; when open it looks like the
+   blocks simply belong to the parent (just a faint rail), so there's no visual seam. Collapsed → just the label. */
+details.subthread { display: block; margin: 8px 0; }
+details.subthread > summary.subthread-head {
+    display: flex; align-items: center; gap: 6px; cursor: pointer;
+    list-style: none; font-size: 12px; color: var(--text-dim, #8e8ea0);
+    padding: 1px 0 4px; user-select: none;
+}
+details.subthread > summary.subthread-head::-webkit-details-marker { display: none; }
+details.subthread > summary.subthread-head::before { content: "▾"; font-size: 10px; opacity: .7; }
+details.subthread:not([open]) > summary.subthread-head::before { content: "▸"; }
+details.subthread > .subthread-body { border-left: 2px solid rgba(255,255,255,.08); padding-left: 12px; }
+
 details.tool-card { display: block; width: fit-content; cursor: pointer; }
 details.tool-card summary {
     display: flex; align-items: center; gap: 6px;

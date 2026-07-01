@@ -6,7 +6,9 @@ eval/
 ## Markdown files — only the root README is tracked.
 *.md
 !README.md
-## Generated runtime logs — the ARI/Logs and ARI/chat_history dirs keep themselves via their own inner .gitignore.
+## Generated runtime data (chat transcripts + Engram/Memory run logs) — now live at the repo root, not tracked.
+/chat_history/
+/Logs/
 *.log
 
 ## Ignore Visual Studio temporary files, build results, and

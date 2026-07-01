@@ -5,7 +5,7 @@ using System.Text;
 namespace ARI.LLM;
 
 /// <summary>
-/// Maintains a plain-text transcript of each user-facing thread under ARI/chat_history (one .txt
+/// Maintains a plain-text transcript of each user-facing thread under chat_history (one .txt
 /// file per thread, named by thread key). Rewritten after every completed exchange so the file
 /// always reflects the full conversation.
 ///
@@ -50,12 +50,12 @@ internal static class ChatHistoryLogger
     /// <summary>Renders the user/ARI turns. Streaming/cancelled responses and internal items are skipped.</summary>
     private static string? Render(ThreadItem item) => item switch
     {
-        UserMessage u => $"[{u.Timestamp:yyyy-MM-dd HH:mm:ss}] {u.Username}: {u.Content}{Attachments(u)}",
-        AriResponse { State: AriResponseState.Complete } r => $"[{r.Timestamp:yyyy-MM-dd HH:mm:ss}] ARI: {r.ContentText}",
+        Prompt u => $"[{u.Timestamp:yyyy-MM-dd HH:mm:ss}] {u.AuthorName}: {u.Text}{Attachments(u)}",
+        Response { State: State.Complete } r => $"[{r.Timestamp:yyyy-MM-dd HH:mm:ss}] ARI: {r.ContentText}",
         _ => null,
     };
 
-    private static string Attachments(UserMessage u) =>
+    private static string Attachments(Prompt u) =>
         u.Attachments is { Count: > 0 } a ? $"  [attachments: {string.Join(", ", a.Select(x => x.Name))}]" : "";
 
     private static string Sanitize(string name)
