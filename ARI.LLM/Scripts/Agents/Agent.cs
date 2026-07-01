@@ -63,9 +63,6 @@ public abstract class Agent
     // ── Context-building hooks (overridden by specialised agents) ────────────
     internal virtual string BuildPersistentContext(Thread thread)    => "";
     internal virtual string RenderDynamicContextBlock(Thread thread) => "";
-    internal virtual int    IncompleteTasks(Thread thread)           => 0;
-    internal virtual bool   HasTasks(Thread thread)                  => false;
-    internal virtual string PendingTaskSummary(Thread thread)        => "";
 
     // ── Tool-loop hooks (Code overrides; base = generic, no-guard behaviour) ──────
     // Per-turn state for the tool loop. The base carries only what the generic loop reads; Code's
@@ -501,7 +498,6 @@ public abstract class Agent
         int             consecutiveFallbacks = 0;
         List<string>    toolResults          = new();
         int                     continueNudges = 0;
-        int                     todoReminders = 0;
         // All Code-specific per-turn guard state (read/edit/command dedup, build state, loop counters) lives
         // here; the generic loop only reads ToolTurnState.ForceNoMoreTools. See Code.ToolLoop.cs.
         ToolTurnState           toolTurn      = CreateToolTurnState();
@@ -1355,19 +1351,6 @@ public abstract class Agent
             }
 
             bool toolsStillAvailable = !toolTurn.ForceNoMoreTools && !(MaxToolCalls > 0 && toolCallCount >= MaxToolCalls);
-            if (pendingCalls.Count == 0 && IncompleteTasks(thread) > 0 && todoReminders < 1 && toolsStillAvailable)
-            {
-                todoReminders++;
-                string pending = PendingTaskSummary(thread);
-                Shared.Logger.LogInformation("[{Agent}] ({Thread}) finish-time checklist reminder ({Count} incomplete).", Name, thread.Key, IncompleteTasks(thread));
-                messages.Add(new { role = "user", content =
-                    $"[System: You still have incomplete checklist items:\n{pending}\n" +
-                    "Complete them now (make the changes, then call update_todos to mark them completed), " +
-                    "or call update_todos to remove any that are no longer needed. Do not finish until the checklist is resolved.]" });
-                responseBuilder.Clear();
-                continue;
-            }
-
             if (pendingCalls.Count == 0 && toolsStillAvailable && continueNudges < 2)
             {
                 string tail = responseBuilder.ToString().TrimEnd();

@@ -27,21 +27,6 @@ const TOOL_VERBS: Record<string, { active: string; done: string }> = {
     move_file:      { active: "Moving",            done: "Moved" },
 }
 
-// Renders the update_todos checklist marker (base64 "status\tcontent" lines) into an HTML list.
-function renderTodoChecklist(b64: string): string {
-    let decoded = ""
-    try { decoded = b64 ? atob(b64) : "" } catch { decoded = "" }
-    const rows = decoded.split("\n").filter(l => l.length > 0).map(line => {
-        const tab = line.indexOf("\t")
-        const status  = tab >= 0 ? line.slice(0, tab) : "pending"
-        const content = tab >= 0 ? line.slice(tab + 1) : line
-        const glyph = status === "completed" ? "☑" : status === "in_progress" ? "◐" : "☐"
-        return `<li class="todo-item todo-item--${status}"><span class="todo-glyph">${glyph}</span> ${escHtml(content)}</li>`
-    }).join("")
-    if (!rows) return ""
-    return `\n\n<div class="tool-card tool-card--todos"><div class="todo-title">Task checklist</div><ul class="todo-list">${rows}</ul></div>\n\n`
-}
-
 function parseDiffLabel(rawLabel: string): { fileLabel: string; added: number; removed: number; patch: string } | null {
     const parts = rawLabel.split("|")
     if (parts.length < 2) return null
@@ -73,11 +58,6 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
     // directly against prose (e.g. "...`File.cs`.<div class=\"tool-use\">…") makes `marked` treat the whole
     // prose line as a raw HTML block and skip inline markdown — so `code` shows literal backticks (issue #69).
     content = content.replace(/[ \t]*\n?[ \t]*(<div class="tool-use">[\s\S]*?<\/div>)[ \t]*\n?[ \t]*/g, "\n\n$1\n\n")
-
-    // update_todos renders as a checklist card, decoupled from the file start/end pairing logic:
-    // drop its start marker and convert its end marker (base64 list) directly into HTML.
-    content = content.replace(/<!--ari-tool-start:update_todos:[^>]*?-->/g, "")
-    content = content.replace(/<!--ari-tool-end:update_todos:([^>]*?)-->/g, (_, b64) => renderTodoChecklist(b64))
 
     // Step 1: collect diff data from enriched end markers as an ordered queue.
     // Using a queue (not a map) so multiple edits to the same file each get their own data,
@@ -190,7 +170,7 @@ const CARD_VERBS: Record<string, { active: string; done: string }> = {
 type BlockLike = {
     type: string; state?: number
     text?: string; fileName?: string; path?: string; pattern?: string; command?: string
-    task?: string; project?: string; added?: number; removed?: number; patch?: string; encoded?: string
+    task?: string; project?: string; added?: number; removed?: number; patch?: string
     label?: string; blocks?: BlockLike[]
 }
 
@@ -208,7 +188,6 @@ export function renderBlockHtml(block: BlockLike): string {
 
     if (block.type === "text")     return marked.parse(block.text ?? "", { async: false }) as string
     if (block.type === "thinking") return ""   // reasoning is shown via the thought-block, not inline
-    if (block.type === "todolist") return renderTodoChecklist(block.encoded ?? "")
 
     // Subthread anchor: a child thread rendered inline. Default-expanded and, when open, styled to look like
     // the blocks simply belong to the parent (no bubble chrome) — collapsing hides them behind the label.

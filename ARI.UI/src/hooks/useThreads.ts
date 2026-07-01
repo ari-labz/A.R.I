@@ -52,7 +52,6 @@ export interface ContentBlock {
     added?:     number
     removed?:   number
     patch?:     string
-    encoded?:   string
     // subthread anchor: a labelled, inline child thread whose blocks render nested here
     label?:     string
     blocks?:    ContentBlock[]
