@@ -1,0 +1,3 @@
+[submodule "External/StyleTTS2"]
+	path = External/StyleTTS2
+	url = https://github.com/Xywren/StyleTTS2.git
