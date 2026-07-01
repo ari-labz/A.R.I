@@ -8,68 +8,14 @@ public class StyleTtsSetupService(string styleTtsPath, ILogger? logger = null)
     private const string VENV_SUBDIR = "venv";
     private static string Python     => OperatingSystem.IsWindows() ? "python" : "/opt/homebrew/bin/python3.11";
     private static string PythonArgs => "";
-    private const string REPO_URL    = "https://github.com/yl4579/StyleTTS2.git";
 
+    // StyleTTS2 is now vendored as a git submodule (Xywren/StyleTTS2 fork), so the source files
+    // are always present — no clone or source-patching on first run. This only provisions the
+    // Python virtual environment (gitignored, so it must be created locally) and its dependencies.
     public async Task Install()
     {
         string venv    = Path.Combine(styleTtsPath, VENV_SUBDIR);
         string repoDir = styleTtsPath;
-
-        if (!Directory.Exists(styleTtsPath))
-            Directory.CreateDirectory(styleTtsPath);
-
-        // Clone the repo if not already present.
-        // Clone into a temp dir first so we don't clobber an existing venv in repoDir.
-        if (!File.Exists(Path.Combine(repoDir, "train_finetune.py")))
-        {
-            logger?.LogInformation("Cloning StyleTTS2 repository...");
-            string tmp = repoDir + "_clone_tmp";
-            if (Directory.Exists(tmp)) Directory.Delete(tmp, recursive: true);
-            await RunExe("git", $"clone {REPO_URL} \"{tmp}\"", Path.GetDirectoryName(styleTtsPath)!);
-
-            foreach (string src in Directory.GetFiles(tmp))
-                File.Copy(src, Path.Combine(repoDir, Path.GetFileName(src)), overwrite: true);
-            foreach (string srcDir in Directory.GetDirectories(tmp))
-            {
-                string dirName = Path.GetFileName(srcDir);
-                if (dirName == VENV_SUBDIR) continue;
-                string dest = Path.Combine(repoDir, dirName);
-                if (Directory.Exists(dest)) Directory.Delete(dest, recursive: true);
-                Directory.Move(srcDir, dest);
-            }
-            Directory.Delete(tmp, recursive: true);
-        }
-
-        // train_finetune.py hardcodes device = 'cuda' — patch it to read from config
-        string trainScript = Path.Combine(repoDir, "train_finetune.py");
-        if (File.Exists(trainScript))
-        {
-            string src = File.ReadAllText(trainScript);
-            string patched = src
-                .Replace("device = 'cuda'", "device = config.get('device', 'cuda')")
-                // forking after MPS init causes segfaults in DataLoader workers on macOS
-                .Replace("num_workers=2,", "num_workers=0,")
-                // MPS doesn't support float64; numpy defaults to float64 so cast explicitly
-                .Replace("torch.from_numpy(y).to(device)", "torch.from_numpy(y).float().to(device)")
-                // NaN loss triggers an interactive debugger which blocks the non-interactive process; skip instead
-                .Replace(
-                    "from IPython.core.debugger import set_trace\n                set_trace()",
-                    "continue")
-                // validation loop may have 0 iters if all batches are skipped; guard division
-                .Replace(
-                    "logger.info('Validation loss: %.3f, Dur loss: %.3f, F0 loss: %.3f' % (loss_test / iters_test, loss_align / iters_test, loss_f / iters_test) + '\\n\\n\\n')\n        print('\\n\\n\\n')\n        writer.add_scalar('eval/mel_loss', loss_test / iters_test, epoch + 1)\n        writer.add_scalar('eval/dur_loss', loss_test / iters_test, epoch + 1)\n        writer.add_scalar('eval/F0_loss', loss_f / iters_test, epoch + 1)",
-                    "if iters_test > 0:\n            logger.info('Validation loss: %.3f, Dur loss: %.3f, F0 loss: %.3f' % (loss_test / iters_test, loss_align / iters_test, loss_f / iters_test) + '\\n\\n\\n')\n            writer.add_scalar('eval/mel_loss', loss_test / iters_test, epoch + 1)\n            writer.add_scalar('eval/dur_loss', loss_test / iters_test, epoch + 1)\n            writer.add_scalar('eval/F0_loss', loss_f / iters_test, epoch + 1)\n        print('\\n\\n\\n')");
-            // yield GPU briefly each step so WindowServer can check in and avoid kernel panic. This anchor SURVIVES
-            // its own replacement (the new text keeps "iters = iters + 1"), so chaining it would stack another sleep
-            // line on EVERY setup run. Guard it so it applies exactly once.
-            if (!patched.Contains("_time.sleep(0.05)"))
-                patched = patched.Replace(
-                    "iters = iters + 1",
-                    "iters = iters + 1\n            import time as _time; _time.sleep(0.05)");
-
-            if (patched != src)
-                File.WriteAllText(trainScript, patched);
-        }
 
         if (!Directory.Exists(venv))
         {
