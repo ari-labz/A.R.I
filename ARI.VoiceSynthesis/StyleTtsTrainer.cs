@@ -543,7 +543,7 @@ slmadv_params:
             "        parts = line.split('|')\n" +
             "        if len(parts) < 3:\n" +
             "            out.append(line); continue\n" +
-            "        parts[1] = phonemize(preprocess(parts[1]))\n" +
+            "        parts[1] = phonemize(preprocess(parts[1])).replace('|', ' ')\n" +
             "        out.append('|'.join(parts))\n" +
             "with open(path, 'w', encoding='utf-8') as f:\n" +
             "    f.write('\\n'.join(out) + '\\n')\n" +
