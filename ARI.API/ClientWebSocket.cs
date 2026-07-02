@@ -17,17 +17,51 @@ public static class ClientWebSocket
     // Persistent per-thread file tool state — survives WebSocket reconnections until the thread is deleted.
     private static readonly ConcurrentDictionary<string, FileToolState> threadFileState = new();
 
+    // Which connection currently owns the registered client tools on a given thread. A stale connection's
+    // cleanup must NOT strip tools a newer connection has re-registered on the same thread — that is how a
+    // reconnect mid-turn left the architect with tools=0 and pushed it into the toolless parsing fallback.
+    private static readonly ConcurrentDictionary<string, Guid> threadToolOwner = new();
+
     private sealed class FileToolState
     {
+        // Guardrail scope of the AGENT this state belongs to. The architect's state is the root; each spawned
+        // Coder gets a FRESH child scope (its context starts empty, so it must never inherit the parent's
+        // "already read" ledger) linked back here so an edit made by one agent invalidates the other's ranges.
+        public FileToolState? Parent { get; init; }
+
         // Files modified by write_file or edit_file this session. Must be re-read before further edits.
         public ConcurrentDictionary<string, byte> DirtyFiles   { get; } = new(StringComparer.OrdinalIgnoreCase);
         // Consecutive edit_file failures per file. Reset on read_file.
         public ConcurrentDictionary<string, int>  EditFailures { get; } = new(StringComparer.OrdinalIgnoreCase);
-        // Line ranges already read per file this session. WHY: re-reading a range the model already has in
-        // context re-injects thousands of UNCACHED tokens (a single big re-read measured ~150s of prompt
-        // processing) and adds nothing. We short-circuit a covered re-read with a pointer instead. Cleared
-        // when the file is edited (line numbers shift, so a fresh read is legitimate).
-        public ConcurrentDictionary<string, List<(int Start, int End)>> ReadRanges { get; } = new(StringComparer.OrdinalIgnoreCase);
+        // Line ranges already read per file, tagged with the user-turn serial they were read in. WHY: re-reading
+        // a range the model already has in context re-injects thousands of UNCACHED tokens (a single big re-read
+        // measured ~150s of prompt processing) and adds nothing — so a covered re-read is short-circuited with a
+        // pointer. Scoped to the CURRENT turn only: content read in an earlier turn may have been condensed out
+        // of the model's context, and "scroll up to that result" is a lie once it has been. Cleared when the
+        // file is edited (line numbers shift, so a fresh read is legitimate).
+        public ConcurrentDictionary<string, List<(int Start, int End, int Turn)>> ReadRanges { get; } = new(StringComparer.OrdinalIgnoreCase);
+        // Files previewed this session. preview_file must precede read_file (the model sees the line count
+        // and outline, then picks a range) — the same gate ServerFileSystem enforces for local projects.
+        public ConcurrentDictionary<string, byte> PreviewedFiles { get; } = new(StringComparer.OrdinalIgnoreCase);
+        // Raw pre-edit content per file, captured just before this scope's FIRST edit/write of that file —
+        // the restore point revert_file writes back. Per-scope on purpose: a Coder reverts to the state the
+        // file was in when ITS task began, not to before an earlier coder's completed work.
+        public ConcurrentDictionary<string, string> Snapshots { get; } = new(StringComparer.OrdinalIgnoreCase);
+        // Line counts learned from preview_file, used to serve small files directly instead of forcing the
+        // preview-then-re-read round-trip dance.
+        public ConcurrentDictionary<string, int> KnownLineCounts { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The file changed on disk: forget recorded read ranges and preview state for it in this
+        /// scope AND every linked scope (parent chain) — their line numbers are stale now too.</summary>
+        public void InvalidateFile(string path)
+        {
+            for (FileToolState? s = this; s is not null; s = s.Parent)
+            {
+                s.ReadRanges.TryRemove(path, out _);
+                s.PreviewedFiles.TryRemove(path, out _);
+                s.KnownLineCounts.TryRemove(path, out _);
+            }
+        }
     }
 
     public static async Task HandleAsync(WebSocket ws, HttpContext ctx, LLMModule llm, ILogger log)
@@ -41,6 +75,7 @@ public static class ClientWebSocket
 
         var fileTree = new List<string>();
         var state    = new ConnectionState();
+        Guid connId  = Guid.NewGuid();
 
         // Get or create persistent file-tool state for this thread.
         FileToolState fileState = threadFileState.GetOrAdd(threadKey, _ => new FileToolState());
@@ -58,12 +93,12 @@ public static class ClientWebSocket
             return;
         }
 
-        RegisterTools(codeThread, ws, log, fileState);
+        RegisterTools(codeThread, ws, log, fileState, connId);
 
         try
         {
             log.LogInformation("[Client] Entering receive loop");
-            await ReceiveLoop(ws, llm, codeThread, threadKey, fileTree, state, fileState, log);
+            await ReceiveLoop(ws, llm, codeThread, threadKey, fileTree, state, fileState, log, connId);
         }
         catch (Exception ex)
         {
@@ -71,38 +106,76 @@ public static class ClientWebSocket
         }
         finally
         {
-            foreach (string tool in ClientToolNames)
-                codeThread.UnregisterTool(tool);
+            UnregisterIfOwner(codeThread, connId, log);
             log.LogInformation("[Client] Session ended ({Thread})", threadKey);
         }
     }
 
     private static readonly string[] ClientToolNames =
         { "preview_file", "read_file", "list_directory", "search_files", "find_files", "edit_file", "write_file",
-          "delete_file", "move_file", "run_command" };
+          "delete_file", "move_file", "run_command", "revert_file" };
 
-    private static void RegisterTools(ARI.LLM.Thread thread, WebSocket ws, ILogger log, FileToolState fileState)
+    /// <summary>Removes this connection's client tools from the thread — but ONLY if this connection is still
+    /// the registered owner. A stale (reconnected-over) connection closing late must not strip the tools the
+    /// live connection just registered: that left the architect mid-turn with zero tools.</summary>
+    private static void UnregisterIfOwner(ARI.LLM.Thread thread, Guid connId, ILogger log)
     {
-        RegisterTool(thread, ws, log,
-            name: "run_command",
-            description: "Run a shell command in the project's root directory and get back its stdout, stderr and exit code. Use this to build, test, or inspect the project after making changes — e.g. 'dotnet build', 'dotnet test', 'git status'. Commands not on the user's allow list require their approval before running, so prefer concrete, non-destructive commands and do not chain commands with ; && or |.",
-            parameters: new { type = "object", properties = new { command = new { type = "string", description = "The exact command line to run, e.g. 'dotnet build'." } }, required = new[] { "command" } },
-            displayVerb: "Running", displayDoneVerb: "Ran",
-            labelField: "command",
-            customDisplay:     argsJson => RunCommandMarker(argsJson, "start"),
-            customDisplayDone: argsJson => RunCommandMarker(argsJson, "end"),
-            preCheck: argsJson => CheckRunCommand(argsJson));
+        if (!threadToolOwner.TryGetValue(thread.Key, out Guid owner) || owner != connId)
+        {
+            log.LogInformation("[Client] Skipping tool unregister on {Thread} — a newer connection owns the tools.", thread.Key);
+            return;
+        }
+        threadToolOwner.TryRemove(thread.Key, out _);
+        thread.ClientToolCloner = null;
+        foreach (string tool in ClientToolNames)
+            thread.UnregisterTool(tool);
+    }
+
+    private static void RegisterTools(ARI.LLM.Thread thread, WebSocket ws, ILogger log, FileToolState fileState, Guid connId)
+    {
+        threadToolOwner[thread.Key] = connId;
+
+        // Spawned Coder sub-threads get their OWN guardrail scope (fresh read/preview ledgers, own snapshots)
+        // linked to this one, over the same socket. Without this a Coder inherits "already read" state for
+        // content its empty context has never seen, gets every read blocked, and edits blind.
+        thread.ClientToolCloner = child =>
+        {
+            RegisterCoderScopeTools(child, ws, log, new FileToolState { Parent = fileState }, thread);
+            return true;
+        };
+
+        RegisterAgentTools(thread, ws, log, fileState, epochThread: thread, coderScope: false);
+    }
+
+    /// <summary>The lean executor toolset for a spawned Coder (no search/list/find/run — those make a think-off
+    /// Coder wander), with its own guardrail scope. Turn epochs come from the PARENT thread (the user turn).</summary>
+    private static void RegisterCoderScopeTools(ARI.LLM.Thread child, WebSocket ws, ILogger log, FileToolState childState, ARI.LLM.Thread epochThread)
+        => RegisterAgentTools(child, ws, log, childState, epochThread, coderScope: true);
+
+    private static void RegisterAgentTools(ARI.LLM.Thread thread, WebSocket ws, ILogger log, FileToolState fileState, ARI.LLM.Thread epochThread, bool coderScope)
+    {
+        if (!coderScope)
+            RegisterTool(thread, ws, log,
+                name: "run_command",
+                description: "Run a shell command in the project's root directory and get back its stdout, stderr and exit code. Use this to build, test, or inspect the project after making changes — e.g. 'dotnet build', 'dotnet test', 'git status'. Commands not on the user's allow list require their approval before running, so prefer concrete, non-destructive commands and do not chain commands with ; && or |.",
+                parameters: new { type = "object", properties = new { command = new { type = "string", description = "The exact command line to run, e.g. 'dotnet build'." } }, required = new[] { "command" } },
+                displayVerb: "Running", displayDoneVerb: "Ran",
+                labelField: "command",
+                customDisplay:     argsJson => RunCommandMarker(argsJson, "start"),
+                customDisplayDone: argsJson => RunCommandMarker(argsJson, "end"),
+                preCheck: argsJson => CheckRunCommand(argsJson));
 
         RegisterTool(thread, ws, log,
             name: "preview_file",
             description: "Get a structural outline of a file — line count, size, and landmarks (classes, methods, JSON keys, headings) with line numbers. Call this before read_file on any unfamiliar file to find the right line range.",
             parameters: new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root." } }, required = new[] { "path" } },
             displayVerb: "Previewing", displayDoneVerb: "Previewed",
-            labelField: "path");
+            labelField: "path",
+            postHook: (argsJson, result) => { MarkPreviewed(argsJson, result, fileState); return null; });
 
         RegisterTool(thread, ws, log,
             name: "read_file",
-            description: "Read a file from the user's project. Lines come back numbered so you can edit_file by line number afterwards. Read ONLY the part you need: pass start_line and end_line to read a specific range, and use preview_file or search_files first to locate that range. Omitting both reads the whole file — fine for a small file, but on a large file it wastes context, so read a range instead. You rarely need to re-read a file you already have, or to re-read after editing (edit_file returns the updated lines around your change).",
+            description: "Read a file from the user's project. Lines come back numbered so you can edit_file by line number afterwards. HARD LIMIT: at most 100 lines per call — wider requests are rejected without being read. ALWAYS call preview_file on a file BEFORE your first read_file on it — preview shows the line count and outline so you pick the right range. Pass start_line and end_line spanning at most 100 lines, and use search_files to locate the range. To cover a longer stretch, read consecutive 100-line windows (1-100, then 101-200, ...) — they stack in your context as one continuous view. You rarely need to re-read a file you already have, or to re-read after editing (edit_file returns the updated lines around your change).",
             parameters: new { type = "object", properties = new {
                 path       = new { type = "string",  description = "File path relative to project root" },
                 start_line = new { type = "integer", description = "First line to read (1-based, inclusive). Omit to read from the start." },
@@ -110,22 +183,27 @@ public static class ClientWebSocket
             }, required = new[] { "path" } },
             displayVerb: "Reading", displayDoneVerb: "Read",
             labelField: "path",
-            preCheck: argsJson => CheckRedundantRead(argsJson, fileState),
-            postHook: (argsJson, result) => ReadPostHook(argsJson, result, fileState));
+            preCheck: argsJson => CheckRedundantRead(argsJson, fileState, epochThread)
+                                  ?? CheckReadWindow(argsJson, fileState),
+            postHook: (argsJson, result) => ReadPostHook(argsJson, result, fileState, epochThread),
+            divert:   argsJson => PreviewBeforeRead(argsJson, ws, log, fileState));
 
-        RegisterTool(thread, ws, log,
-            name: "list_directory",
-            description: "List files and subdirectories at a path within the project.",
-            parameters: new { type = "object", properties = new { path = new { type = "string", description = "Directory path relative to project root. Defaults to root." } }, required = Array.Empty<string>() },
-            displayVerb: "Listing directory", displayDoneVerb: "Listed directory",
-            labelField: "path");
+        if (!coderScope)
+        {
+            RegisterTool(thread, ws, log,
+                name: "list_directory",
+                description: "List files and subdirectories at a path within the project.",
+                parameters: new { type = "object", properties = new { path = new { type = "string", description = "Directory path relative to project root. Defaults to root." } }, required = Array.Empty<string>() },
+                displayVerb: "Listing directory", displayDoneVerb: "Listed directory",
+                labelField: "path");
 
-        RegisterTool(thread, ws, log,
-            name: "search_files",
-            description: "Search file contents with a regular expression. Returns each match as 'path:line: text' — the line numbers let you edit_file directly WITHOUT reading the whole file. Case-sensitive by default; set ignore_case for a case-insensitive search. Use this to find every call site / definition before changing a symbol.",
-            parameters: new { type = "object", properties = new { pattern = new { type = "string", description = "Regular expression to search for, e.g. 'GrantAccess\\(' or 'class\\s+Token'." }, path = new { type = "string", description = "Directory to search in, relative to project root." }, glob = new { type = "string", description = "File filter e.g. '*.cs'. Defaults to all files." }, ignore_case = new { type = "boolean", description = "Set true for a case-insensitive match. Defaults to false." } }, required = new[] { "pattern" } },
-            displayVerb: "Searching", displayDoneVerb: "Searched",
-            labelField: "pattern");
+            RegisterTool(thread, ws, log,
+                name: "search_files",
+                description: "Search file contents with a regular expression. Returns each match as 'path:line: text' — the line numbers let you edit_file directly WITHOUT reading the whole file. Case-sensitive by default; set ignore_case for a case-insensitive search. Use this to find every call site / definition before changing a symbol.",
+                parameters: new { type = "object", properties = new { pattern = new { type = "string", description = "Regular expression to search for, e.g. 'GrantAccess\\(' or 'class\\s+Token'." }, path = new { type = "string", description = "Directory to search in, relative to project root." }, glob = new { type = "string", description = "File filter e.g. '*.cs'. Defaults to all files." }, ignore_case = new { type = "boolean", description = "Set true for a case-insensitive match. Defaults to false." } }, required = new[] { "pattern" } },
+                displayVerb: "Searching", displayDoneVerb: "Searched",
+                labelField: "pattern");
+        }
 
         RegisterTool(thread, ws, log,
             name: "edit_file",
@@ -167,6 +245,7 @@ public static class ClientWebSocket
                 catch { return $"<!--ari-tool-end:edit_file:{label}|+0|-0-->"; }
             },
             preCheck: argsJson => CheckDirty(argsJson, fileState),
+            preForward: argsJson => EnsureSnapshot(argsJson, ws, log, fileState),
             postHook: (argsJson, result) => TrackEditResult(argsJson, result, fileState));
 
         RegisterTool(thread, ws, log,
@@ -206,14 +285,16 @@ public static class ClientWebSocket
                 catch { return "<!--ari-tool-end:write_file:file-->"; }
             },
             preCheck: argsJson => CheckDirty(argsJson, fileState),
+            preForward: argsJson => EnsureSnapshot(argsJson, ws, log, fileState),
             postHook: (argsJson, result) => { MarkWriteDirty(argsJson, result, fileState); return null; });
 
-        RegisterTool(thread, ws, log,
-            name: "find_files",
-            description: "Find files by name with a glob pattern, e.g. '*.cs', 'Token*.cs', or '**/Security/*.cs'. Returns paths relative to the project root. Use search_files to match file contents.",
-            parameters: new { type = "object", properties = new { pattern = new { type = "string", description = "Glob pattern, e.g. '*.cs' or '**/Token*.cs'." }, path = new { type = "string", description = "Directory to search under, relative to project root. Defaults to root." } }, required = new[] { "pattern" } },
-            displayVerb: "Finding", displayDoneVerb: "Found",
-            labelField: "pattern");
+        if (!coderScope)
+            RegisterTool(thread, ws, log,
+                name: "find_files",
+                description: "Find files by name with a glob pattern, e.g. '*.cs', 'Token*.cs', or '**/Security/*.cs'. Returns paths relative to the project root. Use search_files to match file contents.",
+                parameters: new { type = "object", properties = new { pattern = new { type = "string", description = "Glob pattern, e.g. '*.cs' or '**/Token*.cs'." }, path = new { type = "string", description = "Directory to search under, relative to project root. Defaults to root." } }, required = new[] { "pattern" } },
+                displayVerb: "Finding", displayDoneVerb: "Found",
+                labelField: "pattern");
 
         RegisterTool(thread, ws, log,
             name: "delete_file",
@@ -228,6 +309,19 @@ public static class ClientWebSocket
             parameters: new { type = "object", properties = new { source = new { type = "string", description = "Current file path relative to project root." }, destination = new { type = "string", description = "New file path relative to project root." } }, required = new[] { "source", "destination" } },
             displayVerb: "Moving", displayDoneVerb: "Moved",
             labelField: "source");
+
+        // revert_file — restore a file to the snapshot captured before this agent's first edit of it. Fully
+        // server-side (the snapshot is written back via the client's write_file); the client never sees a
+        // "revert_file" op. The Coder's prompts and the loop-guard nudges direct the model here when an edit
+        // leaves a file broken — before this registration existed, that advice dead-ended in "unknown tool"
+        // and the model shipped the broken file as success.
+        RegisterTool(thread, ws, log,
+            name: "revert_file",
+            description: "Restore a file to its pre-edit snapshot (taken automatically before your first edit of it this task). Use when an edit has left the file broken and a single tight follow-up edit cannot fix it: revert, re-read, then redo the edit from scratch.",
+            parameters: new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root." } }, required = new[] { "path" } },
+            displayVerb: "Reverting", displayDoneVerb: "Reverted",
+            labelField: "path",
+            divert: argsJson => RevertFromSnapshot(argsJson, ws, log, fileState));
     }
 
     // ── File-tool guardrail helpers ──────────────────────────────────────────────
@@ -304,24 +398,25 @@ public static class ClientWebSocket
         }
         else if (!result.StartsWith("[Error:", StringComparison.OrdinalIgnoreCase))
         {
-            // Successful edit — mark dirty, reset failure counter, and forget prior read ranges:
-            // the edit shifted line numbers, so a fresh read is legitimate (not a redundant re-read).
+            // Successful edit — mark dirty, reset failure counter, and forget prior read ranges in THIS scope
+            // and every linked scope (an edit by a Coder stales the architect's ranges too): the edit shifted
+            // line numbers, so a fresh read is legitimate (not a redundant re-read).
             fileState.EditFailures.TryRemove(path, out _);
             fileState.DirtyFiles.TryAdd(path, 0);
-            fileState.ReadRanges.TryRemove(path, out _);
+            fileState.InvalidateFile(path);
         }
 
         return null;
     }
 
-    /// <summary>On successful write_file, marks the file as dirty and forgets prior read ranges.</summary>
+    /// <summary>On successful write_file, marks the file as dirty and forgets prior read ranges everywhere.</summary>
     private static void MarkWriteDirty(string argsJson, string result, FileToolState fileState)
     {
         string path = ExtractToolPath(argsJson);
         if (!string.IsNullOrEmpty(path) && result.StartsWith("Successfully", StringComparison.OrdinalIgnoreCase))
         {
             fileState.DirtyFiles.TryAdd(path, 0);
-            fileState.ReadRanges.TryRemove(path, out _);
+            fileState.InvalidateFile(path);
         }
     }
 
@@ -336,60 +431,111 @@ public static class ClientWebSocket
     }
 
     /// <summary>
-    /// Parses a read_file range. Missing start_line means "from the top" (1); missing end_line means
-    /// "to the end" (int.MaxValue). A read with neither is the whole file (1..MaxValue).
-    /// </summary>
-    private static (int Start, int End) ExtractReadRange(string argsJson)
-    {
-        try
-        {
-            using JsonDocument doc = JsonDocument.Parse(argsJson);
-            JsonElement root = doc.RootElement;
-            int start = root.TryGetProperty("start_line", out JsonElement se) && se.TryGetInt32(out int s) && s > 0 ? s : 1;
-            int end   = root.TryGetProperty("end_line",   out JsonElement ee) && ee.TryGetInt32(out int e) && e > 0 ? e : int.MaxValue;
-            if (end < start) end = start;
-            return (start, end);
-        }
-        catch { return (1, int.MaxValue); }
-    }
-
-    /// <summary>
     /// Soft dedup for read_file. If the requested range is already fully covered by a range read earlier
-    /// (and the file has NOT been edited since — line numbers still valid), short-circuits with a pointer
-    /// instead of re-sending the bytes. WHY: a covered re-read re-injects uncached tokens (a big re-read
-    /// measured ~150s of prompt processing) and tells the model nothing new. This nudges, it does not ban:
+    /// IN THE SAME USER TURN (and the file has NOT been edited since — line numbers still valid),
+    /// short-circuits with a pointer instead of re-sending the bytes. WHY: a covered re-read re-injects
+    /// uncached tokens (a big re-read measured ~150s of prompt processing) and tells the model nothing new.
+    /// Scoped to the current turn because earlier turns' reads may have been condensed out of the model's
+    /// context — pointing at content that is no longer there wedges the agent. This nudges, it does not ban:
     /// the model can still read a different/wider range, and any read is allowed after an edit.
     /// </summary>
-    private static string? CheckRedundantRead(string argsJson, FileToolState fileState)
+    private static string? CheckRedundantRead(string argsJson, FileToolState fileState, ARI.LLM.Thread epochThread)
     {
         string path = ExtractToolPath(argsJson);
         if (string.IsNullOrEmpty(path)) return null;
         if (fileState.DirtyFiles.ContainsKey(path)) return null; // edited since — a fresh read is legitimate
-        if (!fileState.ReadRanges.TryGetValue(path, out List<(int Start, int End)>? ranges) || ranges is null) return null;
+        if (!fileState.ReadRanges.TryGetValue(path, out List<(int Start, int End, int Turn)>? ranges) || ranges is null) return null;
 
-        (int reqStart, int reqEnd) = ExtractReadRange(argsJson);
+        int turn = epochThread.TurnSerial;
+        (int reqStart, int reqEnd) = ARI.LLM.ReadFile.ExtractRange(argsJson);
         lock (ranges)
         {
-            foreach ((int s, int e) in ranges)
+            foreach ((int s, int e, int t) in ranges)
             {
-                if (s <= reqStart && e >= reqEnd)
+                if (t == turn && s <= reqStart && e >= reqEnd)
                 {
                     string seen = e == int.MaxValue ? $"from line {s} to the end" : $"lines {s}-{e}";
-                    return $"[Already read] You already read {seen} of '{path}' earlier in this conversation — scroll up to that result rather than re-reading it. If you need a different part, read a different range; if you just edited it, read again for fresh line numbers.";
+                    return $"[Already read] You already read {seen} of '{path}' earlier THIS turn — scroll up to that result rather than re-reading it. If you need a different part, read a different range; if you just edited it, read again for fresh line numbers.";
                 }
             }
         }
         return null;
     }
 
-    /// <summary>Records a successfully read range so a later covered re-read can be short-circuited.</summary>
-    private static void RecordRead(string argsJson, FileToolState fileState)
+    /// <summary>Rejects an oversized read_file BEFORE the websocket round-trip — the client never ships
+    /// bytes the model shouldn't receive. Policy and messages live in <see cref="ARI.LLM.ReadFile"/>
+    /// (shared with the local ServerFileSystem path); this just supplies the remote-side facts: the line
+    /// count learned from the file's preview (0 = never previewed) and whether it was previewed at all
+    /// (un-previewed files fall through to the <see cref="PreviewBeforeRead"/> divert, which answers with
+    /// the outline, not the body).</summary>
+    private static string? CheckReadWindow(string argsJson, FileToolState fileState)
+    {
+        string path = ExtractToolPath(argsJson);
+        fileState.KnownLineCounts.TryGetValue(path, out int known);
+        return ARI.LLM.ReadFile.CheckWindow(argsJson, path, known, fileState.PreviewedFiles.ContainsKey(path));
+    }
+
+    // Files at/under this many lines are served directly on an un-previewed read_file — a full read of a
+    // small file is cheaper than the preview-plus-second-read round-trip the divert used to force (in
+    // practice the model repeated the identical no-range read anyway, paying BOTH costs for every file).
+    // Equal to the read window so the direct serve can never exceed it.
+    private const int DirectReadLines = ARI.LLM.ReadFile.WindowLines;
+
+    /// <summary>
+    /// Preview-before-read for LARGE files: keeps context lean by forcing the model to see the line count
+    /// and outline (and pick a range) before pulling content — the same gate ServerFileSystem enforces for
+    /// local projects. Rather than reject the call and make the model re-issue preview_file then read_file
+    /// (a wasted round-trip), we auto-divert: run preview_file on the client for it, and return that outline
+    /// with a note telling it to now read a specific range. Small files (≤ DirectReadLines) are NOT diverted —
+    /// the read proceeds immediately. Returns null (no divert) once the file has been previewed, when a
+    /// specific range was requested, or if the preview itself fails — the read then proceeds normally.
+    /// </summary>
+    private static async Task<string?> PreviewBeforeRead(string argsJson, WebSocket ws, ILogger log, FileToolState fileState)
+    {
+        string path = ExtractToolPath(argsJson);
+        if (string.IsNullOrEmpty(path) || fileState.PreviewedFiles.ContainsKey(path)) return null;
+
+        // A targeted range read is exactly what the gate exists to encourage — let it through.
+        (int reqStart, int reqEnd) = ARI.LLM.ReadFile.ExtractRange(argsJson);
+        bool ranged = !(reqStart == 1 && reqEnd == int.MaxValue);
+        if (ranged) return null;
+
+        string outline = await Forward(ws, log, "preview_file", JsonSerializer.Serialize(new { path }), "path");
+        if (!outline.StartsWith("[preview:")) return null;
+
+        fileState.PreviewedFiles.TryAdd(path, 0);
+
+        // Small file → serve the whole-file read directly (no second round-trip, no note to re-issue).
+        var lc = System.Text.RegularExpressions.Regex.Match(outline, @"—\s*(\d+)\s+lines");
+        if (lc.Success && int.TryParse(lc.Groups[1].Value, out int lines))
+        {
+            fileState.KnownLineCounts[path] = lines;
+            if (lines <= DirectReadLines) return null;
+        }
+
+        return $"{outline}\n\n[Note: you called read_file on {path} before previewing it, so the preview " +
+               $"is shown above. Now call read_file on {path} with start_line/end_line (at most " +
+               $"{ReadFile.WindowLines} lines per call) to read only the section you need; consecutive windows " +
+               $"stack in your context as one continuous view.]";
+    }
+
+    /// <summary>On successful preview_file, marks the file previewed so read_file on it is allowed.</summary>
+    private static void MarkPreviewed(string argsJson, string result, FileToolState fileState)
+    {
+        string path = ExtractToolPath(argsJson);
+        if (!string.IsNullOrEmpty(path) && result.StartsWith("[preview:"))
+            fileState.PreviewedFiles.TryAdd(path, 0);
+    }
+
+    /// <summary>Records a successfully read range (tagged with the current user turn) so a later covered
+    /// re-read can be short-circuited within that same turn.</summary>
+    private static void RecordRead(string argsJson, FileToolState fileState, ARI.LLM.Thread epochThread)
     {
         string path = ExtractToolPath(argsJson);
         if (string.IsNullOrEmpty(path)) return;
-        (int start, int end) = ExtractReadRange(argsJson);
-        List<(int Start, int End)> ranges = fileState.ReadRanges.GetOrAdd(path, _ => new List<(int, int)>());
-        lock (ranges) ranges.Add((start, end));
+        (int start, int end) = ARI.LLM.ReadFile.ExtractRange(argsJson);
+        List<(int Start, int End, int Turn)> ranges = fileState.ReadRanges.GetOrAdd(path, _ => new List<(int, int, int)>());
+        lock (ranges) ranges.Add((start, end, epochThread.TurnSerial));
     }
 
     // Upper bound on a single read_file result entering the model's context (~6k tokens). WHY: one oversized
@@ -402,13 +548,13 @@ public static class ClientWebSocket
     /// can't blow the per-step context cost, and record the range for dedup. A capped read is NOT recorded —
     /// the model only received part of it, so a follow-up read of the rest must not be blocked.
     /// </summary>
-    private static string? ReadPostHook(string argsJson, string result, FileToolState fileState)
+    private static string? ReadPostHook(string argsJson, string result, FileToolState fileState, ARI.LLM.Thread epochThread)
     {
         ClearDirtyAndFailures(argsJson, fileState);
 
         if (result.Length <= MaxReadChars)
         {
-            RecordRead(argsJson, fileState);
+            RecordRead(argsJson, fileState, epochThread);
             return null; // unchanged
         }
 
@@ -417,6 +563,90 @@ public static class ClientWebSocket
         if (cut <= 0) cut = Math.Min(MaxReadChars, result.Length);
         return result[..cut] +
                "\n```\n[Truncated to keep context lean — this read was large. Read a narrower range with start_line/end_line, or use search_files to jump straight to what you need.]";
+    }
+
+    /// <summary>
+    /// Captures a raw pre-edit snapshot of the file before this scope's FIRST edit/write of it, by reading
+    /// the full file from the client and stripping the line-number formatting. This is what makes revert_file
+    /// real on remote projects — the file lives on the client, so the only restore point is one we take
+    /// ourselves before mutating. Invisible to the model (the extra read never enters its context). A file
+    /// that can't be read/parsed (e.g. a brand-new file) just gets no snapshot; revert_file then explains that.
+    /// </summary>
+    private static async Task EnsureSnapshot(string argsJson, WebSocket ws, ILogger log, FileToolState fileState)
+    {
+        string path = ExtractToolPath(argsJson);
+        if (string.IsNullOrEmpty(path) || fileState.Snapshots.ContainsKey(path)) return;
+        try
+        {
+            string readResult = await Forward(ws, log, "read_file", JsonSerializer.Serialize(new { path }), "path");
+            string? raw = TryExtractRawContent(readResult);
+            if (raw is not null)
+            {
+                fileState.Snapshots[path] = raw;
+                log.LogInformation("[Client] Snapshot captured for {Path} ({Bytes} bytes) before first edit.", path, raw.Length);
+            }
+            else
+            {
+                log.LogWarning("[Client] Could not capture pre-edit snapshot for {Path} — revert_file will be unavailable for it.", path);
+            }
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "[Client] Snapshot capture failed for {Path}.", path);
+        }
+    }
+
+    /// <summary>Recovers the raw file text from a client read_file result (the fenced, line-numbered block).
+    /// Returns null when the result doesn't look like a full successful read.</summary>
+    private static string? TryExtractRawContent(string readResult)
+    {
+        if (readResult.StartsWith("[Error", StringComparison.Ordinal)) return null;
+        int fenceStart = readResult.IndexOf("```", StringComparison.Ordinal);
+        if (fenceStart < 0) return null;
+        int bodyStart = readResult.IndexOf('\n', fenceStart);
+        if (bodyStart < 0) return null;
+        int fenceEnd = readResult.LastIndexOf("\n```", StringComparison.Ordinal);
+        if (fenceEnd <= bodyStart) return null;
+
+        string[] lines = readResult[(bodyStart + 1)..fenceEnd].Split('\n');
+        var sb = new StringBuilder();
+        var numbered = new System.Text.RegularExpressions.Regex(@"^\s{0,7}\d+: ?");
+        int matched = 0;
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var m = numbered.Match(lines[i]);
+            if (m.Success) matched++;
+            if (i > 0) sb.Append('\n');
+            sb.Append(m.Success ? lines[i][m.Length..] : lines[i]);
+        }
+        // Require the overwhelming majority of lines to carry the number prefix — otherwise this isn't the
+        // format we think it is and a "revert" would write garbage.
+        return matched >= lines.Length * 0.9 ? sb.ToString() : null;
+    }
+
+    /// <summary>revert_file implementation: writes the scope's pre-edit snapshot back via the client's
+    /// write_file, then clears the dirty/failure/read state so the agent re-reads clean line numbers.</summary>
+    private static async Task<string?> RevertFromSnapshot(string argsJson, WebSocket ws, ILogger log, FileToolState fileState)
+    {
+        string path = ExtractToolPath(argsJson);
+        if (string.IsNullOrEmpty(path))
+            return "[Error: revert_file requires a non-empty 'path'.]";
+        if (!fileState.Snapshots.TryGetValue(path, out string? snapshot))
+            return $"[Error: no pre-edit snapshot exists for '{path}' in this task — either it has not been " +
+                   "edited here, or the snapshot could not be captured. Read the file and repair it with " +
+                   "edit_file instead, or report the file's state honestly in your summary.]";
+
+        string result = await Forward(ws, log, "write_file", JsonSerializer.Serialize(new { path, content = snapshot }), "path");
+        if (!result.StartsWith("Successfully", StringComparison.OrdinalIgnoreCase))
+            return $"[Error: revert of '{path}' failed — {result}]";
+
+        // The file changed on disk again — stay dirty so the next edit is forced through a fresh read.
+        fileState.EditFailures.TryRemove(path, out _);
+        fileState.DirtyFiles.TryAdd(path, 0);
+        fileState.InvalidateFile(path);
+        int lineCount = snapshot.Length == 0 ? 0 : snapshot.Split('\n').Length;
+        return $"Reverted '{path}' to its pre-edit snapshot ({lineCount} lines). All edits made this task are " +
+               "undone. Read the range you need, then redo the change from scratch.";
     }
 
     // ── End guardrail helpers ────────────────────────────────────────────────────
@@ -504,6 +734,44 @@ public static class ClientWebSocket
         return sb.ToString();
     }
 
+    // The string arguments each tool cannot be dispatched without. Guards against a mis-parsed fallback
+    // call reaching the client with an empty path — the client then operates on the project ROOT (observed:
+    // read_file with no path → EISDIR on the project directory).
+    private static readonly Dictionary<string, string[]> RequiredToolArgs = new(StringComparer.Ordinal)
+    {
+        ["preview_file"] = new[] { "path" },
+        ["read_file"]    = new[] { "path" },
+        ["edit_file"]    = new[] { "path" },
+        ["write_file"]   = new[] { "path" },
+        ["delete_file"]  = new[] { "path" },
+        ["revert_file"]  = new[] { "path" },
+        ["move_file"]    = new[] { "source", "destination" },
+        ["search_files"] = new[] { "pattern" },
+        ["find_files"]   = new[] { "pattern" },
+        ["run_command"]  = new[] { "command" },
+    };
+
+    private static string? CheckRequiredArgs(string name, string argsJson)
+    {
+        if (!RequiredToolArgs.TryGetValue(name, out string[]? required)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(argsJson);
+            foreach (string field in required)
+            {
+                string? v = doc.RootElement.TryGetProperty(field, out var el) && el.ValueKind == JsonValueKind.String
+                    ? el.GetString() : null;
+                if (string.IsNullOrWhiteSpace(v))
+                    return $"[Error: {name} requires a non-empty '{field}' argument — the call was not sent to the client. Re-issue the call with '{field}' set.]";
+            }
+            return null;
+        }
+        catch
+        {
+            return $"[Error: {name} arguments were not valid JSON — the call was not sent to the client. Re-issue the call in the documented format.]";
+        }
+    }
+
     private static void RegisterTool(
         ARI.LLM.Thread thread, WebSocket ws, ILogger log,
         string name, string description, object parameters,
@@ -511,7 +779,9 @@ public static class ClientWebSocket
         Func<string, string>? customDisplay     = null,
         Func<string, string>? customDisplayDone = null,
         Func<string, string?>? preCheck         = null,
-        Func<string, string, string?>? postHook = null)
+        Func<string, string, string?>? postHook = null,
+        Func<string, Task<string?>>? divert     = null,
+        Func<string, Task>? preForward          = null)
     {
         Func<string, string> MakeDisplay(string verb, string markerType) => argsJson =>
         {
@@ -557,6 +827,10 @@ public static class ClientWebSocket
             {
                 argsJson = NormalizePathArg(argsJson);
 
+                // Malformed/missing required args never reach the client (an empty path would make it
+                // operate on the project root).
+                if (CheckRequiredArgs(name, argsJson) is { } argErr) return argErr;
+
                 // Pre-check: short-circuit before round-tripping to the client.
                 if (preCheck is not null)
                 {
@@ -564,41 +838,19 @@ public static class ClientWebSocket
                     if (block is not null) return block;
                 }
 
-                string callId = Guid.NewGuid().ToString("N");
-                string label  = ExtractLogLabel(argsJson, labelField);
-                var tcs = new TaskCompletionSource<string>();
-                pendingFileCalls[callId]  = tcs;
-                pendingCallLabels[callId] = label;
+                // Divert: may answer the call with a DIFFERENT client round-trip (e.g. read_file on an
+                // un-previewed file returns the preview instead — see PreviewBeforeRead; revert_file is
+                // answered entirely by its divert).
+                if (divert is not null)
+                {
+                    string? diverted = await divert(argsJson);
+                    if (diverted is not null) return diverted;
+                }
 
-                log.LogInformation("[Client] → {Tool}  {Label}  callId={CallId}", name, label, callId);
-                await Send(ws, new { type = name, callId, args = argsJson });
+                // Pre-forward side effects (e.g. capturing a pre-edit snapshot for revert_file).
+                if (preForward is not null) await preForward(argsJson);
 
-                // run_command can wait on a build/test plus user confirmation; write/edit round-trips
-                // on large files are slower than reads.
-                int timeoutSeconds = name switch
-                {
-                    "run_command"            => 900,
-                    "write_file" or "edit_file" => 90,
-                    _                         => 30
-                };
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
-                cts.Token.Register(() => tcs.TrySetCanceled());
-                string result;
-                try
-                {
-                    result = await tcs.Task;
-                    log.LogInformation("[Client] ← {Tool}  {Label}  callId={CallId}  bytes={Bytes}", name, label, callId, result.Length);
-                }
-                catch (OperationCanceledException)
-                {
-                    log.LogWarning("[Client] ← {Tool} TIMEOUT  {Label}  callId={CallId}", name, label, callId);
-                    return $"[Error: client did not respond to {name} within {timeoutSeconds}s]";
-                }
-                finally
-                {
-                    pendingFileCalls.TryRemove(callId, out _);
-                    pendingCallLabels.TryRemove(callId, out _);
-                }
+                string result = await Forward(ws, log, name, argsJson, labelField);
 
                 // Post-hook: may modify or augment the result (e.g. appending a block warning).
                 if (postHook is not null)
@@ -646,44 +898,59 @@ public static class ClientWebSocket
             _                              => "path"
         };
 
-        // Send the op to the client and await its reply — the same callId/pendingFileCalls/timeout machinery
-        // the desktop's own tools use, relocated here so a FileSystem-driven agent can reach a client machine.
-        private async Task<string> Forward(string toolName, string argsJson)
+        private Task<string> Forward(string toolName, string argsJson)
+            => ClientWebSocket.Forward(ws, log, toolName, NormalizePathArg(argsJson), LabelField(toolName));
+    }
+
+    /// <summary>Sends one tool op to the connected client and awaits its reply — the callId/pendingFileCalls/
+    /// timeout machinery shared by the registered thread tools, <see cref="ClientFileSystem"/>, and the
+    /// preview-before-read divert.</summary>
+    private static async Task<string> Forward(WebSocket ws, ILogger log, string toolName, string argsJson, string labelField)
+    {
+        // Fail fast on a dead socket instead of silently dropping the send and burning the full timeout —
+        // the model gets an actionable error it can retry after the client's auto-reconnect (~seconds).
+        if (ws.State != WebSocketState.Open)
         {
-            argsJson = NormalizePathArg(argsJson);
-            string callId = Guid.NewGuid().ToString("N");
-            string label  = ExtractLogLabel(argsJson, LabelField(toolName));
-            var tcs = new TaskCompletionSource<string>();
-            pendingFileCalls[callId]  = tcs;
-            pendingCallLabels[callId] = label;
+            log.LogWarning("[Client] → {Tool} SKIPPED — client socket is {State}.", toolName, ws.State);
+            return $"[Error: the desktop client is disconnected, so {toolName} could not run. The client " +
+                   "usually reconnects within a few seconds — retry the call once, and if it still fails, " +
+                   "stop and tell the user the client connection was lost.]";
+        }
 
-            log.LogInformation("[Client] → {Tool}  {Label}  callId={CallId}", toolName, label, callId);
-            await Send(ws, new { type = toolName, callId, args = argsJson });
+        string callId = Guid.NewGuid().ToString("N");
+        string label  = ExtractLogLabel(argsJson, labelField);
+        var tcs = new TaskCompletionSource<string>();
+        pendingFileCalls[callId]  = tcs;
+        pendingCallLabels[callId] = label;
 
-            int timeoutSeconds = toolName switch
-            {
-                "run_command"               => 900,
-                "write_file" or "edit_file" => 90,
-                _                           => 30
-            };
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
-            cts.Token.Register(() => tcs.TrySetCanceled());
-            try
-            {
-                string result = await tcs.Task;
-                log.LogInformation("[Client] ← {Tool}  {Label}  callId={CallId}  bytes={Bytes}", toolName, label, callId, result.Length);
-                return result;
-            }
-            catch (OperationCanceledException)
-            {
-                log.LogWarning("[Client] ← {Tool} TIMEOUT  {Label}  callId={CallId}", toolName, label, callId);
-                return $"[Error: client did not respond to {toolName} within {timeoutSeconds}s]";
-            }
-            finally
-            {
-                pendingFileCalls.TryRemove(callId, out _);
-                pendingCallLabels.TryRemove(callId, out _);
-            }
+        log.LogInformation("[Client] → {Tool}  {Label}  callId={CallId}", toolName, label, callId);
+        await Send(ws, new { type = toolName, callId, args = argsJson });
+
+        // run_command can wait on a build/test plus user confirmation; write/edit round-trips
+        // on large files are slower than reads.
+        int timeoutSeconds = toolName switch
+        {
+            "run_command"               => 900,
+            "write_file" or "edit_file" => 90,
+            _                           => 30
+        };
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+        cts.Token.Register(() => tcs.TrySetCanceled());
+        try
+        {
+            string result = await tcs.Task;
+            log.LogInformation("[Client] ← {Tool}  {Label}  callId={CallId}  bytes={Bytes}", toolName, label, callId, result.Length);
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            log.LogWarning("[Client] ← {Tool} TIMEOUT  {Label}  callId={CallId}", toolName, label, callId);
+            return $"[Error: client did not respond to {toolName} within {timeoutSeconds}s]";
+        }
+        finally
+        {
+            pendingFileCalls.TryRemove(callId, out _);
+            pendingCallLabels.TryRemove(callId, out _);
         }
     }
 
@@ -747,7 +1014,7 @@ public static class ClientWebSocket
     private static async Task ReceiveLoop(
         WebSocket ws, LLMModule llm, ARI.LLM.Thread initialThread,
         string initialThreadKey, List<string> fileTree, ConnectionState state,
-        FileToolState fileState, ILogger log)
+        FileToolState fileState, ILogger log, Guid connId)
     {
         ARI.LLM.Thread codeThread = initialThread;
         string         threadKey  = initialThreadKey;
@@ -756,8 +1023,7 @@ public static class ClientWebSocket
         try { await Inner(); }
         finally
         {
-            foreach (string tool in ClientToolNames)
-                codeThread.UnregisterTool(tool);
+            UnregisterIfOwner(codeThread, connId, log);
         }
         return;
 
@@ -806,11 +1072,10 @@ public static class ClientWebSocket
                                 if (!string.IsNullOrWhiteSpace(bindKey) && bindKey != threadKey)
                                 {
                                     log.LogInformation("[Client] Rebinding tools from {Old} → {New}", threadKey, bindKey);
-                                    foreach (string tool in ClientToolNames)
-                                        codeThread.UnregisterTool(tool);
+                                    UnregisterIfOwner(codeThread, connId, log);
                                     codeThread = llm.GetOrCreateCodeThread(bindKey);
                                     FileToolState reboundFileState = threadFileState.GetOrAdd(bindKey, _ => new FileToolState());
-                                    RegisterTools(codeThread, ws, log, reboundFileState);
+                                    RegisterTools(codeThread, ws, log, reboundFileState, connId);
                                     threadKey = bindKey;
                                 }
                             }

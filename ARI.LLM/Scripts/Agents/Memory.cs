@@ -309,7 +309,7 @@ internal class Memory : Agent
         if (last is null) return;
 
         int    tokens    = last.Data.CompletionTokens;
-        double elapsed   = last.ThinkingSeconds ?? 0;
+        double elapsed   = last.TotalSeconds ?? last.ThinkingSeconds ?? 0;
         double tokPerSec = elapsed > 0 ? tokens / elapsed : 0;
 
         totalTokens  += tokens;

@@ -14,7 +14,7 @@ internal sealed class ServerFileSystem : FileSystem
 {
     private const int MAX_ENTRIES        = 200;   // list_directory recursive cap
     private const int MAX_RESULTS        = 200;   // find_files / search_files result cap
-    private const int READ_MAX_LINES     = 800;   // whole-file read cap
+    private const int READ_MAX_LINES     = 800;   // whole-file read cap (legacy backstop behind ReadFile.CheckWindow)
     private const int READ_MAX_CHARS     = 48000;
     private const int SEARCH_MAX_CHARS   = 8000;
     private const int MAX_REPLACE_SPAN   = 15;    // edit_file: max lines a content replacement may span
@@ -101,6 +101,11 @@ internal sealed class ServerFileSystem : FileSystem
 
             startLine = Math.Max(1,         Math.Min(startLine, totalLines));
             endLine   = Math.Max(startLine, Math.Min(endLine,   totalLines));
+
+            // Hard per-call read window — shared policy with the remote path (see ReadFile.CheckWindow).
+            // previewed: true — the preview gate above has already diverted un-previewed reads.
+            if (ReadFile.CheckWindow(argsJson, relPath, totalLines, previewed: true) is { } windowErr)
+                return windowErr;
 
             // Cap whole-file reads so a single read can't blow the context window.
             // Targeted reads (start_line/end_line supplied) are not capped — the caller chose the range.

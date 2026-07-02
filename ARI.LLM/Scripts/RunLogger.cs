@@ -94,7 +94,7 @@ internal static class RunLogger
 
     private static void RenderResponse(StringBuilder sb, int turn, Response r, bool dumpRequest)
     {
-        sb.AppendLine($"### Turn {turn} — {r.ThinkingSeconds:F1}s · {r.Data.PromptTokens} prompt / {r.Data.CompletionTokens} completion tokens");
+        sb.AppendLine($"### Turn {turn} — {r.TotalSeconds ?? r.ThinkingSeconds:F1}s (prefill {r.PrefillSeconds:F0}s / thinking {r.ThinkingSeconds:F0}s / typing {r.TypingSeconds:F0}s) · {r.Data.PromptTokens} prompt / {r.Data.CompletionTokens} completion tokens");
         sb.AppendLine();
 
         if (r.Trace is { Count: > 0 })

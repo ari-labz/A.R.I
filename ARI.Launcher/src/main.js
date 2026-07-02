@@ -66,7 +66,7 @@ ipcMain.handle("fetch-release", async (_, token) => {
     return new Promise((resolve, reject) => {
         const opts = {
             hostname: "api.github.com",
-            path: `/repos/${OWNER}/${REPO}/releases?per_page=1`,
+            path: `/repos/${OWNER}/${REPO}/releases?per_page=100`,
             headers: {
                 "User-Agent":           "ARILauncher/1.0",
                 "Authorization":        `token ${token}`,
@@ -86,7 +86,11 @@ ipcMain.handle("fetch-release", async (_, token) => {
                     const releases = JSON.parse(data)
                     if (!Array.isArray(releases) || releases.length === 0)
                         return reject(new Error("No releases found on GitHub."))
-                    const r = releases[0]
+                    // GitHub's list order is unreliable (sorts by tag ref date, not version),
+                    // so pick the highest semver rather than releases[0].
+                    const r = releases
+                        .filter(x => !x.draft)
+                        .sort((a, b) => compareVersions(b.tag_name, a.tag_name))[0]
                     resolve({ tagName: r.tag_name, assets: r.assets.map(a => ({ id: a.id, name: a.name })) })
                 } catch (e) {
                     reject(new Error("Failed to parse GitHub response."))
@@ -153,6 +157,17 @@ ipcMain.handle("launch-ari", (_, versionDirOrTag) => {
 })
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// Compare "v0.4.0" vs "v0.3.4" numerically. Returns >0 if a is newer.
+function compareVersions(a, b) {
+    const parse = t => String(t).replace(/^v/i, "").split(/[.\-+]/).map(n => parseInt(n, 10) || 0)
+    const pa = parse(a), pb = parse(b)
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+        const d = (pa[i] || 0) - (pb[i] || 0)
+        if (d !== 0) return d
+    }
+    return 0
+}
 
 function getAssetName(version) {
     if (process.platform === "win32")  return `ARI-${version}-win.zip`

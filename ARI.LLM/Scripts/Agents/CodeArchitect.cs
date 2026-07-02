@@ -35,33 +35,50 @@ internal sealed class CodeArchitect : Agent
     // (set when a turn ends without spawning any coder). The plan prose itself lives in History — nothing is stashed.
     internal async Task<string> RunLoop(
         Thread parent, string threadKey, string prompt, string username,
-        Coder coder, string root, FileSnapshots snapshots, CancellationTokenSource cts, Func<string, Task>? onDelta)
+        Coder coder, string root, FileSnapshots snapshots, CancellationTokenSource cts, Func<string, Task>? onDelta,
+        bool remote = false)
     {
         // The architect is a conversational coding agent driving its OWN tool loop: exploration (read-only) plus
         // two execution tools — spawn_coder (dispatch one edit) and build_project (verify). It infers whether a
         // request needs a plan (refactor/cross-file → present + wait) or can just be done (rename → execute).
-        ServerFileSystem fs = new(root, cts.Token, snapshots);
-        new PreviewFile(fs).Register(parent);
-        new ReadFile(fs).Register(parent);
-        new ListDirectory(fs).Register(parent);
-        new SearchFiles(fs).Register(parent);
-        new FindFiles(fs).Register(parent);
+        // Remote projects: the client's forwarded read/preview/list/search/find tools are ALREADY on `parent`
+        // (they run on the client's machine) — reuse them. Local projects: bind ServerFileSystem to this disk.
+        if (!remote)
+        {
+            ServerFileSystem fs = new(root, cts.Token, snapshots);
+            new PreviewFile(fs).Register(parent);
+            new ReadFile(fs).Register(parent);
+            new ListDirectory(fs).Register(parent);
+            new SearchFiles(fs).Register(parent);
+            new FindFiles(fs).Register(parent);
+        }
 
         // Files changed this request — the success/gating signal (was a file modified?) and the build-error owner tag.
         HashSet<string> touched = new(StringComparer.OrdinalIgnoreCase);
         int taskNum = 0;
 
+        // Deterministic edit freeze: when the user explicitly forbids changes this turn ("planning only",
+        // "do not edit"), spawn_coder is refused at the tool layer — a nudge alone cannot be trusted to
+        // survive an approval-shaped injection (this exact failure corrupted a client file: the harness told
+        // the model the plan was approved while the user's message said the opposite).
+        bool editsForbidden = UserForbadeEdits(prompt);
+
         // spawn_coder(file, change, range?) — dispatch ONE edit to a Coder. Flat args (like read_file) so the
         // text-tool protocol carries it reliably; the model makes many small calls, never one nested submit.
         parent.RegisterTool("spawn_coder", SpawnCoderSchema, async argsJson =>
         {
+            if (editsForbidden)
+                return "[System: the user has explicitly forbidden edits this turn (planning only). spawn_coder is " +
+                       "disabled. Present your plan as text and STOP — do not attempt further tool calls to edit.]";
             (string? file, string? change, string? range, string? err) = ParseCoderArgs(argsJson);
             if (err is not null) return err;
             taskNum++;
-            string? abs = SafeAbs(root, file!);
+            // Local: track the absolute path for the build's yours-vs-pre-existing tagging. Remote: track the
+            // repo-relative path (the build runs on the client; there's no server-side absolute path).
+            string? abs = remote ? file : SafeAbs(root, file!);
             if (abs is not null) touched.Add(abs);
             (string summary, bool modified) = await RunOneCoder(
-                parent, threadKey, taskNum, new CodeStep(file!, range ?? "", change!), username, coder, root, snapshots, cts, onDelta);
+                parent, threadKey, taskNum, new CodeStep(file!, range ?? "", change!), username, coder, root, snapshots, cts, onDelta, remote);
             return modified
                 ? $"Coder finished task {taskNum} on {file}. Result: {summary}"
                 : $"[System: the Coder made NO change to {file} — this task likely FAILED. Result: {summary}. " +
@@ -72,8 +89,10 @@ internal sealed class CodeArchitect : Agent
         displayFormatter: _ => "");
 
         // build_project() — build the touched project(s); errors grouped by file, tagged yours vs pre-existing.
+        // Remote: the build runs on the client via its forwarded run_command (there's no dotnet on this server
+        // for the client's project); local: dotnet build on this disk.
         parent.RegisterTool("build_project", BuildProjectSchema,
-            async _ => await BuildTouched(touched, root, cts.Token),
+            async _ => remote ? await BuildRemote(parent, touched, cts.Token) : await BuildTouched(touched, root, cts.Token),
             displayFormatter: _ => "<div class=\"tool-use\">Building project</div>\n");
 
         bool bypass   = Environment.GetEnvironmentVariable("ARI_GATE_BYPASS") == "1";
@@ -81,21 +100,37 @@ internal sealed class CodeArchitect : Agent
 
         // Per-turn nudge (the full workflow lives in the architect's system prompt). The whole turn — plan, the
         // spawn_coder edits, the build_project check, and the summary — is ONE response made of many blocks.
+        // The resuming nudge must NOT presume approval: the previous turn may have ended in a clarifying
+        // question, and the user's reply may be a new or revised request rather than a go-ahead.
         string nudge = resuming
-            ? "The user has responded to the plan you presented. If they approved it, EXECUTE it now with spawn_coder " +
-              "(do not re-plan or re-explore). If they asked for changes, present the revised plan and STOP."
+            ? "Your previous turn ended awaiting the user (a plan or a question). Read their reply carefully — it is " +
+              "an approval ONLY if it clearly tells you to proceed with the plan you already presented. If it approves, " +
+              "EXECUTE that plan now with spawn_coder (do not re-plan or re-explore). If it answers your question, adds " +
+              "requirements, or changes the request, treat it as a new/revised request: present the updated numbered " +
+              "plan and STOP for approval. If it forbids changes (e.g. 'planning only', 'do not edit'), you MUST NOT " +
+              "call spawn_coder this turn — explore and plan only."
             : bypass
                 ? "Automated run: write your numbered plan FIRST (before any tool call), then execute it directly with spawn_coder — no approval needed."
                 : "Write your numbered plan to the user FIRST (before any spawn_coder call). Then: a small, localized change " +
                   "(a rename, a one-line fix) — proceed and spawn_coder now; a larger refactor / cross-file / multi-step / " +
                   "ambiguous change — STOP after the plan for the user to approve before you spawn any coder.";
+        if (editsForbidden)
+            nudge += " [The user has forbidden edits this turn — spawn_coder is disabled; plan only.]";
 
-        // Resume turns are not a fresh coding request — don't re-appraise the thinking budget.
-        (int? thinkSeconds, string awareness) = resuming ? (null, "") : await AppraiseThinking(prompt, threadKey, cts.Token);
+        // Every user prompt gets appraised — a "resume" can be anything from a one-word approval (grade 0)
+        // to a fully-specified new request (the turn that actually needs a thinking budget).
+        (int? grade, int? thinkSeconds, string awareness) = await AppraiseThinking(prompt, threadKey, cts.Token);
 
         string reply = await SendPrompt(parent, prompt, username,
             augmentedPrompt: $"{prompt}\n\n[System: {nudge}{awareness}]",
             ct: cts.Token, userMessagePreadded: true, onDelta: onDelta, thinkSeconds: thinkSeconds);
+
+        // Attach appraisal telemetry to this turn's response so the DTI can show it (chat view ignores it).
+        if (grade is not null && parent.History.OfType<Response>().LastOrDefault() is { } appraised)
+        {
+            appraised.AppraisalGrade   = grade;
+            appraised.AppraisalSeconds = thinkSeconds;
+        }
 
         // If it spawned coders it executed → done; otherwise it presented a plan / asked a question → await the user.
         parent.AwaitingPlanApproval = !bypass && touched.Count == 0;
@@ -142,6 +177,21 @@ internal sealed class CodeArchitect : Agent
 
     private static string Esc(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
 
+    /// <summary>True when the user's message explicitly forbids making changes this turn ("planning only",
+    /// "do not edit any files", "don't make changes without my permission"). Deliberately conservative:
+    /// only unambiguous no-edit phrasings trigger the freeze — a false positive just means a plan-only turn.</summary>
+    internal static bool UserForbadeEdits(string prompt) => Regex.IsMatch(prompt, string.Join("|",
+        @"\bplanning (phase|only|stage)\b",
+        @"\b(just|only) (a )?plan\b",
+        @"\bplan (it |this )?(out |first )?only\b",
+        @"\bdo ?n[o']t (make|apply|do) (any )?(changes|edits|modifications)\b",
+        @"\bdo not (make|apply|do) (any )?(changes|edits|modifications)\b",
+        @"\bdo ?n[o']t (edit|change|modify|touch) (any|the|my)? ?(files?|code)\b",
+        @"\bdo not (edit|change|modify|touch) (any|the|my)? ?(files?|code)\b",
+        @"\bno (changes|edits) (yet|for now)\b",
+        @"\bwithout my (explicit )?(permission|approval|say.?so|go.?ahead)\b"),
+        RegexOptions.IgnoreCase);
+
     private static string? SafeAbs(string root, string rel)
     {
         try { return Path.GetFullPath(Path.Combine(root, rel)); } catch { return null; }
@@ -172,15 +222,18 @@ internal sealed class CodeArchitect : Agent
     /// changed (the success signal the architect gates on).</summary>
     private async Task<(string Summary, bool Modified)> RunOneCoder(
         Thread parent, string threadKey, int n, CodeStep task, string username,
-        Coder coder, string root, FileSnapshots snapshots, CancellationTokenSource cts, Func<string, Task>? onDelta)
+        Coder coder, string root, FileSnapshots snapshots, CancellationTokenSource cts, Func<string, Task>? onDelta,
+        bool remote = false)
     {
-        string? abs    = SafeAbs(root, task.File);
+        string? abs    = remote ? null : SafeAbs(root, task.File);
         string  before = abs is not null && File.Exists(abs) ? SafeRead(abs) : "";
 
         Thread child = new(ThreadPipeline.Code, $"{threadKey}#coder{n}:{Guid.NewGuid():N}")
             { Internal = true, Parent = parent, Label = $"Coder {n}: {task.Change}" };
         parent.AddChild(child);
-        RegisterCoderTools(child, root, snapshots, cts.Token);
+        // Remote: give the child the client's forwarded edit tools (they run on the client). Local: ServerFileSystem.
+        if (remote) CopyForwardedCoderTools(parent, child);
+        else        RegisterCoderTools(child, root, snapshots, cts.Token);
 
         // Anchor the child in the architect's CURRENT response: register it for display resolution, then drop a
         // subthread marker into the stream at this position (via the tool-display sink active during Execute).
@@ -189,7 +242,9 @@ internal sealed class CodeArchitect : Agent
         if (parent.ToolDisplaySink is not null)
             await parent.ToolDisplaySink($"<!--ari-subthread:{child.Key}|{Esc(task.Change)}-->");
 
-        string seed = ReadNumberedView(root, task.File, new List<CodeStep> { task });
+        // Remote: no local disk to seed from — the Coder reads its file via the forwarded read_file. Local: seed
+        // the located line-numbered view so the Coder edits without re-reading.
+        string seed = remote ? "" : ReadNumberedView(root, task.File, new List<CodeStep> { task });
         if (seed.Length > 0) child.PreReadPaths.Add(Path.GetFileName(task.File));
 
         // The Coder streams into its OWN thread; poke the parent so watching clients re-poll and pick up the
@@ -205,10 +260,74 @@ internal sealed class CodeArchitect : Agent
             username, ct: cts.Token, userMessagePreadded: false, onDelta: Live);
 
         Response? resp  = child.History.OfType<Response>().LastOrDefault();
-        string    prose = resp is null ? "" : string.Concat(resp.Content.OfType<TextBlock>().Select(b => b.Text)).Trim();
+        string    prose = resp is null ? "" : CleanCoderProse(string.Concat(resp.Content.OfType<TextBlock>().Select(b => b.Text)));
 
-        string after = abs is not null && File.Exists(abs) ? SafeRead(abs) : "";
-        return (prose.Length > 0 ? prose : "(no summary reported)", before != after);
+        // Modification signal: local diffs the file on disk; remote can't (file is on the client) so it checks
+        // whether the Coder actually landed a successful edit_file/write_file/move/delete over the socket.
+        bool modified = remote ? ChildLandedEdit(child) : before != (abs is not null && File.Exists(abs) ? SafeRead(abs) : "");
+
+        // Honesty backstop: a Coder that leaves its LAST edit attempt blocked/failed may have left the file
+        // broken and then talked itself into reporting success. Surface that to the architect explicitly so it
+        // verifies instead of trusting the prose (this exact failure shipped a corrupted file as "complete").
+        string summary = prose.Length > 0 ? prose : "(no summary reported)";
+        if (modified && ChildEditTrouble(child))
+            summary += "\n[System: WARNING — this Coder's last edit attempt on the file was blocked or failed after " +
+                       "an earlier edit landed. The file may be in a broken or partial state regardless of what the " +
+                       "summary above claims. Verify it now with preview_file and a ranged read_file before " +
+                       "continuing; if it is broken, spawn a coder to repair or revert it.]";
+        return (summary, modified);
+    }
+
+    // Strips UI display artefacts out of a Coder's prose before it enters the architect's context: the child's
+    // stream text embeds tool-use cards (<div class="tool-use">…</div>) and marker comments (<!--ari-…-->)
+    // which are display-only noise to another model.
+    private static string CleanCoderProse(string prose)
+    {
+        prose = Regex.Replace(prose, "<div class=\"tool-use\">.*?</div>", "", RegexOptions.Singleline);
+        prose = Regex.Replace(prose, "<!--ari-.*?-->", "", RegexOptions.Singleline);
+        return prose.Trim();
+    }
+
+    /// <summary>True when the child's trace shows its final mutating attempt (edit/write/revert) was blocked or
+    /// errored — i.e. an edit landed earlier but the Coder was subsequently refused mid-repair. That pattern means
+    /// the file's state is unverified and possibly broken, whatever the Coder's summary says.</summary>
+    private static bool ChildEditTrouble(Thread child)
+    {
+        bool lastMutatingFailed = false;
+        foreach (Response r in child.History.OfType<Response>())
+            foreach (TraceStep s in r.Trace ?? Enumerable.Empty<TraceStep>())
+            {
+                if (s.Kind != "tool_result" || s.Name is not ("edit_file" or "write_file" or "revert_file" or "move_file" or "delete_file")) continue;
+                string t = (s.Text ?? "").TrimStart();
+                lastMutatingFailed = t.StartsWith("[Blocked") || t.StartsWith("[Error") || t.StartsWith("[System") || t.StartsWith("Error");
+            }
+        return lastMutatingFailed;
+    }
+
+    // The forwarded edit tools a remote Coder needs — mirrors RegisterCoderTools' lean set (no search/list, which
+    // make a think-off Coder wander). Preferred path: the client WebSocket layer's cloner, which registers a FRESH
+    // guardrail scope for the child (its own read-dedup/preview/dirty state — a sub-agent must never inherit the
+    // parent's "already read" ledger, since its context starts empty). Fallback: copy the parent's delegates
+    // (shared state — pre-cloner behaviour) so a Coder still works if the cloner isn't wired.
+    private static void CopyForwardedCoderTools(Thread from, Thread to)
+    {
+        if (from.ClientToolCloner is not null && from.ClientToolCloner(to)) return;
+        foreach (string name in new[] { "preview_file", "read_file", "edit_file", "write_file", "delete_file", "move_file", "revert_file" })
+            if (from.tools.TryGetValue(name, out var t)) to.tools[name] = t;
+    }
+
+    // True if the child issued a successful mutating tool call (its result isn't an error/refusal marker).
+    private static bool ChildLandedEdit(Thread child)
+    {
+        foreach (Response r in child.History.OfType<Response>())
+            foreach (TraceStep s in r.Trace ?? Enumerable.Empty<TraceStep>())
+            {
+                if (s.Kind != "tool_result" || s.Name is not ("edit_file" or "write_file" or "move_file" or "delete_file")) continue;
+                string t = (s.Text ?? "").TrimStart();
+                if (!t.StartsWith("[Error") && !t.StartsWith("[System") && !t.StartsWith("SAFETY MODE") && !t.StartsWith("Error"))
+                    return true;
+            }
+        return false;
     }
 
     /// <summary>Builds the project(s) containing the touched files; groups CS errors by file and tags each file
@@ -253,18 +372,31 @@ internal sealed class CodeArchitect : Agent
         return sb.ToString();
     }
 
+    /// <summary>Remote build: there's no dotnet on this server for the client's project, so run `dotnet build` on
+    /// the CLIENT via its forwarded run_command and hand the raw output back to the architect. (The yours-vs-
+    /// pre-existing tagging that BuildTouched does needs local disk; on remote we return the client's output as-is.)</summary>
+    private static async Task<string> BuildRemote(Thread parent, HashSet<string> touched, CancellationToken ct)
+    {
+        if (touched.Count == 0) return "[System: no files have been changed yet — spawn a coder first.]";
+        if (!parent.tools.TryGetValue("run_command", out var rc))
+            return "[System: no run_command tool is available to build on the client — skip the build and write your summary.]";
+        string output = await rc.Execute(JsonSerializer.Serialize(new { command = "dotnet build" }));
+        return "Build output from the client (`dotnet build`):\n\n" + output;
+    }
+
     // Appraise how much thinking the request needs → wall-clock budget (seconds) + an awareness line the model is
     // told so it self-paces. Null appraiser ⇒ (null, "") = today's behaviour. Runs once at the start of the request.
-    private async Task<(int? thinkSeconds, string awareness)> AppraiseThinking(string prompt, string threadKey, CancellationToken ct)
+    private async Task<(int? grade, int? thinkSeconds, string awareness)> AppraiseThinking(string prompt, string threadKey, CancellationToken ct)
     {
-        if (Appraisal is null) return (null, "");
+        if (Appraisal is null) return (null, null, "");
         int grade = await Appraisal.Appraise(prompt, ct);
         int secs  = Appraisal.GradeToSeconds(grade);
-        string awareness = secs == 0 ? ""
-            : secs < 0 ? " You may think as long as you need."
-            : $" You have about {secs} seconds to think — be concise and reach your conclusion within it.";
+        string awareness =
+              secs < 0   ? " You may think as long as you need."
+            : secs <= 10 ? " This needs little or no deliberation — think for at most a moment, then act."
+            :              $" You have about {secs} seconds to think — be concise and reach your conclusion within it.";
         Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) appraisal grade {G} → {S}s thinking budget.", threadKey, grade, secs);
-        return (secs, awareness);
+        return (grade, secs, awareness);
     }
 
 
