@@ -58,9 +58,21 @@ public class Response : ThreadItem
     [JsonPropertyName("isStreaming")]
     public bool IsStreamingJson => State == State.Streaming;
 
+    /// <summary>Wall-clock split of this turn (see Agent.TurnClock). ThinkingSeconds counts ONLY time spent
+    /// receiving reasoning deltas; PrefillSeconds is the server reading the prompt (request sent → first
+    /// delta, summed per request); TypingSeconds is time receiving answer/tool-call deltas. TotalSeconds is
+    /// the whole turn — anything above the three buckets' sum is tool execution or stream stalls.</summary>
     public double?          ThinkingSeconds { get; set; }
+    public double?          PrefillSeconds  { get; set; }
+    public double?          TypingSeconds   { get; set; }
+    public double?          TotalSeconds    { get; set; }
     public string?          RecallNotes     { get; set; }
     public string?          ContextSummary  { get; set; }
+
+    /// <summary>Prompt-appraisal telemetry (DTI only): the grade the Appraisal agent gave this turn's prompt
+    /// and the wall-clock thinking budget (seconds) it mapped to. Null when the turn was not appraised.</summary>
+    public int?             AppraisalGrade   { get; set; }
+    public int?             AppraisalSeconds { get; set; }
 
     /// <summary>Grouped telemetry + debug-dump fields (token stats, request/response dumps).</summary>
     public ResponseData     Data { get; set; } = new();

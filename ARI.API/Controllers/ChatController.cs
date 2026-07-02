@@ -200,6 +200,8 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                 content                   = r.ContentText,
                 isStreaming               = r.IsStreamingJson,
                 thinkingSeconds           = r.ThinkingSeconds,
+                appraisalGrade            = r.AppraisalGrade,
+                appraisalSeconds          = r.AppraisalSeconds,
                 recallNotes               = r.RecallNotes,
                 contextSummary            = r.ContextSummary,
                 completionTokens          = r.Data.CompletionTokens,
