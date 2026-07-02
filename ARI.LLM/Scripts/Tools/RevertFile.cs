@@ -63,8 +63,8 @@ internal sealed class RevertFile : FileTool
         {
             using JsonDocument doc = JsonDocument.Parse(args);
             string p = doc.RootElement.GetProperty("path").GetString() ?? "";
-            return $"<div class=\"tool-use\">Reverting {p.Replace("&", "&amp;").Replace("<", "&lt;")}</div>\n";
+            return $"<!--ari-tool-start:revert_file:{p.Replace("&", "&amp;").Replace("<", "&lt;").Replace("--", "&#45;&#45;")}-->";
         }
-        catch { return "<div class=\"tool-use\">Reverting file</div>\n"; }
+        catch { return "<!--ari-tool-start:revert_file:file-->"; }
     };
 }

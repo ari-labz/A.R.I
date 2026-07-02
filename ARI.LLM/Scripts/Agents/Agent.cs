@@ -595,7 +595,6 @@ public abstract class Agent
         thread.RaiseUpdated();
         thread.streamingResponse = ariResponse;
         thread.streamedText      = "";
-        DateTime lastStreamNotify = DateTime.MinValue;
         Func<string, Task>? userDelta = onDelta;
         onDelta = async text => {
             ariResponse.StreamText = text;
@@ -603,14 +602,13 @@ public abstract class Agent
             // live text to the chat — that broadcast (LLMModule wires thread.Streaming → the "streaming" SSE)
             // is what made the hidden approval turn overwrite the user's view. The debug view re-polls /debug
             // and still sees it; the response itself still builds via ariResponse.StreamText above.
+            // Every delta is its own frame — NO throttling. A server-side timer dropped frames with no
+            // trailing flush, so clients jumped from a word to whole paragraphs and card states appeared
+            // only in their final form. Per-token frames are cheap locally; clients coalesce as needed.
             if (!chatHidden)
             {
                 thread.streamedText = text;
-                DateTime now = DateTime.UtcNow;
-                if ((now - lastStreamNotify).TotalMilliseconds >= 150) {
-                    lastStreamNotify = now;
-                    thread.RaiseStreaming(text);
-                }
+                thread.RaiseStreaming(text);
             }
             if (userDelta is not null) await userDelta(text);
         };
@@ -762,6 +760,13 @@ public abstract class Agent
             bool contentRunaway = false; // text content degenerated into a repeated-character spiral (e.g. backslashes)
             int  reasoningStartLen = reasoningBuilder.Length; // for slicing THIS request's reasoning into the trace
 
+            // Live trace steps (#80/#111): created the moment their content starts streaming and MUTATED as
+            // deltas arrive, so the DTI timeline grows in real time and every request's thinking lands as its
+            // own step at the true point in the sequence (never merged into an earlier bubble). The live text
+            // step is provisional — it is removed before the post-stream parser records the real text steps.
+            TraceStep? liveReasoning = null;
+            TraceStep? liveText      = null;
+
             DateTime lastProgress = DateTime.UtcNow;
             string? line;
             while ((line = await reader.ReadLineAsync(ct)) is not null)
@@ -843,6 +848,12 @@ public abstract class Agent
                             wasThinking = true;
                         }
                         if (!string.IsNullOrEmpty(thinkDelta)) { reasoningChars += thinkDelta.Length; reasoningBuilder.Append(thinkDelta); }
+                        if (liveReasoning is null) { liveReasoning = new TraceStep { Kind = "reasoning", Text = "" }; trace.Add(liveReasoning); }
+                        liveReasoning.Text = reasoningBuilder.ToString(reasoningStartLen, reasoningBuilder.Length - reasoningStartLen);
+                        // Reasoning never reaches the chat stream, so nothing would wake watching clients while
+                        // the model thinks — poke them per delta so the DTI re-fetches the growing live step
+                        // (the DTI's own 120ms debounce coalesces the refetches).
+                        if (!chatHidden) thread.RaiseStreaming(thread.streamedText);
                         // Thinking budget (#35 v2): all thresholds compare the THINKING clock — time actually
                         // spent receiving reasoning — never wall-clock (a 223s prefill once consumed a 30s
                         // budget before the model produced a word). Overruns break to the /completion
@@ -888,6 +899,7 @@ public abstract class Agent
                             if (!isLeakedToolCall && preText.Length > 0)
                             {
                                 contentBuilder.Append(preText + "\n");
+                                if (liveText is not null) { trace.Remove(liveText); liveText = null; }
                                 trace.Add(new TraceStep { Kind = "text", Text = preText });
                                 if (!QuietLogging)
                                     Shared.Logger.LogInformation("[{Agent}] ({Thread}) \"{Text}\"", Name, thread.Key, preText);
@@ -994,9 +1006,15 @@ public abstract class Agent
                                 ? (accumulated.StartsWith(AriPrefix[..accumulated.Length], StringComparison.OrdinalIgnoreCase) ? "" : accumulated)
                                 : (accumulated.StartsWith(AriPrefix, StringComparison.OrdinalIgnoreCase) ? accumulated[AriPrefix.Length..] : accumulated);
                             // Show a live "Editing <file> +N/-M" card while the model streams an edit_file/
-                            // write_file text tool call, instead of frozen narration. View-only transform of
-                            // the streamed text; responseBuilder and the parse/execute path are untouched.
-                            await onDelta(contentBuilder.ToString() + InjectLiveToolCards(visible));
+                            // write_file text tool call, instead of frozen narration; every OTHER tool call's
+                            // raw <tool_call>/<function=…> text (complete or still-streaming, including a
+                            // half-typed opening tag) is stripped so it never flashes as prose in the client
+                            // (#78). View-only transforms of the streamed text; responseBuilder and the
+                            // parse/execute path are untouched.
+                            string liveView = StripStreamingToolText(InjectLiveToolCards(visible));
+                            if (liveText is null && liveView.Trim().Length > 0) { liveText = new TraceStep { Kind = "text", Text = "" }; trace.Add(liveText); }
+                            if (liveText is not null) liveText.Text = liveView;
+                            await onDelta(contentBuilder.ToString() + liveView);
                         }
                     }
                 }
@@ -1015,11 +1033,15 @@ public abstract class Agent
                 reasoningChars = reasoningBuilder.Length;
             }
 
-            // Deep-inspection trace: record THIS request's reasoning (the chunk added since the request began)
-            // as its own step, so the panel can show a "thinking" cloud before each tool-call batch.
+            // Deep-inspection trace: finalize THIS request's reasoning step (created live at the first
+            // reasoning delta; ContinueThinking may have appended more since the last delta tick).
             if (reasoningBuilder.Length > reasoningStartLen)
-                trace.Add(new TraceStep { Kind = "reasoning",
-                    Text = reasoningBuilder.ToString(reasoningStartLen, reasoningBuilder.Length - reasoningStartLen) });
+            {
+                if (liveReasoning is null) { liveReasoning = new TraceStep { Kind = "reasoning" }; trace.Add(liveReasoning); }
+                liveReasoning.Text = reasoningBuilder.ToString(reasoningStartLen, reasoningBuilder.Length - reasoningStartLen);
+            }
+            // The provisional live-text step gives way to the parsed text steps recorded below.
+            if (liveText is not null) { trace.Remove(liveText); liveText = null; }
 
             if (!QuietLogging)
             {
@@ -1277,7 +1299,7 @@ public abstract class Agent
                             string pf = "";
                             try { using JsonDocument pvd = JsonDocument.Parse(argsJson); pf = System.IO.Path.GetFileName((pvd.RootElement.TryGetProperty("path", out JsonElement ppe) ? ppe.GetString() : null)?.Trim('"', '\'', ' ') ?? ""); }
                             catch { /* ignore */ }
-                            ReplaceInBuilder(contentBuilder, activeMarker, $"<div class=\"tool-use\">Previewed {pf}</div>\n");
+                            ReplaceInBuilder(contentBuilder, activeMarker, $"<!--ari-tool-done:preview_file:{pf.Replace("--", "&#45;&#45;")}-->");
                             if (onDelta is not null) await onDelta(contentBuilder.ToString());
                             activeMarker = null;
                         }
@@ -1403,16 +1425,32 @@ public abstract class Agent
                 // the reasoning block and stops with NO answer and NO tool call (responseBuilder empty). That
                 // is never a real completion — re-prompt it to actually act. (The narrate-without-acting case
                 // above only fires when there IS content; this catches the zero-content case.)
-                bool emptyTurn = tail.Length == 0;
+                // Degenerate-placeholder turn: the model occasionally answers with a literal template
+                // variable instead of content — e.g. its entire output is "${plan}" or "{summary}". Treat it
+                // like an empty turn (it is one, semantically) so the nudge makes it write the real thing.
+                bool placeholderTurn = tail.Length > 0 && System.Text.RegularExpressions.Regex.IsMatch(
+                    tail, @"^\$?\{[\w .-]{1,60}\}$");
+                bool emptyTurn = tail.Length == 0 || placeholderTurn;
+                // Calls written INSIDE the <think> block land in reasoning_content and are never parsed or
+                // executed — a whole turn can be "spent" on tool calls that went nowhere. Tell the model
+                // exactly what happened so its retry re-issues them as the answer.
+                bool callsInThinking = emptyTurn && reasoningBuilder.Length > reasoningStartLen &&
+                    reasoningBuilder.ToString(reasoningStartLen, reasoningBuilder.Length - reasoningStartLen)
+                        .Contains("<tool_call>", StringComparison.OrdinalIgnoreCase);
                 if ((promisesAction && mentionsVerb) || emptyTurn)
                 {
                     continueNudges++;
-                    string why = emptyTurn
+                    string why = callsInThinking
+                        ? "You wrote your tool calls INSIDE your thinking block — tool calls made while thinking are NOT executed. Nothing ran"
+                        : placeholderTurn
+                        ? $"Your entire answer was the literal placeholder \"{tail}\" — that is not content; write the actual text it stands for"
+                        : emptyTurn
                         ? "Your reasoning finished but you produced no answer and no tool call — the turn was empty"
                         : "You described an action but didn't perform it — no tool call was made";
-                    Shared.Logger.LogInformation("[{Agent}] ({Thread}) premature-stop nudge ({Kind}).", Name, thread.Key, emptyTurn ? "empty-turn-after-reasoning" : "narrated-no-action");
+                    Shared.Logger.LogInformation("[{Agent}] ({Thread}) premature-stop nudge ({Kind}).", Name, thread.Key,
+                        callsInThinking ? "tool-calls-inside-thinking" : placeholderTurn ? "placeholder-answer" : emptyTurn ? "empty-turn-after-reasoning" : "narrated-no-action");
                     messages.Add(new { role = "user", content =
-                        $"[System: {why}. Don't stop here: take the next concrete action now — issue the tool call to make the change (and keep working until the task is done AND the project builds), or if you are genuinely finished, give the user a short summary of what you changed. Do not reply with nothing, and do not repeat a tool call you already made.]" });
+                        $"[System: {why}. Don't stop here: take the next concrete action now — issue the tool call AFTER your thinking ends, as your answer (and keep working until the task is done AND the project builds), or if you are genuinely finished, give the user a short summary of what you changed. Do not reply with nothing, and do not repeat a tool call you already made.]" });
                     responseBuilder.Clear();
                     continue;
                 }
@@ -1577,6 +1615,39 @@ public abstract class Agent
                 removed = e - s + 1;
             return $"<!--ari-tool-start:{name}:{label}|+{added}|-{removed}-->";
         });
+    }
+
+    // Complete or trailing-partial text tool calls in the STREAMED view. Ordered alternation: closed
+    // blocks first, then an unterminated block running to end-of-string (the still-streaming case).
+    private static readonly System.Text.RegularExpressions.Regex StreamToolTextRe = new(
+        @"<tool_call>[\s\S]*?</tool_call>|<tool_call>[\s\S]*$|<function=[^>]*>[\s\S]*?</function[^>]*>|<function=[^>]*>[\s\S]*$",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    // Opening tags a leak can start with — a bare partial prefix of one of these at the very end of the
+    // stream ("<tool_ca") is held back until enough arrives to classify it.
+    private static readonly string[] ToolTagPrefixes = { "<tool_call", "</tool_call", "<function=", "</function", "<parameter=", "</parameter" };
+
+    /// <summary>
+    /// View-only strip of text-protocol tool-call XML from the streamed text (#78): complete blocks,
+    /// a block still streaming to end-of-string, and a partially-typed opening tag at the very tail
+    /// (e.g. "&lt;tool_ca") — without this the raw call flashes as prose in every client until the
+    /// post-stream parser strips it. The underlying builders are untouched.
+    /// </summary>
+    private static string StripStreamingToolText(string text)
+    {
+        if (text.IndexOf('<') < 0) return text;
+        text = StreamToolTextRe.Replace(text, "");
+
+        int lt = text.LastIndexOf('<');
+        if (lt >= 0)
+        {
+            string tail = text[lt..];
+            if (!tail.Contains('>'))
+                foreach (string tag in ToolTagPrefixes)
+                    if (tag.StartsWith(tail, StringComparison.OrdinalIgnoreCase) || tail.StartsWith(tag, StringComparison.OrdinalIgnoreCase))
+                        return text[..lt];
+        }
+        return text;
     }
 
     /// <summary>Extracts a parameter value from a possibly-incomplete text tool-call body (up to

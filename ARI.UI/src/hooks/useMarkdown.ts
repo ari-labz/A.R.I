@@ -8,6 +8,7 @@ const COPY_ICON = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" s
 const CHECK_ICON = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`
 
 const TOOL_START_RE = /<!--ari-tool-start:([^:]+):([^>]*?)-->/g
+const TOOL_DONE_RE  = /<!--ari-tool-done:([^:]+):([^>]*?)-->/g
 const TOOL_END_RE   = /<!--ari-tool-end:([^:]+):([^>]*?)-->/g
 const TOOL_ERROR_RE = /<!--ari-tool-error:([^:]+):([^:]*):([^>]*?)-->/g
 
@@ -16,15 +17,19 @@ function escHtml(s: string): string {
 }
 
 const TOOL_VERBS: Record<string, { active: string; done: string }> = {
-    read_file:      { active: "Reading",          done: "Read" },
-    list_directory: { active: "Listing",           done: "Listed" },
-    search_files:   { active: "Searching",         done: "Searched" },
-    edit_file:      { active: "Editing",           done: "Edited" },
-    write_file:     { active: "Writing",           done: "Written" },
-    run_command:    { active: "Running",           done: "Ran" },
-    find_files:     { active: "Finding",           done: "Found" },
-    delete_file:    { active: "Deleting",          done: "Deleted" },
-    move_file:      { active: "Moving",            done: "Moved" },
+    read_file:      { active: "Reading",    done: "Read" },
+    preview_file:   { active: "Previewing", done: "Previewed" },
+    list_directory: { active: "Listing",    done: "Listed" },
+    search_files:   { active: "Searching",  done: "Searched" },
+    edit_file:      { active: "Editing",    done: "Edited" },
+    write_file:     { active: "Writing",    done: "Written" },
+    run_command:    { active: "Running",    done: "Ran" },
+    find_files:     { active: "Finding",    done: "Found" },
+    delete_file:    { active: "Deleting",   done: "Deleted" },
+    move_file:      { active: "Moving",     done: "Moved" },
+    revert_file:    { active: "Reverting",  done: "Reverted" },
+    spawn_coder:    { active: "Delegating", done: "Delegated" },
+    build_project:  { active: "Building",   done: "Built" },
 }
 
 function parseDiffLabel(rawLabel: string): { fileLabel: string; added: number; removed: number; patch: string } | null {
@@ -96,6 +101,12 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
 
     let out = normalized.split(BATCH_END).join("")
     out = out.replace(TOOL_END_RE, "")
+    // Self-contained done markers (one marker = one finished card; no start/end pairing needed).
+    out = out.replace(TOOL_DONE_RE, (_, name, rawLabel) => {
+        const verbs = TOOL_VERBS[name] ?? { active: name, done: name }
+        const label = rawLabel.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">")
+        return `\n\n<div class="tool-card tool-card--done"><span>${verbs.done} ${escHtml(label)}</span></div>\n\n`
+    })
     out = out.replace(TOOL_ERROR_RE, (_, name, rawFile, rawMsg) => {
         const verbs = TOOL_VERBS[name] ?? { active: name, done: name }
         const file  = rawFile.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">")
@@ -154,6 +165,8 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
 // Present/past verb pairs for the non-diff cards (extends TOOL_VERBS with the orchestration cards).
 const CARD_VERBS: Record<string, { active: string; done: string }> = {
     reading:    { active: "Reading",    done: "Read" },
+    previewing: { active: "Previewing", done: "Previewed" },
+    reverting:  { active: "Reverting",  done: "Reverted" },
     listing:    { active: "Listing",    done: "Listed" },
     searching:  { active: "Searching",  done: "Searched" },
     finding:    { active: "Finding",    done: "Found" },

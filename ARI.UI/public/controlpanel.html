@@ -329,7 +329,8 @@ html, body {
 .dbg-seg-text:not(:last-child) { border-bottom: 1px solid #f0f0f0; }
 .dbg-tool-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 5px; font-size: 11px; font-weight: 600; font-family: ui-monospace, monospace; }
 .dbg-tool-chip.start  { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
-.dbg-tool-chip.end    { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
+.dbg-tool-chip.end,
+.dbg-tool-chip.done   { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
 .dbg-tool-chip.error  { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
 .dbg-seg-tool { padding: 4px 12px; }
 .dbg-batch-sep { height: 1px; background: var(--border); margin: 2px 12px; opacity: .5; }
@@ -3005,9 +3006,9 @@ function dbgParseContent(raw) {
     if (!raw) return '<div class="dbg-seg-text" style="color:var(--text-dim);font-style:italic;">empty</div>';
 
     const segments = [];
-    // Matches: <!--ari-tool-start:name:label-->, <!--ari-tool-end:name:label|...--> ,
-    //          <!--ari-tool-error:name:rest-->, <!--ari-batch-end-->
-    const re = /<!--ari-tool-(start|end|error):([^:>]+):([^>]*?)-->|<!--ari-batch-end-->/g;
+    // Matches: <!--ari-tool-start:name:label-->, <!--ari-tool-done:name:label-->,
+    //          <!--ari-tool-end:name:label|...--> , <!--ari-tool-error:name:rest-->, <!--ari-batch-end-->
+    const re = /<!--ari-tool-(start|done|end|error):([^:>]+):([^>]*?)-->|<!--ari-batch-end-->/g;
     let pos = 0, m;
 
     while ((m = re.exec(raw)) !== null) {
@@ -3035,7 +3036,7 @@ function dbgParseContent(raw) {
         if (seg.kind === 'text') {
             return `<div class="dbg-seg-text">${escHtml(seg.text)}</div>`;
         } else if (seg.kind === 'tool') {
-            const icon = seg.state === 'end' ? '✓' : seg.state === 'error' ? '✗' : '…';
+            const icon = (seg.state === 'end' || seg.state === 'done') ? '✓' : seg.state === 'error' ? '✗' : '…';
             const labelPart = seg.label ? ` <span style="opacity:.7;">· ${escHtml(seg.label)}</span>` : '';
             return `<div class="dbg-seg-tool"><span class="dbg-tool-chip ${escHtml(seg.state)}">${icon} ${escHtml(seg.name)}${labelPart}</span></div>`;
         } else if (seg.kind === 'sep') {

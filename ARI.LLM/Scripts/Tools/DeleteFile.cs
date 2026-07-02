@@ -34,8 +34,8 @@ internal sealed class DeleteFile : Tool
         {
             using JsonDocument doc = JsonDocument.Parse(args);
             string p = doc.RootElement.GetProperty("path").GetString() ?? "";
-            return $"<div class=\"tool-use\">Deleting {System.IO.Path.GetFileName(p).Replace("&", "&amp;").Replace("<", "&lt;")}</div>\n";
+            return $"<!--ari-tool-start:delete_file:{System.IO.Path.GetFileName(p).Replace("&", "&amp;").Replace("<", "&lt;").Replace("--", "&#45;&#45;")}-->";
         }
-        catch { return "<div class=\"tool-use\">Deleting file</div>\n"; }
+        catch { return "<!--ari-tool-start:delete_file:file-->"; }
     };
 }

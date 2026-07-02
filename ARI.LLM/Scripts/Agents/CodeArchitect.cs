@@ -93,7 +93,7 @@ internal sealed class CodeArchitect : Agent
         // for the client's project); local: dotnet build on this disk.
         parent.RegisterTool("build_project", BuildProjectSchema,
             async _ => remote ? await BuildRemote(parent, touched, cts.Token) : await BuildTouched(touched, root, cts.Token),
-            displayFormatter: _ => "<div class=\"tool-use\">Building project</div>\n");
+            displayFormatter: _ => "<!--ari-tool-start:build_project:project-->");
 
         bool bypass   = Environment.GetEnvironmentVariable("ARI_GATE_BYPASS") == "1";
         bool resuming = parent.AwaitingPlanApproval && !bypass;

@@ -38,8 +38,8 @@ internal sealed class FindFiles : Tool
         {
             using JsonDocument doc = JsonDocument.Parse(args);
             string p = doc.RootElement.GetProperty("pattern").GetString() ?? "";
-            return $"<div class=\"tool-use\">Finding {p.Replace("&", "&amp;").Replace("<", "&lt;")}</div>\n";
+            return $"<!--ari-tool-start:find_files:{p.Replace("&", "&amp;").Replace("<", "&lt;").Replace("--", "&#45;&#45;")}-->";
         }
-        catch { return "<div class=\"tool-use\">Finding files</div>\n"; }
+        catch { return "<!--ari-tool-start:find_files:files-->"; }
     };
 }
