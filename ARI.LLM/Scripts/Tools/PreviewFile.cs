@@ -46,8 +46,8 @@ internal sealed class PreviewFile : Tool
             using JsonDocument doc = JsonDocument.Parse(args);
             string name = Path.GetFileName(doc.RootElement.GetProperty("path").GetString() ?? "file")
                 .Replace("&", "&amp;").Replace("<", "&lt;");
-            return $"<div class=\"tool-use\">Previewing {name}</div>\n";
+            return $"<!--ari-tool-start:preview_file:{name.Replace("--", "&#45;&#45;")}-->";
         }
-        catch { return "<div class=\"tool-use\">Previewing file</div>\n"; }
+        catch { return "<!--ari-tool-start:preview_file:file-->"; }
     };
 }

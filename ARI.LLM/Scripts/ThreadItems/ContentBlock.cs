@@ -13,7 +13,9 @@ namespace ARI.LLM;
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
 [JsonDerivedType(typeof(TextBlock), "text")]
 [JsonDerivedType(typeof(Thinking),  "thinking")]
-[JsonDerivedType(typeof(Reading),   "reading")]
+[JsonDerivedType(typeof(Reading),    "reading")]
+[JsonDerivedType(typeof(Previewing), "previewing")]
+[JsonDerivedType(typeof(Reverting),  "reverting")]
 [JsonDerivedType(typeof(Deleting),  "deleting")]
 [JsonDerivedType(typeof(Moving),    "moving")]
 [JsonDerivedType(typeof(Listing),   "listing")]
@@ -46,6 +48,7 @@ public abstract class ContentBlock
     private static readonly Regex MarkerRe = new(
         @"(?<div><div class=""tool-use"">(?<dinner>.*?)</div>)" +
         @"|(?<start><!--ari-tool-start:(?<sname>[^:]+):(?<slabel>[^>]*?)-->)" +
+        @"|(?<done><!--ari-tool-done:(?<dname>[^:]+):(?<dlabel>[^>]*?)-->)" +
         @"|(?<end><!--ari-tool-end:(?<ename>[^:]+):(?<elabel>[^>]*?)-->)" +
         @"|(?<err><!--ari-tool-error:(?<rname>[^:]+):(?<rlabel>[^>]*?)-->)" +
         @"|(?<sub><!--ari-subthread:(?<subkey>[^|>]+)\|(?<sublabel>[^>]*?)-->)" +
@@ -140,6 +143,8 @@ public abstract class ContentBlock
         }
         if (m.Groups["start"].Success)
             return Build(FromTool(m.Groups["sname"].Value), State.Streaming, m.Value, m.Groups["slabel"].Value);
+        if (m.Groups["done"].Success)
+            return Build(FromTool(m.Groups["dname"].Value), State.Complete, m.Value, m.Groups["dlabel"].Value);
         if (m.Groups["end"].Success)
             return Build(FromTool(m.Groups["ename"].Value), State.Complete, m.Value, m.Groups["elabel"].Value);
         if (m.Groups["err"].Success)
@@ -159,6 +164,7 @@ public abstract class ContentBlock
     private static Card? FromTool(string name) => name switch
     {
         "read_file"      => new Reading(),
+        "preview_file"   => new Previewing(),
         "list_directory" => new Listing(),
         "search_files"   => new Searching(),
         "edit_file"      => new Editing(),
@@ -167,20 +173,25 @@ public abstract class ContentBlock
         "find_files"     => new Finding(),
         "delete_file"    => new Deleting(),
         "move_file"      => new Moving(),
+        "revert_file"    => new Reverting(),
+        "spawn_coder"    => new Delegating(),
+        "build_project"  => new Building(),
         _                => null
     };
 
     private static Card? FromVerb(string verb) => verb switch
     {
-        "Reading"   => new Reading(),
-        "Listing"   => new Listing(),
-        "Searching" => new Searching(),
-        "Editing"   => new Editing(),
-        "Writing"   => new Writing(),
+        "Reading"    => new Reading(),
+        "Previewing" => new Previewing(),
+        "Listing"    => new Listing(),
+        "Searching"  => new Searching(),
+        "Editing"    => new Editing(),
+        "Writing"    => new Writing(),
         "Running"    => new Running(),
         "Finding"    => new Finding(),
         "Deleting"   => new Deleting(),
         "Moving"     => new Moving(),
+        "Reverting"  => new Reverting(),
         "Delegating" => new Delegating(),
         "Building"   => new Building(),
         _            => null
@@ -203,16 +214,22 @@ public sealed class Thinking : ContentBlock
     public override string ToString() => Text;
 }
 
-/// <summary>A tool-use card. Renders as a "&lt;div class=\"tool-use\"&gt;verb label&lt;/div&gt;" marker whose verb is
-/// present-tense while streaming and past-tense once <see cref="Flip"/>ped. <see cref="Flip"/> is the single
-/// mechanism that flips a card to its done form; each card overrides it (and/or <see cref="Render"/>) to add its
-/// own custom done behaviour (e.g. a diff card keeps its +/- badges).</summary>
+/// <summary>A tool-use card. Renders as an <c>&lt;!--ari-tool-start:name:label--&gt;</c> marker while streaming
+/// and a self-contained <c>&lt;!--ari-tool-done:name:label--&gt;</c> marker once <see cref="Flip"/>ped — ONE
+/// marker = one card = one state, so every client renders every tool identically (the old
+/// <c>&lt;div class="tool-use"&gt;</c> form is still PARSED for legacy history but never emitted). <see cref="Flip"/>
+/// is the single mechanism that flips a card to its done form; each card overrides it (and/or
+/// <see cref="Render"/>) to add its own custom done behaviour (e.g. a diff card keeps its +/- badges).</summary>
 public abstract class Card : ContentBlock
 {
     /// <summary>The exact marker string this card was parsed from, if any (round-trip fidelity). When empty,
     /// <see cref="ToString"/> falls back to <see cref="Render"/>.</summary>
     [JsonIgnore]
     public string Marker { get; set; } = "";
+
+    /// <summary>Wire tool name used in this card's markers (read_file, spawn_coder, …).</summary>
+    [JsonIgnore]
+    protected abstract string ToolName { get; }
 
     /// <summary>Present- and past-tense verbs, e.g. ("Reading","Read"). Each card supplies its own.</summary>
     [JsonIgnore]
@@ -222,14 +239,10 @@ public abstract class Card : ContentBlock
     [JsonIgnore]
     protected virtual string Label => "";
 
-    /// <summary>The display marker for this card in its CURRENT state — present-tense while Streaming, past-tense
-    /// once flipped. This is what the streaming loop appends and, on completion, replaces.</summary>
-    public virtual string Render()
-    {
-        string verb  = State == State.Complete ? Verbs.Past : Verbs.Present;
-        string label = Label.Length > 0 ? " " + Esc(Label) : "";
-        return $"<div class=\"tool-use\">{verb}{label}</div>\n";
-    }
+    /// <summary>The display marker for this card in its CURRENT state — a start marker while Streaming, a done
+    /// marker once flipped. This is what the streaming loop appends and, on completion, replaces.</summary>
+    public virtual string Render() =>
+        $"<!--ari-tool-{(State == State.Complete ? "done" : "start")}:{ToolName}:{MarkerEsc(Label)}-->";
 
     public override string ToString() => Marker.Length > 0 ? Marker : Render();
 
@@ -239,6 +252,9 @@ public abstract class Card : ContentBlock
     public virtual void Flip() { if (State != State.Error) State = State.Complete; }
 
     protected static string Esc(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+
+    /// <summary>Escapes a label for embedding inside an HTML-comment marker ("--" would close the comment).</summary>
+    protected static string MarkerEsc(string s) => s.Replace("--", "&#45;&#45;").Replace(">", "&gt;");
 
     /// <summary>Populates this card's typed fields from the marker's label.</summary>
     protected internal abstract void Fill(string label);
@@ -252,14 +268,17 @@ public abstract class FileCard : Card
     protected internal override void Fill(string label) => FileName = label;
 }
 
-public sealed class Reading  : FileCard { protected override (string, string) Verbs => ("Reading",  "Read");    }
-public sealed class Deleting : FileCard { protected override (string, string) Verbs => ("Deleting", "Deleted"); }
-public sealed class Moving   : FileCard { protected override (string, string) Verbs => ("Moving",   "Moved");   }
+public sealed class Reading    : FileCard { protected override string ToolName => "read_file";    protected override (string, string) Verbs => ("Reading",    "Read");      }
+public sealed class Previewing : FileCard { protected override string ToolName => "preview_file"; protected override (string, string) Verbs => ("Previewing", "Previewed"); }
+public sealed class Deleting   : FileCard { protected override string ToolName => "delete_file";  protected override (string, string) Verbs => ("Deleting",   "Deleted");   }
+public sealed class Moving     : FileCard { protected override string ToolName => "move_file";    protected override (string, string) Verbs => ("Moving",     "Moved");     }
+public sealed class Reverting  : FileCard { protected override string ToolName => "revert_file";  protected override (string, string) Verbs => ("Reverting",  "Reverted");  }
 
 public sealed class Listing : Card
 {
     public string Path { get; set; } = "";
     protected override string Label => Path;
+    protected override string ToolName => "list_directory";
     protected override (string, string) Verbs => ("Listing", "Listed");
     protected internal override void Fill(string label) => Path = label;
 }
@@ -268,6 +287,7 @@ public sealed class Searching : Card
 {
     public string Pattern { get; set; } = "";
     protected override string Label => Pattern;
+    protected override string ToolName => "search_files";
     protected override (string, string) Verbs => ("Searching", "Searched");
     protected internal override void Fill(string label) => Pattern = label;
 }
@@ -276,6 +296,7 @@ public sealed class Finding : Card
 {
     public string Pattern { get; set; } = "";
     protected override string Label => Pattern;
+    protected override string ToolName => "find_files";
     protected override (string, string) Verbs => ("Finding", "Found");
     protected internal override void Fill(string label) => Pattern = label;
 }
@@ -284,6 +305,7 @@ public sealed class Running : Card
 {
     public string Command { get; set; } = "";
     protected override string Label => Command;
+    protected override string ToolName => "run_command";
     protected override (string, string) Verbs => ("Running", "Ran");
     protected internal override void Fill(string label) => Command = label;
 }
@@ -293,6 +315,7 @@ public sealed class Delegating : Card
 {
     public string Task { get; set; } = "";
     protected override string Label => Task;
+    protected override string ToolName => "spawn_coder";
     protected override (string, string) Verbs => ("Delegating", "Delegated");
     protected internal override void Fill(string label) => Task = label;
 }
@@ -302,6 +325,7 @@ public sealed class Building : Card
 {
     public string Project { get; set; } = "";
     protected override string Label => Project;
+    protected override string ToolName => "build_project";
     protected override (string, string) Verbs => ("Building", "Built");
     protected internal override void Fill(string label) => Project = label;
 }
@@ -314,9 +338,6 @@ public abstract class DiffCard : FileCard
     public int     Added   { get; set; }
     public int     Removed { get; set; }
     public string? Patch   { get; set; }
-
-    /// <summary>Tool name used in the enriched marker (edit_file / write_file) — drives the client's diff card.</summary>
-    protected abstract string ToolName { get; }
 
     public override string Render()
     {

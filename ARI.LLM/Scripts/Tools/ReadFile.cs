@@ -111,8 +111,8 @@ internal sealed class ReadFile : Tool
                 TryGetLineArg(s, out int sl) && TryGetLineArg(e, out int el))
                 suffix = $" ({sl}–{el})";
 
-            return $"<div class=\"tool-use\">Reading {safe}{suffix}</div>\n";
+            return $"<!--ari-tool-start:read_file:{safe.Replace("--", "&#45;&#45;")}{suffix}-->";
         }
-        catch { return "<div class=\"tool-use\">Reading file</div>\n"; }
+        catch { return "<!--ari-tool-start:read_file:file-->"; }
     };
 }
