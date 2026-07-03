@@ -3,6 +3,7 @@ import Messages from "./Messages"
 import InputArea from "./InputArea"
 import ThreadPanel from "./ThreadPanel"
 import DropOverlay from "./DropOverlay"
+import Orb from "./Orb"
 import type { AppMode, PendingAttachment } from "../App"
 import type { ThreadItem, Attachment, Project } from "../hooks/useThreads"
 
@@ -34,6 +35,11 @@ interface Props {
     projects:         Project[]
     selectedProject:  string | null
     onProjectChange:  (id: string | null) => void
+    pipelines:        string[]
+    selectedPipeline: string | null
+    onPipelineChange: (id: string | null) => void
+    speechMode:       boolean
+    onBeginSpeech:    () => void
 }
 
 export default function Main({
@@ -45,6 +51,8 @@ export default function Main({
     onRemoveThreadAttach, onRemoveMessageAttach,
     onHeartbeatStart, onHeartbeatStop, commands,
     projects, selectedProject, onProjectChange,
+    pipelines, selectedPipeline, onPipelineChange,
+    speechMode, onBeginSpeech,
     safetyMode, onToggleSafety,
 }: Props) {
     const [threadPanelOpen, setThreadPanelOpen] = useState(false)
@@ -129,6 +137,7 @@ export default function Main({
     const mainClasses = [
         mode === "active" ? "active" : "",
         codeMode ? "code-mode" : "",
+        speechMode ? "speech-mode" : "",
     ].filter(Boolean).join(" ")
 
     return (
@@ -174,14 +183,18 @@ export default function Main({
                         </svg>
                     </button>
 
-                    <Messages
-                        items={items}
-                        isRemembering={isRemembering}
-                        activeThread={activeThread}
-                        isInternal={isInternal}
-                        agentName={agentName}
-                        processing={isStreaming}
-                    />
+                    {speechMode && activeThread ? (
+                        <Orb state="idle" />
+                    ) : (
+                        <Messages
+                            items={items}
+                            isRemembering={isRemembering}
+                            activeThread={activeThread}
+                            isInternal={isInternal}
+                            agentName={agentName}
+                            processing={isStreaming}
+                        />
+                    )}
 
                     <ThreadPanel
                         open={threadPanelOpen}
@@ -201,7 +214,7 @@ export default function Main({
                     />
                 </div>
 
-                {!isInternal && (
+                {!isInternal && !(speechMode && activeThread) && (
                     <InputArea
                         isStreaming={isStreaming}
                         pendingAttach={pendingAttach}
@@ -209,6 +222,10 @@ export default function Main({
                         projects={projects}
                         selectedProject={selectedProject}
                         onProjectChange={onProjectChange}
+                        pipelines={pipelines}
+                        selectedPipeline={selectedPipeline}
+                        onPipelineChange={onPipelineChange}
+                        onBeginSpeech={onBeginSpeech}
                         threadLocked={activeThread !== null}
                         onSend={onSend}
                         onUploadFiles={onUploadMessageFiles}
