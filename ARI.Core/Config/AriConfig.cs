@@ -7,6 +7,7 @@ using ARI.LLM;
 using ARI.Voice;
 using ARI.VoiceSynthesis;
 using ARI.API;
+using ARI.Listener;
 
 namespace ARI.Core;
 
@@ -50,6 +51,7 @@ public class Modules
     public VoiceConfig Voice { get; init; } = new();
     public BrainConfig Brain { get; init; }
     public DiscordConfig Discord { get; init; }
+    public ListenerConfig Listener { get; init; } = new();
 }
 
 

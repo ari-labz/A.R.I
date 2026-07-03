@@ -472,3 +472,6 @@ External/F5TTS/training/
 
 # Release builds
 /Builds/
+
+# ARI.Listener dedicated Python venv
+ARI.Listener/python/venv/

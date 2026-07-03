@@ -7,6 +7,7 @@ using ARI.Voice;
 using ARI.VoiceSynthesis;
 using ARI.API;
 using ARI.API.Data;
+using ARI.Listener;
 using ARI.Brain;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -25,6 +26,7 @@ public class ARI : BackgroundService
     public BrainModule?   brainModule;
     public VoiceModule?           voiceModule;
     public VoiceSynthesisModule?  voiceSynthesisModule;
+    public ListenerModule?        listenerModule;
     private LLMModule?           llmModule;
 
     private readonly ILoggerFactory loggerFactory;
@@ -173,6 +175,18 @@ public class ARI : BackgroundService
                 llmModule.AssignAgentServer(agent.Name, agent.ServerName);
                 if (agent.Slot.HasValue) llmModule.AssignAgentSlot(agent.Name, agent.Slot.Value);
             }
+        }
+
+        // ── Listener (audio hub) ───────────────────────────────────────────────────
+        if (config.modules.Listener.Enabled && llmModule is not null)
+        {
+            _logger.LogInformation("Listener module is enabled. Starting audio hub...");
+            if (!string.IsNullOrEmpty(config.modules.Listener.ScriptPath))
+                config.modules.Listener.ScriptPath = ResolvePath(executableDirectory, config.modules.Listener.ScriptPath);
+            listenerModule = new ListenerModule(llmModule, config.modules.Listener, loggerFactory.CreateLogger("ARI.Listener"));
+            listenerModule.Start();
+            CommonModules.Register(listener: listenerModule);
+            _logger.LogInformation("Listener ready (whisper worker running: {Running}).", listenerModule.IsReady);
         }
 
         // ── Discord ──────────────────────────────────────────────────────────────

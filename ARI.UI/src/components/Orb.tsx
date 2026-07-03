@@ -11,6 +11,7 @@ export interface OrbHandle {
 
 interface Props {
     state?: OrbState
+    caption?: string | null   // overrides the state label (e.g. live transcript)
 }
 
 const LABELS: Record<OrbState, string> = {
@@ -23,7 +24,7 @@ const LABELS: Record<OrbState, string> = {
 
 // Orb overlay shell (issue #92) — a bespoke WebGL orb in ARI's palette. State machine (#93) and
 // mic/output amplitude (#94) drive `state`/`pulse` from Listener events later.
-const Orb = forwardRef<OrbHandle, Props>(function Orb({ state = "idle" }, ref) {
+const Orb = forwardRef<OrbHandle, Props>(function Orb({ state = "idle", caption }, ref) {
     const canvasRef = useRef<HTMLCanvasElement>(null)
     const rendererRef = useRef<OrbRenderer | null>(null)
 
@@ -54,7 +55,7 @@ const Orb = forwardRef<OrbHandle, Props>(function Orb({ state = "idle" }, ref) {
             <div className="orb" onClick={() => rendererRef.current?.pulse(1.4)}>
                 <canvas ref={canvasRef} className="orb-canvas" />
             </div>
-            <p className="orb-label">{LABELS[state]}</p>
+            <p className="orb-label">{caption || LABELS[state]}</p>
         </div>
     )
 })

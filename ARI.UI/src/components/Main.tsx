@@ -40,6 +40,7 @@ interface Props {
     onPipelineChange: (id: string | null) => void
     speechMode:       boolean
     onBeginSpeech:    () => void
+    speechCaption:    string | null
 }
 
 export default function Main({
@@ -52,7 +53,7 @@ export default function Main({
     onHeartbeatStart, onHeartbeatStop, commands,
     projects, selectedProject, onProjectChange,
     pipelines, selectedPipeline, onPipelineChange,
-    speechMode, onBeginSpeech,
+    speechMode, onBeginSpeech, speechCaption,
     safetyMode, onToggleSafety,
 }: Props) {
     const [threadPanelOpen, setThreadPanelOpen] = useState(false)
@@ -184,7 +185,7 @@ export default function Main({
                     </button>
 
                     {speechMode && activeThread ? (
-                        <Orb state="idle" />
+                        <Orb state="listening" caption={speechCaption} />
                     ) : (
                         <Messages
                             items={items}

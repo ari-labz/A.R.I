@@ -194,6 +194,22 @@ public class APIModule : IAsyncDisposable
                 await ClientWebSocket.HandleAsync(ws, ctx, llmSvc, log);
                 return;
             }
+
+            // Audio ingress for the Speech pipeline — browser mic / client streams PCM here.
+            if (ctx.Request.Path == "/api/listener/stream")
+            {
+                if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
+                if (Modules.Listener is not ARI.Listener.ListenerModule listener) { ctx.Response.StatusCode = 503; return; }
+
+                string source    = ctx.Request.Query["source"].ToString() is { Length: > 0 } s ? s : "web";
+                string threadKey = ctx.Request.Query["threadKey"].ToString();
+                string? userId   = ctx.Request.Query["userId"].ToString() is { Length: > 0 } u ? u : null;
+                var context      = new ARI.Listener.ListenerSessionContext(source, threadKey, userId);
+
+                var ws = await ctx.WebSockets.AcceptWebSocketAsync();
+                await listener.HandleConnectionAsync(ws, context, ctx.RequestAborted);
+                return;
+            }
             await next();
         });
 

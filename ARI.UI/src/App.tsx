@@ -8,6 +8,7 @@ import {
     type ThreadItem, type ThreadEntry, type AppEvent, type Attachment, type Project,
 } from "./hooks/useThreads"
 import { usePipelines } from "./hooks/usePipelines"
+import { startListening, type ListenerHandle } from "./hooks/useListener"
 import { env } from "./env"
 import "./styles/app.css"
 
@@ -191,7 +192,15 @@ export default function App() {
     const [selectedProject,  setSelectedProject]   = useState<string | null>(null)
     const [selectedPipeline, setSelectedPipeline]  = useState<string | null>(null)
     const [speechMode,       setSpeechMode]        = useState(false)
+    const [speechCaption,    setSpeechCaption]     = useState<string | null>(null)
+    const listenerRef = useRef<ListenerHandle | null>(null)
     const pipelines = usePipelines()
+
+    const stopListening = () => {
+        listenerRef.current?.stop()
+        listenerRef.current = null
+        setSpeechCaption(null)
+    }
 
     const [safetyMode,     setSafetyMode]     = useState(false)
     const safetyModeRef = useRef(false)
@@ -344,6 +353,7 @@ export default function App() {
         setItems([])
         setCodeMode(false)
         setSpeechMode(false)
+        stopListening()
     }
 
     // ── load thread attachments ───────────────────────────
@@ -688,6 +698,7 @@ export default function App() {
     ) => {
         abortRef.current?.abort(); abortRef.current = null
         stopPollRef.current?.(); stopPollRef.current = null
+        listenerRef.current?.stop(); listenerRef.current = null; setSpeechCaption(null)
 
         setActiveThread(key)
         setIsInternal(internal)
@@ -731,11 +742,20 @@ export default function App() {
         }
     }, [refreshThreadAttach, injectFileTree, openToolSocket, loadThreads])
 
-    // Create a Speech thread and open it straight into the orb view (no message composer).
+    // Create a Speech thread, open it into the orb view, and start streaming the mic to ARI.Listener.
     const beginSpeech = useCallback(async () => {
         const key = await createThread(selectedProject, "speech")
-        await openThread(key, false, null, false, null)
+        await openThread(key, false, null, false, null) // clears any previous listener
         loadThreads()
+        try {
+            listenerRef.current = await startListening(key, e => {
+                if (e.type === "transcript" && e.text)
+                    setSpeechCaption(e.addressed ? e.text : `(overheard) ${e.text}`)
+            })
+        } catch (err) {
+            console.warn("[Listener] mic start failed", err)
+            setSpeechCaption("Microphone unavailable")
+        }
     }, [selectedProject, openThread, loadThreads])
 
     // ── new chat ──────────────────────────────────────────
@@ -745,6 +765,7 @@ export default function App() {
         toolSocketRef.current?.close(); toolSocketRef.current = null; toolSocketKeyRef.current = null
         setActiveThread(null); setIsInternal(false); setAgentName(null)
         setCodeMode(false); setSpeechMode(false); setIsStreaming(false); setIsRemembering(false)
+        stopListening()
         setPendingAttach([]); setThreadAttach([])
         // Preserve selectedProject so repeated new chats on the same project
         // don't require re-selecting it each time.
@@ -1071,6 +1092,7 @@ export default function App() {
                     onPipelineChange={setSelectedPipeline}
                     speechMode={speechMode}
                     onBeginSpeech={beginSpeech}
+                    speechCaption={speechCaption}
                 />
             )}
             {toasts.map(t => (
