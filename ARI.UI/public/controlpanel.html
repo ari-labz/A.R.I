@@ -329,7 +329,8 @@ html, body {
 .dbg-seg-text:not(:last-child) { border-bottom: 1px solid #f0f0f0; }
 .dbg-tool-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 5px; font-size: 11px; font-weight: 600; font-family: ui-monospace, monospace; }
 .dbg-tool-chip.start  { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
-.dbg-tool-chip.end    { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
+.dbg-tool-chip.end,
+.dbg-tool-chip.done   { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
 .dbg-tool-chip.error  { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
 .dbg-seg-tool { padding: 4px 12px; }
 .dbg-batch-sep { height: 1px; background: var(--border); margin: 2px 12px; opacity: .5; }
@@ -358,6 +359,8 @@ html, body {
 .dbg-payload-lbl { padding: 5px 10px 4px; font-size: 9.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--text-dim); background: #f9fafb; border-bottom: 1px solid var(--border); flex-shrink: 0; }
 .dbg-payload-pre { margin: 0; padding: 8px 10px; font-family: ui-monospace, monospace; font-size: 10.5px; white-space: pre-wrap; word-break: break-word; overflow-y: auto; flex: 1; color: #1e293b; line-height: 1.5; }
 /* ── deep-inspection trace (prompt → thinking → tool call → result) ── */
+/* prompt-appraisal chip — grade + thinking budget the Appraisal agent assigned this turn */
+.dbg-appraisal { align-self: center; margin: 2px auto 8px; padding: 3px 12px; border-radius: 999px; background: #fffbeb; border: 1px solid #fde68a; color: #92400e; font-size: 11px; font-weight: 600; letter-spacing: .02em; }
 .dbg-bubble.prompt .dbg-bhead { background: #1d4ed8; color: #fff; }
 .dbg-bubble.toolcall { border-color: #bfdbfe; }
 .dbg-bubble.toolcall .dbg-bhead { background: #eff6ff; color: #1d4ed8; }
@@ -2785,6 +2788,16 @@ function dbgRenderHistoryItem(item, host, workers = [], cursor = { i: 0 }, depth
 // When a spawn_coder result is rendered, the matching Coder sub-thread frame is drawn inline right after it
 // (consuming workers[cursor.i]) so the delegated work appears at the point it was dispatched.
 function dbgRenderTrace(item, host, workers = [], cursor = { i: 0 }, depth = 0) {
+    // Prompt-appraisal bubble (DTI only): the grade the Appraisal agent gave, and the thinking budget it mapped to.
+    if (item.appraisalGrade != null) {
+        const s = item.appraisalSeconds;
+        const budget = s == null ? '' : s < 0 ? ' (unlimited)' : s === 0 ? ' (no thinking)'
+            : s >= 60 ? ` (${(s / 60).toFixed(s % 60 ? 1 : 0)} minutes)` : ` (${s} seconds)`;
+        const appr = document.createElement('div');
+        appr.className = 'dbg-appraisal';
+        appr.textContent = `Prompt appraisal: ${item.appraisalGrade}${budget}`;
+        host.appendChild(appr);
+    }
     (item.trace || []).forEach(step => {
         const row = document.createElement('div');
         row.className = 'dbg-row';
@@ -2993,9 +3006,9 @@ function dbgParseContent(raw) {
     if (!raw) return '<div class="dbg-seg-text" style="color:var(--text-dim);font-style:italic;">empty</div>';
 
     const segments = [];
-    // Matches: <!--ari-tool-start:name:label-->, <!--ari-tool-end:name:label|...--> ,
-    //          <!--ari-tool-error:name:rest-->, <!--ari-batch-end-->
-    const re = /<!--ari-tool-(start|end|error):([^:>]+):([^>]*?)-->|<!--ari-batch-end-->/g;
+    // Matches: <!--ari-tool-start:name:label-->, <!--ari-tool-done:name:label-->,
+    //          <!--ari-tool-end:name:label|...--> , <!--ari-tool-error:name:rest-->, <!--ari-batch-end-->
+    const re = /<!--ari-tool-(start|done|end|error):([^:>]+):([^>]*?)-->|<!--ari-batch-end-->/g;
     let pos = 0, m;
 
     while ((m = re.exec(raw)) !== null) {
@@ -3023,7 +3036,7 @@ function dbgParseContent(raw) {
         if (seg.kind === 'text') {
             return `<div class="dbg-seg-text">${escHtml(seg.text)}</div>`;
         } else if (seg.kind === 'tool') {
-            const icon = seg.state === 'end' ? '✓' : seg.state === 'error' ? '✗' : '…';
+            const icon = (seg.state === 'end' || seg.state === 'done') ? '✓' : seg.state === 'error' ? '✗' : '…';
             const labelPart = seg.label ? ` <span style="opacity:.7;">· ${escHtml(seg.label)}</span>` : '';
             return `<div class="dbg-seg-tool"><span class="dbg-tool-chip ${escHtml(seg.state)}">${icon} ${escHtml(seg.name)}${labelPart}</span></div>`;
         } else if (seg.kind === 'sep') {

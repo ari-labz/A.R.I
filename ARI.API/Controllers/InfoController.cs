@@ -7,7 +7,7 @@ namespace ARI.API.Controllers;
 public class InfoController : ControllerBase
 {
     // Bump this whenever a breaking change requires clients to update.
-    private const string RequiredClientVersion = "0.3.4";
+    private const string RequiredClientVersion = "0.4.3";
 
     [HttpGet("version")]
     public IActionResult GetVersion() =>

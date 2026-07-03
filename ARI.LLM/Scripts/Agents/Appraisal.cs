@@ -27,12 +27,16 @@ internal class Appraisal : Agent
     }
 
     /// <summary>
-    /// Grade → wall-clock thinking-time budget in seconds. 0 = no thinking; -1 = no limit (grade 10).
-    /// 0:0 · 1:10s · 2:20s · 3:30s · 4:1m · 5:2m · 6:4m · 7:6m · 8:10m · 9:15m · 10:∞
+    /// Grade → wall-clock thinking-time budget in seconds. -1 = no limit (grade 10).
+    /// 0:3s · 1:10s · 2:20s · 3:30s · 4:1m · 5:2m · 6:4m · 7:6m · 8:10m · 9:15m · 10:∞
+    /// Grade 0 is a TINY budget, not think-off: thinking on/off is fixed at the pipeline level and never
+    /// flipped per turn — a flip changes the chat template and invalidates the server's whole KV prefix.
+    /// A 3s budget means the 100% finish-sentence cue fires almost immediately, so a trivial prompt still
+    /// costs only a breath of reasoning while the cache stays warm.
     /// </summary>
     internal static int GradeToSeconds(int grade) => grade switch
     {
-        <= 0 => 0,
+        <= 0 => 3,
         1    => 10,
         2    => 20,
         3    => 30,

@@ -117,13 +117,12 @@ public abstract class Agent
         Func<string, Task>? onDelta                = null,
         int                 thinkingBudgetOverride = 0,
         bool                chatHidden             = false,
-        bool?               thinkOverride          = null,
         int?                thinkSeconds           = null)
     {
         await thread.sendLock.WaitAsync(ct);
         try
         {
-            return await Send(thread, prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded, onDelta, thinkingBudgetOverride, chatHidden, thinkOverride, thinkSeconds);
+            return await Send(thread, prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded, onDelta, thinkingBudgetOverride, chatHidden, thinkSeconds);
         }
         catch (OperationCanceledException)
         {
@@ -174,9 +173,39 @@ public abstract class Agent
         return c is '.' or '!' or '?' or '\n';
     }
 
-    // Mid-thought budget nudges, injected INSIDE <think> (hidden from the user; visible only in the debug trace).
-    private const string Nudge70 = "\n[System: You've used 70% of your thinking budget — please start wrapping up your chain of thought.]\n";
-    private const string Nudge90 = "\n[System: You've used 90% of your thinking budget — finish your thought and move on.]\n";
+    // Mid-thought budget nudges, injected INSIDE <think> (hidden from the user; visible only in the debug
+    // trace). Escalation ladder on the THINKING clock: 80% warn → 100% finish-the-sentence → 110% guide the
+    // thought shut (assistant-voice prime that leads straight to </think>) → 120% force-close </think>.
+    private const string Nudge80  = "\n[System: You've used 80% of your thinking budget — start wrapping up your chain of thought.]\n";
+    private const string Nudge100 = "\n[System: Your thinking budget is spent. Finish your current sentence, then close your thinking and act.]\n";
+    private const string Nudge110 = "\n\nOkay — I have thought about this long enough. I'll stop here and act on what I have: ";
+
+    /// <summary>Wall-clock split of one turn (#35 v2). Prefill = request sent → first delta of each request
+    /// (the server reading the prompt). Thinking/Typing tick ONLY while deltas are actually arriving — an
+    /// inter-delta gap over 2s is a server stall or tool wait and counts toward no bucket. The thinking
+    /// budget compares against Thinking, never total elapsed, so a slow prefill can no longer eat the
+    /// model's thinking allowance (a 223s prefill once consumed a 30s budget before the model said a word).</summary>
+    private sealed class TurnClock
+    {
+        public double Prefill, Thinking, Typing;
+        private DateTime  sent;
+        private DateTime? lastDelta;
+
+        public void RequestSent() { sent = DateTime.UtcNow; lastDelta = null; }
+
+        public void Tick(bool reasoning)
+        {
+            DateTime now = DateTime.UtcNow;
+            if (lastDelta is null)
+                Prefill += (now - sent).TotalSeconds;
+            else
+            {
+                double gap = (now - lastDelta.Value).TotalSeconds;
+                if (gap <= 2) { if (reasoning) Thinking += gap; else Typing += gap; }
+            }
+            lastDelta = now;
+        }
+    }
 
     // Grade-10 (unlimited budget) periodic time-awareness nudge — injected every 30s of reasoning.
     private static string PeriodicNudge(int seconds) =>
@@ -197,7 +226,11 @@ public abstract class Agent
     /// <summary>
     /// Mid-thought budget warnings. The chat API can't continue a thought, so we drop to raw /completion: re-feed
     /// the reasoning so far + a nudge INSIDE &lt;think&gt;, let the model keep thinking, then stream the post-
-    /// &lt;/think&gt; answer. Loops for the later (90%) nudge and force-closes &lt;/think&gt; at the hard deadline.
+    /// &lt;/think&gt; answer. Cache-friendly by construction: the continuation prompt is the SAME rendered
+    /// conversation plus tokens the server itself just generated, so the KV prefix survives — this NEVER flips
+    /// enable_thinking (a template flip invalidates the whole cached prompt; a 16k context re-prefilled twice
+    /// that way). Escalation: 80% cue → 100% wrap-up cue → forced &lt;/think&gt; only past 150% of the budget,
+    /// all measured on the THINKING clock (time actually receiving reasoning), never wall-clock.
     /// Reasoning stays hidden (appended to reasoningBuilder for the trace only); only the answer reaches onDelta,
     /// so it's invisible in the chat UI. Returns when the answer is complete; contentBuilder holds it for the
     /// caller's normal (text-mode) post-stream parsing.
@@ -205,12 +238,14 @@ public abstract class Agent
     private async Task ContinueThinking(
         IEnumerable<object> messages, IReadOnlyDictionary<string, object> body, HttpClient http, Thread thread,
         StringBuilder reasoningBuilder, StringBuilder responseBuilder, StringBuilder contentBuilder,
-        string firstNudge, DateTime reasoningStart, int thinkDeadlineSec, bool warned90Already,
+        string firstNudge, TurnClock clock, int thinkDeadlineSec, bool warned80Already, bool warned100Already,
         int lastPeriodicSec, Func<string, Task>? onDelta, CancellationToken ct)
     {
         string basePrompt    = await ApplyTemplate(messages, http, ct);
         string suffix        = firstNudge;
-        bool   warned90      = warned90Already;
+        bool   warned80      = warned80Already;
+        bool   warned100     = warned100Already;
+        bool   guided110     = false;    // 110% assistant-voice close prime sent?
         bool   startInContent = false;   // true when the suffix already closed </think>
 
         while (true)
@@ -230,6 +265,7 @@ public abstract class Agent
 
             HttpRequestMessage req = new(HttpMethod.Post, $"{Endpoint}/completion")
                 { Content = new StringContent(JsonSerializer.Serialize(cbody), Encoding.UTF8, "application/json") };
+            clock.RequestSent();
             using HttpResponseMessage resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
             resp.EnsureSuccessStatusCode();
             using Stream stream = await resp.Content.ReadAsStreamAsync(ct);
@@ -255,6 +291,7 @@ public abstract class Agent
 
                 if (piece.Length > 0)
                 {
+                    clock.Tick(reasoning: !inContent);
                     if (!inContent)
                     {
                         string buf = carry + piece;
@@ -280,11 +317,11 @@ public abstract class Agent
                     }
                 }
 
-                // Threshold checks while still thinking.
+                // Threshold checks while still thinking — all on the THINKING clock (see TurnClock).
                 if (!inContent && thinkDeadlineSec < 0)
                 {
-                    // Grade 10 (unlimited): no deadline, just a time-awareness nudge every 30s.
-                    int el = (int)(DateTime.UtcNow - reasoningStart).TotalSeconds;
+                    // Grade 10 (unlimited): no deadline, just a time-awareness nudge every 30s of thinking.
+                    int el = (int)clock.Thinking;
                     if (el - lastPeriodicSec >= 30)
                     {
                         lastPeriodicSec = el;
@@ -295,18 +332,20 @@ public abstract class Agent
                 }
                 else if (!inContent && thinkDeadlineSec > 0)
                 {
-                    double frac = (DateTime.UtcNow - reasoningStart).TotalSeconds / thinkDeadlineSec;
-                    if (frac >= 1.0 && (EndsSentence(reasoningBuilder) || frac >= 1.5))
+                    double frac = clock.Thinking / thinkDeadlineSec;
+                    string? escalation =
+                        frac >= 1.20              ? "</think>\n\n"   // runaway stop — close the thought ourselves; a prompt-level </think> keeps the template (and KV cache) intact
+                      : frac >= 1.10 && !guided110 ? Nudge110         // guide it shut: assistant-voice prime that leads straight to </think>
+                      : frac >= 1.00 && !warned100 ? Nudge100         // budget spent: finish the sentence, then close
+                      : frac >= 0.80 && !warned80 && thinkDeadlineSec >= 30 ? Nudge80   // warning — only on budgets big enough for it not to be spam
+                      : null;
+                    if (escalation is not null)
                     {
+                        if (escalation == Nudge110) guided110 = true;
+                        if (escalation == Nudge100) warned100 = true;
+                        if (escalation == Nudge80)  warned80  = true;
                         reasoningBuilder.Append(carry); carry = "";
-                        nextSuffix = "</think>\n\n";   // hard deadline → force the answer
-                        break;
-                    }
-                    if (frac >= 0.90 && !warned90)
-                    {
-                        warned90 = true;
-                        reasoningBuilder.Append(carry); carry = "";
-                        nextSuffix = Nudge90;
+                        nextSuffix = escalation;
                         break;
                     }
                 }
@@ -317,8 +356,13 @@ public abstract class Agent
             if (nextSuffix is null) return;   // round finished naturally — the answer is complete
             suffix         = nextSuffix;
             startInContent = nextSuffix.StartsWith("</think>", StringComparison.Ordinal);
-            Shared.Logger.LogInformation("[{Agent}] ({Thread}) thinking continuation: {Why}.",
-                Name, thread.Key, startInContent ? "deadline → forced </think>" : "90% nudge");
+            Shared.Logger.LogInformation("[{Agent}] ({Thread}) thinking continuation: {Why} ({Thinking}s thinking / {Budget}s budget).",
+                Name, thread.Key,
+                startInContent ? "120% → forced </think>"
+                : guided110    ? "110% → guided close"
+                : warned100    ? "100% → finish-sentence cue"
+                :                "80% warning",
+                clock.Thinking.ToString("F0"), thinkDeadlineSec);
         }
     }
 
@@ -335,14 +379,15 @@ public abstract class Agent
         Func<string, Task>? onDelta               = null,
         int                 thinkingBudgetOverride = 0,
         bool                chatHidden             = false,
-        bool?               thinkOverride          = null,
         int?                thinkSeconds           = null)
     {
-        // Per-request thinking toggle: a caller can force think on/off for THIS turn (e.g. the architect
-        // thinks while planning but not on approval/summary turns); null = use the agent's configured Think.
-        // thinkSeconds (from the Appraisal grade) takes precedence: >0 / -1 (unlimited) → think on; 0 → off.
-        bool effectiveThink = thinkSeconds.HasValue ? thinkSeconds.Value != 0 : (thinkOverride ?? Think);
-        int  thinkDeadlineSec = thinkSeconds.GetValueOrDefault(0);   // >0 = wall-clock reasoning budget (#35); <=0 = none
+        // Thinking on/off is a PIPELINE-LEVEL setting (the agent's configured Think) — never flipped per
+        // turn or mid-turn. Flipping it changes the chat template, which invalidates the server's entire
+        // cached prompt prefix and forces a full re-prefill (~minutes at local prefill speeds). Per-turn
+        // thinkSeconds (from the Appraisal grade) only sizes the BUDGET; grade 0 maps to a tiny budget
+        // (3s → the 100% finish-sentence cue fires almost immediately), never to think-off.
+        bool effectiveThink   = Think;
+        int  thinkDeadlineSec = thinkSeconds.GetValueOrDefault(0);   // >0 = thinking-clock budget (#35); <=0 = none
         thread.LastMessageAt = DateTime.UtcNow;
 
         thread.inactivityTimer?.Dispose();
@@ -516,14 +561,11 @@ public abstract class Agent
         int             reasoningChars   = 0;
         // Full reasoning/chain-of-thought text for this turn (debug viewer only — never re-sent to the LLM).
         StringBuilder   reasoningBuilder = new();
-        DateTime?       reasoningStart   = null;   // stamped on the first reasoning delta (for the #35 time budget)
-        bool            warned70 = false, warned90 = false;   // 70/90% mid-thought budget warnings fired?
+        TurnClock       clock            = new();  // prefill/thinking/typing wall-clock split for this turn
+        bool            warned80 = false, warned100 = false;   // 80/100% thinking-budget warnings fired?
         string?         pendingNudge     = null;   // set when a warning fires → switch to the /completion continuation
         bool            warningsEnabled  = Environment.GetEnvironmentVariable("ARI_NO_WARNINGS") != "1";   // A/B toggle
-        int             lastPeriodicSec  = 0;   // grade-10 unlimited: elapsed-secs of the last 30s time-awareness nudge
-        // Hard reasoning cap: once cumulative reasoning crosses ReasoningCharCap, latch thinking off for the
-        // rest of the turn (the body builder reads thinkingCapReached) so the model must produce output.
-        bool            thinkingCapReached = false;
+        int             lastPeriodicSec  = 0;   // grade-10 unlimited: thinking-secs of the last 30s time-awareness nudge
         int             completionTokens = 0;
         int             promptTokens     = 0;
         bool            hadImages        = msgAtts.Any(a => a.IsImage) || threadAtts.Any(a => a.IsImage);
@@ -553,7 +595,6 @@ public abstract class Agent
         thread.RaiseUpdated();
         thread.streamingResponse = ariResponse;
         thread.streamedText      = "";
-        DateTime lastStreamNotify = DateTime.MinValue;
         Func<string, Task>? userDelta = onDelta;
         onDelta = async text => {
             ariResponse.StreamText = text;
@@ -561,14 +602,13 @@ public abstract class Agent
             // live text to the chat — that broadcast (LLMModule wires thread.Streaming → the "streaming" SSE)
             // is what made the hidden approval turn overwrite the user's view. The debug view re-polls /debug
             // and still sees it; the response itself still builds via ariResponse.StreamText above.
+            // Every delta is its own frame — NO throttling. A server-side timer dropped frames with no
+            // trailing flush, so clients jumped from a word to whole paragraphs and card states appeared
+            // only in their final form. Per-token frames are cheap locally; clients coalesce as needed.
             if (!chatHidden)
             {
                 thread.streamedText = text;
-                DateTime now = DateTime.UtcNow;
-                if ((now - lastStreamNotify).TotalMilliseconds >= 150) {
-                    lastStreamNotify = now;
-                    thread.RaiseStreaming(text);
-                }
+                thread.RaiseStreaming(text);
             }
             if (userDelta is not null) await userDelta(text);
         };
@@ -626,7 +666,11 @@ public abstract class Agent
             if (PresencePenalty.HasValue)  body["presence_penalty"]  = PresencePenalty.Value;
             if (FrequencyPenalty.HasValue) body["frequency_penalty"] = FrequencyPenalty.Value;
 
-            if (!effectiveThink || thinkingCapReached)
+            // Thinking mode is decided ONCE for the thread/turn and never flipped mid-turn: switching
+            // enable_thinking changes the chat template, which invalidates the server's whole cached
+            // prompt prefix (a 16k context re-prefilled from scratch when a budget-expiry retry flipped
+            // it). Budget overruns are handled with in-band cues instead — see ContinueThinking.
+            if (!effectiveThink)
             {
                 body["thinking"]             = false;
                 body["enable_thinking"]      = false;
@@ -676,6 +720,7 @@ public abstract class Agent
                 Content = new StringContent(json, Encoding.UTF8, "application/json")
             };
 
+            clock.RequestSent();
             HttpResponseMessage response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
             if (!response.IsSuccessStatusCode)
             {
@@ -713,8 +758,14 @@ public abstract class Agent
             HashSet<int> precheckedCalls = new();
             int? runawayCall = null;   // a native call whose args ran away (model looping / leaking text-format markers)
             bool contentRunaway = false; // text content degenerated into a repeated-character spiral (e.g. backslashes)
-            bool reasoningCapBreak = false; // this request's reasoning crossed ReasoningCharCap — stop the stream
             int  reasoningStartLen = reasoningBuilder.Length; // for slicing THIS request's reasoning into the trace
+
+            // Live trace steps (#80/#111): created the moment their content starts streaming and MUTATED as
+            // deltas arrive, so the DTI timeline grows in real time and every request's thinking lands as its
+            // own step at the true point in the sequence (never merged into an earlier bubble). The live text
+            // step is provisional — it is removed before the post-stream parser records the real text steps.
+            TraceStep? liveReasoning = null;
+            TraceStep? liveText      = null;
 
             DateTime lastProgress = DateTime.UtcNow;
             string? line;
@@ -745,6 +796,12 @@ public abstract class Agent
                         finishReason = frEl.GetString();
 
                     JsonElement delta = choice.GetProperty("delta");
+
+                    // Wall-clock bucketing: the first delta of a request closes its prefill window; after
+                    // that each delta ticks the thinking or typing clock (stalls tick neither — see TurnClock).
+                    bool reasoningDelta = delta.TryGetProperty("reasoning_content", out JsonElement rcProbe)
+                        && rcProbe.ValueKind == JsonValueKind.String && (rcProbe.GetString()?.Length ?? 0) > 0;
+                    clock.Tick(reasoningDelta);
 
                     // Live progress so a long/runaway generation is visible in the log as it happens.
                     if (!QuietLogging && (DateTime.UtcNow - lastProgress).TotalSeconds >= 3)
@@ -791,53 +848,46 @@ public abstract class Agent
                             wasThinking = true;
                         }
                         if (!string.IsNullOrEmpty(thinkDelta)) { reasoningChars += thinkDelta.Length; reasoningBuilder.Append(thinkDelta); }
-                        // Hard cap: this model ignores thinking_budget, so enforce it ourselves. Once cumulative
-                        // reasoning crosses the cap, stop the stream and latch thinking off; the empty-turn nudge
-                        // below then re-prompts and the next request (thinking disabled) must produce the plan.
-                        if (ReasoningCharCap > 0 && !thinkingCapReached && reasoningChars >= ReasoningCharCap)
+                        if (liveReasoning is null) { liveReasoning = new TraceStep { Kind = "reasoning", Text = "" }; trace.Add(liveReasoning); }
+                        liveReasoning.Text = reasoningBuilder.ToString(reasoningStartLen, reasoningBuilder.Length - reasoningStartLen);
+                        // Reasoning never reaches the chat stream, so nothing would wake watching clients while
+                        // the model thinks — poke them per delta so the DTI re-fetches the growing live step
+                        // (the DTI's own 120ms debounce coalesces the refetches).
+                        if (!chatHidden) thread.RaiseStreaming(thread.streamedText);
+                        // Thinking budget (#35 v2): all thresholds compare the THINKING clock — time actually
+                        // spent receiving reasoning — never wall-clock (a 223s prefill once consumed a 30s
+                        // budget before the model produced a word). Overruns break to the /completion
+                        // continuation (ContinueThinking), which re-feeds the reasoning + a cue and escalates
+                        // 80% warn → 100% finish-sentence → 110% guided close → 120% forced </think>. Nothing
+                        // flips enable_thinking mid-turn: a template flip invalidates the whole KV prefix.
+                        // The 80% warning is gated to budgets ≥30s (on a tiny budget it would fire seconds
+                        // before the 100% cue — pure spam) and the ARI_NO_WARNINGS A/B toggle; the 100%
+                        // cue always fires regardless of budget size.
+                        if (thinkDeadlineSec > 0 && pendingNudge is null)
                         {
-                            thinkingCapReached = true;
-                            reasoningCapBreak  = true;
-                            Shared.Logger.LogWarning("[{Agent}] ({Thread}) reasoning cap hit ({RC} >= {Cap} chars) — forcing thinking off for the rest of the turn.",
-                                Name, thread.Key, reasoningChars, ReasoningCharCap);
-                        }
-                        // Time budget (#35): once the wall-clock reasoning budget is spent, let the model FINISH THE
-                        // CURRENT SENTENCE, then stop thinking — never a mid-thought cut (that's why a bare length cap
-                        // was net-negative). Reuses the existing break → re-request-thinking-off path to produce the
-                        // answer. A 30s grace past the budget hard-stops if no sentence boundary arrives.
-                        reasoningStart ??= DateTime.UtcNow;
-                        // 70/90% budget warnings → break to the /completion continuation, which re-feeds the
-                        // reasoning + nudge and keeps the model THINKING (the chat API can't continue a thought).
-                        // Gated to budgets ≥120s (appraisal grade ≥5): the continuation's SWA re-prefill (~10s) is
-                        // only worth it when the budget is long enough to amortise it; on short budgets it's net-negative.
-                        if (warningsEnabled && thinkDeadlineSec >= 120 && pendingNudge is null && !thinkingCapReached)
-                        {
-                            double frac = (DateTime.UtcNow - reasoningStart.Value).TotalSeconds / thinkDeadlineSec;
-                            if      (frac >= 0.90 && !warned90) { warned90 = true; pendingNudge = Nudge90; }
-                            else if (frac >= 0.70 && !warned70) { warned70 = true; pendingNudge = Nudge70; }
-                        }
-                        // Grade 10 (unlimited budget, thinkDeadlineSec < 0): no deadline, but every 30s inject a
-                        // time-awareness nudge so an open-ended thinker stays mindful the user is waiting.
-                        if (thinkDeadlineSec < 0 && pendingNudge is null && !thinkingCapReached)
-                        {
-                            int el = (int)(DateTime.UtcNow - reasoningStart.Value).TotalSeconds;
-                            if (el - lastPeriodicSec >= 30) { lastPeriodicSec = el; pendingNudge = PeriodicNudge(el); }
-                        }
-                        // Deadline (#35) — fallback for the no-warning case (e.g. an agent with thinkSeconds but
-                        // warnings irrelevant): finish the sentence, then stop thinking via the existing break.
-                        if (thinkDeadlineSec > 0 && pendingNudge is null && !thinkingCapReached)
-                        {
-                            double over = (DateTime.UtcNow - reasoningStart.Value).TotalSeconds - thinkDeadlineSec;
-                            if (over >= 0 && (EndsSentence(reasoningBuilder) || over >= 30))
+                            double frac = clock.Thinking / thinkDeadlineSec;
+                            if (frac >= 1.0 && !warned100)
                             {
-                                thinkingCapReached = true;
-                                reasoningCapBreak  = true;
-                                Shared.Logger.LogInformation("[{Agent}] ({Thread}) thinking budget {Sec}s spent — wrapped up at a sentence boundary ({RC} reasoning chars).",
+                                warned100    = true;
+                                pendingNudge = Nudge100;
+                                Shared.Logger.LogInformation("[{Agent}] ({Thread}) thinking budget {Sec}s spent — sending finish-sentence cue ({RC} reasoning chars).",
                                     Name, thread.Key, thinkDeadlineSec, reasoningChars);
                             }
+                            else if (warningsEnabled && thinkDeadlineSec >= 30 && frac >= 0.80 && !warned80)
+                            {
+                                warned80     = true;
+                                pendingNudge = Nudge80;
+                            }
+                        }
+                        // Grade 10 (unlimited budget, thinkDeadlineSec < 0): no deadline, but every 30s of
+                        // thinking inject a time-awareness nudge so an open-ended thinker stays mindful.
+                        if (thinkDeadlineSec < 0 && pendingNudge is null)
+                        {
+                            int el = (int)clock.Thinking;
+                            if (el - lastPeriodicSec >= 30) { lastPeriodicSec = el; pendingNudge = PeriodicNudge(el); }
                         }
                     }
-                    if (reasoningCapBreak || pendingNudge is not null) break;
+                    if (pendingNudge is not null) break;
 
                     if (delta.TryGetProperty("tool_calls", out JsonElement toolCallsEl))
                     {
@@ -849,6 +899,7 @@ public abstract class Agent
                             if (!isLeakedToolCall && preText.Length > 0)
                             {
                                 contentBuilder.Append(preText + "\n");
+                                if (liveText is not null) { trace.Remove(liveText); liveText = null; }
                                 trace.Add(new TraceStep { Kind = "text", Text = preText });
                                 if (!QuietLogging)
                                     Shared.Logger.LogInformation("[{Agent}] ({Thread}) \"{Text}\"", Name, thread.Key, preText);
@@ -955,9 +1006,15 @@ public abstract class Agent
                                 ? (accumulated.StartsWith(AriPrefix[..accumulated.Length], StringComparison.OrdinalIgnoreCase) ? "" : accumulated)
                                 : (accumulated.StartsWith(AriPrefix, StringComparison.OrdinalIgnoreCase) ? accumulated[AriPrefix.Length..] : accumulated);
                             // Show a live "Editing <file> +N/-M" card while the model streams an edit_file/
-                            // write_file text tool call, instead of frozen narration. View-only transform of
-                            // the streamed text; responseBuilder and the parse/execute path are untouched.
-                            await onDelta(contentBuilder.ToString() + InjectLiveToolCards(visible));
+                            // write_file text tool call, instead of frozen narration; every OTHER tool call's
+                            // raw <tool_call>/<function=…> text (complete or still-streaming, including a
+                            // half-typed opening tag) is stripped so it never flashes as prose in the client
+                            // (#78). View-only transforms of the streamed text; responseBuilder and the
+                            // parse/execute path are untouched.
+                            string liveView = StripStreamingToolText(InjectLiveToolCards(visible));
+                            if (liveText is null && liveView.Trim().Length > 0) { liveText = new TraceStep { Kind = "text", Text = "" }; trace.Add(liveText); }
+                            if (liveText is not null) liveText.Text = liveView;
+                            await onDelta(contentBuilder.ToString() + liveView);
                         }
                     }
                 }
@@ -970,17 +1027,21 @@ public abstract class Agent
             {
                 Shared.Logger.LogInformation("[{Agent}] ({Thread}) budget warning at {RC} reasoning chars — continuing via /completion.", Name, thread.Key, reasoningChars);
                 await ContinueThinking(messages, body, httpClient, thread, reasoningBuilder, responseBuilder, contentBuilder,
-                    pendingNudge, reasoningStart!.Value, thinkDeadlineSec, warned90, lastPeriodicSec, onDelta, ct);
+                    pendingNudge, clock, thinkDeadlineSec, warned80, warned100, lastPeriodicSec, onDelta, ct);
                 pendingNudge   = null;
                 finishReason ??= "stop";
                 reasoningChars = reasoningBuilder.Length;
             }
 
-            // Deep-inspection trace: record THIS request's reasoning (the chunk added since the request began)
-            // as its own step, so the panel can show a "thinking" cloud before each tool-call batch.
+            // Deep-inspection trace: finalize THIS request's reasoning step (created live at the first
+            // reasoning delta; ContinueThinking may have appended more since the last delta tick).
             if (reasoningBuilder.Length > reasoningStartLen)
-                trace.Add(new TraceStep { Kind = "reasoning",
-                    Text = reasoningBuilder.ToString(reasoningStartLen, reasoningBuilder.Length - reasoningStartLen) });
+            {
+                if (liveReasoning is null) { liveReasoning = new TraceStep { Kind = "reasoning" }; trace.Add(liveReasoning); }
+                liveReasoning.Text = reasoningBuilder.ToString(reasoningStartLen, reasoningBuilder.Length - reasoningStartLen);
+            }
+            // The provisional live-text step gives way to the parsed text steps recorded below.
+            if (liveText is not null) { trace.Remove(liveText); liveText = null; }
 
             if (!QuietLogging)
             {
@@ -1238,7 +1299,7 @@ public abstract class Agent
                             string pf = "";
                             try { using JsonDocument pvd = JsonDocument.Parse(argsJson); pf = System.IO.Path.GetFileName((pvd.RootElement.TryGetProperty("path", out JsonElement ppe) ? ppe.GetString() : null)?.Trim('"', '\'', ' ') ?? ""); }
                             catch { /* ignore */ }
-                            ReplaceInBuilder(contentBuilder, activeMarker, $"<div class=\"tool-use\">Previewed {pf}</div>\n");
+                            ReplaceInBuilder(contentBuilder, activeMarker, $"<!--ari-tool-done:preview_file:{pf.Replace("--", "&#45;&#45;")}-->");
                             if (onDelta is not null) await onDelta(contentBuilder.ToString());
                             activeMarker = null;
                         }
@@ -1364,16 +1425,32 @@ public abstract class Agent
                 // the reasoning block and stops with NO answer and NO tool call (responseBuilder empty). That
                 // is never a real completion — re-prompt it to actually act. (The narrate-without-acting case
                 // above only fires when there IS content; this catches the zero-content case.)
-                bool emptyTurn = tail.Length == 0;
+                // Degenerate-placeholder turn: the model occasionally answers with a literal template
+                // variable instead of content — e.g. its entire output is "${plan}" or "{summary}". Treat it
+                // like an empty turn (it is one, semantically) so the nudge makes it write the real thing.
+                bool placeholderTurn = tail.Length > 0 && System.Text.RegularExpressions.Regex.IsMatch(
+                    tail, @"^\$?\{[\w .-]{1,60}\}$");
+                bool emptyTurn = tail.Length == 0 || placeholderTurn;
+                // Calls written INSIDE the <think> block land in reasoning_content and are never parsed or
+                // executed — a whole turn can be "spent" on tool calls that went nowhere. Tell the model
+                // exactly what happened so its retry re-issues them as the answer.
+                bool callsInThinking = emptyTurn && reasoningBuilder.Length > reasoningStartLen &&
+                    reasoningBuilder.ToString(reasoningStartLen, reasoningBuilder.Length - reasoningStartLen)
+                        .Contains("<tool_call>", StringComparison.OrdinalIgnoreCase);
                 if ((promisesAction && mentionsVerb) || emptyTurn)
                 {
                     continueNudges++;
-                    string why = emptyTurn
+                    string why = callsInThinking
+                        ? "You wrote your tool calls INSIDE your thinking block — tool calls made while thinking are NOT executed. Nothing ran"
+                        : placeholderTurn
+                        ? $"Your entire answer was the literal placeholder \"{tail}\" — that is not content; write the actual text it stands for"
+                        : emptyTurn
                         ? "Your reasoning finished but you produced no answer and no tool call — the turn was empty"
                         : "You described an action but didn't perform it — no tool call was made";
-                    Shared.Logger.LogInformation("[{Agent}] ({Thread}) premature-stop nudge ({Kind}).", Name, thread.Key, emptyTurn ? "empty-turn-after-reasoning" : "narrated-no-action");
+                    Shared.Logger.LogInformation("[{Agent}] ({Thread}) premature-stop nudge ({Kind}).", Name, thread.Key,
+                        callsInThinking ? "tool-calls-inside-thinking" : placeholderTurn ? "placeholder-answer" : emptyTurn ? "empty-turn-after-reasoning" : "narrated-no-action");
                     messages.Add(new { role = "user", content =
-                        $"[System: {why}. Don't stop here: take the next concrete action now — issue the tool call to make the change (and keep working until the task is done AND the project builds), or if you are genuinely finished, give the user a short summary of what you changed. Do not reply with nothing, and do not repeat a tool call you already made.]" });
+                        $"[System: {why}. Don't stop here: take the next concrete action now — issue the tool call AFTER your thinking ends, as your answer (and keep working until the task is done AND the project builds), or if you are genuinely finished, give the user a short summary of what you changed. Do not reply with nothing, and do not repeat a tool call you already made.]" });
                     responseBuilder.Clear();
                     continue;
                 }
@@ -1409,8 +1486,10 @@ public abstract class Agent
 
         if (!QuietLogging)
         {
-            Shared.Logger.LogInformation("[{Agent}] ({Thread}) responded in {Seconds}s ({Tokens} tokens, {TokPerSec} t/s)",
-                Name, thread.Key, elapsed.ToString("F1"), completionTokens, tokPerSec.ToString("F1"));
+            Shared.Logger.LogInformation("[{Agent}] ({Thread}) responded in {Seconds}s (prefill {Prefill}s, thinking {Thinking}s, typing {Typing}s; {Tokens} tokens, {TokPerSec} t/s)",
+                Name, thread.Key, elapsed.ToString("F1"),
+                clock.Prefill.ToString("F1"), clock.Thinking.ToString("F1"), clock.Typing.ToString("F1"),
+                completionTokens, tokPerSec.ToString("F1"));
 
             if (maxTokens > 0 && completionTokens >= maxTokens * TOKEN_WARNING_RATIO)
                 Shared.Logger.LogWarning("[{Agent}] ({Thread}) token usage at {Pct}% of limit ({Used}/{Max})",
@@ -1430,7 +1509,10 @@ public abstract class Agent
         ariResponse.Content                   = ContentBlock.Parse(responseText);
         ariResponse.Data.DebugResponseText         = responseText;
         ariResponse.Reasoning                 = reasoningBuilder.Length > 0 ? reasoningBuilder.ToString() : null;
-        ariResponse.ThinkingSeconds           = elapsed;
+        ariResponse.ThinkingSeconds           = clock.Thinking;
+        ariResponse.PrefillSeconds            = clock.Prefill;
+        ariResponse.TypingSeconds             = clock.Typing;
+        ariResponse.TotalSeconds              = elapsed;
         ariResponse.RecallNotes               = combinedNotes;
         ariResponse.ContextSummary            = contextSummary;
         ariResponse.Data.CompletionTokens          = completionTokens;
@@ -1533,6 +1615,39 @@ public abstract class Agent
                 removed = e - s + 1;
             return $"<!--ari-tool-start:{name}:{label}|+{added}|-{removed}-->";
         });
+    }
+
+    // Complete or trailing-partial text tool calls in the STREAMED view. Ordered alternation: closed
+    // blocks first, then an unterminated block running to end-of-string (the still-streaming case).
+    private static readonly System.Text.RegularExpressions.Regex StreamToolTextRe = new(
+        @"<tool_call>[\s\S]*?</tool_call>|<tool_call>[\s\S]*$|<function=[^>]*>[\s\S]*?</function[^>]*>|<function=[^>]*>[\s\S]*$",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    // Opening tags a leak can start with — a bare partial prefix of one of these at the very end of the
+    // stream ("<tool_ca") is held back until enough arrives to classify it.
+    private static readonly string[] ToolTagPrefixes = { "<tool_call", "</tool_call", "<function=", "</function", "<parameter=", "</parameter" };
+
+    /// <summary>
+    /// View-only strip of text-protocol tool-call XML from the streamed text (#78): complete blocks,
+    /// a block still streaming to end-of-string, and a partially-typed opening tag at the very tail
+    /// (e.g. "&lt;tool_ca") — without this the raw call flashes as prose in every client until the
+    /// post-stream parser strips it. The underlying builders are untouched.
+    /// </summary>
+    private static string StripStreamingToolText(string text)
+    {
+        if (text.IndexOf('<') < 0) return text;
+        text = StreamToolTextRe.Replace(text, "");
+
+        int lt = text.LastIndexOf('<');
+        if (lt >= 0)
+        {
+            string tail = text[lt..];
+            if (!tail.Contains('>'))
+                foreach (string tag in ToolTagPrefixes)
+                    if (tag.StartsWith(tail, StringComparison.OrdinalIgnoreCase) || tail.StartsWith(tag, StringComparison.OrdinalIgnoreCase))
+                        return text[..lt];
+        }
+        return text;
     }
 
     /// <summary>Extracts a parameter value from a possibly-incomplete text tool-call body (up to

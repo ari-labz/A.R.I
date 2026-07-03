@@ -39,37 +39,23 @@ internal sealed class CodePipeline : Pipeline
     {
         Shared.Logger.LogInformation("[Code] ({Thread}) prompt\n\"{Prompt}\"", threadKey, effectivePrompt);
 
-        // No project root → no filesystem access. Tell the model plainly so it asks for
-        // attachments instead of pretending to have read the codebase (#61). The note goes to
-        // the model only (augmentedPrompt) — the user still sees just their own message.
-        if (string.IsNullOrWhiteSpace(localPath))
-            return code.SendPrompt(thread, effectivePrompt, username,
-                augmentedPrompt: $"[System: You do not have file access. Ask the user to attach any files needed.]\n\n{effectivePrompt}",
-                ct: cts.Token, userMessagePreadded: true, onDelta: onDelta);
+        // Every code request runs the SAME pipeline: appraise → architect → the architect spawns coders. Coders
+        // are never invoked directly. What differs is only WHERE the filesystem lives:
+        //   • Remote: the client connected a project and registered its own file tools over the websocket
+        //     (read_file/edit_file/…), which execute on the CLIENT's machine. The project is not on this disk,
+        //     so the architect and its coders drive those forwarded tools; `root` stays the raw client path
+        //     (used only to build commands sent back to the client — never touched on this disk).
+        //   • Local (eval / co-located): the project is on this server's disk; the architect binds ServerFileSystem.
+        // New user turn: bump the serial so client-side per-turn guardrails (read dedup) reset their scope.
+        thread.TurnSerial++;
 
-        string        resolvedRoot = Path.GetFullPath(localPath);
+        bool          remote       = thread.tools.ContainsKey("read_file");
+        string        resolvedRoot = remote ? (localPath ?? "") : Path.GetFullPath(string.IsNullOrWhiteSpace(localPath) ? "." : localPath);
         FileSnapshots snapshots    = new();
 
-        // Architect path: the CodeArchitect runs ON the main thread — it plans, then commissions a Coder
-        // sub-thread per task whose work live-streams back, and approves each task's summary before proceeding.
-        // (The older Orchestrate, which ran the architect on a hidden sub-thread, is kept as a fallback.)
-        if (architect is not null)
-            return architect.RunLoop(thread, threadKey, effectivePrompt, username, code, resolvedRoot, snapshots, cts, onDelta);
+        if (architect is null)
+            throw new InvalidOperationException("CodeArchitect is not configured — the code pipeline cannot run.");
 
-        // Fallback (no CodeArchitect configured): degraded solo Coder with the full edit toolset.
-        Shared.Logger.LogWarning("[Code] ({Thread}) CodeArchitect not configured — running solo Coder.", threadKey);
-        ServerFileSystem fs = new(resolvedRoot, cts.Token, snapshots);
-        new PreviewFile(fs).Register(thread);
-        new ReadFile(fs).Register(thread);
-        new ListDirectory(fs).Register(thread);
-        new SearchFiles(fs).Register(thread);
-        new FindFiles(fs).Register(thread);
-        new EditFile(fs).Register(thread);
-        new WriteFile(fs).Register(thread);
-        new RevertFile(resolvedRoot, cts.Token, snapshots).Register(thread);   // snapshot-tied — not via FileSystem yet
-        new DeleteFile(fs).Register(thread);
-        new MoveFile(fs).Register(thread);
-
-        return code.SendPrompt(thread, effectivePrompt, username, ct: cts.Token, userMessagePreadded: true, onDelta: onDelta);
+        return architect.RunLoop(thread, threadKey, effectivePrompt, username, code, resolvedRoot, snapshots, cts, onDelta, remote);
     }
 }

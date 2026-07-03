@@ -347,7 +347,8 @@ public class ClientController : ControllerBase
                                 username:        "user",
                                 platformContext: platformContext,
                                 onDelta:         async (delta) => await SendJson(ws, new { type = "delta", text = delta }),
-                                ct:              CancellationToken.None);
+                                ct:              CancellationToken.None,
+                                localPath:       string.IsNullOrWhiteSpace(state.ProjectRoot) ? null : state.ProjectRoot);
 
                             await SendJson(ws, new { type = "done" });
                         }

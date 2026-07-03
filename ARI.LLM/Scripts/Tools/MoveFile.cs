@@ -38,8 +38,8 @@ internal sealed class MoveFile : Tool
         {
             using JsonDocument doc = JsonDocument.Parse(args);
             string s = doc.RootElement.GetProperty("source").GetString() ?? "";
-            return $"<div class=\"tool-use\">Moving {System.IO.Path.GetFileName(s).Replace("&", "&amp;").Replace("<", "&lt;")}</div>\n";
+            return $"<!--ari-tool-start:move_file:{System.IO.Path.GetFileName(s).Replace("&", "&amp;").Replace("<", "&lt;").Replace("--", "&#45;&#45;")}-->";
         }
-        catch { return "<div class=\"tool-use\">Moving file</div>\n"; }
+        catch { return "<!--ari-tool-start:move_file:file-->"; }
     };
 }

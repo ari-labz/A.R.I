@@ -176,8 +176,10 @@ public class APIModule : IAsyncDisposable
             },
         });
 
-        // Desktop client WebSocket — MUST be before UseRouting
-        app.UseWebSockets();
+        // Desktop client WebSocket — MUST be before UseRouting. Aggressive keepalive: the desktop client's
+        // socket was observed dropping mid-turn during long silent stretches (model decoding, no traffic),
+        // losing in-flight tool calls; protocol-level pings keep intermediaries from idling it out.
+        app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(15) });
         app.Use(async (ctx, next) =>
         {
             if (ctx.Request.Path == "/api/client")
