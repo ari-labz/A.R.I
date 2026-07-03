@@ -52,7 +52,8 @@ public abstract class Agent
     private const double MIN_P               = 0.05;
     private const double REPEAT_PENALTY      = 1.0;
     private const double TOKEN_WARNING_RATIO = 0.8;
-    private const double COMPACT_RATIO       = 0.6;
+    private const double COMPACT_RATIO_HIGH  = 0.6;  // trigger: compact once context chars exceed this fraction of budget
+    private const double COMPACT_RATIO_LOW   = 0.4;  // target: stub down to here in one pass (hysteresis — one prefix invalidation buys many stable turns)
     private const int    COMPACT_KEEP_RECENT = 3;
     private const int    MAX_DEGRADE_EVENTS  = 5;
     private const int    DEFAULT_MEMORY_LIMIT = 25;
@@ -1682,20 +1683,21 @@ public abstract class Agent
     {
         if (maxContextTokens <= 0) return;
 
-        long budget = (long)(maxContextTokens * (long)CHARS_PER_TOKEN * COMPACT_RATIO);
-        long total  = 0;
+        long trigger = (long)(maxContextTokens * (long)CHARS_PER_TOKEN * COMPACT_RATIO_HIGH);
+        long target  = (long)(maxContextTokens * (long)CHARS_PER_TOKEN * COMPACT_RATIO_LOW);
+        long total   = 0;
         foreach (object m in messages) total += ContentOf(m)?.Length ?? 0;
 
-        // Only compact once we ACTUALLY exceed the budget. Stubbing tool outputs rewrites the middle of
+        // Only compact once we ACTUALLY exceed the trigger. Stubbing tool outputs rewrites the middle of
         // the message array, which (1) invalidates the server's KV prefix cache and forces a full
         // re-prefill of the whole context each step (~125s on a large context), and (2) throws away file
-        // contents the model just read, forcing wasteful re-reads. Previously this ran unconditionally
-        // every turn even with the context far under budget. Leave context untouched until it's too big,
-        // then stub only as many of the oldest outputs as needed to get back under budget.
-        if (total <= budget) return;
+        // contents the model just read, forcing wasteful re-reads. When triggered, stub all the way down
+        // to the LOW watermark rather than just below the trigger — otherwise a session hovering at the
+        // budget stubs one more output (and re-prefills) almost every turn.
+        if (total <= trigger) return;
 
         int stubbable = slots.Count - COMPACT_KEEP_RECENT;
-        for (int i = 0; i < stubbable && total > budget; i++)
+        for (int i = 0; i < stubbable && total > target; i++)
         {
             (int idx, string callId, string name) = slots[i];
             if (idx < 0 || idx >= messages.Count) continue;

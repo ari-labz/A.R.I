@@ -191,31 +191,72 @@ public class Thread
 
     // ── History ─────────────────────────────────────────────────────────────────
 
+    /// <summary>When the history exceeds maxChars, whole turns are evicted from the front until
+    /// it fits within this fraction of the budget. Evicting past the trigger point (hysteresis)
+    /// keeps the window start — and therefore the llama-server prompt prefix — stable for many
+    /// turns instead of shifting on every message, which would force a full re-prefill each call.</summary>
+    private const double EVICT_TO_FRACTION = 0.7;
+
+    /// <summary>Index into History of the first item still inside the context window.
+    /// Only ever moves forward, and only in whole-turn steps when a caller's char budget
+    /// overflows. History is append-only apart from tail removals, so the index stays valid.</summary>
+    private int contextStartIndex;
+
     internal List<ThreadMessage> GetChatHistory(int maxMessages = 0, int maxChars = 0)
     {
-        List<ThreadMessage> result = new();
+        if (contextStartIndex > History.Count) contextStartIndex = 0;
+
+        List<(ThreadMessage Msg, int HistoryIndex, int Chars, bool EndsTurn)> kept = new();
         int charCount = 0;
 
-        for (int i = History.Count - 1; i >= 0; i--)
+        for (int i = contextStartIndex; i < History.Count; i++)
         {
-            if (maxMessages > 0 && result.Count >= maxMessages) break;
-
             ThreadItem item = History[i];
             string? content = item.ContextText;
             if (string.IsNullOrEmpty(content)) continue;
 
             string author  = item.AuthorName ?? string.Empty;
             int    itemLen = author.Length + 2 + content.Length;
-            if (maxChars > 0 && charCount + itemLen > maxChars) break;
 
             charCount += itemLen;
-            result.Add(new ThreadMessage(
+            kept.Add((new ThreadMessage(
                 Role:     author == "ARI" ? "assistant" : "user",
                 Username: author,
-                Content:  content));
+                Content:  content), i, itemLen,
+                // A turn is complete when an ariResponse closes. A Response only contributes
+                // ContextText once it is Complete, so any Response seen here is a closed one.
+                EndsTurn: item is Response));
         }
 
-        result.Reverse();
+        if (maxChars > 0 && charCount > maxChars)
+        {
+            int target    = (int)(maxChars * EVICT_TO_FRACTION);
+            int firstKept = 0;
+
+            while (charCount > target)
+            {
+                // Advance to the item just past the next closed ariResponse — one whole turn.
+                int next = firstKept;
+                while (next < kept.Count && !kept[next].EndsTurn) next++;
+                next++;
+                if (next >= kept.Count) break; // never evict the final (possibly still-open) turn
+
+                for (int j = firstKept; j < next; j++) charCount -= kept[j].Chars;
+                firstKept = next;
+            }
+
+            if (firstKept > 0)
+            {
+                contextStartIndex = kept[firstKept].HistoryIndex;
+                kept.RemoveRange(0, firstKept);
+            }
+        }
+
+        if (maxMessages > 0 && kept.Count > maxMessages)
+            kept.RemoveRange(0, kept.Count - maxMessages);
+
+        List<ThreadMessage> result = new(kept.Count);
+        foreach ((ThreadMessage msg, _, _, _) in kept) result.Add(msg);
         return result;
     }
 
