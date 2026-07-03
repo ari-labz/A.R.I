@@ -183,6 +183,10 @@ public static class ClientWebSocket
             }, required = new[] { "path" } },
             displayVerb: "Reading", displayDoneVerb: "Read",
             labelField: "path",
+            // Card label carries the line range ("File.cs (101-200)") so consecutive window reads of the
+            // same file are visibly distinct rather than looking like duplicate reads (#113).
+            customDisplay:     argsJson => ReadCardMarker(argsJson, "start"),
+            customDisplayDone: argsJson => ReadCardMarker(argsJson, "end"),
             preCheck: argsJson => CheckRedundantRead(argsJson, fileState, epochThread)
                                   ?? CheckReadWindow(argsJson, fileState),
             postHook: (argsJson, result) => ReadPostHook(argsJson, result, fileState, epochThread),
@@ -460,6 +464,24 @@ public static class ClientWebSocket
             }
         }
         return null;
+    }
+
+    /// <summary>read_file card marker whose label includes the requested line range — "File.cs (101-200)" —
+    /// so chained window reads of one file each show as their own distinct card (#113).</summary>
+    private static string ReadCardMarker(string argsJson, string markerType)
+    {
+        try
+        {
+            string file = System.IO.Path.GetFileName(ExtractToolPath(argsJson).Trim('"', '\'', ' ', '\\'))
+                .Replace("--", "&#45;&#45;");
+            if (string.IsNullOrWhiteSpace(file)) file = "file";
+            (int start, int end) = ReadFile.ExtractRange(argsJson);
+            string range = start == 1 && end == int.MaxValue ? ""
+                         : end == int.MaxValue               ? $" ({start}-end)"
+                         :                                     $" ({start}-{end})";
+            return $"<!--ari-tool-{markerType}:read_file:{file}{range}-->";
+        }
+        catch { return $"<!--ari-tool-{markerType}:read_file:file-->"; }
     }
 
     /// <summary>Rejects an oversized read_file BEFORE the websocket round-trip — the client never ships
