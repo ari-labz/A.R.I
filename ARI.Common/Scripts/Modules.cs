@@ -31,6 +31,11 @@ public interface IVoiceSynthesisModule
 
 public interface IBrainModule { }
 
+public interface IListenerModule
+{
+    bool IsReady { get; }
+}
+
 public static class Modules
 {
     public static IDiscordModule?        Discord        { get; private set; }
@@ -38,18 +43,21 @@ public static class Modules
     public static IVoiceModule?          Voice          { get; private set; }
     public static IVoiceSynthesisModule? VoiceSynthesis { get; private set; }
     public static IBrainModule?          Brain          { get; private set; }
+    public static IListenerModule?       Listener       { get; private set; }
 
     public static void Register(
         IDiscordModule?        discord        = null,
         ILLMModule?            llm            = null,
         IVoiceModule?          voice          = null,
         IVoiceSynthesisModule? voiceSynthesis = null,
-        IBrainModule?          brain          = null)
+        IBrainModule?          brain          = null,
+        IListenerModule?       listener       = null)
     {
         if (discord        is not null) Discord        = discord;
         if (llm            is not null) Llm            = llm;
         if (voice          is not null) Voice          = voice;
         if (voiceSynthesis is not null) VoiceSynthesis = voiceSynthesis;
         if (brain          is not null) Brain          = brain;
+        if (listener       is not null) Listener       = listener;
     }
 }

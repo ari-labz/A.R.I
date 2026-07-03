@@ -49,6 +49,13 @@
       "AllowedGuildIds": [
         0
       ]
+    },
+    "Listener": {
+      "Enabled": true,
+      "WhisperPort": 8123,
+      "PythonPath": "/Users/user/Documents/GitHub/A.R.I/ARI.Listener/python/venv/bin/python",
+      "ScriptPath": "../../../../ARI.Listener/python/whisper_serve.py",
+      "Model": "base.en"
     }
   }
 }

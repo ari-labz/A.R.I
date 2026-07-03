@@ -29,6 +29,7 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly Engram?           engram;
     private readonly Refactor?         refactor;
     private readonly Classifier?       classifier;
+    private readonly Awareness?        awareness;
     private readonly Appraisal?        appraiser;
     private readonly BrainModule?      brain;
     
@@ -154,6 +155,21 @@ public class LLMModule : ILLMModule, IDisposable
         {
             classifier = Deserialize<Classifier>(classifierEl);
             _logger.LogInformation("Classifier is active.");
+        }
+
+        // Speech conversational-awareness gate. Uses its own Agents.json entry if present, otherwise
+        // reuses the Classifier's server/model with awareness-tuned defaults so it works out of the box.
+        if (rawAgents.TryGetValue("Awareness", out JsonElement awarenessEl))
+        {
+            awareness = Deserialize<Awareness>(awarenessEl);
+            _logger.LogInformation("Awareness is active.");
+        }
+        else if (classifier is not null)
+        {
+            awareness = new Awareness { Name = "Awareness", ServerName = classifier.ServerName, SystemPrompt = Awareness.DefaultSystemPrompt };
+            awareness.Endpoint = classifier.Endpoint;
+            awareness.Slot     = classifier.Slot;
+            _logger.LogInformation("Awareness using Classifier server (default config).");
         }
 
         if (rawAgents.TryGetValue("Appraisal", out JsonElement appraiserEl))
@@ -380,6 +396,20 @@ public class LLMModule : ILLMModule, IDisposable
 
     /// <summary>Pre-marks a thread to run through the Code pipeline. Thin wrapper over <see cref="ForcePipeline"/>.</summary>
     public void ForceCodeThread(string threadKey) => ForcePipeline(threadKey, ThreadPipeline.Code);
+
+    /// <summary>Whether a conversational-awareness gate is available.</summary>
+    public bool AwarenessAvailable => awareness is not null;
+
+    /// <summary>
+    /// Fast gate for the Speech pipeline: is this transcript addressed to Ari, or background talk?
+    /// Returns true (addressed) when no gate is configured or on error, so nothing is silently dropped.
+    /// </summary>
+    public async Task<bool> EvaluateAwareness(string transcript, string? context = null, CancellationToken ct = default)
+    {
+        if (awareness is null || string.IsNullOrWhiteSpace(transcript)) return true;
+        try { return await awareness.IsAddressed(transcript, context, ct); }
+        catch (Exception ex) { _logger.LogWarning(ex, "[Awareness] evaluation failed; assuming addressed."); return true; }
+    }
 
     public Task<string> Prompt(string threadKey, string prompt, string username, string? platformContext = null, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null)
         => Route(threadKey, prompt, username, platformContext, null, CancellationToken.None, messageAttachments, threadAttachments);
