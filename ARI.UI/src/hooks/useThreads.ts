@@ -64,6 +64,9 @@ export interface ThreadItem {
     username?:       string
     timestamp:       string
     thinkingSeconds?: number
+    prefillSeconds?:  number
+    typingSeconds?:   number
+    totalSeconds?:    number
     recallNotes?:    string
     contextSummary?: string
     input?:          string

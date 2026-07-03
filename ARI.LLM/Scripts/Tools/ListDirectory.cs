@@ -41,8 +41,8 @@ internal sealed class ListDirectory : Tool
         {
             using JsonDocument doc = JsonDocument.Parse(args);
             string p = doc.RootElement.TryGetProperty("path", out JsonElement pe) ? pe.GetString() ?? "." : ".";
-            return $"<div class=\"tool-use\">Listing {p.Replace("&", "&amp;").Replace("<", "&lt;")}</div>\n";
+            return $"<!--ari-tool-start:list_directory:{p.Replace("&", "&amp;").Replace("<", "&lt;").Replace("--", "&#45;&#45;")}-->";
         }
-        catch { return "<div class=\"tool-use\">Listing directory</div>\n"; }
+        catch { return "<!--ari-tool-start:list_directory:directory-->"; }
     };
 }

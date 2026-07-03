@@ -280,9 +280,12 @@ public class Server : IDisposable
                 : "",
             mtp ? "--spec-type draft-mtp --spec-draft-n-max 3" : "",
             "--flash-attn on",
-            // Larger physical/logical batch speeds prompt-processing (the dominant cost with a long system
-            // prompt on a slow dense model). Flash-attention above keeps the extra batch's memory in check.
-            "-b 4096 -ub 1024",
+            // Larger physical/logical batch speeds prompt-processing — the dominant cost of the coding
+            // pipeline (one sweep over the MoE expert weights per ub prompt tokens). ub is capped at 2048:
+            // 4096 OOMs the Metal backend MID-PREFILL (kIOGPUCommandBufferCallbackErrorOutOfMemory) even
+            // with the KV pool at 160k, and a mid-prefill OOM wedges llama-server until it is restarted —
+            // the startup V-quant ladder cannot catch it because boot succeeds.
+            "-b 4096 -ub 2048",
             $"--cache-type-k {kvQuantK} --cache-type-v {kvQuantV}",
             $"-c {ContextSize}",
             "--n-predict -1",

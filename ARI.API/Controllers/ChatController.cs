@@ -200,6 +200,8 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                 content                   = r.ContentText,
                 isStreaming               = r.IsStreamingJson,
                 thinkingSeconds           = r.ThinkingSeconds,
+                appraisalGrade            = r.AppraisalGrade,
+                appraisalSeconds          = r.AppraisalSeconds,
                 recallNotes               = r.RecallNotes,
                 contextSummary            = r.ContextSummary,
                 completionTokens          = r.Data.CompletionTokens,
@@ -624,6 +626,25 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
             await Response.WriteAsync("data: [ERROR] ARI is not ready yet.\n\n", cancellationToken);
             await Response.Body.FlushAsync(cancellationToken);
             return;
+        }
+
+        // A prompt sent while the model servers are still booting is QUEUED, not rejected (#77): hold it
+        // here until every boot-startup server reports Online (the client's typing indicator covers the
+        // wait), and only error out if boot genuinely never completes. Prompting mid-boot used to surface
+        // raw connection errors to the user.
+        if (Llm.Servers.Any(s => s.BootStartup && s.Status != ARI.LLM.ServerStatus.Online))
+        {
+            DateTime bootDeadline = DateTime.UtcNow.AddMinutes(4);
+            while (DateTime.UtcNow < bootDeadline
+                   && Llm.Servers.Any(s => s.BootStartup && s.Status != ARI.LLM.ServerStatus.Online))
+                await Task.Delay(1000, cancellationToken);
+            if (Llm.Servers.Any(s => s.BootStartup && s.Status != ARI.LLM.ServerStatus.Online))
+            {
+                await Response.WriteAsync("data: [ERROR] ARI's model server has not come online — please try again in a moment.\n\n", cancellationToken);
+                await Response.WriteAsync("data: [DONE]\n\n", cancellationToken);
+                await Response.Body.FlushAsync(cancellationToken);
+                return;
+            }
         }
 
         // Safeguard: reject prompts that are clearly too large for the context window.

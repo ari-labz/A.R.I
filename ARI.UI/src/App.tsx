@@ -783,6 +783,10 @@ export default function App() {
             activeProjectRef.current = selectedProject
             loadThreads()
             if (selectedProject) {
+                // A project thread is a code thread — flip code mode on now so the
+                // dark-mode overlay animates in (false → true while #main is mounted)
+                // instead of only appearing when the thread is later reopened.
+                setCodeMode(true)
                 await injectFileTree(key, selectedProject)
             }
         } else if (mode === "idle") {
@@ -792,8 +796,10 @@ export default function App() {
         // Always ensure tools are bound before sending — covers both new threads and
         // existing threads opened after a server restart (openToolSocket no-ops if already bound)
         const project = selectedProject ?? activeProjectRef.current
+        let localPath: string | null = null
         if (project) {
             await openToolSocket(key!, project)
+            localPath = await env.getLocalPath(project)
         }
 
         if (prompt.startsWith("/")) {
@@ -848,7 +854,7 @@ export default function App() {
                 const resp = await fetch(`/threads/${keyForStream}/stream`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ prompt }),
+                    body: JSON.stringify(localPath ? { prompt, localPath } : { prompt }),
                     signal: ctrl.signal,
                 })
 

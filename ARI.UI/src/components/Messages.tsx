@@ -220,15 +220,27 @@ function AriResponse({ item, isInternal, agentName, msgIndex }: { item: ThreadIt
     const senderLabel = isInternal ? (agentName ?? "Agent") : "A·R·I"
 
     let thoughtEl: React.ReactNode = null
-    if (!streaming && item.thinkingSeconds != null) {
-        const secs = typeof item.thinkingSeconds === "number"
-            ? item.thinkingSeconds.toFixed(1) : item.thinkingSeconds
-        const hasDetails = !!(item.recallNotes || item.contextSummary)
+    if (!streaming && (item.totalSeconds != null || item.thinkingSeconds != null)) {
+        // Header shows the TOTAL turn time; expanding breaks it down into where that time went.
+        const total = item.totalSeconds ?? item.thinkingSeconds ?? 0
+        const secs  = total.toFixed(1)
+        const timeRow = (label: string, v?: number) => v == null || v <= 0.05 ? null :
+            <div key={label} style={{ display: "flex", justifyContent: "space-between", gap: "14px" }}><span>{label}</span><span>{v.toFixed(1)}s</span></div>
+        const hasBreakdown = (item.prefillSeconds ?? 0) > 0 || (item.thinkingSeconds ?? 0) > 0 || (item.typingSeconds ?? 0) > 0
+        const hasDetails = hasBreakdown || !!(item.recallNotes || item.contextSummary)
         if (hasDetails) {
             thoughtEl = (
                 <details className="thought-block">
                     <summary>A·R·I thought for {secs}s</summary>
                     <div className="thought-content">
+                        {hasBreakdown && (
+                            <div className="thought-times" style={{ fontSize: "12px", color: "#8e8ea0", width: "fit-content", minWidth: "200px", marginBottom: "8px" }}>
+                                {timeRow("Thinking",           item.thinkingSeconds)}
+                                {timeRow("Prefill",            item.prefillSeconds)}
+                                {timeRow("Inference (typing)", item.typingSeconds)}
+                                {timeRow("Tools & other",      Math.max(0, total - (item.thinkingSeconds ?? 0) - (item.prefillSeconds ?? 0) - (item.typingSeconds ?? 0)))}
+                            </div>
+                        )}
                         {item.recallNotes && <RecallNotes raw={item.recallNotes} />}
                         {item.contextSummary && <><h4>Context summary</h4>{item.contextSummary}</>}
                     </div>
@@ -516,12 +528,18 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
                 // while any part is still streaming OR the whole thread is still processing the reply.
                 const last = u.parts[u.parts.length - 1] as ThreadItem & Record<string, unknown>
                 const anyStreaming = u.parts.some(p => (p as { isStreaming?: boolean }).isStreaming)
-                const thinking = u.parts.reduce((s, p) => s + (((p as { thinkingSeconds?: number }).thinkingSeconds) || 0), 0)
+                const sum = (field: keyof ThreadItem) =>
+                    u.parts.reduce((s, p) => s + ((p[field] as number | undefined) || 0), 0)
+                const thinking = sum("thinkingSeconds"), prefill = sum("prefillSeconds")
+                const typing   = sum("typingSeconds"),   total   = sum("totalSeconds")
                 const merged = {
                     ...last,
                     content: u.parts.map(p => (p as { content?: string }).content).filter(Boolean).join("\n\n"),
                     isStreaming: anyStreaming || (ui === units.length - 1 && !!processing),
                     thinkingSeconds: thinking > 0 ? thinking : undefined,
+                    prefillSeconds:  prefill  > 0 ? prefill  : undefined,
+                    typingSeconds:   typing   > 0 ? typing   : undefined,
+                    totalSeconds:    total    > 0 ? total    : undefined,
                 } as ThreadItem
                 return <AriResponse key={u.key} item={merged} isInternal={isInternal} agentName={agentName} msgIndex={u.key} />
             })}

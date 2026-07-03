@@ -170,7 +170,7 @@ internal partial class Coder
                 {
                     string cachedRead = state.CommandCache.TryGetValue($"read_file:{rangeKey}", out var rcv) ? rcv.Result : "";
                     if (state.FileReadTotals[rpath] >= READ_LOOP_CEILING)
-                        return $"[System: You have read {rpath} {state.FileReadTotals[rpath]} times this turn and are looping. The content has not changed and re-reading will not help. To finish a multi-spot change, call search_files for the symbol (it returns exact current line numbers for every remaining call site), then edit_file each one — do not keep re-reading. If the change is already done, stop and give your summary now.]";
+                        return $"[System: You have read {rpath} {state.FileReadTotals[rpath]} times this turn and are looping. The content has not changed and re-reading will not help. To finish a multi-spot change, call search_files for the symbol (it returns exact current line numbers for every remaining call site), then edit_file each one — do not keep re-reading. If you believe the file is BROKEN and you cannot fix it with one tight edit, call revert_file to restore its pre-edit snapshot and redo the change. If the change is already done, stop and give your summary now — and if the file may be broken, your summary must say FAILED and describe its state; never claim success.]";
                     return string.IsNullOrEmpty(cachedRead)
                         ? $"[System: You already have {rpath} lines {startStr}–{endStr} in the context above. This is not a cache error — the content has not changed. Stop re-reading and make your edits now with edit_file (start_line/end_line). To see a different part, read a different range.]"
                         : $"[System: You already have these lines — this is not a cache error, the file has not changed. Stop re-reading and make your edits now with edit_file. Repeating the content for reference:]\n\n{cachedRead}";
@@ -200,15 +200,13 @@ internal partial class Coder
         {
             // Cross-turn identical-edit guard. A think-off Coder can spiral, re-issuing the EXACT same
             // edit every turn (each its own batch). Refuse a byte-identical edit we already applied this
-            // turn — re-applying it is a no-op or duplicates the line — and force-stop on the 3rd attempt.
+            // turn — re-applying it is a no-op or duplicates the line. Tools stay available: cutting them
+            // off here starved legitimate repairs (the Coder could no longer read or fix the file at all).
             string esig    = Regex.Replace(argsJson.Trim(), @"\s+", " ");
             int    seenSig = state.EditSignatures.TryGetValue(esig, out int sc) ? sc : 0;
             state.EditSignatures[esig] = seenSig + 1;
             if (seenSig >= 1)
-            {
-                if (seenSig >= 2) state.ForceNoMoreTools = true;
                 return "[System: You already made this exact edit this turn — it is done. Re-applying an identical edit changes nothing (or duplicates the line). Do NOT repeat it. If the change is complete, STOP and write your summary now.]";
-            }
 
             string? editPath = null;
             try
@@ -311,7 +309,7 @@ internal partial class Coder
                 string brkPath = NormKey(brkDoc.RootElement.GetProperty("path").GetString() ?? "");
                 state.FileReadTotals.TryGetValue(brkPath, out int brkTotal);
                 if (brkTotal >= READ_LOOP_CEILING)
-                    result += $"\n[System: You have now read this file {brkTotal} times this turn — far more than the work needs. The file is fine: C# ignores indentation, so a brace at column 0 is still a valid, correctly-placed brace, and edit_file already showed you each change landed. Re-reading is not revealing a real problem. STOP re-reading and verifying. If one specific line is genuinely wrong, make a single tight edit to fix exactly that line; otherwise you are finished — write your summary now. Do not read this file again.]";
+                    result += $"\n[System: You have now read this file {brkTotal} times this turn — far more than the work needs. STOP re-reading; it will not reveal anything new. Decide from what you already have. Note that pure formatting quirks are NOT breakage (C# ignores indentation — a brace at column 0 is still valid). If one specific line is genuinely wrong, make a single tight edit_file to fix exactly that line. If the file is genuinely BROKEN (duplicate members, a mangled constructor, code inserted in the wrong place) and one edit cannot fix it, call revert_file to restore the pre-edit snapshot and redo the change from scratch. Otherwise you are finished — write your summary now. If the file may be left broken, the summary must say FAILED and describe its exact state; never report success for a broken file. Do not read this file again.]";
             }
             catch { /* ignore */ }
         }
@@ -407,9 +405,8 @@ internal partial class Coder
                     result += " You have already written this file this turn and that write succeeded. Do NOT write it again unless you have a further, distinct change. If you are unsure the content is correct, use read_file to verify — do not rewrite it blindly.";
                 else if (wc >= 3)
                 {
-                    state.ForceNoMoreTools = true;
-                    result += " This file has been written too many times this turn. No further tool calls will be accepted — tell the user the file has been updated and stop.";
-                    Shared.Logger.LogWarning("[{Agent}] ({Thread}) write_file called {Count}x on '{File}' — cutting off tools for this turn.", Name, thread.Key, wc, writePath);
+                    result += " This file has now been written " + wc + " times this turn. Stop rewriting it: verify with read_file if unsure, and if the content is right, write your summary and stop.";
+                    Shared.Logger.LogWarning("[{Agent}] ({Thread}) write_file called {Count}x on '{File}'.", Name, thread.Key, wc, writePath);
                 }
             }
             catch { /* ignore */ }

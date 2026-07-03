@@ -64,6 +64,19 @@ public class Thread
     /// the "a plan is on the table" flag. Cleared once the approved plan is formalised into tasks and executed.</summary>
     public bool AwaitingPlanApproval;
 
+    /// <summary>Monotonic user-turn counter, incremented by the pipeline at the start of each user request.
+    /// Client-side tool guardrails (e.g. the read-dedup "already read" short-circuit) scope their state to the
+    /// current turn via this: content read in an earlier turn may have been condensed out of the model's
+    /// context, so "you already read this — scroll up" is only ever safe within the same turn.</summary>
+    public int TurnSerial;
+
+    /// <summary>Set by the client WebSocket layer when this thread's file tools are forwarded to a connected
+    /// desktop client: registers a FRESH, independently-scoped copy of the client edit toolset onto a child
+    /// thread (a spawned Coder). Sub-agents must NOT share the parent's guardrail state — a Coder starts with
+    /// an empty context, so inheriting the parent's "already read" ledger blocks the very reads it needs and
+    /// forces it to edit blind. Null when the project is local (ServerFileSystem is bound instead).</summary>
+    public Func<Thread, bool>? ClientToolCloner;
+
     public readonly List<ThreadItem> History = new();
 
     /// <summary>The flattened display blocks for this thread — every visible <see cref="Response"/>'s blocks in

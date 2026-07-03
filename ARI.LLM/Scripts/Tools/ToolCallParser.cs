@@ -32,11 +32,11 @@ internal static class ToolCallParser
             StringBuilder argsBuilder = new();
             argsBuilder.Append('{');
             bool first = true;
-            foreach (Match p in Regex.Matches(callBody, @"<parameter=(\w+)>\s*(.*?)\s*</parameter>", RegexOptions.Singleline))
+            foreach (Match p in Regex.Matches(callBody, @"<parameter=(\w+)>(.*?)</parameter>", RegexOptions.Singleline))
             {
                 if (!first) argsBuilder.Append(',');
                 string pName = p.Groups[1].Value;
-                string pVal  = p.Groups[2].Value.Trim();
+                string pVal  = TrimParamValue(pName, p.Groups[2].Value);
                 argsBuilder.Append(JsonSerializer.Serialize(pName));
                 argsBuilder.Append(':');
                 // Structured params (e.g. edit_file's `edits`) are emitted by the model as
@@ -51,10 +51,55 @@ internal static class ToolCallParser
                 first = false;
             }
             argsBuilder.Append('}');
-            calls.Add(new Call($"fallback_{++index}", name, argsBuilder.ToString()));
+            calls.Add(new Call($"fallback_{++index}", name, UnwrapArgumentsParam(argsBuilder.ToString())));
         }
         return calls;
     }
+
+    /// <summary>
+    /// Models occasionally wrap the whole argument object in a single &lt;parameter=arguments&gt; block
+    /// (e.g. &lt;parameter=arguments&gt;{"path": "...", "start_line": 25}&lt;/parameter&gt;), which parses to
+    /// {"arguments":"{...}"} — the executor then sees no real fields and dispatches with an empty path.
+    /// Unwrap it: if the ONLY parameter is 'arguments' and its value is itself a JSON object, use that.
+    /// </summary>
+    private static string UnwrapArgumentsParam(string argsJson)
+    {
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            JsonElement root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return argsJson;
+            JsonProperty[] props = root.EnumerateObject().ToArray();
+            if (props.Length != 1 || !props[0].Name.Equals("arguments", StringComparison.OrdinalIgnoreCase)) return argsJson;
+
+            string inner = props[0].Value.ValueKind == JsonValueKind.String
+                ? props[0].Value.GetString() ?? ""
+                : props[0].Value.GetRawText();
+            inner = inner.Trim();
+            if (inner.StartsWith('{') && IsJsonArrayOrObject(inner)) return inner;
+            return argsJson;
+        }
+        catch { return argsJson; }
+    }
+
+    /// <summary>Trims a text-format parameter value. Code-bearing params (new_string/content/old_string)
+    /// keep their indentation: only the newline the model puts after the open tag and the newline (plus
+    /// any tag-indent spaces) before the close tag are stripped — a full Trim() would delete the first
+    /// code line's leading whitespace and every edit would land flush-left (the Coder then sees the
+    /// misindented echo and loops re-fixing it). All other params (paths, patterns, line numbers) get
+    /// the full trim as before.</summary>
+    private static string TrimParamValue(string name, string raw)
+    {
+        if (!IsContentParam(name)) return raw.Trim();
+        string v = Regex.Replace(raw, @"^[ \t]*\r?\n", "");
+        return Regex.Replace(v, @"\r?\n[ \t]*$", "");
+    }
+
+    /// <summary>Tool parameters that carry code/file content, where leading whitespace is significant.</summary>
+    private static bool IsContentParam(string name) =>
+        name.Equals("new_string", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("content",    StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("old_string", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Tool parameters whose value the model emits as a JSON array/object (not a string).</summary>
     private static bool IsStructuredParam(string name) =>
@@ -89,11 +134,11 @@ internal static class ToolCallParser
             string inner    = m.Groups[2].Value;
 
             Dictionary<string, string> argsDict = new(StringComparer.OrdinalIgnoreCase);
-            foreach (Match p in Regex.Matches(inner, @"<(\w+)>\s*(.*?)\s*</\1>", RegexOptions.Singleline))
+            foreach (Match p in Regex.Matches(inner, @"<(\w+)>(.*?)</\1>", RegexOptions.Singleline))
             {
                 string paramName = p.Groups[1].Value.Trim();
                 if (paramName.Equals("file_path", StringComparison.OrdinalIgnoreCase)) paramName = "path";
-                argsDict[paramName] = p.Groups[2].Value.Trim();
+                argsDict[paramName] = TrimParamValue(paramName, p.Groups[2].Value);
             }
 
             calls.Add(new Call($"fallback_xml_{++index}", toolName, JsonSerializer.Serialize(argsDict)));
