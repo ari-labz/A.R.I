@@ -7,6 +7,7 @@ import {
     openEventStream, cancelProcessing, useTypingHeartbeat,
     type ThreadItem, type ThreadEntry, type AppEvent, type Attachment, type Project,
 } from "./hooks/useThreads"
+import { usePipelines } from "./hooks/usePipelines"
 import { env } from "./env"
 import "./styles/app.css"
 
@@ -188,6 +189,9 @@ export default function App() {
     const [activeView,       setActiveView]        = useState<"chat" | "projects">("chat")
     const [projects,         setProjects]          = useState<Project[]>([])
     const [selectedProject,  setSelectedProject]   = useState<string | null>(null)
+    const [selectedPipeline, setSelectedPipeline]  = useState<string | null>(null)
+    const [speechMode,       setSpeechMode]        = useState(false)
+    const pipelines = usePipelines()
 
     const [safetyMode,     setSafetyMode]     = useState(false)
     const safetyModeRef = useRef(false)
@@ -275,7 +279,7 @@ export default function App() {
                         loadThreads()
                         if (data.threadKey === activeThreadRef.current) {
                             setActiveThread(null); setIsRemembering(false)
-                            setMode("idle"); setCodeMode(false); setItems([])
+                            setMode("idle"); setCodeMode(false); setSpeechMode(false); setItems([])
                         }
                         break
                 }
@@ -339,6 +343,7 @@ export default function App() {
         setMode("idle")
         setItems([])
         setCodeMode(false)
+        setSpeechMode(false)
     }
 
     // ── load thread attachments ───────────────────────────
@@ -688,12 +693,14 @@ export default function App() {
         setIsInternal(internal)
         setAgentName(agName)
         setCodeMode(isCode)
+        setSpeechMode(false)
         setIsRemembering(false)
         activeProjectRef.current = projectId
         setSelectedProject(projectId)
 
         // Fetch the thread (state + history) via the new polling endpoint
         const detail = await fetchThread(key).catch(() => null)
+        setSpeechMode(detail?.pipeline === "speech")
         const hist = detail?.history ?? await loadHistory(key, internal).catch(() => [])
         setItems(hist)
         activate(hist.length > 0)
@@ -724,13 +731,20 @@ export default function App() {
         }
     }, [refreshThreadAttach, injectFileTree, openToolSocket, loadThreads])
 
+    // Create a Speech thread and open it straight into the orb view (no message composer).
+    const beginSpeech = useCallback(async () => {
+        const key = await createThread(selectedProject, "speech")
+        await openThread(key, false, null, false, null)
+        loadThreads()
+    }, [selectedProject, openThread, loadThreads])
+
     // ── new chat ──────────────────────────────────────────
     function newChat() {
         abortRef.current?.abort(); abortRef.current = null
         stopPollRef.current?.(); stopPollRef.current = null
         toolSocketRef.current?.close(); toolSocketRef.current = null; toolSocketKeyRef.current = null
         setActiveThread(null); setIsInternal(false); setAgentName(null)
-        setCodeMode(false); setIsStreaming(false); setIsRemembering(false)
+        setCodeMode(false); setSpeechMode(false); setIsStreaming(false); setIsRemembering(false)
         setPendingAttach([]); setThreadAttach([])
         // Preserve selectedProject so repeated new chats on the same project
         // don't require re-selecting it each time.
@@ -778,7 +792,7 @@ export default function App() {
 
         let key = activeThreadRef.current
         if (needsNew) {
-            key = await createThread(selectedProject)
+            key = await createThread(selectedProject, selectedPipeline)
             setActiveThread(key)
             activeProjectRef.current = selectedProject
             loadThreads()
@@ -1052,6 +1066,11 @@ export default function App() {
                     projects={projects}
                     selectedProject={selectedProject}
                     onProjectChange={setSelectedProject}
+                    pipelines={pipelines}
+                    selectedPipeline={selectedPipeline}
+                    onPipelineChange={setSelectedPipeline}
+                    speechMode={speechMode}
+                    onBeginSpeech={beginSpeech}
                 />
             )}
             {toasts.map(t => (

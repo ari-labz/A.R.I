@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState, type KeyboardEvent } from "react"
 import type { PendingAttachment } from "../App"
 import type { Project } from "../hooks/useThreads"
+import PipelineSelector from "./PipelineSelector"
 
 interface Command { cmd: string; desc: string }
 
@@ -11,6 +12,10 @@ interface Props {
     projects:         Project[]
     selectedProject:  string | null
     onProjectChange:  (id: string | null) => void
+    pipelines:        string[]
+    selectedPipeline: string | null
+    onPipelineChange: (id: string | null) => void
+    onBeginSpeech:    () => void
     threadLocked:     boolean
     onSend:           (text: string) => void
     onUploadFiles:    (files: File[]) => void
@@ -29,7 +34,8 @@ function fileExtLabel(name: string) {
 
 export default function InputArea({
     isStreaming, pendingAttach, commands,
-    projects, selectedProject, onProjectChange, threadLocked,
+    projects, selectedProject, onProjectChange,
+    pipelines, selectedPipeline, onPipelineChange, onBeginSpeech, threadLocked,
     onSend, onUploadFiles, onRemoveAttach,
     onHeartbeatStart, onHeartbeatStop,
     codeMode, safetyMode, onToggleSafety,
@@ -104,8 +110,29 @@ export default function InputArea({
         }
     }
 
+    // Talk selected on the new-thread screen: the composer becomes a single "Begin" button.
+    const speechCompose = !threadLocked && selectedPipeline === "speech"
+
     return (
         <div id="input-area">
+            {!threadLocked && (
+                <div id="input-pipeline-row">
+                    <PipelineSelector
+                        pipelines={pipelines}
+                        value={selectedPipeline}
+                        onChange={onPipelineChange}
+                        orientation="horizontal"
+                    />
+                </div>
+            )}
+            {speechCompose ? (
+                <button id="btn-begin-speech" onClick={onBeginSpeech}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/>
+                    </svg>
+                    Begin
+                </button>
+            ) : (
             <div id="input-wrap" ref={wrapRef} onClick={e => {
                 const tag = (e.target as HTMLElement).tagName
                 if (tag !== "SELECT" && tag !== "BUTTON" && tag !== "INPUT") textareaRef.current?.focus()
@@ -209,7 +236,8 @@ export default function InputArea({
                     </div>
                 </div>
             </div>
-            <p id="input-hint">Enter to send &nbsp;·&nbsp; Shift+Enter for new line</p>
+            )}
+            {!speechCompose && <p id="input-hint">Enter to send &nbsp;·&nbsp; Shift+Enter for new line</p>}
         </div>
     )
 }

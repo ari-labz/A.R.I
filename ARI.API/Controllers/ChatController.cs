@@ -82,7 +82,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         var allThreads = Llm.Threads;
 
         List<ThreadEntry> threads = allThreads
-            .Where(kvp => kvp.Value.Pipeline == ARI.LLM.ThreadPipeline.Dialogue || kvp.Value.Pipeline == ARI.LLM.ThreadPipeline.Code)
+            .Where(kvp => kvp.Value.Pipeline is ARI.LLM.ThreadPipeline.Dialogue or ARI.LLM.ThreadPipeline.Code or ARI.LLM.ThreadPipeline.Speech)
             .Select(kvp =>
             {
                 string? projectId   = ThreadProjects.TryGetValue(kvp.Key, out string? pid) ? pid : null;
@@ -92,7 +92,8 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                     MessageCount: kvp.Value.History.Count(m => m is Prompt or ARI.LLM.Response),
                     State: kvp.Value.State.ToString().ToLowerInvariant(),
                     IsCodeMode: kvp.Value.Pipeline == ARI.LLM.ThreadPipeline.Code,
-                    ProjectName: projectName, ProjectId: projectId);
+                    ProjectName: projectName, ProjectId: projectId,
+                    Pipeline: kvp.Value.Pipeline.ToString().ToLowerInvariant());
             })
             .ToList();
 
@@ -123,13 +124,24 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         }
         // Pre-register in LLMModule so the newThread event fires immediately and
         // all sidebar observers see the thread without waiting for the first message.
-        // Projects with ForceCodePipeline start the thread as Code so it opens in code-mode.
-        if (project?.ForceCodePipeline == true)
+        // An explicit pipeline selection wins; otherwise projects with ForceCodePipeline open in code-mode.
+        if (Enum.TryParse(req?.Pipeline, ignoreCase: true, out ARI.LLM.ThreadPipeline selected))
+            Llm.ForcePipeline(key, selected);
+        else if (project?.ForceCodePipeline == true)
             Llm.ForceCodeThread(key);
         else
             Llm.GetOrCreateDialogueThread(key);
         return Ok(new { key });
     }
+
+    /// <summary>
+    /// The pipelines a thread can run on, lowercased (e.g. "dialogue", "code", "speech"). The client
+    /// renders its selector from this list and maps each name to a label/icon with a generic fallback,
+    /// so adding a ThreadPipeline value surfaces in the UI without a frontend change.
+    /// </summary>
+    [HttpGet("~/pipelines")]
+    public IActionResult GetPipelines()
+        => Ok(Enum.GetNames<ARI.LLM.ThreadPipeline>().Select(n => n.ToLowerInvariant()).ToList());
 
     /// <summary>
     /// Returns thread metadata plus full history. The primary polling endpoint for streaming threads.
@@ -779,6 +791,6 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 
 public record StreamRequest(string Prompt, string? LocalPath = null);
 public record CommandRequest(string? ThreadKey, string Input);
-public record NewThreadRequest(string? ProjectId, bool Desktop = false);
+public record NewThreadRequest(string? ProjectId, bool Desktop = false, string? Pipeline = null);
 public record InjectContextRequest(string Name, string Content);
-public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active", bool IsCodeMode = false, string? ProjectName = null, string? ProjectId = null);
+public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active", bool IsCodeMode = false, string? ProjectName = null, string? ProjectId = null, string Pipeline = "dialogue");

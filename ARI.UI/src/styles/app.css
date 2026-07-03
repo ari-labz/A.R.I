@@ -192,7 +192,8 @@ html, body {
             #101618 4px, #101618 8px
         );
 }
-#main.code-mode::before { opacity: 1; }
+#main.code-mode::before,
+#main.speech-mode::before { opacity: 1; }
 
 #chat-col { position: relative; z-index: 1; flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
 
@@ -380,6 +381,8 @@ button, a, input, select, textarea, label, [role="button"] {
     transition: width 0.65s ease-in-out; flex-shrink: 0;
 }
 #main.active #main-logo { width: 110px; }
+/* speech mode shares the dark backdrop — flip the black logo to white so it stays visible */
+#main.speech-mode #main-logo { filter: brightness(0) invert(1); }
 
 #code-logo {
     width: 0; height: auto; display: block;
@@ -547,6 +550,51 @@ button, a, input, select, textarea, label, [role="button"] {
 #input-project-select:disabled { opacity: 0.5; cursor: default; pointer-events: none; }
 #main.code-mode #input-project-select { color: #4a5568; }
 #main.code-mode #input-project-select:hover:not(:disabled) { color: var(--cm-text-dim); }
+
+/* Pipeline selector — iOS-style segmented control, sits above the input box */
+#input-pipeline-row { display: flex; justify-content: center; margin-bottom: 8px; }
+.pipeline-selector {
+    position: relative;
+    display: inline-flex; gap: 0;
+    background: rgba(120, 120, 128, 0.12);
+    border-radius: 9px; padding: 2px;
+}
+.pipeline-selector.vertical { flex-direction: column; align-items: stretch; }
+.pipeline-selector.disabled { opacity: 0.5; pointer-events: none; }
+
+/* the sliding selection pill */
+.pipeline-thumb {
+    position: absolute; top: 2px; bottom: 2px; left: 0;
+    border-radius: 7px; background: #ffffff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 1px 1px rgba(0, 0, 0, 0.04);
+    transition: transform 0.18s ease-in-out, width 0.18s ease-in-out;
+    pointer-events: none; z-index: 1;
+}
+.pipeline-thumb.instant { transition: none; }
+
+.pipeline-option {
+    position: relative; z-index: 2;
+    background: transparent; border: none; outline: none;
+    font-family: inherit; font-size: 13px; font-weight: 500; color: var(--text);
+    cursor: pointer; padding: 4px 16px; border-radius: 7px;
+    transition: color 0.18s ease;
+}
+/* thin iOS separator between adjacent unselected segments */
+.pipeline-selector.horizontal .pipeline-option:not(:first-child)::before {
+    content: ""; position: absolute; left: 0; top: 5px; bottom: 5px;
+    width: 1px; background: rgba(120, 120, 128, 0.28);
+    transition: opacity 0.15s ease;
+}
+.pipeline-option.active::before,
+.pipeline-option.active + .pipeline-option::before,
+.pipeline-selector.animating .pipeline-option::before { opacity: 0; }
+.pipeline-option:hover:not(:disabled):not(.active) { color: var(--text); }
+.pipeline-option.active { color: #111; }
+
+#main.code-mode .pipeline-selector { background: rgba(255, 255, 255, 0.06); }
+#main.code-mode .pipeline-thumb { background: var(--cm-text-dim); }
+#main.code-mode .pipeline-option { color: var(--cm-text-dim); }
+#main.code-mode .pipeline-option.active { color: var(--cm-bg, #1a1d23); }
 
 #input-actions { display: flex; align-items: center; gap: 4px; }
 
@@ -1138,3 +1186,33 @@ details.tool-card summary::-webkit-details-marker { display: none; }
     #main.active #main-logo { width: 90px; }
     #main-header { height: 38vh; padding-bottom: 20px; }
 }
+
+/* ── Speech / Orb overlay (issue #92) ───────────────────────────────────── */
+/* voice mode gets an immersive dark pool so the additive-glow orb reads; it fades to the app bg at the edges */
+.orb-stage {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 30px; width: 100%; height: 100%; min-height: 0; flex: 1;
+    user-select: none;
+}
+.orb {
+    position: relative; width: 425px; height: 425px; max-width: 86vmin; max-height: 86vmin;
+    cursor: pointer;
+}
+.orb-canvas { width: 100%; height: 100%; display: block; }
+.orb-label {
+    font-size: 15px; font-weight: 500; letter-spacing: 0.5px;
+    color: #8ec6de;
+}
+
+/* Begin button that replaces the composer when Talk is selected */
+#btn-begin-speech {
+    display: flex; align-items: center; justify-content: center; gap: 7px;
+    width: fit-content; margin: 0 auto; padding: 9px 22px;
+    border: none; border-radius: 10px; cursor: pointer;
+    background: linear-gradient(135deg, var(--cm-accent), var(--accent)); color: #fff;
+    font-family: inherit; font-size: 14px; font-weight: 600;
+    box-shadow: 0 2px 8px rgba(34, 55, 66, 0.28);
+    transition: filter 0.15s ease, transform 0.05s ease;
+}
+#btn-begin-speech:hover { filter: brightness(1.08); }
+#btn-begin-speech:active { transform: translateY(1px); }

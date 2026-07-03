@@ -18,6 +18,7 @@ public class LLMModule : ILLMModule, IDisposable
     //pipelines
     private readonly DialoguePipeline? dialoguePipeline;
     private readonly CodePipeline?     codePipeline;
+    private readonly SpeechPipeline?   speechPipeline;
     
     //agents
     private readonly Dialogue?         dialogue;
@@ -37,7 +38,7 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly ConcurrentDictionary<string, LiveCallInfo>            liveCalls           = new();
     private readonly ConcurrentDictionary<Guid, Channel<AppEvent>>         globalSubscribers   = new();
     private readonly Dictionary<string, Agent>                             agentMap            = new();
-    private readonly HashSet<string>                                                              forcedCodeThreads = new();
+    private readonly ConcurrentDictionary<string, ThreadPipeline>                                 forcedPipelines   = new();
     private readonly ConcurrentDictionary<string, Thread>                                         threads           = new();
 
     private readonly List<Server>  _servers    = new();
@@ -209,6 +210,11 @@ public class LLMModule : ILLMModule, IDisposable
             dialoguePipeline = new DialoguePipeline(dialogue, memory, context, engram, processingThreads, liveCalls, NotifyWatchers);
             dialoguePipeline.ThreadBufferFull    += key => NotifyWatchers(key);
             dialoguePipeline.ThreadBecameInactive += key => NotifyWatchers(key);
+
+            // Speech reuses the Dialogue agent for now (issue #84) — a baseline to diverge from.
+            speechPipeline = new SpeechPipeline(dialogue, memory, context, engram, processingThreads, liveCalls, NotifyWatchers);
+            speechPipeline.ThreadBufferFull    += key => NotifyWatchers(key);
+            speechPipeline.ThreadBecameInactive += key => NotifyWatchers(key);
         }
 
         if (code is not null)
@@ -230,7 +236,7 @@ public class LLMModule : ILLMModule, IDisposable
         thread.ExchangeCompleted += (_, _) => ChatHistoryLogger.Write(thread);
         if (type == ThreadPipeline.Code)
             thread.BecameInactive += () => thread.MarkEngramProcessed();
-        if (type == ThreadPipeline.Dialogue && dialogue is not null)
+        if (type is ThreadPipeline.Dialogue or ThreadPipeline.Speech && dialogue is not null)
         {
             thread.Deleted        += () => dialogue.RaiseThreadDeleted(threadKey);
             thread.BufferFull     += () => dialogue.RaiseThreadBufferFull(threadKey);
@@ -361,14 +367,19 @@ public class LLMModule : ILLMModule, IDisposable
     // ── Prompting ───────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Pre-marks a thread to run through the Code pipeline, bypassing the classifier.
-    /// Call before the first PromptStreaming for project threads with ForceCodePipeline enabled.
+    /// Pins a thread to a specific pipeline, bypassing the classifier. Honoured by <see cref="Route"/>
+    /// on every send — including threads that already have history — so re-pinning flips the thread to
+    /// the new pipeline on the next message (carrying history via <see cref="Recategorise"/>). Used both
+    /// for explicit selection at thread creation and for switching a live thread from the UI.
     /// </summary>
-    public void ForceCodeThread(string threadKey)
+    public void ForcePipeline(string threadKey, ThreadPipeline pipeline)
     {
-        forcedCodeThreads.Add(threadKey);
-        GetOrCreateThread(ThreadPipeline.Code, threadKey);
+        forcedPipelines[threadKey] = pipeline;
+        GetOrCreateThread(pipeline, threadKey);
     }
+
+    /// <summary>Pre-marks a thread to run through the Code pipeline. Thin wrapper over <see cref="ForcePipeline"/>.</summary>
+    public void ForceCodeThread(string threadKey) => ForcePipeline(threadKey, ThreadPipeline.Code);
 
     public Task<string> Prompt(string threadKey, string prompt, string username, string? platformContext = null, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null)
         => Route(threadKey, prompt, username, platformContext, null, CancellationToken.None, messageAttachments, threadAttachments);
@@ -407,20 +418,18 @@ public class LLMModule : ILLMModule, IDisposable
         string? agent = existing?.Pipeline.ToString();
         bool hasMessages = existing is { History.Count: > 0 };
 
-        // new or empty thread (may exist for attachment staging) needs classifying
-        if (!hasMessages)
+        // An explicit pin (UI selection / project) overrides both the classifier and the thread's current
+        // type, on every send — so re-pinning a live thread flips it to the new pipeline on its next message.
+        if (forcedPipelines.TryGetValue(threadKey, out ThreadPipeline forced))
         {
-            if (forcedCodeThreads.Contains(threadKey))
-            {
-                agent = "Code";
-                _logger.LogInformation($"[Classifier] ({threadKey}) → Code (forced by project)");
-            }
-            else
-            {
-                agent = await classifier.Classify(prompt, cts.Token);
-                _logger.LogInformation($"[Classifier] ({threadKey}) → {agent}");
-            }
-
+            agent = forced.ToString();
+            _logger.LogInformation($"[Classifier] ({threadKey}) → {agent} (forced)");
+        }
+        // new or empty thread (may exist for attachment staging) needs classifying
+        else if (!hasMessages)
+        {
+            agent = await classifier.Classify(prompt, cts.Token);
+            _logger.LogInformation($"[Classifier] ({threadKey}) → {agent}");
         }
 
         switch (agent)
@@ -429,6 +438,11 @@ public class LLMModule : ILLMModule, IDisposable
             {
                 Thread codeThread = Recategorise(ThreadPipeline.Code, threadKey, platformContext);
                 return await (codePipeline ?? (Pipeline)dialoguePipeline!).ExecuteAsync(codeThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments, localPath);
+            }
+            case "Speech":
+            {
+                Thread speechThread = Recategorise(ThreadPipeline.Speech, threadKey, platformContext);
+                return await (speechPipeline ?? (Pipeline)dialoguePipeline!).ExecuteAsync(speechThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments, localPath);
             }
             default:
             {

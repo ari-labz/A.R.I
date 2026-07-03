@@ -6,6 +6,7 @@ export interface ThreadEntry {
     isInternal:   boolean
     agentName:    string | null
     isCodeMode:   boolean
+    pipeline:     string  // "dialogue" | "code" | "speech"
     state:        string
     lastMessageAt: string
     projectName?: string | null
@@ -93,11 +94,11 @@ export interface Attachment {
     content:  string | null
 }
 
-export async function createThread(projectId?: string | null): Promise<string> {
+export async function createThread(projectId?: string | null, pipeline?: string | null): Promise<string> {
     const res = await fetch("/threads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: projectId ?? null, desktop: env.isDesktop }),
+        body: JSON.stringify({ projectId: projectId ?? null, desktop: env.isDesktop, pipeline: pipeline ?? null }),
     })
     const { key } = await res.json()
     return key
@@ -113,7 +114,7 @@ export async function loadHistory(key: string, raw = false): Promise<ThreadItem[
 export interface ThreadDetail {
     key:           string
     state:         string  // "idle" | "streaming" | "dormant" | "cleanupneeded" | "deleted"
-    pipeline:      string  // "dialogue" | "code"
+    pipeline:      string  // "dialogue" | "code" | "speech"
     isInternal:    boolean
     lastMessageAt: string
     history:       ThreadItem[]

@@ -6,7 +6,7 @@ namespace ARI.LLM;
 public enum ThreadState { Idle, Streaming, Dormant, CleanupNeeded, Deleted }
 
 /// <summary>The pipeline a thread belongs to. Determines how its prompts are processed.</summary>
-public enum ThreadPipeline { Dialogue, Code }
+public enum ThreadPipeline { Dialogue, Code, Speech }
 
 public class Thread
 {
