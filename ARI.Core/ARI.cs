@@ -225,36 +225,44 @@ public class ARI : BackgroundService
         return wavs.Length > 0 ? wavs.OrderBy(f => f).First() : "";
     }
 
+    // Only one audio-output stream at a time — otherwise back-to-back sentences (Speech pipeline) spawn
+    // overlapping sd.play processes that fight for the device (PortAudio -9986).
+    private static readonly SemaphoreSlim playLock = new(1, 1);
+
     private static void PlayAudio(byte[] wav, string python, ILogger logger)
     {
-        string tmp = Path.Combine(Path.GetTempPath(), $"ari_speech_{Guid.NewGuid():N}.wav");
-        File.WriteAllBytes(tmp, wav);
-
-        string script =
-            "import sys, sounddevice as sd, soundfile as sf\n" +
-            $"data, sr = sf.read(r'{tmp}')\n" +
-            "sd.play(data, sr, blocking=True)\n" +
-            $"import os; os.remove(r'{tmp}')\n";
-
-        string scriptPath = Path.Combine(Path.GetTempPath(), $"ari_play_{Guid.NewGuid():N}.py");
-        File.WriteAllText(scriptPath, script);
-
-        System.Diagnostics.Process? proc = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-        {
-            FileName              = python,
-            Arguments             = $"\"{scriptPath}\"",
-            UseShellExecute       = false,
-            RedirectStandardError = true,
-        });
-
-        if (proc == null) { logger.LogError("[Voice] Failed to start audio playback"); return; }
-
         _ = Task.Run(async () =>
         {
-            string stderr = await proc.StandardError.ReadToEndAsync();
-            await proc.WaitForExitAsync();
-            if (proc.ExitCode != 0) logger.LogError("[Voice] Playback failed: {Error}", stderr);
-            try { File.Delete(scriptPath); } catch { }
+            await playLock.WaitAsync();
+            string tmp        = Path.Combine(Path.GetTempPath(), $"ari_speech_{Guid.NewGuid():N}.wav");
+            string scriptPath = Path.Combine(Path.GetTempPath(), $"ari_play_{Guid.NewGuid():N}.py");
+            try
+            {
+                File.WriteAllBytes(tmp, wav);
+                File.WriteAllText(scriptPath,
+                    "import sounddevice as sd, soundfile as sf\n" +
+                    $"data, sr = sf.read(r'{tmp}')\n" +
+                    "sd.play(data, sr, blocking=True)\n" +
+                    $"import os; os.remove(r'{tmp}')\n");
+
+                System.Diagnostics.Process? proc = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName              = python,
+                    Arguments             = $"\"{scriptPath}\"",
+                    UseShellExecute       = false,
+                    RedirectStandardError = true,
+                });
+                if (proc == null) { logger.LogError("[Voice] Failed to start audio playback"); return; }
+
+                string stderr = await proc.StandardError.ReadToEndAsync();
+                await proc.WaitForExitAsync();
+                if (proc.ExitCode != 0) logger.LogError("[Voice] Playback failed: {Error}", stderr);
+            }
+            finally
+            {
+                try { File.Delete(scriptPath); } catch { }
+                playLock.Release();
+            }
         });
     }
 

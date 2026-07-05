@@ -12,4 +12,8 @@ public class ListenerConfig
     public string ScriptPath  { get; set; } = "";
     /// <summary>faster-whisper model name. Smaller = lower latency (e.g. base.en, small, distil-small.en).</summary>
     public string Model       { get; init; } = "base.en";
+    /// <summary>CPU threads for transcription (CTranslate2 is CPU-only, so this is the main speed knob).</summary>
+    public int    CpuThreads  { get; init; } = 6;
+    /// <summary>Trailing silence (ms) that ends an utterance. Lower = snappier, but splits sentences on pauses.</summary>
+    public int    SilenceMs   { get; init; } = 400;
 }

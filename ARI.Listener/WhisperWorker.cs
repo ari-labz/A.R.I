@@ -37,7 +37,7 @@ public sealed class WhisperWorker : IDisposable
             ProcessStartInfo info = new()
             {
                 FileName               = config.PythonPath,
-                Arguments              = $"\"{config.ScriptPath}\" --port {config.WhisperPort} --model {config.Model}",
+                Arguments              = $"\"{config.ScriptPath}\" --port {config.WhisperPort} --model {config.Model} --cpu-threads {config.CpuThreads} --silence-ms {config.SilenceMs}",
                 RedirectStandardOutput = true,
                 RedirectStandardError  = true,
                 UseShellExecute        = false,

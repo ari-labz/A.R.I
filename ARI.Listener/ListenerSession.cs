@@ -1,6 +1,8 @@
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
+using ARI.Common;
 using ARI.LLM;
 using Microsoft.Extensions.Logging;
 
@@ -18,6 +20,12 @@ internal sealed class ListenerSession
     private readonly ListenerSessionContext ctx;
     private readonly ILogger? logger;
     private readonly List<string> transcript = new();
+    private CancellationTokenSource? responseCts;
+
+    // Steers the model toward short, speakable replies for a live voice conversation.
+    private const string SpeechContext =
+        "You are in a live, spoken voice conversation. Keep replies concise, natural, and easy to say aloud. " +
+        "Do not use markdown, lists, headings, or code blocks — plain spoken sentences only.";
 
     public ListenerSession(WebSocket browser, WhisperWorker worker, LLMModule llm, ListenerSessionContext ctx, ILogger? logger)
     {
@@ -67,6 +75,7 @@ internal sealed class ListenerSession
             Task down = PumpWhisperToBrowser(toWhisper, ct);
             await Task.WhenAny(up, down);
 
+            responseCts?.Cancel(); // stop any in-flight spoken response when the session ends
             try { await toWhisper.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", CancellationToken.None); } catch { /* ignore */ }
         }
     }
@@ -129,6 +138,72 @@ internal sealed class ListenerSession
         logger?.LogInformation("[Listener] ({Src}/{User}) {Verdict}: \"{Text}\"",
             ctx.Source, ctx.UserId ?? "?", addressed ? "ADDRESSED" : "overheard", text);
         await SendJson(new { type = "transcript", text, addressed }, ct);
+
+        if (addressed) StartResponse(text!, ct);
+    }
+
+    // Run Ari's spoken response to an addressed turn. A new addressed turn cancels the in-flight one
+    // (a crude interrupt; real barge-in/flush is later work).
+    private void StartResponse(string transcript, CancellationToken sessionCt)
+    {
+        responseCts?.Cancel();
+        CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(sessionCt);
+        responseCts = cts;
+        _ = Task.Run(() => RespondAsync(transcript, cts.Token), cts.Token);
+    }
+
+    private async Task RespondAsync(string userText, CancellationToken ct)
+    {
+        // Sentences are synthesised on a single ordered pump and the WAV streamed to the browser, which
+        // plays it through its own audio session (issue #91). Avoids the host-side CoreAudio device conflict
+        // with the open mic (PortAudio -9986).
+        Channel<string> sentences = Channel.CreateUnbounded<string>();
+        bool spoke = false;
+
+        Task synthPump = Task.Run(async () =>
+        {
+            await foreach (string sentence in sentences.Reader.ReadAllAsync(ct))
+            {
+                if (Modules.Voice is null) continue;
+                try
+                {
+                    if (!spoke) { spoke = true; await SendJson(new { type = "speaking" }, ct); }
+                    byte[] wav = await Modules.Voice.Synthesise(sentence, ct);
+                    if (wav.Length > 0 && browser.State == WebSocketState.Open)
+                        await browser.SendAsync(wav, WebSocketMessageType.Binary, true, ct);
+                }
+                catch (OperationCanceledException) { break; }
+                catch (Exception ex) { logger?.LogWarning(ex, "[Listener] synthesis failed."); }
+            }
+        }, ct);
+
+        try
+        {
+            await SendJson(new { type = "thinking" }, ct);           // reasoning before the first token
+            SentenceChunker chunker = new(sentence =>
+            {
+                logger?.LogInformation("[Listener] Ari: \"{Sentence}\"", sentence);
+                _ = SendJson(new { type = "say", text = sentence }, ct); // caption on the orb
+                sentences.Writer.TryWrite(sentence);                     // queue for synthesis → browser
+            });
+
+            await llm.PromptStreaming(
+                ctx.ThreadKey, userText,
+                username:        ctx.UserId ?? "user",
+                platformContext: SpeechContext,
+                onDelta:         delta => { chunker.Feed(delta); return Task.CompletedTask; },
+                ct:              ct);
+
+            chunker.Flush();
+        }
+        catch (OperationCanceledException) { /* superseded by a newer turn or session ended */ }
+        catch (Exception ex) { logger?.LogWarning(ex, "[Listener] response generation failed."); }
+        finally
+        {
+            sentences.Writer.TryComplete();
+            try { await synthPump; } catch { /* ignore */ }
+            await SendJson(new { type = "done" }, ct);
+        }
     }
 
     // A little rolling context (speaker + recent lines) to help the gate judge cross-talk vs. direct address.

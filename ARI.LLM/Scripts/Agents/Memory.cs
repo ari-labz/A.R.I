@@ -166,6 +166,7 @@ internal class Memory : Agent
         }
 
         HashSet<string>                                       fetched      = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<string>                                       shownToModel = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<string, (string Content, string? NoteId)> noteContents = new(StringComparer.OrdinalIgnoreCase);
 
         // Pre-fetch direct token matches without consulting the LLM.
@@ -241,16 +242,21 @@ internal class Memory : Agent
 
             if (depth + 1 >= RecursiveBrainSearchDepth) break;
 
+            // Send ONLY notes the model hasn't seen yet. Earlier notes remain visible in the recall thread's
+            // history (and are prefix-cached on the pinned slot), so re-sending the full accumulated block
+            // every pass — which forced a full re-prefill and collapsed the token rate — is unnecessary.
+            // Each note's content is shown exactly once, keeping full depth/recall at a fraction of the cost.
             StringBuilder notesBlock = new();
             foreach (KeyValuePair<string, (string Content, string? NoteId)> kvp in noteContents)
             {
+                if (!shownToModel.Add(kvp.Key)) continue;   // already shown in a prior pass
                 notesBlock.AppendLine($"--- {kvp.Key} ---");
                 notesBlock.AppendLine(kvp.Value.Content);
                 notesBlock.AppendLine("---");
             }
 
             string nextPrompt =
-                $"Here are the notes you requested:\n\n{notesBlock}\n" +
+                $"Here are the notes:\n\n{notesBlock}\n" +
                 $"Based on any [[links]] or references in those notes, are there further notes you want? " +
                 $"Do NOT re-request notes already fetched: {string.Join(", ", fetched)}.\n" +
                 "Respond ONLY with JSON: {\"fetch\": [\"Name\"]} — or {\"fetch\": []} to stop.";

@@ -36,7 +36,6 @@ export async function startListening(threadKey: string, onEvent: (e: ListenerEve
     const wsProto = location.protocol === "https:" ? "wss" : "ws"
     const ws = new WebSocket(`${wsProto}://${location.host}/api/listener/stream?source=web&threadKey=${encodeURIComponent(threadKey)}`)
     ws.binaryType = "arraybuffer"
-    ws.onmessage = e => { try { onEvent(JSON.parse(e.data)) } catch { /* ignore */ } }
 
     const stream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -54,10 +53,45 @@ export async function startListening(threadKey: string, onEvent: (e: ListenerEve
     source.connect(processor)
     processor.connect(ctx.destination) // required for the processor to run; it emits no audio itself
 
+    // Ari's spoken reply arrives as binary WAV frames (one per sentence). Play them back-to-back so it
+    // sounds continuous; a new turn flushes what's queued. Decoding is chained to preserve order.
+    let nextStart = 0
+    const active = new Set<AudioBufferSourceNode>()
+    let playChain: Promise<void> = Promise.resolve()
+
+    const playWav = (data: ArrayBuffer) => {
+        playChain = playChain.then(async () => {
+            const buf = await ctx.decodeAudioData(data.slice(0))
+            const src = ctx.createBufferSource()
+            src.buffer = buf
+            src.connect(ctx.destination)
+            const start = Math.max(ctx.currentTime + 0.02, nextStart)
+            src.start(start)
+            nextStart = start + buf.duration
+            active.add(src)
+            src.onended = () => active.delete(src)
+        }).catch(() => { /* skip undecodable frame */ })
+    }
+    const flushAudio = () => {
+        active.forEach(s => { try { s.stop() } catch { /* ignore */ } })
+        active.clear()
+        nextStart = ctx.currentTime
+    }
+
+    ws.onmessage = e => {
+        if (typeof e.data !== "string") { playWav(e.data as ArrayBuffer); return } // binary = audio
+        try {
+            const evt = JSON.parse(e.data)
+            if (evt.type === "thinking") flushAudio() // a new turn supersedes queued speech
+            onEvent(evt)
+        } catch { /* ignore */ }
+    }
+
     let stopped = false
     const stop = () => {
         if (stopped) return
         stopped = true
+        flushAudio()
         try { processor.disconnect(); source.disconnect() } catch { /* ignore */ }
         stream.getTracks().forEach(t => t.stop())
         void ctx.close().catch(() => {})

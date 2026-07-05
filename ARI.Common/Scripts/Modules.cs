@@ -22,6 +22,8 @@ public interface IVoiceModule
     Task<byte[]> SynthesiseWithCheckpoint(string text, string checkpointPath, CancellationToken ct, int diffusionSteps = 5, float alpha = 0.3f, float beta = 0.7f, float embeddingScale = 1.0f, float? speed = null, float? pauseScale = null);
     (float speed, float pauseScale) GetVoiceSettings();
     void SetVoiceSettings(float speed, float pauseScale);
+    /// <summary>Queue text to be spoken with the currently-selected voice (host playback).</summary>
+    void Speak(string text);
 }
 
 public interface IVoiceSynthesisModule
