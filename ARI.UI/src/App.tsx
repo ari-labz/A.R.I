@@ -193,6 +193,7 @@ export default function App() {
     const [selectedPipeline, setSelectedPipeline]  = useState<string | null>(null)
     const [speechMode,       setSpeechMode]        = useState(false)
     const [speechCaption,    setSpeechCaption]     = useState<string | null>(null)
+    const [speechOrbState,   setSpeechOrbState]    = useState<"listening" | "thinking" | "speaking">("listening")
     const listenerRef = useRef<ListenerHandle | null>(null)
     const pipelines = usePipelines()
 
@@ -200,6 +201,7 @@ export default function App() {
         listenerRef.current?.stop()
         listenerRef.current = null
         setSpeechCaption(null)
+        setSpeechOrbState("listening")
     }
 
     const [safetyMode,     setSafetyMode]     = useState(false)
@@ -749,8 +751,15 @@ export default function App() {
         loadThreads()
         try {
             listenerRef.current = await startListening(key, e => {
-                if (e.type === "transcript" && e.text)
-                    setSpeechCaption(e.addressed ? e.text : `(overheard) ${e.text}`)
+                switch (e.type) {
+                    case "transcript":
+                        if (e.text) setSpeechCaption(e.addressed ? e.text : `(overheard) ${e.text}`)
+                        break
+                    case "thinking":  setSpeechOrbState("thinking"); break
+                    case "speaking":  setSpeechOrbState("speaking"); break
+                    case "say":       if (e.text) setSpeechCaption(e.text); break  // Ari's reply
+                    case "done":      setSpeechOrbState("listening"); break
+                }
             })
         } catch (err) {
             console.warn("[Listener] mic start failed", err)
@@ -1093,6 +1102,7 @@ export default function App() {
                     speechMode={speechMode}
                     onBeginSpeech={beginSpeech}
                     speechCaption={speechCaption}
+                    speechOrbState={speechOrbState}
                 />
             )}
             {toasts.map(t => (

@@ -182,11 +182,20 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8123)
     ap.add_argument("--model", default="base.en")
-    ap.add_argument("--device", default="cpu")           # CTranslate2 has no MPS; CPU int8 is the Mac path
+    ap.add_argument("--device", default="cpu")           # CTranslate2 has no MPS; CPU int8 is the portable path
     ap.add_argument("--compute-type", default="int8")
+    ap.add_argument("--cpu-threads", type=int, default=6)  # main speed knob for CPU decoding
+    ap.add_argument("--silence-ms", type=int, default=400)  # trailing silence that ends an utterance
     args = ap.parse_args()
 
-    log(f"[whisper_serve] loading model {args.model} ({args.device}/{args.compute_type})...")
-    model = WhisperModel(args.model, device=args.device, compute_type=args.compute_type)
-    log("[whisper_serve] model ready.")
+    SILENCE_MS_END = args.silence_ms
+
+    log(f"[whisper_serve] loading model {args.model} ({args.device}/{args.compute_type}, {args.cpu_threads} threads)...")
+    model = WhisperModel(args.model, device=args.device, compute_type=args.compute_type, cpu_threads=args.cpu_threads)
+    # Warm up so the first real utterance isn't a cold-start (graph/kernels get compiled here instead).
+    try:
+        list(model.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), language="en", beam_size=1)[0])
+    except Exception:
+        pass
+    log(f"[whisper_serve] model ready (silence gate {SILENCE_MS_END}ms).")
     asyncio.run(main(args.port))
