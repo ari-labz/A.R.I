@@ -239,7 +239,17 @@ function particleMaterial(dpr: number): THREE.ShaderMaterial {
     })
 }
 
-export function createOrbRenderer(canvas: HTMLCanvasElement): OrbRenderer {
+// Which frequency band drives an element, by radius — inner reacts to lows, outer to highs.
+// (band 0 = bass, reserved for the core; 1..4 = low→air across the shell)
+function bandForRadius(r: number): number {
+    if (r < 0.6) return 1
+    if (r < 0.85) return 2
+    if (r < 1.05) return 3
+    return 4
+}
+
+// getAudio (optional) returns ORB_BANDS frequency levels 0..1 while Ari speaks; drives the equaliser glow.
+export function createOrbRenderer(canvas: HTMLCanvasElement, getAudio?: () => number[]): OrbRenderer {
     const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2))
     const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, premultipliedAlpha: false })
     renderer.setPixelRatio(dpr)
@@ -330,6 +340,7 @@ export function createOrbRenderer(canvas: HTMLCanvasElement): OrbRenderer {
         const ring = new THREE.LineSegments(dashedRing(c.r, 120, c.seed, 0, c.span), m)
         ring.rotation.x = c.tx; ring.rotation.y = c.ty; ring.rotation.z = seeded(c.seed) * TAU
         ring.userData = mkDisk(c.seed, c.sp, c.op, coolC, hotC)
+        ring.userData.band = bandForRadius(c.r)
         ringGroup.add(ring)
     }
 
@@ -344,6 +355,7 @@ export function createOrbRenderer(canvas: HTMLCanvasElement): OrbRenderer {
         const band = new THREE.Mesh(new THREE.TorusGeometry(c.r, 0.0095, 8, 160, c.span), m)
         band.rotation.x = c.tx; band.rotation.y = c.ty; band.rotation.z = seeded(c.r * 13.7) * TAU
         band.userData = mkDisk(c.r * 20 + 5, c.sp, c.op, hotC, briteC, c.fmin)
+        band.userData.band = bandForRadius(c.r)
         ringGroup.add(band)
     }
 
@@ -364,6 +376,7 @@ export function createOrbRenderer(canvas: HTMLCanvasElement): OrbRenderer {
         disk.userData = {
             isDisk: true, spin: c.sp, base: 0.42, cool: coolC, hot: briteC, seed: c.seed,
             nextJump: 0, jumpActive: false, jumpT: 0, jumpDur: 0, jumpTotal: 0, jumpPrevEased: 0,
+            band: bandForRadius((c.ri + c.ro) / 2),
             ...fadeParams(c.seed + 1),
         }
         ringGroup.add(disk)
@@ -380,6 +393,7 @@ export function createOrbRenderer(canvas: HTMLCanvasElement): OrbRenderer {
         gauge.userData = {
             isDisk: true, spin: c.sp, base: 0.4, cool: coolC, hot: briteC, seed: c.seed,
             nextJump: 0, jumpActive: false, jumpT: 0, jumpDur: 0, jumpTotal: 0, jumpPrevEased: 0,
+            band: bandForRadius((c.ri + c.ro) / 2),
             ...fadeParams(c.seed + 2),
         }
         ringGroup.add(gauge)
@@ -395,6 +409,7 @@ export function createOrbRenderer(canvas: HTMLCanvasElement): OrbRenderer {
         const ticks = new THREE.LineSegments(tickRing(c.r, c.count, c.seed, 0, c.span), m)
         ticks.rotation.x = c.tx; ticks.rotation.y = c.ty; ticks.rotation.z = seeded(c.seed) * TAU
         ticks.userData = mkDisk(c.seed, c.sp, 0.5, coolC, hotC)
+        ticks.userData.band = bandForRadius(c.r)
         ringGroup.add(ticks)
     }
 
@@ -410,6 +425,7 @@ export function createOrbRenderer(canvas: HTMLCanvasElement): OrbRenderer {
         hud.userData = {
             isDisk: true, spin: c.sp, base: 0.5, cool: hotC, hot: briteC, seed: c.seed,
             nextJump: 0, jumpActive: false, jumpT: 0, jumpDur: 0, jumpTotal: 0, jumpPrevEased: 0,
+            band: bandForRadius(c.r),
             ...fadeParams(c.seed + 4, c.fmin),
         }
         ringGroup.add(hud)
