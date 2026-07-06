@@ -123,29 +123,31 @@ public static class BrainModule
     {
         if (terms.Count == 0) return new RecallResult(new List<SearchResult>(), new List<RecallPath>());
 
-        Dictionary<long, SearchResult> merged = new();
-        void MergeIn(IEnumerable<SearchResult> batch)
-        {
-            foreach (SearchResult candidate in batch)
-                if (!merged.TryGetValue(candidate.Note.id, out SearchResult? existing) || candidate.Score > existing.Score)
-                    merged[candidate.Note.id] = candidate;
-        }
-
         List<SearchResult> direct = Search(terms, seedNearLimit);
-        MergeIn(direct);
-        foreach (SearchResult seed in direct)
-            MergeIn(SearchNear(seed.Note, terms, hopLimit, seedNearLimit));
+        IEnumerable<SearchResult> allResults = direct.Concat(direct.SelectMany(seed => SearchNear(seed.Note, terms, hopLimit, seedNearLimit)));
+        List<SearchResult> deduped = Dedup(allResults);
 
-        List<RecallPath> paths = Pathfind(terms, hopLimit, merged);
+        (List<SearchResult> boosted, List<RecallPath> paths) = Pathfind(terms, hopLimit, deduped);
 
-        List<SearchResult> ranked = merged.Values.OrderByDescending(c => c.Score).ThenByDescending(c => c.TermsMatched).Take(topLimit).ToList();
+        List<SearchResult> ranked = boosted.OrderByDescending(c => c.Score).ThenByDescending(c => c.TermsMatched).Take(topLimit).ToList();
         return new RecallResult(ranked, paths);
     }
 
-    // One anchor per distinct term, not per candidate — connects "the [REDACT] thing" to "the [REDACT] thing"
-    // instead of cross-linking every matched note (which is mostly noise on a dense graph). Boosts each
-    // connecting note's score in place, at most once per note regardless of how many paths cross it.
-    private static List<RecallPath> Pathfind(IReadOnlyList<string> terms, int hopLimit, Dictionary<long, SearchResult> scores)
+    // Keeps the highest-scoring result per note across every batch — a note found by both the
+    // direct search and several SearchNear calls counts once, at its best score.
+    private static List<SearchResult> Dedup(IEnumerable<SearchResult> results)
+    {
+        Dictionary<long, SearchResult> best = new();
+        foreach (SearchResult candidate in results)
+            if (!best.TryGetValue(candidate.Note.id, out SearchResult? existing) || candidate.Score > existing.Score)
+                best[candidate.Note.id] = candidate;
+        return best.Values.ToList();
+    }
+
+    // One anchor per distinct term, not per result — connects "the [REDACT] thing" to "the [REDACT] thing"
+    // instead of cross-linking every matched note (which is mostly noise on a dense graph). Each note
+    // on a connecting path is boosted once, regardless of how many paths cross it.
+    private static (List<SearchResult> Boosted, List<RecallPath> Paths) Pathfind(IReadOnlyList<string> terms, int hopLimit, List<SearchResult> results)
     {
         List<Note> anchors = terms
             .Select(term => Search(new List<string> { term }, 1).FirstOrDefault()?.Note)
@@ -155,13 +157,13 @@ public static class BrainModule
             .ToList();
 
         List<RecallPath> paths = FindConnectingPaths(anchors, hopLimit);
-        HashSet<long> boosted = new();
-        foreach (RecallPath path in paths)
-            foreach (Note note in path.Notes)
-                if (boosted.Add(note.id) && scores.TryGetValue(note.id, out SearchResult? existing))
-                    scores[note.id] = existing with { Score = existing.Score + PATH_BONUS };
+        HashSet<long> onPath = paths.SelectMany(path => path.Notes).Select(note => note.id).ToHashSet();
 
-        return paths;
+        List<SearchResult> boosted = results
+            .Select(result => onPath.Contains(result.Note.id) ? result with { Score = result.Score + PATH_BONUS } : result)
+            .ToList();
+
+        return (boosted, paths);
     }
 
     private static List<Note> WalkBack(Dictionary<long, (int Depth, long? Predecessor)> reach, long from)
