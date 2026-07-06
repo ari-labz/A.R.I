@@ -132,7 +132,12 @@ internal class Memory : Agent
 
         StringBuilder candidateBlock = new();
         foreach (SearchResult candidate in recall.Candidates)
-            candidateBlock.AppendLine($"- {candidate.Note.Title}: {Snippet(candidate.Note.Content)}");
+        {
+            string aliasNote = candidate.Note.Aliases.Count > 0
+                ? $"(aka {string.Join(", ", candidate.Note.Aliases)}) "
+                : string.Empty;
+            candidateBlock.AppendLine($"- {candidate.Note.Title}: {aliasNote}{Snippet(candidate.Note.Content)}");
+        }
 
         string pathBlock = recall.Paths.Count > 0
             ? "\nCONNECTIONS FOUND:\n" + string.Join("\n", recall.Paths.Select(p =>
@@ -173,14 +178,19 @@ internal class Memory : Agent
         }
 
         StringBuilder result = new();
+        List<string> fetched = new();
+        List<string> unresolved = new();
         foreach (string title in selected)
         {
             Note? note = BrainModule.GetNote(title);
-            if (note is null) continue;
+            if (note is null) { unresolved.Add(title); continue; }
+            fetched.Add(note.Title);
             result.AppendLine($"[{note.Title}|{note.Url}]");
             result.AppendLine(note.ToPrompt());
             result.AppendLine();
         }
+        if (unresolved.Count > 0)
+            Shared.Logger.LogWarning("[Memory] model selected title(s) not found in the brain: {Unresolved}", string.Join(", ", unresolved));
 
         Shared.Logger.LogInformation("[Memory] complete {Seconds}s, {Tokens} tokens, {TokPerSec} t/s",
             timer.Elapsed.TotalSeconds.ToString("F1"), completionTokens, tokPerSec.ToString("F1"));
@@ -190,7 +200,8 @@ internal class Memory : Agent
             $"Search terms: {string.Join(", ", terms)}",
             $"Candidates offered: {recall.Candidates.Count} · paths found: {recall.Paths.Count}",
             $"Total: {timer.Elapsed.TotalSeconds:F1}s, {completionTokens} tokens, {tokPerSec:F1} t/s",
-            $"Recalled {selected.Count} note(s): {string.Join(", ", selected)}",
+            $"Recalled {fetched.Count} note(s): {string.Join(", ", fetched)}"
+                + (unresolved.Count > 0 ? $" · unresolved: {string.Join(", ", unresolved)}" : string.Empty),
         });
         return result.ToString().TrimEnd();
     }
