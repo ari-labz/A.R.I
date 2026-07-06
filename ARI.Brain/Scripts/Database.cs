@@ -2,11 +2,8 @@ using Microsoft.Data.Sqlite;
 
 namespace ARI.Brain;
 
-/// <summary>
-/// The index database: pointers, graph edges, aliases, and full-text search over the vault.
-/// Derived and disposable — the markdown files are the source of truth; delete this and rebuild anytime.
-/// Every call opens a fresh connection: nothing stays resident, the OS page cache provides the speed.
-/// </summary>
+// Derived and disposable — the markdown files are the source of truth; delete this and rebuild anytime.
+// Every call opens a fresh connection: nothing stays resident, the OS page cache provides the speed.
 internal static class Database
 {
     internal const string SCHEMA = """
@@ -60,7 +57,6 @@ internal static class Database
         command.ExecuteNonQuery();
     }
 
-    /// <summary>Single-column string query.</summary>
     internal static List<string> Column(string sql, params (string Name, object Value)[] parameters)
     {
         using SqliteConnection db = Open();
@@ -71,7 +67,7 @@ internal static class Database
         return results;
     }
 
-    /// <summary>Materializes Note handles from any query whose first three columns are noteID, title, path.</summary>
+    // First three columns must be noteID, title, path.
     internal static List<Note> QueryNotes(string sql, params (string Name, object Value)[] parameters)
     {
         using SqliteConnection db = Open();
@@ -86,7 +82,7 @@ internal static class Database
         return notes;
     }
 
-    /// <summary>Materializes ranked Recall candidates from a query shaped (noteID, title, path, score, termsMatched).</summary>
+    // Query must be shaped (noteID, title, path, score, termsMatched).
     internal static List<(Note Note, double Score, int TermsMatched)> QueryScored(string sql, params (string Name, object Value)[] parameters)
     {
         using SqliteConnection db = Open();

@@ -84,7 +84,7 @@ internal class Memory : Agent
             }
         }
 
-        // Tokenise the incoming prompt + context summary (not full transcript — avoids noisy seeds from ARI's own words).
+        // Not the full transcript — avoids noisy seeds from ARI's own words.
         string combined = string.IsNullOrWhiteSpace(contextSummary)
             ? incomingPrompt
             : $"{incomingPrompt} {contextSummary}";
@@ -105,8 +105,7 @@ internal class Memory : Agent
             return string.Empty;
         }
 
-        // Deterministic candidate gathering: direct term matches, their neighbourhoods, and any
-        // paths connecting the terms — all SQL, no LLM involved yet. See BrainModule.Recall.
+        // Pure SQL, no LLM yet — see BrainModule.Recall.
         RecallResult recall = BrainModule.Recall(terms, HopLimit, SEED_NEAR_LIMIT, TOP_CANDIDATES);
 
         Shared.Logger.LogInformation("[Memory] terms [{Terms}] → {Candidates} candidate(s), {Paths} path(s)",
@@ -125,9 +124,7 @@ internal class Memory : Agent
             return string.Empty;
         }
 
-        // Build transcript + a snippets-only candidate block, highest-scored first. The model always
-        // makes this call, but a well-separated top score is a fast decision even so — the sort does
-        // the work a skip-branch would have, without ever hiding a candidate from the model's judgment.
+        // Snippets only, highest-scored first — a well-separated top score is a fast decision even though the model always runs.
         StringBuilder transcriptBuilder = new();
         foreach (ThreadMessage msg in chatHistory.TakeLast(TRANSCRIPT_LIMIT))
             transcriptBuilder.AppendLine($"{msg.Username}: {msg.Content}");
@@ -198,8 +195,7 @@ internal class Memory : Agent
         return result.ToString().TrimEnd();
     }
 
-    // First non-heading line of the note, trimmed — enough for the model to judge relevance without
-    // ever seeing full content during the deciding step. Full content is fetched only after selection.
+    // Full content is fetched only after selection, never during the deciding step.
     private static string Snippet(string content)
     {
         string line = content.Split('\n', StringSplitOptions.RemoveEmptyEntries)

@@ -4,10 +4,6 @@ using System.Text.RegularExpressions;
 
 namespace ARI.Brain;
 
-/// <summary>
-/// A note in Ari's brain. One markdown file is the source of truth; one row in the index points at it.
-/// Instances are lightweight handles — content is read from disk on demand, never held resident.
-/// </summary>
 public class Note
 {
     private const string TIMESTAMP_FORMAT = "yyyy-MM-ddTHH:mm:ssZ";
@@ -20,10 +16,7 @@ public class Note
     internal readonly long id;
 
     public string Title { get; }
-
-    /// <summary>Vault-relative file path, e.g. "People/[REDACT].md".</summary>
     public string Path { get; }
-
     public IReadOnlyList<string> Aliases { get; }
 
     internal Note(long id, string title, string path, IReadOnlyList<string> aliases)
@@ -34,42 +27,33 @@ public class Note
         Aliases = aliases;
     }
 
-    /// <summary>Full note name in "Folder/Sub/Title" form.</summary>
     public string Name => Path[..^".md".Length];
-
     public string Folder => Name.Contains('/') ? Name[..Name.LastIndexOf('/')] : string.Empty;
 
-    /// <summary>Markdown body, read fresh from the file (frontmatter stripped).</summary>
+    // Read fresh from disk on every access — never held resident.
     public string Content => Parse(File.ReadAllText(AbsolutePath)).Body;
 
-    /// <summary>Deep link that opens this note in Obsidian.</summary>
     public string Url => $"obsidian://open?vault={Uri.EscapeDataString(BrainModule.VaultName)}&file={Uri.EscapeDataString(Name)}";
 
-    /// <summary>Notes this note links to.</summary>
     public List<Note> GetLinks() => Database.QueryNotes(
         "SELECT noteID, title, path FROM notes WHERE noteID IN (SELECT noteIDTo FROM connections WHERE noteIDFrom = $id)", ("$id", id));
 
-    /// <summary>Notes that link to this note.</summary>
     public List<Note> GetReferences() => Database.QueryNotes(
         "SELECT noteID, title, path FROM notes WHERE noteID IN (SELECT noteIDFrom FROM connections WHERE noteIDTo = $id)", ("$id", id));
 
-    /// <summary>True when a folder of child notes exists beside this note (it is a hub).</summary>
     public bool HasChildren() => Directory.Exists(System.IO.Path.Combine(BrainModule.VaultRoot, Name))
         && Directory.EnumerateFiles(System.IO.Path.Combine(BrainModule.VaultRoot, Name), "*.md", SearchOption.AllDirectories).Any();
 
-    /// <summary>Direct child notes of this hub.</summary>
     public List<Note> GetChildren() => Database.QueryNotes(
         "SELECT noteID, title, path FROM notes WHERE path LIKE $inside AND path NOT LIKE $deeper",
         ("$inside", $"{Name}/%"), ("$deeper", $"{Name}/%/%"));
 
-    /// <summary>Replaces the note's content and aliases on disk, then refreshes the index.</summary>
     public void Save(string content, IReadOnlyList<string> aliases)
     {
         Write(Path, content, aliases, Parse(File.ReadAllText(AbsolutePath)).Created);
         BrainModule.Index();
     }
 
-    /// <summary>Deletes the note file and its index rows. Hubs with children must be dissolved first.</summary>
     public void Delete()
     {
         if (HasChildren()) throw new InvalidOperationException($"'{Title}' has child notes and cannot be deleted.");
@@ -77,8 +61,7 @@ public class Note
         BrainModule.Index();
     }
 
-    /// <summary>Folds this note into another: aliases transfer, content is appended nothing — the winner's text stands.
-    /// Existing [[links]] to this title keep resolving because the title becomes an alias of the winner.</summary>
+    // The old title becomes an alias on the winner, so existing [[links]] keep resolving.
     public void MergeInto(Note winner)
     {
         if (HasChildren()) throw new InvalidOperationException($"'{Title}' is a hub and cannot be merged away.");
@@ -93,12 +76,11 @@ public class Note
         BrainModule.Index();
     }
 
-    /// <summary>The shape agents see in prompts.</summary>
     public string ToPrompt() => $"Path: {Name}\n\n{Content}";
 
     private string AbsolutePath => System.IO.Path.Combine(BrainModule.VaultRoot, Path);
 
-    // ── File format (owned by Note: parsing and composing the frontmatter) ─────────────
+    // ── File format ──────────────────────────────────────────────────────────────────
 
     internal record Parsed(string Body, IReadOnlyList<string> AliasList, DateTime? Created);
 
@@ -124,7 +106,7 @@ public class Note
         return new Parsed(body, aliases, created);
     }
 
-    /// <summary>Atomic write (temp + rename): a crash can never leave a half-written note.</summary>
+    // temp + rename: a crash can never leave a half-written note.
     internal static void Write(string relativePath, string body, IReadOnlyList<string> aliases, DateTime? created)
     {
         string file = System.IO.Path.Combine(BrainModule.VaultRoot, relativePath);

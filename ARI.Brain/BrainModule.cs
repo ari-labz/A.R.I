@@ -6,21 +6,10 @@ using Microsoft.Data.Sqlite;
 namespace ARI.Brain;
 
 public record IndexStats(int Notes, int Edges, int Aliases, IReadOnlyList<string> UnresolvedLinks, IReadOnlyList<string> SkippedAliases);
-
-/// <summary>A note surfaced by Recall. Score sums tier weight across every DISTINCT search term matched —
-/// a note hit by two different terms outranks one hit by a single term many times over.</summary>
 public record RecallCandidate(Note Note, double Score, int TermsMatched);
-
-/// <summary>A connecting route between two Recall seeds, found by expanding both sides until they meet.</summary>
 public record RecallPath(Note From, Note To, IReadOnlyList<Note> Notes);
-
-/// <summary>The deterministic part of recall: ranked candidates plus any paths connecting the search terms.</summary>
 public record RecallResult(IReadOnlyList<RecallCandidate> Candidates, IReadOnlyList<RecallPath> Paths);
 
-/// <summary>
-/// Ari's brain: a vault of markdown files (the source of truth) indexed by SQLite.
-/// Reads navigate to Note objects; writes go file-first, then the index refreshes.
-/// </summary>
 public static class BrainModule
 {
     private const string BACKUP_PREFIX = "ARI-Brain-";
@@ -28,8 +17,8 @@ public static class BrainModule
     private static readonly Regex wikiLink = new(@"\[\[([^\]|]+?)(?:\|[^\]]*)?\]\]", RegexOptions.Compiled);
     private static readonly Regex invalidFileChars = new(@"[/\\:""?*|<>]", RegexOptions.Compiled);
 
-    // Tier weight: how strongly a single term-match counts toward a note's score. Title/alias hits
-    // dominate; a bare content mention barely registers on its own but adds up across several terms.
+    // Tier weight per term match: title/alias hits dominate, a bare content mention barely
+    // registers alone but adds up across several terms.
     private const double TIER_TITLE          = 100.0;
     private const double TIER_ALIAS          = 90.0;
     private const double TIER_TITLE_PARTIAL  = 50.0;
@@ -41,12 +30,9 @@ public static class BrainModule
     private static int maxBackups = 5;
 
     public static bool Ready { get; private set; }
-
     public static string VaultRoot { get; private set; } = string.Empty;
-
     public static string VaultName { get; private set; } = string.Empty;
 
-    /// <summary>Points the module at the vault and builds the index. Must be called before anything else.</summary>
     public static IndexStats Initialize(BrainConfig config)
     {
         VaultRoot = config.VaultPath.Length > 0
@@ -63,7 +49,7 @@ public static class BrainModule
         return stats;
     }
 
-    /// <summary>Rebuilds the index database from the vault files. Safe to run at any time; the index is disposable.</summary>
+    // Rebuilds the index from the vault files. Safe to run at any time — the index is disposable.
     public static IndexStats Index()
     {
         List<(string Path, Note.Parsed Parsed, DateTime Updated)> files = new();
@@ -139,7 +125,6 @@ public static class BrainModule
 
     // ── Reads ────────────────────────────────────────────────────────────────────────
 
-    /// <summary>Resolves a title, alias, or full "Folder/Title" name to its Note. Null when unknown.</summary>
     public static Note? GetNote(string name) => Database.QueryNotes("""
         SELECT noteID, title, path FROM notes WHERE title = $name
         UNION SELECT n.noteID, n.title, n.path FROM aliases a JOIN notes n USING(noteID) WHERE a.alias = $name
@@ -149,7 +134,6 @@ public static class BrainModule
 
     public static List<string> GetTitles() => Database.Column("SELECT title FROM notes ORDER BY title");
 
-    /// <summary>Full note names in "Folder/Sub/Title" form.</summary>
     public static List<string> GetPaths() => Database.Column("SELECT substr(path, 1, length(path) - 3) FROM notes ORDER BY path");
 
     public static List<string> GetTitlesByFolder(string folderPath) =>
@@ -170,7 +154,6 @@ public static class BrainModule
         return result;
     }
 
-    /// <summary>Extracts [[wikilink]] targets from markdown, deduplicated, in order of first appearance.</summary>
     public static List<string> GetWikilinks(string markdown)
     {
         List<string> links = new();
@@ -183,22 +166,13 @@ public static class BrainModule
     }
 
     // ── Search ───────────────────────────────────────────────────────────────────────
-    //
-    // A note's score sums TierWeight(bestTier) across every DISTINCT term it matched — never per
-    // occurrence, never per seed. That single rule is what makes "mentions both search terms"
-    // outrank "sits near many mentions of one popular term": a hub reached from five directions
-    // for the same term still only counts once for that term, while a note reached by two
-    // different terms counts twice. All five tiers run as one SQL statement regardless of how
-    // many terms are passed in — the terms become rows in a small joined table, not a C# loop.
 
-    /// <summary>Every note matching any of the terms, ranked by how many distinct terms it matches and how strongly.</summary>
     public static List<RecallCandidate> Search(IReadOnlyList<string> terms, int resultLimit = 25)
     {
         string cte = HitsCte(terms, out (string Name, object Value)[] parameters);
         return Rank(cte, "hits", parameters, resultLimit);
     }
 
-    /// <summary>Search restricted to notes within maxJumps links (either direction) of the anchor note.</summary>
     public static List<RecallCandidate> SearchNear(Note anchor, IReadOnlyList<string> terms, int maxJumps = 3, int resultLimit = 25)
     {
         string hits = HitsCte(terms, out (string Name, object Value)[] parameters);
@@ -218,8 +192,7 @@ public static class BrainModule
         return Rank(cte, "nearHits", parameters, resultLimit);
     }
 
-    /// <summary>Expands outward from every seed until two seeds' reaches meet, returning the connecting notes.
-    /// Cheap and bounded: one recursive walk per seed, each capped at maxJumps.</summary>
+    // One recursive walk per seed, meet-in-the-middle on the intersection.
     public static List<RecallPath> FindConnectingPaths(IReadOnlyList<Note> seeds, int maxJumps = 3)
     {
         if (seeds.Count < 2) return new List<RecallPath>();
@@ -246,8 +219,6 @@ public static class BrainModule
         return paths;
     }
 
-    /// <summary>Deterministic candidate gathering for a conversation: direct term matches, their neighborhoods,
-    /// and any paths connecting them — sorted and capped in one place. The only LLM step happens after this.</summary>
     public static RecallResult Recall(IReadOnlyList<string> terms, int hopLimit = 3, int seedNearLimit = 25, int topLimit = 25)
     {
         if (terms.Count == 0) return new RecallResult(new List<RecallCandidate>(), new List<RecallPath>());
@@ -265,10 +236,8 @@ public static class BrainModule
         foreach (RecallCandidate seed in direct)
             MergeIn(SearchNear(seed.Note, terms, hopLimit, seedNearLimit));
 
-        // One anchor per distinct term — connecting [REDACT]'s own six "[REDACT]'s ___" matches to each other
-        // is noise; connecting the note that best represents "[REDACT]" to the note that best represents
-        // "[REDACT]" is the actual question. This also keeps path-finding at C(termCount, 2) pairs, not
-        // C(candidateCount, 2).
+        // One anchor per distinct term, not per candidate — connects "the [REDACT] thing" to "the [REDACT]
+        // thing" instead of cross-linking every matched note (which is mostly noise on a dense graph).
         List<Note> anchors = terms
             .Select(term => Search(new List<string> { term }, 1).FirstOrDefault()?.Note)
             .Where(note => note is not null)
@@ -287,9 +256,7 @@ public static class BrainModule
         return new RecallResult(ranked, paths);
     }
 
-    // Builds the five-tier match CTE for an arbitrary number of terms as ONE query: terms become rows in
-    // a small joined table (not a C# loop), so title/alias equality hits the unique index once per term
-    // and the FTS join runs one MATCH per term row — all in a single round trip regardless of term count.
+    // Terms become rows in a joined table, not a C# loop — one round trip regardless of term count.
     private static string HitsCte(IReadOnlyList<string> terms, out (string Name, object Value)[] parameters)
     {
         List<string> termRows = new();
@@ -320,9 +287,8 @@ public static class BrainModule
             """;
     }
 
-    // Groups the named raw-hits table down to one best tier per (term, note), sums tier weight across
-    // DISTINCT terms, and ranks. "WITH RECURSIVE" is used unconditionally — SQLite allows it even when
-    // none of the chained CTEs are actually recursive, so one code path serves both Search and SearchNear.
+    // "WITH RECURSIVE" unconditionally — SQLite allows it even when nothing in the chain recurses,
+    // so one code path serves both Search and SearchNear.
     private static List<RecallCandidate> Rank(string cte, string hitsTable, (string Name, object Value)[] parameters, int resultLimit)
     {
         string sql = $"""
@@ -346,8 +312,6 @@ public static class BrainModule
         return results;
     }
 
-    // Bounded single-source reachability with predecessors, used by FindConnectingPaths. One recursive
-    // walk per seed, capped at maxJumps — cheap and independent of total graph size.
     private static Dictionary<long, (int Depth, long? Predecessor)> Reachability(Note seed, int maxJumps)
     {
         using SqliteConnection db = Database.Open();
@@ -386,7 +350,6 @@ public static class BrainModule
 
     // ── Writes (file first, then reindex) ───────────────────────────────────────────
 
-    /// <summary>Creates a note at "Folder/Title" — or updates it if the name already resolves to one.</summary>
     public static Note CreateNote(string name, string content, IReadOnlyList<string> aliases)
     {
         Note? existing = GetNote(name.Contains('/') ? name[(name.LastIndexOf('/') + 1)..] : name) ?? GetNote(name);
@@ -400,14 +363,12 @@ public static class BrainModule
         return GetNote(name)!;
     }
 
-    /// <summary>Batch create/update from an Engram sweep. One reindex at the end.</summary>
     public static void AddNotes(IReadOnlyList<EngramAdd> adds)
     {
         foreach (EngramAdd add in adds) WriteNamed(add.NoteName, add.Content, add.Aliases);
         Index();
     }
 
-    /// <summary>Batch edit from an Engram sweep. A NewNoteName moves the file; the old title survives as an alias.</summary>
     public static void EditNotes(IReadOnlyList<EngramEdit> edits)
     {
         foreach (EngramEdit edit in edits)
@@ -478,7 +439,6 @@ public static class BrainModule
 
     // ── Structural maintenance ──────────────────────────────────────────────────────
 
-    /// <summary>Deterministic hub pass: every folder note links to each of its direct children.</summary>
     public static int EnsureHubChildLinks()
     {
         int updated = 0;
@@ -503,7 +463,6 @@ public static class BrainModule
         return updated;
     }
 
-    /// <summary>Folds Unknown/ stubs whose name is already an alias of a real note into that note.</summary>
     public static int CleanUnknownStubs()
     {
         int cleaned = 0;
@@ -560,7 +519,7 @@ public static class BrainModule
         return backups;
     }
 
-    /// <summary>Additive restore: recreates missing notes and overwrites existing ones. Never deletes.</summary>
+    // Additive: recreates missing notes, overwrites existing ones, never deletes.
     public static string RestoreBackup(string fileName)
     {
         string zipPath = Path.Combine(backupPath, fileName);
@@ -589,7 +548,6 @@ public static class BrainModule
 
     // ── Internal ────────────────────────────────────────────────────────────────────
 
-    // Create-or-update without reindexing; batch operations reindex once at the end.
     private static void WriteNamed(string name, string content, IReadOnlyList<string> aliases)
     {
         string bareTitle = name.Contains('/') ? name[(name.LastIndexOf('/') + 1)..] : name;
@@ -610,7 +568,6 @@ public static class BrainModule
         return merged;
     }
 
-    /// <summary>Converts a note name like "People/[REDACT]'s Family/[REDACT]" into a safe vault-relative file path.</summary>
     internal static string PathFor(string noteName)
     {
         const int MAX_SEGMENT_LENGTH = 120;
