@@ -56,8 +56,8 @@
       "PythonPath": "/Users/user/Documents/GitHub/A.R.I/ARI.Listener/python/venv/bin/python",
       "ScriptPath": "../../../../ARI.Listener/python/whisper_serve.py",
       "Model": "base.en",
-      "CpuThreads": 6,
-      "SilenceMs": 400
+      "CpuThreads": 10,
+      "SilenceMs": 300
     }
   }
 }

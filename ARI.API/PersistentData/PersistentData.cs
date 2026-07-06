@@ -54,6 +54,11 @@ public class PersistentData
         public List<AgentDefinition> Agents { get; set; } = new();
     }
 
+    private sealed class VoiceFile
+    {
+        public string? DefaultModelName { get; set; }
+    }
+
     // ────────────────────────────────────────────────────────────────────────────
 
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -66,10 +71,12 @@ public class PersistentData
     private readonly string _serversPath;
     private readonly string _modelsPath;
     private readonly string _agentsPath;
+    private readonly string _voicePath;
 
     private readonly object _serversLock = new();
     private readonly object _modelsLock  = new();
     private readonly object _agentsLock  = new();
+    private readonly object _voiceLock   = new();
 
     public PersistentData()
     {
@@ -80,6 +87,7 @@ public class PersistentData
         _serversPath = Path.Combine(_dir, "Servers.json");
         _modelsPath  = Path.Combine(_dir, "Models.json");
         _agentsPath  = Path.Combine(_dir, "Agents.json");
+        _voicePath   = Path.Combine(_dir, "Voice.json");
 
     }
 
@@ -314,11 +322,29 @@ public class PersistentData
         }
     }
 
+    // ── Voice ───────────────────────────────────────────────────────────────────
+
+    public string? GetDefaultVoiceModel()
+    {
+        lock (_voiceLock) return LoadVoice().DefaultModelName;
+    }
+
+    public void SetDefaultVoiceModel(string? modelName)
+    {
+        lock (_voiceLock)
+        {
+            VoiceFile data = LoadVoice();
+            data.DefaultModelName = string.IsNullOrWhiteSpace(modelName) ? null : modelName;
+            Save(_voicePath, data);
+        }
+    }
+
     // ── IO ───────────────────────────────────────────────────────────────────────
 
     private ServersFile LoadServers() => Load<ServersFile>(_serversPath);
     private ModelsFile  LoadModels()  => Load<ModelsFile>(_modelsPath);
     private AgentsFile  LoadAgents()  => Load<AgentsFile>(_agentsPath);
+    private VoiceFile   LoadVoice()   => Load<VoiceFile>(_voicePath);
 
     private T Load<T>(string path) where T : new()
     {

@@ -264,7 +264,8 @@ public class AgentsApiController(PersistentData persistentData) : ControllerBase
 public class VoiceController(
     VoiceSynthesisConfig vsConfig,
     ILoggerFactory loggerFactory,
-    IHostApplicationLifetime lifetime) : ControllerBase
+    IHostApplicationLifetime lifetime,
+    PersistentData persistentData) : ControllerBase
 {
     private readonly ILogger logger = loggerFactory.CreateLogger("ARI.WebPanel");
     private VoiceSynthesisModule? voiceTraining => (VoiceSynthesisModule?)Modules.VoiceSynthesis;
@@ -593,7 +594,28 @@ public class VoiceController(
 
     [HttpGet("active")]
     public IActionResult GetActive() =>
-        Ok(new { model = voiceService?.ActiveModel, ready = voiceService?.IsReady ?? false });
+        Ok(new
+        {
+            model        = voiceService?.ActiveModel,
+            ready        = voiceService?.IsReady ?? false,
+            defaultModel = persistentData.GetDefaultVoiceModel(),
+        });
+
+    /// <summary>Set the voice model loaded at startup. Takes effect on next restart.</summary>
+    [HttpPut("default")]
+    public IActionResult SetDefaultModel([FromBody] SetDefaultVoiceRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.ModelName) || req.ModelName.Contains('/') || req.ModelName.Contains('\\'))
+            return BadRequest(new { error = "Invalid model name." });
+        if (string.IsNullOrEmpty(vsConfig.VoicesPath))
+            return StatusCode(503, new { error = "VoiceSynthesis not configured." });
+        if (!Directory.Exists(Path.Combine(vsConfig.VoicesPath, req.ModelName)))
+            return NotFound(new { error = $"Model '{req.ModelName}' not found." });
+
+        persistentData.SetDefaultVoiceModel(req.ModelName);
+        logger.LogInformation("[Voice] Default startup voice set to {Model}", req.ModelName);
+        return Ok(new { ok = true, defaultModel = req.ModelName });
+    }
 
     [HttpGet("models")]
     public IActionResult GetModels()
@@ -1081,6 +1103,7 @@ public record SpeakRequest(string Text, string? ModelName = null, string? Checkp
     int DiffusionSteps = 5, float Alpha = 0.3f, float Beta = 0.7f, float EmbeddingScale = 1.0f,
     float Speed = 1.0f, float PauseScale = 1.0f);
 public record VoiceSettingsRequest(float Speed = 1.0f, float PauseScale = 1.0f);
+public record SetDefaultVoiceRequest(string ModelName);
 public record SplitSentencesRequest(string Text);
 public record ResumeRequest(string ModelName, int? Epochs = null, int? SaveEveryNEpochs = null);
 public record DatasetProcessRequest(string StageId);

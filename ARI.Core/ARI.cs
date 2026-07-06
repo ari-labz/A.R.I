@@ -120,7 +120,12 @@ public class ARI : BackgroundService
         {
             string sttPath    = ResolvePath(executableDirectory, config.modules.VoiceSynthesis.StyleTtsPath);
             string voicesPath = ResolvePath(executableDirectory, config.modules.VoiceSynthesis.VoicesPath);
-            string modelName  = config.modules.Voice.ModelName;
+            string modelName  = persistentData.GetDefaultVoiceModel() ?? config.modules.Voice.ModelName;
+            if (!Directory.Exists(Path.Combine(voicesPath, modelName)) && modelName != config.modules.Voice.ModelName)
+            {
+                _logger.LogWarning("Default voice '{Model}' no longer exists — falling back to {Fallback}.", modelName, config.modules.Voice.ModelName);
+                modelName = config.modules.Voice.ModelName;
+            }
             string modelDir   = Path.Combine(voicesPath, modelName);
             string modelPath  = Path.Combine(modelDir, "model.pth");
             string configPath = Path.Combine(modelDir, "config.yml");

@@ -552,6 +552,7 @@ html, body {
           <label class="vs-label" style="min-width:140px;">Voice model<select id="vs-tv-model" class="vs-input"></select></label>
           <label class="vs-label" style="min-width:140px;">Checkpoint<select id="vs-tv-epoch" class="vs-input"><option value="">latest</option></select></label>
           <button class="vs-btn-primary" id="vs-tv-speak-btn" type="button">Speak</button>
+          <button class="vs-btn-primary" id="vs-tv-default-btn" type="button" title="Use this model as Ari's voice on startup">Set as default</button>
         </div>
         <span id="vs-tv-status" style="font-size:12px;color:var(--text-dim);margin-top:6px;display:block;"></span>
       </div>
@@ -2440,10 +2441,10 @@ vsTvModel.addEventListener('change', () => loadCheckpoints(vsTvModel.value));
 async function loadVoiceModels() {
     try {
         const [mr, ar] = await Promise.all([fetch('/voice/models'), fetch('/voice/active')]);
-        const { models } = await mr.json(), { model: activeModel, ready } = await ar.json();
+        const { models } = await mr.json(), { model: activeModel, ready, defaultModel } = await ar.json();
         // Voice settings dropdown
         vsTvModel.innerHTML = models.length
-            ? models.map(m => `<option value="${escHtml(m.name)}"${m.name===activeModel?' selected':''}>${escHtml(m.name)}${m.name===activeModel?' ✓':''}</option>`).join('')
+            ? models.map(m => `<option value="${escHtml(m.name)}"${m.name===activeModel?' selected':''}>${escHtml(m.name)}${m.name===activeModel?' ✓':''}${m.name===defaultModel?' (default)':''}</option>`).join('')
             : '<option value="">No models found</option>';
         vsTvStatus.textContent = ready ? `Active: ${activeModel}` : 'Voice module not running';
         // Resume section
@@ -2600,6 +2601,22 @@ vsTvSpeakBtn.addEventListener('click', async () => {
     finally { vsTvSpeakBtn.disabled = false; }
 });
 vsTvText.addEventListener('keydown', e => { if (e.key === 'Enter') vsTvSpeakBtn.click(); });
+
+const vsTvDefaultBtn = document.getElementById('vs-tv-default-btn');
+vsTvDefaultBtn.addEventListener('click', async () => {
+    const modelName = vsTvModel.value;
+    if (!modelName) return;
+    vsTvDefaultBtn.disabled = true;
+    try {
+        const resp = await fetch('/voice/default', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName }) });
+        if (!resp.ok) { const err = await resp.json().catch(() => ({ error: resp.statusText })); vsTvStatus.textContent = 'Error: ' + (err.error ?? resp.statusText); }
+        else {
+            await loadVoiceModels();
+            vsTvStatus.textContent = `Default voice set to ${modelName} — takes effect on next startup.`;
+        }
+    } catch (err) { vsTvStatus.textContent = 'Error: ' + err.message; }
+    finally { vsTvDefaultBtn.disabled = false; }
+});
 
 // ── debug thread view ──────────────────────────────────────
 var dbgSelectedThread  = null;
