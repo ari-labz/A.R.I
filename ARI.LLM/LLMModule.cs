@@ -186,11 +186,11 @@ public class LLMModule : ILLMModule, IDisposable
         if (BrainModule.Ready && rawAgents.TryGetValue("Memory", out JsonElement memoryEl))
         {
             Memory mem = Deserialize<Memory>(memoryEl);
-            if (mem.RecursiveBrainSearchDepth > 0)
+            if (mem.HopLimit > 0)
             {
                 memory = mem;
                 agentMap["Memory"] = memory;
-                _logger.LogInformation("Memory agent is active. Depth: {Depth}.", memory.RecursiveBrainSearchDepth);
+                _logger.LogInformation("Memory agent is active. Hop limit: {HopLimit}.", memory.HopLimit);
             }
         }
 

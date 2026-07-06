@@ -11,15 +11,14 @@ namespace ARI.LLM;
 
 internal class Memory : Agent
 {
-    [JsonPropertyName("recursiveBrainSearchDepth")] public int RecursiveBrainSearchDepth { get; init; }
+    [JsonPropertyName("hopLimit")] public int HopLimit { get; init; }
 
-    private const int BASE_THINKING     = 100;
-    private const int PER_CANDIDATE     = 25;
-    private const int MAX_THINKING      = 1000;
     private const int MIN_RECALL_LENGTH = 80;
     private const int TRANSCRIPT_LIMIT  = 5;
-    private const int MAX_CANDIDATES    = 20;
-
+    private const int SEED_NEAR_LIMIT   = 25;
+    private const int TOP_CANDIDATES    = 25;
+    private const int THINKING_BUDGET   = 400;
+    private const int SNIPPET_LENGTH    = 160;
 
     internal override bool QuietLogging => true;
 
@@ -64,7 +63,7 @@ internal class Memory : Agent
 
     internal async Task<string?> GetNotes(List<ThreadMessage> chatHistory, string incomingPrompt, string? contextSummary = null, CancellationToken ct = default)
     {
-        if (RecursiveBrainSearchDepth <= 0) return null;
+        if (HopLimit <= 0) return null;
 
         Thread memThread = new Thread(ThreadPipeline.Dialogue, $"memory:{Guid.NewGuid()}") { Internal = true };
 
@@ -85,243 +84,130 @@ internal class Memory : Agent
             }
         }
 
-        // Build transcript from last N messages.
-        StringBuilder transcriptBuilder = new();
-        foreach (ThreadMessage msg in chatHistory.TakeLast(TRANSCRIPT_LIMIT))
-            transcriptBuilder.AppendLine($"{msg.Username}: {msg.Content}");
-        string transcript = transcriptBuilder.ToString();
-
         // Tokenise the incoming prompt + context summary (not full transcript — avoids noisy seeds from ARI's own words).
         string combined = string.IsNullOrWhiteSpace(contextSummary)
             ? incomingPrompt
             : $"{incomingPrompt} {contextSummary}";
-        HashSet<string> tokens = Regex.Split(combined, @"[^a-zA-Z0-9']+")
+        List<string> terms = Regex.Split(combined, @"[^a-zA-Z0-9']+")
             .Select(t => t.Trim('\''))
             .Where(t => t.Length >= 3 && !Stopwords.Contains(t))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
-        // Parallel FTS per token — track how many tokens matched each note (coverage score).
-        // Alias labels are searched server-side so a token like "Grumpy" surfaces "Geoffrey" here.
-        List<string> tokenList = tokens.ToList();
-        List<string> seeds     = new();
-        Dictionary<string, int> seedCoverage = new(StringComparer.OrdinalIgnoreCase);
-        if (tokenList.Count > 0)
+        if (terms.Count == 0)
         {
-            List<string>[] searchResults = tokenList.Select(t => BrainModule.Search(t).Select(r => r.Note.Title).ToList()).ToArray();
-            for (int i = 0; i < tokenList.Count; i++)
-                foreach (string title in searchResults[i])
-                    seedCoverage[title] = seedCoverage.GetValueOrDefault(title) + 1;
-            seeds = seedCoverage.Keys.ToList();
+            Shared.Logger.LogInformation("[Memory] complete 0.0s — no search terms");
+            RunLogger.Write("Memory", "no-terms", new[] { ("Recall thread", memThread) }, new[]
+            {
+                $"Incoming prompt: {RunLogger.Trunc(incomingPrompt)}",
+                "Outcome: no search terms survived tokenisation — nothing to recall",
+            });
+            return string.Empty;
         }
 
-        // One-hop expansion — track how many seeds link to each neighbour (in-degree score).
-        Dictionary<string, int> neighbourPullers = new(StringComparer.OrdinalIgnoreCase);
-        if (seeds.Count > 0)
+        // Deterministic candidate gathering: direct term matches, their neighbourhoods, and any
+        // paths connecting the terms — all SQL, no LLM involved yet. See BrainModule.Recall.
+        RecallResult recall = BrainModule.Recall(terms, HopLimit, SEED_NEAR_LIMIT, TOP_CANDIDATES);
+
+        Shared.Logger.LogInformation("[Memory] terms [{Terms}] → {Candidates} candidate(s), {Paths} path(s)",
+            string.Join(", ", terms), recall.Candidates.Count, recall.Paths.Count);
+
+        if (recall.Candidates.Count == 0)
         {
-            List<string>[] linkResults = seeds.Select(t => BrainModule.GetNote(t)?.GetLinks().Select(n => n.Title).ToList() ?? new List<string>()).ToArray();
-            for (int i = 0; i < seeds.Count; i++)
-                foreach (string link in linkResults[i])
-                    if (!seedCoverage.ContainsKey(link))
-                        neighbourPullers[link] = neighbourPullers.GetValueOrDefault(link) + 1;
-        }
-
-        // Score every candidate and cap at MAX_CANDIDATES before showing anything to the LLM.
-        // Scoring: exact title match (100) > token coverage hits (10/token) > neighbour in-degree (5/puller).
-        // Exact title matches are pre-fetched without LLM involvement regardless of the cap.
-        HashSet<string> tokenLower = tokenList.Select(t => t.ToLowerInvariant()).ToHashSet();
-
-        int Score(string title)
-        {
-            int s = 0;
-            if (tokenLower.Contains(title.ToLowerInvariant()))               s += 100;
-            if (seedCoverage.TryGetValue(title, out int cov))                s += cov * 10;
-            if (neighbourPullers.TryGetValue(title, out int pullers))        s += pullers * 5;
-            return s;
-        }
-
-        HashSet<string> allCandidates = new(seedCoverage.Keys, StringComparer.OrdinalIgnoreCase);
-        foreach (string n in neighbourPullers.Keys) allCandidates.Add(n);
-
-        List<string> ranked     = allCandidates.OrderByDescending(Score).Take(MAX_CANDIDATES).ToList();
-        List<string> directFetch = ranked.Where(c => tokenLower.Contains(c.ToLowerInvariant())).ToList();
-        List<string> indirect    = ranked.Except(directFetch, StringComparer.OrdinalIgnoreCase).ToList();
-
-        Shared.Logger.LogInformation("[Memory] tokens [{Tokens}] → {Seeds} seed(s) → ranked {Total} candidate(s) (cap {Cap}): {Direct} direct + {Indirect} indirect",
-            string.Join(", ", tokenList), seeds.Count, ranked.Count, MAX_CANDIDATES, directFetch.Count, indirect.Count);
-
-        if (ranked.Count == 0)
-        {
-            Shared.Logger.LogInformation("[Memory] complete 0.0s, 0 tokens, 0.0 t/s — no memories recalled");
+            Shared.Logger.LogInformation("[Memory] complete 0.0s, 0 tokens, 0.0 t/s — no candidates found");
             RunLogger.Write("Memory", "no-candidates", new[] { ("Recall thread", memThread) }, new[]
             {
                 $"Incoming prompt: {RunLogger.Trunc(incomingPrompt)}",
                 $"Context summary: {RunLogger.Trunc(contextSummary)}",
-                $"Search tokens: {string.Join(", ", tokenList)}",
-                $"Seeds: {seeds.Count}",
+                $"Search terms: {string.Join(", ", terms)}",
                 "Outcome: no candidate notes found — nothing shown to the model",
             });
             return string.Empty;
         }
 
-        HashSet<string>                                       fetched      = new(StringComparer.OrdinalIgnoreCase);
-        HashSet<string>                                       shownToModel = new(StringComparer.OrdinalIgnoreCase);
-        Dictionary<string, (string Content, string? Url)> noteContents = new(StringComparer.OrdinalIgnoreCase);
+        // Build transcript + a snippets-only candidate block, highest-scored first. The model always
+        // makes this call, but a well-separated top score is a fast decision even so — the sort does
+        // the work a skip-branch would have, without ever hiding a candidate from the model's judgment.
+        StringBuilder transcriptBuilder = new();
+        foreach (ThreadMessage msg in chatHistory.TakeLast(TRANSCRIPT_LIMIT))
+            transcriptBuilder.AppendLine($"{msg.Username}: {msg.Content}");
+        string transcript = transcriptBuilder.ToString();
 
-        // Pre-fetch direct token matches without consulting the LLM.
-        if (directFetch.Count > 0)
-        {
-            foreach (string name in directFetch)
-            {
-                Note? note = BrainModule.GetNote(name);
-                if (note is null) continue;
-                fetched.Add(name);
-                noteContents[name] = (note.ToPrompt(), note.Url);
-            }
-            Shared.Logger.LogInformation("[Memory] Direct fetch: {Notes}", string.Join(", ", fetched.Select(n => $"[{n}]")));
-        }
+        StringBuilder candidateBlock = new();
+        foreach (RecallCandidate candidate in recall.Candidates)
+            candidateBlock.AppendLine($"- {candidate.Note.Title}: {Snippet(candidate.Note.Content)}");
 
-        string candidateList = indirect.Count > 0 ? string.Join(", ", indirect) : string.Empty;
+        string pathBlock = recall.Paths.Count > 0
+            ? "\nCONNECTIONS FOUND:\n" + string.Join("\n", recall.Paths.Select(p =>
+                $"- {p.From.Title} connects to {p.To.Title} via {string.Join(" -> ", p.Notes.Select(n => n.Title))}"))
+            : string.Empty;
 
-        string firstPrompt =
-            "You are recalling memories for a conversation. " +
-            "Fetch every note whose person, place, or topic is directly mentioned in the conversation.\n\n" +
+        string prompt =
+            "Select the notes relevant to this conversation. Prefer fewer — only what is needed to respond well. " +
+            "Items are listed highest-scored first.\n\n" +
             $"CONVERSATION:\n{transcript}\n\n" +
-            $"CANDIDATE NOTES: {candidateList}\n\n" +
-            "Respond ONLY with JSON using the exact note titles from the candidate list: " +
-            "{\"fetch\": [\"[REDACT]\", \"[REDACT]\"]}. Only use {\"fetch\": []} if none are relevant.";
+            $"CANDIDATES (highest-scored first):\n{candidateBlock}{pathBlock}\n\n" +
+            "Respond ONLY with JSON using the exact titles above: {\"select\": [\"[REDACT]\", \"[REDACT]\"]}. " +
+            "Use {\"select\": []} if none are relevant.";
 
-        int    totalTokens  = 0;
-        double totalSeconds = 0;
-        int    roundNumber  = 1;
+        Stopwatch timer = Stopwatch.StartNew();
+        string raw = await SendPrompt(memThread, prompt, ct: ct, thinkingBudgetOverride: THINKING_BUDGET);
+        List<string> selected = ParseSelection(raw);
+        timer.Stop();
 
-        int thinkingBudget = Math.Min(BASE_THINKING + indirect.Count * PER_CANDIDATE, MAX_THINKING);
+        Response? last     = memThread.History.OfType<Response>().LastOrDefault();
+        int    completionTokens = last?.Data.CompletionTokens ?? 0;
+        double elapsed          = last?.TotalSeconds ?? last?.ThinkingSeconds ?? 0;
+        double tokPerSec        = elapsed > 0 ? completionTokens / elapsed : 0;
 
-        Stopwatch totalTimer = Stopwatch.StartNew();
-
-        string raw = indirect.Count > 0
-            ? await SendPrompt(memThread, firstPrompt, ct: ct, thinkingBudgetOverride: thinkingBudget)
-            : "{\"fetch\": []}";
-
-        for (int depth = 0; depth < RecursiveBrainSearchDepth; depth++)
+        if (selected.Count == 0)
         {
-            List<string> toFetch = ParseFetchList(raw)
-                .Select(n => n.Contains('/') ? n[(n.LastIndexOf('/') + 1)..] : n)
-                .Where(n => !fetched.Contains(n))
-                .ToList();
-
-            if (toFetch.Count == 0)
-            {
-                LogRound(memThread, roundNumber, ref totalTokens, ref totalSeconds, recalled: null);
-                break;
-            }
-
-            IEnumerable<Task<(string name, string? content, string? noteId)>> fetchTasks = toFetch.Select(async name =>
-            {
-                Note?   note    = BrainModule.GetNote(name);
-                string? content = note?.ToPrompt();
-                string? noteId  = note?.Url;
-                return (name, content, noteId);
-            });
-
-            List<string> recalled = new();
-            foreach ((string name, string? content, string? noteId) in await Task.WhenAll(fetchTasks))
-            {
-                if (content is null) continue;
-                fetched.Add(name);
-                recalled.Add(name);
-                noteContents[name] = (content, noteId);
-            }
-
-            LogRound(memThread, roundNumber++, ref totalTokens, ref totalSeconds, recalled);
-
-            if (depth + 1 >= RecursiveBrainSearchDepth) break;
-
-            // Send ONLY notes the model hasn't seen yet. Earlier notes remain visible in the recall thread's
-            // history (and are prefix-cached on the pinned slot), so re-sending the full accumulated block
-            // every pass — which forced a full re-prefill and collapsed the token rate — is unnecessary.
-            // Each note's content is shown exactly once, keeping full depth/recall at a fraction of the cost.
-            StringBuilder notesBlock = new();
-            foreach (KeyValuePair<string, (string Content, string? Url)> kvp in noteContents)
-            {
-                if (!shownToModel.Add(kvp.Key)) continue;   // already shown in a prior pass
-                notesBlock.AppendLine($"--- {kvp.Key} ---");
-                notesBlock.AppendLine(kvp.Value.Content);
-                notesBlock.AppendLine("---");
-            }
-
-            string nextPrompt =
-                $"Here are the notes:\n\n{notesBlock}\n" +
-                $"Based on any [[links]] or references in those notes, are there further notes you want? " +
-                $"Do NOT re-request notes already fetched: {string.Join(", ", fetched)}.\n" +
-                "Respond ONLY with JSON: {\"fetch\": [\"Name\"]} — or {\"fetch\": []} to stop.";
-
-            raw = await SendPrompt(memThread, nextPrompt, ct: ct, thinkingBudgetOverride: thinkingBudget);
-        }
-
-        totalTimer.Stop();
-        double totalTokPerSec = totalSeconds > 0 ? totalTokens / totalSeconds : 0;
-
-        if (noteContents.Count == 0)
-        {
-            Shared.Logger.LogInformation("[Memory] complete {Seconds}s, {Tokens} tokens, {TokPerSec} t/s — no memories recalled",
-                totalTimer.Elapsed.TotalSeconds.ToString("F1"), totalTokens, totalTokPerSec.ToString("F1"));
+            Shared.Logger.LogInformation("[Memory] complete {Seconds}s, {Tokens} tokens, {TokPerSec} t/s — model selected nothing",
+                timer.Elapsed.TotalSeconds.ToString("F1"), completionTokens, tokPerSec.ToString("F1"));
             RunLogger.Write("Memory", "no-recall", new[] { ("Recall thread", memThread) }, new[]
             {
                 $"Incoming prompt: {RunLogger.Trunc(incomingPrompt)}",
-                $"Context summary: {RunLogger.Trunc(contextSummary)}",
-                $"Search tokens: {string.Join(", ", tokenList)}",
-                $"Seeds: {seeds.Count} · ranked candidates: {ranked.Count} ({directFetch.Count} direct, {indirect.Count} indirect)",
-                $"Total: {totalTimer.Elapsed.TotalSeconds:F1}s, {totalTokens} tokens, {totalTokPerSec:F1} t/s",
-                "Outcome: model declined to fetch any candidate — no memories recalled",
+                $"Search terms: {string.Join(", ", terms)}",
+                $"Candidates offered: {recall.Candidates.Count}",
+                $"Total: {timer.Elapsed.TotalSeconds:F1}s, {completionTokens} tokens, {tokPerSec:F1} t/s",
+                "Outcome: model declined to select any candidate — no memories recalled",
             });
             return string.Empty;
         }
 
         StringBuilder result = new();
-        foreach (KeyValuePair<string, (string Content, string? Url)> kvp in noteContents)
+        foreach (string title in selected)
         {
-            string url    = kvp.Value.Url ?? string.Empty;
-            string header = url.Length > 0 ? $"[{kvp.Key}|{url}]" : $"[{kvp.Key}]";
-            result.AppendLine(header);
-            result.AppendLine(kvp.Value.Content);
+            Note? note = BrainModule.GetNote(title);
+            if (note is null) continue;
+            result.AppendLine($"[{note.Title}|{note.Url}]");
+            result.AppendLine(note.ToPrompt());
             result.AppendLine();
         }
 
         Shared.Logger.LogInformation("[Memory] complete {Seconds}s, {Tokens} tokens, {TokPerSec} t/s",
-            totalTimer.Elapsed.TotalSeconds.ToString("F1"), totalTokens, totalTokPerSec.ToString("F1"));
+            timer.Elapsed.TotalSeconds.ToString("F1"), completionTokens, tokPerSec.ToString("F1"));
         RunLogger.Write("Memory", "recalled", new[] { ("Recall thread", memThread) }, new[]
         {
             $"Incoming prompt: {RunLogger.Trunc(incomingPrompt)}",
-            $"Context summary: {RunLogger.Trunc(contextSummary)}",
-            $"Search tokens: {string.Join(", ", tokenList)}",
-            $"Seeds: {seeds.Count} · ranked candidates: {ranked.Count} ({directFetch.Count} direct, {indirect.Count} indirect)",
-            $"Total: {totalTimer.Elapsed.TotalSeconds:F1}s, {totalTokens} tokens, {totalTokPerSec:F1} t/s",
-            $"Recalled {noteContents.Count} note(s): {string.Join(", ", noteContents.Keys)}",
+            $"Search terms: {string.Join(", ", terms)}",
+            $"Candidates offered: {recall.Candidates.Count} · paths found: {recall.Paths.Count}",
+            $"Total: {timer.Elapsed.TotalSeconds:F1}s, {completionTokens} tokens, {tokPerSec:F1} t/s",
+            $"Recalled {selected.Count} note(s): {string.Join(", ", selected)}",
         });
         return result.ToString().TrimEnd();
     }
 
-    private void LogRound(Thread memThread, int round, ref int totalTokens, ref double totalSeconds, List<string>? recalled)
+    // First non-heading line of the note, trimmed — enough for the model to judge relevance without
+    // ever seeing full content during the deciding step. Full content is fetched only after selection.
+    private static string Snippet(string content)
     {
-        Response? last = memThread.History.OfType<Response>().LastOrDefault();
-        if (last is null) return;
-
-        int    tokens    = last.Data.CompletionTokens;
-        double elapsed   = last.TotalSeconds ?? last.ThinkingSeconds ?? 0;
-        double tokPerSec = elapsed > 0 ? tokens / elapsed : 0;
-
-        totalTokens  += tokens;
-        totalSeconds += elapsed;
-
-        if (recalled is null || recalled.Count == 0)
-            Shared.Logger.LogInformation("[Memory] No memories recalled ({Tokens} tokens, {TokPerSec} t/s)",
-                tokens, tokPerSec.ToString("F1"));
-        else
-            Shared.Logger.LogInformation("[Memory] Recalled {Notes} ({Tokens} tokens, {TokPerSec} t/s)",
-                string.Join(", ", recalled.Select(n => $"[{n}]")), tokens, tokPerSec.ToString("F1"));
+        string line = content.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault(l => !l.TrimStart().StartsWith('#'))?.Trim() ?? string.Empty;
+        return line.Length > SNIPPET_LENGTH ? line[..SNIPPET_LENGTH] + "…" : line;
     }
 
-    private static List<string> ParseFetchList(string raw)
+    private static List<string> ParseSelection(string raw)
     {
         try
         {
@@ -329,7 +215,7 @@ internal class Memory : Agent
             int start = raw.IndexOf('{');
             if (start >= 0) raw = raw[start..];
             using JsonDocument doc = JsonDocument.Parse(raw);
-            if (doc.RootElement.TryGetProperty("fetch", out JsonElement arr) && arr.ValueKind == JsonValueKind.Array)
+            if (doc.RootElement.TryGetProperty("select", out JsonElement arr) && arr.ValueKind == JsonValueKind.Array)
                 return arr.EnumerateArray()
                     .Where(e => e.ValueKind == JsonValueKind.String)
                     .Select(e => e.GetString()!)

@@ -7,8 +7,15 @@ namespace ARI.Brain;
 
 public record IndexStats(int Notes, int Edges, int Aliases, IReadOnlyList<string> UnresolvedLinks, IReadOnlyList<string> SkippedAliases);
 
-/// <summary>One search hit. Match explains why it matched; Distance is jumps from the anchor (0 unless SearchNear).</summary>
-public record SearchResult(Note Note, string Match, int Distance);
+/// <summary>A note surfaced by Recall. Score sums tier weight across every DISTINCT search term matched —
+/// a note hit by two different terms outranks one hit by a single term many times over.</summary>
+public record RecallCandidate(Note Note, double Score, int TermsMatched);
+
+/// <summary>A connecting route between two Recall seeds, found by expanding both sides until they meet.</summary>
+public record RecallPath(Note From, Note To, IReadOnlyList<Note> Notes);
+
+/// <summary>The deterministic part of recall: ranked candidates plus any paths connecting the search terms.</summary>
+public record RecallResult(IReadOnlyList<RecallCandidate> Candidates, IReadOnlyList<RecallPath> Paths);
 
 /// <summary>
 /// Ari's brain: a vault of markdown files (the source of truth) indexed by SQLite.
@@ -20,20 +27,15 @@ public static class BrainModule
 
     private static readonly Regex wikiLink = new(@"\[\[([^\]|]+?)(?:\|[^\]]*)?\]\]", RegexOptions.Compiled);
     private static readonly Regex invalidFileChars = new(@"[/\\:""?*|<>]", RegexOptions.Compiled);
-    private static readonly string[] MATCH_NAMES = ["", "title", "alias", "title-partial", "alias-partial", "content"];
 
-    // Ranks matches into tiers so title hits always sort above content mentions.
-    private const string MATCH_TIERS = """
-        SELECT n.noteID, n.title, n.path, 1 AS tier, 0.0 AS score FROM notes n WHERE n.title = $term
-        UNION ALL
-        SELECT n.noteID, n.title, n.path, 2, 0.0 FROM aliases a JOIN notes n USING(noteID) WHERE a.alias = $term
-        UNION ALL
-        SELECT n.noteID, n.title, n.path, 3, 0.0 FROM notes n WHERE n.title LIKE $pattern ESCAPE '\'
-        UNION ALL
-        SELECT n.noteID, n.title, n.path, 4, 0.0 FROM aliases a JOIN notes n USING(noteID) WHERE a.alias LIKE $pattern ESCAPE '\'
-        UNION ALL
-        SELECT n.noteID, n.title, n.path, 5, bm25(note_search) FROM note_search JOIN notes n ON n.noteID = note_search.rowid WHERE note_search MATCH $phrase
-        """;
+    // Tier weight: how strongly a single term-match counts toward a note's score. Title/alias hits
+    // dominate; a bare content mention barely registers on its own but adds up across several terms.
+    private const double TIER_TITLE          = 100.0;
+    private const double TIER_ALIAS          = 90.0;
+    private const double TIER_TITLE_PARTIAL  = 50.0;
+    private const double TIER_ALIAS_PARTIAL  = 40.0;
+    private const double TIER_CONTENT        = 10.0;
+    private const double PATH_BONUS          = 60.0;
 
     private static string backupPath = "./Backups";
     private static int maxBackups = 5;
@@ -181,49 +183,205 @@ public static class BrainModule
     }
 
     // ── Search ───────────────────────────────────────────────────────────────────────
+    //
+    // A note's score sums TierWeight(bestTier) across every DISTINCT term it matched — never per
+    // occurrence, never per seed. That single rule is what makes "mentions both search terms"
+    // outrank "sits near many mentions of one popular term": a hub reached from five directions
+    // for the same term still only counts once for that term, while a note reached by two
+    // different terms counts twice. All five tiers run as one SQL statement regardless of how
+    // many terms are passed in — the terms become rows in a small joined table, not a C# loop.
 
-    /// <summary>Every note matching the term, best first: exact title, alias, partial title/alias, then content mentions.</summary>
-    public static List<SearchResult> Search(string searchTerm, int resultLimit = 20) => Matches($"""
-        SELECT noteID, title, path, MIN(tier) AS bestTier, MIN(score) AS bestScore, 0 AS distance
-        FROM ({MATCH_TIERS}) GROUP BY noteID
-        ORDER BY bestTier, bestScore LIMIT $limit
-        """, searchTerm, resultLimit);
+    /// <summary>Every note matching any of the terms, ranked by how many distinct terms it matches and how strongly.</summary>
+    public static List<RecallCandidate> Search(IReadOnlyList<string> terms, int resultLimit = 25)
+    {
+        string cte = HitsCte(terms, out (string Name, object Value)[] parameters);
+        return Rank(cte, "hits", parameters, resultLimit);
+    }
 
     /// <summary>Search restricted to notes within maxJumps links (either direction) of the anchor note.</summary>
-    public static List<SearchResult> SearchNear(string anchorTitle, string searchTerm, int maxJumps, int resultLimit = 20)
+    public static List<RecallCandidate> SearchNear(Note anchor, IReadOnlyList<string> terms, int maxJumps = 3, int resultLimit = 25)
     {
-        Note? anchor = GetNote(anchorTitle);
-        if (anchor is null) return new List<SearchResult>();
-
-        return Matches($"""
-            WITH RECURSIVE hop(noteID, depth) AS (
+        string hits = HitsCte(terms, out (string Name, object Value)[] parameters);
+        string cte = $"""
+            hop(noteID, depth) AS (
                 SELECT $anchorId, 0
                 UNION
                 SELECT CASE WHEN c.noteIDFrom = hop.noteID THEN c.noteIDTo ELSE c.noteIDFrom END, hop.depth + 1
                 FROM connections c, hop
                 WHERE hop.depth < $maxJumps AND hop.noteID IN (c.noteIDFrom, c.noteIDTo)
             ),
-            near(noteID, distance) AS (SELECT noteID, MIN(depth) FROM hop GROUP BY noteID)
-            SELECT noteID, title, path, MIN(tier) AS bestTier, MIN(score) AS bestScore, near.distance
-            FROM ({MATCH_TIERS}) matches JOIN near USING(noteID) GROUP BY noteID
-            ORDER BY bestTier, near.distance, bestScore LIMIT $limit
-            """, searchTerm, resultLimit, ("$anchorId", anchor.id), ("$maxJumps", maxJumps));
+            near(noteID) AS (SELECT DISTINCT noteID FROM hop),
+            {hits},
+            nearHits(term, noteID, tier) AS (SELECT h.term, h.noteID, h.tier FROM hits h JOIN near USING(noteID))
+            """;
+        parameters = parameters.Append(("$anchorId", anchor.id)).Append(("$maxJumps", (object)maxJumps)).ToArray();
+        return Rank(cte, "nearHits", parameters, resultLimit);
     }
 
-    private static List<SearchResult> Matches(string sql, string searchTerm, int resultLimit, params (string Name, object Value)[] extras)
+    /// <summary>Expands outward from every seed until two seeds' reaches meet, returning the connecting notes.
+    /// Cheap and bounded: one recursive walk per seed, each capped at maxJumps.</summary>
+    public static List<RecallPath> FindConnectingPaths(IReadOnlyList<Note> seeds, int maxJumps = 3)
     {
-        (string Name, object Value)[] parameters = new (string, object)[]
-        {
-            ("$term", searchTerm),
-            ("$pattern", $"%{searchTerm.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_")}%"),
-            ("$phrase", $"\"{searchTerm.Replace("\"", "\"\"")}\""),
-            ("$limit", resultLimit),
-        }.Concat(extras).ToArray();
+        if (seeds.Count < 2) return new List<RecallPath>();
 
-        List<SearchResult> results = new();
-        foreach ((Note note, int tier, int distance) in Database.QueryHits(sql, parameters))
-            results.Add(new SearchResult(note, MATCH_NAMES[tier], distance));
+        Dictionary<Note, Dictionary<long, (int Depth, long? Predecessor)>> reach = new();
+        foreach (Note seed in seeds) reach[seed] = Reachability(seed, maxJumps);
+
+        List<RecallPath> paths = new();
+        for (int i = 0; i < seeds.Count; i++)
+        {
+            for (int j = i + 1; j < seeds.Count; j++)
+            {
+                long? meetingPoint = reach[seeds[i]].Keys.Intersect(reach[seeds[j]].Keys)
+                    .OrderBy(id => reach[seeds[i]][id].Depth + reach[seeds[j]][id].Depth)
+                    .Cast<long?>().FirstOrDefault();
+                if (meetingPoint is null) continue;
+
+                List<Note> notes = WalkBack(reach[seeds[i]], meetingPoint.Value);
+                notes.Reverse();
+                notes.AddRange(WalkBack(reach[seeds[j]], meetingPoint.Value).Skip(1));
+                paths.Add(new RecallPath(seeds[i], seeds[j], notes));
+            }
+        }
+        return paths;
+    }
+
+    /// <summary>Deterministic candidate gathering for a conversation: direct term matches, their neighborhoods,
+    /// and any paths connecting them — sorted and capped in one place. The only LLM step happens after this.</summary>
+    public static RecallResult Recall(IReadOnlyList<string> terms, int hopLimit = 3, int seedNearLimit = 25, int topLimit = 25)
+    {
+        if (terms.Count == 0) return new RecallResult(new List<RecallCandidate>(), new List<RecallPath>());
+
+        Dictionary<long, RecallCandidate> merged = new();
+        void MergeIn(IEnumerable<RecallCandidate> batch)
+        {
+            foreach (RecallCandidate candidate in batch)
+                if (!merged.TryGetValue(candidate.Note.id, out RecallCandidate? existing) || candidate.Score > existing.Score)
+                    merged[candidate.Note.id] = candidate;
+        }
+
+        List<RecallCandidate> direct = Search(terms, seedNearLimit);
+        MergeIn(direct);
+        foreach (RecallCandidate seed in direct)
+            MergeIn(SearchNear(seed.Note, terms, hopLimit, seedNearLimit));
+
+        // One anchor per distinct term — connecting [REDACT]'s own six "[REDACT]'s ___" matches to each other
+        // is noise; connecting the note that best represents "[REDACT]" to the note that best represents
+        // "[REDACT]" is the actual question. This also keeps path-finding at C(termCount, 2) pairs, not
+        // C(candidateCount, 2).
+        List<Note> anchors = terms
+            .Select(term => Search(new List<string> { term }, 1).FirstOrDefault()?.Note)
+            .Where(note => note is not null)
+            .Select(note => note!)
+            .DistinctBy(note => note.id)
+            .ToList();
+
+        List<RecallPath> paths = FindConnectingPaths(anchors, hopLimit);
+        HashSet<long> boosted = new();
+        foreach (RecallPath path in paths)
+            foreach (Note note in path.Notes)
+                if (boosted.Add(note.id) && merged.TryGetValue(note.id, out RecallCandidate? existing))
+                    merged[note.id] = existing with { Score = existing.Score + PATH_BONUS };
+
+        List<RecallCandidate> ranked = merged.Values.OrderByDescending(c => c.Score).ThenByDescending(c => c.TermsMatched).Take(topLimit).ToList();
+        return new RecallResult(ranked, paths);
+    }
+
+    // Builds the five-tier match CTE for an arbitrary number of terms as ONE query: terms become rows in
+    // a small joined table (not a C# loop), so title/alias equality hits the unique index once per term
+    // and the FTS join runs one MATCH per term row — all in a single round trip regardless of term count.
+    private static string HitsCte(IReadOnlyList<string> terms, out (string Name, object Value)[] parameters)
+    {
+        List<string> termRows = new();
+        List<(string, object)> termParameters = new();
+        for (int i = 0; i < terms.Count; i++)
+        {
+            termRows.Add($"SELECT ${"term" + i} AS term, ${"pattern" + i} AS pattern, ${"phrase" + i} AS phrase");
+            termParameters.Add(($"$term{i}", terms[i]));
+            termParameters.Add(($"$pattern{i}", $"%{terms[i].Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_")}%"));
+            termParameters.Add(($"$phrase{i}", $"\"{terms[i].Replace("\"", "\"\"")}\""));
+        }
+        parameters = termParameters.ToArray();
+
+        string termTable = string.Join("\nUNION ALL\n", termRows);
+        return $"""
+            termTable(term, pattern, phrase) AS ({termTable}),
+            hits(term, noteID, tier) AS (
+                SELECT t.term, n.noteID, 1 FROM notes n, termTable t WHERE n.title = t.term
+                UNION ALL
+                SELECT t.term, n.noteID, 2 FROM aliases a JOIN notes n USING(noteID), termTable t WHERE a.alias = t.term
+                UNION ALL
+                SELECT t.term, n.noteID, 3 FROM notes n, termTable t WHERE n.title LIKE t.pattern ESCAPE '\'
+                UNION ALL
+                SELECT t.term, n.noteID, 4 FROM aliases a JOIN notes n USING(noteID), termTable t WHERE a.alias LIKE t.pattern ESCAPE '\'
+                UNION ALL
+                SELECT t.term, ns.rowid, 5 FROM note_search ns JOIN termTable t ON note_search MATCH t.phrase
+            )
+            """;
+    }
+
+    // Groups the named raw-hits table down to one best tier per (term, note), sums tier weight across
+    // DISTINCT terms, and ranks. "WITH RECURSIVE" is used unconditionally — SQLite allows it even when
+    // none of the chained CTEs are actually recursive, so one code path serves both Search and SearchNear.
+    private static List<RecallCandidate> Rank(string cte, string hitsTable, (string Name, object Value)[] parameters, int resultLimit)
+    {
+        string sql = $"""
+            WITH RECURSIVE {cte},
+            bestPerTerm(term, noteID, tier) AS (SELECT term, noteID, MIN(tier) FROM {hitsTable} GROUP BY term, noteID)
+            SELECT n.noteID, n.title, n.path,
+                   SUM(CASE bestPerTerm.tier
+                       WHEN 1 THEN {TIER_TITLE} WHEN 2 THEN {TIER_ALIAS}
+                       WHEN 3 THEN {TIER_TITLE_PARTIAL} WHEN 4 THEN {TIER_ALIAS_PARTIAL}
+                       ELSE {TIER_CONTENT} END) AS score,
+                   COUNT(DISTINCT bestPerTerm.term) AS termsMatched
+            FROM bestPerTerm JOIN notes n USING(noteID)
+            GROUP BY n.noteID
+            ORDER BY score DESC, termsMatched DESC
+            LIMIT $limit
+            """;
+
+        List<RecallCandidate> results = new();
+        foreach ((Note note, double score, int termsMatched) in Database.QueryScored(sql, parameters.Append(("$limit", resultLimit)).ToArray()))
+            results.Add(new RecallCandidate(note, score, termsMatched));
         return results;
+    }
+
+    // Bounded single-source reachability with predecessors, used by FindConnectingPaths. One recursive
+    // walk per seed, capped at maxJumps — cheap and independent of total graph size.
+    private static Dictionary<long, (int Depth, long? Predecessor)> Reachability(Note seed, int maxJumps)
+    {
+        using SqliteConnection db = Database.Open();
+        using SqliteCommand command = db.CreateCommand();
+        command.CommandText = """
+            WITH RECURSIVE hop(noteID, depth, predecessor) AS (
+                SELECT $seedId, 0, NULL
+                UNION
+                SELECT CASE WHEN c.noteIDFrom = hop.noteID THEN c.noteIDTo ELSE c.noteIDFrom END, hop.depth + 1, hop.noteID
+                FROM connections c, hop
+                WHERE hop.depth < $maxJumps AND hop.noteID IN (c.noteIDFrom, c.noteIDTo)
+            )
+            SELECT noteID, MIN(depth) AS depth, predecessor FROM hop GROUP BY noteID
+            """;
+        command.Parameters.AddWithValue("$seedId", seed.id);
+        command.Parameters.AddWithValue("$maxJumps", maxJumps);
+
+        Dictionary<long, (int, long?)> result = new();
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+            result[reader.GetInt64(0)] = (reader.GetInt32(1), reader.IsDBNull(2) ? null : reader.GetInt64(2));
+        return result;
+    }
+
+    private static List<Note> WalkBack(Dictionary<long, (int Depth, long? Predecessor)> reach, long from)
+    {
+        List<long> ids = new();
+        long? current = from;
+        while (current is not null)
+        {
+            ids.Add(current.Value);
+            current = reach[current.Value].Predecessor;
+        }
+        return ids.Select(id => Database.QueryNotes("SELECT noteID, title, path FROM notes WHERE noteID = $id", ("$id", id)).First()).ToList();
     }
 
     // ── Writes (file first, then reindex) ───────────────────────────────────────────

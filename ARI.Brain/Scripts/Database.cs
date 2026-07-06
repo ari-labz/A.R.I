@@ -86,20 +86,20 @@ internal static class Database
         return notes;
     }
 
-    /// <summary>Materializes search hits from a query shaped (noteID, title, path, tier, score, distance).</summary>
-    internal static List<(Note Note, int Tier, int Distance)> QueryHits(string sql, params (string Name, object Value)[] parameters)
+    /// <summary>Materializes ranked Recall candidates from a query shaped (noteID, title, path, score, termsMatched).</summary>
+    internal static List<(Note Note, double Score, int TermsMatched)> QueryScored(string sql, params (string Name, object Value)[] parameters)
     {
         using SqliteConnection db = Open();
         using SqliteCommand command = Command(db, sql, parameters);
-        List<(long Id, string Title, string NotePath, int Tier, int Distance)> rows = new();
+        List<(long Id, string Title, string NotePath, double Score, int TermsMatched)> rows = new();
         using (SqliteDataReader reader = command.ExecuteReader())
             while (reader.Read())
-                rows.Add((reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetInt32(3), reader.GetInt32(5)));
+                rows.Add((reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetDouble(3), reader.GetInt32(4)));
 
-        List<(Note, int, int)> hits = new();
-        foreach ((long id, string title, string notePath, int tier, int distance) in rows)
-            hits.Add((new Note(id, title, notePath, Column("SELECT alias FROM aliases WHERE noteID = $id", ("$id", id))), tier, distance));
-        return hits;
+        List<(Note, double, int)> results = new();
+        foreach ((long id, string title, string notePath, double score, int termsMatched) in rows)
+            results.Add((new Note(id, title, notePath, Column("SELECT alias FROM aliases WHERE noteID = $id", ("$id", id))), score, termsMatched));
+        return results;
     }
 
     internal static long LastId(SqliteConnection db)
