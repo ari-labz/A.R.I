@@ -14,9 +14,7 @@ internal class Engram : Agent, IDisposable
     private const int ENGRAM_TRIGGER_DELAY = 5;
 
     [JsonIgnore] internal Dialogue?    dialogue       { get; set; }
-    [JsonIgnore] internal BrainModule? brain          { get; set; }
     [JsonIgnore] internal Context?     context        { get; set; }
-    [JsonIgnore] internal string       brainPublicUrl { get; set; } = "";
 
     private EngramBuffer? buffer;
 
@@ -56,13 +54,11 @@ internal class Engram : Agent, IDisposable
 
     public Engram() { }
 
-    internal void Init(Dialogue dialogue, BrainModule brain, Context? context, string brainPublicUrl, ConcurrentDictionary<string, Thread> threads)
+    internal void Init(Dialogue dialogue, Context? context, ConcurrentDictionary<string, Thread> threads)
     {
-        this.dialogue       = dialogue;
-        this.brain          = brain;
-        this.context        = context;
-        this.brainPublicUrl = brainPublicUrl;
-        this.threads        = threads;
+        this.dialogue = dialogue;
+        this.context  = context;
+        this.threads  = threads;
 
         buffer = new EngramBuffer(dialogue, this, threads);
 
@@ -94,7 +90,7 @@ internal class Engram : Agent, IDisposable
         Shared.Logger.LogInformation("[Engram] Disabled.");
     }
 
-    internal Task<int> PurgeNotes() => brain.PurgeAllNotes();
+    internal int PurgeNotes() => BrainModule.PurgeAllNotes();
 
     public void Dispose()
     {
@@ -137,8 +133,8 @@ internal class Engram : Agent, IDisposable
             }
 
             // --- Phase 2: Fetch ---
-            List<string> existingNotes  = await brain.GetNotePaths();
-            Dictionary<string, List<string>> aliasesByTitle = brain.GetAliasesByTitle();
+            List<string> existingNotes  = BrainModule.GetPaths();
+            Dictionary<string, List<string>> aliasesByTitle = BrainModule.GetAliases();
             string existingNotesList    = existingNotes.Count > 0
                 ? string.Join(", ", existingNotes.Select(p =>
                   {
@@ -190,7 +186,7 @@ internal class Engram : Agent, IDisposable
                 StringBuilder sb = new();
                 foreach (string name in toFetch)
                 {
-                    string? noteContent = await brain.GetNote(name);
+                    string? noteContent = BrainModule.GetNote(name)?.ToPrompt();
                     if (noteContent is null) continue;
                     alreadyFetched.Add(name);
                     sb.AppendLine($"--- {name} ---");
@@ -409,29 +405,23 @@ internal class Engram : Agent, IDisposable
                     continue;
                 }
 
-                if (noteAdds.Count  > 0) await brain.AddNotes(noteAdds);
-                if (noteEdits.Count > 0) await brain.EditNotes(noteEdits);
+                if (noteAdds.Count  > 0) BrainModule.AddNotes(noteAdds);
+                if (noteEdits.Count > 0) BrainModule.EditNotes(noteEdits);
 
                 static string BareName(string path) => path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
                 IEnumerable<string> writtenTitles = noteAdds.Select(a => BareName(a.NoteName))
                     .Concat(noteEdits.Select(e => BareName(e.NewNoteName ?? e.NoteName)));
-                await brain.MarkDirty(writtenTitles);
+                BrainModule.MarkDirty(writtenTitles);
 
                 foreach (EngramAdd add in noteAdds)
                 {
-                    string  title  = BareName(add.NoteName);
-                    string? noteId = await brain.GetNoteId(title);
-                    string? url    = noteId is not null && !string.IsNullOrEmpty(brainPublicUrl)
-                        ? $"{brainPublicUrl}/#root/{noteId}" : null;
-                    queueChanges.Add(new NoteChange(title, url, "created", "created"));
+                    string  title = BareName(add.NoteName);
+                    queueChanges.Add(new NoteChange(title, BrainModule.GetNote(title)?.Url, "created", "created"));
                 }
                 foreach (EngramEdit edit in noteEdits)
                 {
-                    string  title  = BareName(edit.NewNoteName ?? edit.NoteName);
-                    string? noteId = await brain.GetNoteId(title);
-                    string? url    = noteId is not null && !string.IsNullOrEmpty(brainPublicUrl)
-                        ? $"{brainPublicUrl}/#root/{noteId}" : null;
-                    queueChanges.Add(new NoteChange(title, url, "updated", item.Summary));
+                    string  title = BareName(edit.NewNoteName ?? edit.NoteName);
+                    queueChanges.Add(new NoteChange(title, BrainModule.GetNote(title)?.Url, "updated", item.Summary));
                 }
 
                 sweepSummary.AppendLine($"- {item.Name}: {item.Summary}");

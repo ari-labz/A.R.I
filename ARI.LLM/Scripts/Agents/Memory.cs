@@ -20,8 +20,6 @@ internal class Memory : Agent
     private const int TRANSCRIPT_LIMIT  = 5;
     private const int MAX_CANDIDATES    = 20;
 
-    [JsonIgnore] internal BrainModule? brain          { get; set; }
-    [JsonIgnore] internal string       brainPublicUrl { get; set; } = "";
 
     internal override bool QuietLogging => true;
 
@@ -109,7 +107,7 @@ internal class Memory : Agent
         Dictionary<string, int> seedCoverage = new(StringComparer.OrdinalIgnoreCase);
         if (tokenList.Count > 0)
         {
-            List<string>[] searchResults = await Task.WhenAll(tokenList.Select(t => brain!.SearchNote(t)));
+            List<string>[] searchResults = tokenList.Select(t => BrainModule.Search(t).Select(r => r.Note.Title).ToList()).ToArray();
             for (int i = 0; i < tokenList.Count; i++)
                 foreach (string title in searchResults[i])
                     seedCoverage[title] = seedCoverage.GetValueOrDefault(title) + 1;
@@ -120,7 +118,7 @@ internal class Memory : Agent
         Dictionary<string, int> neighbourPullers = new(StringComparer.OrdinalIgnoreCase);
         if (seeds.Count > 0)
         {
-            List<string>[] linkResults = await Task.WhenAll(seeds.Select(t => brain!.GetNoteLinks(t)));
+            List<string>[] linkResults = seeds.Select(t => BrainModule.GetNote(t)?.GetLinks().Select(n => n.Title).ToList() ?? new List<string>()).ToArray();
             for (int i = 0; i < seeds.Count; i++)
                 foreach (string link in linkResults[i])
                     if (!seedCoverage.ContainsKey(link))
@@ -167,22 +165,17 @@ internal class Memory : Agent
 
         HashSet<string>                                       fetched      = new(StringComparer.OrdinalIgnoreCase);
         HashSet<string>                                       shownToModel = new(StringComparer.OrdinalIgnoreCase);
-        Dictionary<string, (string Content, string? NoteId)> noteContents = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, (string Content, string? Url)> noteContents = new(StringComparer.OrdinalIgnoreCase);
 
         // Pre-fetch direct token matches without consulting the LLM.
         if (directFetch.Count > 0)
         {
-            IEnumerable<Task<(string name, string? content, string? noteId)>> directTasks = directFetch.Select(async name =>
+            foreach (string name in directFetch)
             {
-                string? content = await brain!.GetNote(name);
-                string? noteId  = content is not null ? await brain!.GetNoteId(name) : null;
-                return (name, content, noteId);
-            });
-            foreach ((string name, string? content, string? noteId) in await Task.WhenAll(directTasks))
-            {
-                if (content is null) continue;
+                Note? note = BrainModule.GetNote(name);
+                if (note is null) continue;
                 fetched.Add(name);
-                noteContents[name] = (content, noteId);
+                noteContents[name] = (note.ToPrompt(), note.Url);
             }
             Shared.Logger.LogInformation("[Memory] Direct fetch: {Notes}", string.Join(", ", fetched.Select(n => $"[{n}]")));
         }
@@ -224,8 +217,9 @@ internal class Memory : Agent
 
             IEnumerable<Task<(string name, string? content, string? noteId)>> fetchTasks = toFetch.Select(async name =>
             {
-                string? content = await brain!.GetNote(name);
-                string? noteId  = content is not null ? await brain!.GetNoteId(name) : null;
+                Note?   note    = BrainModule.GetNote(name);
+                string? content = note?.ToPrompt();
+                string? noteId  = note?.Url;
                 return (name, content, noteId);
             });
 
@@ -247,7 +241,7 @@ internal class Memory : Agent
             // every pass — which forced a full re-prefill and collapsed the token rate — is unnecessary.
             // Each note's content is shown exactly once, keeping full depth/recall at a fraction of the cost.
             StringBuilder notesBlock = new();
-            foreach (KeyValuePair<string, (string Content, string? NoteId)> kvp in noteContents)
+            foreach (KeyValuePair<string, (string Content, string? Url)> kvp in noteContents)
             {
                 if (!shownToModel.Add(kvp.Key)) continue;   // already shown in a prior pass
                 notesBlock.AppendLine($"--- {kvp.Key} ---");
@@ -284,11 +278,9 @@ internal class Memory : Agent
         }
 
         StringBuilder result = new();
-        foreach (KeyValuePair<string, (string Content, string? NoteId)> kvp in noteContents)
+        foreach (KeyValuePair<string, (string Content, string? Url)> kvp in noteContents)
         {
-            string url    = !string.IsNullOrEmpty(brainPublicUrl) && kvp.Value.NoteId is not null
-                                ? $"{brainPublicUrl.TrimEnd('/')}/#?note={kvp.Value.NoteId}"
-                                : string.Empty;
+            string url    = kvp.Value.Url ?? string.Empty;
             string header = url.Length > 0 ? $"[{kvp.Key}|{url}]" : $"[{kvp.Key}]";
             result.AppendLine(header);
             result.AppendLine(kvp.Value.Content);

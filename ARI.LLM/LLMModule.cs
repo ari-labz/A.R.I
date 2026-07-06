@@ -31,7 +31,6 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly Classifier?       classifier;
     private readonly Awareness?        awareness;
     private readonly Appraisal?        appraiser;
-    private readonly BrainModule?      brain;
     
     
     private readonly CommandService    commands;
@@ -117,9 +116,12 @@ public class LLMModule : ILLMModule, IDisposable
             return agent;
         }
 
-        brain = brainConfig is not null
-            ? new BrainModule(brainConfig, loggerFactory)
-            : null;
+        if (brainConfig is not null)
+        {
+            IndexStats brainStats = BrainModule.Initialize(brainConfig);
+            _logger.LogInformation("Brain vault indexed: {Notes} notes, {Edges} edges, {Aliases} aliases.",
+                brainStats.Notes, brainStats.Edges, brainStats.Aliases);
+        }
 
         if (rawAgents.TryGetValue("Context", out JsonElement contextEl))
         {
@@ -181,25 +183,23 @@ public class LLMModule : ILLMModule, IDisposable
         // The architect appraises each plan turn to decide its thinking budget (null appraiser ⇒ no thinking).
         if (codeArchitect is not null) codeArchitect.Appraisal = appraiser;
 
-        if (brain is not null && rawAgents.TryGetValue("Memory", out JsonElement memoryEl))
+        if (BrainModule.Ready && rawAgents.TryGetValue("Memory", out JsonElement memoryEl))
         {
             Memory mem = Deserialize<Memory>(memoryEl);
             if (mem.RecursiveBrainSearchDepth > 0)
             {
                 memory = mem;
-                memory.brain          = brain;
-                memory.brainPublicUrl = brain.BrainPublicUrl;
                 agentMap["Memory"] = memory;
                 _logger.LogInformation("Memory agent is active. Depth: {Depth}.", memory.RecursiveBrainSearchDepth);
             }
         }
 
-        if (brain is not null && dialogue is not null)
+        if (BrainModule.Ready && dialogue is not null)
         {
             if (rawAgents.TryGetValue("Engram", out JsonElement engramEl))
             {
                 engram = Deserialize<Engram>(engramEl);
-                engram.Init(dialogue, brain, context, brain.BrainPublicUrl, threads);
+                engram.Init(dialogue, context, threads);
                 engram.SweepCompleted += key => NotifyWatchers(key);
                 agentMap["Engram"] = engram;
                 _logger.LogInformation("Engram is active. Brain connected.");
@@ -208,13 +208,12 @@ public class LLMModule : ILLMModule, IDisposable
             if (rawAgents.TryGetValue("Refactor", out JsonElement refactorEl))
             {
                 refactor = Deserialize<Refactor>(refactorEl);
-                refactor.brain  = brain;
                 refactor.engram = engram;
                 agentMap["Refactor"] = refactor;
                 _logger.LogInformation("Refactor is active.");
             }
 
-            commands = new CommandService(engram, refactor, brain.PurgeAllNotes, brain.Backup, brain.GetDirtyNotes);
+            commands = new CommandService(engram, refactor);
         }
         else
         {
@@ -375,10 +374,10 @@ public class LLMModule : ILLMModule, IDisposable
     }
 
     // ── Brain backups ───────────────────────────────────────────────────────────
-    public bool BrainAvailable => brain is not null;
-    public Task<string> BackupBrain()                  => brain?.Backup()           ?? Task.FromResult("Brain is not available.");
-    public List<BackupInfo> ListBrainBackups()         => brain?.ListBackups()      ?? new List<BackupInfo>();
-    public Task<string> RestoreBrainBackup(string file) => brain?.RestoreBackup(file) ?? Task.FromResult("Brain is not available.");
+    public bool BrainAvailable => BrainModule.Ready;
+    public string BackupBrain()                   => BrainModule.Ready ? BrainModule.Backup()            : "Brain is not available.";
+    public List<BackupInfo> ListBrainBackups()    => BrainModule.Ready ? BrainModule.ListBackups()       : new List<BackupInfo>();
+    public string RestoreBrainBackup(string file) => BrainModule.Ready ? BrainModule.RestoreBackup(file) : "Brain is not available.";
 
     // ── Prompting ───────────────────────────────────────────────────────────────
 

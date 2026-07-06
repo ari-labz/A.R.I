@@ -34,22 +34,20 @@ public class BrainController : ControllerBase
 
     /// <summary>Creates a new backup of the current brain.</summary>
     [HttpPost("backup")]
-    public async Task<IActionResult> CreateBackup()
+    public IActionResult CreateBackup()
     {
         if (Llm is null || !Llm.BrainAvailable) return BadRequest(new { message = "Brain is not available." });
-        string result = await Llm.BackupBrain();
-        return Ok(new { message = result });
+        return Ok(new { message = Llm.BackupBrain() });
     }
 
     public record RestoreRequest(string File);
 
     /// <summary>Restores notes from the named backup (additive, never deletes).</summary>
     [HttpPost("restore")]
-    public async Task<IActionResult> Restore([FromBody] RestoreRequest request)
+    public IActionResult Restore([FromBody] RestoreRequest request)
     {
         if (Llm is null || !Llm.BrainAvailable) return BadRequest(new { message = "Brain is not available." });
         if (string.IsNullOrWhiteSpace(request.File)) return BadRequest(new { message = "No backup file specified." });
-        string result = await Llm.RestoreBrainBackup(request.File);
-        return Ok(new { message = result });
+        return Ok(new { message = Llm.RestoreBrainBackup(request.File) });
     }
 }
