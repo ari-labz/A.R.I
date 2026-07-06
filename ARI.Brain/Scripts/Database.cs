@@ -4,6 +4,8 @@ namespace ARI.Brain;
 
 // Derived and disposable — the markdown files are the source of truth; delete this and rebuild anytime.
 // Every call opens a fresh connection: nothing stays resident, the OS page cache provides the speed.
+// Every SQL statement in the brain lives in this file. BrainModule and Note call named methods here;
+// they never write SQL themselves.
 internal static class Database
 {
     internal const string SCHEMA = """
@@ -42,22 +44,270 @@ internal static class Database
         CREATE VIRTUAL TABLE note_search USING fts5(title, content, content='notes', content_rowid='noteID');
         """;
 
+    // Tier weight per term match: title/alias hits dominate, a bare content mention barely
+    // registers alone but adds up across several terms.
+    private const double TIER_TITLE          = 100.0;
+    private const double TIER_ALIAS          = 90.0;
+    private const double TIER_TITLE_PARTIAL  = 50.0;
+    private const double TIER_ALIAS_PARTIAL  = 40.0;
+    private const double TIER_CONTENT        = 10.0;
+
     internal static string Path { get; set; } = string.Empty;
 
-    internal static SqliteConnection Open()
+    // ── Rebuild ──────────────────────────────────────────────────────────────────────
+
+    internal static IndexStats Rebuild(List<(string Path, Note.Parsed Parsed, DateTime Updated)> files)
+    {
+        List<string> dirtyBefore = File.Exists(Path) && new FileInfo(Path).Length > 0 ? DirtyTitles() : new List<string>();
+
+        using SqliteConnection db = Open();
+        Run(db, "PRAGMA foreign_keys = ON;");
+        using SqliteTransaction transaction = db.BeginTransaction();
+        Run(db, SCHEMA);
+
+        Dictionary<string, long> idsByName = new(StringComparer.OrdinalIgnoreCase);
+        foreach ((string path, Note.Parsed parsed, DateTime updated) in files)
+        {
+            string title = System.IO.Path.GetFileNameWithoutExtension(path);
+            Run(db, "INSERT INTO notes(title, path, content, updated) VALUES ($title, $path, $content, $updated)",
+                ("$title", title), ("$path", path), ("$content", parsed.Body),
+                ("$updated", updated.ToString("yyyy-MM-ddTHH:mm:ssZ")));
+            idsByName[title] = LastId(db);
+        }
+
+        int aliasCount = 0;
+        List<string> skippedAliases = new();
+        foreach ((string path, Note.Parsed parsed, DateTime _) in files)
+        {
+            string title = System.IO.Path.GetFileNameWithoutExtension(path);
+            foreach (string alias in parsed.AliasList)
+            {
+                if (idsByName.ContainsKey(alias))
+                {
+                    skippedAliases.Add($"{title}: alias '{alias}' shadows an existing name");
+                    continue;
+                }
+                Run(db, "INSERT INTO aliases(alias, noteID) VALUES ($alias, $id)", ("$alias", alias), ("$id", idsByName[title]));
+                idsByName[alias] = idsByName[title];
+                aliasCount++;
+            }
+        }
+
+        int edgeCount = 0;
+        List<string> unresolved = new();
+        foreach ((string path, Note.Parsed parsed, DateTime _) in files)
+        {
+            long source = idsByName[System.IO.Path.GetFileNameWithoutExtension(path)];
+            foreach (string target in BrainModule.GetWikilinks(parsed.Body))
+            {
+                if (!idsByName.TryGetValue(target, out long destination))
+                {
+                    unresolved.Add($"{System.IO.Path.GetFileNameWithoutExtension(path)} -> {target}");
+                    continue;
+                }
+                if (destination == source) continue;
+                Run(db, "INSERT OR IGNORE INTO connections(noteIDFrom, noteIDTo) VALUES ($from, $to)",
+                    ("$from", source), ("$to", destination));
+                edgeCount++;
+            }
+        }
+
+        Run(db, "INSERT INTO note_search(rowid, title, content) SELECT noteID, title, content FROM notes");
+        foreach (string title in dirtyBefore)
+            Run(db, "UPDATE notes SET dirty = 1 WHERE title = $title", ("$title", title));
+        transaction.Commit();
+
+        return new IndexStats(files.Count, edgeCount, aliasCount, unresolved, skippedAliases);
+    }
+
+    // ── Notes ────────────────────────────────────────────────────────────────────────
+
+    internal static Note? FindNote(string name) => QueryNotes("""
+        SELECT noteID, title, path FROM notes WHERE title = $name
+        UNION SELECT n.noteID, n.title, n.path FROM aliases a JOIN notes n USING(noteID) WHERE a.alias = $name
+        UNION SELECT noteID, title, path FROM notes WHERE substr(path, 1, length(path) - 3) = $name
+        LIMIT 1
+        """, ("$name", name)).FirstOrDefault();
+
+    internal static Note NoteById(long id) =>
+        QueryNotes("SELECT noteID, title, path FROM notes WHERE noteID = $id", ("$id", id)).First();
+
+    internal static List<Note> AllNotes() => QueryNotes("SELECT noteID, title, path FROM notes");
+
+    internal static List<string> AllTitles() => Column("SELECT title FROM notes ORDER BY title");
+
+    internal static List<string> AllPaths() => Column("SELECT substr(path, 1, length(path) - 3) FROM notes ORDER BY path");
+
+    internal static List<string> TitlesInFolder(string folderPath) =>
+        Column("SELECT title FROM notes WHERE path LIKE $inside AND path NOT LIKE $deeper ORDER BY title",
+            ("$inside", folderPath.Length > 0 ? $"{folderPath}/%" : "%"),
+            ("$deeper", folderPath.Length > 0 ? $"{folderPath}/%/%" : "%/%"));
+
+    internal static List<(string Title, string Alias)> AliasPairs()
+    {
+        using SqliteConnection db = Open();
+        using SqliteCommand command = db.CreateCommand();
+        command.CommandText = "SELECT n.title, a.alias FROM aliases a JOIN notes n USING(noteID) ORDER BY n.title";
+        List<(string, string)> pairs = new();
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read()) pairs.Add((reader.GetString(0), reader.GetString(1)));
+        return pairs;
+    }
+
+    internal static List<Note> LinksFrom(long noteId) => QueryNotes(
+        "SELECT noteID, title, path FROM notes WHERE noteID IN (SELECT noteIDTo FROM connections WHERE noteIDFrom = $id)", ("$id", noteId));
+
+    internal static List<Note> LinksTo(long noteId) => QueryNotes(
+        "SELECT noteID, title, path FROM notes WHERE noteID IN (SELECT noteIDFrom FROM connections WHERE noteIDTo = $id)", ("$id", noteId));
+
+    internal static List<Note> ChildrenOf(string name) => QueryNotes(
+        "SELECT noteID, title, path FROM notes WHERE path LIKE $inside AND path NOT LIKE $deeper",
+        ("$inside", $"{name}/%"), ("$deeper", $"{name}/%/%"));
+
+    internal static List<Note> UnknownStubs() => QueryNotes("SELECT noteID, title, path FROM notes WHERE path LIKE 'Unknown/%'");
+
+    internal static Note? AliasOwner(string title, long excludeId) => QueryNotes(
+        "SELECT n.noteID, n.title, n.path FROM aliases a JOIN notes n USING(noteID) WHERE a.alias = $title AND n.noteID != $id",
+        ("$title", title), ("$id", excludeId)).FirstOrDefault();
+
+    // ── Dirty set ────────────────────────────────────────────────────────────────────
+
+    internal static void MarkDirty(IEnumerable<string> titles)
+    {
+        using SqliteConnection db = Open();
+        foreach (string title in titles)
+            Run(db, "UPDATE notes SET dirty = 1 WHERE title = $title OR noteID = (SELECT noteID FROM aliases WHERE alias = $title)",
+                ("$title", title));
+    }
+
+    internal static List<string> DirtyTitles() => Column("SELECT title FROM notes WHERE dirty = 1 ORDER BY title");
+
+    internal static void ClearDirty(IEnumerable<string> titles)
+    {
+        using SqliteConnection db = Open();
+        foreach (string title in titles)
+            Run(db, "UPDATE notes SET dirty = 0 WHERE title = $title", ("$title", title));
+    }
+
+    // ── Search ───────────────────────────────────────────────────────────────────────
+
+    internal static List<SearchResult> Search(IReadOnlyList<string> terms, int resultLimit)
+    {
+        string matches = MatchesFor(terms, out (string Name, object Value)[] parameters);
+        return Ranked($"WITH RECURSIVE {matches}", "hits", parameters, resultLimit);
+    }
+
+    internal static List<SearchResult> SearchNear(long anchorId, IReadOnlyList<string> terms, int maxJumps, int resultLimit)
+    {
+        string matches = MatchesFor(terms, out (string Name, object Value)[] parameters);
+        string query = $"""
+            WITH RECURSIVE hop(noteID, depth) AS (
+                SELECT $anchorId, 0
+                UNION
+                SELECT CASE WHEN c.noteIDFrom = hop.noteID THEN c.noteIDTo ELSE c.noteIDFrom END, hop.depth + 1
+                FROM connections c, hop
+                WHERE hop.depth < $maxJumps AND hop.noteID IN (c.noteIDFrom, c.noteIDTo)
+            ),
+            near(noteID) AS (SELECT DISTINCT noteID FROM hop),
+            {matches},
+            nearHits(term, noteID, tier) AS (SELECT h.term, h.noteID, h.tier FROM hits h JOIN near USING(noteID))
+            """;
+        parameters = parameters.Append(("$anchorId", anchorId)).Append(("$maxJumps", (object)maxJumps)).ToArray();
+        return Ranked(query, "nearHits", parameters, resultLimit);
+    }
+
+    internal static Dictionary<long, (int Depth, long? Predecessor)> Reachability(long seedId, int maxJumps)
+    {
+        using SqliteConnection db = Open();
+        using SqliteCommand command = db.CreateCommand();
+        command.CommandText = """
+            WITH RECURSIVE hop(noteID, depth, predecessor) AS (
+                SELECT $seedId, 0, NULL
+                UNION
+                SELECT CASE WHEN c.noteIDFrom = hop.noteID THEN c.noteIDTo ELSE c.noteIDFrom END, hop.depth + 1, hop.noteID
+                FROM connections c, hop
+                WHERE hop.depth < $maxJumps AND hop.noteID IN (c.noteIDFrom, c.noteIDTo)
+            )
+            SELECT noteID, MIN(depth) AS depth, predecessor FROM hop GROUP BY noteID
+            """;
+        command.Parameters.AddWithValue("$seedId", seedId);
+        command.Parameters.AddWithValue("$maxJumps", maxJumps);
+
+        Dictionary<long, (int, long?)> result = new();
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+            result[reader.GetInt64(0)] = (reader.GetInt32(1), reader.IsDBNull(2) ? null : reader.GetInt64(2));
+        return result;
+    }
+
+    // Terms become rows in a joined table, not a C# loop — one round trip regardless of term count.
+    private static string MatchesFor(IReadOnlyList<string> terms, out (string Name, object Value)[] parameters)
+    {
+        List<string> termRows = new();
+        List<(string, object)> termParameters = new();
+        for (int i = 0; i < terms.Count; i++)
+        {
+            termRows.Add($"SELECT ${"term" + i} AS term, ${"pattern" + i} AS pattern, ${"phrase" + i} AS phrase");
+            termParameters.Add(($"$term{i}", terms[i]));
+            termParameters.Add(($"$pattern{i}", $"%{terms[i].Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_")}%"));
+            termParameters.Add(($"$phrase{i}", $"\"{terms[i].Replace("\"", "\"\"")}\""));
+        }
+        parameters = termParameters.ToArray();
+
+        string termTable = string.Join("\nUNION ALL\n", termRows);
+        return $"""
+            termTable(term, pattern, phrase) AS ({termTable}),
+            hits(term, noteID, tier) AS (
+                SELECT t.term, n.noteID, 1 FROM notes n, termTable t WHERE n.title = t.term
+                UNION ALL
+                SELECT t.term, n.noteID, 2 FROM aliases a JOIN notes n USING(noteID), termTable t WHERE a.alias = t.term
+                UNION ALL
+                SELECT t.term, n.noteID, 3 FROM notes n, termTable t WHERE n.title LIKE t.pattern ESCAPE '\'
+                UNION ALL
+                SELECT t.term, n.noteID, 4 FROM aliases a JOIN notes n USING(noteID), termTable t WHERE a.alias LIKE t.pattern ESCAPE '\'
+                UNION ALL
+                SELECT t.term, ns.rowid, 5 FROM note_search ns JOIN termTable t ON note_search MATCH t.phrase
+            )
+            """;
+    }
+
+    // "WITH RECURSIVE" unconditionally — SQLite allows it even when nothing in the chain recurses,
+    // so one code path serves both Search and SearchNear.
+    private static List<SearchResult> Ranked(string query, string hitsTable, (string Name, object Value)[] parameters, int resultLimit)
+    {
+        string sql = $"""
+            {query},
+            bestPerTerm(term, noteID, tier) AS (SELECT term, noteID, MIN(tier) FROM {hitsTable} GROUP BY term, noteID)
+            SELECT n.noteID, n.title, n.path,
+                   SUM(CASE bestPerTerm.tier
+                       WHEN 1 THEN {TIER_TITLE} WHEN 2 THEN {TIER_ALIAS}
+                       WHEN 3 THEN {TIER_TITLE_PARTIAL} WHEN 4 THEN {TIER_ALIAS_PARTIAL}
+                       ELSE {TIER_CONTENT} END) AS score,
+                   COUNT(DISTINCT bestPerTerm.term) AS termsMatched
+            FROM bestPerTerm JOIN notes n USING(noteID)
+            GROUP BY n.noteID
+            ORDER BY score DESC, termsMatched DESC
+            LIMIT $limit
+            """;
+        return QueryScored(sql, parameters.Append(("$limit", resultLimit)).ToArray());
+    }
+
+    // ── Generic execution ────────────────────────────────────────────────────────────
+
+    private static SqliteConnection Open()
     {
         SqliteConnection db = new($"Data Source={Path}");
         db.Open();
         return db;
     }
 
-    internal static void Run(SqliteConnection db, string sql, params (string Name, object Value)[] parameters)
+    private static void Run(SqliteConnection db, string sql, params (string Name, object Value)[] parameters)
     {
         using SqliteCommand command = Command(db, sql, parameters);
         command.ExecuteNonQuery();
     }
 
-    internal static List<string> Column(string sql, params (string Name, object Value)[] parameters)
+    private static List<string> Column(string sql, params (string Name, object Value)[] parameters)
     {
         using SqliteConnection db = Open();
         using SqliteCommand command = Command(db, sql, parameters);
@@ -68,7 +318,7 @@ internal static class Database
     }
 
     // First three columns must be noteID, title, path.
-    internal static List<Note> QueryNotes(string sql, params (string Name, object Value)[] parameters)
+    private static List<Note> QueryNotes(string sql, params (string Name, object Value)[] parameters)
     {
         using SqliteConnection db = Open();
         using SqliteCommand command = Command(db, sql, parameters);
@@ -83,7 +333,7 @@ internal static class Database
     }
 
     // Query must be shaped (noteID, title, path, score, termsMatched).
-    internal static List<(Note Note, double Score, int TermsMatched)> QueryScored(string sql, params (string Name, object Value)[] parameters)
+    private static List<SearchResult> QueryScored(string sql, params (string Name, object Value)[] parameters)
     {
         using SqliteConnection db = Open();
         using SqliteCommand command = Command(db, sql, parameters);
@@ -92,13 +342,14 @@ internal static class Database
             while (reader.Read())
                 rows.Add((reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetDouble(3), reader.GetInt32(4)));
 
-        List<(Note, double, int)> results = new();
+        List<SearchResult> results = new();
         foreach ((long id, string title, string notePath, double score, int termsMatched) in rows)
-            results.Add((new Note(id, title, notePath, Column("SELECT alias FROM aliases WHERE noteID = $id", ("$id", id))), score, termsMatched));
+            results.Add(new SearchResult(
+                new Note(id, title, notePath, Column("SELECT alias FROM aliases WHERE noteID = $id", ("$id", id))), score, termsMatched));
         return results;
     }
 
-    internal static long LastId(SqliteConnection db)
+    private static long LastId(SqliteConnection db)
     {
         using SqliteCommand command = db.CreateCommand();
         command.CommandText = "SELECT last_insert_rowid()";

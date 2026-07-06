@@ -35,18 +35,14 @@ public class Note
 
     public string Url => $"obsidian://open?vault={Uri.EscapeDataString(BrainModule.VaultName)}&file={Uri.EscapeDataString(Name)}";
 
-    public List<Note> GetLinks() => Database.QueryNotes(
-        "SELECT noteID, title, path FROM notes WHERE noteID IN (SELECT noteIDTo FROM connections WHERE noteIDFrom = $id)", ("$id", id));
+    public List<Note> GetLinks() => Database.LinksFrom(id);
 
-    public List<Note> GetReferences() => Database.QueryNotes(
-        "SELECT noteID, title, path FROM notes WHERE noteID IN (SELECT noteIDFrom FROM connections WHERE noteIDTo = $id)", ("$id", id));
+    public List<Note> GetReferences() => Database.LinksTo(id);
 
     public bool HasChildren() => Directory.Exists(System.IO.Path.Combine(BrainModule.VaultRoot, Name))
         && Directory.EnumerateFiles(System.IO.Path.Combine(BrainModule.VaultRoot, Name), "*.md", SearchOption.AllDirectories).Any();
 
-    public List<Note> GetChildren() => Database.QueryNotes(
-        "SELECT noteID, title, path FROM notes WHERE path LIKE $inside AND path NOT LIKE $deeper",
-        ("$inside", $"{Name}/%"), ("$deeper", $"{Name}/%/%"));
+    public List<Note> GetChildren() => Database.ChildrenOf(Name);
 
     public void Save(string content, IReadOnlyList<string> aliases)
     {

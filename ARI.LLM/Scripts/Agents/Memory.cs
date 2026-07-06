@@ -131,7 +131,7 @@ internal class Memory : Agent
         string transcript = transcriptBuilder.ToString();
 
         StringBuilder candidateBlock = new();
-        foreach (RecallCandidate candidate in recall.Candidates)
+        foreach (SearchResult candidate in recall.Candidates)
             candidateBlock.AppendLine($"- {candidate.Note.Title}: {Snippet(candidate.Note.Content)}");
 
         string pathBlock = recall.Paths.Count > 0

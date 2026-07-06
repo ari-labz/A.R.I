@@ -1,30 +1,21 @@
 using System.IO.Compression;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using Microsoft.Data.Sqlite;
 
 namespace ARI.Brain;
 
 public record IndexStats(int Notes, int Edges, int Aliases, IReadOnlyList<string> UnresolvedLinks, IReadOnlyList<string> SkippedAliases);
-public record RecallCandidate(Note Note, double Score, int TermsMatched);
+public record SearchResult(Note Note, double Score, int TermsMatched);
 public record RecallPath(Note From, Note To, IReadOnlyList<Note> Notes);
-public record RecallResult(IReadOnlyList<RecallCandidate> Candidates, IReadOnlyList<RecallPath> Paths);
+public record RecallResult(IReadOnlyList<SearchResult> Candidates, IReadOnlyList<RecallPath> Paths);
 
 public static class BrainModule
 {
     private const string BACKUP_PREFIX = "ARI-Brain-";
+    private const double PATH_BONUS = 60.0;
 
     private static readonly Regex wikiLink = new(@"\[\[([^\]|]+?)(?:\|[^\]]*)?\]\]", RegexOptions.Compiled);
     private static readonly Regex invalidFileChars = new(@"[/\\:""?*|<>]", RegexOptions.Compiled);
-
-    // Tier weight per term match: title/alias hits dominate, a bare content mention barely
-    // registers alone but adds up across several terms.
-    private const double TIER_TITLE          = 100.0;
-    private const double TIER_ALIAS          = 90.0;
-    private const double TIER_TITLE_PARTIAL  = 50.0;
-    private const double TIER_ALIAS_PARTIAL  = 40.0;
-    private const double TIER_CONTENT        = 10.0;
-    private const double PATH_BONUS          = 60.0;
 
     private static string backupPath = "./Backups";
     private static int maxBackups = 5;
@@ -59,95 +50,24 @@ public static class BrainModule
             if (relative.Split('/').Any(segment => segment.StartsWith('.'))) continue;
             files.Add((relative, Note.Parse(File.ReadAllText(file)), File.GetLastWriteTimeUtc(file)));
         }
-
-        List<string> dirtyBefore = File.Exists(Database.Path) && new FileInfo(Database.Path).Length > 0
-            ? GetDirtyNotes() : new List<string>();
-
-        using SqliteConnection db = Database.Open();
-        Database.Run(db, "PRAGMA foreign_keys = ON;");
-        using SqliteTransaction transaction = db.BeginTransaction();
-        Database.Run(db, Database.SCHEMA);
-
-        Dictionary<string, long> idsByName = new(StringComparer.OrdinalIgnoreCase);
-        foreach ((string path, Note.Parsed parsed, DateTime updated) in files)
-        {
-            string title = Path.GetFileNameWithoutExtension(path);
-            Database.Run(db, "INSERT INTO notes(title, path, content, updated) VALUES ($title, $path, $content, $updated)",
-                ("$title", title), ("$path", path), ("$content", parsed.Body),
-                ("$updated", updated.ToString("yyyy-MM-ddTHH:mm:ssZ")));
-            idsByName[title] = Database.LastId(db);
-        }
-
-        int aliasCount = 0;
-        List<string> skippedAliases = new();
-        foreach ((string path, Note.Parsed parsed, DateTime _) in files)
-        {
-            string title = Path.GetFileNameWithoutExtension(path);
-            foreach (string alias in parsed.AliasList)
-            {
-                if (idsByName.ContainsKey(alias))
-                {
-                    skippedAliases.Add($"{title}: alias '{alias}' shadows an existing name");
-                    continue;
-                }
-                Database.Run(db, "INSERT INTO aliases(alias, noteID) VALUES ($alias, $id)", ("$alias", alias), ("$id", idsByName[title]));
-                idsByName[alias] = idsByName[title];
-                aliasCount++;
-            }
-        }
-
-        int edgeCount = 0;
-        List<string> unresolved = new();
-        foreach ((string path, Note.Parsed parsed, DateTime _) in files)
-        {
-            long source = idsByName[Path.GetFileNameWithoutExtension(path)];
-            foreach (string target in GetWikilinks(parsed.Body))
-            {
-                if (!idsByName.TryGetValue(target, out long destination))
-                {
-                    unresolved.Add($"{Path.GetFileNameWithoutExtension(path)} -> {target}");
-                    continue;
-                }
-                if (destination == source) continue;
-                Database.Run(db, "INSERT OR IGNORE INTO connections(noteIDFrom, noteIDTo) VALUES ($from, $to)",
-                    ("$from", source), ("$to", destination));
-                edgeCount++;
-            }
-        }
-
-        Database.Run(db, "INSERT INTO note_search(rowid, title, content) SELECT noteID, title, content FROM notes");
-        foreach (string title in dirtyBefore)
-            Database.Run(db, "UPDATE notes SET dirty = 1 WHERE title = $title", ("$title", title));
-        transaction.Commit();
-
-        return new IndexStats(files.Count, edgeCount, aliasCount, unresolved, skippedAliases);
+        return Database.Rebuild(files);
     }
 
     // ── Reads ────────────────────────────────────────────────────────────────────────
 
-    public static Note? GetNote(string name) => Database.QueryNotes("""
-        SELECT noteID, title, path FROM notes WHERE title = $name
-        UNION SELECT n.noteID, n.title, n.path FROM aliases a JOIN notes n USING(noteID) WHERE a.alias = $name
-        UNION SELECT noteID, title, path FROM notes WHERE substr(path, 1, length(path) - 3) = $name
-        LIMIT 1
-        """, ("$name", name)).FirstOrDefault();
+    public static Note? GetNote(string name) => Database.FindNote(name);
 
-    public static List<string> GetTitles() => Database.Column("SELECT title FROM notes ORDER BY title");
+    public static List<string> GetTitles() => Database.AllTitles();
 
-    public static List<string> GetPaths() => Database.Column("SELECT substr(path, 1, length(path) - 3) FROM notes ORDER BY path");
+    public static List<string> GetPaths() => Database.AllPaths();
 
-    public static List<string> GetTitlesByFolder(string folderPath) =>
-        Database.Column("SELECT title FROM notes WHERE path LIKE $inside AND path NOT LIKE $deeper ORDER BY title",
-            ("$inside", folderPath.Length > 0 ? $"{folderPath}/%" : "%"),
-            ("$deeper", folderPath.Length > 0 ? $"{folderPath}/%/%" : "%/%"));
+    public static List<string> GetTitlesByFolder(string folderPath) => Database.TitlesInFolder(folderPath);
 
     public static Dictionary<string, List<string>> GetAliases()
     {
         Dictionary<string, List<string>> result = new(StringComparer.OrdinalIgnoreCase);
-        foreach (string row in Database.Column("SELECT n.title || '/' || a.alias FROM aliases a JOIN notes n USING(noteID) ORDER BY n.title"))
+        foreach ((string title, string alias) in Database.AliasPairs())
         {
-            string title = row[..row.IndexOf('/')];
-            string alias = row[(row.IndexOf('/') + 1)..];
             if (!result.TryGetValue(title, out List<string>? list)) result[title] = list = new List<string>();
             list.Add(alias);
         }
@@ -167,30 +87,10 @@ public static class BrainModule
 
     // ── Search ───────────────────────────────────────────────────────────────────────
 
-    public static List<RecallCandidate> Search(IReadOnlyList<string> terms, int resultLimit = 25)
-    {
-        string cte = HitsCte(terms, out (string Name, object Value)[] parameters);
-        return Rank(cte, "hits", parameters, resultLimit);
-    }
+    public static List<SearchResult> Search(IReadOnlyList<string> terms, int resultLimit = 25) => Database.Search(terms, resultLimit);
 
-    public static List<RecallCandidate> SearchNear(Note anchor, IReadOnlyList<string> terms, int maxJumps = 3, int resultLimit = 25)
-    {
-        string hits = HitsCte(terms, out (string Name, object Value)[] parameters);
-        string cte = $"""
-            hop(noteID, depth) AS (
-                SELECT $anchorId, 0
-                UNION
-                SELECT CASE WHEN c.noteIDFrom = hop.noteID THEN c.noteIDTo ELSE c.noteIDFrom END, hop.depth + 1
-                FROM connections c, hop
-                WHERE hop.depth < $maxJumps AND hop.noteID IN (c.noteIDFrom, c.noteIDTo)
-            ),
-            near(noteID) AS (SELECT DISTINCT noteID FROM hop),
-            {hits},
-            nearHits(term, noteID, tier) AS (SELECT h.term, h.noteID, h.tier FROM hits h JOIN near USING(noteID))
-            """;
-        parameters = parameters.Append(("$anchorId", anchor.id)).Append(("$maxJumps", (object)maxJumps)).ToArray();
-        return Rank(cte, "nearHits", parameters, resultLimit);
-    }
+    public static List<SearchResult> SearchNear(Note anchor, IReadOnlyList<string> terms, int maxJumps = 3, int resultLimit = 25) =>
+        Database.SearchNear(anchor.id, terms, maxJumps, resultLimit);
 
     // One recursive walk per seed, meet-in-the-middle on the intersection.
     public static List<RecallPath> FindConnectingPaths(IReadOnlyList<Note> seeds, int maxJumps = 3)
@@ -198,7 +98,7 @@ public static class BrainModule
         if (seeds.Count < 2) return new List<RecallPath>();
 
         Dictionary<Note, Dictionary<long, (int Depth, long? Predecessor)>> reach = new();
-        foreach (Note seed in seeds) reach[seed] = Reachability(seed, maxJumps);
+        foreach (Note seed in seeds) reach[seed] = Database.Reachability(seed.id, maxJumps);
 
         List<RecallPath> paths = new();
         for (int i = 0; i < seeds.Count; i++)
@@ -221,19 +121,19 @@ public static class BrainModule
 
     public static RecallResult Recall(IReadOnlyList<string> terms, int hopLimit = 3, int seedNearLimit = 25, int topLimit = 25)
     {
-        if (terms.Count == 0) return new RecallResult(new List<RecallCandidate>(), new List<RecallPath>());
+        if (terms.Count == 0) return new RecallResult(new List<SearchResult>(), new List<RecallPath>());
 
-        Dictionary<long, RecallCandidate> merged = new();
-        void MergeIn(IEnumerable<RecallCandidate> batch)
+        Dictionary<long, SearchResult> merged = new();
+        void MergeIn(IEnumerable<SearchResult> batch)
         {
-            foreach (RecallCandidate candidate in batch)
-                if (!merged.TryGetValue(candidate.Note.id, out RecallCandidate? existing) || candidate.Score > existing.Score)
+            foreach (SearchResult candidate in batch)
+                if (!merged.TryGetValue(candidate.Note.id, out SearchResult? existing) || candidate.Score > existing.Score)
                     merged[candidate.Note.id] = candidate;
         }
 
-        List<RecallCandidate> direct = Search(terms, seedNearLimit);
+        List<SearchResult> direct = Search(terms, seedNearLimit);
         MergeIn(direct);
-        foreach (RecallCandidate seed in direct)
+        foreach (SearchResult seed in direct)
             MergeIn(SearchNear(seed.Note, terms, hopLimit, seedNearLimit));
 
         // One anchor per distinct term, not per candidate — connects "the [REDACT] thing" to "the [REDACT]
@@ -249,91 +149,11 @@ public static class BrainModule
         HashSet<long> boosted = new();
         foreach (RecallPath path in paths)
             foreach (Note note in path.Notes)
-                if (boosted.Add(note.id) && merged.TryGetValue(note.id, out RecallCandidate? existing))
+                if (boosted.Add(note.id) && merged.TryGetValue(note.id, out SearchResult? existing))
                     merged[note.id] = existing with { Score = existing.Score + PATH_BONUS };
 
-        List<RecallCandidate> ranked = merged.Values.OrderByDescending(c => c.Score).ThenByDescending(c => c.TermsMatched).Take(topLimit).ToList();
+        List<SearchResult> ranked = merged.Values.OrderByDescending(c => c.Score).ThenByDescending(c => c.TermsMatched).Take(topLimit).ToList();
         return new RecallResult(ranked, paths);
-    }
-
-    // Terms become rows in a joined table, not a C# loop — one round trip regardless of term count.
-    private static string HitsCte(IReadOnlyList<string> terms, out (string Name, object Value)[] parameters)
-    {
-        List<string> termRows = new();
-        List<(string, object)> termParameters = new();
-        for (int i = 0; i < terms.Count; i++)
-        {
-            termRows.Add($"SELECT ${"term" + i} AS term, ${"pattern" + i} AS pattern, ${"phrase" + i} AS phrase");
-            termParameters.Add(($"$term{i}", terms[i]));
-            termParameters.Add(($"$pattern{i}", $"%{terms[i].Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_")}%"));
-            termParameters.Add(($"$phrase{i}", $"\"{terms[i].Replace("\"", "\"\"")}\""));
-        }
-        parameters = termParameters.ToArray();
-
-        string termTable = string.Join("\nUNION ALL\n", termRows);
-        return $"""
-            termTable(term, pattern, phrase) AS ({termTable}),
-            hits(term, noteID, tier) AS (
-                SELECT t.term, n.noteID, 1 FROM notes n, termTable t WHERE n.title = t.term
-                UNION ALL
-                SELECT t.term, n.noteID, 2 FROM aliases a JOIN notes n USING(noteID), termTable t WHERE a.alias = t.term
-                UNION ALL
-                SELECT t.term, n.noteID, 3 FROM notes n, termTable t WHERE n.title LIKE t.pattern ESCAPE '\'
-                UNION ALL
-                SELECT t.term, n.noteID, 4 FROM aliases a JOIN notes n USING(noteID), termTable t WHERE a.alias LIKE t.pattern ESCAPE '\'
-                UNION ALL
-                SELECT t.term, ns.rowid, 5 FROM note_search ns JOIN termTable t ON note_search MATCH t.phrase
-            )
-            """;
-    }
-
-    // "WITH RECURSIVE" unconditionally — SQLite allows it even when nothing in the chain recurses,
-    // so one code path serves both Search and SearchNear.
-    private static List<RecallCandidate> Rank(string cte, string hitsTable, (string Name, object Value)[] parameters, int resultLimit)
-    {
-        string sql = $"""
-            WITH RECURSIVE {cte},
-            bestPerTerm(term, noteID, tier) AS (SELECT term, noteID, MIN(tier) FROM {hitsTable} GROUP BY term, noteID)
-            SELECT n.noteID, n.title, n.path,
-                   SUM(CASE bestPerTerm.tier
-                       WHEN 1 THEN {TIER_TITLE} WHEN 2 THEN {TIER_ALIAS}
-                       WHEN 3 THEN {TIER_TITLE_PARTIAL} WHEN 4 THEN {TIER_ALIAS_PARTIAL}
-                       ELSE {TIER_CONTENT} END) AS score,
-                   COUNT(DISTINCT bestPerTerm.term) AS termsMatched
-            FROM bestPerTerm JOIN notes n USING(noteID)
-            GROUP BY n.noteID
-            ORDER BY score DESC, termsMatched DESC
-            LIMIT $limit
-            """;
-
-        List<RecallCandidate> results = new();
-        foreach ((Note note, double score, int termsMatched) in Database.QueryScored(sql, parameters.Append(("$limit", resultLimit)).ToArray()))
-            results.Add(new RecallCandidate(note, score, termsMatched));
-        return results;
-    }
-
-    private static Dictionary<long, (int Depth, long? Predecessor)> Reachability(Note seed, int maxJumps)
-    {
-        using SqliteConnection db = Database.Open();
-        using SqliteCommand command = db.CreateCommand();
-        command.CommandText = """
-            WITH RECURSIVE hop(noteID, depth, predecessor) AS (
-                SELECT $seedId, 0, NULL
-                UNION
-                SELECT CASE WHEN c.noteIDFrom = hop.noteID THEN c.noteIDTo ELSE c.noteIDFrom END, hop.depth + 1, hop.noteID
-                FROM connections c, hop
-                WHERE hop.depth < $maxJumps AND hop.noteID IN (c.noteIDFrom, c.noteIDTo)
-            )
-            SELECT noteID, MIN(depth) AS depth, predecessor FROM hop GROUP BY noteID
-            """;
-        command.Parameters.AddWithValue("$seedId", seed.id);
-        command.Parameters.AddWithValue("$maxJumps", maxJumps);
-
-        Dictionary<long, (int, long?)> result = new();
-        using SqliteDataReader reader = command.ExecuteReader();
-        while (reader.Read())
-            result[reader.GetInt64(0)] = (reader.GetInt32(1), reader.IsDBNull(2) ? null : reader.GetInt64(2));
-        return result;
     }
 
     private static List<Note> WalkBack(Dictionary<long, (int Depth, long? Predecessor)> reach, long from)
@@ -345,7 +165,7 @@ public static class BrainModule
             ids.Add(current.Value);
             current = reach[current.Value].Predecessor;
         }
-        return ids.Select(id => Database.QueryNotes("SELECT noteID, title, path FROM notes WHERE noteID = $id", ("$id", id)).First()).ToList();
+        return ids.Select(Database.NoteById).ToList();
     }
 
     // ── Writes (file first, then reindex) ───────────────────────────────────────────
@@ -420,29 +240,18 @@ public static class BrainModule
 
     // ── Dirty set (Refactor's work queue; lives in the index only) ─────────────────
 
-    public static void MarkDirty(IEnumerable<string> titles)
-    {
-        using SqliteConnection db = Database.Open();
-        foreach (string title in titles)
-            Database.Run(db, "UPDATE notes SET dirty = 1 WHERE title = $title OR noteID = (SELECT noteID FROM aliases WHERE alias = $title)",
-                ("$title", title));
-    }
+    public static void MarkDirty(IEnumerable<string> titles) => Database.MarkDirty(titles);
 
-    public static List<string> GetDirtyNotes() => Database.Column("SELECT title FROM notes WHERE dirty = 1 ORDER BY title");
+    public static List<string> GetDirtyNotes() => Database.DirtyTitles();
 
-    public static void ClearDirty(IEnumerable<string> titles)
-    {
-        using SqliteConnection db = Database.Open();
-        foreach (string title in titles)
-            Database.Run(db, "UPDATE notes SET dirty = 0 WHERE title = $title", ("$title", title));
-    }
+    public static void ClearDirty(IEnumerable<string> titles) => Database.ClearDirty(titles);
 
     // ── Structural maintenance ──────────────────────────────────────────────────────
 
     public static int EnsureHubChildLinks()
     {
         int updated = 0;
-        foreach (Note hub in Database.QueryNotes("SELECT noteID, title, path FROM notes"))
+        foreach (Note hub in Database.AllNotes())
         {
             if (!hub.HasChildren()) continue;
             string content = hub.Content;
@@ -466,11 +275,9 @@ public static class BrainModule
     public static int CleanUnknownStubs()
     {
         int cleaned = 0;
-        foreach (Note stub in Database.QueryNotes("SELECT noteID, title, path FROM notes WHERE path LIKE 'Unknown/%'"))
+        foreach (Note stub in Database.UnknownStubs())
         {
-            Note? owner = Database.QueryNotes(
-                "SELECT n.noteID, n.title, n.path FROM aliases a JOIN notes n USING(noteID) WHERE a.alias = $title AND n.noteID != $id",
-                ("$title", stub.Title), ("$id", stub.id)).FirstOrDefault();
+            Note? owner = Database.AliasOwner(stub.Title, stub.id);
             if (owner is null) continue;
             stub.MergeInto(owner);
             cleaned++;
@@ -485,7 +292,7 @@ public static class BrainModule
     public static string Backup()
     {
         Directory.CreateDirectory(backupPath);
-        List<BackupNote> notes = Database.QueryNotes("SELECT noteID, title, path FROM notes")
+        List<BackupNote> notes = Database.AllNotes()
             .Select(note => new BackupNote(note.Title, note.Folder, note.ToPrompt(), note.Aliases))
             .ToList();
 
