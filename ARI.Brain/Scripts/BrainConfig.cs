@@ -15,6 +15,10 @@ public class BrainConfig
     [JsonPropertyName("RootNoteId")]
     public string RootNoteId { get; set; } = "root";
 
+    /// <summary>Root directory of the markdown vault (Brain v2). Empty expands to ~/.ari/Brain at startup.</summary>
+    [JsonPropertyName("VaultPath")]
+    public string VaultPath { get; set; } = string.Empty;
+
     /// <summary>
     /// Maximum number of note contents held in BrainService's in-memory MRU cache.
     /// Shared by all consumers (Recall, Engram, Refactor) — no separate per-consumer caches.
