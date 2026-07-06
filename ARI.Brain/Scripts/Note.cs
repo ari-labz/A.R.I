@@ -72,7 +72,9 @@ public class Note
         BrainModule.Index();
     }
 
-    public string ToPrompt() => $"Path: {Name}\n\n{Content}";
+    public string ToPrompt() => Aliases.Count > 0
+        ? $"Path: {Name}\nAliases: {string.Join(", ", Aliases)}\n\n{Content}"
+        : $"Path: {Name}\n\n{Content}";
 
     private string AbsolutePath => System.IO.Path.Combine(BrainModule.VaultRoot, Path);
 
