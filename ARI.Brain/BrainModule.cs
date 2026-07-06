@@ -123,11 +123,18 @@ public static class BrainModule
     {
         if (terms.Count == 0) return new RecallResult(new List<SearchResult>(), new List<RecallPath>());
 
-        List<SearchResult> direct = Search(terms, seedNearLimit);
-        IEnumerable<SearchResult> allResults = direct.Concat(direct.SelectMany(seed => SearchNear(seed.Note, terms, hopLimit, seedNearLimit)));
-        List<SearchResult> deduped = Dedup(allResults);
+        List<SearchResult> directResults = Search(terms, seedNearLimit);
 
-        (List<SearchResult> boosted, List<RecallPath> paths) = Pathfind(terms, hopLimit, deduped);
+        List<SearchResult> indirectResults = new();
+        foreach (SearchResult seed in directResults)
+            indirectResults.AddRange(SearchNear(seed.Note, terms, hopLimit, seedNearLimit));
+
+        List<SearchResult> combinedResults = new();
+        combinedResults.AddRange(directResults);
+        combinedResults.AddRange(indirectResults);
+        List<SearchResult> allResults = Dedup(combinedResults);
+
+        (List<SearchResult> boosted, List<RecallPath> paths) = Pathfind(terms, hopLimit, allResults);
 
         List<SearchResult> ranked = boosted.OrderByDescending(c => c.Score).ThenByDescending(c => c.TermsMatched).Take(topLimit).ToList();
         return new RecallResult(ranked, paths);
