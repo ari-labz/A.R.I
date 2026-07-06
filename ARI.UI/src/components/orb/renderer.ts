@@ -248,8 +248,7 @@ function bandForRadius(r: number): number {
     return 4
 }
 
-// getAudio (optional) returns ORB_BANDS frequency levels 0..1 while Ari speaks; drives the equaliser glow.
-export function createOrbRenderer(canvas: HTMLCanvasElement, getAudio?: () => number[]): OrbRenderer {
+export function createOrbRenderer(canvas: HTMLCanvasElement): OrbRenderer {
     const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2))
     const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, premultipliedAlpha: false })
     renderer.setPixelRatio(dpr)

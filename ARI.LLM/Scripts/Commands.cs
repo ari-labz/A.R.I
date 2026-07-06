@@ -1,3 +1,4 @@
+using ARI.Brain;
 using ARI.Common;
 using Microsoft.Extensions.Logging;
 
@@ -5,19 +6,13 @@ namespace ARI.LLM;
 
 internal class CommandService
 {
-    private readonly Engram?                         engram;
-    private readonly Refactor?                       refactor;
-    private readonly Func<Task<int>>?                purgeNotes;
-    private readonly Func<Task<string>>?             backupBrain;
-    private readonly Func<Task<List<string>>>?       getDirtyNotes;
+    private readonly Engram?   engram;
+    private readonly Refactor? refactor;
 
-    internal CommandService(Engram? engram, Refactor? refactor = null, Func<Task<int>>? purgeNotes = null, Func<Task<string>>? backupBrain = null, Func<Task<List<string>>>? getDirtyNotes = null)
+    internal CommandService(Engram? engram, Refactor? refactor = null)
     {
-        this.engram        = engram;
-        this.refactor      = refactor;
-        this.purgeNotes    = purgeNotes;
-        this.backupBrain   = backupBrain;
-        this.getDirtyNotes = getDirtyNotes;
+        this.engram   = engram;
+        this.refactor = refactor;
     }
 
     internal async Task<string?> Handle(string input, string? threadKey = null)
@@ -33,9 +28,9 @@ internal class CommandService
         {
             "/engram"        => await HandleEngram(sub, threadKey),
             "/refactor"      => await HandleRefactor(sub),
-            "/purge"         => sub == "notes" ? await HandlePurge() : null,
-            "/brain"         => sub == "backup" ? await HandleBackup() : null,
-            "/getdirtynotes" => await HandleDirtyNotes(),
+            "/purge"         => sub == "notes" ? HandlePurge() : null,
+            "/brain"         => sub == "backup" ? HandleBackup() : null,
+            "/getdirtynotes" => HandleDirtyNotes(),
             _                => null
         };
     }
@@ -85,25 +80,25 @@ internal class CommandService
         return await refactor.Run(allNotes);
     }
 
-    private async Task<string> HandlePurge()
+    private static string HandlePurge()
     {
-        if (purgeNotes is null) return "Brain is not available.";
+        if (!BrainModule.Ready) return "Brain is not available.";
         Shared.Logger.LogInformation("[Commands] Brain purge requested.");
-        int deleted = await purgeNotes();
+        int deleted = BrainModule.PurgeAllNotes();
         return $"Purged {deleted} note(s) from the brain.";
     }
 
-    private async Task<string> HandleBackup()
+    private static string HandleBackup()
     {
-        if (backupBrain is null) return "Brain is not available.";
+        if (!BrainModule.Ready) return "Brain is not available.";
         Shared.Logger.LogInformation("[Commands] Brain backup requested.");
-        return await backupBrain();
+        return BrainModule.Backup();
     }
 
-    private async Task<string> HandleDirtyNotes()
+    private static string HandleDirtyNotes()
     {
-        if (getDirtyNotes is null) return "Brain is not available.";
-        List<string> dirty = await getDirtyNotes();
+        if (!BrainModule.Ready) return "Brain is not available.";
+        List<string> dirty = BrainModule.GetDirtyNotes();
         if (dirty.Count == 0) return "No dirty notes — graph is clean.";
         return $"**{dirty.Count} dirty note(s):**\n" + string.Join("\n", dirty.Select(n => $"- {n}"));
     }

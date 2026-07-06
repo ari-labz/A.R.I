@@ -23,7 +23,6 @@ public class ARI : BackgroundService
     // modules
     public DiscordModule? discordService;
     public APIModule?     apiModule;
-    public BrainModule?   brainModule;
     public VoiceModule?           voiceModule;
     public VoiceSynthesisModule?  voiceSynthesisModule;
     public ListenerModule?        listenerModule;

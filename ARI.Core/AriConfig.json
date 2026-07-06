@@ -28,10 +28,7 @@
     },
     "Brain": {
       "Enabled": true,
-      "TriliumUrl": "http://localhost:8080",
-      "EtapiToken": "[REDACTED]",
-      "RootNoteId": "root",
-      "BrainCacheSize": 50,
+      "VaultPath": "",
       "BackupPath": "./Backups",
       "MaxBackups": 5
     },

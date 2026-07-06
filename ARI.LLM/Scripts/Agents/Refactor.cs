@@ -10,7 +10,6 @@ namespace ARI.LLM;
 
 internal class Refactor : Agent
 {
-    [JsonIgnore] internal BrainModule? brain  { get; set; }
     [JsonIgnore] internal Engram?      engram { get; set; }
 
     private readonly SemaphoreSlim runLock = new(1, 1);
@@ -46,18 +45,18 @@ internal class Refactor : Agent
             Shared.Logger.LogInformation("[Refactor] Starting {Mode} pass.", allNotes ? "full" : "incremental");
 
             // ── Backup ────────────────────────────────────────────────────────────
-            string backupResult = await brain!.Backup();
+            string backupResult = BrainModule.Backup();
             Shared.Logger.LogInformation("[Refactor] {Backup}", backupResult);
 
             // ── Clean duplicate Unknown stubs ─────────────────────────────────────
-            int stubsDeleted = await brain!.CleanUnknownStubs();
+            int stubsDeleted = BrainModule.CleanUnknownStubs();
             if (stubsDeleted > 0)
                 Shared.Logger.LogInformation("[Refactor] Deleted {Count} duplicate Unknown stub(s).", stubsDeleted);
 
             // ── Seed ──────────────────────────────────────────────────────────────
             List<string> seedTitles = allNotes
-                ? await brain!.GetNoteTitles()
-                : await brain!.GetDirtyNotes();
+                ? BrainModule.GetTitles()
+                : BrainModule.GetDirtyNotes();
 
             if (seedTitles.Count == 0)
                 return allNotes
@@ -72,7 +71,7 @@ internal class Refactor : Agent
             async Task Load(string title)
             {
                 if (loaded.ContainsKey(title)) return;
-                string? raw = await brain!.GetNote(title);
+                string? raw = BrainModule.GetNote(title)?.ToPrompt();
                 if (raw is not null) loaded[title] = ParseNoteData(title, raw);
             }
 
@@ -94,19 +93,19 @@ internal class Refactor : Agent
 
             foreach (string folder in touchedFolders)
             {
-                foreach (string t in brain!.GetTitlesByFolder(folder))
+                foreach (string t in BrainModule.GetTitlesByFolder(folder))
                     await Load(t);
             }
 
             // Load root-level hub notes regardless (LLM needs to know what hubs exist)
-            foreach (string t in brain!.GetTitlesByFolder(string.Empty))
+            foreach (string t in BrainModule.GetTitlesByFolder(string.Empty))
                 await Load(t);
 
             Shared.Logger.LogInformation("[Refactor] Working set: {Count} note(s) across folder(s): {Folders}.",
                 loaded.Count, string.Join(", ", touchedFolders));
 
             // ── All titles (lightweight, from cache) ──────────────────────────────
-            List<string> allTitles = await brain!.GetNoteTitles();
+            List<string> allTitles = BrainModule.GetTitles();
 
             // ── Strip See Also sections + orphan link bullets ─────────────────────
             // Do this before analysis so the LLM receives clean content.
@@ -256,14 +255,14 @@ internal class Refactor : Agent
             if (allAdds.Count > 0)
             {
                 Shared.Logger.LogInformation("[Refactor] Applying {Count} add(s).", allAdds.Count);
-                await brain!.AddNotes(allAdds);
+                BrainModule.AddNotes(allAdds);
             }
 
             if (finalEdits.Count > 0)
             {
                 Shared.Logger.LogInformation("[Refactor] Applying {Count} edit(s) ({SeeAlso} See Also strip(s), {Llm} LLM edit(s)).",
                     finalEdits.Count, seeAlsoEdits.Count, allEdits.Count);
-                await brain!.EditNotes(finalEdits);
+                BrainModule.EditNotes(finalEdits);
             }
 
             // Merges run after edits (so the winner's combined content is already written) and
@@ -275,7 +274,7 @@ internal class Refactor : Agent
                 foreach (EngramMerge mg in allMerges)
                 {
                     Shared.Logger.LogInformation("[Refactor] Merging '{From}' → '{Into}': {Reason}", mg.From, mg.Into, mg.Reason);
-                    try { await brain!.MergeNotes(mg.From, mg.Into); }
+                    try { BrainModule.MergeNotes(mg.From, mg.Into); }
                     catch (Exception ex) { Shared.Logger.LogWarning("[Refactor] Merge '{From}' → '{Into}' failed: {Message}", mg.From, mg.Into, ex.Message); }
                 }
             }
@@ -286,7 +285,7 @@ internal class Refactor : Agent
                 foreach (EngramDelete del in allDeletes)
                 {
                     Shared.Logger.LogInformation("[Refactor] Deleting '{Name}': {Reason}", del.NoteName, del.Reason);
-                    try { await brain!.DeleteNote(del.NoteName); }
+                    try { BrainModule.DeleteNote(del.NoteName); }
                     catch (Exception ex) { Shared.Logger.LogWarning("[Refactor] Delete '{Name}' failed: {Message}", del.NoteName, ex.Message); }
                 }
             }
@@ -294,12 +293,12 @@ internal class Refactor : Agent
             // ── Hub child-link pass ───────────────────────────────────────────────
             // Deterministic: every hub (folder) links to each direct child, including child hubs.
             // Done after all structural changes so it reflects the final folder tree.
-            int hubsLinked = await brain!.EnsureHubChildLinks();
+            int hubsLinked = BrainModule.EnsureHubChildLinks();
             if (hubsLinked > 0)
                 Shared.Logger.LogInformation("[Refactor] Hub child-link pass updated {Count} hub(s).", hubsLinked);
 
             // ── Clear dirty flags ─────────────────────────────────────────────────
-            await brain!.ClearDirty(loaded.Keys);
+            BrainModule.ClearDirty(loaded.Keys);
 
             StringBuilder summary = new();
             summary.AppendLine($"Refactor {(allNotes ? "full" : "incremental")} complete — {allAdds.Count} added, {finalEdits.Count} edited, {allMerges.Count} merged, {allDeletes.Count} deleted.");
