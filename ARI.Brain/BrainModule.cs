@@ -136,8 +136,17 @@ public static class BrainModule
         foreach (SearchResult seed in direct)
             MergeIn(SearchNear(seed.Note, terms, hopLimit, seedNearLimit));
 
-        // One anchor per distinct term, not per candidate — connects "the [REDACT] thing" to "the [REDACT]
-        // thing" instead of cross-linking every matched note (which is mostly noise on a dense graph).
+        List<RecallPath> paths = Pathfind(terms, hopLimit, merged);
+
+        List<SearchResult> ranked = merged.Values.OrderByDescending(c => c.Score).ThenByDescending(c => c.TermsMatched).Take(topLimit).ToList();
+        return new RecallResult(ranked, paths);
+    }
+
+    // One anchor per distinct term, not per candidate — connects "the [REDACT] thing" to "the [REDACT] thing"
+    // instead of cross-linking every matched note (which is mostly noise on a dense graph). Boosts each
+    // connecting note's score in place, at most once per note regardless of how many paths cross it.
+    private static List<RecallPath> Pathfind(IReadOnlyList<string> terms, int hopLimit, Dictionary<long, SearchResult> scores)
+    {
         List<Note> anchors = terms
             .Select(term => Search(new List<string> { term }, 1).FirstOrDefault()?.Note)
             .Where(note => note is not null)
@@ -149,11 +158,10 @@ public static class BrainModule
         HashSet<long> boosted = new();
         foreach (RecallPath path in paths)
             foreach (Note note in path.Notes)
-                if (boosted.Add(note.id) && merged.TryGetValue(note.id, out SearchResult? existing))
-                    merged[note.id] = existing with { Score = existing.Score + PATH_BONUS };
+                if (boosted.Add(note.id) && scores.TryGetValue(note.id, out SearchResult? existing))
+                    scores[note.id] = existing with { Score = existing.Score + PATH_BONUS };
 
-        List<SearchResult> ranked = merged.Values.OrderByDescending(c => c.Score).ThenByDescending(c => c.TermsMatched).Take(topLimit).ToList();
-        return new RecallResult(ranked, paths);
+        return paths;
     }
 
     private static List<Note> WalkBack(Dictionary<long, (int Depth, long? Predecessor)> reach, long from)
