@@ -29,3 +29,12 @@ public class EngramMerge
     public string Into   { get; init; } = string.Empty; // title of the canonical note to keep (the winner)
     public string Reason { get; init; } = string.Empty; // logged but not written to Trilium
 }
+
+public class EngramThought
+{
+    public string NoteName   { get; init; } = string.Empty; // note this is anchored to
+    public string SpanText   { get; init; } = string.Empty; // verbatim line/bullet from that note's content
+    public string Comment    { get; init; } = string.Empty; // the thought itself
+    public string Confidence { get; init; } = string.Empty; // low | medium | high
+    public string Kind       { get; init; } = string.Empty; // observation | self-prompt
+}
