@@ -3,7 +3,7 @@ import Sidebar from "./components/Sidebar"
 import Main from "./components/Main"
 import ProjectsPage from "./components/ProjectsPage"
 import {
-    useThreads, createThread, loadHistory, fetchThread, pollThreadWhileStreaming,
+    useThreads, createThread, closeThread, loadHistory, fetchThread, pollThreadWhileStreaming,
     openEventStream, cancelProcessing, useTypingHeartbeat,
     type ThreadItem, type ThreadEntry, type AppEvent, type Attachment, type Project,
 } from "./hooks/useThreads"
@@ -196,6 +196,7 @@ export default function App() {
     const [speechCaption,    setSpeechCaption]     = useState<string | null>(null)
     const [speechOrbState,   setSpeechOrbState]    = useState<"listening" | "thinking" | "speaking">("listening")
     const listenerRef = useRef<ListenerHandle | null>(null)
+    const [connState, setConnState] = useState<"connecting" | "connected" | "failed">("connecting")
     const pipelines = usePipelines()
 
     const stopListening = () => {
@@ -306,18 +307,26 @@ export default function App() {
     }
 
     // ── init ─────────────────────────────────────────────
-    useEffect(() => {
-        async function waitAndInit() {
-            while (true) {
-                const res = await fetch("/threads").catch(() => null)
-                if (res && res.status !== 503) break
-                await new Promise(r => setTimeout(r, 2000))
-            }
-            await Promise.all([loadThreads(), loadProjects()])
-            openGlobalStream()
-            window.electronBridge?.markReady()
+    // Connect to the server, tolerating 503 (still booting) but surfacing a hard failure when the
+    // server is unreachable (fetch throws → null) for several attempts, so #68's retry UI can show.
+    const connectAndInit = useCallback(async () => {
+        setConnState("connecting")
+        let failures = 0
+        while (true) {
+            const res = await fetch("/threads").catch(() => null)
+            if (res && res.status !== 503) break                              // server ready
+            if (res === null && ++failures >= 5) { setConnState("failed"); return }
+            if (res !== null) failures = 0                                    // 503: booting — keep waiting
+            await new Promise(r => setTimeout(r, 2000))
         }
-        waitAndInit()
+        await Promise.all([loadThreads(), loadProjects()])
+        openGlobalStream()
+        setConnState("connected")
+        window.electronBridge?.markReady()
+    }, [loadThreads, loadProjects])
+
+    useEffect(() => {
+        connectAndInit()
         // Long fallback poll — events drive updates; this is only a safety net.
         const pollId = setInterval(loadThreads, 60_000)
 
@@ -337,7 +346,7 @@ export default function App() {
         })
 
         return () => { clearInterval(pollId); globalEsRef.current?.close() }
-    }, [loadThreads, loadProjects])
+    }, [connectAndInit, loadThreads, loadProjects])
 
     // ── toast ─────────────────────────────────────────────
     const showToast = useCallback((msg: string) => {
@@ -1036,6 +1045,18 @@ export default function App() {
 
     return (
         <div id="shell">
+            {connState === "failed" && (
+                <div id="conn-error-overlay">
+                    <div id="conn-error-card">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                            <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                        </svg>
+                        <p id="conn-error-title">Cannot connect to server</p>
+                        <button id="conn-error-retry" onClick={() => connectAndInit()}>Retry</button>
+                    </div>
+                </div>
+            )}
             {window.electronBridge && (
                 <div id="titlebar-drag">
                     {isWin32 && (
@@ -1060,6 +1081,7 @@ export default function App() {
                 onNewChat={newChat}
                 onOpenProjects={() => setActiveView("projects")}
                 onSelectThread={(t: ThreadEntry) => { setActiveView("chat"); openThread(t.key, t.isInternal, t.agentName, t.isCodeMode, t.projectId ?? null) }}
+                onCloseThread={(t: ThreadEntry) => { void closeThread(t.key) }}
                 collapsed={sidebarCollapsed}
                 onToggleCollapse={() => setSidebarCollapsed(c => !c)}
                 clientVersion={clientVersion}
