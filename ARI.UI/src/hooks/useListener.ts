@@ -3,7 +3,7 @@
 // Ari's spoken reply as binary WAV frames. While she speaks, the playback is analysed into frequency bands
 // (low → high) so the orb can light up like a radial equaliser.
 
-export const ORB_BANDS = 5   // bass, low, mid, high, air → core … outer
+import { ORB_BANDS } from "ari-orb"
 
 export interface ListenerEvent {
     type: string          // "ready" | "partial" | "transcript" | "error"

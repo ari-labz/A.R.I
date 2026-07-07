@@ -1,5 +1,5 @@
 import { useEffect, useRef, forwardRef, useImperativeHandle } from "react"
-import { createOrbRenderer, type OrbRenderer, type OrbStateName } from "./orb/renderer"
+import { createOrbRenderer, type OrbRenderer, type OrbStateName } from "ari-orb"
 
 export type OrbState = OrbStateName
 
