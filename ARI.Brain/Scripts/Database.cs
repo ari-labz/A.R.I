@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using System.Text;
 
 namespace ARI.Brain;
 
@@ -19,6 +20,7 @@ internal static class Database
             title    TEXT NOT NULL UNIQUE COLLATE NOCASE,
             path     TEXT NOT NULL,
             content  TEXT NOT NULL,
+            type     TEXT,
             updated  TEXT NOT NULL,
             dirty    INTEGER NOT NULL DEFAULT 0
         );
@@ -72,8 +74,9 @@ internal static class Database
         foreach ((string path, Note.Parsed parsed, DateTime updated) in files)
         {
             string title = System.IO.Path.GetFileNameWithoutExtension(path);
-            Run(db, "INSERT INTO notes(title, path, content, updated) VALUES ($title, $path, $content, $updated)",
+            Run(db, "INSERT INTO notes(title, path, content, type, updated) VALUES ($title, $path, $content, $type, $updated)",
                 ("$title", title), ("$path", path), ("$content", parsed.Body),
+                ("$type", (object?)parsed.Type ?? DBNull.Value),
                 ("$updated", updated.ToString("yyyy-MM-ddTHH:mm:ssZ")));
             idsByName[title] = LastId(db);
         }
@@ -286,6 +289,81 @@ internal static class Database
         while (reader.Read())
             result[reader.GetInt64(0)] = (reader.GetInt32(1), reader.IsDBNull(2) ? null : reader.GetInt64(2));
         return result;
+    }
+
+    // ── Graph walk (seed ranking + adjacency skeleton) ─────────────────────────────────
+
+    // Seeds for a walk: the highest total-degree (inbound + outbound) notes — where sprawl lives.
+    internal static List<Note> SeedsByDegree(int limit) => QueryNotes("""
+        SELECT n.noteID, n.title, n.path,
+               (SELECT COUNT(*) FROM connections c WHERE c.noteIDFrom = n.noteID OR c.noteIDTo = n.noteID) AS degree
+        FROM notes n
+        ORDER BY degree DESC, n.title
+        LIMIT $limit
+        """, ("$limit", limit));
+
+    // Adjacency skeleton for the neighbourhood BFS-reachable from a seed within maxJumps, capped at
+    // `cap` nodes (nearest first). One block per node: full path + [type], then its inbound (<) and
+    // outbound (>) connections by bare title. Keeps context minimal while showing every node's wiring
+    // so the agent can spot edges that don't belong.
+    internal static string Skeleton(long seedId, int maxJumps, int cap)
+    {
+        List<long> ids = Reachability(seedId, maxJumps)
+            .OrderBy(kv => kv.Key == seedId ? -1 : kv.Value.Depth)
+            .ThenBy(kv => kv.Key)
+            .Select(kv => kv.Key)
+            .Take(cap)
+            .ToList();
+        if (ids.Count == 0) return string.Empty;
+
+        string idList = string.Join(",", ids);
+        using SqliteConnection db = Open();
+
+        // node meta: id -> (path-without-.md, type)
+        Dictionary<long, (string Path, string? Type)> meta = new();
+        using (SqliteCommand cmd = db.CreateCommand())
+        {
+            // Real on-disk path (WITH .md) so read_file/edit_file/find_files get valid filenames straight from the skeleton.
+            cmd.CommandText = $"SELECT noteID, path, type FROM notes WHERE noteID IN ({idList})";
+            using SqliteDataReader r = cmd.ExecuteReader();
+            while (r.Read())
+                meta[r.GetInt64(0)] = (r.GetString(1), r.IsDBNull(2) ? null : r.GetString(2));
+        }
+
+        // every edge touching a neighbourhood node (targets may sit outside the neighbourhood — still shown)
+        Dictionary<long, List<string>> outbound = new(), inbound = new();
+        using (SqliteCommand cmd = db.CreateCommand())
+        {
+            cmd.CommandText = $"""
+                SELECT c.noteIDFrom, f.title, c.noteIDTo, t.title
+                FROM connections c
+                JOIN notes f ON f.noteID = c.noteIDFrom
+                JOIN notes t ON t.noteID = c.noteIDTo
+                WHERE c.noteIDFrom IN ({idList}) OR c.noteIDTo IN ({idList})
+                """;
+            using SqliteDataReader r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                long from = r.GetInt64(0), to = r.GetInt64(2);
+                string fromTitle = r.GetString(1), toTitle = r.GetString(3);
+                if (meta.ContainsKey(from)) (outbound.TryGetValue(from, out List<string>? o) ? o : outbound[from] = new()).Add(toTitle);
+                if (meta.ContainsKey(to))   (inbound.TryGetValue(to, out List<string>? i)  ? i : inbound[to]  = new()).Add(fromTitle);
+            }
+        }
+
+        StringBuilder sb = new();
+        foreach (long id in ids)
+        {
+            (string path, string? type) = meta[id];
+            sb.Append(path);
+            if (!string.IsNullOrEmpty(type)) sb.Append("  [").Append(type).Append(']');
+            sb.Append('\n');
+            if (inbound.TryGetValue(id, out List<string>? ins))
+                foreach (string t in ins.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)) sb.Append("   < ").Append(t).Append('\n');
+            if (outbound.TryGetValue(id, out List<string>? outs))
+                foreach (string t in outs.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)) sb.Append("   > ").Append(t).Append('\n');
+        }
+        return sb.ToString();
     }
 
     // Terms become rows in a joined table, not a C# loop — one round trip regardless of term count.
