@@ -10,6 +10,7 @@ import {
 import { usePipelines } from "./hooks/usePipelines"
 import { startListening, type ListenerHandle } from "./hooks/useListener"
 import { env } from "./env"
+import { playResponseChime } from "./notify"
 import "./styles/app.css"
 
 export type AppMode = "idle" | "active"
@@ -283,6 +284,7 @@ export default function App() {
                         break
                     case "streamingFinished":
                         loadThreads()
+                        playResponseChime()   // issue #63: chime when an Ari response completes
                         if (data.threadKey === activeThreadRef.current && !streamingRef.current)
                             loadHistory(data.threadKey).then(hist => setItems(hist)).catch(() => {})
                         break
