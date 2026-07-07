@@ -1,6 +1,6 @@
-// Plays a short chime when an Ari response completes (issue #63). Swap src/assets/notification.wav
-// (or point NOTIFY_SRC at an .mp3) to change the sound.
-import notifySrc from "./assets/notification.wav"
+// Plays a short chime when an Ari response completes (issue #63). Swap src/assets/notification.mp3
+// to change the sound.
+import notifySrc from "./assets/notification.mp3"
 
 const audio = new Audio(notifySrc)
 audio.preload = "auto"
