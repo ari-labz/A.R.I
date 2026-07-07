@@ -573,6 +573,8 @@ public abstract class Agent
         int             lastPeriodicSec  = 0;   // grade-10 unlimited: thinking-secs of the last 30s time-awareness nudge
         int             completionTokens = 0;
         int             promptTokens     = 0;
+        int             prefilledTokens  = -1;   // timings.prompt_n: tokens actually re-read (rest served from KV cache)
+        double          prefillTokPerSec = 0;    // timings.prompt_per_second
         bool            hadImages        = msgAtts.Any(a => a.IsImage) || threadAtts.Any(a => a.IsImage);
 
         int estimatedTextTokens = messages.Sum(m =>
@@ -793,6 +795,15 @@ public abstract class Agent
                     {
                         completionTokens += usage.TryGetProperty("completion_tokens", out JsonElement ctEl) ? ctEl.GetInt32() : 0;
                         promptTokens      = usage.TryGetProperty("prompt_tokens",     out JsonElement ptEl) ? ptEl.GetInt32() : 0;
+                    }
+
+                    // llama-server (OAI-compat) reports how much of the context it actually re-read this turn
+                    // vs served from KV cache. prompt_n is the prefilled count; the rest is a cache hit.
+                    if (chunk.RootElement.TryGetProperty("timings", out JsonElement timings))
+                    {
+                        if (timings.TryGetProperty("prompt_n",          out JsonElement pnEl)) prefilledTokens  = pnEl.GetInt32();
+                        if (timings.TryGetProperty("prompt_per_second", out JsonElement ppsEl) && ppsEl.ValueKind == JsonValueKind.Number)
+                            prefillTokPerSec = ppsEl.GetDouble();
                     }
 
                     if (!chunk.RootElement.TryGetProperty("choices", out JsonElement choices) || choices.GetArrayLength() == 0) continue;
@@ -1498,6 +1509,13 @@ public abstract class Agent
                 clock.Prefill.ToString("F1"), clock.Thinking.ToString("F1"), clock.Typing.ToString("F1"),
                 completionTokens, tokPerSec.ToString("F1"));
 
+            if (prefilledTokens >= 0 && promptTokens > 0)
+            {
+                int reusedPct = (int)((promptTokens - prefilledTokens) * 100.0 / promptTokens);
+                Shared.Logger.LogInformation("[{Agent}] ({Thread}) cache-hit: prefilled {Prefilled} of {Prompt} ({Pct}% reused) @ {PrefillTokPerSec} t/s",
+                    Name, thread.Key, prefilledTokens, promptTokens, reusedPct, prefillTokPerSec.ToString("F1"));
+            }
+
             if (maxTokens > 0 && completionTokens >= maxTokens * TOKEN_WARNING_RATIO)
                 Shared.Logger.LogWarning("[{Agent}] ({Thread}) token usage at {Pct}% of limit ({Used}/{Max})",
                     Name, thread.Key, (int)(completionTokens * 100.0 / maxTokens), completionTokens, maxTokens);
@@ -1525,6 +1543,7 @@ public abstract class Agent
         ariResponse.Data.CompletionTokens          = completionTokens;
         ariResponse.Data.OutputTokenLimit          = maxTokens > 0 ? maxTokens : 0;
         ariResponse.Data.PromptTokens              = promptTokens;
+        ariResponse.Data.PrefilledPromptTokens     = prefilledTokens;
         ariResponse.Data.ContextTokenLimit         = MaxContextTokens;
         ariResponse.Data.HadImageAttachments       = hadImages;
         ariResponse.Data.EstimatedTextPromptTokens = estimatedTextTokens;
