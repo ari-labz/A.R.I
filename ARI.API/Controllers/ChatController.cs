@@ -20,6 +20,10 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 {
     private LLMModule? Llm => (LLMModule?)Modules.Llm;
 
+    // The web client reads SSE events as camelCase (data.type / data.threadKey / data.text). Without
+    // this, bare Serialize emits PascalCase ("Type") and the client's event switch silently never matches.
+    private static readonly JsonSerializerOptions SseJson = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
     // Maps threadKey → projectId — backed by a persistent JSON file so it survives rebuilds
     private static ConcurrentDictionary<string, string>? _threadProjects;
     private static ConcurrentDictionary<string, string> GetThreadProjects(ProjectStore store)
@@ -297,7 +301,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                 continue;
             }
 
-            string payload = JsonSerializer.Serialize(evt);
+            string payload = JsonSerializer.Serialize(evt, SseJson);
             await Response.WriteAsync($"data: {payload}\n\n", cancellationToken);
             await Response.Body.FlushAsync(cancellationToken);
         }
