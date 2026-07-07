@@ -28,6 +28,7 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly Context?          context;
     private readonly Engram?           engram;
     private readonly Refactor?         refactor;
+    private readonly BrainScan?        brainScan;
     private readonly Classifier?       classifier;
     private readonly Awareness?        awareness;
     private readonly Appraisal?        appraiser;
@@ -211,6 +212,13 @@ public class LLMModule : ILLMModule, IDisposable
                 refactor.engram = engram;
                 agentMap["Refactor"] = refactor;
                 _logger.LogInformation("Refactor is active.");
+            }
+
+            if (rawAgents.TryGetValue("BrainScan", out JsonElement scanEl))
+            {
+                brainScan = Deserialize<BrainScan>(scanEl);
+                agentMap["BrainScan"] = brainScan;
+                _logger.LogInformation("BrainScan is active.");
             }
 
             commands = new CommandService(engram, refactor);
@@ -603,6 +611,17 @@ public class LLMModule : ILLMModule, IDisposable
     public bool IsThreadProcessing(string threadKey) => processingThreads.ContainsKey(threadKey);
 
     public bool IsEngramSweeping(string threadKey) => engram?.IsSweeping(threadKey) ?? false;
+
+    // Idle = no thread is currently being processed. Read statically via Activity.IsIdle(); the Scheduler
+    // runs background work only while this holds, and long tasks poll it to yield the moment Ari is busy.
+    public bool IsIdle => processingThreads.IsEmpty;
+
+    /// <summary>True when BrainScan is loaded and can be run by the Scheduler.</summary>
+    public bool HasBrainScan => brainScan is not null;
+
+    /// <summary>Runs one brain-scan pass (checkpointed; honours the token so it yields when Ari is busy).</summary>
+    public Task RunBrainScanAsync(string persistentDir, CancellationToken ct) =>
+        brainScan?.Run(persistentDir, ct) ?? Task.CompletedTask;
 
     public void NotifyTyping(string threadKey)
     {

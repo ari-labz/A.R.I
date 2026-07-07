@@ -55,6 +55,11 @@
       "Model": "base.en",
       "CpuThreads": 10,
       "SilenceMs": 300
+    },
+    "Scheduler": {
+      "Enabled": true,
+      "TickSeconds": 30,
+      "Schedules": {}
     }
   }
 }

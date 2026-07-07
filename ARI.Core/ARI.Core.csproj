@@ -56,6 +56,7 @@
     <ProjectReference Include="..\ARI.Voice\ARI.Voice.csproj" />
     <ProjectReference Include="..\ARI.Common\ARI.Common.csproj" />
     <ProjectReference Include="..\ARI.Listener\ARI.Listener.csproj" />
+    <ProjectReference Include="..\ARI.Scheduler\ARI.Scheduler.csproj" />
   </ItemGroup>
 
 </Project>

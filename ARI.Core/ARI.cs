@@ -1,4 +1,5 @@
 using ARI.Common;
+using ARI.Scheduler;
 using CommonModules = ARI.Common.Modules;
 using ARI.Core.Scripts;
 using ARI.Discord;
@@ -27,6 +28,7 @@ public class ARI : BackgroundService
     public VoiceSynthesisModule?  voiceSynthesisModule;
     public ListenerModule?        listenerModule;
     private LLMModule?           llmModule;
+    private SchedulerModule?     schedulerModule;
 
     private readonly ILoggerFactory loggerFactory;
     private ILogger _logger = Shared.Logger;
@@ -207,6 +209,18 @@ public class ARI : BackgroundService
             CommonModules.Register(discord: discordService);
         }
 
+        // ── Scheduler ─────────────────────────────────────────────────────────────
+        if (config.modules.Scheduler.Enabled && llmModule is not null)
+        {
+            schedulerModule = new SchedulerModule(config.modules.Scheduler, ariPersistentDir, loggerFactory.CreateLogger("ARI.Scheduler"));
+
+            // Brain scan: every 6 hours, while idle, Ari reflects on her graph and records curiosities.
+            if (llmModule.HasBrainScan)
+                schedulerModule.AddTask("BrainScan", "0 */6 * * *", ct => llmModule.RunBrainScanAsync(ariPersistentDir, ct));
+
+            schedulerModule.Start();
+        }
+
         if (config.modules.API.Enabled)
             LaunchClient(executableDirectory, config.modules.API.Port);
 
@@ -338,6 +352,8 @@ public class ARI : BackgroundService
 
         speechQueue?.Dispose();
         synthesiser?.Dispose();
+
+        schedulerModule?.Dispose();
 
         llmModule?.StopAllServersAsync();
         llmModule?.Dispose();
