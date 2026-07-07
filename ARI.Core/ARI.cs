@@ -60,6 +60,10 @@ public class ARI : BackgroundService
     {
         _logger.LogInformation("ARI is starting...");
 
+        // Clear any stale ARI instance (and its child servers) before we bind ports — otherwise a
+        // leftover process from a terminal launch blocks a fresh run from Rider.
+        ProcessGuard.KillStaleInstances(_logger);
+
         string executableDirectory = AppDomain.CurrentDomain.BaseDirectory;
         config = AriConfig.LoadFrom(Path.Combine(executableDirectory, "AriConfig.json"));
 
@@ -214,9 +218,10 @@ public class ARI : BackgroundService
         {
             schedulerModule = new SchedulerModule(config.modules.Scheduler, ariPersistentDir, loggerFactory.CreateLogger("ARI.Scheduler"));
 
-            // Brain scan: every 6 hours, while idle, Ari reflects on her graph and records curiosities.
-            if (llmModule.HasBrainScan)
-                schedulerModule.AddTask("BrainScan", "0 */6 * * *", ct => llmModule.RunBrainScanAsync(ariPersistentDir, ct));
+            // Graph walk: every 6 hours, while idle, Refactor tidies the graph and records curiosities
+            // (replaces the old BrainScan — same schedule, now a tool-driven walk that also restructures).
+            if (llmModule.HasRefactor)
+                schedulerModule.AddTask("Refactor", "0 */6 * * *", ct => llmModule.RunRefactorAsync(ct));
 
             // Proactive message: every 2 hours (while idle, outside quiet hours), Ari DMs a curiosity.
             LLMModule llm = llmModule;

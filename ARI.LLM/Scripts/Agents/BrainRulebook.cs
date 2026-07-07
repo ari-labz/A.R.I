@@ -14,6 +14,17 @@ internal static class BrainRulebook
           Inbound links are invisible to recall. A note with no outward link is a dead end: findable,
           but it leads nowhere. Every entity must link outward to its hub.
 
+        NODE TYPES (drive the graph's colour groups):
+        A note MAY carry a 'type' — it is optional. No type means the note is an ordinary leaf. The core
+        types are: person, hub, event, relationship, discussion. You may coin a NEW type when a note is a
+        distinct kind worth its own colour (e.g. "conversation" for a daily log) — reuse an existing type
+        name before inventing one. A category grouping is a 'hub'; a point-in-time happening is an
+        'event'; an ongoing bond between people is a 'relationship'.
+        To set a note's type, add or edit a `type: <value>` line inside the `---` YAML frontmatter block
+        at the very TOP of the file (alongside `aliases:`), never in the body — a type written in the body
+        is not recognised. If a note is functionally a hub/event/relationship but has no `type:` line, add
+        one.
+
         PATH IS TAXONOMY:
         The path encodes meaning before the note is even opened. Each segment answers: what is this,
         whose is it, how does it relate? EVERY note lives under a top-level category folder — NEVER at
@@ -36,7 +47,25 @@ internal static class BrainRulebook
         possessively when they belong to a person ("[REDACT]'s Family", "[REDACT]'s Friends"). Individual notes
         link UP to their hub; the hub links DOWN to each direct child, including children that are
         themselves hubs — but only direct children, never grandchildren (each sub-hub routes its own
-        members).
+        members). Give a hub note the type 'hub'.
+        A HUB MUST HAVE AT LEAST 3 MEMBERS. Never create a hub for fewer than 3 leaves that share a
+        theme — 1 or 2 members belong directly under the parent instead. If an existing hub has dropped
+        below 3 members, dissolve it: move its members up to the parent hub (or root category) and delete
+        the hub note.
+
+        DEGREE CAP — TAME OUTBOUND SPRAWL (NOT INBOUND):
+        Recall only ever follows a note's OWN outward links, so a note being POINTED AT by many others
+        costs nothing — inbound degree is unlimited, and cross-links between related notes are good (they
+        cluster a family/topic together and add recall paths). The problem is a single node fanning OUT to
+        many unrelated leaves. If a note links OUT to more than 10 individual (non-hub) notes, route those
+        outward links through hubs instead: links to a hub don't count, only direct non-hub links do. A
+        person who links out to 15 hubs is fine; one that links out to 15 individual leaves is not — group
+        those leaves under hubs and link to the hubs. The root/person note especially should reach the
+        graph through top-level hubs, not through a direct link to every entity.
+
+        Do NOT delete a direct link just because a hub path also exists — a direct edge that adds a useful
+        recall path or clusters related notes together earns its place. Only collapse direct edges when a
+        node's OUTBOUND fan-out is genuinely sprawling and unstructured.
 
         ONE ENTITY, ONE NOTE:
         Before creating a note, check existing notes AND their aliases for the same person/place/thing
@@ -49,15 +78,28 @@ internal static class BrainRulebook
         one-way: if A mentions B, only A links to B, not the reverse (the only two-way relationship is
         hub ⇄ member).
 
-        RELATIONSHIPS:
-        The dynamics between two people belong in Relationships/[A] and [B] Relationship, not duplicated
-        on each person's note. Descriptors like "long distance" or "estranged" are a field or sentence
-        inside that note, never a separate note.
+        PEOPLE CONNECT THROUGH BRIDGES:
+        A direct person ↔ person link is allowed (Danielle is Jake's wife — that edge is real). But
+        PREFER to express how two people are connected through a bridge node — a relationship, an event,
+        or a discussion — rather than a bare direct link. The bridge carries the meaning ("how are they
+        connected?"); a hub only carries organisation ("what kind of thing?"). Once a bridge exists, the
+        direct person ↔ person edge is redundant (see REDUNDANT LINKS) and should be removed.
 
-        EVENT NOTES:
-        Notes in Events/ are point-in-time snapshots: a specific or approximate date, what happened, who
-        was involved, and an outward link to the ongoing note (Relationships/, People/) for the evolving
-        story. Never store evolving facts in an event note.
+        RELATIONSHIPS (ongoing — type 'relationship'):
+        A relationship is the LIVING thread between two people — the evolving story over time. Its
+        dynamics belong in Relationships/[A] and [B] Relationship (type 'relationship'), not duplicated on
+        each person's note. Everything that develops AFTER two people connect lands here. Descriptors like
+        "long distance" or "estranged" are a field or sentence inside this note, never a separate note.
+        Later events hang off the relationship as dated beads on its timeline.
+
+        EVENT NOTES (a bounded moment — type 'event'):
+        An event is ONE point-in-time happening plus its circumstances: a specific or approximate date,
+        what happened, who was involved, and an outward link to the ongoing note (Relationships/, People/).
+        You MAY keep enriching an event with more detail ABOUT THAT MOMENT (who introduced them, where it
+        happened, the circumstances). You must NOT add LATER DEVELOPMENTS to an event — anything that
+        happened afterwards belongs in the relationship or a new event. "[REDACT] and [REDACT] got together"
+        holds the circumstances of getting together; how the relationship unfolds since lives in the
+        relationship note.
 
         CONVERSATION NOTES:
         Exactly ONE dated log per day at Conversations/YYYY-MM-DD — a 1-3 sentence summary plus a
@@ -88,9 +130,10 @@ internal static class BrainRulebook
         Every nickname or alternate name goes in the 'aliases' array of the canonical note. Never a
         separate note for a nickname.
 
-        CHANGELOG:
-        Every note you create or edit gets a ## Changelog with a dated entry describing what changed.
-        Plain text only — no [[links]] in changelog entries.
+        HISTORY LIVES IN GIT, NOT IN THE NOTE:
+        Do NOT add a ## Changelog section to notes. Every change is recorded by its git commit message
+        (what changed + why), so a note's body stays clean. If you find an existing ## Changelog section
+        while editing a note, remove it.
 
         NO DESCRIPTOR NOTES:
         A status or descriptor ("Employed", "Long Distance", "Estranged") is a field inside the relevant

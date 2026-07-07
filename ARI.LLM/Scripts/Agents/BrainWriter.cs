@@ -97,7 +97,7 @@ internal static class BrainWriter
                 {
                     string? name = el.GetStr("name"), content = el.GetStr("content");
                     if (!string.IsNullOrWhiteSpace(name) && content is not null)
-                        adds.Add(new EngramAdd { NoteName = name, Content = NormalizeLinks(content), Aliases = ParseAliases(el) });
+                        adds.Add(new EngramAdd { NoteName = name, Content = NormalizeLinks(content), Aliases = ParseAliases(el), Type = el.GetStr("type") });
                 }
 
             List<EngramEdit> edits = [];
@@ -106,7 +106,7 @@ internal static class BrainWriter
                 {
                     string? name = el.GetStr("name"), newName = el.GetStr("newName"), content = el.GetStr("content");
                     if (!string.IsNullOrWhiteSpace(name) && content is not null)
-                        edits.Add(new EngramEdit { NoteName = name, NewNoteName = newName, Content = NormalizeLinks(content), Aliases = ParseAliases(el) });
+                        edits.Add(new EngramEdit { NoteName = name, NewNoteName = newName, Content = NormalizeLinks(content), Aliases = ParseAliases(el), Type = el.GetStr("type") });
                 }
 
             List<EngramDelete> deletes = [];
