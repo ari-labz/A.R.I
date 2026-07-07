@@ -12,6 +12,8 @@ public interface ILLMModule
     Task RestartAllServersAsync();
     bool AssignAgentServer(string agentName, string serverName);
     bool AssignAgentSlot(string agentName, int? slot);
+    /// <summary>True when no thread is currently being processed — Ari is idle.</summary>
+    bool IsIdle { get; }
 }
 
 public interface IVoiceModule
