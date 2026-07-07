@@ -31,6 +31,8 @@
       <BunExe Condition="'$(OS)' != 'Unix'">$(USERPROFILE)\.bun\bin\bun.exe</BunExe>
     </PropertyGroup>
     <Message Importance="high" Text="Building ARI.UI via $(BunExe) run build" />
+    <!-- Link workspace-local packages (ari-orb → ../ARI.Orb) before building. -->
+    <Exec Command="&quot;$(BunExe)&quot; install" WorkingDirectory="$(AriUiDir)" />
     <Exec Command="&quot;$(BunExe)&quot; run build" WorkingDirectory="$(AriUiDir)" />
   </Target>
 
