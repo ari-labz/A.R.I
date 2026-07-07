@@ -19,6 +19,9 @@ internal class Context : Agent
     private readonly SemaphoreSlim updateLock = new(1, 1);
     private string resolvedPrompt;
 
+    /// <summary>Raised (threadKey, title) when an update yields a fresh 3-4 word thread title. Wired by LLMModule to rename the thread.</summary>
+    internal Action<string, string>? TitleUpdated;
+
     public Context()
     {
         httpClient = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
@@ -32,6 +35,27 @@ internal class Context : Agent
 
     internal string GetContext(string threadKey)
         => contexts.TryGetValue(threadKey, out string? ctx) ? ctx : string.Empty;
+
+    /// <summary>Pulls a trailing "TITLE: ..." line out of the model's summary output, returning a cleaned
+    /// 3-4 word title (or null if absent) and rewriting <paramref name="summary"/> without that line.</summary>
+    private static string? ExtractTitle(ref string summary)
+    {
+        string[] lines = summary.Replace("\r\n", "\n").Split('\n');
+        for (int i = lines.Length - 1; i >= 0; i--)
+        {
+            string line = lines[i].Trim();
+            if (line.Length == 0) continue;
+            int idx = line.IndexOf("TITLE:", StringComparison.OrdinalIgnoreCase);
+            if (idx < 0) break;   // last non-empty line isn't a title line — give up
+
+            string title = line[(idx + "TITLE:".Length)..].Trim().Trim('"', '\'', '.', '*', '#').Trim();
+            summary = string.Join("\n", lines.Take(i)).TrimEnd();
+            // Guard against a runaway/empty title; cap to a sane length.
+            if (title.Length == 0 || title.Length > 60) return null;
+            return title;
+        }
+        return null;
+    }
 
     internal async Task Update(string threadKey, string userMessage, string assistantResponse)
     {
@@ -52,7 +76,8 @@ internal class Context : Agent
                         $"TODAY: {DateTime.Now:dddd, d MMMM yyyy}\n\n" +
                         $"CURRENT CONTEXT:\n{contextBlock}\n\n" +
                         $"NEW EXCHANGE:\nWren: {userMessage}\nARI: {assistantResponse}\n\n" +
-                        "Update the context summary." }
+                        "Update the context summary. Then, on a final separate line, write exactly " +
+                        "\"TITLE: \" followed by a 3-4 word title naming this conversation's topic." }
                 },
                 stream         = false,
                 max_tokens     = CONTEXT_MAX_TOKENS,
@@ -85,8 +110,12 @@ internal class Context : Agent
 
             if (!string.IsNullOrWhiteSpace(updated))
             {
+                // Split off the trailing "TITLE: ..." line so the stored summary stays clean; use the
+                // title to rename the thread. If the model omits it, we simply keep the previous title.
+                string? title = ExtractTitle(ref updated);
                 contexts[threadKey] = updated;
                 Shared.Logger.LogInformation("[Context] ({Thread}) context updated:\n{Context}", threadKey, updated);
+                if (title is not null) TitleUpdated?.Invoke(threadKey, title);
             }
         }
         catch (Exception ex)
