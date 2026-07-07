@@ -10,6 +10,9 @@ public sealed class ResponseData
     public int CompletionTokens          { get; set; }
     public int OutputTokenLimit          { get; set; }
     public int PromptTokens              { get; set; }
+    /// <summary>Tokens actually prefilled (re-read) this turn per llama-server's <c>timings.prompt_n</c>;
+    /// the remainder of <see cref="PromptTokens"/> was served from KV cache. -1 when the server didn't report it.</summary>
+    public int PrefilledPromptTokens     { get; set; } = -1;
     public int ContextTokenLimit         { get; set; }
     public bool HadImageAttachments      { get; set; }
     public int EstimatedTextPromptTokens { get; set; }
