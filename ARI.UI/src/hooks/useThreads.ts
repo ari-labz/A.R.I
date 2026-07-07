@@ -11,6 +11,7 @@ export interface ThreadEntry {
     lastMessageAt: string
     projectName?: string | null
     projectId?:   string | null
+    title?:       string | null
 }
 
 export interface Project {
@@ -102,6 +103,12 @@ export async function createThread(projectId?: string | null, pipeline?: string 
     })
     const { key } = await res.json()
     return key
+}
+
+// Close a thread: the server runs Engram (saving it to memory) then deletes it, broadcasting threadDeleted.
+export async function closeThread(key: string): Promise<boolean> {
+    const res = await fetch(`/threads/${key}`, { method: "DELETE" })
+    return res.ok
 }
 
 export async function loadHistory(key: string, raw = false): Promise<ThreadItem[]> {
