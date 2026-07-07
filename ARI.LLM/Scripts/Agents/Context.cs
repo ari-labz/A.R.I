@@ -59,7 +59,12 @@ internal class Context : Agent
                 temperature    = CONTEXT_TEMPERATURE,
                 top_p          = CONTEXT_TOP_P,
                 top_k          = CONTEXT_TOP_K,
-                repeat_penalty = CONTEXT_REPEAT
+                repeat_penalty = CONTEXT_REPEAT,
+                // The template force-opens a <think> block unless disabled via kwargs — the in-band
+                // <|think_off|> text alone doesn't stop it, and thinking eats the token budget.
+                thinking             = false,
+                enable_thinking      = false,
+                chat_template_kwargs = new { enable_thinking = false }
             };
 
             HttpRequestMessage request = new(HttpMethod.Post, $"{Endpoint}/v1/chat/completions")
@@ -120,7 +125,10 @@ internal class Context : Agent
                 temperature    = CONTEXT_TEMPERATURE,
                 top_p          = CONTEXT_TOP_P,
                 top_k          = CONTEXT_TOP_K,
-                repeat_penalty = CONTEXT_REPEAT
+                repeat_penalty = CONTEXT_REPEAT,
+                thinking             = false,
+                enable_thinking      = false,
+                chat_template_kwargs = new { enable_thinking = false }
             };
 
             HttpRequestMessage request = new(HttpMethod.Post, $"{Endpoint}/v1/chat/completions")

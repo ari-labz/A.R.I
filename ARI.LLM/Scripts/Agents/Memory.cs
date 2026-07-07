@@ -19,6 +19,7 @@ internal class Memory : Agent
     private const int TOP_CANDIDATES    = 25;
     private const int THINKING_BUDGET   = 400;
     private const int SNIPPET_LENGTH    = 160;
+    private const int MAX_SEARCH_TERMS  = 15;
 
     internal override bool QuietLogging => true;
 
@@ -61,6 +62,22 @@ internal class Memory : Agent
         "time", "day", "days", "way", "use", "used", "using", "put", "set", "try"
     };
 
+    // The Context agent's summary is structured (TODAY/ENTITIES/PRONOUN MAP/...); its labels and
+    // date words are scaffolding, not searchable entities.
+    private static readonly HashSet<string> SummaryLabels = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "TODAY", "ENTITIES", "PRONOUN", "MAP", "PRIMARY", "TOPIC", "TOPICS", "SECONDARY",
+        "HISTORY", "User", "Assistant", "None", "Started", "shifted", "updated",
+        "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+        "January", "February", "March", "April", "May", "June", "July", "August",
+        "September", "October", "November", "December"
+    };
+
+    private static List<string> Tokenize(string text) => Regex.Split(text, @"[^a-zA-Z0-9']+")
+        .Select(t => t.Trim('\''))
+        .Where(t => t.Length >= 3 && !Stopwords.Contains(t))
+        .ToList();
+
     internal async Task<string?> GetNotes(List<ThreadMessage> chatHistory, string incomingPrompt, string? contextSummary = null, CancellationToken ct = default)
     {
         if (HopLimit <= 0) return null;
@@ -84,14 +101,13 @@ internal class Memory : Agent
             }
         }
 
-        // Not the full transcript — avoids noisy seeds from ARI's own words.
-        string combined = string.IsNullOrWhiteSpace(contextSummary)
-            ? incomingPrompt
-            : $"{incomingPrompt} {contextSummary}";
-        List<string> terms = Regex.Split(combined, @"[^a-zA-Z0-9']+")
-            .Select(t => t.Trim('\''))
-            .Where(t => t.Length >= 3 && !Stopwords.Contains(t))
+        // Not the full transcript — avoids noisy seeds from ARI's own words. Prompt terms come
+        // first so the cap trims summary terms, never the user's own words. The summary's structural
+        // labels and date words are excluded — tokenising them once turned 51 terms into a 12.6s recall.
+        List<string> terms = Tokenize(incomingPrompt)
+            .Concat(Tokenize(contextSummary ?? string.Empty).Where(t => !SummaryLabels.Contains(t)))
             .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(MAX_SEARCH_TERMS)
             .ToList();
 
         if (terms.Count == 0)
