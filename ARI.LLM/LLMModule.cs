@@ -119,8 +119,8 @@ public class LLMModule : ILLMModule, IDisposable
         if (brainConfig is not null)
         {
             IndexStats brainStats = BrainModule.Initialize(brainConfig);
-            _logger.LogInformation("Brain vault indexed: {Notes} notes, {Edges} edges, {Aliases} aliases.",
-                brainStats.Notes, brainStats.Edges, brainStats.Aliases);
+            _logger.LogInformation("Brain vault indexed: {Notes} notes, {Edges} edges, {Aliases} aliases, {Thoughts} thoughts.",
+                brainStats.Notes, brainStats.Edges, brainStats.Aliases, brainStats.Thoughts);
         }
 
         if (rawAgents.TryGetValue("Context", out JsonElement contextEl))
@@ -618,6 +618,25 @@ public class LLMModule : ILLMModule, IDisposable
 
     public Thread GetOrCreateDialogueThread(string threadKey)
         => GetOrCreateThread(ThreadPipeline.Dialogue, threadKey);
+
+    // ── Engram eval harness (additive; not used by the live app) ──────────────────────
+    // Seeds a dialogue thread with a scripted transcript so a sweep can be tested in isolation,
+    // without driving the live Dialogue pipeline turn by turn. RunEngram rebuilds Context from the
+    // transcript itself, so pronoun resolution still works.
+    public Thread SeedScriptedThread(string threadKey, IReadOnlyList<ThreadMessage> turns)
+    {
+        Thread thread = GetOrCreateThread(ThreadPipeline.Dialogue, threadKey);
+        thread.Seed(turns);
+        return thread;
+    }
+
+    // Triggers one Engram sweep directly and awaits it. Returns false if Engram isn't loaded.
+    public async Task<bool> RunEngramSweepAsync(string threadKey)
+    {
+        if (engram is null) return false;
+        await engram.RunEngram(threadKey, "eval");
+        return true;
+    }
 
     public void SetCodeThreadContext(string threadKey, string? projectMap, string? conventions, string? rules)
         => code?.SetThreadContext(threadKey, projectMap, conventions, rules);
