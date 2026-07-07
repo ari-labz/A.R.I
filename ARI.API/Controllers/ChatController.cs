@@ -97,7 +97,8 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                     State: kvp.Value.State.ToString().ToLowerInvariant(),
                     IsCodeMode: kvp.Value.Pipeline == ARI.LLM.ThreadPipeline.Code,
                     ProjectName: projectName, ProjectId: projectId,
-                    Pipeline: kvp.Value.Pipeline.ToString().ToLowerInvariant());
+                    Pipeline: kvp.Value.Pipeline.ToString().ToLowerInvariant(),
+                    Title: kvp.Value.Title);
             })
             .ToList();
 
@@ -629,6 +630,15 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         return Ok();
     }
 
+    /// <summary>Close a thread: runs Engram to save it to memory, then deletes it. Fires a threadDeleted event.</summary>
+    [HttpDelete("{threadKey}")]
+    public async Task<IActionResult> CloseThread(string threadKey)
+    {
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        bool closed = await Llm.CloseThreadAsync(threadKey);
+        return closed ? Ok() : NotFound();
+    }
+
     [HttpPost("{threadKey}/stream")]
     public async Task Stream(string threadKey, [FromBody] StreamRequest body, CancellationToken cancellationToken)
     {
@@ -797,4 +807,4 @@ public record StreamRequest(string Prompt, string? LocalPath = null);
 public record CommandRequest(string? ThreadKey, string Input);
 public record NewThreadRequest(string? ProjectId, bool Desktop = false, string? Pipeline = null);
 public record InjectContextRequest(string Name, string Content);
-public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active", bool IsCodeMode = false, string? ProjectName = null, string? ProjectId = null, string Pipeline = "dialogue");
+public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active", bool IsCodeMode = false, string? ProjectName = null, string? ProjectId = null, string Pipeline = "dialogue", string? Title = null);

@@ -7,13 +7,14 @@ interface Props {
     onNewChat:        () => void
     onOpenProjects:   () => void
     onSelectThread:   (t: ThreadEntry) => void
+    onCloseThread:    (t: ThreadEntry) => void
     collapsed:        boolean
     onToggleCollapse: () => void
     clientVersion:    string | null
     outdated:         boolean
 }
 
-export default function Sidebar({ threads, activeThread, activeView, onNewChat, onOpenProjects, onSelectThread, collapsed, onToggleCollapse, clientVersion, outdated }: Props) {
+export default function Sidebar({ threads, activeThread, activeView, onNewChat, onOpenProjects, onSelectThread, onCloseThread, collapsed, onToggleCollapse, clientVersion, outdated }: Props) {
     return (
         <aside id="sidebar" className={collapsed ? "collapsed" : ""}>
             <div id="sidebar-inner">
@@ -68,7 +69,7 @@ export default function Sidebar({ threads, activeThread, activeView, onNewChat, 
                                     {t.projectName && (
                                         <span className="thread-project">{t.projectName}/</span>
                                     )}
-                                    {baseName}
+                                    {!t.isInternal && t.title ? t.title : baseName}
                                 </span>
                                 <span className="thread-meta">
                                     {t.isCodeMode && (
@@ -77,6 +78,17 @@ export default function Sidebar({ threads, activeThread, activeView, onNewChat, 
                                         </svg>
                                     )}
                                     <span className="thread-time">{time}</span>
+                                    {!t.isInternal && (
+                                        <button
+                                            className="thread-close"
+                                            title="Close thread (saves to memory, then removes it)"
+                                            onClick={e => { e.stopPropagation(); onCloseThread(t) }}
+                                        >
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                                            </svg>
+                                        </button>
+                                    )}
                                 </span>
                             </li>
                         )

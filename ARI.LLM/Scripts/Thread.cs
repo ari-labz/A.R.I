@@ -35,6 +35,9 @@ public class Thread
     /// <summary>Human-readable label for a sub-thread (e.g. the atomic step it executes). Shown in the parent's live child overview.</summary>
     public string? Label { get; init; }
 
+    /// <summary>Short (3-4 word) auto-generated title reflecting the conversation, refreshed by the Context agent each exchange. Null until the first update.</summary>
+    public string? Title { get; set; }
+
     private readonly List<Thread> children = new();
 
     /// <summary>
@@ -286,6 +289,18 @@ public class Thread
             Shared.Logger.LogInformation("[Thread] ({ThreadKey}) deleted.", threadKey);
             Deleted?.Invoke();
         }, null, DormantDuration, Timeout.InfiniteTimeSpan);
+    }
+
+    /// <summary>Delete the thread immediately (used by the manual close-thread action), bypassing the
+    /// dormant grace period. Engram is expected to have already run if the caller wants it saved.</summary>
+    internal void ForceDelete()
+    {
+        if (State == ThreadState.Deleted) return;
+        State = ThreadState.Deleted;
+        inactivityTimer?.Dispose();
+        dormantTimer?.Dispose();
+        Shared.Logger.LogInformation("[Thread] ({ThreadKey}) closed and deleted.", threadKey);
+        Deleted?.Invoke();
     }
 
     internal void AddItem(ThreadItem item)

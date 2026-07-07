@@ -131,6 +131,15 @@ public class LLMModule : ILLMModule, IDisposable
                 ? JsonSerializer.Deserialize<Dialogue>(dlgEl.GetRawText(), JsonOptions)!.ShortTermMemoryLimit ?? 25
                 : 25;
             context.Init(memoryLimit);
+            // Each context update yields a fresh short title — rename the thread and notify the UI.
+            context.TitleUpdated = (key, title) =>
+            {
+                if (threads.TryGetValue(key, out Thread? t) && t.Title != title)
+                {
+                    t.Title = title;
+                    Broadcast(new AppEvent("threadUpdated", key));
+                }
+            };
             _logger.LogInformation("Context tracker is active.");
         }
 
@@ -403,6 +412,24 @@ public class LLMModule : ILLMModule, IDisposable
 
     /// <summary>Pre-marks a thread to run through the Code pipeline. Thin wrapper over <see cref="ForcePipeline"/>.</summary>
     public void ForceCodeThread(string threadKey) => ForcePipeline(threadKey, ThreadPipeline.Code);
+
+    /// <summary>Manually close a thread (close-thread button): cancel any in-flight generation, run Engram so
+    /// the conversation is saved to memory, then delete it immediately with no dormant grace period.</summary>
+    public async Task<bool> CloseThreadAsync(string threadKey)
+    {
+        if (!threads.TryGetValue(threadKey, out Thread? thread)) return false;
+
+        Cancel(threadKey);   // stop any active send before we sweep + delete
+
+        if (engram is not null)
+        {
+            try { await engram.RunEngram(threadKey, "closed"); }
+            catch (Exception ex) { _logger.LogWarning("[Close] Engram failed for {Key}: {Err}", threadKey, ex.Message); }
+        }
+
+        thread.ForceDelete();
+        return true;
+    }
 
     /// <summary>Whether a conversational-awareness gate is available.</summary>
     public bool AwarenessAvailable => awareness is not null;
