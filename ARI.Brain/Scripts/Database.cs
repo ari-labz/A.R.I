@@ -36,6 +36,7 @@ internal static class Database
         CREATE TABLE annotations (
             annotationID INTEGER PRIMARY KEY AUTOINCREMENT,
             noteID       INTEGER NOT NULL REFERENCES notes(noteID) ON DELETE CASCADE,
+            kind         TEXT NOT NULL,
             spanText     TEXT NOT NULL,
             comment      TEXT NOT NULL,
             confidence   TEXT NOT NULL,
@@ -50,6 +51,8 @@ internal static class Database
     private const double TIER_ALIAS          = 90.0;
     private const double TIER_TITLE_PARTIAL  = 50.0;
     private const double TIER_ALIAS_PARTIAL  = 40.0;
+    private const double TIER_TITLE_IN_TERM  = 45.0;
+    private const double TIER_ALIAS_IN_TERM  = 35.0;
     private const double TIER_CONTENT        = 10.0;
 
     internal static string Path { get; set; } = string.Empty;
@@ -115,9 +118,22 @@ internal static class Database
         Run(db, "INSERT INTO note_search(rowid, title, content) SELECT noteID, title, content FROM notes");
         foreach (string title in dirtyBefore)
             Run(db, "UPDATE notes SET dirty = 1 WHERE title = $title", ("$title", title));
+
+        int thoughtCount = 0;
+        foreach ((string path, Note.Parsed parsed, DateTime _) in files)
+        {
+            long noteId = idsByName[System.IO.Path.GetFileNameWithoutExtension(path)];
+            foreach (Note.ParsedThought thought in Note.ParseThoughts(parsed.Body))
+            {
+                Run(db, "INSERT INTO annotations(noteID, kind, spanText, comment, confidence, created) VALUES ($id, $kind, $span, $comment, $confidence, $created)",
+                    ("$id", noteId), ("$kind", thought.Kind), ("$span", thought.SpanText),
+                    ("$comment", thought.Comment), ("$confidence", thought.Confidence), ("$created", thought.Created));
+                thoughtCount++;
+            }
+        }
         transaction.Commit();
 
-        return new IndexStats(files.Count, edgeCount, aliasCount, unresolved, skippedAliases);
+        return new IndexStats(files.Count, edgeCount, aliasCount, thoughtCount, unresolved, skippedAliases);
     }
 
     // ── Notes ────────────────────────────────────────────────────────────────────────
@@ -187,6 +203,38 @@ internal static class Database
         using SqliteConnection db = Open();
         foreach (string title in titles)
             Run(db, "UPDATE notes SET dirty = 0 WHERE title = $title", ("$title", title));
+    }
+
+    // ── Thoughts ─────────────────────────────────────────────────────────────────────
+
+    internal static List<ThoughtRecord> ThoughtsForNote(long noteId)
+    {
+        using SqliteConnection db = Open();
+        using SqliteCommand command = db.CreateCommand();
+        command.CommandText = "SELECT kind, spanText, comment, confidence, created FROM annotations WHERE noteID = $id ORDER BY created";
+        command.Parameters.AddWithValue("$id", noteId);
+        List<ThoughtRecord> results = new();
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+            results.Add(new ThoughtRecord(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4)));
+        return results;
+    }
+
+    internal static List<(string NoteTitle, ThoughtRecord Thought)> RecentThoughts(int limit)
+    {
+        using SqliteConnection db = Open();
+        using SqliteCommand command = db.CreateCommand();
+        command.CommandText = """
+            SELECT n.title, a.kind, a.spanText, a.comment, a.confidence, a.created
+            FROM annotations a JOIN notes n USING(noteID)
+            ORDER BY a.created DESC LIMIT $limit
+            """;
+        command.Parameters.AddWithValue("$limit", limit);
+        List<(string, ThoughtRecord)> results = new();
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+            results.Add((reader.GetString(0), new ThoughtRecord(reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5))));
+        return results;
     }
 
     // ── Search ───────────────────────────────────────────────────────────────────────
@@ -266,7 +314,11 @@ internal static class Database
                 UNION ALL
                 SELECT t.term, n.noteID, 4 FROM aliases a JOIN notes n USING(noteID), termTable t WHERE a.alias LIKE t.pattern ESCAPE '\'
                 UNION ALL
-                SELECT t.term, ns.rowid, 5 FROM note_search ns JOIN termTable t ON note_search MATCH t.phrase
+                SELECT t.term, n.noteID, 5 FROM notes n, termTable t WHERE length(n.title) >= 4 AND instr(lower(t.term), lower(n.title)) > 0
+                UNION ALL
+                SELECT t.term, n.noteID, 6 FROM aliases a JOIN notes n USING(noteID), termTable t WHERE length(a.alias) >= 4 AND instr(lower(t.term), lower(a.alias)) > 0
+                UNION ALL
+                SELECT t.term, ns.rowid, 7 FROM note_search ns JOIN termTable t ON note_search MATCH t.phrase
             )
             """;
     }
@@ -282,6 +334,7 @@ internal static class Database
                    SUM(CASE bestPerTerm.tier
                        WHEN 1 THEN {TIER_TITLE} WHEN 2 THEN {TIER_ALIAS}
                        WHEN 3 THEN {TIER_TITLE_PARTIAL} WHEN 4 THEN {TIER_ALIAS_PARTIAL}
+                       WHEN 5 THEN {TIER_TITLE_IN_TERM} WHEN 6 THEN {TIER_ALIAS_IN_TERM}
                        ELSE {TIER_CONTENT} END) AS score,
                    COUNT(DISTINCT bestPerTerm.term) AS termsMatched
             FROM bestPerTerm JOIN notes n USING(noteID)

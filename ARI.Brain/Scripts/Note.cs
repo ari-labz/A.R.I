@@ -13,6 +13,11 @@ public class Note
     private static readonly Regex createdLine = new(@"^created: (\S+)$", RegexOptions.Multiline | RegexOptions.Compiled);
     private static readonly Regex quotedValue = new(@"""((?:[^""\\]|\\.)*)""", RegexOptions.Compiled);
 
+    private static readonly Regex thoughtHeader = new(@"^\s*>\s*\[!ari-thought\]\s*(.*)$", RegexOptions.Compiled);
+    private static readonly Regex thoughtMeta   = new(@"^\s*>\s*confidence:\s*([^·]+)·\s*([^·]+)·\s*kind:\s*(.+)$", RegexOptions.Compiled);
+    private static readonly Regex listMarker    = new(@"^[-*]\s+(.*)$", RegexOptions.Compiled);
+    private const string ORPHAN_HEADER = "## Ari's Thoughts (needs re-anchoring)";
+
     internal readonly long id;
 
     public string Title { get; }
@@ -46,7 +51,7 @@ public class Note
 
     public void Save(string content, IReadOnlyList<string> aliases)
     {
-        Write(Path, content, aliases, Parse(File.ReadAllText(AbsolutePath)).Created);
+        Write(Path, CarryThoughtsInto(Content, content), aliases, Parse(File.ReadAllText(AbsolutePath)).Created);
         BrainModule.Index();
     }
 
@@ -66,9 +71,13 @@ public class Note
             if (!combined.Contains(alias, StringComparer.OrdinalIgnoreCase) &&
                 !string.Equals(alias, winner.Title, StringComparison.OrdinalIgnoreCase))
                 combined.Add(alias);
-        string content = winner.Content;
+        string loserTitle = Title;
+        string content = CarryThoughtsInto(Content, winner.Content);
         File.Delete(AbsolutePath);
         Write(winner.Path, content, combined, null);
+        // Repoint every [[loserTitle]] to the winner so referrers don't keep pointing at the folded-away
+        // note. The loser title is also kept as an alias on the winner, so anything missed still resolves.
+        BrainModule.RepointReferences(loserTitle, winner.Title);
         BrainModule.Index();
     }
 
@@ -76,7 +85,125 @@ public class Note
         ? $"Path: {Name}\nAliases: {string.Join(", ", Aliases)}\n\n{Content}"
         : $"Path: {Name}\n\n{Content}";
 
+    // spanText must be a verbatim substring of this note's current content — anchors the callout
+    // directly under the line/bullet it's about. Falls back to an orphaned, re-anchorable entry
+    // if the text can't be found (e.g. the note changed between when the thought was formed and written).
+    public void AddThought(string spanText, string comment, string confidence, string kind)
+    {
+        ParsedThought thought = new(kind, spanText, comment, confidence, DateTime.UtcNow.ToString("yyyy-MM-dd"));
+        string newBody = InsertThought(Content, thought);
+        Write(Path, newBody, Aliases, Parse(File.ReadAllText(AbsolutePath)).Created);
+        BrainModule.Index();
+    }
+
     private string AbsolutePath => System.IO.Path.Combine(BrainModule.VaultRoot, Path);
+
+    // ── Thoughts (margin annotations) ────────────────────────────────────────────────
+
+    internal record ParsedThought(string Kind, string SpanText, string Comment, string Confidence, string Created);
+
+    // Scans a note body for `> [!ari-thought]` callouts and reads each one's anchor (the nearest
+    // preceding non-blockquote, non-blank line). Used both by Database.Rebuild (indexing) and by
+    // the strip/reinsert safety net around edits and merges.
+    internal static List<ParsedThought> ParseThoughts(string body)
+    {
+        List<ParsedThought> thoughts = new();
+        string[] lines = body.Replace("\r\n", "\n").Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+        {
+            Match header = thoughtHeader.Match(lines[i]);
+            if (!header.Success) continue;
+
+            string comment    = header.Groups[1].Value.Trim();
+            string confidence = "unknown";
+            string created    = string.Empty;
+            string kind        = "observation";
+            if (i + 1 < lines.Length)
+            {
+                Match meta = thoughtMeta.Match(lines[i + 1]);
+                if (meta.Success)
+                {
+                    confidence = meta.Groups[1].Value.Trim();
+                    created    = meta.Groups[2].Value.Trim();
+                    kind       = meta.Groups[3].Value.Trim();
+                }
+            }
+
+            string spanText = string.Empty;
+            for (int j = i - 1; j >= 0; j--)
+            {
+                string candidate = lines[j].Trim();
+                if (candidate.Length == 0 || candidate.StartsWith('>')) continue;
+                Match marker = listMarker.Match(candidate);
+                spanText = marker.Success ? marker.Groups[1].Value : candidate;
+                break;
+            }
+
+            thoughts.Add(new ParsedThought(kind, spanText, comment, confidence, created));
+        }
+        return thoughts;
+    }
+
+    // Removes every `> [!ari-thought]` callout (header + meta line) from a body, returning the
+    // clean body and what was removed — used before an LLM-driven edit so the model never sees
+    // (and can't garble) previously-recorded thoughts.
+    internal static (string Body, List<ParsedThought> Removed) StripThoughts(string body)
+    {
+        List<ParsedThought> removed = ParseThoughts(body);
+        if (removed.Count == 0) return (body, removed);
+
+        string[] lines = body.Replace("\r\n", "\n").Split('\n');
+        List<string> kept = new();
+        for (int i = 0; i < lines.Length; i++)
+        {
+            if (thoughtHeader.IsMatch(lines[i]))
+            {
+                if (i + 1 < lines.Length && thoughtMeta.IsMatch(lines[i + 1])) i++;
+                continue;
+            }
+            kept.Add(lines[i]);
+        }
+        string stripped = Regex.Replace(string.Join('\n', kept), @"\n{3,}", "\n\n").TrimEnd() + "\n";
+        return (stripped, removed);
+    }
+
+    // Inserts one thought under its anchor if the anchor text still exists in the body, otherwise
+    // appends it to a trailing "needs re-anchoring" section so nothing is silently lost.
+    internal static string InsertThought(string body, ParsedThought thought)
+    {
+        const string calloutIndent = "    ";
+        string callout = $"{calloutIndent}> [!ari-thought] {thought.Comment}\n" +
+                          $"{calloutIndent}> confidence: {thought.Confidence} · {thought.Created} · kind: {thought.Kind}";
+
+        int anchorIndex = string.IsNullOrEmpty(thought.SpanText) ? -1 : body.IndexOf(thought.SpanText, StringComparison.Ordinal);
+        if (anchorIndex >= 0)
+        {
+            int lineEnd = body.IndexOf('\n', anchorIndex);
+            if (lineEnd < 0) lineEnd = body.Length;
+            return body[..lineEnd] + "\n" + callout + body[lineEnd..];
+        }
+
+        string orphanEntry = $"- Was anchored to: \"{thought.SpanText}\"\n{callout}";
+        int headerIndex = body.IndexOf(ORPHAN_HEADER, StringComparison.Ordinal);
+        if (headerIndex >= 0)
+        {
+            int sectionEnd = body.IndexOf("\n## ", headerIndex + ORPHAN_HEADER.Length, StringComparison.Ordinal);
+            if (sectionEnd < 0) sectionEnd = body.Length;
+            return body[..sectionEnd].TrimEnd() + "\n\n" + orphanEntry + "\n" + body[sectionEnd..];
+        }
+        return body.TrimEnd() + $"\n\n{ORPHAN_HEADER}\n\n{orphanEntry}\n";
+    }
+
+    // Strips thoughts out before an edit is applied, then re-anchors (or orphans) each one against
+    // the freshly-written content. Call this around any path that replaces a note's body wholesale.
+    internal static string CarryThoughtsInto(string oldBody, string newBody)
+    {
+        List<ParsedThought> existing = ParseThoughts(oldBody);
+        foreach (ParsedThought thought in existing)
+            if (!newBody.Contains(thought.Comment, StringComparison.Ordinal)) // skip if already re-emitted by the edit itself
+                newBody = InsertThought(newBody, thought);
+        return newBody;
+    }
 
     // ── File format ──────────────────────────────────────────────────────────────────
 

@@ -4,10 +4,11 @@ using System.Text.RegularExpressions;
 
 namespace ARI.Brain;
 
-public record IndexStats(int Notes, int Edges, int Aliases, IReadOnlyList<string> UnresolvedLinks, IReadOnlyList<string> SkippedAliases);
+public record IndexStats(int Notes, int Edges, int Aliases, int Thoughts, IReadOnlyList<string> UnresolvedLinks, IReadOnlyList<string> SkippedAliases);
 public record SearchResult(Note Note, double Score, int TermsMatched);
 public record RecallPath(Note From, Note To, IReadOnlyList<Note> Notes);
 public record RecallResult(IReadOnlyList<SearchResult> Candidates, IReadOnlyList<RecallPath> Paths);
+public record ThoughtRecord(string Kind, string SpanText, string Comment, string Confidence, string Created);
 
 public static class BrainModule
 {
@@ -84,6 +85,77 @@ public static class BrainModule
         }
         return links;
     }
+
+    // Rewrites every [[fromTitle]] / [[fromTitle|display]] across the vault to point at toTitle,
+    // preserving any display alias. Called after a rename or merge so referrers never keep pointing
+    // at a name that is now only an alias. Returns the number of files changed. Does not reindex —
+    // the caller reindexes once after its structural changes.
+    public static int RepointReferences(string fromTitle, string toTitle)
+    {
+        if (string.IsNullOrWhiteSpace(fromTitle) || string.IsNullOrWhiteSpace(toTitle)) return 0;
+        if (string.Equals(fromTitle, toTitle, StringComparison.OrdinalIgnoreCase)) return 0;
+        Regex pattern = new(@"\[\[" + Regex.Escape(fromTitle) + @"(\|[^\]]*)?\]\]", RegexOptions.IgnoreCase);
+        int changed = 0;
+        foreach (string file in Directory.EnumerateFiles(VaultRoot, "*.md", SearchOption.AllDirectories))
+        {
+            string relative = Path.GetRelativePath(VaultRoot, file).Replace(Path.DirectorySeparatorChar, '/');
+            if (relative.Split('/').Any(segment => segment.StartsWith('.'))) continue;
+            string text = File.ReadAllText(file);
+            string updated = pattern.Replace(text, match => $"[[{toTitle}{match.Groups[1].Value}]]");
+            if (updated == text) continue;
+            string temp = $"{file}.tmp";
+            File.WriteAllText(temp, updated);
+            File.Move(temp, file, overwrite: true);
+            changed++;
+        }
+        return changed;
+    }
+
+    // Terminal guardrail: after a sweep, any [[link]] that resolves to no title, alias, or path is
+    // genuinely dead (aliases already resolved, e.g. [[[REDACT]]] -> Xywren, so those survive). De-link it
+    // to its plain display text rather than leave a broken reference. Returns files changed; reindexes.
+    public static int StripUnresolvedLinks()
+    {
+        HashSet<string> known = new(StringComparer.OrdinalIgnoreCase);
+        foreach (string title in Database.AllTitles()) known.Add(title);
+        foreach ((string _, string alias) in Database.AliasPairs()) known.Add(alias);
+        foreach (string path in Database.AllPaths()) known.Add(path);
+
+        Regex link = new(@"\[\[([^\]|]+?)(\|[^\]]*)?\]\]", RegexOptions.Compiled);
+        int changed = 0;
+        foreach (string file in Directory.EnumerateFiles(VaultRoot, "*.md", SearchOption.AllDirectories))
+        {
+            string relative = Path.GetRelativePath(VaultRoot, file).Replace(Path.DirectorySeparatorChar, '/');
+            if (relative.Split('/').Any(segment => segment.StartsWith('.'))) continue;
+            string text = File.ReadAllText(file);
+            string updated = link.Replace(text, match =>
+            {
+                string target = match.Groups[1].Value.Trim();
+                if (known.Contains(target)) return match.Value;
+                return match.Groups[2].Success ? match.Groups[2].Value.TrimStart('|') : target; // keep the words, drop the brackets
+            });
+            if (updated == text) continue;
+            string temp = $"{file}.tmp";
+            File.WriteAllText(temp, updated);
+            File.Move(temp, file, overwrite: true);
+            changed++;
+        }
+        if (changed > 0) Index();
+        return changed;
+    }
+
+    // ── Thoughts (margin annotations) ───────────────────────────────────────────────
+
+    public static void AddThought(string noteName, string spanText, string comment, string confidence, string kind) =>
+        GetNote(noteName)?.AddThought(spanText, comment, confidence, kind);
+
+    public static List<ThoughtRecord> GetThoughts(string noteName)
+    {
+        Note? note = GetNote(noteName);
+        return note is null ? new List<ThoughtRecord>() : Database.ThoughtsForNote(note.id);
+    }
+
+    public static List<(string NoteTitle, ThoughtRecord Thought)> GetRecentThoughts(int limit = 20) => Database.RecentThoughts(limit);
 
     // ── Search ───────────────────────────────────────────────────────────────────────
 
@@ -210,23 +282,34 @@ public static class BrainModule
     {
         foreach (EngramEdit edit in edits)
         {
-            if (edit.NewNoteName is null || edit.NewNoteName == edit.NoteName)
+            // A rename only happens when NewNoteName names a DIFFERENT, valid title. A malformed or
+            // empty newName (e.g. "People/") must never delete the note or rename to an empty title —
+            // treat it as an in-place edit. This guards the vault against bad model output.
+            string newBareTitle = edit.NewNoteName is null ? string.Empty
+                : (edit.NewNoteName.Contains('/') ? edit.NewNoteName[(edit.NewNoteName.LastIndexOf('/') + 1)..] : edit.NewNoteName).Trim();
+            string oldBareTitle = edit.NoteName.Contains('/') ? edit.NoteName[(edit.NoteName.LastIndexOf('/') + 1)..] : edit.NoteName;
+            bool isRename = newBareTitle.Length > 0 && !string.Equals(newBareTitle, oldBareTitle, StringComparison.OrdinalIgnoreCase);
+
+            if (!isRename)
             {
                 WriteNamed(edit.NoteName, edit.Content, edit.Aliases);
                 continue;
             }
             Note? old = GetNote(edit.NoteName);
             List<string> aliases = new(edit.Aliases);
+            string newContent = edit.Content;
+            string? renamedFrom = null;
             if (old is not null)
             {
-                string oldTitle = old.Title;
-                string newTitle = edit.NewNoteName.Contains('/') ? edit.NewNoteName[(edit.NewNoteName.LastIndexOf('/') + 1)..] : edit.NewNoteName;
-                if (!string.Equals(oldTitle, newTitle, StringComparison.OrdinalIgnoreCase) &&
-                    !aliases.Contains(oldTitle, StringComparer.OrdinalIgnoreCase))
-                    aliases.Add(oldTitle);
+                if (!aliases.Contains(old.Title, StringComparer.OrdinalIgnoreCase)) aliases.Add(old.Title);
+                newContent = Note.CarryThoughtsInto(old.Content, newContent);
                 File.Delete(Path.Combine(VaultRoot, old.Path));
+                renamedFrom = old.Title;
             }
-            Note.Write(PathFor(edit.NewNoteName), edit.Content, aliases, null);
+            Note.Write(PathFor(edit.NewNoteName!), newContent, aliases, null);
+            // Rewrite every [[oldTitle]] in other notes to [[newBareTitle]] so a rename never leaves the
+            // referrers pointing at the old name (the alias still resolves them, but the text is repointed).
+            if (renamedFrom is not null) RepointReferences(renamedFrom, newBareTitle);
         }
         Index();
     }
@@ -264,6 +347,47 @@ public static class BrainModule
     public static void ClearDirty(IEnumerable<string> titles) => Database.ClearDirty(titles);
 
     // ── Structural maintenance ──────────────────────────────────────────────────────
+
+    // A folder full of notes needs a hub note beside it (Pets/ → Pets.md) to index them. Engram places
+    // members correctly but doesn't always create the hub note; this makes it deterministic.
+    public static int EnsureHubNotes()
+    {
+        int created = 0;
+        foreach (string dir in Directory.EnumerateDirectories(VaultRoot, "*", SearchOption.AllDirectories))
+        {
+            string relative = Path.GetRelativePath(VaultRoot, dir).Replace(Path.DirectorySeparatorChar, '/');
+            if (relative.Split('/').Any(segment => segment.StartsWith('.'))) continue;
+            if (!Directory.EnumerateFiles(dir, "*.md").Any()) continue;   // no direct child notes → not a hub
+            if (File.Exists(dir + ".md")) continue;                        // hub note already exists
+
+            string name = Path.GetFileName(dir);
+            Note.Write($"{relative}.md", $"# {name}\n\nHub for {name}.\n\n## Changelog\n\n- {DateTime.UtcNow:yyyy-MM-dd}: Created hub note.\n",
+                Array.Empty<string>(), null);
+            created++;
+        }
+        if (created > 0) Index();
+        return created;
+    }
+
+    // Merges a drifted title variant ("Xywren — User", "[REDACT] - boyfriend") back into its base note when
+    // the base exists — the write phase sometimes appends a descriptor to a resolved note's title, which
+    // would otherwise leave a duplicate. The variant title becomes an alias on the base (via MergeNotes).
+    public static int MergeTitleVariants()
+    {
+        int merged = 0;
+        List<string> titles = Database.AllTitles();
+        HashSet<string> titleSet = new(titles, StringComparer.OrdinalIgnoreCase);
+        foreach (string title in titles)
+        {
+            int cut = title.IndexOf(" — ", StringComparison.Ordinal);
+            if (cut < 0) cut = title.IndexOf(" - ", StringComparison.Ordinal);
+            if (cut <= 0) continue;
+            string basePart = title[..cut].Trim();
+            if (basePart.Length > 0 && !basePart.Equals(title, StringComparison.OrdinalIgnoreCase) && titleSet.Contains(basePart))
+                if (MergeNotes(title, basePart)) merged++;
+        }
+        return merged;
+    }
 
     public static int EnsureHubChildLinks()
     {
@@ -377,7 +501,7 @@ public static class BrainModule
         string bareTitle = name.Contains('/') ? name[(name.LastIndexOf('/') + 1)..] : name;
         Note? existing = GetNote(bareTitle);
         if (existing is not null)
-            Note.Write(existing.Path, content, MergedAliases(existing, aliases), null);
+            Note.Write(existing.Path, Note.CarryThoughtsInto(existing.Content, content), MergedAliases(existing, aliases), null);
         else
             Note.Write(PathFor(name), content, aliases, null);
     }
@@ -392,9 +516,14 @@ public static class BrainModule
         return merged;
     }
 
+    private static readonly Regex bareDate = new(@"^\d{4}-\d{2}-\d{2}$", RegexOptions.Compiled);
+
     internal static string PathFor(string noteName)
     {
         const int MAX_SEGMENT_LENGTH = 120;
+        // A bare date is always a daily conversation log — file it under Conversations/ deterministically,
+        // regardless of whether the model prefixed the folder.
+        if (bareDate.IsMatch(noteName.Trim())) noteName = "Conversations/" + noteName.Trim();
         IEnumerable<string> segments = noteName.Split('/')
             .Select(segment => invalidFileChars.Replace(segment, "").Trim())
             .Where(segment => segment.Length > 0)
