@@ -59,7 +59,12 @@
     "Scheduler": {
       "Enabled": true,
       "TickSeconds": 30,
-      "Schedules": {}
+      "QuietStartHour": 22,
+      "QuietEndHour": 8,
+      "Schedules": {
+        "BrainScan": "0 */6 * * *",
+        "ProactiveMessage": "0 */2 * * *"
+      }
     }
   }
 }

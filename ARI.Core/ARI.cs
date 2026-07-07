@@ -218,6 +218,19 @@ public class ARI : BackgroundService
             if (llmModule.HasBrainScan)
                 schedulerModule.AddTask("BrainScan", "0 */6 * * *", ct => llmModule.RunBrainScanAsync(ariPersistentDir, ct));
 
+            // Proactive message: every 2 hours (while idle, outside quiet hours), Ari DMs a curiosity.
+            LLMModule llm = llmModule;
+            SchedulerConfig sched = config.modules.Scheduler;
+            schedulerModule.AddTask("ProactiveMessage", "0 */2 * * *", async ct =>
+            {
+                if (sched.IsQuietHour(DateTime.Now.Hour))
+                {
+                    _logger.LogInformation("[Scheduler] proactive message held — quiet hours.");
+                    return;
+                }
+                await llm.RunProactiveMessageAsync(ariPersistentDir, ct);
+            });
+
             schedulerModule.Start();
         }
 
