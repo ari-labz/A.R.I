@@ -508,6 +508,18 @@ public class LLMModule : ILLMModule, IDisposable
                    : trimmed == "/code"     ? "Switched to **Code** mode."
                    :                          "Switched to **Dialogue** mode.";
         }
+        else if (trimmed == "/brainscan")
+        {
+            // Manual trigger for the scheduled brain scan (long-running — fire and forget).
+            if (!HasBrainScan) result = "BrainScan is not loaded.";
+            else { _ = Task.Run(() => RunBrainScanAsync(PersistentDataDir, CancellationToken.None)); result = "Brain scan started — watch the log / Curiosities.json."; }
+        }
+        else if (trimmed == "/proactive")
+        {
+            // Manual trigger for the proactive message: pick a curiosity and DM the owner now.
+            await RunProactiveMessageAsync(PersistentDataDir, CancellationToken.None);
+            result = "Proactive message attempted — check the log and your DMs.";
+        }
         else
         {
             result = await commands.Handle(input, threadKey);
@@ -618,6 +630,11 @@ public class LLMModule : ILLMModule, IDisposable
 
     /// <summary>True when BrainScan is loaded and can be run by the Scheduler.</summary>
     public bool HasBrainScan => brainScan is not null;
+
+    // Canonical persistent-data location (same as the Scheduler tasks use). Only needed by the manual
+    // /brainscan and /proactive commands, which don't receive it from ARI.Core.
+    private static string PersistentDataDir =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "Server", "PersistentData");
 
     /// <summary>Runs one brain-scan pass (checkpointed; honours the token so it yields when Ari is busy).</summary>
     public Task RunBrainScanAsync(string persistentDir, CancellationToken ct) =>
