@@ -623,6 +623,44 @@ public class LLMModule : ILLMModule, IDisposable
     public Task RunBrainScanAsync(string persistentDir, CancellationToken ct) =>
         brainScan?.Run(persistentDir, ct) ?? Task.CompletedTask;
 
+    /// <summary>
+    /// Picks the top pending curiosity, phrases it in Ari's voice, and DMs the owner on Discord. The
+    /// curiosity is marked "asked" only after a successful send, so a failed send simply retries next time.
+    /// Quiet-hours gating is the caller's responsibility.
+    /// </summary>
+    public async Task RunProactiveMessageAsync(string persistentDir, CancellationToken ct)
+    {
+        if (dialogue is null) return;
+        IDiscordModule? discord = Modules.Discord;
+        if (discord is null) { _logger.LogInformation("[Proactive] Discord not available — skipping."); return; }
+
+        List<Curiosity> all = CuriosityStore.Load(persistentDir);
+        Curiosity? pick = all.Where(c => c.Status == "pending")
+            .OrderByDescending(c => c.Priority).ThenBy(c => c.Created)
+            .FirstOrDefault();
+        if (pick is null) { _logger.LogInformation("[Proactive] no pending curiosities to raise."); return; }
+
+        string instruction =
+            "You want to message the user — the person you talk with and care about — first, unprompted, because " +
+            "something has genuinely been on your mind. Greet them warmly and ask them this, in one or two sentences: " +
+            $"\"{pick.Question}\" " +
+            "You are asking the USER about it. The question may concern someone else in their life — if so, ask the " +
+            "user about that person; do not address that person directly. Do not mention that this was scheduled, " +
+            "automatic, or that you were 'reflecting'.";
+
+        string opener;
+        try { opener = await dialogue.SendPrompt(new Thread(ThreadPipeline.Dialogue, $"proactive:{Guid.NewGuid()}") { Internal = true }, instruction, ct: ct); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { _logger.LogWarning("[Proactive] phrasing failed ({Msg}); sending the raw question.", ex.Message); opener = pick.Question; }
+        if (string.IsNullOrWhiteSpace(opener)) opener = pick.Question;
+
+        await discord.NotifyOwner(opener.Trim());
+
+        int idx = all.FindIndex(c => c.Id == pick.Id);
+        if (idx >= 0) { all[idx] = pick with { Status = "asked", AskedAt = DateTime.UtcNow.ToString("o") }; CuriosityStore.Save(persistentDir, all); }
+        _logger.LogInformation("[Proactive] messaged the owner about '{Topic}'.", pick.Topic);
+    }
+
     public void NotifyTyping(string threadKey)
     {
         if (threads.TryGetValue(threadKey, out Thread? t)) t.ResetInactivityTimer();
