@@ -462,13 +462,17 @@ public abstract class Agent
             messages.Add(new { role = m.Role, content = $"{m.Username}: {m.Content}" });
         }
 
-        if (recallNotes != null)
-            messages.Add(new { role = "system", content = $"[ARI's Memories]\n{(string.IsNullOrWhiteSpace(recallNotes) ? "none" : recallNotes.Trim())}" });
+        // The chat template only renders the FIRST system message — a mid-conversation system role
+        // is silently dropped at templating (verified against llama-server /apply-template). Memories
+        // are therefore folded into the current user message, never sent as their own system message.
+        string memoryBlock = recallNotes != null
+            ? $"[ARI's Memories]\n{(string.IsNullOrWhiteSpace(recallNotes) ? "none" : recallNotes.Trim())}\n\n"
+            : string.Empty;
 
         if (collapsed.Count > 0)
         {
             ThreadMessage current   = collapsed[^1];
-            string        promptText = $"{current.Username}: {current.Content}";
+            string        promptText = $"{memoryBlock}{current.Username}: {current.Content}";
 
             List<Attachment> threadImages = threadAtts.Where(a =>  a.IsImage).ToList();
             List<Attachment> threadTexts  = threadAtts.Where(a => !a.IsImage).ToList();
@@ -704,7 +708,9 @@ public abstract class Agent
             // Only this small block + genuinely new tokens are re-processed each turn instead of the whole context.
             string dynamicBlock   = RenderDynamicContextBlock(thread);
             bool   dynamicInjected = dynamicBlock.Length > 0;
-            if (dynamicInjected) messages.Add(new { role = "system", content = dynamicBlock });
+            // role "user", not "system": the chat template silently drops every system message after
+            // the first (verified via /apply-template), so a system-role block here never reaches the model.
+            if (dynamicInjected) messages.Add(new { role = "user", content = dynamicBlock });
 
             string             json    = JsonSerializer.Serialize(body);
             if (!QuietLogging)
