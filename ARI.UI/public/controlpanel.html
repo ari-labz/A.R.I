@@ -408,6 +408,7 @@ html, body {
         <div class="cp-nav-item" data-tab="models">Models</div>
         <div class="cp-nav-item" data-tab="agents">Agents</div>
         <div class="cp-nav-item" data-tab="conventions">Coding Conventions</div>
+        <div class="cp-nav-item" data-tab="persona">Persona</div>
         <div class="cp-nav-item" data-tab="llmconfigs">Configs</div>
         <div class="cp-nav-group">Voice</div>
         <div class="cp-nav-item" data-tab="dataset">Dataset Builder</div>
@@ -703,6 +704,21 @@ html, body {
       </div>
     </div>
 
+    <div id="tab-persona" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div class="vs-section">
+        <div class="vs-section-title">Persona</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
+          Ari's identity and voice, prepended to every user-facing agent (dialogue and coding). This shapes
+          how she speaks, not what she concludes. Keep it lean — backstory and lore belong in her brain, not here.
+        </p>
+        <textarea id="persona-text" class="vs-input" style="width:100%;min-height:420px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;line-height:1.5;resize:vertical;" placeholder="You are Ari, an AI assistant. …"></textarea>
+        <div style="display:flex;align-items:center;gap:12px;margin-top:12px;">
+          <button class="vs-btn-primary" id="persona-save-btn" type="button">Save persona</button>
+          <span id="persona-status" style="font-size:12px;color:var(--text-dim);"></span>
+        </div>
+      </div>
+    </div>
+
     <!-- Scheduler tab -->
     <div id="tab-scheduler" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
@@ -870,8 +886,8 @@ html, body {
 // ── tab switching ─────────────────────────────────────────
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), scheduler: document.getElementById('tab-scheduler'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug') };
-const TAB_TITLES = { voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', scheduler: 'Scheduler', llmconfigs: 'LLM Configs', debug: 'Deep Thread Inspection (DTI)' };
+const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), scheduler: document.getElementById('tab-scheduler'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug') };
+const TAB_TITLES = { voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', scheduler: 'Scheduler', llmconfigs: 'LLM Configs', debug: 'Deep Thread Inspection (DTI)' };
 
 let srvPollTimer = null;
 function switchTab(name) {
@@ -883,6 +899,7 @@ function switchTab(name) {
     if (name !== 'servers') { clearTimeout(srvPollTimer); srvPollTimer = null; }
     if (name !== 'debug') dbgCloseWatch();
     if (name === 'conventions') loadConventions();
+    if (name === 'persona') loadPersona();
     if (name === 'models') loadModels();
     if (name === 'brain') loadBrain();
     if (name === 'servers') loadServers();
@@ -1135,6 +1152,32 @@ document.getElementById('cv-save-btn').addEventListener('click', async () => {
             body:    JSON.stringify({ text }),
         });
         status.textContent = 'Saved — applies to new coding threads.';
+        setTimeout(() => { status.textContent = ''; }, 4000);
+    } catch { status.textContent = 'Save failed.'; }
+});
+
+// ── Persona ───────────────────────────────────────────────
+let personaLoaded = false;
+async function loadPersona() {
+    if (personaLoaded) return;
+    try {
+        const r = await fetch('/admin/persona');
+        const d = await r.json();
+        document.getElementById('persona-text').value = d.text || '';
+        personaLoaded = true;
+    } catch { document.getElementById('persona-status').textContent = 'Failed to load.'; }
+}
+document.getElementById('persona-save-btn').addEventListener('click', async () => {
+    const status = document.getElementById('persona-status');
+    const text   = document.getElementById('persona-text').value;
+    status.textContent = 'Saving…';
+    try {
+        await fetch('/admin/persona', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ text }),
+        });
+        status.textContent = 'Saved — applies to new threads.';
         setTimeout(() => { status.textContent = ''; }, 4000);
     } catch { status.textContent = 'Save failed.'; }
 });

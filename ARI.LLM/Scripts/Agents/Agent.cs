@@ -31,6 +31,9 @@ public abstract class Agent
     // of the text protocol (BuildToolCatalog + ParseTextCalls). Native relies on llama.cpp's --jinja
     // chat-template tool parsing (qwen3_coder format) being reliable for this model/build.
     [JsonPropertyName("nativeTools")]   public bool    NativeTools   { get; init; }
+    // When true, Ari's persona (PersonaStore) is prepended as the stable prefix of this agent's system
+    // prompt. Set on user-facing agents (Dialogue, CodeArchitect); left false on autonomic agents.
+    [JsonPropertyName("usePersona")]    public bool    UsePersona    { get; init; }
 
     // ── Runtime-only ─────────────────────────────────────────────────────────
     [JsonIgnore] public string Endpoint { get; internal set; } = "";
@@ -277,9 +280,13 @@ public abstract class Agent
         if (augmentedPrompt is not null && collapsed.Count > 0)
             collapsed[^1] = collapsed[^1] with { Content = augmentedPrompt };
 
-        string baseSystem = thread.PlatformContext is null
+        // Persona is the stable prefix — it must come FIRST so it stays byte-identical across turns and
+        // the llama-server KV cache survives (role prompt, then persistent context, then recall follow).
+        string persona = UsePersona ? PersonaStore.Get() : "";
+        string roleBlock = thread.PlatformContext is null
             ? SystemPrompt
             : $"{SystemPrompt}\n\n{thread.PlatformContext}";
+        string baseSystem = persona.Length == 0 ? roleBlock : $"{persona}\n\n{roleBlock}";
         baseSystem += BuildPersistentContext(thread);
         // Budget awareness (the soft layer): the server hard-caps thinking at BudgetThinking tokens, but the
         // model can't feel that limit approaching, so it runs straight into it every turn. Telling it the
