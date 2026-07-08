@@ -77,6 +77,66 @@ public class DiscordModule : BackgroundService, IDiscordModule
         await dm.SendMessageAsync(AsBlockQuote("A·R·I is offline."));
     }
 
+    /// <summary>Deletes every message ARI sent within the given window across all reachable
+    /// channels (guild text channels in joined guilds plus the owner DM).</summary>
+    public async Task<int> DeleteRecentMessagesAsync(TimeSpan window)
+    {
+        DateTimeOffset cutoff = DateTimeOffset.UtcNow - window;
+        ulong selfId = client.CurrentUser?.Id ?? 0;
+        if (selfId == 0)
+        {
+            _logger.LogWarning("Cannot delete messages: Discord client is not connected.");
+            return 0;
+        }
+
+        var channels = new List<IMessageChannel>();
+        foreach (SocketGuild guild in client.Guilds)
+            channels.AddRange(guild.TextChannels);
+
+        try
+        {
+            IUser owner = await client.GetUserAsync(config.OwnerId);
+            if (owner is not null)
+                channels.Add(await owner.CreateDMChannelAsync());
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Could not open owner DM for message deletion: {Message}", ex.Message);
+        }
+
+        int deleted = 0;
+        foreach (IMessageChannel channel in channels)
+        {
+            try
+            {
+                var messages = new List<IMessage>();
+                await foreach (var batch in channel.GetMessagesAsync(500))
+                    messages.AddRange(batch);
+
+                foreach (IMessage msg in messages)
+                {
+                    if (msg.Author.Id != selfId || msg.Timestamp < cutoff) continue;
+                    try
+                    {
+                        await msg.DeleteAsync();
+                        deleted++;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning("Failed to delete message {MessageId}: {Message}", msg.Id, ex.Message);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Failed to scan channel {ChannelId} for deletion: {Message}", channel.Id, ex.Message);
+            }
+        }
+
+        _logger.LogInformation("Deleted {Count} ARI message(s) from the last {Hours:0.#}h.", deleted, window.TotalHours);
+        return deleted;
+    }
+
     private DateTimeOffset botOnlineSince = DateTimeOffset.UtcNow;
 
     private async Task OnReady()

@@ -28,6 +28,7 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly Context?          context;
     private readonly Engram?           engram;
     private readonly Refactor?         refactor;
+    private readonly CuriosityAgent?   curiosity;
     private readonly Classifier?       classifier;
     private readonly Awareness?        awareness;
     private readonly Appraisal?        appraiser;
@@ -152,14 +153,14 @@ public class LLMModule : ILLMModule, IDisposable
         {
             code = Deserialize<Coder>(codeEl);
             agentMap["Code"] = code;
-            _logger.LogInformation("Coder agent is active. MaxContext: {Ctx} tokens.", code.MaxContextTokens);
+            _logger.LogInformation("Coder agent is active. MaxContext: {Ctx} tokens.", code.BudgetContext);
         }
 
         if (rawAgents.TryGetValue("CodeArchitect", out JsonElement architectEl))
         {
             codeArchitect = Deserialize<CodeArchitect>(architectEl);
             agentMap["CodeArchitect"] = codeArchitect;
-            _logger.LogInformation("CodeArchitect agent is active. MaxContext: {Ctx} tokens.", codeArchitect.MaxContextTokens);
+            _logger.LogInformation("CodeArchitect agent is active. MaxContext: {Ctx} tokens.", codeArchitect.BudgetContext);
         }
 
         if (rawAgents.TryGetValue("Classifier", out JsonElement classifierEl))
@@ -226,6 +227,16 @@ public class LLMModule : ILLMModule, IDisposable
                 refactor.Notify = NotifyWatchers;
                 agentMap["Refactor"] = refactor;
                 _logger.LogInformation("Refactor is active.");
+            }
+
+            if (rawAgents.TryGetValue("Curiosity", out JsonElement curiosityEl))
+            {
+                curiosity = Deserialize<CuriosityAgent>(curiosityEl);
+                curiosity.PersistentDir = PersistentDataDir;
+                curiosity.Registry = threads;
+                curiosity.Notify = NotifyWatchers;
+                agentMap["Curiosity"] = curiosity;
+                _logger.LogInformation("Curiosity is active.");
             }
 
             commands = new CommandService(engram, refactor);
@@ -533,11 +544,11 @@ public class LLMModule : ILLMModule, IDisposable
                    : trimmed == "/code"     ? "Switched to **Code** mode."
                    :                          "Switched to **Dialogue** mode.";
         }
-        else if (trimmed == "/brainscan")
+        else if (trimmed == "/curiosity" || trimmed == "/brainscan")
         {
-            // Retained alias — the graph walk (Refactor) now does the tidy + curiosity work BrainScan used to.
-            if (!HasRefactor) result = "Refactor is not loaded.";
-            else { _ = Task.Run(() => RunRefactorAsync(CancellationToken.None)); result = "Graph walk started — watch the log / vault git history."; }
+            // /brainscan retained as an alias — the Curiosity agent is BrainScan's successor (graph-walk).
+            if (!HasCuriosity) result = "Curiosity is not loaded.";
+            else { _ = Task.Run(() => RunCuriosityAsync(CancellationToken.None)); result = "Curiosity walk started — watch the log / Curiosities.json."; }
         }
         else if (trimmed == "/proactive")
         {
@@ -664,6 +675,13 @@ public class LLMModule : ILLMModule, IDisposable
     /// <summary>Runs a full graph-walk refactor pass (honours the token so it yields when cancelled).</summary>
     public Task RunRefactorAsync(CancellationToken ct) =>
         refactor?.Run(allNotes: true, ct) ?? Task.CompletedTask;
+
+    /// <summary>True when the Curiosity agent is loaded and can be run by the Scheduler.</summary>
+    public bool HasCuriosity => curiosity is not null;
+
+    /// <summary>Runs a curiosity walk (idle-gated by the Scheduler; yields when cancelled).</summary>
+    public Task RunCuriosityAsync(CancellationToken ct) =>
+        curiosity?.Run(ct) ?? Task.CompletedTask;
 
     /// <summary>
     /// Picks the top pending curiosity, phrases it in Ari's voice, and DMs the owner on Discord. The

@@ -87,8 +87,9 @@ public class ARI : BackgroundService
 
         string ariPersistentDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "Server", "PersistentData");
-        string persistentAgentsPath = Path.Combine(ariPersistentDir, "Agents.json");
-        persistentData.EnsureAgentsFileFromFallback(Path.Combine(executableDirectory, "Agents.json"));
+        // Agents.json is now source-controlled (ARI.Core/Agents.json, copied to the output dir at build) —
+        // edited in the repo, not in PersistentData. Load the built copy directly.
+        string agentsPath = Path.Combine(executableDirectory, "Agents.json");
 
         // ── LLM module ───────────────────────────────────────────────────────────
         string modelsPath = ResolvePath(executableDirectory, config.modules.LLM.ModelsPath);
@@ -100,7 +101,7 @@ public class ARI : BackgroundService
             _logger.LogInformation("Loading agents...");
             llmModule = new LLMModule(
                 servers:        persistentData.GetServers().ToList(),
-                agentsJsonPath: persistentAgentsPath,
+                agentsJsonPath: agentsPath,
                 brainConfig:    brainConfig,
                 loggerFactory:  loggerFactory);
             CommonModules.Register(llm: llmModule);
@@ -218,10 +219,15 @@ public class ARI : BackgroundService
         {
             schedulerModule = new SchedulerModule(config.modules.Scheduler, ariPersistentDir, loggerFactory.CreateLogger("ARI.Scheduler"));
 
-            // Graph walk: every 6 hours, while idle, Refactor tidies the graph and records curiosities
-            // (replaces the old BrainScan — same schedule, now a tool-driven walk that also restructures).
+            // Tidy walk: every 6 hours, while idle, Refactor restructures the graph (hubs, dedup, types).
             if (llmModule.HasRefactor)
                 schedulerModule.AddTask("Refactor", "0 */6 * * *", ct => llmModule.RunRefactorAsync(ct));
+
+            // Curiosity walk: every 6 hours, while idle, the Curiosity agent explores the graph and records
+            // open questions to Curiosities.json (BrainScan's successor). Staggered off Refactor's slot so
+            // the two brain walks don't fire together.
+            if (llmModule.HasCuriosity)
+                schedulerModule.AddTask("Curiosity", "0 3,9,15,21 * * *", ct => llmModule.RunCuriosityAsync(ct));
 
             // Proactive message: every 2 hours (while idle, outside quiet hours), Ari DMs a curiosity.
             LLMModule llm = llmModule;

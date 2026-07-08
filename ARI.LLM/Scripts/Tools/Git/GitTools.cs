@@ -107,7 +107,8 @@ internal sealed class GitLog : GitTool
 
 internal sealed class GitCommit : GitTool
 {
-    internal GitCommit(string root) : base(root) { }
+    private readonly string? coAuthor;   // e.g. "A.R.I <ari@xywren.net>" → appended as a Co-Authored-By trailer
+    internal GitCommit(string root, string? coAuthor = null) : base(root) => this.coAuthor = coAuthor;
     internal override string Name => "git_commit";
     internal override object Schema => new
     {
@@ -115,16 +116,18 @@ internal sealed class GitCommit : GitTool
         function = new
         {
             name        = "git_commit",
-            description = "Stage all changes and commit them. One commit per logical change (may span several files when it is one coherent change, e.g. 'Extracted X into note Y'). Subject = what changed, body = why. Review the diff first.",
+            // ONE parameter on purpose: the model reliably merges separate subject/body fields into one and
+            // adds stray quotes, which breaks the text tool-call parser. A single `message` field removes that
+            // whole failure class. First line = what changed; leave a blank line then the why.
+            description = "Stage all changes and commit them. One commit per logical change. Provide a single 'message': the first line is a short summary of WHAT changed, then a blank line, then WHY. Review the diff first.",
             parameters  = new
             {
                 type       = "object",
                 properties = new
                 {
-                    subject = new { type = "string", description = "Short summary of what changed." },
-                    body    = new { type = "string", description = "Why the change was made (the reasoning). Strongly encouraged — this is the changelog." }
+                    message = new { type = "string", description = "Commit message: first line = what changed; blank line; then why." }
                 },
-                required = new[] { "subject" }
+                required = new[] { "message" }
             }
         }
     };
@@ -132,16 +135,15 @@ internal sealed class GitCommit : GitTool
     internal override Task<string> Execute(string argsJson)
     {
         JsonElement a = GitArgs.Parse(argsJson);
-        string subject = a.Str("subject");
-        if (subject.Length == 0) return Task.FromResult("Error: 'subject' is required.");
+        string message = a.Str("message");
+        if (message.Length == 0) return Task.FromResult("Error: 'message' is required.");
 
         (int _, string status, string _) = Run("status", "--porcelain");
         if (string.IsNullOrWhiteSpace(status)) return Task.FromResult("Nothing to commit — working tree clean.");
 
         Run("add", "-A");
-        string body = a.Str("body");
-        string message = string.IsNullOrWhiteSpace(body) ? subject : $"{subject}\n\n{body}";
-        (int code, string _, string err) = Run(message, "commit", "-F", "-");
+        if (!string.IsNullOrWhiteSpace(coAuthor)) message += $"\n\nCo-Authored-By: {coAuthor}";
+        (int code, string _, string err) = RunInput(message, "commit", "-F", "-");
         if (code != 0) return Task.FromResult($"Commit failed: {err.Trim()}");
 
         (int _, string head, string _) = Run("log", "-1", "--format=%h %s");

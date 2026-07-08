@@ -4,6 +4,10 @@ public interface IDiscordModule
 {
     Task NotifyOwner(string message);
     Task NotifyOffline();
+
+    /// <summary>Deletes every message ARI sent within the given window, across all reachable
+    /// channels (guild text channels and the owner DM). Returns the number of messages deleted.</summary>
+    Task<int> DeleteRecentMessagesAsync(TimeSpan window);
 }
 
 public interface ILLMModule

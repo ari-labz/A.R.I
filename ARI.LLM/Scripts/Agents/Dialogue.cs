@@ -5,7 +5,7 @@ namespace ARI.LLM;
 internal class Dialogue : Agent
 {
     [JsonPropertyName("shortTermMemoryLimit")] public int? ShortTermMemoryLimit { get; init; }
-    [JsonPropertyName("maxImageTokens")]       public int MaxImageTokens        { get; init; }
+    [JsonPropertyName("budgetImage")]       public int BudgetImage        { get; init; }
 
     internal override int  MemoryLimit      => ShortTermMemoryLimit ?? 0;
     internal override bool SuppressPromptLog => true;
