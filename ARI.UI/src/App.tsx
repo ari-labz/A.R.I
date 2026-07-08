@@ -755,6 +755,18 @@ export default function App() {
         }
     }, [refreshThreadAttach, injectFileTree, openToolSocket, loadThreads])
 
+    // Deep-link from a push notification: /?thread=KEY opens that thread once the app is connected.
+    const deepLinkedRef = useRef(false)
+    useEffect(() => {
+        if (connState !== "connected" || deepLinkedRef.current) return
+        const key = new URLSearchParams(window.location.search).get("thread")
+        if (!key) return
+        deepLinkedRef.current = true
+        openThread(key).catch(() => {})
+        // Strip the param so a later refresh doesn't re-open it.
+        window.history.replaceState({}, "", window.location.pathname)
+    }, [connState, openThread])
+
     // Create a Speech thread, open it into the orb view, and start streaming the mic to ARI.Listener.
     const beginSpeech = useCallback(async () => {
         const key = await createThread(selectedProject, "speech")

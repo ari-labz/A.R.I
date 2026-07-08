@@ -79,6 +79,62 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
         return Ok(new { ok = true });
     }
 
+    // ── Scheduler ─────────────────────────────────────────────────────────────────────
+
+    [HttpGet("scheduler")]
+    public IActionResult GetScheduler()
+    {
+        ISchedulerModule? sched = Modules.Scheduler;
+        if (sched is null) return StatusCode(503, "Scheduler is not available.");
+        (int quietStart, int quietEnd) = sched.QuietHours;
+        return Ok(new
+        {
+            enabled          = sched.Enabled,
+            proactiveEnabled = sched.ProactiveEnabled,
+            quietStartHour   = quietStart,
+            quietEndHour     = quietEnd,
+            tasks = sched.GetTasks().Select(t => new
+            {
+                name       = t.Name,
+                cron       = t.Cron,
+                lastRunUtc = t.LastRunUtc,
+                nextRunUtc = t.NextRunUtc,
+            }),
+        });
+    }
+
+    [HttpPost("scheduler/task")]
+    public IActionResult SetSchedulerTask([FromBody] SchedulerTaskRequest req)
+    {
+        ISchedulerModule? sched = Modules.Scheduler;
+        if (sched is null) return StatusCode(503, "Scheduler is not available.");
+        if (string.IsNullOrWhiteSpace(req.Name) || string.IsNullOrWhiteSpace(req.Cron))
+            return BadRequest(new { error = "name and cron are required." });
+        if (!sched.SetTaskCron(req.Name, req.Cron))
+            return BadRequest(new { error = "Invalid cron expression or unknown task." });
+        return Ok(new { ok = true });
+    }
+
+    [HttpPost("scheduler/proactive")]
+    public IActionResult SetProactive([FromBody] SchedulerProactiveRequest req)
+    {
+        ISchedulerModule? sched = Modules.Scheduler;
+        if (sched is null) return StatusCode(503, "Scheduler is not available.");
+        sched.ProactiveEnabled = req.Enabled;
+        return Ok(new { ok = true });
+    }
+
+    [HttpPost("scheduler/quiet-hours")]
+    public IActionResult SetQuietHours([FromBody] SchedulerQuietHoursRequest req)
+    {
+        ISchedulerModule? sched = Modules.Scheduler;
+        if (sched is null) return StatusCode(503, "Scheduler is not available.");
+        if (req.QuietStartHour is < 0 or > 23 || req.QuietEndHour is < 0 or > 23)
+            return BadRequest(new { error = "Hours must be 0-23." });
+        sched.SetQuietHours(req.QuietStartHour, req.QuietEndHour);
+        return Ok(new { ok = true });
+    }
+
     [HttpGet("ram")]
     public IActionResult GetRam()
     {
@@ -1092,6 +1148,9 @@ public record SetStartupModelRequest(string ModelName);
 public record ModelNotesRequest(string ModelName, string? Notes);
 
 public record ConventionsRequest(string? Text);
+public record SchedulerTaskRequest(string? Name, string? Cron);
+public record SchedulerProactiveRequest(bool Enabled);
+public record SchedulerQuietHoursRequest(int QuietStartHour, int QuietEndHour);
 
 public record TrainRequest(
     string ModelName,
