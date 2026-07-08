@@ -431,7 +431,8 @@ internal sealed class ServerFileSystem : FileSystem
 
                 int s = ed.StartLine, en = ed.EndLine > 0 ? ed.EndLine : ed.StartLine;
                 if (s < 1 || s > totalLines || en < s || en > totalLines)
-                    return $"start_line/end_line {s}-{en} is out of range{label} — {relPath} has {totalLines} lines. Re-read the file for current line numbers.";
+                    return $"start_line/end_line {s}-{en} is out of range{label} — {relPath} has {totalLines} lines. "
+                         + $"You do NOT need to re-read; here are the file's current line numbers — edit against these:\n\n{NumberedView(buf0, s, totalLines)}";
 
                 if (s == en && ed.New.Trim().Length > 0)
                 {
@@ -469,6 +470,12 @@ internal sealed class ServerFileSystem : FileSystem
             foreach (Span sp in spans.OrderByDescending(s => s.Start))
                 buf = buf[..sp.Start] + sp.Rep + buf[(sp.Start + sp.Len)..];
 
+            // No-op guard: a replacement identical to the existing text changes nothing, but silently
+            // "succeeds" — the model then can't tell why the file didn't change and repeats the same edit.
+            // Tell it explicitly, and point at the real move (delete lines to REMOVE content).
+            if (buf == buf0)
+                return $"No change: your new_string is identical to the current content at those lines in {relPath} — nothing was written. Re-typing the same text does nothing. To REMOVE content (e.g. to reduce a note's outbound links), target those lines with an EMPTY new_string to delete them; to change it, write genuinely different text.";
+
             int open0 = buf0.Count(c => c == '{'), close0 = buf0.Count(c => c == '}');
             int open1 = buf.Count(c => c == '{'),  close1 = buf.Count(c => c == '}');
             if (open0 == close0 && open1 != close1)
@@ -480,7 +487,9 @@ internal sealed class ServerFileSystem : FileSystem
             string[] lines = buf.Split('\n');
 
             if (multi)
-                return $"Successfully edited {relPath}. Applied {edits.Count} edits ({spans.Count} replacements). File is now {lines.Length} lines.";
+                return $"Successfully edited {relPath}. Applied {edits.Count} edits ({spans.Count} replacements). "
+                     + $"File is now {lines.Length} lines — its line numbers have shifted; edit against these current numbers "
+                     + $"(no need to re-read):\n\n{NumberedView(buf, 1, lines.Length)}";
 
             int    editLine     = buf[..firstStart].Count(c => c == '\n');
             int    newLineCount = firstRepLen == 0 ? 1 : buf.Substring(firstStart, firstRepLen).Count(c => c == '\n') + 1;
@@ -490,6 +499,20 @@ internal sealed class ServerFileSystem : FileSystem
             return $"Successfully edited {relPath}.\n\n[Updated context — lines {from + 1}–{to + 1}]\n```\n{snippet}\n```";
         }
         catch (Exception ex) { return $"Error editing file: {ex.Message}"; }
+    }
+
+    // Render 1-based numbered lines so a failed/batch edit can hand back CURRENT line numbers instead of
+    // telling the model to re-read (which the memory-agent read guard blocks → blind re-read loop). Shows the
+    // whole file when small; otherwise a window around the target line. Matches the read_file numbering format.
+    private static string NumberedView(string content, int targetLine, int totalLines)
+    {
+        string[] lines = content.Replace("\r", "").Split('\n');
+        int from, to;
+        if (lines.Length <= 140) { from = 0; to = lines.Length - 1; }
+        else { from = Math.Max(0, targetLine - 15); to = Math.Min(lines.Length - 1, targetLine + 15); }
+        string body = string.Join("\n", lines[from..(to + 1)].Select((l, i) => $"{from + i + 1,6}: {l}"));
+        string tag  = (from == 0 && to == lines.Length - 1) ? "whole file" : $"lines {from + 1}–{to + 1}";
+        return $"[Current content — {tag}]\n```\n{body}\n```";
     }
 
     private async Task<string> ReadWithRetry(string absPath)
@@ -585,6 +608,32 @@ internal sealed class ServerFileSystem : FileSystem
         catch (Exception ex) { return Task.FromResult($"Error moving file: {ex.Message}"); }
     }
 
+    // ── write_file (create a new file, or fully replace an existing one) ────────────────────────────
+    public override async Task<string> Write(string argsJson)
+    {
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            JsonElement root = doc.RootElement;
+            string relPath = (root.GetProperty("path").GetString() ?? "").Trim('"', '\'', ' ');
+            string content = root.TryGetProperty("content", out JsonElement c) ? c.GetString() ?? "" : "";
+            string? abs = Resolve(relPath);
+            if (abs is null) return "Access denied: path traversal is not allowed.";
+            if (IsRedactionPlaceholder(content))
+                return $"Refused: content was a placeholder (\"[omitted]\"), not real text — re-send the literal content for {relPath}.";
+            string? dir = Path.GetDirectoryName(abs);
+            if (dir is not null) Directory.CreateDirectory(dir);
+            bool existed = File.Exists(abs);
+            // Snapshot the pre-write content so RevertFile can undo it (parity with Edit) — matters for the
+            // coding pipeline; the memory agents revert via git instead.
+            if (existed) gate?.TakeSnapshot(abs, await ReadWithRetry(abs));
+            await WriteWithRetry(abs, content);
+            // "Successfully wrote" is the exact phrase Coder.ToolLoop keys on to register a write — keep it.
+            return $"Successfully wrote {relPath} ({(existed ? "overwrote" : "created")}, {content.Split('\n').Length} lines).";
+        }
+        catch (Exception ex) { return $"Error writing file: {ex.Message}"; }
+    }
+
     // ── list_directory (from ListDirectory.cs) ─────────────────────────────────────────────────────
     public override Task<string> List(string argsJson)
     {
@@ -593,7 +642,11 @@ internal sealed class ServerFileSystem : FileSystem
             using JsonDocument doc = JsonDocument.Parse(argsJson);
 
             string relPath  = doc.RootElement.TryGetProperty("path",      out JsonElement pathEl) ? (pathEl.GetString() ?? ".").Trim('"', '\'', ' ') : ".";
-            bool   recurse  = doc.RootElement.TryGetProperty("recursive", out JsonElement recEl)  && recEl.GetBoolean();
+            // The text tool protocol delivers every parameter as a STRING, so "recursive":"true" would throw on
+            // GetBoolean(). Accept a real bool OR a "true"/"false" string.
+            bool   recurse  = doc.RootElement.TryGetProperty("recursive", out JsonElement recEl)
+                && (recEl.ValueKind == JsonValueKind.True
+                    || (recEl.ValueKind == JsonValueKind.String && bool.TryParse(recEl.GetString(), out bool rb) && rb));
             string? absPath = Resolve(relPath);
 
             if (absPath is null)             return Task.FromResult("Access denied: path traversal is not allowed.");

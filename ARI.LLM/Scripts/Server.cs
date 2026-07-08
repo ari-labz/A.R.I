@@ -291,6 +291,12 @@ public class Server : IDisposable
             "--n-predict -1",
             $"--temp {temp:F2} --top-p {topP:F2} --top-k {topK} --min-p {minP:F2} --repeat-penalty {repeatPenalty:F2}",
             jinja ? "--jinja" : "",
+            // Reasoning: separate the chain-of-thought into message.reasoning_content, and — since thinking
+            // is budgeted PER-REQUEST via `thinking_budget_tokens` — leave the server budget unset (never pass
+            // --reasoning-budget, which would disable per-request overrides). The budget-message is injected
+            // before the forced end-of-thinking so a budgeted turn wraps up its thought instead of being chopped.
+            "--reasoning-format deepseek",
+            "--reasoning-budget-message \"I've used most of my thinking budget. Let me finish this thought, state my conclusion in one line, and act on it now.\"",
             $"-np {ParallelSlots} -ngl 99 --port {Port}",
             "--host 127.0.0.1",
             UnifiedCache ? "--kv-unified --cache-reuse 256" : "",

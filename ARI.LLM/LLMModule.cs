@@ -28,7 +28,7 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly Context?          context;
     private readonly Engram?           engram;
     private readonly Refactor?         refactor;
-    private readonly BrainScan?        brainScan;
+    private readonly CuriosityAgent?   curiosity;
     private readonly Classifier?       classifier;
     private readonly Awareness?        awareness;
     private readonly Appraisal?        appraiser;
@@ -153,14 +153,14 @@ public class LLMModule : ILLMModule, IDisposable
         {
             code = Deserialize<Coder>(codeEl);
             agentMap["Code"] = code;
-            _logger.LogInformation("Coder agent is active. MaxContext: {Ctx} tokens.", code.MaxContextTokens);
+            _logger.LogInformation("Coder agent is active. MaxContext: {Ctx} tokens.", code.BudgetContext);
         }
 
         if (rawAgents.TryGetValue("CodeArchitect", out JsonElement architectEl))
         {
             codeArchitect = Deserialize<CodeArchitect>(architectEl);
             agentMap["CodeArchitect"] = codeArchitect;
-            _logger.LogInformation("CodeArchitect agent is active. MaxContext: {Ctx} tokens.", codeArchitect.MaxContextTokens);
+            _logger.LogInformation("CodeArchitect agent is active. MaxContext: {Ctx} tokens.", codeArchitect.BudgetContext);
         }
 
         if (rawAgents.TryGetValue("Classifier", out JsonElement classifierEl))
@@ -209,6 +209,9 @@ public class LLMModule : ILLMModule, IDisposable
             if (rawAgents.TryGetValue("Engram", out JsonElement engramEl))
             {
                 engram = Deserialize<Engram>(engramEl);
+                engram.PersistentDir = PersistentDataDir;
+                engram.Registry = threads;
+                engram.Notify = NotifyWatchers;
                 engram.Init(dialogue, context, threads);
                 engram.SweepCompleted += key => NotifyWatchers(key);
                 agentMap["Engram"] = engram;
@@ -219,15 +222,21 @@ public class LLMModule : ILLMModule, IDisposable
             {
                 refactor = Deserialize<Refactor>(refactorEl);
                 refactor.engram = engram;
+                refactor.PersistentDir = PersistentDataDir;
+                refactor.Registry = threads;
+                refactor.Notify = NotifyWatchers;
                 agentMap["Refactor"] = refactor;
                 _logger.LogInformation("Refactor is active.");
             }
 
-            if (rawAgents.TryGetValue("BrainScan", out JsonElement scanEl))
+            if (rawAgents.TryGetValue("Curiosity", out JsonElement curiosityEl))
             {
-                brainScan = Deserialize<BrainScan>(scanEl);
-                agentMap["BrainScan"] = brainScan;
-                _logger.LogInformation("BrainScan is active.");
+                curiosity = Deserialize<CuriosityAgent>(curiosityEl);
+                curiosity.PersistentDir = PersistentDataDir;
+                curiosity.Registry = threads;
+                curiosity.Notify = NotifyWatchers;
+                agentMap["Curiosity"] = curiosity;
+                _logger.LogInformation("Curiosity is active.");
             }
 
             commands = new CommandService(engram, refactor);
@@ -535,11 +544,11 @@ public class LLMModule : ILLMModule, IDisposable
                    : trimmed == "/code"     ? "Switched to **Code** mode."
                    :                          "Switched to **Dialogue** mode.";
         }
-        else if (trimmed == "/brainscan")
+        else if (trimmed == "/curiosity" || trimmed == "/brainscan")
         {
-            // Manual trigger for the scheduled brain scan (long-running — fire and forget).
-            if (!HasBrainScan) result = "BrainScan is not loaded.";
-            else { _ = Task.Run(() => RunBrainScanAsync(PersistentDataDir, CancellationToken.None)); result = "Brain scan started — watch the log / Curiosities.json."; }
+            // /brainscan retained as an alias — the Curiosity agent is BrainScan's successor (graph-walk).
+            if (!HasCuriosity) result = "Curiosity is not loaded.";
+            else { _ = Task.Run(() => RunCuriosityAsync(CancellationToken.None)); result = "Curiosity walk started — watch the log / Curiosities.json."; }
         }
         else if (trimmed == "/proactive")
         {
@@ -655,17 +664,24 @@ public class LLMModule : ILLMModule, IDisposable
     // runs background work only while this holds, and long tasks poll it to yield the moment Ari is busy.
     public bool IsIdle => processingThreads.IsEmpty;
 
-    /// <summary>True when BrainScan is loaded and can be run by the Scheduler.</summary>
-    public bool HasBrainScan => brainScan is not null;
+    /// <summary>True when Refactor is loaded and can be run by the Scheduler (the graph walk that replaced BrainScan).</summary>
+    public bool HasRefactor => refactor is not null;
 
     // Canonical persistent-data location (same as the Scheduler tasks use). Only needed by the manual
     // /brainscan and /proactive commands, which don't receive it from ARI.Core.
     private static string PersistentDataDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "Server", "PersistentData");
 
-    /// <summary>Runs one brain-scan pass (checkpointed; honours the token so it yields when Ari is busy).</summary>
-    public Task RunBrainScanAsync(string persistentDir, CancellationToken ct) =>
-        brainScan?.Run(persistentDir, ct) ?? Task.CompletedTask;
+    /// <summary>Runs a full graph-walk refactor pass (honours the token so it yields when cancelled).</summary>
+    public Task RunRefactorAsync(CancellationToken ct) =>
+        refactor?.Run(allNotes: true, ct) ?? Task.CompletedTask;
+
+    /// <summary>True when the Curiosity agent is loaded and can be run by the Scheduler.</summary>
+    public bool HasCuriosity => curiosity is not null;
+
+    /// <summary>Runs a curiosity walk (idle-gated by the Scheduler; yields when cancelled).</summary>
+    public Task RunCuriosityAsync(CancellationToken ct) =>
+        curiosity?.Run(ct) ?? Task.CompletedTask;
 
     /// <summary>
     /// Picks the top pending curiosity, phrases it in Ari's voice, and DMs the owner on Discord. The

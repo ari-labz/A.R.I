@@ -11,10 +11,10 @@ public sealed class AgentDefinition
     public bool    Enabled           { get; set; } = true;
     public int?    Slot              { get; set; }
     public bool    Think             { get; set; }
-    public int     ThinkingBudget    { get; set; }
-    public int     MaxTokens         { get; set; } = -1;
+    public int     BudgetThinking    { get; set; }
+    public int     BudgetResponse         { get; set; } = -1;
     public int     MaxToolCalls      { get; set; }
-    public int     MaxContextTokens  { get; set; }
+    public int     BudgetContext  { get; set; }
     public bool    NativeTools       { get; set; }
     public double? Temperature       { get; set; }
     public double? TopP              { get; set; }

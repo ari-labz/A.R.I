@@ -40,7 +40,7 @@ internal sealed class SpeechPipeline : Pipeline
     }
 
     protected override LiveCallInfo BuildLiveCall(string threadKey) =>
-        new("Speech", threadKey, 0, dialogue.MaxTokens, dialogue.MaxContextTokens, dialogue.MaxImageTokens);
+        new("Speech", threadKey, 0, dialogue.BudgetResponse, dialogue.BudgetContext, dialogue.BudgetImage);
 
     protected override async Task<string> RunAsync(
         Thread               thread,
