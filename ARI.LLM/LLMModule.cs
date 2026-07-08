@@ -684,15 +684,14 @@ public class LLMModule : ILLMModule, IDisposable
         curiosity?.Run(ct) ?? Task.CompletedTask;
 
     /// <summary>
-    /// Picks the top pending curiosity, phrases it in Ari's voice, and DMs the owner on Discord. The
-    /// curiosity is marked "asked" only after a successful send, so a failed send simply retries next time.
-    /// Quiet-hours gating is the caller's responsibility.
+    /// Picks the top pending curiosity, phrases it in Ari's voice, opens a normal Dialogue thread seeded
+    /// with that opening message (so Ari can see its own question when the owner replies), and rings the
+    /// owner's phone with a Web Push notification. The curiosity is marked "asked" only after the thread is
+    /// created, so a failure simply retries next time. Quiet-hours gating is the caller's responsibility.
     /// </summary>
     public async Task RunProactiveMessageAsync(string persistentDir, CancellationToken ct)
     {
         if (dialogue is null) return;
-        IDiscordModule? discord = Modules.Discord;
-        if (discord is null) { _logger.LogInformation("[Proactive] Discord not available — skipping."); return; }
 
         List<Curiosity> all = CuriosityStore.Load(persistentDir);
         Curiosity? pick = all.Where(c => c.Status == "pending")
@@ -700,25 +699,68 @@ public class LLMModule : ILLMModule, IDisposable
             .FirstOrDefault();
         if (pick is null) { _logger.LogInformation("[Proactive] no pending curiosities to raise."); return; }
 
+        // Framed to make Ari WRITE its own opening message, not narrate the task. The earlier "Greet them
+        // and ask this" phrasing was echoed back as a stage direction ("Ari greets you warmly and asks…");
+        // "write your opening message now / output only the message" stops that.
         string instruction =
-            "You want to message the user — the person you talk with and care about — first, unprompted, because " +
-            "something has genuinely been on your mind. Greet them warmly and ask them this, in one or two sentences: " +
-            $"\"{pick.Question}\" " +
-            "You are asking the USER about it. The question may concern someone else in their life — if so, ask the " +
-            "user about that person; do not address that person directly. Do not mention that this was scheduled, " +
-            "automatic, or that you were 'reflecting'.";
+            "Something has been on your mind and you want to message the user — the person you talk with and care " +
+            "about — first, unprompted. Write your opening message to them now: greet them and raise this with them, " +
+            $"in one or two sentences — \"{pick.Question}\" " +
+            "Address the user directly as \"you\", never by name. If the matter concerns someone else in their life, " +
+            "ask the user about that person — do not address that person. Output only the message itself, in your own " +
+            "voice; do not describe what you are doing, and do not mention that this was scheduled, automatic, or that " +
+            "you were 'reflecting'.";
 
+        // Generate through the full Dialogue pipeline (not raw SendPrompt) so the opener is grounded in memory
+        // recall + context — otherwise Ari phrases blind, with no idea who the people in the question are. The
+        // draft thread is internal and never registered, so the instruction above never surfaces in the sidebar;
+        // we then seed a fresh owner-facing thread with just the resulting message.
         string opener;
-        try { opener = await dialogue.SendPrompt(new Thread(ThreadPipeline.Dialogue, $"proactive:{Guid.NewGuid()}") { Internal = true }, instruction, ct: ct); }
+        Thread draft = new(ThreadPipeline.Dialogue, $"proactive-draft:{Guid.NewGuid()}") { Internal = true };
+        CancellationTokenSource draftCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        processingThreads[draft.Key] = draftCts;
+        try
+        {
+            opener = dialoguePipeline is not null
+                ? await dialoguePipeline.ExecuteAsync(draft, draft.Key, instruction, "user", null, null, draftCts)
+                : await dialogue.SendPrompt(draft, instruction, ct: ct);
+        }
         catch (OperationCanceledException) { throw; }
-        catch (Exception ex) { _logger.LogWarning("[Proactive] phrasing failed ({Msg}); sending the raw question.", ex.Message); opener = pick.Question; }
+        catch (Exception ex) { _logger.LogWarning("[Proactive] phrasing failed ({Msg}); using the raw question.", ex.Message); opener = pick.Question; }
+        finally { processingThreads.TryRemove(draft.Key, out _); }
         if (string.IsNullOrWhiteSpace(opener)) opener = pick.Question;
+        opener = opener.Trim();
 
-        await discord.NotifyOwner(opener.Trim());
+        // Create the real, owner-facing thread and seed Ari's opening message into its history.
+        string threadKey = CreateProactiveDialogueThread(opener, title: pick.Topic);
+
+        // Ring the phone. Web Push is best-effort — a missing/failed push must not lose the thread.
+        try { await (Modules.WebPush?.SendPushNotification(opener, url: $"/?thread={threadKey}", title: "Ari") ?? Task.CompletedTask); }
+        catch (Exception ex) { _logger.LogWarning("[Proactive] push notification failed: {Msg}", ex.Message); }
 
         int idx = all.FindIndex(c => c.Id == pick.Id);
         if (idx >= 0) { all[idx] = pick with { Status = "asked", AskedAt = DateTime.UtcNow.ToString("o") }; CuriosityStore.Save(persistentDir, all); }
-        _logger.LogInformation("[Proactive] messaged the owner about '{Topic}'.", pick.Topic);
+        _logger.LogInformation("[Proactive] opened thread '{Key}' about '{Topic}'.", threadKey, pick.Topic);
+    }
+
+    /// <summary>
+    /// Creates a fresh, owner-facing Dialogue thread whose history is a single assistant message — Ari
+    /// speaking first. Returns the thread key. The thread is registered like any web thread (fires the
+    /// newThread event), so it appears in the sidebar and the owner's reply lands with the opener in history.
+    /// </summary>
+    public string CreateProactiveDialogueThread(string assistantText, string? title = null)
+    {
+        string threadKey = $"web-{Guid.NewGuid():N}";
+        Thread thread = GetOrCreateThread(ThreadPipeline.Dialogue, threadKey);   // broadcasts "newThread"
+        if (!string.IsNullOrWhiteSpace(title)) thread.Title = title;
+        thread.AddItem(new Response
+        {
+            Content   = ContentBlock.Parse(assistantText),
+            Timestamp = DateTime.Now,
+            State     = State.Complete,
+            IsVisible = true,
+        });
+        return threadKey;
     }
 
     public void NotifyTyping(string threadKey)
