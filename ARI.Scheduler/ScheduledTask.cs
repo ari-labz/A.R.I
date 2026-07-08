@@ -11,7 +11,8 @@ namespace ARI.Scheduler;
 internal sealed class ScheduledTask
 {
     internal string Name { get; }
-    internal CronExpression Cron { get; }
+    internal CronExpression Cron { get; private set; }
+    internal string CronText { get; private set; }
     internal Func<CancellationToken, Task> Handler { get; }
 
     // Persisted: when the task last completed a full run. Cron's next occurrence is computed from this.
@@ -20,10 +21,21 @@ internal sealed class ScheduledTask
     internal ScheduledTask(string name, string cronExpression, Func<CancellationToken, Task> handler, DateTime lastRunUtc)
     {
         Name = name;
+        CronText = cronExpression;
         Cron = CronExpression.Parse(cronExpression);
         Handler = handler;
         LastRunUtc = lastRunUtc;
     }
+
+    /// <summary>Swaps in a new cron expression live. Throws CronFormatException if invalid (caller validates).</summary>
+    internal void UpdateCron(string cronExpression)
+    {
+        Cron = CronExpression.Parse(cronExpression);
+        CronText = cronExpression;
+    }
+
+    /// <summary>Next scheduled fire time (UTC) after the last run, or null if none.</summary>
+    internal DateTime? NextRunUtc() => Cron.GetNextOccurrence(LastRunUtc, TimeZoneInfo.Utc);
 
     /// <summary>Due when the next cron occurrence after the last run has passed. A task that was due
     /// while Ari was busy simply stays due (overdue) until an idle window arrives.</summary>

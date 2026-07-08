@@ -1,5 +1,7 @@
 using System.Text.Json;
+using ARI.Common;
 using ARI.LLM;
+using Cronos;
 using Microsoft.Extensions.Logging;
 
 namespace ARI.Scheduler;
@@ -13,11 +15,14 @@ namespace ARI.Scheduler;
 /// Register jobs with AddTask before Start. Cron schedules come from the task's default or a
 /// SchedulerConfig override. Last-run times persist to Scheduler.json so overdue survives restarts.
 /// </summary>
-public sealed class SchedulerModule : IDisposable
+public sealed class SchedulerModule : IDisposable, ISchedulerModule
 {
     private readonly SchedulerConfig _config;
     private readonly ILogger _logger;
     private readonly string _statePath;
+    private readonly string _settingsPath;
+    private readonly SchedulerSettings _settings;
+    private readonly object _settingsLock = new();
     private readonly List<ScheduledTask> _tasks = new();
     private readonly Dictionary<string, DateTime> _lastRun;
 
@@ -32,16 +37,86 @@ public sealed class SchedulerModule : IDisposable
         _config = config;
         _logger = logger;
         _statePath = Path.Combine(persistentDataDir, "Scheduler.json");
+        _settingsPath = Path.Combine(persistentDataDir, "Scheduler.Settings.json");
+        _settings = SchedulerSettings.Load(_settingsPath);
         _lastRun = LoadState();
     }
 
-    /// <summary>Register a job. <paramref name="defaultCron"/> is used unless overridden in config.</summary>
+    /// <summary>Register a job. Cron precedence: runtime override (control panel) &gt; AriConfig override
+    /// &gt; the task's built-in default.</summary>
     public void AddTask(string name, string defaultCron, Func<CancellationToken, Task> handler)
     {
-        string cron = _config.Schedules.TryGetValue(name, out string? c) && !string.IsNullOrWhiteSpace(c) ? c : defaultCron;
+        string cron =
+            _settings.Schedules.TryGetValue(name, out string? s) && IsValidCron(s) ? s
+          : _config.Schedules.TryGetValue(name, out string? c) && !string.IsNullOrWhiteSpace(c) ? c
+          : defaultCron;
         DateTime lastRun = _lastRun.TryGetValue(name, out DateTime lr) ? lr : DateTime.UtcNow;
         _tasks.Add(new ScheduledTask(name, cron, handler, lastRun));
         _logger.LogInformation("[Scheduler] Registered task '{Name}' (cron: {Cron}).", name, cron);
+    }
+
+    // ── ISchedulerModule (control-panel surface) ──────────────────────────────────────
+
+    public bool Enabled => _config.Enabled;
+
+    public IReadOnlyList<SchedulerTaskInfo> GetTasks()
+    {
+        lock (_settingsLock)
+            return _tasks.Select(t => new SchedulerTaskInfo(
+                t.Name, t.CronText,
+                _lastRun.TryGetValue(t.Name, out DateTime lr) && lr != default ? lr : (DateTime?)null,
+                t.NextRunUtc())).ToList();
+    }
+
+    public bool SetTaskCron(string name, string cron)
+    {
+        if (!IsValidCron(cron)) return false;
+        lock (_settingsLock)
+        {
+            ScheduledTask? task = _tasks.FirstOrDefault(t => t.Name == name);
+            if (task is null) return false;
+            task.UpdateCron(cron.Trim());
+            _settings.Schedules[name] = cron.Trim();
+            _settings.Save(_settingsPath);
+        }
+        _logger.LogInformation("[Scheduler] Task '{Name}' cron updated to '{Cron}'.", name, cron.Trim());
+        return true;
+    }
+
+    public bool ProactiveEnabled
+    {
+        get { lock (_settingsLock) return _settings.ProactiveEnabled ?? true; }
+        set
+        {
+            lock (_settingsLock) { _settings.ProactiveEnabled = value; _settings.Save(_settingsPath); }
+            _logger.LogInformation("[Scheduler] Proactive messages {State}.", value ? "enabled" : "disabled");
+        }
+    }
+
+    public (int QuietStartHour, int QuietEndHour) QuietHours
+    {
+        get { lock (_settingsLock) return (_settings.QuietStartHour ?? _config.QuietStartHour, _settings.QuietEndHour ?? _config.QuietEndHour); }
+    }
+
+    public void SetQuietHours(int quietStartHour, int quietEndHour)
+    {
+        int start = ((quietStartHour % 24) + 24) % 24;
+        int end   = ((quietEndHour   % 24) + 24) % 24;
+        lock (_settingsLock) { _settings.QuietStartHour = start; _settings.QuietEndHour = end; _settings.Save(_settingsPath); }
+        _logger.LogInformation("[Scheduler] Quiet hours set to {Start}:00–{End}:00.", start, end);
+    }
+
+    public bool IsQuietHour(int hour)
+    {
+        (int start, int end) = QuietHours;
+        return start <= end ? hour >= start && hour < end : hour >= start || hour < end;
+    }
+
+    private static bool IsValidCron(string? cron)
+    {
+        if (string.IsNullOrWhiteSpace(cron)) return false;
+        try { CronExpression.Parse(cron.Trim()); return true; }
+        catch { return false; }
     }
 
     public void Start()
