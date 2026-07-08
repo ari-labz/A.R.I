@@ -13,7 +13,6 @@ internal class Memory : Agent
 {
     [JsonPropertyName("hopLimit")] public int HopLimit { get; init; }
 
-    private const int MIN_RECALL_LENGTH = 80;
     private const int TRANSCRIPT_LIMIT  = 5;
     private const int SEED_NEAR_LIMIT   = 25;
     private const int TOP_CANDIDATES    = 25;
@@ -24,20 +23,6 @@ internal class Memory : Agent
     internal override bool QuietLogging => true;
 
     public Memory() { }
-
-    private static readonly string[] MemoryKeywords =
-    [
-        "remember", "last time", "before", "yesterday", "you said", "we talked",
-        "earlier", "previously", "used to", "told me", "you mentioned", "we discussed"
-    ];
-
-    private static readonly string[] PersonalKeywords =
-    [
-        " my ", "my ", "who is", "who's", "who are", "what is", "what's",
-        "where is", "where's", "tell me about", "what do you know",
-        "about me", "who am i", "am i ", "do you know", "know about",
-        "what do i", "how do i", "what are my", "tell me"
-    ];
 
     private static readonly HashSet<string> Stopwords = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -84,22 +69,8 @@ internal class Memory : Agent
 
         Thread memThread = new Thread(ThreadPipeline.Dialogue, $"memory:{Guid.NewGuid()}") { Internal = true };
 
-        // Skip for short messages with no question or memory/personal signal.
-        if (incomingPrompt.Length < MIN_RECALL_LENGTH && !incomingPrompt.Contains('?'))
-        {
-            bool hasSignal = MemoryKeywords.Any(kw => incomingPrompt.Contains(kw, StringComparison.OrdinalIgnoreCase))
-                          || PersonalKeywords.Any(kw => incomingPrompt.Contains(kw, StringComparison.OrdinalIgnoreCase));
-            if (!hasSignal)
-            {
-                Shared.Logger.LogInformation("[Memory] skipped");
-                RunLogger.Write("Memory", "skipped", new[] { ("Recall thread", memThread) }, new[]
-                {
-                    $"Incoming prompt: {RunLogger.Trunc(incomingPrompt)}",
-                    "Outcome: skipped — short message with no question or memory/personal signal",
-                });
-                return string.Empty;
-            }
-        }
+        // Recall always runs — it's fast enough that a keyword gate only ever costs a real hit.
+        // If nothing matches, the SQL seed returns no candidates and we bail below at near-zero cost.
 
         // Not the full transcript — avoids noisy seeds from ARI's own words. Prompt terms come
         // first so the cap trims summary terms, never the user's own words. The summary's structural
@@ -193,18 +164,29 @@ internal class Memory : Agent
             return string.Empty;
         }
 
+        // The model is asked for exact titles but often echoes the whole decorated candidate line
+        // ("Xywren: (aka [REDACT]) - **Formal Name:** [REDACT]"). Constrain the fuzzy fallback to the notes
+        // actually offered, so a mangled pick can never resolve to a note that wasn't in the list.
+        HashSet<string> offered = recall.Candidates.Select(c => c.Note.Name).ToHashSet();
+
         StringBuilder result = new();
         List<string> fetched = new();
+        List<string> fuzzy = new();
         List<string> unresolved = new();
+        HashSet<string> seen = new();
         foreach (string title in selected)
         {
-            Note? note = BrainModule.GetNote(title);
+            Note? note = Resolve(title, offered, out bool viaFuzzy);
             if (note is null) { unresolved.Add(title); continue; }
+            if (!seen.Add(note.Name)) continue;
+            if (viaFuzzy) fuzzy.Add(title);
             fetched.Add(note.Title);
             result.AppendLine($"[{note.Title}|{note.Url}]");
             result.AppendLine(note.ToPrompt());
             result.AppendLine();
         }
+        if (fuzzy.Count > 0)
+            Shared.Logger.LogInformation("[Memory] recovered decorated pick(s) via scored resolve: {Fuzzy}", string.Join(", ", fuzzy));
         if (unresolved.Count > 0)
             Shared.Logger.LogWarning("[Memory] model selected title(s) not found in the brain: {Unresolved}", string.Join(", ", unresolved));
 
@@ -220,6 +202,26 @@ internal class Memory : Agent
                 + (unresolved.Count > 0 ? $" · unresolved: {string.Join(", ", unresolved)}" : string.Empty),
         });
         return result.ToString().TrimEnd();
+    }
+
+    // Resolve a model's selection to a note. Fast path: exact title/alias/path via GetNote. Fallback:
+    // tokenise the (often decorated) pick and run it through the scored search, keeping the top result
+    // that was actually offered — title/alias tiers outweigh stray snippet words, so the intended note wins.
+    private static Note? Resolve(string pick, HashSet<string> offered, out bool viaFuzzy)
+    {
+        viaFuzzy = false;
+        Note? note = BrainModule.GetNote(pick);
+        if (note is not null) return note;
+
+        List<string> tokens = Tokenize(pick);
+        if (tokens.Count == 0) return null;
+
+        SearchResult? best = BrainModule.Search(tokens, TOP_CANDIDATES)
+            .FirstOrDefault(r => offered.Contains(r.Note.Name));
+        if (best is null) return null;
+
+        viaFuzzy = true;
+        return best.Note;
     }
 
     // Full content is fetched only after selection, never during the deciding step.
