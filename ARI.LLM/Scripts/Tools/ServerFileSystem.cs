@@ -31,12 +31,21 @@ internal sealed class ServerFileSystem : FileSystem
     private readonly string            root;
     private readonly CancellationToken ct;
     private readonly FileSnapshots?    gate;   // preview-before-read + edit/revert snapshots
+    private readonly bool              brainVault; // vault root: redirect content/name search to search_brain
 
-    public ServerFileSystem(string root, CancellationToken ct, FileSnapshots? gate = null)
+    // Redirect returned when a memory agent reaches for a raw-file search over the vault. The filesystem
+    // search (regex over text / glob over filenames) can't see a note's aliases; search_brain resolves by
+    // title, alias, and content through the index. Told, not blocked — so the model self-corrects.
+    private const string BrainSearchRedirect =
+        "To search the brain, use the search_brain tool instead — it searches note titles, aliases, and " +
+        "content through the memory index. Give it plain words (a name or phrase), not a regex or glob.";
+
+    public ServerFileSystem(string root, CancellationToken ct, FileSnapshots? gate = null, bool brainVault = false)
     {
-        this.root = root;
-        this.ct   = ct;
-        this.gate = gate;
+        this.root       = root;
+        this.ct         = ct;
+        this.gate       = gate;
+        this.brainVault = brainVault;
     }
 
     /// <summary>Resolves a project-relative path to an absolute one, or null if it escapes the root.</summary>
@@ -208,6 +217,7 @@ internal sealed class ServerFileSystem : FileSystem
     // ── search_files (from SearchFiles.cs) ─────────────────────────────────────────────────────────
     public override async Task<string> Search(string argsJson)
     {
+        if (brainVault) return BrainSearchRedirect;
         try
         {
             using JsonDocument doc = JsonDocument.Parse(argsJson);
@@ -276,6 +286,7 @@ internal sealed class ServerFileSystem : FileSystem
     // ── find_files (from FindFiles.cs) ─────────────────────────────────────────────────────────────
     public override Task<string> Find(string argsJson)
     {
+        if (brainVault) return Task.FromResult(BrainSearchRedirect);
         try
         {
             using JsonDocument doc = JsonDocument.Parse(argsJson);
