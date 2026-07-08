@@ -23,6 +23,7 @@ public abstract class Agent
     [JsonPropertyName("temperature")]   public double? Temperature   { get; init; }
     [JsonPropertyName("topP")]          public double? TopP          { get; init; }
     [JsonPropertyName("topK")]          public int?    TopK          { get; init; }
+    [JsonPropertyName("minP")]          public double? MinP          { get; init; }
     [JsonPropertyName("repeatPenalty")] public double? RepeatPenalty { get; init; }
     [JsonPropertyName("presencePenalty")]  public double? PresencePenalty  { get; init; }
     [JsonPropertyName("frequencyPenalty")]  public double? FrequencyPenalty  { get; init; }
@@ -509,7 +510,7 @@ public abstract class Agent
                 ["temperature"]    = Temperature   ?? TEMPERATURE,
                 ["top_p"]          = TopP          ?? TOP_P,
                 ["top_k"]          = TopK          ?? TOP_K,
-                ["min_p"]          = MIN_P,
+                ["min_p"]          = MinP          ?? MIN_P,
                 ["repeat_penalty"] = RepeatPenalty ?? REPEAT_PENALTY
             };
 
@@ -1085,7 +1086,7 @@ public abstract class Agent
                 OnToolBatchStart(toolTurn);
 
                 HashSet<string> readOnlyTools = new(StringComparer.OrdinalIgnoreCase)
-                    { "read_file", "search_files", "list_directory", "find_files" };
+                    { "read_file", "search_files", "list_directory", "find_files", "search_brain" };
                 Dictionary<int, Task<string>> prelaunched = new();
                 if (pendingCalls.Count > 1)
                     foreach (var (idx, c) in pendingCalls)

@@ -16,6 +16,11 @@ internal class Engram : MemoryAgent, IDisposable
     // the first commit (that's the Refactor walk's behaviour).
     protected override bool StopAfterCommit => false;
 
+    // No work-call ceiling: the circuit breaker exists for the single-change Refactor epoch. Engram must
+    // recon several existing entities (find/search/read) before it can place memories, so an 8-call cap
+    // guillotines the sweep during exploration — it never reaches write_file/git_commit. Disable it here.
+    protected override int? EpochToolCeiling => null;
+
     [JsonIgnore] internal Dialogue?    dialogue       { get; set; }
     [JsonIgnore] internal Context?     context        { get; set; }
     [JsonIgnore] internal string       PersistentDir  { get; set; } = string.Empty;
@@ -179,9 +184,10 @@ internal class Engram : MemoryAgent, IDisposable
         sb.AppendLine();
         sb.AppendLine("For each real person, place, event, project, pet, or thing worth remembering (NOT yourself, " +
                        "and NOT purely task/technical chatter):");
-        sb.AppendLine("- Check whether it already has a note before creating one: search_files / find_files by name " +
-                       "AND aliases, and use `neighbours` to see the surrounding graph. Never create a duplicate — if " +
-                       "the same entity exists under another name, edit that note; if there are two, merge_notes them.");
+        sb.AppendLine("- Check whether it already has a note before creating one: search_brain by name (it searches " +
+                       "note titles, aliases, and content, so it finds the note even under an alias), and use `neighbours` " +
+                       "to see the surrounding graph. Never create a duplicate — if the same entity exists under another " +
+                       "name, edit that note; if there are two, merge_notes them.");
         sb.AppendLine("- Read the relevant hub/neighbour notes (read_file) before writing, so you place it correctly " +
                        "and link it to the right owned hub. Use the path to infer where things belong.");
         sb.AppendLine("- Create or update the note with write_file / edit_file: set its type, link it outward to its hub, " +
