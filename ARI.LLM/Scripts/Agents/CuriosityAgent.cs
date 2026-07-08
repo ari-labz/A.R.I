@@ -57,9 +57,11 @@ internal sealed class CuriosityAgent : MemoryAgent
     protected override void RegisterTools(Thread thread, string persistentDir, CancellationToken ct)
     {
         string root = BrainModule.VaultRoot;
-        ServerFileSystem fs = new(root, ct);
+        ServerFileSystem fs = new(root, ct, brainVault: true);
         new ReadFile(fs).Register(thread);
         new ListDirectory(fs).Register(thread);
+        // search_files / find_files over the vault redirect to search_brain (alias-aware) — see ServerFileSystem.
+        new SearchBrain().Register(thread);
         new SearchFiles(fs).Register(thread);
         new FindFiles(fs).Register(thread);
         new Neighbours().Register(thread);
@@ -100,7 +102,7 @@ internal sealed class CuriosityAgent : MemoryAgent
         sb.AppendLine(task);
         sb.AppendLine();
         sb.AppendLine("Explore with the tools: read the notes that intrigue you (read_file), follow links (neighbours), " +
-                      "search if something nags at you (search_files). When a GENUINE open question surfaces — an event " +
+                      "search if something nags at you (search_brain). When a GENUINE open question surfaces — an event " +
                       "whose outcome you never heard, a person you know little about, a thread left hanging, a gap in " +
                       "what you know — record it with add_curiosity. Prefer a few real questions over many shallow ones; " +
                       "record nothing if nothing here genuinely makes you wonder.");

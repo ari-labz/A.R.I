@@ -65,6 +65,53 @@ internal sealed class Neighbours : Tool
     }
 }
 
+// ── search_brain ─────────────────────────────────────────────────────────────────────
+
+// Alias-aware lookup over the memory index. Where a raw file search sees only filenames (find_files) or
+// literal text (search_files), this resolves by note title, alias, AND content — so an entity referred to
+// by an alias (e.g. "[REDACT]" → the "Xywren" note) is still found. Reindexes first so results reflect edits
+// the agent just made. Ranked: exact title, then alias, then content.
+internal sealed class SearchBrain : Tool
+{
+    private const int DEFAULT_LIMIT = 15;
+
+    internal override string Name => "search_brain";
+    internal override object Schema => new
+    {
+        type = "function",
+        function = new
+        {
+            name        = "search_brain",
+            description = "Search the memory graph for a note by title, alias, or content. Give it plain words — a name or short phrase, one entity at a time (NOT a regex or glob). This is how you check whether an entity already has a note before creating one: it finds the note even when the entity is referred to by an alias. Returns matching notes ranked by relevance (title match, then alias, then content), one 'title — path' per line.",
+            parameters  = new
+            {
+                type       = "object",
+                properties = new
+                {
+                    query = new { type = "string",  description = "Plain words to look up, e.g. '[REDACT]' or '[REDACT]'. Not a regex or glob." },
+                    limit = new { type = "integer", description = $"Max results to return (default {DEFAULT_LIMIT})." }
+                },
+                required = new[] { "query" }
+            }
+        }
+    };
+
+    internal override Task<string> Execute(string argsJson)
+    {
+        JsonElement a = Args.Parse(argsJson);
+        string query = a.Str("query").Trim();
+        if (query.Length == 0) return Task.FromResult("Error: 'query' is required.");
+        int limit = Math.Clamp(a.Int("limit", DEFAULT_LIMIT), 1, 50);
+
+        BrainModule.Index();
+        List<string> terms = query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).ToList();
+        List<SearchResult> hits = BrainModule.Search(terms, limit);
+        if (hits.Count == 0) return Task.FromResult($"No notes found for '{query}'. It likely has no note yet.");
+
+        return Task.FromResult(string.Join('\n', hits.Select(h => $"{h.Note.Title} — {h.Note.Path}")));
+    }
+}
+
 // ── merge_notes ────────────────────────────────────────────────────────────────────────
 
 // Fold one note into another: the loser's title + aliases become aliases on the winner, every
