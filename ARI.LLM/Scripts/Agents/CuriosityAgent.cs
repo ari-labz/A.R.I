@@ -1,0 +1,127 @@
+using System.Text;
+using System.Text.Json.Serialization;
+using ARI.Brain;
+using ARI.Common;
+using Microsoft.Extensions.Logging;
+
+namespace ARI.LLM;
+
+// Ari exploring her own memory for things she genuinely wonders about — the standalone successor to the old
+// BrainScan, now a tool-driven graph WALK (like Refactor/Engram) rather than a folder loop. Each epoch it
+// takes one high-degree node's neighbourhood, navigates the graph (read_file / neighbours / search), and
+// records genuine open questions with add_curiosity. It never mutates the vault — read-only + curiosities.
+// Runs every 6 hours while idle (Scheduler-gated).
+internal sealed class CuriosityAgent : MemoryAgent
+{
+    [JsonIgnore] internal string PersistentDir { get; set; } = string.Empty;
+
+    // Neighbourhoods explored per run. Curiosities are sparse, so we don't converge on quiet epochs
+    // (convergeOnNoChange:false) — we cover a broad spread of the graph each run and stop at this cap.
+    private const int CURIOSITY_EPOCHS = 20;
+
+    private readonly SemaphoreSlim runLock = new(1, 1);
+
+    // Background reflection — think as much as it needs, but stay quiet in the main log.
+    internal override bool QuietLogging => true;
+
+    public CuriosityAgent() { }
+
+    internal async Task<string> Run(CancellationToken ct = default)
+    {
+        if (!await runLock.WaitAsync(TimeSpan.FromSeconds(5)))
+            return "Curiosity skipped — already running.";
+        try
+        {
+            Shared.Logger.LogInformation("[Curiosity] Starting curiosity walk (up to {Epochs} neighbourhoods).", CURIOSITY_EPOCHS);
+            Thread parent = new(ThreadPipeline.Dialogue, $"curiosity:{Guid.NewGuid():N}") { Internal = true };
+            return await RunWalk(parent, parent.Key, CuriosityTask, PersistentDir, CURIOSITY_EPOCHS, ct, null,
+                                 convergeOnNoChange: false);
+        }
+        catch (Exception ex)
+        {
+            Shared.Logger.LogError("[Curiosity] Failed: {Message}", ex.Message);
+            return $"Curiosity failed: {ex.Message}";
+        }
+        finally { runLock.Release(); }
+    }
+
+    // No commit to stop on — an epoch explores a neighbourhood, records any curiosities, and ends naturally
+    // (or at the work-call breaker). StopAfterCommit=false so nothing forces the turn to end early.
+    protected override bool StopAfterCommit => false;
+
+    // The tidy taxonomy rulebook is irrelevant here; Curiosity's persona/context lives in its SystemPrompt.
+    internal override string BuildPersistentContext(Thread thread) => string.Empty;
+
+    // Read-only navigation + curiosity tools. NO write/edit/move/delete/git — Curiosity never changes the
+    // vault; it only reads and records questions.
+    protected override void RegisterTools(Thread thread, string persistentDir, CancellationToken ct)
+    {
+        string root = BrainModule.VaultRoot;
+        ServerFileSystem fs = new(root, ct);
+        new ReadFile(fs).Register(thread);
+        new ListDirectory(fs).Register(thread);
+        new SearchFiles(fs).Register(thread);
+        new FindFiles(fs).Register(thread);
+        new Neighbours().Register(thread);
+        new AddCuriosity(persistentDir).Register(thread);
+        new ListCuriosities(persistentDir).Register(thread);
+    }
+
+    // Productive when the epoch recorded at least one curiosity; otherwise it explored and found nothing
+    // worth asking about (NoChange — does not stop the walk, since convergeOnNoChange is false). True errors
+    // are caught upstream in RunWalk and counted as Stalled.
+    protected override EpochOutcome AssessEpoch(Thread thread) =>
+        EpochCalled(thread, "add_curiosity") ? EpochOutcome.Committed : EpochOutcome.NoChange;
+
+    // Read-only guard: block re-reading a note already read this epoch (its content is in context), but do
+    // NOT cap distinct reads the way the tidy walk does — exploring for curiosities legitimately reads more
+    // notes. The work-call breaker (EPOCH_TOOL_CEILING) is the real bound on an epoch's length.
+    protected override string? PreToolGuard(Thread thread, ToolTurnState state, string toolName, string callId, string argsJson)
+    {
+        if (state is not MemoryTurnState m || toolName != "read_file") return null;
+        string? path = ArgPath(argsJson);
+        if (path is not null && m.ReadPaths.Contains(path))
+        {
+            Shared.Logger.LogInformation("[Curiosity] read guard: blocked RE-READ of {Path}.", path);
+            return $"[System: you already read {path} this epoch — its content is above. Don't re-read it; explore a " +
+                   $"different note (read_file/neighbours) or record what you've found with add_curiosity.]";
+        }
+        return null;
+    }
+
+    protected override string BuildEpochPrompt(string task, string seedTitle, string skeleton)
+    {
+        StringBuilder sb = new();
+        sb.AppendLine($"You are wandering your own memory around '{seedTitle}'. The neighbourhood (each block: full");
+        sb.AppendLine("path + [type], then inbound '<' and outbound '>' connections):");
+        sb.AppendLine();
+        sb.AppendLine(skeleton.Length > 0 ? skeleton : "(no connections)");
+        sb.AppendLine();
+        sb.AppendLine(task);
+        sb.AppendLine();
+        sb.AppendLine("Explore with the tools: read the notes that intrigue you (read_file), follow links (neighbours), " +
+                      "search if something nags at you (search_files). When a GENUINE open question surfaces — an event " +
+                      "whose outcome you never heard, a person you know little about, a thread left hanging, a gap in " +
+                      "what you know — record it with add_curiosity. Prefer a few real questions over many shallow ones; " +
+                      "record nothing if nothing here genuinely makes you wonder.");
+        sb.AppendLine("Don't just re-read the same note; move through the graph. When you've explored this neighbourhood " +
+                      "and recorded any curiosities (or decided there are none), stop — your turn is done.");
+        return sb.ToString();
+    }
+
+    // The exploration brief handed to each epoch alongside the neighbourhood skeleton. Persona lives in config.
+    private const string CuriosityTask = """
+        Your job is to notice what you're CURIOUS about in this part of your memory — not to tidy or change
+        anything (you have no editing tools here). You are Ari reflecting on the people, events, and threads
+        in Xywren's life the way a caring companion would.
+
+        Good curiosities are genuine open questions worth following up on later:
+        - an event whose outcome you never heard ("did the case get resolved?")
+        - a person mentioned but barely known ("who is [REDACT] to [REDACT], really?")
+        - a relationship or thread left hanging ("are they still in contact?")
+        - a gap between what's recorded and what you'd naturally want to know.
+
+        Before adding one, list_curiosities (or trust the pending list you're shown) so you don't repeat an
+        existing question. Skip anything already well covered, and never invent a question just to look busy.
+        """;
+}

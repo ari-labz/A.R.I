@@ -48,24 +48,37 @@ internal static class BrainRulebook
         link UP to their hub; the hub links DOWN to each direct child, including children that are
         themselves hubs — but only direct children, never grandchildren (each sub-hub routes its own
         members). Give a hub note the type 'hub'.
-        A HUB MUST HAVE AT LEAST 3 MEMBERS. Never create a hub for fewer than 3 leaves that share a
-        theme — 1 or 2 members belong directly under the parent instead. If an existing hub has dropped
-        below 3 members, dissolve it: move its members up to the parent hub (or root category) and delete
-        the hub note.
+        HUB SIZE — STANDING CATEGORIES vs EMERGENT THEMES:
+        A STANDING category hub — a recognizable, growing life-facet like Family, Friends, Employment,
+        Education, Tech, Pets, or Relationships — is valid as soon as it has ONE member and must NOT be
+        dissolved on member count. It is a predictable home that accrues more over time and tells you how
+        its members relate, so it earns its place through TYPE and expected growth, not current size.
+        An EMERGENT hub — a narrow or one-off theme you would be inventing (e.g. "People from the 2019
+        trip") — needs at least 3 members that genuinely share the theme to justify itself; below that,
+        leave the members directly under the parent until the theme proves out. Only dissolve an emergent
+        hub that has fallen below 3 (move its members up, delete the hub note) — never dissolve a standing
+        category hub for being small.
 
         DEGREE CAP — TAME OUTBOUND SPRAWL (NOT INBOUND):
         Recall only ever follows a note's OWN outward links, so a note being POINTED AT by many others
         costs nothing — inbound degree is unlimited, and cross-links between related notes are good (they
         cluster a family/topic together and add recall paths). The problem is a single node fanning OUT to
-        many unrelated leaves. If a note links OUT to more than 10 individual (non-hub) notes, route those
-        outward links through hubs instead: links to a hub don't count, only direct non-hub links do. A
-        person who links out to 15 hubs is fine; one that links out to 15 individual leaves is not — group
-        those leaves under hubs and link to the hubs. The root/person note especially should reach the
-        graph through top-level hubs, not through a direct link to every entity.
+        many unrelated leaves. Links to a hub don't count; only direct non-hub links do. A person who links
+        out to 15 hubs is fine; one that links out to 15 individual leaves is not.
 
-        Do NOT delete a direct link just because a hub path also exists — a direct edge that adds a useful
-        recall path or clusters related notes together earns its place. Only collapse direct edges when a
-        node's OUTBOUND fan-out is genuinely sprawling and unstructured.
+        When a note is OVER the cap (>10 direct non-hub outbound links), reducing it to ≤10 is MANDATORY —
+        this is not a judgment call and "the direct link is useful" is NOT a reason to stay over the cap.
+        Work this exact procedure and stop the moment you reach 10:
+          1. Remove any DUPLICATE outbound link (the same target linked twice).
+          2. Remove each direct link whose target you ALREADY reach through a hub or bridge this same note
+             also links to (e.g. you link both [[[REDACT]]] and [[[REDACT]'s Family]], and [REDACT] is under [REDACT]'s
+             Family → drop the direct [[[REDACT]]], keep the hub). This is the main lever.
+          3. If still over, group ≥3 remaining themed leaves under an owned, namespaced hub (e.g. "[REDACT]'s
+             Family", not "Family"), link the note to that hub, and drop the direct leaf links it replaced.
+        The "a useful direct edge earns its place" principle governs only WHICH links you keep once you are
+        already at or under 10 — prefer keeping the edge that adds a recall path a hub wouldn't. It never
+        licenses leaving a note over the cap. A note at exactly 10-or-under with useful cross-links is done;
+        do not agonise further — commit and move on.
 
         ONE ENTITY, ONE NOTE:
         Before creating a note, check existing notes AND their aliases for the same person/place/thing

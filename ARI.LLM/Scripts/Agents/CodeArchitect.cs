@@ -119,18 +119,15 @@ internal sealed class CodeArchitect : Agent
 
         // Every user prompt gets appraised — a "resume" can be anything from a one-word approval (grade 0)
         // to a fully-specified new request (the turn that actually needs a thinking budget).
-        (int? grade, int? thinkSeconds, string awareness) = await AppraiseThinking(prompt, threadKey, cts.Token);
+        (int? grade, _, _) = await AppraiseThinking(prompt, threadKey, cts.Token);
 
         string reply = await SendPrompt(parent, prompt, username,
-            augmentedPrompt: $"{prompt}\n\n[System: {nudge}{awareness}]",
-            ct: cts.Token, userMessagePreadded: true, onDelta: onDelta, thinkSeconds: thinkSeconds);
+            augmentedPrompt: $"{prompt}\n\n[System: {nudge}]",
+            ct: cts.Token, userMessagePreadded: true, onDelta: onDelta);
 
         // Attach appraisal telemetry to this turn's response so the DTI can show it (chat view ignores it).
         if (grade is not null && parent.History.OfType<Response>().LastOrDefault() is { } appraised)
-        {
-            appraised.AppraisalGrade   = grade;
-            appraised.AppraisalSeconds = thinkSeconds;
-        }
+            appraised.AppraisalGrade = grade;
 
         // If it spawned coders it executed → done; otherwise it presented a plan / asked a question → await the user.
         parent.AwaitingPlanApproval = !bypass && touched.Count == 0;

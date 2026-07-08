@@ -25,7 +25,7 @@ internal sealed class CodePipeline : Pipeline
     }
 
     protected override LiveCallInfo BuildLiveCall(string threadKey) =>
-        new("Code", threadKey, 0, code.MaxTokens, code.MaxContextTokens, 0);
+        new("Code", threadKey, 0, code.BudgetResponse, code.BudgetContext, 0);
 
     protected override Task<string> RunAsync(
         Thread               thread,

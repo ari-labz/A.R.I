@@ -22,8 +22,6 @@ internal class Engram : MemoryAgent, IDisposable
 
     private EngramBuffer? buffer;
 
-    [JsonPropertyName("sweepIntervalMinutes")] public int SweepIntervalMinutes { get; init; }
-
     private readonly Dictionary<string, DateTime>       lastRun          = new();
     private readonly Dictionary<string, int>            lastHistoryCount = new();
     private readonly SemaphoreSlim                      engramLock       = new(1, 1);
@@ -147,7 +145,6 @@ internal class Engram : MemoryAgent, IDisposable
             writeThreads.Add(("Engram placement", parent));
 
             await SendPrompt(parent, EngramTask(transcript, contextSummary, speaker), "system",
-                thinkSeconds: THINK_SECONDS_PER_EPOCH,
                 onDelta: async _ => { Notify?.Invoke(parent.Key); await Task.CompletedTask; });
 
             int commits = parent.History.OfType<Response>()
@@ -192,7 +189,7 @@ internal class Engram : MemoryAgent, IDisposable
         sb.AppendLine($"- Maintain today's conversation log at Conversations/{DateTime.Now:yyyy-MM-dd} — a 1-3 sentence " +
                        "summary that links to everything discussed. Edit it if it already exists.");
         sb.AppendLine("- After each note (or each coherent group of edits), review with git_diff and git_commit with a " +
-                       "clear subject and why.");
+                       "single 'message' (first line = what changed, blank line, then why).");
         sb.AppendLine();
         sb.AppendLine("If nothing is worth storing, make no changes and stop. Preserve facts; never invent them.");
         return sb.ToString();

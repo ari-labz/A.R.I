@@ -14,8 +14,10 @@ internal abstract class GitTool : Tool
     protected GitTool(string root) => this.root = root;
 
     /// <summary>Run a git subcommand in the repo root. Optional stdin is written then closed (used for
-    /// commit messages via `-F -`). Returns the exit code plus captured stdout/stderr.</summary>
-    protected (int Code, string Out, string Err) Run(string? stdin, params string[] args)
+    /// commit messages via `-F -`). Returns the exit code plus captured stdout/stderr.
+    /// NOTE: distinct name from <see cref="Run(string[])"/> on purpose — a single overloaded `Run` makes
+    /// `Run("status","--short")` bind "status" to the stdin parameter, silently breaking every git call.</summary>
+    protected (int Code, string Out, string Err) RunInput(string? stdin, params string[] args)
     {
         ProcessStartInfo psi = new()
         {
@@ -40,5 +42,5 @@ internal abstract class GitTool : Tool
         return (process.ExitCode, outp, err);
     }
 
-    protected (int Code, string Out, string Err) Run(params string[] args) => Run(null, args);
+    protected (int Code, string Out, string Err) Run(params string[] args) => RunInput(null, args);
 }
