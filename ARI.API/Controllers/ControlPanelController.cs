@@ -79,6 +79,17 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
         return Ok(new { ok = true });
     }
 
+    // ── Persona ───────────────────────────────────────────────────────────────────────
+    [HttpGet("persona")]
+    public IActionResult GetPersona() => Ok(new { text = PersonaStore.Get() });
+
+    [HttpPost("persona")]
+    public IActionResult SetPersona([FromBody] PersonaRequest req)
+    {
+        PersonaStore.Set(req.Text ?? "");
+        return Ok(new { ok = true });
+    }
+
     // ── Scheduler ─────────────────────────────────────────────────────────────────────
 
     [HttpGet("scheduler")]
@@ -1148,6 +1159,7 @@ public record SetStartupModelRequest(string ModelName);
 public record ModelNotesRequest(string ModelName, string? Notes);
 
 public record ConventionsRequest(string? Text);
+public record PersonaRequest(string? Text);
 public record SchedulerTaskRequest(string? Name, string? Cron);
 public record SchedulerProactiveRequest(bool Enabled);
 public record SchedulerQuietHoursRequest(int QuietStartHour, int QuietEndHour);
