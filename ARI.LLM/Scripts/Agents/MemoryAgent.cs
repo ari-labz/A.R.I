@@ -38,7 +38,9 @@ internal abstract class MemoryAgent : Agent
     // (status/diff/log/commit) is excluded so the commit at the end of a clean epoch always lands. Anything
     // past this many work calls is a spiral, so we END the turn gracefully (OnBatchEndShouldBreak breaks the
     // loop WITHOUT withdrawing tools mid-generation, which is what triggered the earlier text-fallback aborts).
-    protected const int EPOCH_TOOL_CEILING = 8;
+    // This bound exists for the single-change Refactor epoch; Engram seeds a whole conversation and needs to
+    // recon several entities before writing, so it overrides this to null (no ceiling).
+    protected virtual int? EpochToolCeiling => 8;
 
     protected sealed class MemoryTurnState : ToolTurnState
     {
@@ -60,7 +62,7 @@ internal abstract class MemoryAgent : Agent
             Shared.Logger.LogInformation("[{Agent}] commit landed — ending epoch (skipping the empty post-commit turn).", Name);
             return true;
         }
-        if (m.WorkCalls >= EPOCH_TOOL_CEILING)
+        if (EpochToolCeiling is int ceiling && m.WorkCalls >= ceiling)
         {
             Shared.Logger.LogWarning("[{Agent}] circuit breaker: {N} work tool calls this epoch — ending turn.", Name, m.WorkCalls);
             return true;
@@ -187,13 +189,15 @@ internal abstract class MemoryAgent : Agent
     protected virtual void RegisterTools(Thread thread, string persistentDir, CancellationToken ct)
     {
         string root = BrainModule.VaultRoot;
-        ServerFileSystem fs = new(root, ct);
+        ServerFileSystem fs = new(root, ct, brainVault: true);
         new ReadFile(fs).Register(thread);
         new WriteFile(fs).Register(thread);
         new EditFile(fs).Register(thread);
         new MoveFile(fs).Register(thread);
         new DeleteFile(fs).Register(thread);
         new ListDirectory(fs).Register(thread);
+        // search_files / find_files over the vault redirect to search_brain (alias-aware) — see ServerFileSystem.
+        new SearchBrain().Register(thread);
         new SearchFiles(fs).Register(thread);
         new FindFiles(fs).Register(thread);
 
