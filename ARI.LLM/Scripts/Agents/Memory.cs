@@ -58,6 +58,9 @@ internal class Memory : Agent
         "September", "October", "November", "December"
     };
 
+    // Whole-word self-reference — the speaker is talking about themselves, so seed their own note.
+    private static readonly Regex SelfReference = new(@"\b(i|me|my|myself|mine|i'?m)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private static List<string> Tokenize(string text) => Regex.Split(text, @"[^a-zA-Z0-9']+")
         .Select(t => t.Trim('\''))
         .Where(t => t.Length >= 3 && !Stopwords.Contains(t))
@@ -72,10 +75,21 @@ internal class Memory : Agent
         // Recall always runs — it's fast enough that a keyword gate only ever costs a real hit.
         // If nothing matches, the SQL seed returns no candidates and we bail below at near-zero cost.
 
-        // Not the full transcript — avoids noisy seeds from ARI's own words. Prompt terms come
-        // first so the cap trims summary terms, never the user's own words. The summary's structural
+        // A self-referential prompt ("what do you remember about my circumstance?") carries no name
+        // token, so on turn 1 — before any context summary exists — the speaker's own note never seeds.
+        // When the message talks about the speaker, seed their username so recall can find that note.
+        List<string> selfSeed = new();
+        if (SelfReference.IsMatch(incomingPrompt))
+        {
+            string? speaker = chatHistory.LastOrDefault()?.Username;
+            if (!string.IsNullOrWhiteSpace(speaker)) selfSeed.Add(speaker);
+        }
+
+        // Not the full transcript — avoids noisy seeds from ARI's own words. Self-seed and prompt terms
+        // come first so the cap trims summary terms, never the user's own words. The summary's structural
         // labels and date words are excluded — tokenising them once turned 51 terms into a 12.6s recall.
-        List<string> terms = Tokenize(incomingPrompt)
+        List<string> terms = selfSeed
+            .Concat(Tokenize(incomingPrompt))
             .Concat(Tokenize(contextSummary ?? string.Empty).Where(t => !SummaryLabels.Contains(t)))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Take(MAX_SEARCH_TERMS)
