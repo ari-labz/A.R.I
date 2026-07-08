@@ -229,11 +229,18 @@ public class ARI : BackgroundService
             if (llmModule.HasCuriosity)
                 schedulerModule.AddTask("Curiosity", "0 3,9,15,21 * * *", ct => llmModule.RunCuriosityAsync(ct));
 
-            // Proactive message: every 2 hours (while idle, outside quiet hours), Ari DMs a curiosity.
+            // Proactive message: every 2 hours (while idle, outside quiet hours), Ari opens a thread + pushes.
+            // The enable switch and quiet-hours window are read LIVE from the scheduler each fire, so control-
+            // panel edits take effect without a restart.
             LLMModule llm = llmModule;
-            SchedulerConfig sched = config.modules.Scheduler;
+            SchedulerModule sched = schedulerModule;
             schedulerModule.AddTask("ProactiveMessage", "0 */2 * * *", async ct =>
             {
+                if (!sched.ProactiveEnabled)
+                {
+                    _logger.LogInformation("[Scheduler] proactive message held — disabled.");
+                    return;
+                }
                 if (sched.IsQuietHour(DateTime.Now.Hour))
                 {
                     _logger.LogInformation("[Scheduler] proactive message held — quiet hours.");
@@ -242,6 +249,7 @@ public class ARI : BackgroundService
                 await llm.RunProactiveMessageAsync(ariPersistentDir, ct);
             });
 
+            CommonModules.Register(scheduler: schedulerModule);
             schedulerModule.Start();
         }
 

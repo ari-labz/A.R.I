@@ -80,6 +80,14 @@ public class APIModule : IAsyncDisposable
             .PersistKeysToFileSystem(new System.IO.DirectoryInfo(keysDir))
             .SetApplicationName("ARI");
 
+        // Web Push (PWA notifications). Owns the VAPID keypair + subscription store; Ari's proactive
+        // path rings the phone via Modules.WebPush. Registered statically so controllers reach it like Llm.
+        string pushDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "Server", "push");
+        string vapidSubject = config.Google.AllowedEmails.FirstOrDefault() is { Length: > 0 } ownerEmail
+            ? $"mailto:{ownerEmail}" : "mailto:owner@a-r-i.ai";
+        WebPushModule webPush = new(loggerFactory.CreateLogger<WebPushModule>(), pushDir, vapidSubject);
+        Modules.Register(webPush: webPush);
+
         builder.Services.AddSingleton(config);
         builder.Services.AddSingleton(voiceSynthesisConfig);
         builder.Services.AddSingleton(persistentData);
