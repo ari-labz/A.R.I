@@ -274,7 +274,7 @@ public static class BrainModule
 
     public static void AddNotes(IReadOnlyList<EngramAdd> adds)
     {
-        foreach (EngramAdd add in adds) WriteNamed(add.NoteName, add.Content, add.Aliases);
+        foreach (EngramAdd add in adds) WriteNamed(add.NoteName, add.Content, add.Aliases, add.Type);
         Index();
     }
 
@@ -292,7 +292,7 @@ public static class BrainModule
 
             if (!isRename)
             {
-                WriteNamed(edit.NoteName, edit.Content, edit.Aliases);
+                WriteNamed(edit.NoteName, edit.Content, edit.Aliases, edit.Type);
                 continue;
             }
             Note? old = GetNote(edit.NoteName);
@@ -306,7 +306,7 @@ public static class BrainModule
                 File.Delete(Path.Combine(VaultRoot, old.Path));
                 renamedFrom = old.Title;
             }
-            Note.Write(PathFor(edit.NewNoteName!), newContent, aliases, null);
+            Note.Write(PathFor(edit.NewNoteName!), newContent, aliases, null, edit.Type);
             // Rewrite every [[oldTitle]] in other notes to [[newBareTitle]] so a rename never leaves the
             // referrers pointing at the old name (the alias still resolves them, but the text is repointed).
             if (renamedFrom is not null) RepointReferences(renamedFrom, newBareTitle);
@@ -413,6 +413,19 @@ public static class BrainModule
         return updated;
     }
 
+    // ── Graph walk ────────────────────────────────────────────────────────────────────
+
+    // Highest total-degree notes — the starting points for a walk, where sprawl concentrates.
+    public static List<Note> TopDegreeSeeds(int limit) => Database.SeedsByDegree(limit);
+
+    // Adjacency skeleton (path + [type] + inbound '<' / outbound '>' connections) for the neighbourhood
+    // BFS-reachable from the seed within `depth` hops, capped at `cap` nodes. Null if the seed is unknown.
+    public static string? Skeleton(string seedTitle, int depth = 6, int cap = 1000)
+    {
+        Note? seed = GetNote(seedTitle);
+        return seed is null ? null : Database.Skeleton(seed.id, depth, cap);
+    }
+
     public static int CleanUnknownStubs()
     {
         int cleaned = 0;
@@ -496,14 +509,14 @@ public static class BrainModule
 
     // ── Internal ────────────────────────────────────────────────────────────────────
 
-    private static void WriteNamed(string name, string content, IReadOnlyList<string> aliases)
+    private static void WriteNamed(string name, string content, IReadOnlyList<string> aliases, string? type = null)
     {
         string bareTitle = name.Contains('/') ? name[(name.LastIndexOf('/') + 1)..] : name;
         Note? existing = GetNote(bareTitle);
         if (existing is not null)
-            Note.Write(existing.Path, Note.CarryThoughtsInto(existing.Content, content), MergedAliases(existing, aliases), null);
+            Note.Write(existing.Path, Note.CarryThoughtsInto(existing.Content, content), MergedAliases(existing, aliases), null, type);
         else
-            Note.Write(PathFor(name), content, aliases, null);
+            Note.Write(PathFor(name), content, aliases, null, type);
     }
 
     private static List<string> MergedAliases(Note note, IReadOnlyList<string> incoming)

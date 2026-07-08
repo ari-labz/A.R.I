@@ -14,6 +14,17 @@ internal static class BrainRulebook
           Inbound links are invisible to recall. A note with no outward link is a dead end: findable,
           but it leads nowhere. Every entity must link outward to its hub.
 
+        NODE TYPES (drive the graph's colour groups):
+        A note MAY carry a 'type' — it is optional. No type means the note is an ordinary leaf. The core
+        types are: person, hub, event, relationship, discussion. You may coin a NEW type when a note is a
+        distinct kind worth its own colour (e.g. "conversation" for a daily log) — reuse an existing type
+        name before inventing one. A category grouping is a 'hub'; a point-in-time happening is an
+        'event'; an ongoing bond between people is a 'relationship'.
+        To set a note's type, add or edit a `type: <value>` line inside the `---` YAML frontmatter block
+        at the very TOP of the file (alongside `aliases:`), never in the body — a type written in the body
+        is not recognised. If a note is functionally a hub/event/relationship but has no `type:` line, add
+        one.
+
         PATH IS TAXONOMY:
         The path encodes meaning before the note is even opened. Each segment answers: what is this,
         whose is it, how does it relate? EVERY note lives under a top-level category folder — NEVER at
@@ -36,7 +47,38 @@ internal static class BrainRulebook
         possessively when they belong to a person ("[REDACT]'s Family", "[REDACT]'s Friends"). Individual notes
         link UP to their hub; the hub links DOWN to each direct child, including children that are
         themselves hubs — but only direct children, never grandchildren (each sub-hub routes its own
-        members).
+        members). Give a hub note the type 'hub'.
+        HUB SIZE — STANDING CATEGORIES vs EMERGENT THEMES:
+        A STANDING category hub — a recognizable, growing life-facet like Family, Friends, Employment,
+        Education, Tech, Pets, or Relationships — is valid as soon as it has ONE member and must NOT be
+        dissolved on member count. It is a predictable home that accrues more over time and tells you how
+        its members relate, so it earns its place through TYPE and expected growth, not current size.
+        An EMERGENT hub — a narrow or one-off theme you would be inventing (e.g. "People from the 2019
+        trip") — needs at least 3 members that genuinely share the theme to justify itself; below that,
+        leave the members directly under the parent until the theme proves out. Only dissolve an emergent
+        hub that has fallen below 3 (move its members up, delete the hub note) — never dissolve a standing
+        category hub for being small.
+
+        DEGREE CAP — TAME OUTBOUND SPRAWL (NOT INBOUND):
+        Recall only ever follows a note's OWN outward links, so a note being POINTED AT by many others
+        costs nothing — inbound degree is unlimited, and cross-links between related notes are good (they
+        cluster a family/topic together and add recall paths). The problem is a single node fanning OUT to
+        many unrelated leaves. Links to a hub don't count; only direct non-hub links do. A person who links
+        out to 15 hubs is fine; one that links out to 15 individual leaves is not.
+
+        When a note is OVER the cap (>10 direct non-hub outbound links), reducing it to ≤10 is MANDATORY —
+        this is not a judgment call and "the direct link is useful" is NOT a reason to stay over the cap.
+        Work this exact procedure and stop the moment you reach 10:
+          1. Remove any DUPLICATE outbound link (the same target linked twice).
+          2. Remove each direct link whose target you ALREADY reach through a hub or bridge this same note
+             also links to (e.g. you link both [[[REDACT]]] and [[[REDACT]'s Family]], and [REDACT] is under [REDACT]'s
+             Family → drop the direct [[[REDACT]]], keep the hub). This is the main lever.
+          3. If still over, group ≥3 remaining themed leaves under an owned, namespaced hub (e.g. "[REDACT]'s
+             Family", not "Family"), link the note to that hub, and drop the direct leaf links it replaced.
+        The "a useful direct edge earns its place" principle governs only WHICH links you keep once you are
+        already at or under 10 — prefer keeping the edge that adds a recall path a hub wouldn't. It never
+        licenses leaving a note over the cap. A note at exactly 10-or-under with useful cross-links is done;
+        do not agonise further — commit and move on.
 
         ONE ENTITY, ONE NOTE:
         Before creating a note, check existing notes AND their aliases for the same person/place/thing
@@ -49,15 +91,28 @@ internal static class BrainRulebook
         one-way: if A mentions B, only A links to B, not the reverse (the only two-way relationship is
         hub ⇄ member).
 
-        RELATIONSHIPS:
-        The dynamics between two people belong in Relationships/[A] and [B] Relationship, not duplicated
-        on each person's note. Descriptors like "long distance" or "estranged" are a field or sentence
-        inside that note, never a separate note.
+        PEOPLE CONNECT THROUGH BRIDGES:
+        A direct person ↔ person link is allowed (Danielle is Jake's wife — that edge is real). But
+        PREFER to express how two people are connected through a bridge node — a relationship, an event,
+        or a discussion — rather than a bare direct link. The bridge carries the meaning ("how are they
+        connected?"); a hub only carries organisation ("what kind of thing?"). Once a bridge exists, the
+        direct person ↔ person edge is redundant (see REDUNDANT LINKS) and should be removed.
 
-        EVENT NOTES:
-        Notes in Events/ are point-in-time snapshots: a specific or approximate date, what happened, who
-        was involved, and an outward link to the ongoing note (Relationships/, People/) for the evolving
-        story. Never store evolving facts in an event note.
+        RELATIONSHIPS (ongoing — type 'relationship'):
+        A relationship is the LIVING thread between two people — the evolving story over time. Its
+        dynamics belong in Relationships/[A] and [B] Relationship (type 'relationship'), not duplicated on
+        each person's note. Everything that develops AFTER two people connect lands here. Descriptors like
+        "long distance" or "estranged" are a field or sentence inside this note, never a separate note.
+        Later events hang off the relationship as dated beads on its timeline.
+
+        EVENT NOTES (a bounded moment — type 'event'):
+        An event is ONE point-in-time happening plus its circumstances: a specific or approximate date,
+        what happened, who was involved, and an outward link to the ongoing note (Relationships/, People/).
+        You MAY keep enriching an event with more detail ABOUT THAT MOMENT (who introduced them, where it
+        happened, the circumstances). You must NOT add LATER DEVELOPMENTS to an event — anything that
+        happened afterwards belongs in the relationship or a new event. "[REDACT] and [REDACT] got together"
+        holds the circumstances of getting together; how the relationship unfolds since lives in the
+        relationship note.
 
         CONVERSATION NOTES:
         Exactly ONE dated log per day at Conversations/YYYY-MM-DD — a 1-3 sentence summary plus a
@@ -88,9 +143,10 @@ internal static class BrainRulebook
         Every nickname or alternate name goes in the 'aliases' array of the canonical note. Never a
         separate note for a nickname.
 
-        CHANGELOG:
-        Every note you create or edit gets a ## Changelog with a dated entry describing what changed.
-        Plain text only — no [[links]] in changelog entries.
+        HISTORY LIVES IN GIT, NOT IN THE NOTE:
+        Do NOT add a ## Changelog section to notes. Every change is recorded by its git commit message
+        (what changed + why), so a note's body stays clean. If you find an existing ## Changelog section
+        while editing a note, remove it.
 
         NO DESCRIPTOR NOTES:
         A status or descriptor ("Employed", "Long Distance", "Estranged") is a field inside the relevant

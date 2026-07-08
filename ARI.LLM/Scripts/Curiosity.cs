@@ -64,6 +64,15 @@ public static class CuriosityStore
         return added;
     }
 
+    /// <summary>Removes a curiosity by id. Returns true if one was removed.</summary>
+    public static bool Remove(string dir, string id)
+    {
+        List<Curiosity> existing = Load(dir);
+        int removed = existing.RemoveAll(c => c.Id == id);
+        if (removed > 0) Save(dir, existing);
+        return removed > 0;
+    }
+
     /// <summary>Pending topics, lower-cased — given to the scan so it doesn't re-raise what's already queued.</summary>
     public static HashSet<string> PendingTopics(string dir) =>
         Load(dir).Where(c => c.Status == "pending").Select(c => c.Topic.ToLowerInvariant()).ToHashSet();

@@ -8,16 +8,19 @@ using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
-internal class Engram : BrainAgent, IDisposable
+internal class Engram : MemoryAgent, IDisposable
 {
     private const int ENGRAM_TRIGGER_DELAY = 5;
 
+    // Engram places several memories from one conversation in a single turn, so it does NOT end after
+    // the first commit (that's the Refactor walk's behaviour).
+    protected override bool StopAfterCommit => false;
+
     [JsonIgnore] internal Dialogue?    dialogue       { get; set; }
     [JsonIgnore] internal Context?     context        { get; set; }
+    [JsonIgnore] internal string       PersistentDir  { get; set; } = string.Empty;
 
     private EngramBuffer? buffer;
-
-    [JsonPropertyName("sweepIntervalMinutes")] public int SweepIntervalMinutes { get; init; }
 
     private readonly Dictionary<string, DateTime>       lastRun          = new();
     private readonly Dictionary<string, int>            lastHistoryCount = new();
@@ -106,7 +109,6 @@ internal class Engram : BrainAgent, IDisposable
         List<(string Title, Thread Thread)> writeThreads = new();
         List<string>                       runMeta      = new() { $"Trigger: {trigger}", $"Thread: {threadKey}" };
         string                             outcome      = "incomplete (unexpected exit)";
-        List<NoteChange>                   queueChanges = new();
 
         try
         {
@@ -121,8 +123,7 @@ internal class Engram : BrainAgent, IDisposable
 
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] sweep triggered (trigger: {Trigger})", threadKey, trigger);
 
-            // --- Phase 1: Classify ---
-            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] phase 1 — classifying conversation...", threadKey);
+            // --- Classify: is there anything worth remembering? ---
             runMeta.Add($"Classified transcript: {RunLogger.Trunc(BuildTranscript(recentItems), 600)}");
             if (!await Classify(recentItems, trigger))
             {
@@ -133,86 +134,25 @@ internal class Engram : BrainAgent, IDisposable
             string transcript = BuildTranscript(conversationItems);
             if (context is not null) await context.RebuildFromTranscript(threadKey, transcript);
             string contextSummary = context?.GetContext(threadKey) ?? string.Empty;
+            string speaker = conversationItems.OfType<Prompt>().Select(p => p.AuthorName)
+                .FirstOrDefault(a => !string.IsNullOrWhiteSpace(a)) ?? "the user";
 
-            // --- Phase 2: Gather mentions (no note-path dump — Search handles dedup later) ---
-            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] phase 2 — gathering entity mentions...", threadKey);
-            Thread gatherThread = NewPhaseThread($"engram-gather-{threadKey}");
-            string gatherRaw = await SendPrompt(gatherThread, GatherPrompt(transcript, contextSummary), thinkingBudgetOverride: THINKING_BUDGET);
-            List<EntityMention> mentions = ParseMentions(gatherRaw);
-            writeThreads.Add(("Gather mentions", gatherThread));
+            // --- Tool-driven placement: the agent walks the graph and stores the memories itself. ---
+            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] placing memories via graph walk...", threadKey);
+            Thread parent = new(ThreadPipeline.Dialogue, $"engram:{threadKey}:{Guid.NewGuid():N}") { Internal = true };
+            RegisterTools(parent, PersistentDir, CancellationToken.None);
+            PublishForInspection(parent);   // surface the sweep in the DTI
+            writeThreads.Add(("Engram placement", parent));
 
-            // Always resolve the SPEAKER as an entity — gather often omits the user themselves, which is how
-            // a self-duplicate gets created (their note exists under one name, the plan invents another from
-            // the username). Injecting them forces search-then-judge to surface their real person note.
-            string? speaker = conversationItems.OfType<Prompt>().Select(p => p.AuthorName).FirstOrDefault(a => !string.IsNullOrWhiteSpace(a));
-            if (speaker is not null)
-            {
-                mentions = mentions.Where(m => !m.Name.Equals(speaker, StringComparison.OrdinalIgnoreCase)).ToList();
-                mentions.Insert(0, new EntityMention(speaker, new[] { speaker }, "the user/speaker in this conversation — resolve to their existing person note", IsSpeaker: true));
-            }
+            await SendPrompt(parent, EngramTask(transcript, contextSummary, speaker), "system",
+                onDelta: async _ => { Notify?.Invoke(parent.Key); await Task.CompletedTask; });
 
-            // Always include today's conversation log as a mention so it gets created/edited every sweep.
-            string today = DateTime.Now.ToString("yyyy-MM-dd");
-            mentions = mentions.Append(new EntityMention(today, new[] { today }, "today's conversation log")).ToList();
-
-            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] {Count} mention(s): [{Names}]",
-                threadKey, mentions.Count, string.Join(", ", mentions.Select(m => m.Name)));
-
-            if (mentions.Count == 0)
-            {
-                outcome = "no changes — no mentions gathered";
-                return;
-            }
-
-            // --- Phase 3: Resolve candidates (search-then-judge, bounded regardless of vault size) ---
-            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] phase 3 — resolving candidates...", threadKey);
-            List<CandidatePlan> resolved = await ResolveCandidates(mentions);
-
-            // --- Phase 4: Plan ---
-            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] phase 4 — planning...", threadKey);
-            Thread planThread = NewPhaseThread($"engram-plan-{threadKey}");
-            string planRaw = await SendPrompt(planThread, PlanPrompt(transcript, contextSummary, resolved), thinkingBudgetOverride: THINKING_BUDGET);
-            List<BrainPlanItem> plan = ParsePlan(planRaw);
-            writeThreads.Add(("Plan", planThread));
-
-            if (plan.Count == 0)
-            {
-                outcome = "no changes — plan was empty";
-                return;
-            }
-
-            string planSummary = string.Join(", ", plan.Select(p => string.IsNullOrWhiteSpace(p.NewName) ? $"{p.Name} ({p.Op})" : $"{p.Name} -> {p.NewName} ({p.Op})"));
-            runMeta.Add($"Plan ({plan.Count}): {RunLogger.Trunc(planSummary, 600)}");
-            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] plan: {Count} change(s) — [{Notes}]", threadKey, plan.Count, planSummary);
-
-            // --- Phase 5: Batched write + apply (shared with Refactor) ---
-            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] phase 5 — writing {Count} note(s)...", threadKey, plan.Count);
-            BrainWriter.ApplyResult result = await WritePlan(plan, EngramRulesPreamble(transcript, contextSummary), CancellationToken.None);
-            queueChanges = result.Changes;
-
-            // Deterministic structural repairs: fold any drifted title variant back into its base
-            // ("Xywren — User" → "Xywren"), create hub notes for populated folders, link every hub down
-            // to its members, then de-link anything left unresolved.
-            BrainModule.MergeTitleVariants();
-            BrainModule.EnsureHubNotes();
-            BrainModule.EnsureHubChildLinks();
-            int delinked = BrainModule.StripUnresolvedLinks();
-            if (delinked > 0) Shared.Logger.LogInformation("[Engram] [{ThreadKey}] de-linked unresolved references in {Count} note(s).", threadKey, delinked);
-
-            outcome = $"{result.Succeeded} saved, {result.Failed} failed";
-            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] phase 5 complete: {Success} saved, {Fail} failed.", threadKey, result.Succeeded, result.Failed);
-
-            if (queueChanges.Count > 0)
-            {
-                Shared.Logger.LogInformation("[Engram] [{ThreadKey}] {Count} note change(s): {Changes}",
-                    threadKey, queueChanges.Count, string.Join(", ", queueChanges.Select(ch => $"{ch.Op}:{ch.Title}")));
-
-                // Rendered client-side as the "A·R·I will remember this" collapsible block.
-                if (threads.TryGetValue(threadKey, out Thread? liveThread))
-                    liveThread.AddItem(new EngramEvent { Changes = queueChanges });
-            }
-
-            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] sweep complete.", threadKey);
+            int commits = parent.History.OfType<Response>()
+                .SelectMany(r => r.Trace ?? Enumerable.Empty<TraceStep>())
+                .Count(s => s.Kind == "tool_result" && s.Name == "git_commit"
+                            && (s.Text?.StartsWith("Committed", StringComparison.Ordinal) ?? false));
+            outcome = $"{commits} memory change(s) committed";
+            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] sweep complete — {Commits} change(s).", threadKey, commits);
         }
         finally
         {
@@ -225,72 +165,33 @@ internal class Engram : BrainAgent, IDisposable
         }
     }
 
-    // ── Prompts ──────────────────────────────────────────────────────────────────────
+    // ── Placement task ─────────────────────────────────────────────────────────────────
 
-    private static string GatherPrompt(string transcript, string contextSummary)
+    private static string EngramTask(string transcript, string contextSummary, string speaker)
     {
         StringBuilder sb = new();
-        sb.AppendLine("Read this conversation and list every entity (person, place, event, project, thing) worth remembering.");
-        sb.AppendLine("You do not check whether it already has a note — that happens later.");
+        sb.AppendLine("A conversation just happened. Store what is worth remembering into the memory graph, then stop.");
         sb.AppendLine();
         if (!string.IsNullOrWhiteSpace(contextSummary))
-            sb.AppendLine($"CONTEXT SUMMARY (resolve all pronouns with this):\n{contextSummary}\n");
+            sb.AppendLine($"CONTEXT (resolve pronouns with this):\n{contextSummary}\n");
+        sb.AppendLine($"The speaker is '{speaker}'.");
         sb.AppendLine($"CONVERSATION:\n{transcript}");
         sb.AppendLine();
-        sb.AppendLine("List EVERY real person, place, event, project, pet, or thing NAMED IN THE CONVERSATION ABOVE " +
-                       "— do not skip any, even when many are named. Do NOT include yourself (Ari/ARI, the assistant), " +
-                       "and do NOT invent entities for abstract topics (\"big news\", \"an update\") — only concrete, named things.");
+        sb.AppendLine("For each real person, place, event, project, pet, or thing worth remembering (NOT yourself, " +
+                       "and NOT purely task/technical chatter):");
+        sb.AppendLine("- Check whether it already has a note before creating one: search_files / find_files by name " +
+                       "AND aliases, and use `neighbours` to see the surrounding graph. Never create a duplicate — if " +
+                       "the same entity exists under another name, edit that note; if there are two, merge_notes them.");
+        sb.AppendLine("- Read the relevant hub/neighbour notes (read_file) before writing, so you place it correctly " +
+                       "and link it to the right owned hub. Use the path to infer where things belong.");
+        sb.AppendLine("- Create or update the note with write_file / edit_file: set its type, link it outward to its hub, " +
+                       "and record the new facts from this conversation.");
+        sb.AppendLine($"- Maintain today's conversation log at Conversations/{DateTime.Now:yyyy-MM-dd} — a 1-3 sentence " +
+                       "summary that links to everything discussed. Edit it if it already exists.");
+        sb.AppendLine("- After each note (or each coherent group of edits), review with git_diff and git_commit with a " +
+                       "single 'message' (first line = what changed, blank line, then why).");
         sb.AppendLine();
-        sb.AppendLine("Each entry: name = the entity's actual name from the conversation; terms = 2-4 words to find it " +
-                       "later (nicknames, roles, related names); context = why it matters.");
-        sb.AppendLine("Output ONLY a JSON object: a key \"mentions\" whose value is an array of such entries. Use the " +
-                       "REAL names from the conversation — never placeholder text, brackets, or example words.");
-        sb.AppendLine("If the conversation names nothing worth remembering: {\"mentions\": []}");
-        return sb.ToString();
-    }
-
-    private static string PlanPrompt(string transcript, string contextSummary, List<CandidatePlan> resolved)
-    {
-        StringBuilder sb = new();
-        sb.AppendLine(BrainRulebook.RULES);
-        sb.AppendLine();
-        if (!string.IsNullOrWhiteSpace(contextSummary))
-            sb.AppendLine($"Use the context summary to resolve all pronouns:\n{contextSummary}\n");
-        sb.AppendLine("Based on the conversation and these resolved entities, list every note to create or edit.");
-        sb.AppendLine();
-        sb.AppendLine($"CONVERSATION:\n{transcript}");
-        sb.AppendLine();
-        sb.AppendLine("RESOLVED ENTITIES:");
-        foreach (CandidatePlan candidate in resolved)
-        {
-            if (candidate.ExistingNote is null)
-                sb.AppendLine($"- NEW entity \"{candidate.Mention.Name}\" (no existing note): {candidate.Mention.Context}");
-            else
-                // Lead with the EXISTING note's identity, not the spoken name, so the plan targets the
-                // real note. The spoken name is demoted to a parenthetical the model must not turn into a path.
-                sb.AppendLine($"- EDIT existing note titled \"{candidate.ExistingNote.Title}\" at path \"{candidate.ExistingNote.Name}\" " +
-                               $"(the user said \"{candidate.Mention.Name}\", which is the SAME note — do NOT create a \"{candidate.Mention.Name}\" note): {candidate.Mention.Context}");
-        }
-        sb.AppendLine();
-        sb.AppendLine("For any EDIT entity above, `name` MUST be its stated existing path exactly. Never invent a new path from the spoken name.");
-        sb.AppendLine();
-        sb.AppendLine("For each provide: op (\"add\"/\"edit\"), name (desired full path — CURRENT path if editing), " +
-                       "summary (1-2 sentences — key facts, pronouns, main links), newName (only if an existing note is moving).");
-        sb.AppendLine();
-        sb.AppendLine("Output ONLY:");
-        sb.AppendLine("{\"plan\": [{\"op\": \"add\", \"name\": \"People/Fenn\", \"summary\": \"...\"}]}");
-        sb.AppendLine("If nothing needs to be stored: {\"plan\": []}");
-        return sb.ToString();
-    }
-
-    private static string EngramRulesPreamble(string transcript, string contextSummary)
-    {
-        StringBuilder sb = new();
-        sb.AppendLine(BrainRulebook.RULES);
-        sb.AppendLine();
-        if (!string.IsNullOrWhiteSpace(contextSummary))
-            sb.AppendLine($"CONTEXT SUMMARY:\n{contextSummary}\n");
-        sb.AppendLine($"CONVERSATION (for reference while writing):\n{transcript}");
+        sb.AppendLine("If nothing is worth storing, make no changes and stop. Preserve facts; never invent them.");
         return sb.ToString();
     }
 
@@ -373,73 +274,6 @@ internal class Engram : BrainAgent, IDisposable
         }
         return sb.ToString();
     }
-
-    // ── Parsing ──────────────────────────────────────────────────────────────────────
-
-    private static List<EntityMention> ParseMentions(string raw)
-    {
-        try
-        {
-            raw = raw.Trim();
-            int start = raw.IndexOf('{');
-            if (start >= 0) raw = raw[start..];
-            using JsonDocument doc = JsonDocument.Parse(raw);
-            if (!doc.RootElement.TryGetProperty("mentions", out JsonElement arr) || arr.ValueKind != JsonValueKind.Array)
-                return new();
-
-            List<EntityMention> mentions = new();
-            foreach (JsonElement el in arr.EnumerateArray())
-            {
-                string? name = el.TryGetProperty("name", out JsonElement n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null;
-                if (string.IsNullOrWhiteSpace(name)) continue;
-                // Safety net: drop echoed placeholder text ("<entity name>") and the assistant itself.
-                if (name.Contains('<') || name.Contains('>')) continue;
-                if (name.Equals("Ari", StringComparison.OrdinalIgnoreCase) || name.Equals("ARI", StringComparison.OrdinalIgnoreCase)) continue;
-                List<string> terms = el.TryGetProperty("terms", out JsonElement t) && t.ValueKind == JsonValueKind.Array
-                    ? t.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).ToList()
-                    : new List<string> { name };
-                if (terms.Count == 0) terms = new List<string> { name };
-                string context = el.TryGetProperty("context", out JsonElement c) && c.ValueKind == JsonValueKind.String ? c.GetString()! : string.Empty;
-                mentions.Add(new EntityMention(name, terms, context));
-            }
-            return mentions;
-        }
-        catch (Exception ex)
-        {
-            Shared.Logger.LogError("[Engram] Failed to parse mentions: {Error}. Raw: {Raw}", ex.Message, raw);
-            return new();
-        }
-    }
-
-    private static List<BrainPlanItem> ParsePlan(string raw)
-    {
-        try
-        {
-            raw = raw.Trim();
-            int start = raw.IndexOf('{');
-            if (start >= 0) raw = raw[start..];
-            using JsonDocument doc = JsonDocument.Parse(raw);
-            if (!doc.RootElement.TryGetProperty("plan", out JsonElement arr) || arr.ValueKind != JsonValueKind.Array)
-                return new();
-
-            List<BrainPlanItem> items = new();
-            foreach (JsonElement el in arr.EnumerateArray())
-            {
-                string? op      = el.GetString("op");
-                string? name    = el.GetString("name");
-                string? summary = el.GetString("summary");
-                string? newName = el.GetString("newName");
-                if (!string.IsNullOrWhiteSpace(op) && !string.IsNullOrWhiteSpace(name))
-                    items.Add(new BrainPlanItem(op, name, summary ?? string.Empty, newName));
-            }
-            return items;
-        }
-        catch (Exception ex)
-        {
-            Shared.Logger.LogError("[Engram] Failed to parse plan: {Error}. Raw: {Raw}", ex.Message, raw);
-            return new();
-        }
-    }
 }
 
 internal class EngramBuffer
@@ -492,10 +326,4 @@ internal class EngramBuffer
                 return;
         }
     }
-}
-
-file static class JsonElementExtensions
-{
-    internal static string? GetString(this JsonElement el, string prop)
-        => el.TryGetProperty(prop, out JsonElement v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 }

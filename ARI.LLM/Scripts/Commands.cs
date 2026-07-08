@@ -75,6 +75,11 @@ internal class CommandService
     private async Task<string> HandleRefactor(string sub)
     {
         if (refactor is null) return "Refactor is not loaded.";
+        if (sub == "once")   // eval: a single epoch, for fast iteration
+        {
+            Shared.Logger.LogInformation("[Commands] Refactor requested (mode: once — single epoch).");
+            return await refactor.Run(allNotes: true, epochsOverride: 1);
+        }
         bool allNotes = sub == "all";
         Shared.Logger.LogInformation("[Commands] Refactor requested (mode: {Mode}).", allNotes ? "all" : "dirty");
         return await refactor.Run(allNotes);

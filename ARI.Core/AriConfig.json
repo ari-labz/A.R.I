@@ -62,8 +62,8 @@
       "QuietStartHour": 22,
       "QuietEndHour": 8,
       "Schedules": {
-        "BrainScan": "0 */6 * * *",
-        "ProactiveMessage": "0 */2 * * *"
+        "ProactiveMessage": "0 */2 * * *",
+        "Refactor": "0 */6 * * *"
       }
     }
   }

@@ -10,6 +10,7 @@ public class Note
 
     private static readonly Regex frontmatterBlock = new(@"\A---\n(.*?)\n---\n", RegexOptions.Singleline | RegexOptions.Compiled);
     private static readonly Regex aliasesLine = new(@"^aliases: \[(.*)\]$", RegexOptions.Multiline | RegexOptions.Compiled);
+    private static readonly Regex typeLine = new(@"^type: (.+)$", RegexOptions.Multiline | RegexOptions.Compiled);
     private static readonly Regex createdLine = new(@"^created: (\S+)$", RegexOptions.Multiline | RegexOptions.Compiled);
     private static readonly Regex quotedValue = new(@"""((?:[^""\\]|\\.)*)""", RegexOptions.Compiled);
 
@@ -37,6 +38,9 @@ public class Note
 
     // Read fresh from disk on every access — never held resident.
     public string Content => Parse(File.ReadAllText(AbsolutePath)).Body;
+
+    // Node type from frontmatter (null = leaf). Read fresh, like Content.
+    public string? Type => Parse(File.ReadAllText(AbsolutePath)).Type;
 
     public string Url => $"obsidian://open?vault={Uri.EscapeDataString(BrainModule.VaultName)}&file={Uri.EscapeDataString(Name)}";
 
@@ -207,13 +211,14 @@ public class Note
 
     // ── File format ──────────────────────────────────────────────────────────────────
 
-    internal record Parsed(string Body, IReadOnlyList<string> AliasList, DateTime? Created);
+    internal record Parsed(string Body, IReadOnlyList<string> AliasList, DateTime? Created, string? Type);
 
     internal static Parsed Parse(string raw)
     {
         string body = raw;
         List<string> aliases = new();
         DateTime? created = null;
+        string? type = null;
 
         Match frontmatter = frontmatterBlock.Match(raw);
         if (frontmatter.Success)
@@ -224,24 +229,32 @@ public class Note
             if (aliasMatch.Success)
                 foreach (Match value in quotedValue.Matches(aliasMatch.Groups[1].Value))
                     aliases.Add(value.Groups[1].Value.Replace("\\\"", "\"").Replace("\\\\", "\\"));
+            Match typeMatch = typeLine.Match(head);
+            if (typeMatch.Success) type = typeMatch.Groups[1].Value.Trim();
             Match createdMatch = createdLine.Match(head);
             if (createdMatch.Success && DateTime.TryParse(createdMatch.Groups[1].Value, null, DateTimeStyles.AdjustToUniversal, out DateTime parsed))
                 created = parsed;
         }
-        return new Parsed(body, aliases, created);
+        return new Parsed(body, aliases, created, type);
     }
 
     // temp + rename: a crash can never leave a half-written note.
-    internal static void Write(string relativePath, string body, IReadOnlyList<string> aliases, DateTime? created)
+    // type is sticky: when a write doesn't set one, the note's existing type is preserved so passes
+    // that rewrite a note for other reasons (hub-links, thoughts, merges) never strip its colour group.
+    internal static void Write(string relativePath, string body, IReadOnlyList<string> aliases, DateTime? created, string? type = null)
     {
         string file = System.IO.Path.Combine(BrainModule.VaultRoot, relativePath);
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file)!);
+
+        if (type is null && File.Exists(file)) type = Parse(File.ReadAllText(file)).Type;
 
         StringBuilder content = new();
         content.AppendLine("---");
         if (aliases.Count > 0)
             content.AppendLine("aliases: [" + string.Join(", ",
                 aliases.Select(alias => $"\"{alias.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"")) + "]");
+        if (!string.IsNullOrWhiteSpace(type))
+            content.AppendLine($"type: {type.Trim()}");
         content.AppendLine($"created: {(created ?? DateTime.UtcNow).ToString(TIMESTAMP_FORMAT)}");
         content.AppendLine($"updated: {DateTime.UtcNow.ToString(TIMESTAMP_FORMAT)}");
         content.AppendLine("---");
