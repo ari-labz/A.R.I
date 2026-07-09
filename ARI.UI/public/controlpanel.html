@@ -2138,13 +2138,26 @@ function parseModelTags(m) {
     const bpw = quantKey ? (quantBits[quantKey] ?? 5.5) : 5.5;
     if (quantLabel) tags.push({ label: quantLabel, cls: 'quant', title: 'Quantization format' });
 
-    // Estimated T/s — M4 Max unbinned: ~546 GB/s memory bandwidth
+    // Estimated T/s — M4 Max unbinned: ~546 GB/s memory bandwidth, weights-only decode bound.
+    // Prefer the REAL effective bpw derived from the actual file size (exact for any quant
+    // scheme incl. IQ-/UD-dynamic); fall back to the nominal name-based bpw only if size is unknown.
     const inferP = activeP ?? totalP;
-    if (inferP !== null) {
+    if (inferP !== null && totalP) {
         const bw = 546; // GB/s
-        const gbPerToken = inferP * 1e9 * bpw / 8 / 1e9;
+        const fileSizeMb = m.fileSizeMb ?? 0;
+        let gbPerToken, basis;
+        if (fileSizeMb > 0) {
+            // Bytes moved per token = full weights × active fraction (dense = 1).
+            const activeFrac = (activeP ?? totalP) / totalP;
+            gbPerToken = fileSizeMb * 1e6 * activeFrac / 1e9;
+            basis = 'file';
+        } else {
+            gbPerToken = inferP * 1e9 * bpw / 8 / 1e9; // nominal fallback
+            basis = 'nominal';
+        }
         const tps = Math.round(bw / gbPerToken * 0.65);
-        tags.push({ label: '~' + tps + ' t/s', cls: 'perf', title: 'Estimated on M4 Max 48GB (theoretical ×65%)' });
+        tags.push({ label: '~' + tps + ' t/s', cls: 'perf',
+            title: 'Estimated on M4 Max 48GB (546 GB/s ×65%, weights-only, ' + basis + '-bpw)' });
     }
 
     return tags;
