@@ -301,15 +301,16 @@ internal sealed class CodeArchitect : Agent
         return lastMutatingFailed;
     }
 
-    // The forwarded edit tools a remote Coder needs — mirrors RegisterCoderTools' lean set (no search/list, which
-    // make a think-off Coder wander). Preferred path: the client WebSocket layer's cloner, which registers a FRESH
+    // The forwarded edit tools a remote Coder needs — mirrors RegisterCoderTools' lean set (search/find to locate a
+    // referenced symbol, but no list_directory, which makes a think-off Coder wander). Preferred path: the client
+    // WebSocket layer's cloner, which registers a FRESH
     // guardrail scope for the child (its own read-dedup/preview/dirty state — a sub-agent must never inherit the
     // parent's "already read" ledger, since its context starts empty). Fallback: copy the parent's delegates
     // (shared state — pre-cloner behaviour) so a Coder still works if the cloner isn't wired.
     private static void CopyForwardedCoderTools(Thread from, Thread to)
     {
         if (from.ClientToolCloner is not null && from.ClientToolCloner(to)) return;
-        foreach (string name in new[] { "preview_file", "read_file", "edit_file", "write_file", "delete_file", "move_file", "revert_file" })
+        foreach (string name in new[] { "preview_file", "read_file", "search_files", "find_files", "edit_file", "write_file", "delete_file", "move_file", "revert_file" })
             if (from.tools.TryGetValue(name, out var t)) to.tools[name] = t;
     }
 
@@ -401,12 +402,15 @@ internal sealed class CodeArchitect : Agent
 
     private static void RegisterCoderTools(Thread child, string root, FileSnapshots snapshots, CancellationToken ct)
     {
-        // Lean executor toolset: preview → read the assigned range, edit, recover. No search/list (with thinking
-        // off those make the Coder wander); preview_file IS included so it can satisfy the preview-before-read
-        // gate and keep context lean even on its assigned file.
+        // Lean executor toolset: locate → preview → read the assigned range, edit, recover. search_files/find_files
+        // are included so the Coder can resolve a symbol referenced by its task but living in another file (without
+        // them it guesses paths and loop-breaks); list_directory is NOT (with thinking off it invites aimless
+        // browsing). preview_file satisfies the preview-before-read gate and keeps context lean on its assigned file.
         ServerFileSystem fs = new(root, ct, snapshots);
         new PreviewFile(fs).Register(child);
         new ReadFile(fs).Register(child);
+        new SearchFiles(fs).Register(child);
+        new FindFiles(fs).Register(child);
         new EditFile(fs).Register(child);
         new WriteFile(fs).Register(child);
         new RevertFile(root, ct, snapshots).Register(child);   // RevertFile is snapshot-tied — not via FileSystem yet
