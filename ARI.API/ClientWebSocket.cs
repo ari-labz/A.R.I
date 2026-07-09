@@ -147,8 +147,9 @@ public static class ClientWebSocket
         RegisterAgentTools(thread, ws, log, fileState, epochThread: thread, coderScope: false);
     }
 
-    /// <summary>The lean executor toolset for a spawned Coder (no search/list/find/run — those make a think-off
-    /// Coder wander), with its own guardrail scope. Turn epochs come from the PARENT thread (the user turn).</summary>
+    /// <summary>The lean executor toolset for a spawned Coder — file edit tools plus search_files/find_files so it
+    /// can locate a referenced symbol before editing (no list_directory/run — those make a think-off Coder wander),
+    /// with its own guardrail scope. Turn epochs come from the PARENT thread (the user turn).</summary>
     private static void RegisterCoderScopeTools(ARI.LLM.Thread child, WebSocket ws, ILogger log, FileToolState childState, ARI.LLM.Thread epochThread)
         => RegisterAgentTools(child, ws, log, childState, epochThread, coderScope: true);
 
@@ -193,7 +194,6 @@ public static class ClientWebSocket
             divert:   argsJson => PreviewBeforeRead(argsJson, ws, log, fileState));
 
         if (!coderScope)
-        {
             RegisterTool(thread, ws, log,
                 name: "list_directory",
                 description: "List files and subdirectories at a path within the project.",
@@ -201,13 +201,15 @@ public static class ClientWebSocket
                 displayVerb: "Listing directory", displayDoneVerb: "Listed directory",
                 labelField: "path");
 
-            RegisterTool(thread, ws, log,
-                name: "search_files",
-                description: "Search file contents with a regular expression. Returns each match as 'path:line: text' — the line numbers let you edit_file directly WITHOUT reading the whole file. Case-sensitive by default; set ignore_case for a case-insensitive search. Use this to find every call site / definition before changing a symbol.",
-                parameters: new { type = "object", properties = new { pattern = new { type = "string", description = "Regular expression to search for, e.g. 'GrantAccess\\(' or 'class\\s+Token'." }, path = new { type = "string", description = "Directory to search in, relative to project root." }, glob = new { type = "string", description = "File filter e.g. '*.cs'. Defaults to all files." }, ignore_case = new { type = "boolean", description = "Set true for a case-insensitive match. Defaults to false." } }, required = new[] { "pattern" } },
-                displayVerb: "Searching", displayDoneVerb: "Searched",
-                labelField: "pattern");
-        }
+        // search_files IS available to a Coder scope: a task often references a symbol living in another file
+        // (a type, a call site) that the Coder must locate before it can edit. Without it the Coder guesses
+        // paths, hits ENOENT/EISDIR, and loop-breaks. list_directory stays excluded — it invites aimless browsing.
+        RegisterTool(thread, ws, log,
+            name: "search_files",
+            description: "Search file contents with a regular expression. Returns each match as 'path:line: text' — the line numbers let you edit_file directly WITHOUT reading the whole file. Case-sensitive by default; set ignore_case for a case-insensitive search. Use this to find every call site / definition before changing a symbol.",
+            parameters: new { type = "object", properties = new { pattern = new { type = "string", description = "Regular expression to search for, e.g. 'GrantAccess\\(' or 'class\\s+Token'." }, path = new { type = "string", description = "Directory to search in, relative to project root." }, glob = new { type = "string", description = "File filter e.g. '*.cs'. Defaults to all files." }, ignore_case = new { type = "boolean", description = "Set true for a case-insensitive match. Defaults to false." } }, required = new[] { "pattern" } },
+            displayVerb: "Searching", displayDoneVerb: "Searched",
+            labelField: "pattern");
 
         RegisterTool(thread, ws, log,
             name: "edit_file",
@@ -292,8 +294,9 @@ public static class ClientWebSocket
             preForward: argsJson => EnsureSnapshot(argsJson, ws, log, fileState),
             postHook: (argsJson, result) => { MarkWriteDirty(argsJson, result, fileState); return null; });
 
-        if (!coderScope)
-            RegisterTool(thread, ws, log,
+        // find_files is available to a Coder scope too (see search_files above): resolving a file's real path
+        // by name is the other half of locating a referenced symbol before editing it.
+        RegisterTool(thread, ws, log,
                 name: "find_files",
                 description: "Find files by name with a glob pattern, e.g. '*.cs', 'Token*.cs', or '**/Security/*.cs'. Returns paths relative to the project root. Use search_files to match file contents.",
                 parameters: new { type = "object", properties = new { pattern = new { type = "string", description = "Glob pattern, e.g. '*.cs' or '**/Token*.cs'." }, path = new { type = "string", description = "Directory to search under, relative to project root. Defaults to root." } }, required = new[] { "pattern" } },
