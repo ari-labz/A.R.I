@@ -86,7 +86,8 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         var allThreads = Llm.Threads;
 
         List<ThreadEntry> threads = allThreads
-            .Where(kvp => kvp.Value.Pipeline is ARI.LLM.ThreadPipeline.Dialogue or ARI.LLM.ThreadPipeline.Code or ARI.LLM.ThreadPipeline.Speech)
+            .Where(kvp => kvp.Value.Pipeline is ARI.LLM.ThreadPipeline.Dialogue or ARI.LLM.ThreadPipeline.Code or ARI.LLM.ThreadPipeline.Speech
+                          && !kvp.Value.Internal)
             .Select(kvp =>
             {
                 string? projectId   = ThreadProjects.TryGetValue(kvp.Key, out string? pid) ? pid : null;
