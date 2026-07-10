@@ -11,6 +11,7 @@ const TOOL_START_RE = /<!--ari-tool-start:([^:]+):([^>]*?)-->/g
 const TOOL_DONE_RE  = /<!--ari-tool-done:([^:]+):([^>]*?)-->/g
 const TOOL_END_RE   = /<!--ari-tool-end:([^:]+):([^>]*?)-->/g
 const TOOL_ERROR_RE = /<!--ari-tool-error:([^:]+):([^:]*):([^>]*?)-->/g
+const TOOL_MODE_RE  = /<!--ari-tool-mode:([^:]+):([^>]*?)-->/g
 
 function escHtml(s: string): string {
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -106,6 +107,11 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
         const verbs = TOOL_VERBS[name] ?? { active: name, done: name }
         const label = rawLabel.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">")
         return `\n\n<div class="tool-card tool-card--done"><span>${verbs.done} ${escHtml(label)}</span></div>\n\n`
+    })
+    // Mode switch (dev_mode / planning_mode): a light-blue info card, NOT an error.
+    out = out.replace(TOOL_MODE_RE, (_, _name, rawLabel) => {
+        const label = rawLabel.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">")
+        return `\n\n<div class="tool-card tool-card--mode"><span>${escHtml(label)}</span></div>\n\n`
     })
     out = out.replace(TOOL_ERROR_RE, (_, name, rawFile, rawMsg) => {
         const verbs = TOOL_VERBS[name] ?? { active: name, done: name }
