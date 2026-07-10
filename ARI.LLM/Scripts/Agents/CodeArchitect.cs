@@ -69,8 +69,6 @@ internal sealed class CodeArchitect : Agent
             : (p.Temperature, p.TopP, p.TopK, p.MinP, p.RepeatPenalty, p.PresencePenalty, p.FrequencyPenalty);
     }
 
-    /// <summary>Grades how much thinking the plan turn needs (set by LLMModule). Null = no appraisal → no thinking.</summary>
-    [JsonIgnore] internal Appraisal? Appraisal { get; set; }
 
     // Phase enforcement. Runs before EVERY tool call on this thread (local ServerFileSystem tools AND the
     // client's forwarded edit/write tools), so "no building in Planning" holds on both paths uniformly.
@@ -199,12 +197,9 @@ internal sealed class CodeArchitect : Agent
             if (editsForbidden)
                 nudge += " [The user has forbidden edits this turn — do not build; plan only.]";
 
-            (int? grade, _, _) = await AppraiseThinking(prompt, threadKey, cts.Token);
             reply = await SendPrompt(parent, prompt, username,
                 augmentedPrompt: $"[Task]\n{prompt}\n\n[System]\n{nudge}",
                 ct: cts.Token, userMessagePreadded: true, onDelta: onDelta);
-            if (grade is not null && parent.History.OfType<Response>().LastOrDefault() is { } appraised)
-                appraised.AppraisalGrade = grade;
 
             // Auto-continue into the new mode when the model handed off this turn (interactive AND bypass).
             if (transitioned[0] && ++hops < 4)
@@ -498,21 +493,6 @@ internal sealed class CodeArchitect : Agent
             return "[System: no run_command tool is available to build on the client — skip the build and write your summary.]";
         string output = await rc.Execute(JsonSerializer.Serialize(new { command = "dotnet build" }));
         return "Build output from the client (`dotnet build`):\n\n" + output;
-    }
-
-    // Appraise how much thinking the request needs → wall-clock budget (seconds) + an awareness line the model is
-    // told so it self-paces. Null appraiser ⇒ (null, "") = today's behaviour. Runs once at the start of the request.
-    private async Task<(int? grade, int? thinkSeconds, string awareness)> AppraiseThinking(string prompt, string threadKey, CancellationToken ct)
-    {
-        if (Appraisal is null) return (null, null, "");
-        int grade = await Appraisal.Appraise(prompt, ct);
-        int secs  = Appraisal.GradeToSeconds(grade);
-        string awareness =
-              secs < 0   ? " You may think as long as you need."
-            : secs <= 10 ? " This needs little or no deliberation — think for at most a moment, then act."
-            :              $" You have about {secs} seconds to think — be concise and reach your conclusion within it.";
-        Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) appraisal grade {G} → {S}s thinking budget.", threadKey, grade, secs);
-        return (grade, secs, awareness);
     }
 
 

@@ -31,7 +31,6 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly CuriosityAgent?   curiosity;
     private readonly Classifier?       classifier;
     private readonly Awareness?        awareness;
-    private readonly Appraisal?        appraiser;
     
     
     private readonly CommandService    commands;
@@ -183,15 +182,6 @@ public class LLMModule : ILLMModule, IDisposable
             awareness.Slot     = classifier.Slot;
             _logger.LogInformation("Awareness using Classifier server (default config).");
         }
-
-        if (rawAgents.TryGetValue("Appraisal", out JsonElement appraiserEl))
-        {
-            appraiser = Deserialize<Appraisal>(appraiserEl);
-            _logger.LogInformation("Appraisal is active.");
-        }
-
-        // The architect appraises each plan turn to decide its thinking budget (null appraiser ⇒ no thinking).
-        if (codeArchitect is not null) codeArchitect.Appraisal = appraiser;
 
         if (BrainModule.Ready && rawAgents.TryGetValue("Memory", out JsonElement memoryEl))
         {
