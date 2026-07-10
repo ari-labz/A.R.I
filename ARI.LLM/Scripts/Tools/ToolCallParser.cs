@@ -348,7 +348,16 @@ internal static class ToolCallParser
             {
                 if (i + 1 >= partialJson.Length) return null; // escape sequence not yet complete
                 char n = partialJson[i + 1];
-                sb.Append(n switch { 'n' => '\n', 't' => '\t', 'r' => '\r', '"' => '"', '\\' => '\\', '/' => '/', _ => n });
+                if (n == 'u')
+                {
+                    if (i + 6 > partialJson.Length) return null; // \uXXXX not fully streamed yet
+                    if (int.TryParse(partialJson.AsSpan(i + 2, 4), System.Globalization.NumberStyles.HexNumber,
+                            System.Globalization.CultureInfo.InvariantCulture, out int code))
+                        sb.Append((char)code);
+                    i += 6;
+                    continue;
+                }
+                sb.Append(n switch { 'n' => '\n', 't' => '\t', 'r' => '\r', '"' => '"', '\\' => '\\', '/' => '/', 'b' => '\b', 'f' => '\f', _ => n });
                 i += 2;
                 continue;
             }

@@ -1244,12 +1244,22 @@ public abstract class Agent
                         Shared.Logger.LogError("[{Agent}] ({Thread}) Model called unknown tool '{Tool}'", Name, thread.Key, call.Name);
                     }
 
-                    // Mode transitions render as their own light-blue info card (NOT the red error card),
-                    // even though their result starts with "[System:" (which is fine for the model to read).
-                    if (call.Name is "dev_mode" or "planning_mode")
+                    // plan_proposed renders an interactive plan card (Accept & Build button); replan renders a
+                    // light-blue info card. Neither is an error, even though the result starts with "[System:".
+                    if (call.Name == "plan_proposed")
                     {
-                        string modeLabel = call.Name == "dev_mode" ? "Switched to Development mode" : "Switched to Planning mode";
-                        contentBuilder.Append($"<!--ari-tool-mode:{call.Name}:{ToolCallParser.EscapeLabel(modeLabel)}-->");
+                        // The plan the user reads IS the payload — render it, so a proposal is never a bare chip
+                        // with nothing above it (the model doesn't have to also narrate the plan as prose).
+                        string planText = (ToolCallParser.TryExtractJsonString(argsJson, "payload") ?? "").Trim();
+                        if (planText.Length > 0) contentBuilder.Append("\n\n" + planText + "\n");
+                        contentBuilder.Append("<!--ari-plan-proposed-->");
+                        productiveBatch = true;   // an intentional transition, NOT a failed/no-progress batch
+                        if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                    }
+                    else if (call.Name == "replan")
+                    {
+                        contentBuilder.Append("<!--ari-tool-mode:replan:Returning to planning-->");
+                        productiveBatch = true;
                         if (onDelta is not null) await onDelta(contentBuilder.ToString());
                     }
                     // A guard message ("[System:") or an error renders as an inline tool-error card.
@@ -1300,6 +1310,14 @@ public abstract class Agent
 
                 contentBuilder.Append("<!--ari-batch-end-->");
                 if (onDelta is not null) await onDelta(contentBuilder.ToString());
+
+                // Clean, intentional turn-end requested by a tool (e.g. plan_proposed / replan force a phase
+                // boundary). This is NOT a stall — end quietly, with no "no progress" note.
+                if (thread.EndTurnNow)
+                {
+                    thread.EndTurnNow = false;
+                    break;
+                }
 
                 // Loop-breaker: a weak model can call tools forever without progressing (e.g. re-reading a
                 // file it already read). The per-tool nags only scold; nothing terminates. Under the text
@@ -1379,8 +1397,7 @@ public abstract class Agent
         string responseText = contentBuilder.Length > 0
             ? contentBuilder.ToString() + responseBuilder.ToString()
             : responseBuilder.ToString();
-        if (responseText.StartsWith("ARI: ", StringComparison.OrdinalIgnoreCase))
-            responseText = responseText["ARI: ".Length..];
+        responseText = System.Text.RegularExpressions.Regex.Replace(responseText, @"^\s*ARI\s*:\s*", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         responseText = responseText
             .Replace("<|think_off|>", "")
             .Replace("<|think_on|>", "")
@@ -1394,7 +1411,7 @@ public abstract class Agent
         string traceText = System.Text.RegularExpressions.Regex.Replace(responseBuilder.ToString(), @"<!--ari-[\s\S]*?-->", "");
         traceText = System.Text.RegularExpressions.Regex.Replace(traceText, "<div class=\"tool-use\">[\\s\\S]*?</div>", "");
         traceText = traceText.Replace("<|think_off|>", "").Replace("<|think_on|>", "").Trim();
-        if (traceText.StartsWith("ARI: ", StringComparison.OrdinalIgnoreCase)) traceText = traceText["ARI: ".Length..];
+        traceText = System.Text.RegularExpressions.Regex.Replace(traceText, @"^\s*ARI\s*:\s*", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         if (traceText.Length > 0) trace.Add(new TraceStep { Kind = "text", Text = traceText.Trim() });
 
         double elapsed   = sw.Elapsed.TotalSeconds;

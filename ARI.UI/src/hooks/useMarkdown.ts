@@ -108,7 +108,11 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
         const label = rawLabel.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">")
         return `\n\n<div class="tool-card tool-card--done"><span>${verbs.done} ${escHtml(label)}</span></div>\n\n`
     })
-    // Mode switch (dev_mode / planning_mode): a light-blue info card, NOT an error.
+    // Plan proposed: a subtle chip in the transcript; the Accept/Amend actions live in the composer.
+    out = out.split("<!--ari-plan-proposed-->").join(
+        `\n\n<div class="tool-card tool-card--plan"><span>Ari proposed a plan</span></div>\n\n`)
+
+    // Mode switch (replan): a light-blue info card, NOT an error.
     out = out.replace(TOOL_MODE_RE, (_, _name, rawLabel) => {
         const label = rawLabel.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">")
         return `\n\n<div class="tool-card tool-card--mode"><span>${escHtml(label)}</span></div>\n\n`
@@ -207,6 +211,13 @@ export function renderBlockHtml(block: BlockLike): string {
 
     if (block.type === "text")     return marked.parse(block.text ?? "", { async: false }) as string
     if (block.type === "thinking") return ""   // reasoning is shown via the thought-block, not inline
+
+    // Plan proposed: a subtle non-interactive chip in the transcript — the Accept/Amend actions live in the
+    // composer, so there is only ever ONE action surface.
+    if (block.type === "plan")
+        return `\n\n<div class="tool-card tool-card--plan"><span>Ari proposed a plan</span></div>\n\n`
+    if (block.type === "mode")
+        return `\n\n<div class="tool-card tool-card--mode"><span>${escHtml(block.text ?? "")}</span></div>\n\n`
 
     // Subthread anchor: a child thread rendered inline. Default-expanded and, when open, styled to look like
     // the blocks simply belong to the parent (no bubble chrome) — collapsing hides them behind the label.
