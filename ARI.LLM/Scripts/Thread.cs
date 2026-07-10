@@ -8,6 +8,10 @@ public enum ThreadState { Idle, Streaming, Dormant, CleanupNeeded, Deleted }
 /// <summary>The pipeline a thread belongs to. Determines how its prompts are processed.</summary>
 public enum ThreadPipeline { Dialogue, Code, Speech }
 
+/// <summary>Coding-pipeline state. Planning = explore/infer/propose (no edits); Development = execute the
+/// approved plan (no exploration). Each phase feeds the agent a different system prompt and sampling.</summary>
+public enum CodePhase { Planning, Development }
+
 public class Thread
 {
     private const int MIN_INACTIVITY_TIMER     = 30;
@@ -66,6 +70,12 @@ public class Thread
     /// is waiting for the user to approve (or adjust) it. The plan prose itself lives in History; this is just
     /// the "a plan is on the table" flag. Cleared once the approved plan is formalised into tasks and executed.</summary>
     public bool AwaitingPlanApproval;
+
+    /// <summary>Coding-pipeline state machine. Planning: explore/infer/propose, no edit tools. Development:
+    /// execute the approved plan, no exploration. The phase selects the agent's system prompt AND sampling
+    /// per turn (see Agent.Phases), and the Planning→Development transition is the context-pruning point.
+    /// Entry state is Planning; only user-gated transitions move it (request_build / request_replan).</summary>
+    public CodePhase Phase = CodePhase.Planning;
 
     /// <summary>Monotonic user-turn counter, incremented by the pipeline at the start of each user request.
     /// Client-side tool guardrails (e.g. the read-dedup "already read" short-circuit) scope their state to the

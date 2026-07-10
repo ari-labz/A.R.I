@@ -68,6 +68,23 @@ public abstract class Agent
     internal virtual string BuildPersistentContext(Thread thread)    => "";
     internal virtual string RenderDynamicContextBlock(Thread thread) => "";
 
+    // The agent's role/mode system-prompt body for THIS thread. Default: the flat configured prompt.
+    // A stateful agent (CodeArchitect) overrides this to swap the [Mode] block per CodePhase.
+    internal virtual string SystemPromptFor(Thread thread) => SystemPrompt;
+
+    // Per-turn sampling override (null members fall back to the flat agent config, then server baseline).
+    // Default: no override. A stateful agent overrides this to sample differently per CodePhase.
+    internal virtual (double? Temperature, double? TopP, int? TopK, double? MinP,
+                      double? RepeatPenalty, double? PresencePenalty, double? FrequencyPenalty)
+        SamplingFor(Thread thread) => (null, null, null, null, null, null, null);
+
+    // Periodic forced narration (#112). When > 0, if the agent has gone this many seconds emitting only
+    // tool calls (no visible text), a one-line "tell the user what you've learned and what you're doing"
+    // nudge is injected before the next request. Better UX AND it re-anchors PURPOSE in a context that is
+    // otherwise a wall of searches — breaking the "I search because my history is all searches" momentum.
+    // 0 = off (default); overridden on the coding architect where long exploration happens.
+    internal virtual int NarrationIntervalSeconds => 0;
+
     // ── Tool-loop hooks (Code overrides; base = generic, no-guard behaviour) ──────
     // Per-turn state for the tool loop. The base carries only what the generic loop reads; Code's
     // CodeTurnState subclass adds its guard counters. Created fresh per SendPrompt turn (never shared
@@ -284,10 +301,14 @@ public abstract class Agent
         // Persona is the stable prefix — it must come FIRST so it stays byte-identical across turns and
         // the llama-server KV cache survives (role prompt, then persistent context, then recall follow).
         string persona = UsePersona ? PersonaStore.Get() : "";
+        string roleBody = SystemPromptFor(thread);   // stateful agents swap the [Mode] block here per CodePhase
         string roleBlock = thread.PlatformContext is null
-            ? SystemPrompt
-            : $"{SystemPrompt}\n\n{thread.PlatformContext}";
-        string baseSystem = persona.Length == 0 ? roleBlock : $"{persona}\n\n{roleBlock}";
+            ? roleBody
+            : $"{roleBody}\n\n{thread.PlatformContext}";
+        // Persona is its own labelled block, separated from the pipeline/role prompt (applies to every
+        // persona agent — Dialogue and Coding alike), so "who ARI is" is never tangled with "what this
+        // pipeline does".
+        string baseSystem = persona.Length == 0 ? roleBlock : $"[Persona]\n{persona}\n\n{roleBlock}";
         baseSystem += BuildPersistentContext(thread);
         // Budget awareness (the soft layer): the server hard-caps thinking at BudgetThinking tokens, but the
         // model can't feel that limit approaching, so it runs straight into it every turn. Telling it the
@@ -464,6 +485,11 @@ public abstract class Agent
             if (userDelta is not null) await userDelta(text);
         };
 
+        // Periodic-narration state (#112): when did the agent last emit visible text, and was the last step
+        // tool-calls-only. Drives the forced "tell the user what you're doing" injection below.
+        DateTime lastNarrationUtc   = DateTime.UtcNow;
+        bool     lastStepToolOnly   = false;
+
         while (true)
         {
             bool      toolsExhausted = toolTurn.ForceNoMoreTools || (MaxToolCalls > 0 && toolCallCount >= MaxToolCalls);
@@ -500,6 +526,9 @@ public abstract class Agent
                     Name, thread.Key,
                     toolSchemas is not null ? $"{toolSchemas.Length} tool(s) available: {string.Join(", ", thread.tools.Keys)}" : "no tools registered");
 
+            // Per-turn sampling: a stateful agent (CodeArchitect) can override per CodePhase; each null member
+            // falls back to the flat agent config, then the server baseline.
+            var s = SamplingFor(thread);
             Dictionary<string, object?> body = new()
             {
                 ["model"]          = "local",
@@ -507,15 +536,17 @@ public abstract class Agent
                 ["stream"]         = true,
                 ["stream_options"] = new { include_usage = true },
                 ["max_tokens"]     = maxTokens,
-                ["temperature"]    = Temperature   ?? TEMPERATURE,
-                ["top_p"]          = TopP          ?? TOP_P,
-                ["top_k"]          = TopK          ?? TOP_K,
-                ["min_p"]          = MinP          ?? MIN_P,
-                ["repeat_penalty"] = RepeatPenalty ?? REPEAT_PENALTY
+                ["temperature"]    = s.Temperature   ?? Temperature   ?? TEMPERATURE,
+                ["top_p"]          = s.TopP          ?? TopP          ?? TOP_P,
+                ["top_k"]          = s.TopK          ?? TopK          ?? TOP_K,
+                ["min_p"]          = s.MinP          ?? MinP          ?? MIN_P,
+                ["repeat_penalty"] = s.RepeatPenalty ?? RepeatPenalty ?? REPEAT_PENALTY
             };
 
-            if (PresencePenalty.HasValue)  body["presence_penalty"]  = PresencePenalty.Value;
-            if (FrequencyPenalty.HasValue) body["frequency_penalty"] = FrequencyPenalty.Value;
+            double? presence  = s.PresencePenalty  ?? PresencePenalty;
+            double? frequency = s.FrequencyPenalty ?? FrequencyPenalty;
+            if (presence.HasValue)  body["presence_penalty"]  = presence.Value;
+            if (frequency.HasValue) body["frequency_penalty"] = frequency.Value;
 
             // Thinking mode is decided ONCE for the thread/turn and never flipped mid-turn: switching
             // enable_thinking changes the chat template, which invalidates the server's whole cached
@@ -557,6 +588,20 @@ public abstract class Agent
             // for this request, then remove it so the persistent history (and its cached prefix) stays stable.
             // Only this small block + genuinely new tokens are re-processed each turn instead of the whole context.
             string dynamicBlock   = RenderDynamicContextBlock(thread);
+
+            // Periodic forced narration (#112): if we've gone NarrationIntervalSeconds emitting only tool
+            // calls, make the model surface one sentence of what it learned + what it's doing next. Piggybacks
+            // on the same transient-last-message channel so it never pollutes the cached prefix.
+            if (NarrationIntervalSeconds > 0 && lastStepToolOnly
+                && (DateTime.UtcNow - lastNarrationUtc).TotalSeconds >= NarrationIntervalSeconds)
+            {
+                const string narrate = "[System: Pause and check in. In ONE sentence to the user, say what you've " +
+                    "learned so far and what you're about to do next and WHY — then continue. This keeps the user " +
+                    "informed and keeps you anchored to the goal rather than exploring out of habit.]";
+                dynamicBlock = dynamicBlock.Length > 0 ? dynamicBlock + "\n\n" + narrate : narrate;
+                lastNarrationUtc = DateTime.UtcNow;   // don't re-fire every step
+            }
+
             bool   dynamicInjected = dynamicBlock.Length > 0;
             // role "user", not "system": the chat template silently drops every system message after
             // the first (verified via /apply-template), so a system-role block here never reaches the model.
@@ -901,6 +946,12 @@ public abstract class Agent
                         Name, thread.Key, (snip.Length > 400 ? snip[..400] + "…" : snip).Replace("\n", "\\n"));
                 }
             }
+
+            // Narration bookkeeping (#112): a step that emitted visible text resets the clock; a text-free
+            // step with tool calls arms the nudge for next time.
+            bool emittedText = responseBuilder.Length > 0;
+            if (emittedText) lastNarrationUtc = DateTime.UtcNow;
+            lastStepToolOnly = !emittedText && pendingCalls.Count > 0;
 
             // The stream degenerated into a character spiral. Discard the garbage and end the turn —
             // there's no salvageable tool call, and continuing would just repeat the spiral.

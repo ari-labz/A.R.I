@@ -168,15 +168,21 @@ public static class ClientWebSocket
 
         RegisterTool(thread, ws, log,
             name: "preview_file",
-            description: "Get a structural outline of a file — line count, size, and landmarks (classes, methods, JSON keys, headings) with line numbers. Call this before read_file on any unfamiliar file to find the right line range.",
+            description: "Get a class-diagram outline of a file — its types with base/interfaces, and every field, property and method SIGNATURE with types and line numbers. This answers \"how do I USE this?\" and for most files it is ALL you need: to bind to a data class, call a method, or place a control, the outline gives you the exact names — no read required. Prefer this over read_file by default; only read_file (a narrow range) when you must see how a specific method behaves inside because you are copying it.",
             parameters: new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root." } }, required = new[] { "path" } },
             displayVerb: "Previewing", displayDoneVerb: "Previewed",
             labelField: "path",
-            postHook: (argsJson, result) => { MarkPreviewed(argsJson, result, fileState); return null; });
+            // Client returns raw content; build the class-diagram outline server-side (one extractor, #138).
+            postHook: (argsJson, result) =>
+            {
+                string built = BuildClientPreview(ExtractToolPath(argsJson), result);
+                MarkPreviewed(argsJson, built, fileState);
+                return built;
+            });
 
         RegisterTool(thread, ws, log,
             name: "read_file",
-            description: "Read a file from the user's project. Lines come back numbered so you can edit_file by line number afterwards. HARD LIMIT: at most 100 lines per call — wider requests are rejected without being read. ALWAYS call preview_file on a file BEFORE your first read_file on it — preview shows the line count and outline so you pick the right range. Pass start_line and end_line spanning at most 100 lines, and use search_files to locate the range. To cover a longer stretch, read consecutive 100-line windows (1-100, then 101-200, ...) — they stack in your context as one continuous view. You rarely need to re-read a file you already have, or to re-read after editing (edit_file returns the updated lines around your change).",
+            description: "Read a SPECIFIC RANGE of a file — use this sparingly. Most of the time preview_file is enough: it gives the exact members to USE a type, so you do NOT need to read it. Only read when you must see how a specific method BEHAVES inside because you are copying/imitating it — and then read just THAT method's lines (preview gave you its line number), not the whole file. Lines come back numbered so you can edit_file by line number afterwards. HARD LIMIT: at most 100 lines per call — wider requests are rejected without being read. ALWAYS preview_file first, then pass start_line and end_line for the exact range. Reading a whole file, or reading 'to be sure', bloats your context and is the main reason this pipeline runs out of room. You never need to re-read a file you already have (edit_file returns the updated lines around your change).",
             parameters: new { type = "object", properties = new {
                 path       = new { type = "string",  description = "File path relative to project root" },
                 start_line = new { type = "integer", description = "First line to read (1-based, inclusive). Omit to read from the start." },
@@ -455,18 +461,12 @@ public static class ClientWebSocket
 
         int turn = epochThread.TurnSerial;
         (int reqStart, int reqEnd) = ARI.LLM.ReadFile.ExtractRange(argsJson);
-        lock (ranges)
-        {
-            foreach ((int s, int e, int t) in ranges)
-            {
-                if (t == turn && s <= reqStart && e >= reqEnd)
-                {
-                    string seen = e == int.MaxValue ? $"from line {s} to the end" : $"lines {s}-{e}";
-                    return $"[Already read] You already read {seen} of '{path}' earlier THIS turn — scroll up to that result rather than re-reading it. If you need a different part, read a different range; if you just edited it, read again for fresh line numbers.";
-                }
-            }
-        }
-        return null;
+        // Same redundancy algorithm as the server-disk path (FileSnapshots.RedundancyNudge) — one
+        // implementation, so both filesystems dedup identically. Scoped to the current turn: content read
+        // in an earlier turn may have been condensed out of context, so "scroll up" would be a lie.
+        List<(int Start, int End)> thisTurn;
+        lock (ranges) thisTurn = ranges.Where(r => r.Turn == turn).Select(r => (r.Start, r.End)).ToList();
+        return ARI.LLM.FileSnapshots.RedundancyNudge(path, thisTurn, reqStart, reqEnd);
     }
 
     /// <summary>read_file card marker whose label includes the requested line range — "File.cs (101-200)" —
@@ -525,7 +525,7 @@ public static class ClientWebSocket
         bool ranged = !(reqStart == 1 && reqEnd == int.MaxValue);
         if (ranged) return null;
 
-        string outline = await Forward(ws, log, "preview_file", JsonSerializer.Serialize(new { path }), "path");
+        string outline = BuildClientPreview(path, await Forward(ws, log, "preview_file", JsonSerializer.Serialize(new { path }), "path"));
         if (!outline.StartsWith("[preview:")) return null;
 
         fileState.PreviewedFiles.TryAdd(path, 0);
@@ -542,6 +542,29 @@ public static class ClientWebSocket
                $"is shown above. Now call read_file on {path} with start_line/end_line (at most " +
                $"{ReadFile.WindowLines} lines per call) to read only the section you need; consecutive windows " +
                $"stack in your context as one continuous view.]";
+    }
+
+    /// <summary>
+    /// The client's <c>preview_file</c> now returns RAW file content (tagged <c>[rawpreview] &lt;bytes&gt;</c>
+    /// on the first line) instead of building its own outline. We build the class-diagram outline here with
+    /// <see cref="ARI.LLM.PreviewFormatter"/> — the same extractor the server-disk path uses, so there is one
+    /// implementation and no JS/C# divergence (#138). If the client is older / returned an error string
+    /// (no tag), pass it through unchanged.
+    /// </summary>
+    private static string BuildClientPreview(string path, string clientRaw)
+    {
+        const string tag = "[rawpreview]";
+        if (!clientRaw.StartsWith(tag)) return clientRaw;
+
+        int nl = clientRaw.IndexOf('\n');
+        string header  = nl >= 0 ? clientRaw.Substring(0, nl) : clientRaw;
+        string content = nl >= 0 ? clientRaw.Substring(nl + 1) : "";
+        long   bytes   = 0;
+        var    m       = System.Text.RegularExpressions.Regex.Match(header, @"(\d+)");
+        if (m.Success) long.TryParse(m.Value, out bytes);
+
+        string[] lines = content.Split('\n');
+        return ARI.LLM.PreviewFormatter.Build(path, lines, bytes);
     }
 
     /// <summary>On successful preview_file, marks the file previewed so read_file on it is allowed.</summary>
@@ -905,7 +928,9 @@ public static class ClientWebSocket
         internal ClientFileSystem(WebSocket ws, ILogger log) { this.ws = ws; this.log = log; }
 
         public override Task<string> Read(string a)    => Forward("read_file", a);
-        public override Task<string> Preview(string a) => Forward("preview_file", a);
+        // Client returns raw content; build the class-diagram outline server-side (one extractor, #138).
+        public override async Task<string> Preview(string a)
+            => BuildClientPreview(ExtractToolPath(a), await Forward("preview_file", a));
         public override Task<string> Edit(string a)    => Forward("edit_file", a);
         public override Task<string> Write(string a)   => Forward("write_file", a);
         public override Task<string> Search(string a)  => Forward("search_files", a);
