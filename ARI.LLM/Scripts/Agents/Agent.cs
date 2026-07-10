@@ -111,7 +111,9 @@ public abstract class Agent
 
     internal List<ThreadMessage> ContextSnapshot(Thread thread)
     {
-        int maxChars = BudgetContext > 0 ? BudgetContext * 2 : 0;
+        // Phase 5 (#151): ~3.5 chars/token is the measured rate for real code (was a too-conservative ×2 that
+        // capped the architect at ~40k of its 70k budget). Consistent with compaction's estimate.
+        int maxChars = BudgetContext > 0 ? (int)(BudgetContext * 3.5) : 0;
         return thread.GetChatHistory(MemoryLimit, maxChars);
     }
 
@@ -283,7 +285,9 @@ public abstract class Agent
             thread.RaiseUpdated();
         }
 
-        int maxChars = BudgetContext > 0 ? BudgetContext * 2 : 0;
+        // Phase 5 (#151): ~3.5 chars/token is the measured rate for real code (was a too-conservative ×2 that
+        // capped the architect at ~40k of its 70k budget). Consistent with compaction's estimate.
+        int maxChars = BudgetContext > 0 ? (int)(BudgetContext * 3.5) : 0;
         List<ThreadMessage> chatHistory = thread.GetChatHistory(MemoryLimit, maxChars);
 
         List<ThreadMessage> collapsed = new();
