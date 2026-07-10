@@ -17,12 +17,57 @@ namespace ARI.LLM;
 /// when the last succeeded), build, fix its own compile errors, and summarise. The LLM side is its
 /// SystemPrompt; the C# side is <see cref="RunLoop"/>.
 /// </summary>
+/// <summary>Per-CodePhase prompt + sampling override for the coding pipeline (deserialised from the
+/// CodeArchitect entry in Agents.json). A null sampling member falls back to the flat agent default,
+/// then the server baseline.</summary>
+public sealed class PhaseConfig
+{
+    [JsonPropertyName("systemPrompt")]     public string  SystemPrompt     { get; init; } = "";
+    [JsonPropertyName("temperature")]      public double? Temperature      { get; init; }
+    [JsonPropertyName("topP")]             public double? TopP             { get; init; }
+    [JsonPropertyName("topK")]             public int?    TopK             { get; init; }
+    [JsonPropertyName("minP")]             public double? MinP             { get; init; }
+    [JsonPropertyName("repeatPenalty")]    public double? RepeatPenalty    { get; init; }
+    [JsonPropertyName("presencePenalty")]  public double? PresencePenalty  { get; init; }
+    [JsonPropertyName("frequencyPenalty")] public double? FrequencyPenalty { get; init; }
+}
+
 internal sealed class CodeArchitect : Agent
 {
     public CodeArchitect() { }
 
     // Coding prompts are verbose and already logged by the pipeline; don't double-log them.
     [JsonIgnore] internal override bool SuppressPromptLog => true;
+
+    // #112: during long exploration the architect goes minutes emitting only tool calls. Every ~90s of
+    // tool-only work, force a one-sentence check-in — better UX and it re-anchors purpose against the
+    // "search because my history is all searches" momentum that drives over-exploration.
+    [JsonIgnore] internal override int NarrationIntervalSeconds => 90;
+
+    // ── State machine: per-CodePhase prompt + sampling ───────────────────────────────────────────────
+    // SystemPrompt (base field) holds the INVARIANT [Role] text; each phase supplies its own [Mode] prompt
+    // and sampling. Planning = warm/exploratory, Development = cold/precise. Configured in Agents.json.
+    [JsonPropertyName("phases")] public Dictionary<string, PhaseConfig>? Phases { get; init; }
+
+    private PhaseConfig? PhaseFor(Thread t)
+        => Phases is not null && Phases.TryGetValue(t.Phase.ToString(), out PhaseConfig? p) ? p : null;
+
+    internal override string SystemPromptFor(Thread thread)
+    {
+        PhaseConfig? phase = PhaseFor(thread);
+        if (phase is null || phase.SystemPrompt.Length == 0) return SystemPrompt;   // no phase config → flat
+        return $"[Role]\n{SystemPrompt}\n\n[Mode: {thread.Phase}]\n{phase.SystemPrompt}";
+    }
+
+    internal override (double? Temperature, double? TopP, int? TopK, double? MinP,
+                       double? RepeatPenalty, double? PresencePenalty, double? FrequencyPenalty)
+        SamplingFor(Thread thread)
+    {
+        PhaseConfig? p = PhaseFor(thread);
+        return p is null
+            ? (null, null, null, null, null, null, null)
+            : (p.Temperature, p.TopP, p.TopK, p.MinP, p.RepeatPenalty, p.PresencePenalty, p.FrequencyPenalty);
+    }
 
     /// <summary>Grades how much thinking the plan turn needs (set by LLMModule). Null = no appraisal → no thinking.</summary>
     [JsonIgnore] internal Appraisal? Appraisal { get; set; }
@@ -67,6 +112,9 @@ internal sealed class CodeArchitect : Agent
         // text-tool protocol carries it reliably; the model makes many small calls, never one nested submit.
         parent.RegisterTool("spawn_coder", SpawnCoderSchema, async argsJson =>
         {
+            if (parent.Phase == CodePhase.Planning)
+                return "[System: you are in PLANNING mode — you cannot build yet. Refine the plan, then call " +
+                       "request_build to get the user's approval and switch to DEVELOPMENT. spawn_coder is unavailable until then.]";
             if (editsForbidden)
                 return "[System: the user has explicitly forbidden edits this turn (planning only). spawn_coder is " +
                        "disabled. Present your plan as text and STOP — do not attempt further tool calls to edit.]";
@@ -92,45 +140,77 @@ internal sealed class CodeArchitect : Agent
         // Remote: the build runs on the client via its forwarded run_command (there's no dotnet on this server
         // for the client's project); local: dotnet build on this disk.
         parent.RegisterTool("build_project", BuildProjectSchema,
-            async _ => remote ? await BuildRemote(parent, touched, cts.Token) : await BuildTouched(touched, root, cts.Token),
+            async _ =>
+            {
+                if (parent.Phase == CodePhase.Planning)
+                    return "[System: you are in PLANNING mode — nothing has been built yet, so there is nothing to build_project. Plan first, then request_build.]";
+                return remote ? await BuildRemote(parent, touched, cts.Token) : await BuildTouched(touched, root, cts.Token);
+            },
             displayFormatter: _ => "<!--ari-tool-start:build_project:project-->");
 
         bool bypass   = Environment.GetEnvironmentVariable("ARI_GATE_BYPASS") == "1";
+
+        // ── State transitions ────────────────────────────────────────────────────────────────────────
+        // request_build: Planning → Development. The model proposes; the user approves (auto in bypass). Sets
+        // the phase so the NEXT turn runs the Development prompt + sampling + edit tools.
+        parent.RegisterTool("request_build", RequestBuildSchema, _ =>
+        {
+            if (parent.Phase == CodePhase.Development)
+                return Task.FromResult("[System: already in DEVELOPMENT — just execute the plan.]");
+            parent.Phase = CodePhase.Development;
+            parent.AwaitingPlanApproval = !bypass;   // interactive: pause for the user; bypass: auto-approved
+            return Task.FromResult(bypass
+                ? "[System: plan auto-approved — now in DEVELOPMENT. Execute it with spawn_coder.]"
+                : "[System: plan submitted for approval. STOP here — do not build. If the user approves you'll continue in DEVELOPMENT; if they want changes, you'll be back in PLANNING.]");
+        });
+        // request_replan: Development → Planning. The model found the plan wrong/blocked, or the user asked to replan.
+        parent.RegisterTool("request_replan", RequestReplanSchema, _ =>
+        {
+            parent.Phase = CodePhase.Planning;
+            parent.AwaitingPlanApproval = false;
+            return Task.FromResult("[System: back in PLANNING. Explore only what the new information requires and present a revised plan.]");
+        });
+
         bool resuming = parent.AwaitingPlanApproval && !bypass;
 
-        // Per-turn nudge (the full workflow lives in the architect's system prompt). The whole turn — plan, the
-        // spawn_coder edits, the build_project check, and the summary — is ONE response made of many blocks.
-        // The resuming nudge must NOT presume approval: the previous turn may have ended in a clarifying
-        // question, and the user's reply may be a new or revised request rather than a go-ahead.
-        string nudge = resuming
-            ? "Your previous turn ended awaiting the user (a plan or a question). Read their reply carefully — it is " +
-              "an approval ONLY if it clearly tells you to proceed with the plan you already presented. If it approves, " +
-              "EXECUTE that plan now with spawn_coder (do not re-plan or re-explore). If it answers your question, adds " +
-              "requirements, or changes the request, treat it as a new/revised request: present the updated numbered " +
-              "plan and STOP for approval. If it forbids changes (e.g. 'planning only', 'do not edit'), you MUST NOT " +
-              "call spawn_coder this turn — explore and plan only."
-            : bypass
-                ? "Automated run: write your numbered plan FIRST (before any tool call), then execute it directly with spawn_coder — no approval needed."
-                : "Write your numbered plan to the user FIRST (before any spawn_coder call). Then: a small, localized change " +
-                  "(a rename, a one-line fix) — proceed and spawn_coder now; a larger refactor / cross-file / multi-step / " +
-                  "ambiguous change — STOP after the plan for the user to approve before you spawn any coder.";
-        if (editsForbidden)
-            nudge += " [The user has forbidden edits this turn — spawn_coder is disabled; plan only.]";
+        // Phase-aware per-turn nudge. The [Mode] system prompt already carries the full behaviour; this is a
+        // short reminder of what THIS turn is for. In bypass we loop once across a Planning→Development
+        // transition so an automated run completes without a user reply.
+        string reply = "";
+        while (true)
+        {
+            CodePhase entryPhase = parent.Phase;
+            string nudge = entryPhase == CodePhase.Planning
+                ? (resuming
+                    ? "Refine the plan with the user. Their reply may answer a question, add requirements, or approve. " +
+                      "Build on your existing context — re-explore ONLY what the new information needs. If the plan is ready " +
+                      "and approved, call request_build; otherwise refine and re-present."
+                    : "PLANNING. Ask any clarifying questions first if the request is vague, then sketch a BROAD plan from " +
+                      "cheap signals and present it — don't over-read, don't detail every line. When it's solid, call request_build.")
+                : "DEVELOPMENT. Execute the approved plan with spawn_coder, one atomic step at a time; build_project when " +
+                  "done. If the plan turns out wrong or blocked, call request_replan.";
+            if (editsForbidden)
+                nudge += " [The user has forbidden edits this turn — do not build; plan only.]";
 
-        // Every user prompt gets appraised — a "resume" can be anything from a one-word approval (grade 0)
-        // to a fully-specified new request (the turn that actually needs a thinking budget).
-        (int? grade, _, _) = await AppraiseThinking(prompt, threadKey, cts.Token);
+            (int? grade, _, _) = await AppraiseThinking(prompt, threadKey, cts.Token);
+            reply = await SendPrompt(parent, prompt, username,
+                augmentedPrompt: $"[Task]\n{prompt}\n\n[System]\n{nudge}",
+                ct: cts.Token, userMessagePreadded: true, onDelta: onDelta);
+            if (grade is not null && parent.History.OfType<Response>().LastOrDefault() is { } appraised)
+                appraised.AppraisalGrade = grade;
 
-        string reply = await SendPrompt(parent, prompt, username,
-            augmentedPrompt: $"{prompt}\n\n[System: {nudge}]",
-            ct: cts.Token, userMessagePreadded: true, onDelta: onDelta);
+            // Bypass only: a Planning→Development transition this turn auto-continues into execution.
+            if (bypass && entryPhase == CodePhase.Planning && parent.Phase == CodePhase.Development)
+            {
+                prompt   = "[The plan is approved — execute it now with spawn_coder.]";
+                resuming = false;
+                continue;
+            }
+            break;
+        }
 
-        // Attach appraisal telemetry to this turn's response so the DTI can show it (chat view ignores it).
-        if (grade is not null && parent.History.OfType<Response>().LastOrDefault() is { } appraised)
-            appraised.AppraisalGrade = grade;
-
-        // If it spawned coders it executed → done; otherwise it presented a plan / asked a question → await the user.
-        parent.AwaitingPlanApproval = !bypass && touched.Count == 0;
+        // Await the user only if we ended in Planning without a pending build (a plan/question on the table).
+        parent.AwaitingPlanApproval = !bypass && parent.Phase == CodePhase.Planning && touched.Count == 0;
         return reply;
     }
 
@@ -169,6 +249,38 @@ internal sealed class CodeArchitect : Agent
                           "this once all edits are done. Returns compile errors grouped by file, tagged as ones you " +
                           "edited (fix them) or pre-existing (leave them, note them in your summary).",
             parameters = new { type = "object", properties = new { } }
+        }
+    };
+
+    private static readonly object RequestBuildSchema = new
+    {
+        type = "function",
+        function = new
+        {
+            name = "request_build",
+            description = "Call this from PLANNING when your plan is ready, to ask the user to approve it and switch to " +
+                          "DEVELOPMENT. Pass a short summary of the plan. You do NOT build here — this ends your planning turn.",
+            parameters = new
+            {
+                type = "object",
+                properties = new { plan = new { type = "string", description = "A short summary of the plan the user is approving." } }
+            }
+        }
+    };
+
+    private static readonly object RequestReplanSchema = new
+    {
+        type = "function",
+        function = new
+        {
+            name = "request_replan",
+            description = "Call this from DEVELOPMENT to go back to PLANNING — when the approved plan turns out wrong or " +
+                          "blocked, or the user asks to change it. Pass what you found so planning can revise.",
+            parameters = new
+            {
+                type = "object",
+                properties = new { reason = new { type = "string", description = "Why the plan needs revising." } }
+            }
         }
     };
 

@@ -18,8 +18,6 @@ internal sealed class ServerFileSystem : FileSystem
     private const int READ_MAX_CHARS     = 48000;
     private const int SEARCH_MAX_CHARS   = 8000;
     private const int MAX_REPLACE_SPAN   = 15;    // edit_file: max lines a content replacement may span
-    private const int PREVIEW_HEAD_LINES = 8;
-    private const int MAX_OUTLINE_ITEMS  = 80;
 
     private static readonly HashSet<string> IgnoredDirs = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -93,8 +91,10 @@ internal sealed class ServerFileSystem : FileSystem
                 // Return the preview outline FIRST (result starts with "[preview:", not "[System:", so the loop
                 // renders it as a normal preview — Agent relabels the read card to "Previewing" — not an error card).
                 string outline = await Preview(argsJson);   // reads the same "path" arg; marks the file previewed
-                return $"{outline}\n\n[Note: you called read_file on {relPath} before previewing it, so the preview " +
-                       $"is shown above. Now call read_file on {relPath} with start_line/end_line to read the section you need.]";
+                return $"{outline}\n\n[Note: previewing {relPath} for you first. This outline usually gives you everything " +
+                       $"you need to USE the type — exact fields, properties and method signatures. Only call read_file with a " +
+                       $"start_line/end_line for a specific method if you genuinely must see how it behaves inside; otherwise " +
+                       $"work from this outline and move on.]";
             }
 
             string[] lines      = await File.ReadAllLinesAsync(absPath, ct);
@@ -110,6 +110,10 @@ internal sealed class ServerFileSystem : FileSystem
 
             startLine = Math.Max(1,         Math.Min(startLine, totalLines));
             endLine   = Math.Max(startLine, Math.Min(endLine,   totalLines));
+
+            // Redundant/overlap re-read dedup — shared policy with the remote path (see FileSnapshots).
+            if (gate?.RedundantRead(absPath, startLine, endLine) is { } dupNudge)
+                return dupNudge;
 
             // Hard per-call read window — shared policy with the remote path (see ReadFile.CheckWindow).
             // previewed: true — the preview gate above has already diverted un-previewed reads.
@@ -145,6 +149,9 @@ internal sealed class ServerFileSystem : FileSystem
                 sb.Append($"\n[Large file ({totalLines} lines total) — capped at line {endLine}. Use search_files to find the relevant lines, then re-read with start_line/end_line.]");
             else if (!hasStart && !hasEnd && totalLines > 150)
                 sb.Append($"\n[Tip: this file has {totalLines} lines. For future reads, use search_files to locate content first, then read only the relevant range with start_line/end_line.]");
+            // Record what the model actually received, for dedup. A capped read isn't recorded — the model
+            // only got part of it, so a follow-up read of the rest must not be blocked.
+            if (!capped) gate?.RecordRead(absPath, startLine, endLine);
             return sb.ToString();
         }
         catch (Exception ex)
@@ -168,45 +175,9 @@ internal sealed class ServerFileSystem : FileSystem
 
             string[] lines     = await File.ReadAllLinesAsync(absPath, ct);
             long     sizeBytes = new FileInfo(absPath).Length;
-            string   ext       = Path.GetExtension(relPath).ToLowerInvariant();
 
-            StringBuilder sb = new();
-            sb.AppendLine($"[preview: \"{relPath}\" — {lines.Length} lines, {FormatSize(sizeBytes)}]");
-
-            List<(int Line, string Label)> landmarks = ext switch
-            {
-                ".cs"   => ExtractCsharp(lines),
-                ".json" => ExtractJson(lines),
-                ".md" or ".markdown" => ExtractMarkdown(lines),
-                ".ts" or ".tsx" or ".js" or ".jsx" => ExtractJs(lines),
-                ".py"   => ExtractPython(lines),
-                _       => new List<(int, string)>()
-            };
-
-            if (landmarks.Count > 0)
-            {
-                sb.AppendLine();
-                sb.AppendLine("Outline (line: symbol):");
-                foreach ((int ln, string label) in landmarks.Take(MAX_OUTLINE_ITEMS))
-                    sb.AppendLine($"  {ln,5}| {label}");
-                if (landmarks.Count > MAX_OUTLINE_ITEMS)
-                    sb.AppendLine($"  ... ({landmarks.Count - MAX_OUTLINE_ITEMS} more — use search_files to narrow)");
-            }
-            else
-            {
-                sb.AppendLine();
-                sb.AppendLine($"First {Math.Min(PREVIEW_HEAD_LINES, lines.Length)} lines:");
-                for (int i = 0; i < Math.Min(PREVIEW_HEAD_LINES, lines.Length); i++)
-                    sb.AppendLine($"  {i + 1,5}| {lines[i]}");
-            }
-
-            sb.AppendLine();
-            sb.AppendLine($"[{lines.Length} lines total]");
-            if (lines.Length > 400)
-                sb.Append("Warning: this is a large file. Read ONLY the line ranges you need with read_file (start_line/end_line). Do not read the whole file.");
-            else
-                sb.Append("Use read_file with start_line/end_line to read a specific section.");
-            return sb.ToString();
+            // Outline building lives in PreviewFormatter — one extractor shared with the client-disk path.
+            return PreviewFormatter.Build(relPath, lines, sizeBytes);
         }
         catch (Exception ex)
         {
@@ -493,6 +464,7 @@ internal sealed class ServerFileSystem : FileSystem
                 return $"Refused: this edit would leave {relPath} with unbalanced braces ({open1} `{{` vs {close1} `}}`) — it was balanced before, so a brace was dropped or added and the file would not compile. Nothing was written. Check the braces in your new_string: add a COMPLETE block with matching `{{` and `}}` (use insert_after to add a whole method/class), and don't replace or omit an existing brace line.";
 
             gate?.TakeSnapshot(absPath, content);
+            gate?.InvalidateReads(absPath);   // line numbers shifted — recorded read ranges are stale
             await WriteWithRetry(absPath, buf.Replace("\n", nl));
 
             string[] lines = buf.Split('\n');
@@ -638,6 +610,7 @@ internal sealed class ServerFileSystem : FileSystem
             // Snapshot the pre-write content so RevertFile can undo it (parity with Edit) — matters for the
             // coding pipeline; the memory agents revert via git instead.
             if (existed) gate?.TakeSnapshot(abs, await ReadWithRetry(abs));
+            gate?.InvalidateReads(abs);   // content changed — recorded read ranges are stale
             await WriteWithRetry(abs, content);
             // "Successfully wrote" is the exact phrase Coder.ToolLoop keys on to register a write — keep it.
             return $"Successfully wrote {relPath} ({(existed ? "overwrote" : "created")}, {content.Split('\n').Length} lines).";
@@ -706,99 +679,5 @@ internal sealed class ServerFileSystem : FileSystem
         }
     }
 
-    // ── Preview language extractors (from PreviewFile.cs) ───────────────────────────────────────────
-    private static readonly Regex CsType   = new(@"^\s*(public|internal|private|protected|file)[\w\s<>\[\],?]*\s+(class|interface|record|struct|enum)\s+(\w+)", RegexOptions.Compiled);
-    private static readonly Regex CsMember = new(@"^\s*(public|internal|private|protected|static|override|virtual|abstract|async)[\w\s<>\[\],?]*\s+(\w+)\s*[\({]", RegexOptions.Compiled);
-
-    private static List<(int, string)> ExtractCsharp(string[] lines)
-    {
-        List<(int, string)> out_ = new();
-        for (int i = 0; i < lines.Length; i++)
-        {
-            string line = lines[i];
-            Match m;
-            if ((m = CsType.Match(line)).Success)
-                out_.Add((i + 1, $"{m.Groups[2].Value} {m.Groups[3].Value}"));
-            else if ((m = CsMember.Match(line)).Success && !line.TrimStart().StartsWith("//"))
-                out_.Add((i + 1, m.Groups[2].Value + (line.Contains('(') ? "()" : "")));
-        }
-        return out_;
-    }
-
-    private static readonly Regex JsonKey = new(@"^\s*""([^""]+)""\s*:", RegexOptions.Compiled);
-
-    private static List<(int, string)> ExtractJson(string[] lines)
-    {
-        List<(int, string)> out_ = new();
-        int depth = 0;
-        for (int i = 0; i < lines.Length; i++)
-        {
-            string t = lines[i];
-            foreach (char c in t) { if (c == '{' || c == '[') depth++; else if (c == '}' || c == ']') depth--; }
-            if (depth <= 2)
-            {
-                Match m = JsonKey.Match(t);
-                if (m.Success) out_.Add((i + 1, m.Groups[1].Value));
-            }
-        }
-        return out_;
-    }
-
-    private static readonly Regex MdHeading = new(@"^(#{1,4})\s+(.+)", RegexOptions.Compiled);
-
-    private static List<(int, string)> ExtractMarkdown(string[] lines)
-    {
-        List<(int, string)> out_ = new();
-        for (int i = 0; i < lines.Length; i++)
-        {
-            Match m = MdHeading.Match(lines[i]);
-            if (m.Success) out_.Add((i + 1, m.Groups[1].Value + " " + m.Groups[2].Value.Trim()));
-        }
-        return out_;
-    }
-
-    private static readonly Regex JsFunc  = new(@"^\s*(export\s+)?(default\s+)?(async\s+)?function\s+(\w+)", RegexOptions.Compiled);
-    private static readonly Regex JsArrow = new(@"^\s*(export\s+)?(const|let)\s+(\w+)\s*=\s*(async\s+)?\(", RegexOptions.Compiled);
-    private static readonly Regex JsClass = new(@"^\s*(export\s+)?(default\s+)?class\s+(\w+)", RegexOptions.Compiled);
-
-    private static List<(int, string)> ExtractJs(string[] lines)
-    {
-        List<(int, string)> out_ = new();
-        for (int i = 0; i < lines.Length; i++)
-        {
-            string line = lines[i];
-            Match m;
-            if      ((m = JsClass.Match(line)).Success) out_.Add((i + 1, $"class {m.Groups[3].Value}"));
-            else if ((m = JsFunc.Match(line)).Success)  out_.Add((i + 1, $"{m.Groups[4].Value}()"));
-            else if ((m = JsArrow.Match(line)).Success) out_.Add((i + 1, $"{m.Groups[3].Value}()"));
-        }
-        return out_;
-    }
-
-    private static readonly Regex PyDef = new(@"^(\s*)(def|class)\s+(\w+)", RegexOptions.Compiled);
-
-    private static List<(int, string)> ExtractPython(string[] lines)
-    {
-        List<(int, string)> out_ = new();
-        for (int i = 0; i < lines.Length; i++)
-        {
-            Match m = PyDef.Match(lines[i]);
-            if (m.Success)
-            {
-                string indent = m.Groups[1].Value;
-                string kind   = m.Groups[2].Value;
-                string name   = m.Groups[3].Value;
-                string prefix = indent.Length == 0 ? "" : "  ";
-                out_.Add((i + 1, $"{prefix}{kind} {name}"));
-            }
-        }
-        return out_;
-    }
-
-    private static string FormatSize(long bytes) => bytes switch
-    {
-        < 1024        => $"{bytes} B",
-        < 1024 * 1024 => $"{bytes / 1024.0:F1} KB",
-        _             => $"{bytes / (1024.0 * 1024):F1} MB"
-    };
+    // Preview outline building moved to PreviewFormatter (shared with the client-disk path).
 }
