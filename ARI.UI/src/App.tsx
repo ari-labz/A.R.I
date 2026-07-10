@@ -965,6 +965,12 @@ export default function App() {
         runStream()
     }, [isStreaming, pendingAttach, items.length, mode, loadThreads, selectedProject, injectFileTree, openToolSocket])
 
+    // The plan-proposed card's "Accept & Build" button calls this global — it sends the deterministic
+    // "[approve-plan]" signal, which the coding pipeline reads as approval (→ Development with the payload).
+    useEffect(() => {
+        (window as unknown as { __ariApprovePlan?: () => void }).__ariApprovePlan = () => send("[approve-plan]")
+    }, [send])
+
     // ── upload thread attachment ──────────────────────────
     const uploadThreadFiles = useCallback(async (files: File[]) => {
         let key = activeThreadRef.current
@@ -1080,6 +1086,8 @@ export default function App() {
                     mode={mode}
                     codeMode={codeMode}
                     items={items}
+                    planProposed={!isStreaming && items[items.length - 1]?.type === "ariResponse"
+                        && (items[items.length - 1]?.blocks ?? []).some(b => (b as { type?: string }).type === "plan")}
                     isRemembering={isRemembering}
                     isStreaming={isStreaming}
                     activeThread={activeThread}

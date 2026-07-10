@@ -77,6 +77,31 @@ public class Thread
     /// Entry state is Planning; the model moves it via dev_mode / planning_mode after presenting a plan.</summary>
     public CodePhase Phase = CodePhase.Planning;
 
+    /// <summary>The self-contained handoff the architect writes when it calls dev_mode: the plan + the exact
+    /// file contracts Development needs (fields, signatures, patterns). Tool-result cards do NOT persist across
+    /// turns (only prose does), so the working set would vanish at the Planning→Development boundary and force
+    /// re-reads — this payload carries it forward as text. Injected into every Development turn's prompt.</summary>
+    public string? HandoffPayload;
+
+    /// <summary>A plan is on the table awaiting the user's verdict (set by plan_proposed, which force-ends the
+    /// planning turn). On the next turn CodePipeline reads the user's verdict: approve → Development (with the
+    /// captured HandoffPayload); anything else → back to Planning to revise.</summary>
+    public bool PlanProposed;
+
+    /// <summary>This planning turn is a REVISION of a plan the user just amended (set by CodePipeline when a
+    /// proposed plan gets feedback instead of approval). CodeArchitect uses it to hard-steer the turn to end
+    /// with a fresh plan_proposed.</summary>
+    public bool RevisingPlan;
+
+    /// <summary>Set by plan_proposed / replan to force the current turn to end after this tool batch (a clean
+    /// phase boundary), read by CodeArchitect.OnBatchEndShouldBreak.</summary>
+    public bool EndTurnNow;
+
+    /// <summary>Files the architect has edited/written this turn (populated by the edit tools via PostToolProcess).
+    /// build_project builds the projects containing these. Replaces the old spawn_coder-populated set now that
+    /// the architect edits directly instead of dispatching a Coder.</summary>
+    public readonly HashSet<string> TouchedFiles = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>Monotonic user-turn counter, incremented by the pipeline at the start of each user request.
     /// Client-side tool guardrails (e.g. the read-dedup "already read" short-circuit) scope their state to the
     /// current turn via this: content read in an earlier turn may have been condensed out of the model's

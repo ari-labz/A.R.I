@@ -950,6 +950,20 @@ button, a, input, select, textarea, label, [role="button"] {
 .tool-card--active { color: #e5e7eb; }
 .tool-card--error { color: #fca5a5; border-color: #7f1d1d; background: rgba(127,29,29,0.85); }
 .tool-card--mode  { color: #93c5fd; border-color: #1e40af; background: rgba(30,64,175,0.55); }
+.tool-card--plan  { color: #bfdbfe; border-color: #1e40af; background: rgba(30,64,175,0.35); }
+.plan-approve-btn { margin-left: auto; padding: 4px 12px; border-radius: 6px; border: 1px solid #2563eb;
+                    background: #2563eb; color: #fff; font-size: 12px; font-weight: 600; cursor: pointer; }
+.plan-approve-btn:hover { background: #1d4ed8; }
+
+/* Composer decision bar — replaces the textfield while a plan awaits the user's verdict. */
+#plan-decision { display: flex; gap: 10px; padding: 10px; }
+.plan-decision-btn { display: inline-flex; align-items: center; gap: 7px; padding: 10px 16px;
+                     border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer;
+                     border: 1px solid transparent; transition: filter .12s, background .12s; }
+.plan-decision-accept { flex: 1; justify-content: center; background: #2563eb; color: #fff; border-color: #2563eb; }
+.plan-decision-accept:hover { filter: brightness(1.08); }
+.plan-decision-amend { background: transparent; color: #bfdbfe; border-color: #1e40af; }
+.plan-decision-amend:hover { background: rgba(30,64,175,0.28); }
 .tool-card .typing-dots { display: flex; gap: 3px; align-items: center; }
 .tool-card .typing-dots b {
     width: 4px; height: 4px; border-radius: 50%; background: #d1d5db; display: block;

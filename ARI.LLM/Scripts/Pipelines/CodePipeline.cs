@@ -49,9 +49,23 @@ internal sealed class CodePipeline : Pipeline
         // New user turn: bump the serial so client-side per-turn guardrails (read dedup) reset their scope.
         thread.TurnSerial++;
 
-        // Every new user turn starts in PLANNING. The model itself moves to Development within the turn (via
-        // dev_mode) once it has presented a plan and the user has approved — there is no harness approval gate.
-        thread.Phase = CodePhase.Planning;
+        // Phase transition driven by the user's verdict on a proposed plan (not the LLM). plan_proposed set
+        // PlanProposed and captured the payload while the reads were resident; here we act on the reply:
+        //   plan on the table + Approve button ("[approve-plan]")  → Development, build from the payload;
+        //   plan on the table + any other reply                    → Planning, revise;
+        //   no plan on the table                                   → Planning, a fresh request.
+        // "[approve-plan]" is the deterministic signal the Accept & Build button sends. Anything else is feedback.
+        bool approve = thread.PlanProposed && effectivePrompt.Trim() == "[approve-plan]";
+        // Amend: a plan was on the table and the user replied with anything other than approval — that reply IS
+        // their requested change. Flag it so the architect hard-steers this turn to end with a fresh plan_proposed.
+        thread.RevisingPlan = thread.PlanProposed && !approve;
+        if (thread.PlanProposed)
+        {
+            thread.Phase        = approve ? CodePhase.Development : CodePhase.Planning;
+            thread.PlanProposed = false;
+            if (approve) effectivePrompt = "Approved — build the plan from your payload now.";
+        }
+        else thread.Phase = CodePhase.Planning;
 
         bool          remote       = thread.tools.ContainsKey("read_file");
         string        resolvedRoot = remote ? (localPath ?? "") : Path.GetFullPath(string.IsNullOrWhiteSpace(localPath) ? "." : localPath);
