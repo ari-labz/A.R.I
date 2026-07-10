@@ -310,20 +310,24 @@ public abstract class Agent
         // pipeline does".
         string baseSystem = persona.Length == 0 ? roleBlock : $"[Persona]\n{persona}\n\n{roleBlock}";
         baseSystem += BuildPersistentContext(thread);
-        // Budget awareness (the soft layer): the server hard-caps thinking at BudgetThinking tokens, but the
-        // model can't feel that limit approaching, so it runs straight into it every turn. Telling it the
-        // budget up front lets it self-pace and conclude BEFORE the cut — a complete thought, not a chopped
-        // one. Cache-stable (static per agent), so it doesn't invalidate the KV prefix.
-        if (effectiveThink && BudgetThinking > 0)
-            baseSystem += $"\n\nYou have a thinking budget of about {BudgetThinking} tokens of reasoning per turn. " +
-                          "Think in a few concise, high-value steps — state each point ONCE and move on. Do NOT re-derive what " +
-                          "you already worked out, re-count the same list, restate the problem, or circle back to a question you " +
-                          "already answered; that wastes the budget and gets you cut off mid-thought. Make your point quickly, " +
-                          "decide, and act. The moment you know the fix, stop thinking and call the tool — a short decisive think " +
-                          "that ends in action beats a long exhaustive one that runs to the limit.";
+
+        // [Budgets] footer (#127): terse, at the BOTTOM of the system prompt so its per-turn-accurate values
+        // don't invalidate the cached prefix above. max_tokens/thinking are hard cuts the model can't feel
+        // coming; the numbers let it self-allocate and finish cleanly instead of being guillotined mid-answer.
+        int thinkBudget = effectiveThink ? (thinkingBudgetOverride > 0 ? thinkingBudgetOverride : BudgetThinking) : 0;
+        int respBudget  = maxTokensOverride  != 0 ? maxTokensOverride : BudgetResponse;
+        List<string> budgetLines = new();
+        if (thinkBudget   > 0) budgetLines.Add($"Thinking Token Budget: {thinkBudget}");
+        if (respBudget    > 0) budgetLines.Add($"Reply Token Budget: {respBudget}");
+        if (BudgetContext > 0) budgetLines.Add($"Context Token Budget: {BudgetContext}");
+        if (MaxToolCalls  > 0) budgetLines.Add($"Tool Call Budget: {MaxToolCalls}");
+        string budgetsBlock = budgetLines.Count > 0
+            ? $"\n\n[Budgets]\n{string.Join("\n", budgetLines)}\ndeliver a COMPLETE answer within these budgets."
+            : "";
+
         string thinkSuffix = effectiveThink ? "" : "\n<|think_off|>";
 
-        List<object> messages = new List<object> { new { role = "system", content = baseSystem + thinkSuffix } };
+        List<object> messages = new List<object> { new { role = "system", content = baseSystem + budgetsBlock + thinkSuffix } };
 
         for (int i = 0; i < collapsed.Count - 1; i++)
         {
@@ -511,7 +515,7 @@ public abstract class Agent
             // request time instead (see below). Putting changing content here at position 0 invalidates the
             // entire cache every turn, forcing a full re-process of the context (the dominant cost on a dense
             // model: ~100 t/s prompt-eval vs ~19 t/s generation).
-            messages[0] = new { role = "system", content = baseSystem + toolCatalog + thinkSuffix };
+            messages[0] = new { role = "system", content = baseSystem + toolCatalog + budgetsBlock + thinkSuffix };
 
             CompactToolOutput(messages, toolResultSlots, BudgetContext);
 
