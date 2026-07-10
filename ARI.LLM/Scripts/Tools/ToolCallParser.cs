@@ -300,16 +300,13 @@ internal static class ToolCallParser
                 first = false;
                 sb.Append(JsonSerializer.Serialize(prop.Name));
                 sb.Append(':');
-                // Only write_file content is omitted (it can be a whole file). edit_file payloads are
-                // deliberately KEPT in full: they are small (tight edits, capped at MAX_REPLACE_SPAN lines)
-                // so they cost almost nothing, and omitting them caused a doom loop — the model copies the
-                // "[omitted]" placeholder from its own prior edit call in history back as the new_string,
-                // the edit guard refuses it, the model re-reads history, sees "[omitted]" again, and re-sends
-                // forever. Keeping the real edit content means there is no placeholder for it to copy.
-                if (toolName == "write_file" && prop.Name == "content")
-                    sb.Append("\"[content omitted]\"");
-                else
-                    sb.Append(prop.Value.GetRawText());
+                // Keep BOTH edit_file AND write_file payloads in full — the model must be able to see its
+                // OWN edits. Omitting write_file content (it can be a whole file) caused a copy-forward doom
+                // loop: the model couldn't see what it wrote, assumed it wrote the wrong thing, re-read the
+                // file (finding it correct), then re-sent the "[content omitted]" placeholder from history as
+                // the new content — forever. With context now kept lean elsewhere (previews, phase pruning),
+                // we can afford to keep the real content so there is no placeholder to copy.
+                sb.Append(prop.Value.GetRawText());
             }
             sb.Append('}');
             return sb.ToString();

@@ -949,6 +949,7 @@ button, a, input, select, textarea, label, [role="button"] {
 .tool-card--done { opacity: 0.75; }
 .tool-card--active { color: #e5e7eb; }
 .tool-card--error { color: #fca5a5; border-color: #7f1d1d; background: rgba(127,29,29,0.85); }
+.tool-card--mode  { color: #93c5fd; border-color: #1e40af; background: rgba(30,64,175,0.55); }
 .tool-card .typing-dots { display: flex; gap: 3px; align-items: center; }
 .tool-card .typing-dots b {
     width: 4px; height: 4px; border-radius: 50%; background: #d1d5db; display: block;

@@ -1240,8 +1240,16 @@ public abstract class Agent
                         Shared.Logger.LogError("[{Agent}] ({Thread}) Model called unknown tool '{Tool}'", Name, thread.Key, call.Name);
                     }
 
+                    // Mode transitions render as their own light-blue info card (NOT the red error card),
+                    // even though their result starts with "[System:" (which is fine for the model to read).
+                    if (call.Name is "dev_mode" or "planning_mode")
+                    {
+                        string modeLabel = call.Name == "dev_mode" ? "Switched to Development mode" : "Switched to Planning mode";
+                        contentBuilder.Append($"<!--ari-tool-mode:{call.Name}:{ToolCallParser.EscapeLabel(modeLabel)}-->");
+                        if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                    }
                     // A guard message ("[System:") or an error renders as an inline tool-error card.
-                    if (result.StartsWith("[System:", StringComparison.Ordinal) || ToolCallParser.IsError(result))
+                    else if (result.StartsWith("[System:", StringComparison.Ordinal) || ToolCallParser.IsError(result))
                     {
                         string label = "";
                         try
