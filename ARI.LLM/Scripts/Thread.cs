@@ -74,7 +74,7 @@ public class Thread
     /// <summary>Coding-pipeline state machine. Planning: explore/infer/propose, no edit tools. Development:
     /// execute the approved plan, no exploration. The phase selects the agent's system prompt AND sampling
     /// per turn (see Agent.Phases), and the Planning→Development transition is the context-pruning point.
-    /// Entry state is Planning; only user-gated transitions move it (request_build / request_replan).</summary>
+    /// Entry state is Planning; the model moves it via dev_mode / planning_mode after presenting a plan.</summary>
     public CodePhase Phase = CodePhase.Planning;
 
     /// <summary>Monotonic user-turn counter, incremented by the pipeline at the start of each user request.

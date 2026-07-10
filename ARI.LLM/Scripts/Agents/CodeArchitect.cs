@@ -72,12 +72,27 @@ internal sealed class CodeArchitect : Agent
     /// <summary>Grades how much thinking the plan turn needs (set by LLMModule). Null = no appraisal → no thinking.</summary>
     [JsonIgnore] internal Appraisal? Appraisal { get; set; }
 
+    // Phase enforcement. Runs before EVERY tool call on this thread (local ServerFileSystem tools AND the
+    // client's forwarded edit/write tools), so "no building in Planning" holds on both paths uniformly.
+    protected override string? PreToolGuard(Thread thread, ToolTurnState state, string toolName, string callId, string argsJson)
+    {
+        if (thread.Phase == CodePhase.Planning
+            && toolName is "edit_file" or "write_file" or "delete_file" or "move_file" or "spawn_coder" or "build_project")
+            return "[System: you are in planning mode — finish and present your plan first. When the user approves, call " +
+                   "dev_mode to start building. Editing and building are disabled until then.]";
+        return null;
+    }
+
+    // Stage-3 hook: on a Planning→Development hand-off, prune context that is no longer needed (exploration
+    // debris), keeping the working set + the plan. Placeholder for now — real eviction lands in Stage 3.
+    private static void PruneForHandoff(Thread parent) { /* TODO Stage 3: evict non-working-set tool outputs */ }
+
     private sealed record CodePlan(List<string> Decisions, List<CodeStep> Steps);
     private sealed record CodeStep(string File, string Range, string Change);
 
-    // Entry for every user turn on a Code thread (from CodePipeline). Registers the tools and runs one architect
-    // turn; parent.AwaitingPlanApproval carries the "a plan is on the table, awaiting the user" state across turns
-    // (set when a turn ends without spawning any coder). The plan prose itself lives in History — nothing is stashed.
+    // Entry for every user turn on a Code thread (from CodePipeline). Registers the phase tools and runs the
+    // architect turn(s): a dev_mode / planning_mode hand-off auto-continues into the new mode within the same
+    // call. The plan prose lives in History — nothing is stashed; the phase (Thread.Phase) is the only state.
     internal async Task<string> RunLoop(
         Thread parent, string threadKey, string prompt, string username,
         Coder coder, string root, FileSnapshots snapshots, CancellationTokenSource cts, Func<string, Task>? onDelta,
@@ -112,9 +127,6 @@ internal sealed class CodeArchitect : Agent
         // text-tool protocol carries it reliably; the model makes many small calls, never one nested submit.
         parent.RegisterTool("spawn_coder", SpawnCoderSchema, async argsJson =>
         {
-            if (parent.Phase == CodePhase.Planning)
-                return "[System: you are in PLANNING mode — you cannot build yet. Refine the plan, then call " +
-                       "request_build to get the user's approval and switch to DEVELOPMENT. spawn_coder is unavailable until then.]";
             if (editsForbidden)
                 return "[System: the user has explicitly forbidden edits this turn (planning only). spawn_coder is " +
                        "disabled. Present your plan as text and STOP — do not attempt further tool calls to edit.]";
@@ -140,55 +152,50 @@ internal sealed class CodeArchitect : Agent
         // Remote: the build runs on the client via its forwarded run_command (there's no dotnet on this server
         // for the client's project); local: dotnet build on this disk.
         parent.RegisterTool("build_project", BuildProjectSchema,
-            async _ =>
-            {
-                if (parent.Phase == CodePhase.Planning)
-                    return "[System: you are in PLANNING mode — nothing has been built yet, so there is nothing to build_project. Plan first, then request_build.]";
-                return remote ? await BuildRemote(parent, touched, cts.Token) : await BuildTouched(touched, root, cts.Token);
-            },
+            async _ => remote ? await BuildRemote(parent, touched, cts.Token) : await BuildTouched(touched, root, cts.Token),
             displayFormatter: _ => "<!--ari-tool-start:build_project:project-->");
 
-        bool bypass   = Environment.GetEnvironmentVariable("ARI_GATE_BYPASS") == "1";
+        bool bypass = Environment.GetEnvironmentVariable("ARI_GATE_BYPASS") == "1";
 
-        // ── State transitions ────────────────────────────────────────────────────────────────────────
-        // request_build: Planning → Development. The model proposes; the user approves (auto in bypass). Sets
-        // the phase so the NEXT turn runs the Development prompt + sampling + edit tools.
-        parent.RegisterTool("request_build", RequestBuildSchema, _ =>
+        // ── State transitions (LLM-driven; no harness approval gate) ───────────────────────────────────
+        // The model presents its plan as text and simply ends its turn — the "approval" is the user's next
+        // reply. On approval it calls dev_mode itself; the loop below then auto-continues into a Development
+        // turn (new [Mode] prompt + sampling) to build. transitioned[] signals that hand-off to the loop.
+        bool[] transitioned = { false };
+        // dev_mode: Planning → Development. Prunes context no longer needed, flips the phase, hands off.
+        parent.RegisterTool("dev_mode", DevModeSchema, _ =>
         {
             if (parent.Phase == CodePhase.Development)
-                return Task.FromResult("[System: already in DEVELOPMENT — just execute the plan.]");
-            parent.Phase = CodePhase.Development;
-            parent.AwaitingPlanApproval = !bypass;   // interactive: pause for the user; bypass: auto-approved
-            return Task.FromResult(bypass
-                ? "[System: plan auto-approved — now in DEVELOPMENT. Execute it with spawn_coder.]"
-                : "[System: plan submitted for approval. STOP here — do not build. If the user approves you'll continue in DEVELOPMENT; if they want changes, you'll be back in PLANNING.]");
+                return Task.FromResult("[System: already in development mode — continue building, or call planning_mode if the plan is wrong.]");
+            PruneForHandoff(parent);
+            parent.Phase   = CodePhase.Development;
+            transitioned[0] = true;
+            return Task.FromResult("[System: switching to development mode — the plan is set; start building it now.]");
         });
-        // request_replan: Development → Planning. The model found the plan wrong/blocked, or the user asked to replan.
-        parent.RegisterTool("request_replan", RequestReplanSchema, _ =>
+        // planning_mode: Development → Planning. The plan turned out wrong/blocked, or the user asked to change it.
+        parent.RegisterTool("planning_mode", PlanningModeSchema, _ =>
         {
-            parent.Phase = CodePhase.Planning;
-            parent.AwaitingPlanApproval = false;
-            return Task.FromResult("[System: back in PLANNING. Explore only what the new information requires and present a revised plan.]");
+            if (parent.Phase == CodePhase.Planning)
+                return Task.FromResult("[System: already in planning mode.]");
+            parent.Phase   = CodePhase.Planning;
+            transitioned[0] = true;
+            return Task.FromResult("[System: back in planning mode — revise the plan with what you found, then present it.]");
         });
 
-        bool resuming = parent.AwaitingPlanApproval && !bypass;
-
-        // Phase-aware per-turn nudge. The [Mode] system prompt already carries the full behaviour; this is a
-        // short reminder of what THIS turn is for. In bypass we loop once across a Planning→Development
-        // transition so an automated run completes without a user reply.
+        // Phase-aware per-turn nudge + auto-continue across a mode hand-off. The [Mode] system prompt carries
+        // the full behaviour; this is a short reminder of what THIS turn is for. When the model flips the mode
+        // (dev_mode / planning_mode), the loop re-runs in the new mode's prompt + sampling — so an approval
+        // flows straight into building without waiting for another user message. Capped to avoid ping-pong.
         string reply = "";
+        int    hops  = 0;
         while (true)
         {
-            CodePhase entryPhase = parent.Phase;
-            string nudge = entryPhase == CodePhase.Planning
-                ? (resuming
-                    ? "Refine the plan with the user. Their reply may answer a question, add requirements, or approve. " +
-                      "Build on your existing context — re-explore ONLY what the new information needs. If the plan is ready " +
-                      "and approved, call request_build; otherwise refine and re-present."
-                    : "PLANNING. Ask any clarifying questions first if the request is vague, then sketch a BROAD plan from " +
-                      "cheap signals and present it — don't over-read, don't detail every line. When it's solid, call request_build.")
-                : "DEVELOPMENT. Execute the approved plan with spawn_coder, one atomic step at a time; build_project when " +
-                  "done. If the plan turns out wrong or blocked, call request_replan.";
+            transitioned[0] = false;
+            string nudge = parent.Phase == CodePhase.Planning
+                ? (bypass
+                    ? "PLANNING (automated run — no user to approve). Explore leanly, present a BROAD plan, then call dev_mode to build it."
+                    : "PLANNING. If the request is vague, ask your questions first. Otherwise present a BROAD plan and STOP for the user — don't over-read, don't detail every line. When the user approves, call dev_mode to start building.")
+                : "DEVELOPMENT. Build the approved plan — make the edits one file at a time, then build to verify. If the plan turns out wrong or blocked, call planning_mode.";
             if (editsForbidden)
                 nudge += " [The user has forbidden edits this turn — do not build; plan only.]";
 
@@ -199,18 +206,16 @@ internal sealed class CodeArchitect : Agent
             if (grade is not null && parent.History.OfType<Response>().LastOrDefault() is { } appraised)
                 appraised.AppraisalGrade = grade;
 
-            // Bypass only: a Planning→Development transition this turn auto-continues into execution.
-            if (bypass && entryPhase == CodePhase.Planning && parent.Phase == CodePhase.Development)
+            // Auto-continue into the new mode when the model handed off this turn (interactive AND bypass).
+            if (transitioned[0] && ++hops < 4)
             {
-                prompt   = "[The plan is approved — execute it now with spawn_coder.]";
-                resuming = false;
+                prompt = parent.Phase == CodePhase.Development
+                    ? "[Continue: you are now in development mode. Build the plan.]"
+                    : "[Continue: you are back in planning mode. Present the revised plan.]";
                 continue;
             }
             break;
         }
-
-        // Await the user only if we ended in Planning without a pending build (a plan/question on the table).
-        parent.AwaitingPlanApproval = !bypass && parent.Phase == CodePhase.Planning && touched.Count == 0;
         return reply;
     }
 
@@ -252,30 +257,31 @@ internal sealed class CodeArchitect : Agent
         }
     };
 
-    private static readonly object RequestBuildSchema = new
+    private static readonly object DevModeSchema = new
     {
         type = "function",
         function = new
         {
-            name = "request_build",
-            description = "Call this from PLANNING when your plan is ready, to ask the user to approve it and switch to " +
-                          "DEVELOPMENT. Pass a short summary of the plan. You do NOT build here — this ends your planning turn.",
+            name = "dev_mode",
+            description = "Switch from planning to development and start building. Call this ONCE the user has approved " +
+                          "your presented plan (or, in an automated run, straight after presenting it). It hands the plan " +
+                          "off to the build stage — do not call it before you have presented a plan.",
             parameters = new
             {
                 type = "object",
-                properties = new { plan = new { type = "string", description = "A short summary of the plan the user is approving." } }
+                properties = new { plan = new { type = "string", description = "A short summary of the approved plan you are about to build." } }
             }
         }
     };
 
-    private static readonly object RequestReplanSchema = new
+    private static readonly object PlanningModeSchema = new
     {
         type = "function",
         function = new
         {
-            name = "request_replan",
-            description = "Call this from DEVELOPMENT to go back to PLANNING — when the approved plan turns out wrong or " +
-                          "blocked, or the user asks to change it. Pass what you found so planning can revise.",
+            name = "planning_mode",
+            description = "Switch from development back to planning — when the approved plan turns out wrong or blocked, or " +
+                          "the user asks to change it. Pass what you found so the plan can be revised.",
             parameters = new
             {
                 type = "object",

@@ -49,11 +49,9 @@ internal sealed class CodePipeline : Pipeline
         // New user turn: bump the serial so client-side per-turn guardrails (read dedup) reset their scope.
         thread.TurnSerial++;
 
-        // A genuinely new request starts in PLANNING. The one exception is a resume of a plan awaiting the
-        // user's approval (AwaitingPlanApproval): request_build set the phase to Development and paused for the
-        // user, so their approval reply should continue in Development, not reset to Planning.
-        if (!thread.AwaitingPlanApproval)
-            thread.Phase = CodePhase.Planning;
+        // Every new user turn starts in PLANNING. The model itself moves to Development within the turn (via
+        // dev_mode) once it has presented a plan and the user has approved — there is no harness approval gate.
+        thread.Phase = CodePhase.Planning;
 
         bool          remote       = thread.tools.ContainsKey("read_file");
         string        resolvedRoot = remote ? (localPath ?? "") : Path.GetFullPath(string.IsNullOrWhiteSpace(localPath) ? "." : localPath);
