@@ -49,6 +49,15 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "ARI.UI", "ARI.UI", "{A1B2C3
 		ARI.UI\dev.sh = ARI.UI\dev.sh
 	EndProjectSection
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "ARI.Orb", "ARI.Orb", "{D4E5F6A7-B8C9-0123-DEF4-234567890123}"
+	ProjectSection(SolutionItems) = preProject
+		ARI.Orb\package.json = ARI.Orb\package.json
+		ARI.Orb\tsconfig.json = ARI.Orb\tsconfig.json
+		ARI.Orb\src\index.ts = ARI.Orb\src\index.ts
+		ARI.Orb\src\renderer.ts = ARI.Orb\src\renderer.ts
+		ARI.Orb\src\amplitude.ts = ARI.Orb\src\amplitude.ts
+	EndProjectSection
+EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "ARI.App", "ARI.App", "{B2C3D4E5-F6A7-8901-BCDE-F12345678901}"
 	ProjectSection(SolutionItems) = preProject
 		ARI.App\package.json = ARI.App\package.json
