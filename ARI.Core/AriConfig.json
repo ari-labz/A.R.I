@@ -4,10 +4,10 @@
     "API": {
       "Enabled": true,
       "Port": 5074,
-      "EvalToken": "ari-eval-local-2026",
+      "EvalToken": "${API_EVAL_TOKEN}",
       "Google": {
         "ClientId": "886723798260-eapta34u4n4bug81ut10bq2399leu9vn.apps.googleusercontent.com",
-        "ClientSecret": "[REDACTED]",
+        "ClientSecret": "${GOOGLE_CLIENT_SECRET}",
         "AllowedEmails": [
           "owner@example.com"
         ]
@@ -34,7 +34,7 @@
     },
     "Discord": {
       "Enabled": true,
-      "Token": "[REDACTED]",
+      "Token": "${DISCORD_TOKEN}",
       "OwnerId": 0,
       "WhitelistedUserIds": [
         0,
