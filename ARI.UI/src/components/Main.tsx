@@ -12,6 +12,7 @@ interface Command { cmd: string; desc: string }
 interface Props {
     mode:          AppMode
     codeMode:      boolean
+    planProposed:  boolean
     items:         ThreadItem[]
     isRemembering: boolean
     isStreaming:   boolean
@@ -45,7 +46,7 @@ interface Props {
 }
 
 export default function Main({
-    mode, codeMode, items, isRemembering, isStreaming,
+    mode, codeMode, planProposed, items, isRemembering, isStreaming,
     activeThread, isInternal, agentName,
     sidebarCollapsed, onOpenSidebar,
     pendingAttach, threadAttach,
@@ -219,6 +220,7 @@ export default function Main({
                 {!isInternal && !(speechMode && activeThread) && (
                     <InputArea
                         isStreaming={isStreaming}
+                        planProposed={planProposed}
                         pendingAttach={pendingAttach}
                         commands={commands}
                         projects={projects}

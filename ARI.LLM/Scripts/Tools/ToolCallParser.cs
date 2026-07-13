@@ -300,16 +300,13 @@ internal static class ToolCallParser
                 first = false;
                 sb.Append(JsonSerializer.Serialize(prop.Name));
                 sb.Append(':');
-                // Only write_file content is omitted (it can be a whole file). edit_file payloads are
-                // deliberately KEPT in full: they are small (tight edits, capped at MAX_REPLACE_SPAN lines)
-                // so they cost almost nothing, and omitting them caused a doom loop — the model copies the
-                // "[omitted]" placeholder from its own prior edit call in history back as the new_string,
-                // the edit guard refuses it, the model re-reads history, sees "[omitted]" again, and re-sends
-                // forever. Keeping the real edit content means there is no placeholder for it to copy.
-                if (toolName == "write_file" && prop.Name == "content")
-                    sb.Append("\"[content omitted]\"");
-                else
-                    sb.Append(prop.Value.GetRawText());
+                // Keep BOTH edit_file AND write_file payloads in full — the model must be able to see its
+                // OWN edits. Omitting write_file content (it can be a whole file) caused a copy-forward doom
+                // loop: the model couldn't see what it wrote, assumed it wrote the wrong thing, re-read the
+                // file (finding it correct), then re-sent the "[content omitted]" placeholder from history as
+                // the new content — forever. With context now kept lean elsewhere (previews, phase pruning),
+                // we can afford to keep the real content so there is no placeholder to copy.
+                sb.Append(prop.Value.GetRawText());
             }
             sb.Append('}');
             return sb.ToString();
@@ -351,7 +348,16 @@ internal static class ToolCallParser
             {
                 if (i + 1 >= partialJson.Length) return null; // escape sequence not yet complete
                 char n = partialJson[i + 1];
-                sb.Append(n switch { 'n' => '\n', 't' => '\t', 'r' => '\r', '"' => '"', '\\' => '\\', '/' => '/', _ => n });
+                if (n == 'u')
+                {
+                    if (i + 6 > partialJson.Length) return null; // \uXXXX not fully streamed yet
+                    if (int.TryParse(partialJson.AsSpan(i + 2, 4), System.Globalization.NumberStyles.HexNumber,
+                            System.Globalization.CultureInfo.InvariantCulture, out int code))
+                        sb.Append((char)code);
+                    i += 6;
+                    continue;
+                }
+                sb.Append(n switch { 'n' => '\n', 't' => '\t', 'r' => '\r', '"' => '"', '\\' => '\\', '/' => '/', 'b' => '\b', 'f' => '\f', _ => n });
                 i += 2;
                 continue;
             }

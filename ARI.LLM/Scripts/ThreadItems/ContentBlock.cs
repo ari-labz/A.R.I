@@ -27,6 +27,8 @@ namespace ARI.LLM;
 [JsonDerivedType(typeof(Editing),   "editing")]
 [JsonDerivedType(typeof(Writing),   "writing")]
 [JsonDerivedType(typeof(Subthread), "subthread")]
+[JsonDerivedType(typeof(PlanProposed), "plan")]
+[JsonDerivedType(typeof(ModeSwitch),   "mode")]
 public abstract class ContentBlock
 {
     /// <summary>Lifecycle of this block. Streaming until finished/flipped; Error on failure.</summary>
@@ -52,6 +54,8 @@ public abstract class ContentBlock
         @"|(?<end><!--ari-tool-end:(?<ename>[^:]+):(?<elabel>[^>]*?)-->)" +
         @"|(?<err><!--ari-tool-error:(?<rname>[^:]+):(?<rlabel>[^>]*?)-->)" +
         @"|(?<sub><!--ari-subthread:(?<subkey>[^|>]+)\|(?<sublabel>[^>]*?)-->)" +
+        @"|(?<plan><!--ari-plan-proposed-->)" +
+        @"|(?<mode><!--ari-tool-mode:(?<mname>[^:]+):(?<mlabel>[^>]*?)-->)" +
         @"|(?<batch><!--ari-batch-end-->)",
         RegexOptions.Singleline | RegexOptions.Compiled);
 
@@ -149,6 +153,10 @@ public abstract class ContentBlock
             return Build(FromTool(m.Groups["ename"].Value), State.Complete, m.Value, m.Groups["elabel"].Value);
         if (m.Groups["err"].Success)
             return Build(FromTool(m.Groups["rname"].Value), State.Error, m.Value, m.Groups["rlabel"].Value);
+        if (m.Groups["plan"].Success)
+            return Build(new PlanProposed(), State.Complete, m.Value, "");
+        if (m.Groups["mode"].Success)
+            return Build(new ModeSwitch(), State.Complete, m.Value, m.Groups["mlabel"].Value);
         return null;
     }
 
@@ -328,6 +336,26 @@ public sealed class Building : Card
     protected override string ToolName => "build_project";
     protected override (string, string) Verbs => ("Building", "Built");
     protected internal override void Fill(string label) => Project = label;
+}
+
+/// <summary>The interactive "plan ready for approval" card (renders an Accept &amp; Build button client-side).</summary>
+public sealed class PlanProposed : Card
+{
+    protected override string ToolName => "plan_proposed";
+    protected override (string, string) Verbs => ("Proposing plan", "Plan ready");
+    public override string Render() => "<!--ari-plan-proposed-->";
+    protected internal override void Fill(string label) { }
+}
+
+/// <summary>A light-blue mode-switch info card (e.g. "Returning to planning").</summary>
+public sealed class ModeSwitch : Card
+{
+    public string Text { get; set; } = "";
+    protected override string Label => Text;
+    protected override string ToolName => "mode";
+    protected override (string, string) Verbs => ("", "");
+    public override string Render() => $"<!--ari-tool-mode:mode:{MarkerEsc(Text)}-->";
+    protected internal override void Fill(string label) => Text = label;
 }
 
 /// <summary>A file card that also carries diff stats and an optional patch (edit/write). Renders as the enriched

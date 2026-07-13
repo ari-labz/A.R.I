@@ -7,6 +7,7 @@ interface Command { cmd: string; desc: string }
 
 interface Props {
     isStreaming:      boolean
+    planProposed:     boolean
     pendingAttach:    PendingAttachment[]
     commands:         Command[]
     projects:         Project[]
@@ -33,7 +34,7 @@ function fileExtLabel(name: string) {
 }
 
 export default function InputArea({
-    isStreaming, pendingAttach, commands,
+    isStreaming, planProposed, pendingAttach, commands,
     projects, selectedProject, onProjectChange,
     pipelines, selectedPipeline, onPipelineChange, onBeginSpeech, threadLocked,
     onSend, onUploadFiles, onRemoveAttach,
@@ -41,11 +42,15 @@ export default function InputArea({
     codeMode, safetyMode, onToggleSafety,
 }: Props) {
     const [input, setInput]         = useState("")
+    const [amending, setAmending]   = useState(false)
     const [cmdMatches, setCmdMatches] = useState<Command[]>([])
     const [cmdIndex, setCmdIndex]   = useState(-1)
     const textareaRef = useRef<HTMLTextAreaElement>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
     const wrapRef     = useRef<HTMLDivElement>(null)
+
+    // Leaving plan-approval mode (approved or streaming a replan) closes the amend field.
+    useEffect(() => { if (!planProposed) setAmending(false) }, [planProposed])
 
     // Auto-resize textarea
     useEffect(() => {
@@ -113,6 +118,11 @@ export default function InputArea({
     // Talk selected on the new-thread screen: the composer becomes a single "Begin" button.
     const speechCompose = !threadLocked && selectedPipeline === "speech"
 
+    // A plan is on the table and the user hasn't chosen to amend it yet: the composer becomes the
+    // decision bar — [Accept & Build] fires the deterministic approve signal, [Amend] reveals the
+    // textarea so any typed feedback routes back to Planning as a revision.
+    const planDecision = planProposed && !amending && !isStreaming
+
     return (
         <div id="input-area">
             {!threadLocked && (
@@ -125,7 +135,19 @@ export default function InputArea({
                     />
                 </div>
             )}
-            {speechCompose ? (
+            {planDecision ? (
+                <div id="plan-decision">
+                    <button className="plan-decision-btn plan-decision-accept" onClick={() => onSend("[approve-plan]")}>
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M20 6L9 17l-5-5"/>
+                        </svg>
+                        Accept &amp; Build
+                    </button>
+                    <button className="plan-decision-btn plan-decision-amend" onClick={() => { setAmending(true); requestAnimationFrame(() => textareaRef.current?.focus()) }}>
+                        Amend
+                    </button>
+                </div>
+            ) : speechCompose ? (
                 <button id="btn-begin-speech" onClick={onBeginSpeech}>
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/>
@@ -184,7 +206,7 @@ export default function InputArea({
                     ref={textareaRef}
                     rows={1}
                     value={input}
-                    placeholder="Message A·R·I..."
+                    placeholder={amending ? "Describe the changes to the plan…" : "Message A·R·I..."}
                     onChange={e => { setInput(e.target.value); updateCmdPopup(e.target.value) }}
                     onKeyDown={handleKeyDown}
                     onPaste={handlePaste}

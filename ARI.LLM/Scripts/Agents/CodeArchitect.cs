@@ -17,6 +17,21 @@ namespace ARI.LLM;
 /// when the last succeeded), build, fix its own compile errors, and summarise. The LLM side is its
 /// SystemPrompt; the C# side is <see cref="RunLoop"/>.
 /// </summary>
+/// <summary>Per-CodePhase prompt + sampling override for the coding pipeline (deserialised from the
+/// CodeArchitect entry in Agents.json). A null sampling member falls back to the flat agent default,
+/// then the server baseline.</summary>
+public sealed class PhaseConfig
+{
+    [JsonPropertyName("systemPrompt")]     public string  SystemPrompt     { get; init; } = "";
+    [JsonPropertyName("temperature")]      public double? Temperature      { get; init; }
+    [JsonPropertyName("topP")]             public double? TopP             { get; init; }
+    [JsonPropertyName("topK")]             public int?    TopK             { get; init; }
+    [JsonPropertyName("minP")]             public double? MinP             { get; init; }
+    [JsonPropertyName("repeatPenalty")]    public double? RepeatPenalty    { get; init; }
+    [JsonPropertyName("presencePenalty")]  public double? PresencePenalty  { get; init; }
+    [JsonPropertyName("frequencyPenalty")] public double? FrequencyPenalty { get; init; }
+}
+
 internal sealed class CodeArchitect : Agent
 {
     public CodeArchitect() { }
@@ -24,15 +39,72 @@ internal sealed class CodeArchitect : Agent
     // Coding prompts are verbose and already logged by the pipeline; don't double-log them.
     [JsonIgnore] internal override bool SuppressPromptLog => true;
 
-    /// <summary>Grades how much thinking the plan turn needs (set by LLMModule). Null = no appraisal → no thinking.</summary>
-    [JsonIgnore] internal Appraisal? Appraisal { get; set; }
+    // #112: during long exploration the architect goes minutes emitting only tool calls. Every ~90s of
+    // tool-only work, force a one-sentence check-in — better UX and it re-anchors purpose against the
+    // "search because my history is all searches" momentum that drives over-exploration.
+    [JsonIgnore] internal override int NarrationIntervalSeconds => 90;
+
+    // ── State machine: per-CodePhase prompt + sampling ───────────────────────────────────────────────
+    // SystemPrompt (base field) holds the INVARIANT [Role] text; each phase supplies its own [Mode] prompt
+    // and sampling. Planning = warm/exploratory, Development = cold/precise. Configured in Agents.json.
+    [JsonPropertyName("phases")] public Dictionary<string, PhaseConfig>? Phases { get; init; }
+
+    private PhaseConfig? PhaseFor(Thread t)
+        => Phases is not null && Phases.TryGetValue(t.Phase.ToString(), out PhaseConfig? p) ? p : null;
+
+    internal override string SystemPromptFor(Thread thread)
+    {
+        PhaseConfig? phase = PhaseFor(thread);
+        if (phase is null || phase.SystemPrompt.Length == 0) return SystemPrompt;   // no phase config → flat
+        return $"[Role]\n{SystemPrompt}\n\n[Mode: {thread.Phase}]\n{phase.SystemPrompt}";
+    }
+
+    internal override (double? Temperature, double? TopP, int? TopK, double? MinP,
+                       double? RepeatPenalty, double? PresencePenalty, double? FrequencyPenalty)
+        SamplingFor(Thread thread)
+    {
+        PhaseConfig? p = PhaseFor(thread);
+        return p is null
+            ? (null, null, null, null, null, null, null)
+            : (p.Temperature, p.TopP, p.TopK, p.MinP, p.RepeatPenalty, p.PresencePenalty, p.FrequencyPenalty);
+    }
+
+
+    // Phase enforcement. Runs before EVERY tool call on this thread (local ServerFileSystem tools AND the
+    // client's forwarded edit/write tools), so "no building in Planning" holds on both paths uniformly.
+    protected override string? PreToolGuard(Thread thread, ToolTurnState state, string toolName, string callId, string argsJson)
+    {
+        if (thread.Phase == CodePhase.Planning
+            && toolName is "edit_file" or "write_file" or "delete_file" or "move_file" or "build_project")
+            return "[System: you are in planning mode — finish your plan and call plan_proposed. Editing and building " +
+                   "are disabled until the user approves the plan.]";
+        if (thread.Phase == CodePhase.Development && toolName == "plan_proposed")
+            return "[System: the plan is already approved — you are building. Use replan only if the plan is wrong.]";
+        if (thread.Phase == CodePhase.Planning && toolName == "replan")
+            return "[System: you are already in planning — just revise your plan and call plan_proposed.]";
+        return null;
+    }
+
+    // Track files the architect edits directly, so build_project knows what to build (replaces spawn_coder's
+    // touched-tracking). Runs after every tool on both the local and remote paths.
+    protected override string PostToolProcess(Thread thread, ToolTurnState state, string toolName, string argsJson, string result)
+    {
+        if (toolName is "edit_file" or "write_file"
+            && !ToolCallParser.IsError(result) && !result.StartsWith("[System:", StringComparison.Ordinal))
+        {
+            string? path = ToolCallParser.TryExtractJsonString(argsJson, "path");
+            if (!string.IsNullOrWhiteSpace(path)) thread.TouchedFiles.Add(path.Trim());
+        }
+        return result;
+    }
+
 
     private sealed record CodePlan(List<string> Decisions, List<CodeStep> Steps);
     private sealed record CodeStep(string File, string Range, string Change);
 
-    // Entry for every user turn on a Code thread (from CodePipeline). Registers the tools and runs one architect
-    // turn; parent.AwaitingPlanApproval carries the "a plan is on the table, awaiting the user" state across turns
-    // (set when a turn ends without spawning any coder). The plan prose itself lives in History — nothing is stashed.
+    // Entry for every user turn on a Code thread (from CodePipeline). Registers the phase tools and runs the
+    // architect turn(s): a dev_mode / planning_mode hand-off auto-continues into the new mode within the same
+    // call. The plan prose lives in History — nothing is stashed; the phase (Thread.Phase) is the only state.
     internal async Task<string> RunLoop(
         Thread parent, string threadKey, string prompt, string username,
         Coder coder, string root, FileSnapshots snapshots, CancellationTokenSource cts, Func<string, Task>? onDelta,
@@ -51,88 +123,90 @@ internal sealed class CodeArchitect : Agent
             new ListDirectory(fs).Register(parent);
             new SearchFiles(fs).Register(parent);
             new FindFiles(fs).Register(parent);
+            // The architect edits DIRECTLY (no Coder sub-agent) — its reads stay resident, so there is no blind
+            // re-read barrier. (Remote: the client's edit_file/write_file are already on the thread.)
+            new EditFile(fs).Register(parent);
+            new WriteFile(fs).Register(parent);
         }
 
-        // Files changed this request — the success/gating signal (was a file modified?) and the build-error owner tag.
-        HashSet<string> touched = new(StringComparer.OrdinalIgnoreCase);
-        int taskNum = 0;
+        // Files edited this turn — the build-error owner tag + "did anything change". Populated by the edit
+        // tools via PostToolProcess (works for both the local wrappers and the client's forwarded edit tools).
+        parent.TouchedFiles.Clear();
 
-        // Deterministic edit freeze: when the user explicitly forbids changes this turn ("planning only",
-        // "do not edit"), spawn_coder is refused at the tool layer — a nudge alone cannot be trusted to
-        // survive an approval-shaped injection (this exact failure corrupted a client file: the harness told
-        // the model the plan was approved while the user's message said the opposite).
+        // Deterministic edit freeze: when the user forbids changes this turn ("planning only") — enforced at the
+        // tool layer by PreToolGuard alongside the Planning-mode edit block.
         bool editsForbidden = UserForbadeEdits(prompt);
 
-        // spawn_coder(file, change, range?) — dispatch ONE edit to a Coder. Flat args (like read_file) so the
-        // text-tool protocol carries it reliably; the model makes many small calls, never one nested submit.
-        parent.RegisterTool("spawn_coder", SpawnCoderSchema, async argsJson =>
-        {
-            if (editsForbidden)
-                return "[System: the user has explicitly forbidden edits this turn (planning only). spawn_coder is " +
-                       "disabled. Present your plan as text and STOP — do not attempt further tool calls to edit.]";
-            (string? file, string? change, string? range, string? err) = ParseCoderArgs(argsJson);
-            if (err is not null) return err;
-            taskNum++;
-            // Local: track the absolute path for the build's yours-vs-pre-existing tagging. Remote: track the
-            // repo-relative path (the build runs on the client; there's no server-side absolute path).
-            string? abs = remote ? file : SafeAbs(root, file!);
-            if (abs is not null) touched.Add(abs);
-            (string summary, bool modified) = await RunOneCoder(
-                parent, threadKey, taskNum, new CodeStep(file!, range ?? "", change!), username, coder, root, snapshots, cts, onDelta, remote);
-            return modified
-                ? $"Coder finished task {taskNum} on {file}. Result: {summary}"
-                : $"[System: the Coder made NO change to {file} — this task likely FAILED. Result: {summary}. " +
-                  "Do NOT spawn the next task; re-spawn this one with a clearer instruction, or stop and tell the user.]";
-        },
-        // No pre-card: RunOneCoder drops a <!--ari-subthread--> anchor into the stream itself (with the child
-        // key it mints), and the child renders inline under its own labelled frame.
-        displayFormatter: _ => "");
-
         // build_project() — build the touched project(s); errors grouped by file, tagged yours vs pre-existing.
-        // Remote: the build runs on the client via its forwarded run_command (there's no dotnet on this server
-        // for the client's project); local: dotnet build on this disk.
+        // Remote: the build runs on the client via its forwarded run_command; local: dotnet build on this disk.
         parent.RegisterTool("build_project", BuildProjectSchema,
-            async _ => remote ? await BuildRemote(parent, touched, cts.Token) : await BuildTouched(touched, root, cts.Token),
+            async _ => remote ? await BuildRemote(parent, parent.TouchedFiles, cts.Token) : await BuildTouched(parent.TouchedFiles, root, cts.Token),
             displayFormatter: _ => "<!--ari-tool-start:build_project:project-->");
 
-        bool bypass   = Environment.GetEnvironmentVariable("ARI_GATE_BYPASS") == "1";
-        bool resuming = parent.AwaitingPlanApproval && !bypass;
+        bool bypass = Environment.GetEnvironmentVariable("ARI_GATE_BYPASS") == "1";
 
-        // Per-turn nudge (the full workflow lives in the architect's system prompt). The whole turn — plan, the
-        // spawn_coder edits, the build_project check, and the summary — is ONE response made of many blocks.
-        // The resuming nudge must NOT presume approval: the previous turn may have ended in a clarifying
-        // question, and the user's reply may be a new or revised request rather than a go-ahead.
-        string nudge = resuming
-            ? "Your previous turn ended awaiting the user (a plan or a question). Read their reply carefully — it is " +
-              "an approval ONLY if it clearly tells you to proceed with the plan you already presented. If it approves, " +
-              "EXECUTE that plan now with spawn_coder (do not re-plan or re-explore). If it answers your question, adds " +
-              "requirements, or changes the request, treat it as a new/revised request: present the updated numbered " +
-              "plan and STOP for approval. If it forbids changes (e.g. 'planning only', 'do not edit'), you MUST NOT " +
-              "call spawn_coder this turn — explore and plan only."
-            : bypass
-                ? "Automated run: write your numbered plan FIRST (before any tool call), then execute it directly with spawn_coder — no approval needed."
-                : "Write your numbered plan to the user FIRST (before any spawn_coder call). Then: a small, localized change " +
-                  "(a rename, a one-line fix) — proceed and spawn_coder now; a larger refactor / cross-file / multi-step / " +
-                  "ambiguous change — STOP after the plan for the user to approve before you spawn any coder.";
+        // ── State transitions (system-driven, not LLM-driven) ──────────────────────────────────────────
+        // plan_proposed(payload): the architect calls this the moment its plan is written — while its reads
+        // are STILL resident, so the payload is complete. It marks a plan-on-the-table and force-ends the turn.
+        // The user then approves (→ CodePipeline moves to Development next turn WITH the payload) or gives
+        // feedback (→ stays Planning to revise). In an automated run there's no user, so it self-approves.
+        parent.RegisterTool("plan_proposed", PlanProposedSchema, argsJson =>
+        {
+            parent.HandoffPayload = ToolCallParser.TryExtractJsonString(argsJson, "payload");
+            if (bypass) { parent.Phase = CodePhase.Development; return Task.FromResult("[System: plan captured — automated run, building now.]"); }
+            parent.PlanProposed = true;
+            parent.EndTurnNow   = true;   // clean boundary — nothing else runs this turn
+            return Task.FromResult("[System: plan proposed and captured. STOP now — the user will approve it (then you build) or ask for changes (then you revise). Do not build yet.]");
+        });
+        // replan(reason): from Development, hand back to Planning when the plan turns out wrong/blocked.
+        parent.RegisterTool("replan", ReplanSchema, argsJson =>
+        {
+            parent.Phase        = CodePhase.Planning;
+            parent.PlanProposed = false;
+            parent.EndTurnNow   = true;
+            string reason = ToolCallParser.TryExtractJsonString(argsJson, "reason") ?? "";
+            return Task.FromResult($"[System: the plan needs revising — back in planning. Tell the user what you found: {reason}]");
+        });
+
+        // Per-turn nudge. The [Mode] system prompt carries the behaviour; this is a short reminder of THIS turn.
+        string nudge = parent.Phase == CodePhase.Planning
+            ? (bypass
+                ? "PLANNING (automated run). Explore leanly, then call plan_proposed with a complete payload — it auto-approves and builds."
+                : parent.RevisingPlan
+                    // Amend turn: the [Task] above is the user's requested change to a plan you already proposed.
+                    // The model's failure mode is writing the revised plan as a PROSE section and never calling
+                    // plan_proposed — so forbid prose outright and demand the tool call be the ONLY output.
+                    ? "PLANNING — REVISION. The user did not approve your last plan; [Task] is the change they want. Proceed EXACTLY:\n1. Reuse what you already know (read a file ONLY if the change needs a detail you genuinely lack).\n2. Do NOT write the plan, or any part of it, as prose in your message.\n3. Emit ONE plan_proposed tool call whose payload is the FULL revised plan — and output NOTHING ELSE this turn. No lead-in sentence, no prose, no explanation: the tool call is your entire reply. Do NOT build."
+                    : "PLANNING. If the request is genuinely vague, ask ONE clarifying question and stop. Otherwise: explore with read tools until you can plan — then PROPOSE, and a proposal is ONE plan_proposed call and NOTHING ELSE (no prose, no lead-in sentence): the full plan is its payload. NEVER write the plan, or any step of it, as prose in your message — prose is not a proposal and leaves the user nothing to approve. Either you're still exploring (call read tools) or you're proposing (call plan_proposed) — never describe the plan in text. Don't over-read.")
+            : "DEVELOPMENT. Build the plan from the [Handoff] payload above — edit one file at a time, then build to verify. If the plan is genuinely wrong, call replan.";
         if (editsForbidden)
-            nudge += " [The user has forbidden edits this turn — spawn_coder is disabled; plan only.]";
+            nudge += " [The user has forbidden edits this turn — do not build; plan only.]";
 
-        // Every user prompt gets appraised — a "resume" can be anything from a one-word approval (grade 0)
-        // to a fully-specified new request (the turn that actually needs a thinking budget).
-        (int? grade, _, _) = await AppraiseThinking(prompt, threadKey, cts.Token);
-
-        string reply = await SendPrompt(parent, prompt, username,
-            augmentedPrompt: $"{prompt}\n\n[System: {nudge}]",
+        // Development turns carry the architect's handoff payload (the working set — reads don't persist).
+        string handoff = parent.Phase == CodePhase.Development && !string.IsNullOrWhiteSpace(parent.HandoffPayload)
+            ? $"[Handoff — a plan summary, not the code. Build it now: create the NEW files with write_file; for each EXISTING file, preview_file it once then edit. Never preview a NEW file — it does not exist yet.]\n{parent.HandoffPayload}\n\n"
+            : "";
+        string response = await SendPrompt(parent, prompt, username,
+            augmentedPrompt: $"{handoff}[Task]\n{prompt}\n\n[System]\n{nudge}",
             ct: cts.Token, userMessagePreadded: true, onDelta: onDelta);
 
-        // Attach appraisal telemetry to this turn's response so the DTI can show it (chat view ignores it).
-        if (grade is not null && parent.History.OfType<Response>().LastOrDefault() is { } appraised)
-            appraised.AppraisalGrade = grade;
-
-        // If it spawned coders it executed → done; otherwise it presented a plan / asked a question → await the user.
-        parent.AwaitingPlanApproval = !bypass && touched.Count == 0;
-        return reply;
+        // Deterministic safety net for the amend path (NOT a content heuristic). A revision turn is ALWAYS a
+        // proposal: the user already stated the change, so the model never needs to ask a question here — its
+        // reply can only be the revised plan. Strong steering (the strict revision nudge) makes it call
+        // plan_proposed ~88% of the time; for the rest it writes the plan as prose. Since we KNOW this turn is a
+        // proposal (because RevisingPlan is set — no guessing about what the text is), promote that prose to a
+        // proposal so the user always gets the chip + Accept/Amend buttons.
+        if (parent.RevisingPlan && !parent.PlanProposed)
+        {
+            Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) revision turn ended without plan_proposed — promoting reply to a proposal.", parent.Key);
+            parent.HandoffPayload = response;
+            parent.PlanProposed   = true;
+            if (!response.Contains("<!--ari-plan-proposed-->", StringComparison.Ordinal))
+                response += "\n\n<!--ari-plan-proposed-->";
+        }
+        return response;
     }
+
 
     // ── spawn_coder / build_project tools ─────────────────────────────────────────
 
@@ -169,6 +243,45 @@ internal sealed class CodeArchitect : Agent
                           "this once all edits are done. Returns compile errors grouped by file, tagged as ones you " +
                           "edited (fix them) or pre-existing (leave them, note them in your summary).",
             parameters = new { type = "object", properties = new { } }
+        }
+    };
+
+    private static readonly object PlanProposedSchema = new
+    {
+        type = "function",
+        function = new
+        {
+            name = "plan_proposed",
+            description = "Call this the moment your plan is written and presented, to put it before the user for approval. " +
+                          "This ENDS your turn — do not build. CRITICAL: your file reads/previews do NOT survive into the " +
+                          "build stage, so the 'payload' you pass here becomes the build's ENTIRE working context. Call it " +
+                          "now, while you still have everything in front of you — make the payload self-contained.",
+            parameters = new
+            {
+                type = "object",
+                properties = new { payload = new { type = "string", description =
+                    "The complete handoff for the build stage. Include: the ordered plan (files to create/edit and the " +
+                    "change to each), AND the exact contracts the build will rely on — the fields/properties/method " +
+                    "signatures of the data types you bind to, the pattern of the exemplar you're imitating, and the exact " +
+                    "method/lines you're editing. The build will NOT have your reads, so anything it needs must be here." } },
+                required = new[] { "payload" }
+            }
+        }
+    };
+
+    private static readonly object ReplanSchema = new
+    {
+        type = "function",
+        function = new
+        {
+            name = "replan",
+            description = "Call this from the build stage to go back to planning — when the approved plan turns out wrong " +
+                          "or blocked. Pass what you found so the plan can be revised.",
+            parameters = new
+            {
+                type = "object",
+                properties = new { reason = new { type = "string", description = "Why the plan needs revising." } }
+            }
         }
     };
 
@@ -332,8 +445,11 @@ internal sealed class CodeArchitect : Agent
     /// as one the architect edited (fix it) or pre-existing (leave it, mention in the summary).</summary>
     private async Task<string> BuildTouched(HashSet<string> touched, string root, CancellationToken ct)
     {
-        if (touched.Count == 0) return "[System: no files have been changed yet — spawn a coder first.]";
-        List<string> projects = touched.Select(f => NearestProject(f, root)).OfType<string>()
+        if (touched.Count == 0) return "[System: no files have been changed yet — make your edits first.]";
+        // TouchedFiles holds project-relative paths (from the edit tool args); resolve to absolute for the
+        // NearestProject lookup and the yours-vs-pre-existing tagging below.
+        HashSet<string> touchedAbs = touched.Select(f => SafeAbs(root, f) ?? f).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        List<string> projects = touchedAbs.Select(f => NearestProject(f, root)).OfType<string>()
                                        .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (projects.Count == 0) return "[System: the changed files aren't in a buildable .NET project — skip the build and write your summary.]";
 
@@ -359,7 +475,7 @@ internal sealed class CodeArchitect : Agent
         foreach ((string file, List<string> errs) in errors)
         {
             string? absF = SafeAbs(root, file);
-            bool yours   = absF is not null && touched.Contains(absF);
+            bool yours   = absF is not null && touchedAbs.Contains(absF);
             if (yours) anyYours = true;
             sb.AppendLine($"`{file}` {(yours ? "[you edited this file — fix it]" : "[pre-existing — you did NOT touch this file]")}:");
             foreach (string e in errs) sb.AppendLine($"  - {e}");
@@ -375,26 +491,11 @@ internal sealed class CodeArchitect : Agent
     /// pre-existing tagging that BuildTouched does needs local disk; on remote we return the client's output as-is.)</summary>
     private static async Task<string> BuildRemote(Thread parent, HashSet<string> touched, CancellationToken ct)
     {
-        if (touched.Count == 0) return "[System: no files have been changed yet — spawn a coder first.]";
+        if (touched.Count == 0) return "[System: no files have been changed yet — make your edits first.]";
         if (!parent.tools.TryGetValue("run_command", out var rc))
             return "[System: no run_command tool is available to build on the client — skip the build and write your summary.]";
         string output = await rc.Execute(JsonSerializer.Serialize(new { command = "dotnet build" }));
         return "Build output from the client (`dotnet build`):\n\n" + output;
-    }
-
-    // Appraise how much thinking the request needs → wall-clock budget (seconds) + an awareness line the model is
-    // told so it self-paces. Null appraiser ⇒ (null, "") = today's behaviour. Runs once at the start of the request.
-    private async Task<(int? grade, int? thinkSeconds, string awareness)> AppraiseThinking(string prompt, string threadKey, CancellationToken ct)
-    {
-        if (Appraisal is null) return (null, null, "");
-        int grade = await Appraisal.Appraise(prompt, ct);
-        int secs  = Appraisal.GradeToSeconds(grade);
-        string awareness =
-              secs < 0   ? " You may think as long as you need."
-            : secs <= 10 ? " This needs little or no deliberation — think for at most a moment, then act."
-            :              $" You have about {secs} seconds to think — be concise and reach your conclusion within it.";
-        Shared.Logger.LogInformation("[CodeArchitect] ({Thread}) appraisal grade {G} → {S}s thinking budget.", threadKey, grade, secs);
-        return (grade, secs, awareness);
     }
 
 

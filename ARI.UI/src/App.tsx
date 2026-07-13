@@ -646,44 +646,14 @@ export default function App() {
                     if (res.ok) ws.send(JSON.stringify({ type: "file_content", callId, content: `Moved ${params.source} → ${params.destination}.` }))
                     else        ws.send(JSON.stringify({ type: "file_error", callId, error: res.error ?? "Move failed." }))
                 } else if (type === "preview_file") {
+                    // The client no longer builds the outline. It returns RAW file content tagged
+                    // "[rawpreview] <bytes>"; the server builds the class-diagram outline with the single
+                    // shared C# extractor (PreviewFormatter) so there is no JS/C# divergence (#138).
                     const content = await window.electronBridge!.readFile(localPath, params.path ?? "")
-                    const lines = content.split("\n")
-                    const total = lines.length
-                    const sizeKb = (new TextEncoder().encode(content).length / 1024).toFixed(1)
-                    const ext = (params.path ?? "").split(".").pop()?.toLowerCase() ?? ""
-                    const landmarks: string[] = []
-                    const csType   = /^\s*(public|internal|private|protected|file)[\w\s<>[\],?]*\s+(class|interface|record|struct|enum)\s+(\w+)/
-                    const csMember = /^\s*(public|internal|private|protected|static|override|virtual|abstract|async)[\w\s<>[\],?]*\s+(\w+)\s*[({]/
-                    const jsClass  = /^\s*(export\s+)?(default\s+)?class\s+(\w+)/
-                    const jsFunc   = /^\s*(export\s+)?(default\s+)?(async\s+)?function\s+(\w+)/
-                    const jsArrow  = /^\s*(export\s+)?(const|let)\s+(\w+)\s*=\s*(async\s+)?\(/
-                    const pyDef    = /^(\s*)(def|class)\s+(\w+)/
-                    const mdHead   = /^(#{1,4})\s+(.+)/
-                    lines.slice(0, 2000).forEach((line: string, i: number) => {
-                        let m: RegExpMatchArray | null
-                        if (ext === "cs") {
-                            if ((m = line.match(csType)))   landmarks.push(`  ${i+1}| ${m[2]} ${m[3]}`)
-                            else if ((m = line.match(csMember)) && !line.trimStart().startsWith("//")) landmarks.push(`  ${i+1}| ${m[2]}${line.includes("(") ? "()" : ""}`)
-                        } else if (["ts","tsx","js","jsx"].includes(ext)) {
-                            if      ((m = line.match(jsClass)))  landmarks.push(`  ${i+1}| class ${m[3]}`)
-                            else if ((m = line.match(jsFunc)))   landmarks.push(`  ${i+1}| ${m[4]}()`)
-                            else if ((m = line.match(jsArrow)))  landmarks.push(`  ${i+1}| ${m[3]}()`)
-                        } else if (ext === "py") {
-                            if ((m = line.match(pyDef))) landmarks.push(`  ${i+1}| ${m[2]} ${m[3]}`)
-                        } else if (ext === "md" || ext === "markdown") {
-                            if ((m = line.match(mdHead))) landmarks.push(`  ${i+1}| ${m[1]} ${m[2].trim()}`)
-                        }
-                    })
-                    let out = `[preview: "${params.path}" — ${total} lines, ${sizeKb} KB]\n`
-                    if (landmarks.length > 0) {
-                        out += "\nOutline (line: symbol):\n" + landmarks.slice(0, 80).join("\n")
-                        if (landmarks.length > 80) out += `\n  ... (${landmarks.length - 80} more)`
-                    } else {
-                        out += `\nFirst ${Math.min(8, total)} lines:\n` + lines.slice(0, 8).map((l: string, i: number) => `  ${i+1}| ${l}`).join("\n")
-                    }
-                    out += "\n\nUse read_file with start_line/end_line to read a specific section."
-                    console.warn(`[ToolSocket] → file_content (preview_file)  callId=${callId}  path=${params.path}`)
-                    ws.send(JSON.stringify({ type: "file_content", callId, content: out }))
+                    const bytes   = new TextEncoder().encode(content).length
+                    result = `[rawpreview] ${bytes}\n${content}`
+                    console.warn(`[ToolSocket] → file_content (preview_file raw)  callId=${callId}  path=${params.path}  bytes=${bytes}`)
+                    ws.send(JSON.stringify({ type: "file_content", callId, content: result }))
                 }
             } catch (e: unknown) {
                 const msg = e instanceof Error ? e.message : String(e)
@@ -995,6 +965,12 @@ export default function App() {
         runStream()
     }, [isStreaming, pendingAttach, items.length, mode, loadThreads, selectedProject, injectFileTree, openToolSocket])
 
+    // The plan-proposed card's "Accept & Build" button calls this global — it sends the deterministic
+    // "[approve-plan]" signal, which the coding pipeline reads as approval (→ Development with the payload).
+    useEffect(() => {
+        (window as unknown as { __ariApprovePlan?: () => void }).__ariApprovePlan = () => send("[approve-plan]")
+    }, [send])
+
     // ── upload thread attachment ──────────────────────────
     const uploadThreadFiles = useCallback(async (files: File[]) => {
         let key = activeThreadRef.current
@@ -1110,6 +1086,8 @@ export default function App() {
                     mode={mode}
                     codeMode={codeMode}
                     items={items}
+                    planProposed={!isStreaming && items[items.length - 1]?.type === "ariResponse"
+                        && (items[items.length - 1]?.blocks ?? []).some(b => (b as { type?: string }).type === "plan")}
                     isRemembering={isRemembering}
                     isStreaming={isStreaming}
                     activeThread={activeThread}

@@ -536,6 +536,21 @@ html, body {
         </div>
       </div>
 
+      <!-- Sort controls -->
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+        <label style="font-size:12px;color:var(--text-dim);">Sort by</label>
+        <select id="mdl-sort" class="vs-input" style="font-size:12px;padding:4px 8px;width:auto;">
+          <option value="params">Parameter Size</option>
+          <option value="ram">RAM Size</option>
+          <option value="quant">Quant</option>
+          <option value="tps">T/s</option>
+        </select>
+        <select id="mdl-sort-dir" class="vs-input" style="font-size:12px;padding:4px 8px;width:auto;">
+          <option value="desc">High → Low</option>
+          <option value="asc">Low → High</option>
+        </select>
+      </div>
+
       <!-- Model cards -->
       <div id="mdl-cards" style="display:flex;flex-direction:column;gap:16px;"></div>
     </div>
@@ -2084,13 +2099,54 @@ const mdlMsg        = document.getElementById('mdl-switch-msg');
 const mdlCards      = document.getElementById('mdl-cards');
 const mdlNoteTimers = {};
 
+let mdlLastData = null;
+
+// Numeric sort keys, reusing the same parsing as parseModelTags.
+function modelMetrics(m) {
+    const fname   = (m.name || '').replace(/\.gguf$/i, '');
+    const totalM  = fname.match(/(?<![Aa])(\d+(?:\.\d+)?)B/);
+    const totalP  = totalM ? parseFloat(totalM[1]) : null;
+    const activeM = fname.match(/[_\-]A(\d+(?:\.\d+)?)B/i);
+    const activeP = activeM ? parseFloat(activeM[1]) : null;
+    const quantM  = fname.match(/[._\-](Q\d+(?:[_\-]K)?(?:[_\-][A-Z]+)?)/i);
+    const quantBits = { Q2: 2.63, Q3: 3.5, Q4: 4.5, Q5: 5.5, Q6: 6.5, Q8: 8.5 };
+    const quantKey  = quantM ? quantM[1].toUpperCase().match(/Q(\d+)/)?.[0] : null;
+    const nominalBpw = quantKey ? (quantBits[quantKey] ?? 5.5) : 5.5;
+    const ramMb   = m.fileSizeMb ?? 0;
+    // Effective bpw: from real file size when known, else nominal.
+    const bpw = (ramMb > 0 && totalP)
+        ? (ramMb * 8e6) / (totalP * 1e9)
+        : nominalBpw;
+    let tps = 0;
+    const inferP = activeP ?? totalP;
+    if (inferP !== null && totalP) {
+        const gbPerToken = ramMb > 0
+            ? ramMb * 1e6 * ((activeP ?? totalP) / totalP) / 1e9
+            : inferP * 1e9 * nominalBpw / 8 / 1e9;
+        tps = 546 / gbPerToken * 0.65;
+    }
+    return { params: totalP ?? 0, ram: ramMb, quant: bpw, tps };
+}
+
+function sortModels(models) {
+    const key = document.getElementById('mdl-sort')?.value ?? 'params';
+    const dir = document.getElementById('mdl-sort-dir')?.value === 'asc' ? 1 : -1;
+    return [...models].sort((a, b) => (modelMetrics(a)[key] - modelMetrics(b)[key]) * dir);
+}
+
 async function loadModels() {
     let data;
     try { const r = await fetch('/models'); data = await r.json(); }
     catch { return; }
-    renderModelCards(data);
+    mdlLastData = data;
+    renderModelCards({ ...data, models: sortModels(data.models ?? []) });
     if (data.switching && !mdlSwitchEs) startSwitchProgressSse();
 }
+
+['mdl-sort', 'mdl-sort-dir'].forEach(id =>
+    document.getElementById(id)?.addEventListener('change', () => {
+        if (mdlLastData) renderModelCards({ ...mdlLastData, models: sortModels(mdlLastData.models ?? []) });
+    }));
 
 function fmtSize(mb) {
     if (mb <= 0) return null;
@@ -2138,13 +2194,26 @@ function parseModelTags(m) {
     const bpw = quantKey ? (quantBits[quantKey] ?? 5.5) : 5.5;
     if (quantLabel) tags.push({ label: quantLabel, cls: 'quant', title: 'Quantization format' });
 
-    // Estimated T/s — M4 Max unbinned: ~546 GB/s memory bandwidth
+    // Estimated T/s — M4 Max unbinned: ~546 GB/s memory bandwidth, weights-only decode bound.
+    // Prefer the REAL effective bpw derived from the actual file size (exact for any quant
+    // scheme incl. IQ-/UD-dynamic); fall back to the nominal name-based bpw only if size is unknown.
     const inferP = activeP ?? totalP;
-    if (inferP !== null) {
+    if (inferP !== null && totalP) {
         const bw = 546; // GB/s
-        const gbPerToken = inferP * 1e9 * bpw / 8 / 1e9;
+        const fileSizeMb = m.fileSizeMb ?? 0;
+        let gbPerToken, basis;
+        if (fileSizeMb > 0) {
+            // Bytes moved per token = full weights × active fraction (dense = 1).
+            const activeFrac = (activeP ?? totalP) / totalP;
+            gbPerToken = fileSizeMb * 1e6 * activeFrac / 1e9;
+            basis = 'file';
+        } else {
+            gbPerToken = inferP * 1e9 * bpw / 8 / 1e9; // nominal fallback
+            basis = 'nominal';
+        }
         const tps = Math.round(bw / gbPerToken * 0.65);
-        tags.push({ label: '~' + tps + ' t/s', cls: 'perf', title: 'Estimated on M4 Max 48GB (theoretical ×65%)' });
+        tags.push({ label: '~' + tps + ' t/s', cls: 'perf',
+            title: 'Estimated on M4 Max 48GB (546 GB/s ×65%, weights-only, ' + basis + '-bpw)' });
     }
 
     return tags;
@@ -2909,8 +2978,12 @@ function dbgOpenWatch(key) {
     const es = new EventSource(`/threads/${encodeURIComponent(key)}/watch`);
     es.onmessage = () => {
         if (dbgSelectedThread !== key) return;
-        clearTimeout(dbgReloadTimer);
-        dbgReloadTimer = setTimeout(() => dbgLoadThread(key), 120);
+        // Throttle, NOT debounce. A trailing debounce (clearTimeout + setTimeout) starves during
+        // continuous token streaming — every token resets the timer so the reload only fires when the
+        // stream pauses (hence "every few seconds"). A leading throttle guarantees a steady ~13/sec
+        // refresh while tokens keep arriving, so the DTI tracks the response token-by-token.
+        if (dbgReloadTimer) return;
+        dbgReloadTimer = setTimeout(() => { dbgReloadTimer = null; dbgLoadThread(key); }, 75);
     };
     es.onerror = () => { dbgCloseWatch(); setTimeout(() => { if (dbgSelectedThread === key) dbgOpenWatch(key); }, 3000); };
     dbgWatchEs = es;
@@ -3007,7 +3080,14 @@ async function dbgLoadThread(key) {
 // so the 120ms watch poll doesn't flash or lose scroll/expand state between real changes.
 function dbgThreadSig(t) {
     let s = (t.key || '') + '#' + (t.state || '') + '|' + ((t.history || []).length) + '[';
-    (t.history || []).forEach(it => { s += (it.type || '') + '.' + ((it.trace || []).length) + (it.isStreaming ? 's' : '') + ','; });
+    (t.history || []).forEach(it => {
+        s += (it.type || '') + '.' + ((it.trace || []).length);
+        // While an item is streaming, fold its live content + reasoning lengths into the signature so
+        // each token's growth changes it and forces a re-render — otherwise the structural signature is
+        // identical token-to-token and dbgLoadThread's sig-skip would swallow the update.
+        if (it.isStreaming) s += 's' + (it.content ? it.content.length : 0) + '/' + (it.reasoning ? it.reasoning.length : 0);
+        s += ',';
+    });
     s += ']';
     (t.children || []).forEach(c => { s += dbgThreadSig(c); });
     return s;
