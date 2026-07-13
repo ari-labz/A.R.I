@@ -438,6 +438,25 @@ public abstract class Agent
         }
         StringBuilder   responseBuilder  = new();
         StringBuilder   contentBuilder   = new();
+        // Deferred read/preview card flips. Their Execute is a fast disk read; the real wait is Ari
+        // ingesting the file — prefilling it, thinking, then replying. We keep the card present-tense
+        // ("Reading"/"Previewing") until Ari types its next VISIBLE token (prose, not a stripped tool call),
+        // carrying pending flips across intervening tool-only steps; turn end flushes any stragglers. Each
+        // entry is (currentPresentMarker, targetPastMarker) already present in contentBuilder. Callers push
+        // the onDelta after flushing. Returns true if anything flipped.
+        List<(string Active, string Done)> pendingPrefillFlips = new();
+        bool FlushPrefillFlips([System.Runtime.CompilerServices.CallerMemberName] string _ = "",
+                                [System.Runtime.CompilerServices.CallerLineNumber] int callerLine = 0)
+        {
+            if (pendingPrefillFlips.Count == 0) return false;
+            Shared.Logger.LogInformation("[{Agent}] ({Thread}) flush-prefill-flips @L{Line}: {Count} card(s) — {Cards}",
+                Name, thread.Key, callerLine, pendingPrefillFlips.Count,
+                string.Join(", ", pendingPrefillFlips.Select(f => f.Done)));
+            foreach ((string active, string done) in pendingPrefillFlips)
+                ReplaceInBuilder(contentBuilder, active, done);
+            pendingPrefillFlips.Clear();
+            return true;
+        }
         Stopwatch       sw               = Stopwatch.StartNew();
         bool            wasThinking      = false;
         int             reasoningChars   = 0;
@@ -901,6 +920,13 @@ public abstract class Agent
                             // (#78). View-only transforms of the streamed text; responseBuilder and the
                             // parse/execute path are untouched.
                             string liveView = StripStreamingToolText(InjectLiveToolCards(visible));
+                            // NOT a flip trigger: this text can't be trusted as "Ari's real reply" yet — the
+                            // text-protocol path routinely narrates a lead-in ("Now let's check X...") immediately
+                            // before ANOTHER tool call (see the "preserve any narration" handling below), so any
+                            // nonzero liveView flipped cards the instant that narration began, often a fraction of
+                            // a second before the very next tool call. The batch-boundary flush (further down)
+                            // already covers "another tool block was emitted"; the turn-end flush covers a genuine
+                            // final reply once we know for certain no more tool calls followed.
                             if (liveText is null && liveView.Trim().Length > 0) { liveText = new TraceStep { Kind = "text", Text = "" }; trace.Add(liveText); }
                             if (liveText is not null) liveText.Text = liveView;
                             await onDelta(contentBuilder.ToString() + liveView);
@@ -1153,6 +1179,7 @@ public abstract class Agent
                             prelaunched[idx] = roTool.Execute(c.Args.ToString());
 
                 bool productiveBatch = false; // set true when a tool returns new info or mutates a file
+                bool batchRevealedCard = false; // true once this batch has shown the user something new — see below
                 foreach (var (callIndex, call) in pendingCalls)
                 {
                     string argsJson = call.Args.ToString();
@@ -1176,9 +1203,32 @@ public abstract class Agent
                             activeMarker = prevStreamMarker;
                         else if (tool.Display is not null)
                         {
+                            // A genuinely NEW tool card is about to appear — NOW is "another tool block was
+                            // emitted". Flip cards deferred from the PREVIOUS batch here, once per batch, so
+                            // the flip and the new card land in the caller's eyes together. Deliberately NOT
+                            // hooked at the top of the batch (before PreToolGuard runs): a guarded/deduped call
+                            // never reaches this branch at all, so a batch that produces no visible card can
+                            // never flip anything — it used to, which flipped cards with nothing new to show
+                            // for it (a guard silently answering a call, then the turn moving on to more
+                            // "thinking" with no new card ever appearing).
+                            // The flush and the new card's marker are combined into ONE onDelta call (not two
+                            // separate SSE frames) — two frames left a real, if brief, window where the client
+                            // had painted the old cards as done but not yet received the new one, which is
+                            // exactly the "flipped with nothing new to show for it" moment being reported.
+                            if (!batchRevealedCard)
+                            {
+                                batchRevealedCard = true;
+                                FlushPrefillFlips();
+                            }
                             activeMarker = tool.Display(argsJson);
                             contentBuilder.Append(activeMarker);
-                            if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                            if (onDelta is not null)
+                            {
+                                string payload = contentBuilder.ToString();
+                                Shared.Logger.LogInformation("[{Agent}] ({Thread}) reveal-send len={Len} tail={Tail}",
+                                    Name, thread.Key, payload.Length, payload.Length > 400 ? payload[^400..] : payload);
+                                await onDelta(payload);
+                            }
                         }
 
                         // Let a long-running tool stream rendered display into THIS response while it executes
@@ -1201,15 +1251,21 @@ public abstract class Agent
                         result = PostToolProcess(thread, toolTurn, call.Name, argsJson, result);
 
                         // read_file auto-diverted to a preview (result starts with "[preview:", not an error): relabel
-                        // its card to a done "Previewed" card and skip the flip (the preview already completed).
+                        // its card to a preview card. Keep it PRESENT-tense ("Previewing") and defer the flip to
+                        // "Previewed" until the file has prefilled (next request's first delta), like a normal preview.
                         if (activeMarker is not null && call.Name == "read_file" && result.StartsWith("[preview:", StringComparison.Ordinal))
                         {
                             string pf = "";
                             try { using JsonDocument pvd = JsonDocument.Parse(argsJson); pf = System.IO.Path.GetFileName((pvd.RootElement.TryGetProperty("path", out JsonElement ppe) ? ppe.GetString() : null)?.Trim('"', '\'', ' ') ?? ""); }
                             catch { /* ignore */ }
-                            ReplaceInBuilder(contentBuilder, activeMarker, $"<!--ari-tool-done:preview_file:{pf.Replace("--", "&#45;&#45;")}-->");
+                            string pfEsc      = pf.Replace("--", "&#45;&#45;");
+                            string startPrev  = $"<!--ari-tool-start:preview_file:{pfEsc}-->";
+                            string donePrev   = $"<!--ari-tool-done:preview_file:{pfEsc}-->";
+                            ReplaceInBuilder(contentBuilder, activeMarker, startPrev);
                             if (onDelta is not null) await onDelta(contentBuilder.ToString());
-                            activeMarker = null;
+                            Shared.Logger.LogInformation("[{Agent}] ({Thread}) defer-prefill-flip (auto-divert): {Done}", Name, thread.Key, donePrev);
+                            pendingPrefillFlips.Add((startPrev, donePrev));
+                            activeMarker = null;   // handled via the deferred flip
                         }
 
                         // Flip the card to its done (past-tense) form once the tool returns (unless it errored).
@@ -1224,8 +1280,20 @@ public abstract class Agent
                                 string done = doneCard.Render();
                                 if (!string.Equals(done, activeMarker, StringComparison.Ordinal))
                                 {
-                                    ReplaceInBuilder(contentBuilder, activeMarker, done);
-                                    if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                                    // read_file/preview_file: Execute is a fast disk read, but the real wait is the
+                                    // next request prefilling the file. Keep the card present-tense and defer the
+                                    // flip to when that prefill closes. Every other tool's work IS its Execute, so
+                                    // flip it now.
+                                    if (call.Name is "read_file" or "preview_file")
+                                    {
+                                        Shared.Logger.LogInformation("[{Agent}] ({Thread}) defer-prefill-flip: {Done}", Name, thread.Key, done);
+                                        pendingPrefillFlips.Add((activeMarker, done));
+                                    }
+                                    else
+                                    {
+                                        ReplaceInBuilder(contentBuilder, activeMarker, done);
+                                        if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                                    }
                                 }
                             }
                         }
@@ -1392,6 +1460,11 @@ public abstract class Agent
 
             break;
         }
+
+        // The turn is over — this is where "Ari's response has started" becomes trustworthy: either this
+        // step's text turned out to have no further tool calls (a genuine final reply) or the turn ended
+        // with no reply at all (a pure tool run). Either way, flip any still-deferred read/preview cards now.
+        if (FlushPrefillFlips() && onDelta is not null) await onDelta(contentBuilder.ToString());
 
         sw.Stop();
         string responseText = contentBuilder.Length > 0
