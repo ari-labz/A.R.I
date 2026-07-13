@@ -3,7 +3,14 @@ using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
-public enum ThreadState { Idle, Streaming, Dormant, CleanupNeeded, Deleted }
+/// <summary>Thread lifecycle (see Docs/Thread-Lifecycle-StateMachine). A thread may only be deleted
+/// from <see cref="Dormant"/>, and Engram runs on entry to Dormant — so no thread with user content is
+/// ever deleted without being processed first.
+/// unread → dormant (proactive, 3h) · active → streaming (generating) → active → inactive (response
+/// window) → dormant (1h) → deleted (1h). Any user activity before deletion flips the thread back to
+/// active. While Streaming, Ari is emitting tokens directly into the thread's live response and clients
+/// fast-poll to render each token.</summary>
+public enum ThreadState { Unread, Active, Streaming, Inactive, Dormant, Deleted }
 
 /// <summary>The pipeline a thread belongs to. Determines how its prompts are processed.</summary>
 public enum ThreadPipeline { Dialogue, Code, Speech }
@@ -14,10 +21,15 @@ public enum CodePhase { Planning, Development }
 
 public class Thread
 {
-    private const int MIN_INACTIVITY_TIMER     = 30;
-    private const int MIN_DELETION_TIMER       = 15;
-    private const int MIN_INACTIVITY_THRESHOLD = 1;
-    private const int DEFAULT_MEMORY_LIMIT     = 25;
+    // Lifecycle timing (see Docs/Thread-Lifecycle-StateMachine). Kept as named constants for now;
+    // promote to config if these need tuning at runtime.
+    private const int RESPONSE_WINDOW_FLOOR_MIN  = 5;   // active→inactive floor + no-data default (minutes)
+    private const int RESPONSE_WINDOW_BUFFER_MIN = 5;   // safety buffer added to the average response time
+    private const int UNREAD_GRACE_HOURS         = 3;   // proactive: wait this long for a first reply
+    private const int INACTIVE_TO_DORMANT_MIN    = 60;  // inactive → dormant
+    private const int DORMANT_TO_DELETE_MIN      = 60;  // dormant  → deleted
+    private const int DELETE_RETRY_SEC           = 30;  // re-check cadence when Engram hasn't finished at delete time
+    private const int DEFAULT_MEMORY_LIMIT       = 25;
 
     private readonly string threadKey;
 
@@ -133,7 +145,7 @@ public class Thread
     internal readonly Dictionary<string, (object Schema, Func<string, Task<string>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter, Func<string, string?>? StreamingDisplay)> tools = new();
 
     // ── Lifecycle ──────────────────────────────────────────────────────────────
-    public ThreadState               State           = ThreadState.Idle;
+    public ThreadState               State           = ThreadState.Active;
     internal readonly List<TimeSpan> responseSamples = new();
     internal DateTime                ariRepliedAt    = DateTime.MinValue;
     internal Timer?                  inactivityTimer;
@@ -141,27 +153,26 @@ public class Thread
 
     public DateTime LastMessageAt { get; internal set; } = DateTime.MinValue;
 
-    internal TimeSpan InactivityThreshold
-    {
-        get
-        {
-            if (responseSamples.Count < 2) return TimeSpan.FromMinutes(MIN_INACTIVITY_TIMER);
-            double mean     = responseSamples.Average(s => s.TotalSeconds);
-            double variance = responseSamples.Average(s => Math.Pow(s.TotalSeconds - mean, 2));
-            double stdDev   = Math.Sqrt(variance);
-            TimeSpan adaptive = TimeSpan.FromSeconds(mean + stdDev * 2);
-            TimeSpan floor    = TimeSpan.FromMinutes(MIN_INACTIVITY_THRESHOLD);
-            return adaptive > floor ? adaptive : floor;
-        }
-    }
+    /// <summary>Proof that Engram has processed the conversation in its current state. Set true when a
+    /// sweep completes (or there is nothing to save); reset to false whenever new user input arrives.
+    /// A thread may only advance from Dormant to Deleted while this is true.</summary>
+    public bool EngramProcessed { get; internal set; }
 
-    internal TimeSpan DormantDuration
+    /// <summary>True once the user has said anything in this thread — the gate for whether a dormant
+    /// sweep has anything to learn. An unanswered proactive thread has none.</summary>
+    internal bool HasUserMessages => History.OfType<Prompt>().Any();
+
+    /// <summary>The active→inactive countdown: the average of this thread's response times plus a fixed
+    /// safety buffer, floored at (and defaulting, with no samples yet, to) the floor.</summary>
+    internal TimeSpan ResponseWindow
     {
         get
         {
-            TimeSpan dormant = InactivityThreshold * 1.5;
-            TimeSpan minimum = TimeSpan.FromMinutes(MIN_DELETION_TIMER);
-            return dormant > minimum ? dormant : minimum;
+            TimeSpan floor = TimeSpan.FromMinutes(RESPONSE_WINDOW_FLOOR_MIN);
+            if (responseSamples.Count == 0) return floor;
+            double avgSec   = responseSamples.Average(s => s.TotalSeconds);
+            TimeSpan window = TimeSpan.FromSeconds(avgSec) + TimeSpan.FromMinutes(RESPONSE_WINDOW_BUFFER_MIN);
+            return window > floor ? window : floor;
         }
     }
 
@@ -199,12 +210,13 @@ public class Thread
     internal event Action? BufferFull;
     internal event Action<string, string>? ExchangeCompleted;
     internal event Action? BecameInactive;
+    /// <summary>Fires on entry to Dormant — the Engram trigger point.</summary>
+    internal event Action? BecameDormant;
     internal event Action? Deleted;
     internal event Action<string>? Streaming;
     internal event Action? StreamingFinished;
 
     internal void RaiseUpdated()                              => Updated?.Invoke();
-    internal void RaiseBecameInactive()                       => BecameInactive?.Invoke();
     internal void RaiseExchangeCompleted(string p, string r)  => ExchangeCompleted?.Invoke(p, r);
     internal void RaiseBufferFull()                           => BufferFull?.Invoke();
     internal void RaiseStreaming(string text)                 => Streaming?.Invoke(text);
@@ -300,41 +312,115 @@ public class Thread
 
     // ── Lifecycle ───────────────────────────────────────────────────────────────
 
-    internal void ResetInactivityTimer()
+    // State machine: active ─window─▶ inactive ─1h─▶ dormant ─1h(+Engram)─▶ deleted; unread ─3h─▶ dormant.
+    // Timers are single-shot; each transition disposes the previous and arms the next. inactivityTimer
+    // carries the active→inactive (and unread→dormant) countdown; dormantTimer carries inactive→dormant,
+    // dormant→delete, and the delete-retry poll.
+
+    private void DisposeTimers()
     {
-        if (State is ThreadState.CleanupNeeded or ThreadState.Deleted) return;
-        inactivityTimer?.Dispose();
-        inactivityTimer = new Timer(_ =>
-        {
-            if (State != ThreadState.Idle) return;
-            State = ThreadState.Dormant;
-            BecameInactive?.Invoke();
-        }, null, InactivityThreshold, Timeout.InfiniteTimeSpan);
+        inactivityTimer?.Dispose(); inactivityTimer = null;
+        dormantTimer?.Dispose();    dormantTimer    = null;
     }
 
-    internal void MarkEngramProcessed()
-    {
-        State = ThreadState.CleanupNeeded;
-        Shared.Logger.LogInformation("[Thread] ({ThreadKey}) cleanup needed — scheduled for deletion in {Minutes:F1} minutes.", threadKey, DormantDuration.TotalMinutes);
-        dormantTimer = new Timer(_ =>
-        {
-            State = ThreadState.Deleted;
-            inactivityTimer?.Dispose();
-            dormantTimer?.Dispose();
-            Shared.Logger.LogInformation("[Thread] ({ThreadKey}) deleted.", threadKey);
-            Deleted?.Invoke();
-        }, null, DormantDuration, Timeout.InfiniteTimeSpan);
-    }
-
-    /// <summary>Delete the thread immediately (used by the manual close-thread action), bypassing the
-    /// dormant grace period. Engram is expected to have already run if the caller wants it saved.</summary>
-    internal void ForceDelete()
+    /// <summary>A real user message is being processed: cancel any pending deletion, enter Streaming (Ari
+    /// is about to generate), and mark the conversation as needing (re)processing. No window is armed —
+    /// the response is in flight and <see cref="OnResponseComplete"/> arms it when generation ends.</summary>
+    internal void OnUserSend()
     {
         if (State == ThreadState.Deleted) return;
-        State = ThreadState.Deleted;
+        DisposeTimers();
+        State           = ThreadState.Streaming;
+        EngramProcessed = false;
+    }
+
+    /// <summary>Generation ended abnormally (cancel/error) before <see cref="OnResponseComplete"/> ran.
+    /// Return to active and arm the response window so the thread doesn't strand in Streaming.</summary>
+    internal void OnGenerationAborted()
+    {
+        if (State != ThreadState.Streaming) return;
+        State = ThreadState.Active;
+        ArmResponseWindow();
+    }
+
+    /// <summary>The user is composing (typing indicator): keep the thread alive and re-arm the response
+    /// window so it does not drift to inactive/deletion mid-compose.</summary>
+    internal void OnUserTyping()
+    {
+        if (State == ThreadState.Deleted) return;
+        DisposeTimers();
+        State = ThreadState.Active;
+        ArmResponseWindow();
+    }
+
+    /// <summary>Ari has finished a response — start the response-window countdown toward inactive.</summary>
+    internal void OnResponseComplete()
+    {
+        if (State == ThreadState.Deleted) return;
+        ariRepliedAt = DateTime.UtcNow;
+        State        = ThreadState.Active;
+        ArmResponseWindow();
+    }
+
+    /// <summary>Proactive opener sent: await the user's first reply for the unread grace period, then go
+    /// dormant (Engram is skipped there since there are no user messages).</summary>
+    internal void StartUnread()
+    {
+        if (State == ThreadState.Deleted) return;
+        DisposeTimers();
+        State = ThreadState.Unread;
+        Shared.Logger.LogInformation("[Thread] ({ThreadKey}) unread — awaiting reply for {Hours}h.", threadKey, UNREAD_GRACE_HOURS);
+        inactivityTimer = new Timer(_ => ToDormant(), null, TimeSpan.FromHours(UNREAD_GRACE_HOURS), Timeout.InfiniteTimeSpan);
+    }
+
+    private void ArmResponseWindow()
+    {
         inactivityTimer?.Dispose();
+        inactivityTimer = new Timer(_ => ToInactive(), null, ResponseWindow, Timeout.InfiniteTimeSpan);
+    }
+
+    private void ToInactive()
+    {
+        if (State != ThreadState.Active) return;
+        State = ThreadState.Inactive;
+        Shared.Logger.LogInformation("[Thread] ({ThreadKey}) inactive — dormant in {Min}m.", threadKey, INACTIVE_TO_DORMANT_MIN);
+        BecameInactive?.Invoke();
         dormantTimer?.Dispose();
-        Shared.Logger.LogInformation("[Thread] ({ThreadKey}) closed and deleted.", threadKey);
+        dormantTimer = new Timer(_ => ToDormant(), null, TimeSpan.FromMinutes(INACTIVE_TO_DORMANT_MIN), Timeout.InfiniteTimeSpan);
+    }
+
+    private void ToDormant()
+    {
+        if (State is not (ThreadState.Inactive or ThreadState.Unread)) return;
+        State = ThreadState.Dormant;
+        Shared.Logger.LogInformation("[Thread] ({ThreadKey}) dormant — running Engram; deletion in {Min}m.", threadKey, DORMANT_TO_DELETE_MIN);
+        BecameDormant?.Invoke();   // Engram runs here; handler marks EngramProcessed when there's nothing to save
+        dormantTimer?.Dispose();
+        dormantTimer = new Timer(_ => Delete(), null, TimeSpan.FromMinutes(DORMANT_TO_DELETE_MIN), Timeout.InfiniteTimeSpan);
+    }
+
+    /// <summary>Delete the thread — but NEVER before Engram has processed it. This is the single, universal
+    /// delete gate: whoever calls it (the dormant timer, a manual close, any direct caller), if the thread
+    /// still has unprocessed user content it is moved to Dormant, Engram is (re)triggered, and actual
+    /// removal is deferred — this method re-arms itself until <see cref="EngramProcessed"/> is set. Fires
+    /// <see cref="Deleted"/> (registry removal + client broadcast) only once the sweep has completed.</summary>
+    internal void Delete()
+    {
+        if (State == ThreadState.Deleted) return;
+
+        if (!EngramProcessed && HasUserMessages)
+        {
+            if (State != ThreadState.Dormant) State = ThreadState.Dormant;
+            Shared.Logger.LogInformation("[Thread] ({ThreadKey}) delete gated — running Engram first; retrying in {Sec}s.", threadKey, DELETE_RETRY_SEC);
+            BecameDormant?.Invoke();   // (re)trigger the sweep; handler no-ops if one is already running
+            dormantTimer?.Dispose();
+            dormantTimer = new Timer(_ => Delete(), null, TimeSpan.FromSeconds(DELETE_RETRY_SEC), Timeout.InfiniteTimeSpan);
+            return;
+        }
+
+        State = ThreadState.Deleted;
+        DisposeTimers();
+        Shared.Logger.LogInformation("[Thread] ({ThreadKey}) deleted.", threadKey);
         Deleted?.Invoke();
     }
 
