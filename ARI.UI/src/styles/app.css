@@ -43,7 +43,9 @@ html, body {
 }
 
 /* ── shell ─────────────────────────────────────────────── */
-#shell { display: flex; height: 100dvh; overflow: hidden; }
+/* --app-vh (set from window.visualViewport in App.tsx) wins where available — it tracks the on-screen
+   keyboard reliably; 100dvh is the fallback for browsers without visualViewport support. */
+#shell { display: flex; height: var(--app-vh, 100dvh); overflow: hidden; }
 
 /* ── sidebar ───────────────────────────────────────────── */
 #sidebar {
@@ -432,6 +434,9 @@ button, a, input, select, textarea, label, [role="button"] {
     opacity: 0; pointer-events: none;
     max-height: 0; overflow: hidden;
     transition: opacity 0.5s ease-in-out, max-height 0.65s ease-in-out;
+    /* Stop an over-scroll at the top/bottom of the message list from bubbling into the page
+       (pull-to-refresh / rubber-band bounce on iOS Safari and some Android browsers). */
+    overscroll-behavior: contain;
 }
 #main.active #messages { opacity: 1; pointer-events: auto; max-height: 100dvh; overflow-y: auto; }
 
@@ -560,6 +565,12 @@ button, a, input, select, textarea, label, [role="button"] {
     color: #1a1a1a; font-family: inherit; font-size: 15px;
     line-height: 1.55; resize: none; max-height: 180px; min-height: 24px; width: 100%;
     transition: color 0.55s ease;
+}
+/* 16px on every phone/tablet width, regardless of orientation: iOS Safari auto-zooms the whole
+   page on focus of any text input under 16px — the single biggest contributor to #168. */
+@media (max-width: 900px) {
+    #input, #project-form input[type="text"], #project-form textarea,
+    #input-project-select, .command-input { font-size: 16px; }
 }
 #input::placeholder { color: #9ca3af; }
 #main.code-mode #input { color: #dde3e8; }
@@ -1230,6 +1241,44 @@ details.tool-card summary::-webkit-details-marker { display: none; }
     #main-logo { width: 200px; }
     #main.active #main-logo { width: 90px; }
     #main-header { height: 38vh; padding-bottom: 20px; }
+}
+
+/* ── tablet (portrait) ───────────────────────────────────────
+   A tablet in portrait is narrow relative to its height, same as a phone — the sidebar still eats
+   too much width to sit open permanently, so give it the same overlay-drawer treatment. Landscape
+   tablets are excluded (handled by the desktop layout, which has the width for a persistent sidebar). */
+@media (min-width: 641px) and (max-width: 1024px) and (orientation: portrait) {
+    #sidebar {
+        position: fixed; top: 0; bottom: 0; left: 0; z-index: 200; height: 100dvh;
+        width: var(--sidebar-w) !important; min-width: var(--sidebar-w) !important;
+        transform: translateX(-100%);
+        transition: transform .25s ease, box-shadow .25s ease; box-shadow: none;
+    }
+    #sidebar:not(.collapsed) { transform: translateX(0); box-shadow: 4px 0 24px rgba(0,0,0,.35); }
+    #sidebar.collapsed { transform: translateX(-100%); }
+    #main { width: 100%; }
+    #topbar-toggle { display: flex !important; }
+}
+
+/* ── phone landscape ─────────────────────────────────────────
+   Vertical space is the scarce resource in landscape, not width — 38vh (the portrait figure) would
+   eat a huge share of a short viewport, so shrink the header much further and drop its bottom padding. */
+@media (max-height: 500px) and (orientation: landscape) {
+    #main-header { height: 18vh; padding-bottom: 6px; }
+    #main-logo { width: 120px; }
+    #main.active #main-logo { width: 60px; }
+}
+
+/* ── composer focused (mobile/tablet) ────────────────────────
+   With the on-screen keyboard open, vertical room is scarce and the header (still a fixed vh share
+   otherwise) was eating a chunk of what's left regardless of whether the user was even looking at
+   it. Collapse it to near-nothing for as long as the composer holds focus (class toggled in
+   InputArea.tsx); it reappears immediately on blur. */
+@media (max-width: 1024px) {
+    body.composer-focused #main-header { height: 8px; padding-bottom: 0; overflow: hidden; }
+    body.composer-focused #header-logos { opacity: 0; }
+    #main-header { transition: height .2s ease, padding-bottom .2s ease; }
+    #header-logos { transition: opacity .15s ease; }
 }
 
 /* ── Speech / Orb overlay (issue #92) ───────────────────────────────────── */
