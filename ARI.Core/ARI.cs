@@ -247,7 +247,7 @@ public class ARI : BackgroundService
                     return;
                 }
                 await llm.RunProactiveMessageAsync(ariPersistentDir, ct);
-            });
+            }, uninterruptible: true);
 
             CommonModules.Register(scheduler: schedulerModule);
             schedulerModule.Start();

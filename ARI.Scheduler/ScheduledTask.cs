@@ -15,16 +15,22 @@ internal sealed class ScheduledTask
     internal string CronText { get; private set; }
     internal Func<CancellationToken, Task> Handler { get; }
 
+    // When true, the busy-watchdog does NOT cancel this job mid-run: it still only STARTS in an idle
+    // window, but once started it runs to completion even if Ari becomes active again. Used by the
+    // proactive messenger, whose own draft thread would otherwise trip the watchdog and cancel itself.
+    internal bool Uninterruptible { get; }
+
     // Persisted: when the task last completed a full run. Cron's next occurrence is computed from this.
     internal DateTime LastRunUtc { get; set; }
 
-    internal ScheduledTask(string name, string cronExpression, Func<CancellationToken, Task> handler, DateTime lastRunUtc)
+    internal ScheduledTask(string name, string cronExpression, Func<CancellationToken, Task> handler, DateTime lastRunUtc, bool uninterruptible = false)
     {
         Name = name;
         CronText = cronExpression;
         Cron = CronExpression.Parse(cronExpression);
         Handler = handler;
         LastRunUtc = lastRunUtc;
+        Uninterruptible = uninterruptible;
     }
 
     /// <summary>Swaps in a new cron expression live. Throws CronFormatException if invalid (caller validates).</summary>
