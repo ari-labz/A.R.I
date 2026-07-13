@@ -15,6 +15,14 @@ import "./styles/app.css"
 
 export type AppMode = "idle" | "active"
 
+// Phone or tablet in portrait — matches the CSS breakpoints that give the sidebar overlay-drawer
+// behavior instead of a persistent column (app.css: max-width:640px, and the 641–1024px tablet-portrait
+// block). Narrow-and-tall is what makes a permanently open sidebar cost too much width to justify.
+function isNarrowPortrait(): boolean {
+    if (typeof window === "undefined" || !window.matchMedia) return false
+    return window.matchMedia("(max-width: 1024px) and (orientation: portrait)").matches
+}
+
 function buildSafetyDiff(newStr: string, startLine?: number, endLine?: number): string {
     const range = startLine != null
         ? ` (replacing lines ${startLine}${endLine != null && endLine !== startLine ? `–${endLine}` : ""})`
@@ -184,7 +192,7 @@ export default function App() {
     const [items,            setItems]             = useState<ThreadItem[]>([])
     const [isStreaming,      setIsStreaming]        = useState(false)
     const [isRemembering,    setIsRemembering]      = useState(false)
-    const [sidebarCollapsed, setSidebarCollapsed]  = useState(false)
+    const [sidebarCollapsed, setSidebarCollapsed]  = useState(isNarrowPortrait)
     const [pendingAttach,    setPendingAttach]      = useState<PendingAttachment[]>([])
     const [threadAttach,     setThreadAttach]       = useState<Attachment[]>([])
     const [toasts,           setToasts]            = useState<{ id: string; msg: string }[]>([])
@@ -244,6 +252,21 @@ export default function App() {
     }, [])
 
     useEffect(() => { projectsRef.current = projects }, [projects])
+
+    // Pin #shell's height to the REAL visible viewport instead of trusting 100dvh alone — some
+    // Android WebViews and in-app browsers resize `dvh` unreliably (or late) when the on-screen
+    // keyboard opens, which is what left a large dead blank region above the composer instead of
+    // the layout shrinking to fit around the keyboard (#168). visualViewport reports the actual
+    // visible area directly and fires promptly on keyboard open/close, so mirror it into a CSS
+    // custom property #shell reads, with 100dvh as the fallback where visualViewport is unavailable.
+    useEffect(() => {
+        const vv = window.visualViewport
+        if (!vv) return
+        const setHeight = () => document.documentElement.style.setProperty("--app-vh", `${vv.height}px`)
+        setHeight()
+        vv.addEventListener("resize", setHeight)
+        return () => vv.removeEventListener("resize", setHeight)
+    }, [])
 
     const heartbeat = useTypingHeartbeat(() => activeThreadRef.current)
 
