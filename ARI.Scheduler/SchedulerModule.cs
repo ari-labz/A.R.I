@@ -44,14 +44,14 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
 
     /// <summary>Register a job. Cron precedence: runtime override (control panel) &gt; AriConfig override
     /// &gt; the task's built-in default.</summary>
-    public void AddTask(string name, string defaultCron, Func<CancellationToken, Task> handler)
+    public void AddTask(string name, string defaultCron, Func<CancellationToken, Task> handler, bool uninterruptible = false)
     {
         string cron =
             _settings.Schedules.TryGetValue(name, out string? s) && IsValidCron(s) ? s
           : _config.Schedules.TryGetValue(name, out string? c) && !string.IsNullOrWhiteSpace(c) ? c
           : defaultCron;
         DateTime lastRun = _lastRun.TryGetValue(name, out DateTime lr) ? lr : DateTime.UtcNow;
-        _tasks.Add(new ScheduledTask(name, cron, handler, lastRun));
+        _tasks.Add(new ScheduledTask(name, cron, handler, lastRun, uninterruptible));
         _logger.LogInformation("[Scheduler] Registered task '{Name}' (cron: {Cron}).", name, cron);
     }
 
@@ -162,8 +162,11 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
         // This token trips when Ari becomes busy OR the module shuts down — the handler yields on it.
         using CancellationTokenSource jobCts = CancellationTokenSource.CreateLinkedTokenSource(loopCt);
 
-        // Watchdog: cancel the job the moment Ari is no longer idle.
-        Task watchdog = Task.Run(async () =>
+        // Watchdog: cancel the job the moment Ari is no longer idle. Uninterruptible tasks skip it —
+        // they still only START in an idle window (the loop gates on IsIdle), but once running they
+        // finish even if Ari becomes active again. The proactive messenger needs this: its own draft
+        // thread marks Ari busy, so a watchdog would cancel the very message it is generating.
+        Task watchdog = task.Uninterruptible ? Task.CompletedTask : Task.Run(async () =>
         {
             while (!jobCts.IsCancellationRequested)
             {
