@@ -11,8 +11,10 @@ namespace ARI.API;
 
 public static class ClientWebSocket
 {
-    private static readonly ConcurrentDictionary<string, TaskCompletionSource<string>> pendingFileCalls  = new();
-    private static readonly ConcurrentDictionary<string, string>                       pendingCallLabels = new();
+    // Keyed by callId. Carries the owning WebSocket so a closed connection can fail its own in-flight calls
+    // immediately instead of leaving them to expire on Forward's 30/90/900s timeout.
+    private static readonly ConcurrentDictionary<string, (WebSocket Ws, TaskCompletionSource<string> Tcs)> pendingFileCalls  = new();
+    private static readonly ConcurrentDictionary<string, string>                                           pendingCallLabels = new();
 
     // Persistent per-thread file tool state — survives WebSocket reconnections until the thread is deleted.
     private static readonly ConcurrentDictionary<string, FileToolState> threadFileState = new();
@@ -107,6 +109,7 @@ public static class ClientWebSocket
         finally
         {
             UnregisterIfOwner(codeThread, connId, log);
+            FailPendingCallsFor(ws, log);
             log.LogInformation("[Client] Session ended ({Thread})", threadKey);
         }
     }
@@ -129,6 +132,25 @@ public static class ClientWebSocket
         thread.ClientToolCloner = null;
         foreach (string tool in ClientToolNames)
             thread.UnregisterTool(tool);
+    }
+
+    /// <summary>Fails every call still awaiting a reply on a connection that just closed, instead of leaving
+    /// them to expire on Forward's 30/90/900s timeout — a client switching threads mid-tool-call used to
+    /// freeze the whole agent turn (no new tokens, no new tool cards) until that timeout finally fired. The
+    /// error mirrors the one Forward returns for an already-dead socket, so the model can retry immediately.</summary>
+    private static void FailPendingCallsFor(WebSocket ws, ILogger log)
+    {
+        foreach ((string callId, (WebSocket Ws, TaskCompletionSource<string> Tcs) pending) in pendingFileCalls)
+        {
+            if (!ReferenceEquals(pending.Ws, ws)) continue;
+            if (!pendingFileCalls.TryRemove(callId, out _)) continue;   // another thread already resolved/removed it
+            pendingCallLabels.TryRemove(callId, out string? label);
+            log.LogWarning("[Client] connection closed with call in flight — failing immediately  {Label}  callId={CallId}", label, callId);
+            pending.Tcs.TrySetResult(
+                "[Error: the desktop client is disconnected, so this call could not complete. The client " +
+                "usually reconnects within a few seconds — retry the call once, and if it still fails, " +
+                "stop and tell the user the client connection was lost.]");
+        }
     }
 
     private static void RegisterTools(ARI.LLM.Thread thread, WebSocket ws, ILogger log, FileToolState fileState, Guid connId)
@@ -172,6 +194,12 @@ public static class ClientWebSocket
             parameters: new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root." } }, required = new[] { "path" } },
             displayVerb: "Previewing", displayDoneVerb: "Previewed",
             labelField: "path",
+            // No end marker: Agent.cs defers this card's flip (present tense held until the next batch or the
+            // real reply) via its own ari-tool-done marker. The default "end" marker this would otherwise get
+            // is a SEPARATE, older done-signal the client also understands (end marker + a later batch-end ⇒
+            // done) — it used to be harmless because both markers landed together, but now it fires the instant
+            // this call returns, flipping the card immediately and defeating the deferral entirely.
+            customDisplayDone: _ => "",
             // Client returns raw content; build the class-diagram outline server-side (one extractor, #138).
             postHook: (argsJson, result) =>
             {
@@ -192,8 +220,11 @@ public static class ClientWebSocket
             labelField: "path",
             // Card label carries the line range ("File.cs (101-200)") so consecutive window reads of the
             // same file are visibly distinct rather than looking like duplicate reads (#113).
-            customDisplay:     argsJson => ReadCardMarker(argsJson, "start"),
-            customDisplayDone: argsJson => ReadCardMarker(argsJson, "end"),
+            customDisplay: argsJson => ReadCardMarker(argsJson, "start"),
+            // No end marker — see the identical note on preview_file above; read_file's flip is deferred by
+            // Agent.cs the same way, and the "end" marker's line-range data is redundant with the start
+            // marker's anyway (Card.Flip() reuses the label captured from "start", never reads "end").
+            customDisplayDone: _ => "",
             preCheck: argsJson => CheckRedundantRead(argsJson, fileState, epochThread)
                                   ?? CheckReadWindow(argsJson, fileState),
             postHook: (argsJson, result) => ReadPostHook(argsJson, result, fileState, epochThread),
@@ -970,7 +1001,7 @@ public static class ClientWebSocket
         string callId = Guid.NewGuid().ToString("N");
         string label  = ExtractLogLabel(argsJson, labelField);
         var tcs = new TaskCompletionSource<string>();
-        pendingFileCalls[callId]  = tcs;
+        pendingFileCalls[callId]  = (ws, tcs);
         pendingCallLabels[callId] = label;
 
         log.LogInformation("[Client] → {Tool}  {Label}  callId={CallId}", toolName, label, callId);
@@ -1150,8 +1181,8 @@ public static class ClientWebSocket
                                 string content = contentEl.GetString() ?? "";
                                 string flabel  = pendingCallLabels.TryGetValue(callId, out var fl) ? fl : "";
                                 log.LogInformation("[Client] ← file_content  {Label}  callId={CallId}  bytes={Bytes}  pending={Pending}", flabel, callId, content.Length, pendingFileCalls.ContainsKey(callId));
-                                if (pendingFileCalls.TryGetValue(callId, out var tcs))
-                                    tcs.TrySetResult(content);
+                                if (pendingFileCalls.TryGetValue(callId, out var pending))
+                                    pending.Tcs.TrySetResult(content);
                                 else
                                     log.LogWarning("[Client] ← file_content  callId={CallId}  NO PENDING CALL", callId);
                             }
@@ -1165,8 +1196,8 @@ public static class ClientWebSocket
                                 string error  = errEl.GetString()  ?? "";
                                 string elabel = pendingCallLabels.TryGetValue(callId, out var el2) ? el2 : "";
                                 log.LogWarning("[Client] ← file_error  {Label}  callId={CallId}  error={Error}", elabel, callId, error);
-                                if (pendingFileCalls.TryGetValue(callId, out var tcs))
-                                    tcs.TrySetResult($"[Error: {SanitizeClientError(error)}]");
+                                if (pendingFileCalls.TryGetValue(callId, out var pending))
+                                    pending.Tcs.TrySetResult($"[Error: {SanitizeClientError(error)}]");
                             }
                             break;
 
