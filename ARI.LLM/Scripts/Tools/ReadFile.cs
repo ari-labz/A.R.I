@@ -17,11 +17,12 @@ internal sealed class ReadFile : Tool
         {
             name        = "read_file",
             description =
-                "Read lines from a source file. HARD LIMIT: at most 100 lines per call — wider requests are rejected without being read. " +
-                "ALWAYS call preview_file on a file BEFORE your first read_file on it — preview shows the line count so you pick the right range. " +
-                "Use search_files to locate the relevant lines and read only that range with start_line and end_line (spanning at most 100 lines). " +
-                "To cover a longer stretch, read consecutive 100-line windows (1-100, then 101-200, ...) — they stack in your context as one continuous view. " +
-                "Only omit start_line/end_line for a file you know fits in one window (e.g. a short config).",
+                "Read a SPECIFIC RANGE of a source file — use this sparingly. Most of the time preview_file is enough: it gives the exact " +
+                "members to USE a type, so you do NOT need to read it. Only read when you must see how a specific method BEHAVES inside because " +
+                "you are copying/imitating it — and then read just THAT method's lines (preview gave you its line number), not the whole file. " +
+                "HARD LIMIT: at most 100 lines per call — wider requests are rejected without being read. ALWAYS preview_file first, then pass " +
+                "start_line and end_line for the exact range. Reading a whole file, or reading 'to be sure', bloats your context and is the main " +
+                "reason this pipeline runs out of room before it finishes. You never need to read a file you have already read.",
             parameters  = new
             {
                 type       = "object",

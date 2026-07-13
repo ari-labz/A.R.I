@@ -20,11 +20,13 @@ internal sealed class PreviewFile : Tool
         {
             name        = "preview_file",
             description =
-                "Get a structural outline of a file — line count, file size, and landmarks " +
-                "(classes, methods, properties, JSON keys, Markdown headings, etc.) with their line numbers. " +
-                "Call this BEFORE read_file on any file you haven't read yet. " +
-                "Use the line numbers it returns to do a targeted read_file with start_line/end_line " +
-                "rather than reading the whole file.",
+                "Get a class-diagram outline of a file — its types with base/interfaces, and every field, " +
+                "property and method SIGNATURE with types and line numbers. This answers \"how do I USE this?\" " +
+                "and for most files it is ALL you need: to bind to a data class, call a method, or place a " +
+                "control, the outline gives you the exact names — no read required. Prefer this over read_file " +
+                "by default. Only read_file (a narrow range) when you must see how a specific method BEHAVES " +
+                "inside because you are copying it. A preview costs a fraction of a read and keeps your context " +
+                "lean, which is what lets you finish.",
             parameters = new
             {
                 type       = "object",

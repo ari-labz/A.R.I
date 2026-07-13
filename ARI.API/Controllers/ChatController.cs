@@ -151,7 +151,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 
     /// <summary>
     /// Returns thread metadata plus full history. The primary polling endpoint for streaming threads.
-    /// Poll at ~150ms while thread.state == "streaming"; stop on "idle" or "dormant".
+    /// Poll at ~150ms while thread.state == "streaming"; stop once it is anything else (active/inactive/…).
     /// DebugRequestJson / DebugResponseText are excluded here — use GET /threads/{key}/debug for those.
     /// </summary>
     [HttpGet("{threadKey}")]

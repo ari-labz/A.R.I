@@ -71,14 +71,26 @@ internal static class Database
         Run(db, SCHEMA);
 
         Dictionary<string, long> idsByName = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, string> pathByTitle = new(StringComparer.OrdinalIgnoreCase);
+        List<string> skippedNotes = new();
         foreach ((string path, Note.Parsed parsed, DateTime updated) in files)
         {
             string title = System.IO.Path.GetFileNameWithoutExtension(path);
+            // Title is UNIQUE (it's how [[wikilinks]] resolve), so two files sharing a basename collide.
+            // A bare INSERT would throw and abort the whole rebuild — and, at startup, all of Ari. Instead
+            // skip the later duplicate and record it: the vault stays indexable, the conflict is logged for
+            // reconciliation, and the first note wins (later aliases/links fall through to it via idsByName).
+            if (idsByName.ContainsKey(title))
+            {
+                skippedNotes.Add($"'{title}' — duplicate title; kept '{pathByTitle[title]}', skipped '{path}'");
+                continue;
+            }
             Run(db, "INSERT INTO notes(title, path, content, type, updated) VALUES ($title, $path, $content, $type, $updated)",
                 ("$title", title), ("$path", path), ("$content", parsed.Body),
                 ("$type", (object?)parsed.Type ?? DBNull.Value),
                 ("$updated", updated.ToString("yyyy-MM-ddTHH:mm:ssZ")));
-            idsByName[title] = LastId(db);
+            idsByName[title]   = LastId(db);
+            pathByTitle[title] = path;
         }
 
         int aliasCount = 0;
@@ -136,7 +148,7 @@ internal static class Database
         }
         transaction.Commit();
 
-        return new IndexStats(files.Count, edgeCount, aliasCount, thoughtCount, unresolved, skippedAliases);
+        return new IndexStats(files.Count - skippedNotes.Count, edgeCount, aliasCount, thoughtCount, unresolved, skippedAliases, skippedNotes);
     }
 
     // ── Notes ────────────────────────────────────────────────────────────────────────

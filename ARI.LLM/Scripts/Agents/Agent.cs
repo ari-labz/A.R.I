@@ -68,6 +68,23 @@ public abstract class Agent
     internal virtual string BuildPersistentContext(Thread thread)    => "";
     internal virtual string RenderDynamicContextBlock(Thread thread) => "";
 
+    // The agent's role/mode system-prompt body for THIS thread. Default: the flat configured prompt.
+    // A stateful agent (CodeArchitect) overrides this to swap the [Mode] block per CodePhase.
+    internal virtual string SystemPromptFor(Thread thread) => SystemPrompt;
+
+    // Per-turn sampling override (null members fall back to the flat agent config, then server baseline).
+    // Default: no override. A stateful agent overrides this to sample differently per CodePhase.
+    internal virtual (double? Temperature, double? TopP, int? TopK, double? MinP,
+                      double? RepeatPenalty, double? PresencePenalty, double? FrequencyPenalty)
+        SamplingFor(Thread thread) => (null, null, null, null, null, null, null);
+
+    // Periodic forced narration (#112). When > 0, if the agent has gone this many seconds emitting only
+    // tool calls (no visible text), a one-line "tell the user what you've learned and what you're doing"
+    // nudge is injected before the next request. Better UX AND it re-anchors PURPOSE in a context that is
+    // otherwise a wall of searches — breaking the "I search because my history is all searches" momentum.
+    // 0 = off (default); overridden on the coding architect where long exploration happens.
+    internal virtual int NarrationIntervalSeconds => 0;
+
     // ── Tool-loop hooks (Code overrides; base = generic, no-guard behaviour) ──────
     // Per-turn state for the tool loop. The base carries only what the generic loop reads; Code's
     // CodeTurnState subclass adds its guard counters. Created fresh per SendPrompt turn (never shared
@@ -94,7 +111,9 @@ public abstract class Agent
 
     internal List<ThreadMessage> ContextSnapshot(Thread thread)
     {
-        int maxChars = BudgetContext > 0 ? BudgetContext * 2 : 0;
+        // Phase 5 (#151): ~3.5 chars/token is the measured rate for real code (was a too-conservative ×2 that
+        // capped the architect at ~40k of its 70k budget). Consistent with compaction's estimate.
+        int maxChars = BudgetContext > 0 ? (int)(BudgetContext * 3.5) : 0;
         return thread.GetChatHistory(MemoryLimit, maxChars);
     }
 
@@ -162,6 +181,9 @@ public abstract class Agent
         {
             thread.liveCallInfo = null;
             thread.sendLock.Release();
+            // Cancel/error exited before OnResponseComplete ran — leave the thread active (with a fresh
+            // response window) instead of stranded in Streaming with no timers.
+            thread.OnGenerationAborted();
         }
     }
 
@@ -224,12 +246,9 @@ public abstract class Agent
         bool effectiveThink   = Think;
         thread.LastMessageAt = DateTime.UtcNow;
 
-        thread.inactivityTimer?.Dispose();
-        thread.inactivityTimer = null;
-
-        thread.dormantTimer?.Dispose();
-        thread.dormantTimer = null;
-        thread.State = ThreadState.Streaming;
+        // A real user message: cancel any pending inactive/dormant/delete timers, return to active, and
+        // flag the conversation as needing (re)processing by Engram.
+        thread.OnUserSend();
 
         if (thread.ariRepliedAt != DateTime.MinValue)
         {
@@ -266,7 +285,9 @@ public abstract class Agent
             thread.RaiseUpdated();
         }
 
-        int maxChars = BudgetContext > 0 ? BudgetContext * 2 : 0;
+        // Phase 5 (#151): ~3.5 chars/token is the measured rate for real code (was a too-conservative ×2 that
+        // capped the architect at ~40k of its 70k budget). Consistent with compaction's estimate.
+        int maxChars = BudgetContext > 0 ? (int)(BudgetContext * 3.5) : 0;
         List<ThreadMessage> chatHistory = thread.GetChatHistory(MemoryLimit, maxChars);
 
         List<ThreadMessage> collapsed = new();
@@ -284,25 +305,33 @@ public abstract class Agent
         // Persona is the stable prefix — it must come FIRST so it stays byte-identical across turns and
         // the llama-server KV cache survives (role prompt, then persistent context, then recall follow).
         string persona = UsePersona ? PersonaStore.Get() : "";
+        string roleBody = SystemPromptFor(thread);   // stateful agents swap the [Mode] block here per CodePhase
         string roleBlock = thread.PlatformContext is null
-            ? SystemPrompt
-            : $"{SystemPrompt}\n\n{thread.PlatformContext}";
-        string baseSystem = persona.Length == 0 ? roleBlock : $"{persona}\n\n{roleBlock}";
+            ? roleBody
+            : $"{roleBody}\n\n{thread.PlatformContext}";
+        // Persona is its own labelled block, separated from the pipeline/role prompt (applies to every
+        // persona agent — Dialogue and Coding alike), so "who ARI is" is never tangled with "what this
+        // pipeline does".
+        string baseSystem = persona.Length == 0 ? roleBlock : $"[Persona]\n{persona}\n\n{roleBlock}";
         baseSystem += BuildPersistentContext(thread);
-        // Budget awareness (the soft layer): the server hard-caps thinking at BudgetThinking tokens, but the
-        // model can't feel that limit approaching, so it runs straight into it every turn. Telling it the
-        // budget up front lets it self-pace and conclude BEFORE the cut — a complete thought, not a chopped
-        // one. Cache-stable (static per agent), so it doesn't invalidate the KV prefix.
-        if (effectiveThink && BudgetThinking > 0)
-            baseSystem += $"\n\nYou have a thinking budget of about {BudgetThinking} tokens of reasoning per turn. " +
-                          "Think in a few concise, high-value steps — state each point ONCE and move on. Do NOT re-derive what " +
-                          "you already worked out, re-count the same list, restate the problem, or circle back to a question you " +
-                          "already answered; that wastes the budget and gets you cut off mid-thought. Make your point quickly, " +
-                          "decide, and act. The moment you know the fix, stop thinking and call the tool — a short decisive think " +
-                          "that ends in action beats a long exhaustive one that runs to the limit.";
+
+        // [Budgets] footer (#127): terse, at the BOTTOM of the system prompt so its per-turn-accurate values
+        // don't invalidate the cached prefix above. max_tokens/thinking are hard cuts the model can't feel
+        // coming; the numbers let it self-allocate and finish cleanly instead of being guillotined mid-answer.
+        int thinkBudget = effectiveThink ? (thinkingBudgetOverride > 0 ? thinkingBudgetOverride : BudgetThinking) : 0;
+        int respBudget  = maxTokensOverride  != 0 ? maxTokensOverride : BudgetResponse;
+        List<string> budgetLines = new();
+        if (thinkBudget   > 0) budgetLines.Add($"Thinking Token Budget: {thinkBudget}");
+        if (respBudget    > 0) budgetLines.Add($"Reply Token Budget: {respBudget}");
+        if (BudgetContext > 0) budgetLines.Add($"Context Token Budget: {BudgetContext}");
+        if (MaxToolCalls  > 0) budgetLines.Add($"Tool Call Budget: {MaxToolCalls}");
+        string budgetsBlock = budgetLines.Count > 0
+            ? $"\n\n[Budgets]\n{string.Join("\n", budgetLines)}\ndeliver a COMPLETE answer within these budgets."
+            : "";
+
         string thinkSuffix = effectiveThink ? "" : "\n<|think_off|>";
 
-        List<object> messages = new List<object> { new { role = "system", content = baseSystem + thinkSuffix } };
+        List<object> messages = new List<object> { new { role = "system", content = baseSystem + budgetsBlock + thinkSuffix } };
 
         for (int i = 0; i < collapsed.Count - 1; i++)
         {
@@ -409,6 +438,25 @@ public abstract class Agent
         }
         StringBuilder   responseBuilder  = new();
         StringBuilder   contentBuilder   = new();
+        // Deferred read/preview card flips. Their Execute is a fast disk read; the real wait is Ari
+        // ingesting the file — prefilling it, thinking, then replying. We keep the card present-tense
+        // ("Reading"/"Previewing") until Ari types its next VISIBLE token (prose, not a stripped tool call),
+        // carrying pending flips across intervening tool-only steps; turn end flushes any stragglers. Each
+        // entry is (currentPresentMarker, targetPastMarker) already present in contentBuilder. Callers push
+        // the onDelta after flushing. Returns true if anything flipped.
+        List<(string Active, string Done)> pendingPrefillFlips = new();
+        bool FlushPrefillFlips([System.Runtime.CompilerServices.CallerMemberName] string _ = "",
+                                [System.Runtime.CompilerServices.CallerLineNumber] int callerLine = 0)
+        {
+            if (pendingPrefillFlips.Count == 0) return false;
+            Shared.Logger.LogInformation("[{Agent}] ({Thread}) flush-prefill-flips @L{Line}: {Count} card(s) — {Cards}",
+                Name, thread.Key, callerLine, pendingPrefillFlips.Count,
+                string.Join(", ", pendingPrefillFlips.Select(f => f.Done)));
+            foreach ((string active, string done) in pendingPrefillFlips)
+                ReplaceInBuilder(contentBuilder, active, done);
+            pendingPrefillFlips.Clear();
+            return true;
+        }
         Stopwatch       sw               = Stopwatch.StartNew();
         bool            wasThinking      = false;
         int             reasoningChars   = 0;
@@ -464,6 +512,11 @@ public abstract class Agent
             if (userDelta is not null) await userDelta(text);
         };
 
+        // Periodic-narration state (#112): when did the agent last emit visible text, and was the last step
+        // tool-calls-only. Drives the forced "tell the user what you're doing" injection below.
+        DateTime lastNarrationUtc   = DateTime.UtcNow;
+        bool     lastStepToolOnly   = false;
+
         while (true)
         {
             bool      toolsExhausted = toolTurn.ForceNoMoreTools || (MaxToolCalls > 0 && toolCallCount >= MaxToolCalls);
@@ -485,7 +538,7 @@ public abstract class Agent
             // request time instead (see below). Putting changing content here at position 0 invalidates the
             // entire cache every turn, forcing a full re-process of the context (the dominant cost on a dense
             // model: ~100 t/s prompt-eval vs ~19 t/s generation).
-            messages[0] = new { role = "system", content = baseSystem + toolCatalog + thinkSuffix };
+            messages[0] = new { role = "system", content = baseSystem + toolCatalog + budgetsBlock + thinkSuffix };
 
             CompactToolOutput(messages, toolResultSlots, BudgetContext);
 
@@ -500,6 +553,9 @@ public abstract class Agent
                     Name, thread.Key,
                     toolSchemas is not null ? $"{toolSchemas.Length} tool(s) available: {string.Join(", ", thread.tools.Keys)}" : "no tools registered");
 
+            // Per-turn sampling: a stateful agent (CodeArchitect) can override per CodePhase; each null member
+            // falls back to the flat agent config, then the server baseline.
+            var s = SamplingFor(thread);
             Dictionary<string, object?> body = new()
             {
                 ["model"]          = "local",
@@ -507,15 +563,17 @@ public abstract class Agent
                 ["stream"]         = true,
                 ["stream_options"] = new { include_usage = true },
                 ["max_tokens"]     = maxTokens,
-                ["temperature"]    = Temperature   ?? TEMPERATURE,
-                ["top_p"]          = TopP          ?? TOP_P,
-                ["top_k"]          = TopK          ?? TOP_K,
-                ["min_p"]          = MinP          ?? MIN_P,
-                ["repeat_penalty"] = RepeatPenalty ?? REPEAT_PENALTY
+                ["temperature"]    = s.Temperature   ?? Temperature   ?? TEMPERATURE,
+                ["top_p"]          = s.TopP          ?? TopP          ?? TOP_P,
+                ["top_k"]          = s.TopK          ?? TopK          ?? TOP_K,
+                ["min_p"]          = s.MinP          ?? MinP          ?? MIN_P,
+                ["repeat_penalty"] = s.RepeatPenalty ?? RepeatPenalty ?? REPEAT_PENALTY
             };
 
-            if (PresencePenalty.HasValue)  body["presence_penalty"]  = PresencePenalty.Value;
-            if (FrequencyPenalty.HasValue) body["frequency_penalty"] = FrequencyPenalty.Value;
+            double? presence  = s.PresencePenalty  ?? PresencePenalty;
+            double? frequency = s.FrequencyPenalty ?? FrequencyPenalty;
+            if (presence.HasValue)  body["presence_penalty"]  = presence.Value;
+            if (frequency.HasValue) body["frequency_penalty"] = frequency.Value;
 
             // Thinking mode is decided ONCE for the thread/turn and never flipped mid-turn: switching
             // enable_thinking changes the chat template, which invalidates the server's whole cached
@@ -557,6 +615,20 @@ public abstract class Agent
             // for this request, then remove it so the persistent history (and its cached prefix) stays stable.
             // Only this small block + genuinely new tokens are re-processed each turn instead of the whole context.
             string dynamicBlock   = RenderDynamicContextBlock(thread);
+
+            // Periodic forced narration (#112): if we've gone NarrationIntervalSeconds emitting only tool
+            // calls, make the model surface one sentence of what it learned + what it's doing next. Piggybacks
+            // on the same transient-last-message channel so it never pollutes the cached prefix.
+            if (NarrationIntervalSeconds > 0 && lastStepToolOnly
+                && (DateTime.UtcNow - lastNarrationUtc).TotalSeconds >= NarrationIntervalSeconds)
+            {
+                const string narrate = "[System: Pause and check in. In ONE sentence to the user, say what you've " +
+                    "learned so far and what you're about to do next and WHY — then continue. This keeps the user " +
+                    "informed and keeps you anchored to the goal rather than exploring out of habit.]";
+                dynamicBlock = dynamicBlock.Length > 0 ? dynamicBlock + "\n\n" + narrate : narrate;
+                lastNarrationUtc = DateTime.UtcNow;   // don't re-fire every step
+            }
+
             bool   dynamicInjected = dynamicBlock.Length > 0;
             // role "user", not "system": the chat template silently drops every system message after
             // the first (verified via /apply-template), so a system-role block here never reaches the model.
@@ -848,6 +920,13 @@ public abstract class Agent
                             // (#78). View-only transforms of the streamed text; responseBuilder and the
                             // parse/execute path are untouched.
                             string liveView = StripStreamingToolText(InjectLiveToolCards(visible));
+                            // NOT a flip trigger: this text can't be trusted as "Ari's real reply" yet — the
+                            // text-protocol path routinely narrates a lead-in ("Now let's check X...") immediately
+                            // before ANOTHER tool call (see the "preserve any narration" handling below), so any
+                            // nonzero liveView flipped cards the instant that narration began, often a fraction of
+                            // a second before the very next tool call. The batch-boundary flush (further down)
+                            // already covers "another tool block was emitted"; the turn-end flush covers a genuine
+                            // final reply once we know for certain no more tool calls followed.
                             if (liveText is null && liveView.Trim().Length > 0) { liveText = new TraceStep { Kind = "text", Text = "" }; trace.Add(liveText); }
                             if (liveText is not null) liveText.Text = liveView;
                             await onDelta(contentBuilder.ToString() + liveView);
@@ -901,6 +980,12 @@ public abstract class Agent
                         Name, thread.Key, (snip.Length > 400 ? snip[..400] + "…" : snip).Replace("\n", "\\n"));
                 }
             }
+
+            // Narration bookkeeping (#112): a step that emitted visible text resets the clock; a text-free
+            // step with tool calls arms the nudge for next time.
+            bool emittedText = responseBuilder.Length > 0;
+            if (emittedText) lastNarrationUtc = DateTime.UtcNow;
+            lastStepToolOnly = !emittedText && pendingCalls.Count > 0;
 
             // The stream degenerated into a character spiral. Discard the garbage and end the turn —
             // there's no salvageable tool call, and continuing would just repeat the spiral.
@@ -1094,6 +1179,7 @@ public abstract class Agent
                             prelaunched[idx] = roTool.Execute(c.Args.ToString());
 
                 bool productiveBatch = false; // set true when a tool returns new info or mutates a file
+                bool batchRevealedCard = false; // true once this batch has shown the user something new — see below
                 foreach (var (callIndex, call) in pendingCalls)
                 {
                     string argsJson = call.Args.ToString();
@@ -1117,9 +1203,32 @@ public abstract class Agent
                             activeMarker = prevStreamMarker;
                         else if (tool.Display is not null)
                         {
+                            // A genuinely NEW tool card is about to appear — NOW is "another tool block was
+                            // emitted". Flip cards deferred from the PREVIOUS batch here, once per batch, so
+                            // the flip and the new card land in the caller's eyes together. Deliberately NOT
+                            // hooked at the top of the batch (before PreToolGuard runs): a guarded/deduped call
+                            // never reaches this branch at all, so a batch that produces no visible card can
+                            // never flip anything — it used to, which flipped cards with nothing new to show
+                            // for it (a guard silently answering a call, then the turn moving on to more
+                            // "thinking" with no new card ever appearing).
+                            // The flush and the new card's marker are combined into ONE onDelta call (not two
+                            // separate SSE frames) — two frames left a real, if brief, window where the client
+                            // had painted the old cards as done but not yet received the new one, which is
+                            // exactly the "flipped with nothing new to show for it" moment being reported.
+                            if (!batchRevealedCard)
+                            {
+                                batchRevealedCard = true;
+                                FlushPrefillFlips();
+                            }
                             activeMarker = tool.Display(argsJson);
                             contentBuilder.Append(activeMarker);
-                            if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                            if (onDelta is not null)
+                            {
+                                string payload = contentBuilder.ToString();
+                                Shared.Logger.LogInformation("[{Agent}] ({Thread}) reveal-send len={Len} tail={Tail}",
+                                    Name, thread.Key, payload.Length, payload.Length > 400 ? payload[^400..] : payload);
+                                await onDelta(payload);
+                            }
                         }
 
                         // Let a long-running tool stream rendered display into THIS response while it executes
@@ -1142,15 +1251,21 @@ public abstract class Agent
                         result = PostToolProcess(thread, toolTurn, call.Name, argsJson, result);
 
                         // read_file auto-diverted to a preview (result starts with "[preview:", not an error): relabel
-                        // its card to a done "Previewed" card and skip the flip (the preview already completed).
+                        // its card to a preview card. Keep it PRESENT-tense ("Previewing") and defer the flip to
+                        // "Previewed" until the file has prefilled (next request's first delta), like a normal preview.
                         if (activeMarker is not null && call.Name == "read_file" && result.StartsWith("[preview:", StringComparison.Ordinal))
                         {
                             string pf = "";
                             try { using JsonDocument pvd = JsonDocument.Parse(argsJson); pf = System.IO.Path.GetFileName((pvd.RootElement.TryGetProperty("path", out JsonElement ppe) ? ppe.GetString() : null)?.Trim('"', '\'', ' ') ?? ""); }
                             catch { /* ignore */ }
-                            ReplaceInBuilder(contentBuilder, activeMarker, $"<!--ari-tool-done:preview_file:{pf.Replace("--", "&#45;&#45;")}-->");
+                            string pfEsc      = pf.Replace("--", "&#45;&#45;");
+                            string startPrev  = $"<!--ari-tool-start:preview_file:{pfEsc}-->";
+                            string donePrev   = $"<!--ari-tool-done:preview_file:{pfEsc}-->";
+                            ReplaceInBuilder(contentBuilder, activeMarker, startPrev);
                             if (onDelta is not null) await onDelta(contentBuilder.ToString());
-                            activeMarker = null;
+                            Shared.Logger.LogInformation("[{Agent}] ({Thread}) defer-prefill-flip (auto-divert): {Done}", Name, thread.Key, donePrev);
+                            pendingPrefillFlips.Add((startPrev, donePrev));
+                            activeMarker = null;   // handled via the deferred flip
                         }
 
                         // Flip the card to its done (past-tense) form once the tool returns (unless it errored).
@@ -1165,8 +1280,20 @@ public abstract class Agent
                                 string done = doneCard.Render();
                                 if (!string.Equals(done, activeMarker, StringComparison.Ordinal))
                                 {
-                                    ReplaceInBuilder(contentBuilder, activeMarker, done);
-                                    if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                                    // read_file/preview_file: Execute is a fast disk read, but the real wait is the
+                                    // next request prefilling the file. Keep the card present-tense and defer the
+                                    // flip to when that prefill closes. Every other tool's work IS its Execute, so
+                                    // flip it now.
+                                    if (call.Name is "read_file" or "preview_file")
+                                    {
+                                        Shared.Logger.LogInformation("[{Agent}] ({Thread}) defer-prefill-flip: {Done}", Name, thread.Key, done);
+                                        pendingPrefillFlips.Add((activeMarker, done));
+                                    }
+                                    else
+                                    {
+                                        ReplaceInBuilder(contentBuilder, activeMarker, done);
+                                        if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                                    }
                                 }
                             }
                         }
@@ -1185,8 +1312,26 @@ public abstract class Agent
                         Shared.Logger.LogError("[{Agent}] ({Thread}) Model called unknown tool '{Tool}'", Name, thread.Key, call.Name);
                     }
 
+                    // plan_proposed renders an interactive plan card (Accept & Build button); replan renders a
+                    // light-blue info card. Neither is an error, even though the result starts with "[System:".
+                    if (call.Name == "plan_proposed")
+                    {
+                        // The plan the user reads IS the payload — render it, so a proposal is never a bare chip
+                        // with nothing above it (the model doesn't have to also narrate the plan as prose).
+                        string planText = (ToolCallParser.TryExtractJsonString(argsJson, "payload") ?? "").Trim();
+                        if (planText.Length > 0) contentBuilder.Append("\n\n" + planText + "\n");
+                        contentBuilder.Append("<!--ari-plan-proposed-->");
+                        productiveBatch = true;   // an intentional transition, NOT a failed/no-progress batch
+                        if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                    }
+                    else if (call.Name == "replan")
+                    {
+                        contentBuilder.Append("<!--ari-tool-mode:replan:Returning to planning-->");
+                        productiveBatch = true;
+                        if (onDelta is not null) await onDelta(contentBuilder.ToString());
+                    }
                     // A guard message ("[System:") or an error renders as an inline tool-error card.
-                    if (result.StartsWith("[System:", StringComparison.Ordinal) || ToolCallParser.IsError(result))
+                    else if (result.StartsWith("[System:", StringComparison.Ordinal) || ToolCallParser.IsError(result))
                     {
                         string label = "";
                         try
@@ -1233,6 +1378,14 @@ public abstract class Agent
 
                 contentBuilder.Append("<!--ari-batch-end-->");
                 if (onDelta is not null) await onDelta(contentBuilder.ToString());
+
+                // Clean, intentional turn-end requested by a tool (e.g. plan_proposed / replan force a phase
+                // boundary). This is NOT a stall — end quietly, with no "no progress" note.
+                if (thread.EndTurnNow)
+                {
+                    thread.EndTurnNow = false;
+                    break;
+                }
 
                 // Loop-breaker: a weak model can call tools forever without progressing (e.g. re-reading a
                 // file it already read). The per-tool nags only scold; nothing terminates. Under the text
@@ -1308,12 +1461,16 @@ public abstract class Agent
             break;
         }
 
+        // The turn is over — this is where "Ari's response has started" becomes trustworthy: either this
+        // step's text turned out to have no further tool calls (a genuine final reply) or the turn ended
+        // with no reply at all (a pure tool run). Either way, flip any still-deferred read/preview cards now.
+        if (FlushPrefillFlips() && onDelta is not null) await onDelta(contentBuilder.ToString());
+
         sw.Stop();
         string responseText = contentBuilder.Length > 0
             ? contentBuilder.ToString() + responseBuilder.ToString()
             : responseBuilder.ToString();
-        if (responseText.StartsWith("ARI: ", StringComparison.OrdinalIgnoreCase))
-            responseText = responseText["ARI: ".Length..];
+        responseText = System.Text.RegularExpressions.Regex.Replace(responseText, @"^\s*ARI\s*:\s*", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         responseText = responseText
             .Replace("<|think_off|>", "")
             .Replace("<|think_on|>", "")
@@ -1327,7 +1484,7 @@ public abstract class Agent
         string traceText = System.Text.RegularExpressions.Regex.Replace(responseBuilder.ToString(), @"<!--ari-[\s\S]*?-->", "");
         traceText = System.Text.RegularExpressions.Regex.Replace(traceText, "<div class=\"tool-use\">[\\s\\S]*?</div>", "");
         traceText = traceText.Replace("<|think_off|>", "").Replace("<|think_on|>", "").Trim();
-        if (traceText.StartsWith("ARI: ", StringComparison.OrdinalIgnoreCase)) traceText = traceText["ARI: ".Length..];
+        traceText = System.Text.RegularExpressions.Regex.Replace(traceText, @"^\s*ARI\s*:\s*", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         if (traceText.Length > 0) trace.Add(new TraceStep { Kind = "text", Text = traceText.Trim() });
 
         double elapsed   = sw.Elapsed.TotalSeconds;
@@ -1384,15 +1541,8 @@ public abstract class Agent
         thread.streamingResponse              = null;
         thread.RaiseStreamingFinished();
 
-        thread.ariRepliedAt = DateTime.UtcNow;
-        thread.State = ThreadState.Idle;
-        thread.inactivityTimer?.Dispose();
-        thread.inactivityTimer = new Timer(_ =>
-        {
-            if (thread.State != ThreadState.Idle) return;
-            thread.State = ThreadState.Dormant;
-            thread.RaiseBecameInactive();
-        }, null, thread.InactivityThreshold, Timeout.InfiniteTimeSpan);
+        // Response done — start the response-window countdown toward inactive (→ dormant → delete).
+        thread.OnResponseComplete();
 
         thread.RaiseExchangeCompleted(prompt, responseText);
 

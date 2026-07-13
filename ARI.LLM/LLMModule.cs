@@ -31,7 +31,6 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly CuriosityAgent?   curiosity;
     private readonly Classifier?       classifier;
     private readonly Awareness?        awareness;
-    private readonly Appraisal?        appraiser;
     
     
     private readonly CommandService    commands;
@@ -122,6 +121,12 @@ public class LLMModule : ILLMModule, IDisposable
             IndexStats brainStats = BrainModule.Initialize(brainConfig);
             _logger.LogInformation("Brain vault indexed: {Notes} notes, {Edges} edges, {Aliases} aliases, {Thoughts} thoughts.",
                 brainStats.Notes, brainStats.Edges, brainStats.Aliases, brainStats.Thoughts);
+            if (brainStats.SkippedNotes.Count > 0)
+            {
+                _logger.LogWarning("Brain vault: {Count} note(s) skipped on index due to duplicate titles — reconcile these in the vault:", brainStats.SkippedNotes.Count);
+                foreach (string skipped in brainStats.SkippedNotes)
+                    _logger.LogWarning("  [Brain] skipped note: {Detail}", skipped);
+            }
         }
 
         if (rawAgents.TryGetValue("Context", out JsonElement contextEl))
@@ -183,15 +188,6 @@ public class LLMModule : ILLMModule, IDisposable
             awareness.Slot     = classifier.Slot;
             _logger.LogInformation("Awareness using Classifier server (default config).");
         }
-
-        if (rawAgents.TryGetValue("Appraisal", out JsonElement appraiserEl))
-        {
-            appraiser = Deserialize<Appraisal>(appraiserEl);
-            _logger.LogInformation("Appraisal is active.");
-        }
-
-        // The architect appraises each plan turn to decide its thinking budget (null appraiser ⇒ no thinking).
-        if (codeArchitect is not null) codeArchitect.Appraisal = appraiser;
 
         if (BrainModule.Ready && rawAgents.TryGetValue("Memory", out JsonElement memoryEl))
         {
@@ -275,8 +271,8 @@ public class LLMModule : ILLMModule, IDisposable
         thread.StreamingFinished += () => Broadcast(new AppEvent("streamingFinished", threadKey));
         // Persist a plain-text transcript to chat_history after every completed exchange.
         thread.ExchangeCompleted += (_, _) => ChatHistoryLogger.Write(thread);
-        if (type == ThreadPipeline.Code)
-            thread.BecameInactive += () => thread.MarkEngramProcessed();
+        // Engram (or a mark-processed no-op) fires on entry to dormant — the single gate before deletion.
+        thread.BecameDormant    += () => OnThreadDormant(thread);
         if (type is ThreadPipeline.Dialogue or ThreadPipeline.Speech && dialogue is not null)
         {
             thread.Deleted        += () => dialogue.RaiseThreadDeleted(threadKey);
@@ -422,21 +418,48 @@ public class LLMModule : ILLMModule, IDisposable
     /// <summary>Pre-marks a thread to run through the Code pipeline. Thin wrapper over <see cref="ForcePipeline"/>.</summary>
     public void ForceCodeThread(string threadKey) => ForcePipeline(threadKey, ThreadPipeline.Code);
 
-    /// <summary>Manually close a thread (close-thread button): cancel any in-flight generation, run Engram so
-    /// the conversation is saved to memory, then delete it immediately with no dormant grace period.</summary>
+    /// <summary>Engram gate on entry to dormant — the ONLY point at which a thread earns the right to be
+    /// deleted. Runs a sweep for Dialogue/Speech threads that carry user messages and aren't already
+    /// processed; otherwise (Code thread, or an unanswered proactive with nothing to learn) marks the
+    /// thread processed so its deletion timer may proceed. RunEngram sets EngramProcessed on success; if
+    /// it can't run (disabled / a concurrent sweep holds the lock) the flag stays false and the thread's
+    /// delete-retry poll tries again.</summary>
+    private void OnThreadDormant(Thread thread)
+    {
+        bool sweep = engram is not null
+                  && thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech
+                  && thread.HasUserMessages
+                  && !thread.EngramProcessed;
+        if (!sweep) { thread.EngramProcessed = true; return; }
+
+        _ = Task.Run(async () =>
+        {
+            try { await engram!.RunEngram(thread.Key, "dormant"); }
+            catch (Exception ex) { _logger.LogWarning("[Dormant] Engram failed for {Key}: {Err}", thread.Key, ex.Message); }
+        });
+    }
+
+    /// <summary>Manually close a thread (close-thread button): remove it from the UI immediately, run a real
+    /// Engram sweep (forced past any disabled gate — a user closing wants it saved), then delete once the
+    /// sweep finishes. The thread stays in the registry, hidden, until Engram completes.</summary>
     public async Task<bool> CloseThreadAsync(string threadKey)
     {
         if (!threads.TryGetValue(threadKey, out Thread? thread)) return false;
 
         Cancel(threadKey);   // stop any active send before we sweep + delete
 
-        if (engram is not null)
+        // 1) Clear it from the UI now; the thread lingers in the registry until Engram is done.
+        Broadcast(new AppEvent("threadDeleted", threadKey));
+
+        // 2) Guarantee the conversation is saved before deletion (honours the no-delete-before-Engram rule).
+        if (engram is not null && thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech && thread.HasUserMessages)
         {
-            try { await engram.RunEngram(threadKey, "closed"); }
+            try { await engram.RunEngram(threadKey, "closed", force: true); }
             catch (Exception ex) { _logger.LogWarning("[Close] Engram failed for {Key}: {Err}", threadKey, ex.Message); }
         }
 
-        thread.ForceDelete();
+        // 3) Delete for real (fires Deleted → registry removal + a final threadDeleted broadcast).
+        thread.Delete();
         return true;
     }
 
@@ -760,12 +783,13 @@ public class LLMModule : ILLMModule, IDisposable
             State     = State.Complete,
             IsVisible = true,
         });
+        thread.StartUnread();   // proactive opener: await the user's reply, else unread → dormant → deleted
         return threadKey;
     }
 
     public void NotifyTyping(string threadKey)
     {
-        if (threads.TryGetValue(threadKey, out Thread? t)) t.ResetInactivityTimer();
+        if (threads.TryGetValue(threadKey, out Thread? t)) t.OnUserTyping();
     }
 
     /// <summary>Returns the Code thread for a given key, creating it if needed, for tool registration.</summary>
