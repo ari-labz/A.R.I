@@ -181,6 +181,9 @@ public abstract class Agent
         {
             thread.liveCallInfo = null;
             thread.sendLock.Release();
+            // Cancel/error exited before OnResponseComplete ran — leave the thread active (with a fresh
+            // response window) instead of stranded in Streaming with no timers.
+            thread.OnGenerationAborted();
         }
     }
 
@@ -243,12 +246,9 @@ public abstract class Agent
         bool effectiveThink   = Think;
         thread.LastMessageAt = DateTime.UtcNow;
 
-        thread.inactivityTimer?.Dispose();
-        thread.inactivityTimer = null;
-
-        thread.dormantTimer?.Dispose();
-        thread.dormantTimer = null;
-        thread.State = ThreadState.Streaming;
+        // A real user message: cancel any pending inactive/dormant/delete timers, return to active, and
+        // flag the conversation as needing (re)processing by Engram.
+        thread.OnUserSend();
 
         if (thread.ariRepliedAt != DateTime.MinValue)
         {
@@ -1468,15 +1468,8 @@ public abstract class Agent
         thread.streamingResponse              = null;
         thread.RaiseStreamingFinished();
 
-        thread.ariRepliedAt = DateTime.UtcNow;
-        thread.State = ThreadState.Idle;
-        thread.inactivityTimer?.Dispose();
-        thread.inactivityTimer = new Timer(_ =>
-        {
-            if (thread.State != ThreadState.Idle) return;
-            thread.State = ThreadState.Dormant;
-            thread.RaiseBecameInactive();
-        }, null, thread.InactivityThreshold, Timeout.InfiniteTimeSpan);
+        // Response done — start the response-window countdown toward inactive (→ dormant → delete).
+        thread.OnResponseComplete();
 
         thread.RaiseExchangeCompleted(prompt, responseText);
 

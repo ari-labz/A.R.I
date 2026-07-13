@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 
 namespace ARI.Brain;
 
-public record IndexStats(int Notes, int Edges, int Aliases, int Thoughts, IReadOnlyList<string> UnresolvedLinks, IReadOnlyList<string> SkippedAliases);
+public record IndexStats(int Notes, int Edges, int Aliases, int Thoughts, IReadOnlyList<string> UnresolvedLinks, IReadOnlyList<string> SkippedAliases, IReadOnlyList<string> SkippedNotes);
 public record SearchResult(Note Note, double Score, int TermsMatched);
 public record RecallPath(Note From, Note To, IReadOnlyList<Note> Notes);
 public record RecallResult(IReadOnlyList<SearchResult> Candidates, IReadOnlyList<RecallPath> Paths);

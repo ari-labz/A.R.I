@@ -10,8 +10,6 @@ namespace ARI.LLM;
 
 internal class Engram : MemoryAgent, IDisposable
 {
-    private const int ENGRAM_TRIGGER_DELAY = 5;
-
     // Engram places several memories from one conversation in a single turn, so it does NOT end after
     // the first commit (that's the Refactor walk's behaviour).
     protected override bool StopAfterCommit => false;
@@ -24,8 +22,6 @@ internal class Engram : MemoryAgent, IDisposable
     [JsonIgnore] internal Dialogue?    dialogue       { get; set; }
     [JsonIgnore] internal Context?     context        { get; set; }
     [JsonIgnore] internal string       PersistentDir  { get; set; } = string.Empty;
-
-    private EngramBuffer? buffer;
 
     private readonly Dictionary<string, DateTime>       lastRun          = new();
     private readonly Dictionary<string, int>            lastHistoryCount = new();
@@ -66,19 +62,13 @@ internal class Engram : MemoryAgent, IDisposable
         this.context  = context;
         this.threads  = threads;
 
-        buffer = new EngramBuffer(dialogue, this, threads);
-
-        dialogue.ThreadBufferFull += threadKey =>
-        {
-            buffer.Remove(threadKey);
-            _ = Task.Delay(TimeSpan.FromSeconds(ENGRAM_TRIGGER_DELAY)).ContinueWith(_ => RunEngram(threadKey, "chat buffer"));
-        };
-
+        // Engram now runs solely on a thread's transition to dormant (wired via Thread.BecameDormant in
+        // LLMModule). The old inactivity buffer/drain is gone — it could be starved indefinitely by an
+        // unanswered proactive thread sitting idle. Deletion cleanup only.
         dialogue.ThreadDeleted += threadKey =>
         {
             lastRun.Remove(threadKey);
             lastHistoryCount.Remove(threadKey);
-            buffer.Remove(threadKey);
         };
     }
 
@@ -104,16 +94,23 @@ internal class Engram : MemoryAgent, IDisposable
         httpClient.Dispose();
     }
 
-    internal async Task RunEngram(string threadKey, string trigger)
+    /// <summary>Sweeps a thread into memory. <paramref name="force"/> (manual close) bypasses the disabled
+    /// gate and waits for the sweep lock rather than skipping. On a completed run — including a "nothing to
+    /// store" classification — the thread's <see cref="Thread.EngramProcessed"/> flag is set, which is what
+    /// releases it for deletion. If the run can't start (disabled, or a concurrent sweep holds the lock) the
+    /// flag is left untouched so the caller's delete-retry poll tries again.</summary>
+    internal async Task RunEngram(string threadKey, string trigger, bool force = false)
     {
-        if (!IsEnabled) return;
-        if (!await engramLock.WaitAsync(0)) return;
+        if (!IsEnabled && !force) return;
+        if (force) await engramLock.WaitAsync();
+        else if (!await engramLock.WaitAsync(0)) return;
         sweepingThreads[threadKey] = 0;
 
         // --- Run-log capture (Logs): every sweep records its full thought process for offline analysis. ---
         List<(string Title, Thread Thread)> writeThreads = new();
         List<string>                       runMeta      = new() { $"Trigger: {trigger}", $"Thread: {threadKey}" };
         string                             outcome      = "incomplete (unexpected exit)";
+        bool                               processed    = false;
 
         try
         {
@@ -132,7 +129,8 @@ internal class Engram : MemoryAgent, IDisposable
             runMeta.Add($"Classified transcript: {RunLogger.Trunc(BuildTranscript(recentItems), 600)}");
             if (!await Classify(recentItems, trigger))
             {
-                outcome = "skipped — classified as task-only (or no new messages)";
+                outcome   = "skipped — classified as task-only (or no new messages)";
+                processed = true;   // nothing to save is still "processed" — the thread may be deleted
                 return;
             }
 
@@ -156,13 +154,18 @@ internal class Engram : MemoryAgent, IDisposable
                 .SelectMany(r => r.Trace ?? Enumerable.Empty<TraceStep>())
                 .Count(s => s.Kind == "tool_result" && s.Name == "git_commit"
                             && (s.Text?.StartsWith("Committed", StringComparison.Ordinal) ?? false));
-            outcome = $"{commits} memory change(s) committed";
+            outcome   = $"{commits} memory change(s) committed";
+            processed = true;
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] sweep complete — {Commits} change(s).", threadKey, commits);
         }
         finally
         {
             runMeta.Add($"Outcome: {outcome}");
             RunLogger.Write("Engram", threadKey, writeThreads, runMeta);
+
+            // The invariant latch: a completed sweep (or a "nothing to store") releases the thread for deletion.
+            if (processed && threads.TryGetValue(threadKey, out Thread? processedThread))
+                processedThread.EngramProcessed = true;
 
             sweepingThreads.TryRemove(threadKey, out _);
             engramLock.Release();
@@ -279,57 +282,5 @@ internal class Engram : MemoryAgent, IDisposable
             }
         }
         return sb.ToString();
-    }
-}
-
-internal class EngramBuffer
-{
-    private const int DRAIN_QUEUE_LIMIT = 10;
-
-    private readonly Dialogue      dialogue;
-    private readonly Engram        engram;
-    private readonly ConcurrentDictionary<string, Thread> threads;
-    private readonly Queue<string> queue            = new();
-    private readonly HashSet<string> queuedKeys     = new();
-
-    internal EngramBuffer(Dialogue dialogue, Engram engram, ConcurrentDictionary<string, Thread> threads)
-    {
-        this.dialogue = dialogue;
-        this.engram   = engram;
-        this.threads  = threads;
-
-        dialogue.ThreadBecameInactive += threadKey =>
-        {
-            if (queuedKeys.Contains(threadKey)) return;
-            queue.Enqueue(threadKey);
-            queuedKeys.Add(threadKey);
-
-            if (queue.Count >= DRAIN_QUEUE_LIMIT)
-                _ = Task.Run(Drain);
-            else if (!threads.Values.Any(t => t.Pipeline == ThreadPipeline.Dialogue && t.State is ThreadState.Idle or ThreadState.Streaming))
-                _ = Task.Run(Drain);
-        };
-    }
-
-    internal void Remove(string threadKey) => queuedKeys.Remove(threadKey);
-
-    internal async Task Drain()
-    {
-        while (true)
-        {
-            if (queue.Count == 0) return;
-            string threadKey = queue.Dequeue();
-            queuedKeys.Remove(threadKey);
-
-            threads.TryGetValue(threadKey, out Thread? thread);
-            if (thread is null || thread.State is ThreadState.Idle or ThreadState.Streaming or ThreadState.Deleted)
-                continue;
-
-            await engram.RunEngram(threadKey, "inactivity");
-            if (threads.TryGetValue(threadKey, out Thread? et)) et.MarkEngramProcessed();
-
-            if (threads.Values.Any(t => t.Pipeline == ThreadPipeline.Dialogue && t.State is ThreadState.Idle or ThreadState.Streaming))
-                return;
-        }
     }
 }

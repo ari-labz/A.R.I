@@ -2978,8 +2978,12 @@ function dbgOpenWatch(key) {
     const es = new EventSource(`/threads/${encodeURIComponent(key)}/watch`);
     es.onmessage = () => {
         if (dbgSelectedThread !== key) return;
-        clearTimeout(dbgReloadTimer);
-        dbgReloadTimer = setTimeout(() => dbgLoadThread(key), 120);
+        // Throttle, NOT debounce. A trailing debounce (clearTimeout + setTimeout) starves during
+        // continuous token streaming — every token resets the timer so the reload only fires when the
+        // stream pauses (hence "every few seconds"). A leading throttle guarantees a steady ~13/sec
+        // refresh while tokens keep arriving, so the DTI tracks the response token-by-token.
+        if (dbgReloadTimer) return;
+        dbgReloadTimer = setTimeout(() => { dbgReloadTimer = null; dbgLoadThread(key); }, 75);
     };
     es.onerror = () => { dbgCloseWatch(); setTimeout(() => { if (dbgSelectedThread === key) dbgOpenWatch(key); }, 3000); };
     dbgWatchEs = es;
@@ -3076,7 +3080,14 @@ async function dbgLoadThread(key) {
 // so the 120ms watch poll doesn't flash or lose scroll/expand state between real changes.
 function dbgThreadSig(t) {
     let s = (t.key || '') + '#' + (t.state || '') + '|' + ((t.history || []).length) + '[';
-    (t.history || []).forEach(it => { s += (it.type || '') + '.' + ((it.trace || []).length) + (it.isStreaming ? 's' : '') + ','; });
+    (t.history || []).forEach(it => {
+        s += (it.type || '') + '.' + ((it.trace || []).length);
+        // While an item is streaming, fold its live content + reasoning lengths into the signature so
+        // each token's growth changes it and forces a re-render — otherwise the structural signature is
+        // identical token-to-token and dbgLoadThread's sig-skip would swallow the update.
+        if (it.isStreaming) s += 's' + (it.content ? it.content.length : 0) + '/' + (it.reasoning ? it.reasoning.length : 0);
+        s += ',';
+    });
     s += ']';
     (t.children || []).forEach(c => { s += dbgThreadSig(c); });
     return s;
