@@ -26,6 +26,9 @@
 	<Content Update="Agents.json">
 		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 	</Content>
+	<Content Update="AriConfig.json">
+		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	</Content>
 <Content Include="..\compose.yaml">
   		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
   		<Link>compose.yaml</Link>
