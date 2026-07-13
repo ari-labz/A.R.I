@@ -368,14 +368,16 @@ html, body {
 .dbg-bubble.toolresult .dbg-bhead { background: #f0fdf4; color: #15803d; }
 .dbg-bubble.toolresult.err { border-color: #fecaca; }
 .dbg-bubble.toolresult.err .dbg-bhead { background: #fef2f2; color: #dc2626; }
-.dbg-prompt-body { padding: 10px 12px; max-height: 260px; overflow-y: auto; }
-.dbg-args   { padding: 9px 12px; max-height: 220px; overflow-y: auto; color: #1e293b; }
-.dbg-result { padding: 9px 12px; max-height: 260px; overflow-y: auto; color: #334155; }
+/* #167: no block caps its own height with an inner scrollbar — every block grows to fit its
+   content, same as tool-call/tool-result/text blocks always have. */
+.dbg-prompt-body { padding: 10px 12px; }
+.dbg-args   { padding: 9px 12px; color: #1e293b; }
+.dbg-result { padding: 9px 12px; color: #334155; }
 /* thinking cloud */
 .dbg-cloud { max-width: 80%; background: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 16px; box-shadow: 0 1px 5px rgba(109,40,217,.08); position: relative; }
 .dbg-cloud::after { content: ''; position: absolute; left: 22px; bottom: -7px; width: 12px; height: 12px; background: #f5f3ff; border-right: 1px solid #ddd6fe; border-bottom: 1px solid #ddd6fe; border-radius: 0 0 8px 0; transform: rotate(20deg); }
 .dbg-cloud-head { padding: 7px 15px 3px; font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: #6d28d9; }
-.dbg-cloud-body { padding: 2px 15px 12px; font-family: ui-monospace, monospace; font-size: 11.5px; white-space: pre-wrap; word-break: break-word; color: #4c1d95; line-height: 1.55; max-height: 360px; overflow-y: auto; }
+.dbg-cloud-body { padding: 2px 15px 12px; font-family: ui-monospace, monospace; font-size: 11.5px; white-space: pre-wrap; word-break: break-word; color: #4c1d95; line-height: 1.55; }
 /* nested sub-thread (architect plan / per-task coder) */
 .dbg-subthread { border: 1px solid #cbd5e1; border-radius: 10px; margin: 2px 0; background: #fbfcfe; overflow: hidden; }
 .dbg-sub-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: pointer; background: #eef2f7; font-size: 11px; user-select: none; }
