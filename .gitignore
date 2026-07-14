@@ -457,16 +457,6 @@ External/StyleTTS2/venv/
 External/StyleTTS2/Data/
 External/StyleTTS2/Models/
 
-# F5-TTS — entire venv and downloaded base model weights (auto-installed at runtime)
-External/F5TTS/venv/
-External/F5TTS/ckpts/
-
-# F5-TTS — dataset prep output (Arrow files, duration.json, vocab copies)
-External/F5TTS/data/
-
-# F5-TTS — chunked audio and transcripts from training runs
-External/F5TTS/training/
-
 # Trained voice checkpoints — kept in Voices/, not External
 /Voices/
 /.claude

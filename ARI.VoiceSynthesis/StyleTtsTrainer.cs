@@ -600,11 +600,9 @@ slmadv_params:
         return File.Exists(txtFile) ? await File.ReadAllTextAsync(txtFile, ct) : "";
     }
 
-    private static readonly (string Wrong, string Right)[] NameFixes =
-    [
-        ("Shubhi", "Voice"), ("Shubey", "Voice"), ("Shuby", "Voice"),
-        ("Shubie", "Voice"), ("Shubi", "Voice"), ("Shuwi", "Voice"),
-    ];
+    // Optional corrections for names Whisper reliably mis-transcribes in your training clips.
+    // Populate with (wrong, right) pairs for your own voice/name if needed; empty by default.
+    private static readonly (string Wrong, string Right)[] NameFixes = [];
 
     private static string FixWhisperNames(string text)
     {
