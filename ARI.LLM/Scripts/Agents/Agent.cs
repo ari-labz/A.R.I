@@ -958,7 +958,7 @@ public abstract class Agent
             {
                 try
                 {
-                    string rf = System.IO.Path.Combine(AppContext.BaseDirectory, $"reasoning-{Name}.log");
+                    string rf = System.IO.Path.Combine(Paths.Logs, $"reasoning-{Name}.log");
                     System.IO.File.AppendAllText(rf,
                         $"\n===== [{DateTime.Now:HH:mm:ss}] {thread.Key} =====\n"
                         + reasoningBuilder.ToString(reasoningStartLen, reasoningBuilder.Length - reasoningStartLen).Trim()

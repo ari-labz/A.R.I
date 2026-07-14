@@ -15,21 +15,29 @@ namespace ARI.Core;
 
 public class AriConfig
 {
-    public string DockerComposePath { get; init; }
     public Modules modules { get; init; }
 
     private static readonly Regex PlaceholderPattern = new(@"\$\{([A-Za-z0-9_]+)\}", RegexOptions.Compiled);
 
-    public static AriConfig LoadFrom(string path)
+    // AriConfig.json is user data (instance identity, whitelists, ports) — it lives in AppData so
+    // customization survives a rebuild/update. The copy shipped with the build (BuildPath) is only
+    // ever a template: the first time Paths.AriConfig is missing, seed it from that template, then
+    // always read/write the AppData copy from then on.
+    public static AriConfig Load()
     {
-        if (!File.Exists(path))
+        if (!File.Exists(Paths.AriConfig))
         {
-            Shared.Logger.LogCritical($"AriConfig.json not found at {path}");
-            throw new Exception($"AriConfig.json not found at {path}");
+            string bundledDefault = Path.Combine(Paths.BuildPath, "AriConfig.json");
+            if (!File.Exists(bundledDefault))
+            {
+                Shared.Logger.LogCritical($"No AriConfig.json found at {Paths.AriConfig}, and no bundled default at {bundledDefault}.");
+                throw new Exception($"No AriConfig.json found at {Paths.AriConfig}, and no bundled default at {bundledDefault}.");
+            }
+            File.Copy(bundledDefault, Paths.AriConfig);
         }
 
-        string json = File.ReadAllText(path);
-        json = SubstitutePlaceholders(json, Path.GetDirectoryName(path));
+        string json = File.ReadAllText(Paths.AriConfig);
+        json = SubstitutePlaceholders(json);
 
         AriConfig result = JsonSerializer.Deserialize<AriConfig>(json, ReadOptions);
         if (result == null)
@@ -41,9 +49,9 @@ public class AriConfig
         return result;
     }
 
-    private static string SubstitutePlaceholders(string json, string configDir)
+    private static string SubstitutePlaceholders(string json)
     {
-        Dictionary<string, string> secrets = LoadSecretsEnv(configDir);
+        Dictionary<string, string> secrets = LoadSecretsEnv();
 
         return PlaceholderPattern.Replace(json, match =>
         {
@@ -60,20 +68,16 @@ public class AriConfig
         });
     }
 
-    private static Dictionary<string, string> LoadSecretsEnv(string configDir)
+    private static Dictionary<string, string> LoadSecretsEnv()
     {
-        // secrets.env lives at repo root alongside compose.yaml. AriConfig.json is loaded from the
-        // build output dir (e.g. ARI.Core/bin/Debug/net8.0/), so reach repo root the same way
-        // StyleTtsPath/ScriptPath do elsewhere in this config: four levels up.
-        string[] candidates =
-        {
-            Environment.GetEnvironmentVariable("ARI_SECRETS_PATH"),
-            Path.Combine(configDir ?? "", "..", "..", "..", "..", "secrets.env"),
-        };
+        // ARI_SECRETS_PATH is an explicit override; otherwise secrets.env always lives at
+        // Paths.Secrets (AppData/Server) — never in BuildPath, which may be wiped on update.
+        string path = Environment.GetEnvironmentVariable("ARI_SECRETS_PATH") is { Length: > 0 } overridePath
+            ? overridePath
+            : Paths.Secrets;
 
         Dictionary<string, string> secrets = new();
-        string path = candidates.FirstOrDefault(p => !string.IsNullOrEmpty(p) && File.Exists(p));
-        if (path == null)
+        if (!File.Exists(path))
             return secrets;
 
         foreach (string line in File.ReadAllLines(path))

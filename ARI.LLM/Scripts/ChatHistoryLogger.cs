@@ -5,7 +5,7 @@ using System.Text;
 namespace ARI.LLM;
 
 /// <summary>
-/// Maintains a plain-text transcript of each user-facing thread under chat_history (one .txt
+/// Maintains a plain-text transcript of each user-facing thread under ChatHistory (one .txt
 /// file per thread, named by thread key). Rewritten after every completed exchange so the file
 /// always reflects the full conversation.
 ///
@@ -21,7 +21,7 @@ internal static class ChatHistoryLogger
     {
         try
         {
-            string file = Path.Combine(LogPaths.Dir("chat_history"), $"{Sanitize(thread.Key)}.txt");
+            string file = Path.Combine(Paths.ChatHistory, $"{Sanitize(thread.Key)}.txt");
 
             StringBuilder sb = new();
             sb.AppendLine($"Thread:   {thread.Key}");

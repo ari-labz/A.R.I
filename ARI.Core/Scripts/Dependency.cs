@@ -7,20 +7,6 @@ public class Dependency
 {
     private static readonly string[] BrewPaths = ["/opt/homebrew/bin", "/usr/local/bin"];
 
-    public static async Task CheckDocker()
-    {
-        try
-        {
-            Process process = Shared.RunCommand("docker", "--version");
-            await process.WaitForExitAsync();
-            Shared.Logger.LogInformation("Docker is installed.");
-        }
-        catch
-        {
-            throw new Exception("Docker is not installed. Please install Docker Desktop from https://docker.com and try again.");
-        }
-    }
-
     public static async Task CheckPython()
     {
         try

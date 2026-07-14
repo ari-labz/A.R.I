@@ -9,7 +9,7 @@ public static class PhonemeSubstitutions
     {
         get
         {
-            string p = System.IO.Path.Combine(AppContext.BaseDirectory, "PhonemeSubstitutions.json");
+            string p = System.IO.Path.Combine(Paths.BuildPath, "PhonemeSubstitutions.json");
             return System.IO.File.Exists(p) ? p : null;
         }
     }

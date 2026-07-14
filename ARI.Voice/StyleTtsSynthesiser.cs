@@ -6,7 +6,9 @@ using Microsoft.Extensions.Logging;
 
 namespace ARI.Voice;
 
-public class StyleTtsSynthesiser(string styleTtsPath, string modelPath, string configPath, string refAudioPath, ILogger? logger = null) : IDisposable
+// styleTtsPath is install content (StyleTTS2 source, e.g. serve.py); dataDir is AppDataRoot-based
+// mutable state (the venv StyleTtsSetupService provisions).
+public class StyleTtsSynthesiser(string styleTtsPath, string dataDir, string modelPath, string configPath, string refAudioPath, ILogger? logger = null) : IDisposable
 {
     private const string SERVER_SCRIPT        = "serve.py";
     private const int    SERVER_PORT          = 8020;
@@ -19,7 +21,7 @@ public class StyleTtsSynthesiser(string styleTtsPath, string modelPath, string c
 
     // Persisted server-side defaults so the sliders in the Voice tab change Ari's real
     // conversational voice (SpeechQueue calls Speak with no overrides).
-    private string SettingsPath => Path.Combine(Path.GetDirectoryName(modelPath) ?? styleTtsPath, "voice_settings.json");
+    private string SettingsPath => Path.Combine(Path.GetDirectoryName(modelPath) ?? dataDir, "voice_settings.json");
     public float Speed      { get; private set; } = 1.0f;
     public float PauseScale { get; private set; } = 1.0f;
 
@@ -49,7 +51,7 @@ public class StyleTtsSynthesiser(string styleTtsPath, string modelPath, string c
     {
         LoadSettings();
 
-        string python = Path.Combine(styleTtsPath, "venv", "bin", "python");
+        string python = Path.Combine(dataDir, "venv", "bin", "python");
         string script = Path.Combine(styleTtsPath, SERVER_SCRIPT);
 
         KillPortOwner(SERVER_PORT);

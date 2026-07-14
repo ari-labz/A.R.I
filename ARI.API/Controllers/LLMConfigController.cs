@@ -11,11 +11,9 @@ namespace ARI.API.Controllers;
 [ApiController]
 public class LLMConfigController(PersistentData persistentData) : ControllerBase
 {
-    private static readonly string ConfigsDir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "Server", "LLMConfigs");
+    private static readonly string ConfigsDir = Paths.LLMConfigs;
 
-    private static readonly string PersistentDir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "Server", "PersistentData");
+    private static readonly string PersistentDir = Paths.PersistentData;
 
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
 

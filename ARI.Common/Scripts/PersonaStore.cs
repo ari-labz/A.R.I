@@ -9,8 +9,7 @@ namespace ARI.Common;
 /// </summary>
 public static class PersonaStore
 {
-    private static readonly string FilePath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "Server", "PersistentData", "Persona.md");
+    private static readonly string FilePath = Path.Combine(Paths.PersistentData, "Persona.md");
     private static readonly object Lock = new();
 
     public static string Get()

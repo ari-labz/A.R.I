@@ -26,6 +26,7 @@ public class DatasetBuilder
     private static DatasetBuilder?  current;
 
     private readonly string                  styleTtsPath;
+    private readonly string                  dataDir;
     private readonly string                  stageDir;
     private readonly ILogger                 logger;
     private readonly CancellationTokenSource cancellation;
@@ -44,21 +45,24 @@ public class DatasetBuilder
         get { lock (gate) return current; }
     }
 
-    private DatasetBuilder(string styleTtsPath, string stageDir, ILogger logger, CancellationToken appStopping)
+    // styleTtsPath is install content (StyleTTS2 source — dataset_process.py); dataDir is
+    // AppDataRoot-based mutable state (the venv StyleTtsSetupService provisions).
+    private DatasetBuilder(string styleTtsPath, string dataDir, string stageDir, ILogger logger, CancellationToken appStopping)
     {
         this.styleTtsPath = styleTtsPath;
+        this.dataDir      = dataDir;
         this.stageDir     = stageDir;
         this.logger       = logger;
         cancellation      = CancellationTokenSource.CreateLinkedTokenSource(appStopping);
     }
 
-    public static DatasetBuilder Start(string styleTtsPath, string stageDir, ILogger logger, CancellationToken appStopping)
+    public static DatasetBuilder Start(string styleTtsPath, string dataDir, string stageDir, ILogger logger, CancellationToken appStopping)
     {
         lock (gate)
         {
             if (current?.IsRunning == true)
                 throw new InvalidOperationException("A dataset build is already running.");
-            DatasetBuilder builder = new(styleTtsPath, stageDir, logger, appStopping);
+            DatasetBuilder builder = new(styleTtsPath, dataDir, stageDir, logger, appStopping);
             current = builder;
             builder.Run();
             return builder;
@@ -91,7 +95,7 @@ public class DatasetBuilder
 
     private async Task RunScript()
     {
-        string python = Path.Combine(styleTtsPath, VenvPython);
+        string python = Path.Combine(dataDir, VenvPython);
         string script = Path.Combine(styleTtsPath, PROCESS_SCRIPT);
 
         ProcessStartInfo info = new()

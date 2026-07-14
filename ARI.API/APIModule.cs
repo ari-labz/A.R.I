@@ -3,9 +3,6 @@ using ARI.API.Data;
 using ARI.Common;
 using ARI.LLM;
 using ARI.VoiceSynthesis;
-using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authentication.Cookies;
-using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
@@ -13,7 +10,6 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Logging;
-using System.Security.Claims;
 
 namespace ARI.API;
 
@@ -25,16 +21,6 @@ public class APIModule : IAsyncDisposable
     private readonly PersistentData       persistentData;
     private readonly SystemInfo           systemInfo;
     private WebApplication? app;
-
-    // Cached internet connectivity — checked every 30 s in the background.
-    // When offline, localhost connections bypass Google auth (OAuth can't work anyway).
-    private static volatile bool _online = true;
-    private static readonly HttpClient _pingClient = new() { Timeout = TimeSpan.FromSeconds(3) };
-    private static readonly Timer _pingTimer = new(async _ =>
-    {
-        try   { await _pingClient.GetAsync("https://accounts.google.com/"); _online = true;  }
-        catch { _online = false; }
-    }, null, TimeSpan.Zero, TimeSpan.FromSeconds(30));
 
     public APIModule(
         ILoggerFactory       loggerFactory,
@@ -54,14 +40,10 @@ public class APIModule : IAsyncDisposable
     {
         VoiceController.ClearStaging();   // voice uploads/processing output are non-persistent
 
-        string exeDir     = AppContext.BaseDirectory;
-        string uiDist     = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "..", "..", "ARI.UI", "dist"));
-        string wwwrootDir = Directory.Exists(uiDist) ? uiDist : Path.Combine(exeDir, "wwwroot");
-
         WebApplicationBuilder builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
-            ContentRootPath = exeDir,
-            WebRootPath     = wwwrootDir,
+            ContentRootPath = Paths.BuildPath,
+            WebRootPath     = Paths.WwwRoot,
         });
 
         builder.Logging.ClearProviders();
@@ -74,18 +56,17 @@ public class APIModule : IAsyncDisposable
             k.Limits.MaxRequestBodySize = 512L * 1024 * 1024;
         });
 
-        string keysDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "Server", "keys");
-        Directory.CreateDirectory(keysDir);
+        string keysDir = Paths.Keys;
         builder.Services.AddDataProtection()
             .PersistKeysToFileSystem(new System.IO.DirectoryInfo(keysDir))
             .SetApplicationName("ARI");
 
         // Web Push (PWA notifications). Owns the VAPID keypair + subscription store; Ari's proactive
         // path rings the phone via Modules.WebPush. Registered statically so controllers reach it like Llm.
-        string pushDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "Server", "push");
-        string vapidSubject = config.Google.AllowedEmails.FirstOrDefault() is { Length: > 0 } ownerEmail
-            ? $"mailto:{ownerEmail}" : "mailto:owner@a-r-i.ai";
-        WebPushModule webPush = new(loggerFactory.CreateLogger<WebPushModule>(), pushDir, vapidSubject);
+        string pushDir = Paths.Push;
+        // VAPID subject is just a contact field on the push keypair — a generic mailto is fine;
+        // auth (who may reach ARI) is handled by whatever reverse proxy sits in front, not here.
+        WebPushModule webPush = new(loggerFactory.CreateLogger<WebPushModule>(), pushDir, "mailto:owner@localhost");
         Modules.Register(webPush: webPush);
 
         builder.Services.AddSingleton(config);
@@ -102,48 +83,9 @@ public class APIModule : IAsyncDisposable
         builder.Services.AddControllers()
             .AddApplicationPart(typeof(ThreadsController).Assembly);
 
-        bool useGoogleAuth = !string.IsNullOrEmpty(config.Google.ClientId);
-
-        var authBuilder = builder.Services.AddAuthentication(options =>
-        {
-            options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-            if (useGoogleAuth)
-                options.DefaultChallengeScheme = GoogleDefaults.AuthenticationScheme;
-        })
-        .AddCookie(options =>
-        {
-            options.LoginPath       = "/auth/login";
-            options.ExpireTimeSpan  = TimeSpan.FromDays(30);
-            options.SlidingExpiration = true;
-            options.Events.OnSigningIn = ctx =>
-            {
-                ctx.Properties.IsPersistent = true;
-                return Task.CompletedTask;
-            };
-        });
-
-        if (useGoogleAuth)
-        {
-            authBuilder.AddGoogle(options =>
-            {
-                options.ClientId     = config.Google.ClientId;
-                options.ClientSecret = config.Google.ClientSecret;
-                options.CallbackPath = "/auth/callback";
-                options.Events.OnTicketReceived = ctx =>
-                {
-                    string? email = ctx.Principal?.FindFirstValue(ClaimTypes.Email);
-                    if (!config.Google.AllowedEmails.Any(e => string.Equals(email, e, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        ctx.Fail("Access denied.");
-                        ctx.HandleResponse();
-                        ctx.Response.Redirect("/auth/login?error=unauthorized");
-                    }
-                    return Task.CompletedTask;
-                };
-            });
-        }
-
-        builder.Services.AddAuthorization();
+        // ARI has no built-in auth. It binds to localhost/LAN and expects any public exposure to be
+        // gated by a reverse proxy in front of it (e.g. Cloudflare Access, Authentik, an nginx
+        // basic-auth layer). Keeping auth out of ARI keeps it identity-provider-agnostic.
 
         app = builder.Build();
 
@@ -166,7 +108,7 @@ public class APIModule : IAsyncDisposable
 
         app.UseStaticFiles(new StaticFileOptions
         {
-            FileProvider = new PhysicalFileProvider(wwwrootDir),
+            FileProvider = new PhysicalFileProvider(Paths.WwwRoot),
             RequestPath  = "",
             OnPrepareResponse = ctx =>
             {
@@ -222,54 +164,6 @@ public class APIModule : IAsyncDisposable
         });
 
         app.UseRouting();
-        app.UseAuthentication();
-        app.UseAuthorization();
-
-        app.Use(async (ctx, next) =>
-        {
-            if (string.IsNullOrEmpty(config.Google.ClientId)) { await next(); return; }
-
-            var remoteIp     = ctx.Connection.RemoteIpAddress;
-            bool isLocalhost = remoteIp != null && (System.Net.IPAddress.IsLoopback(remoteIp) || remoteIp.ToString() == "::1");
-            if (isLocalhost && !_online) { await next(); return; }
-
-            // Localhost eval harness: static token in X-Eval-Token header bypasses Google auth.
-            if (isLocalhost && !string.IsNullOrEmpty(config.EvalToken)
-                && ctx.Request.Headers.TryGetValue("X-Eval-Token", out var evalHeader)
-                && evalHeader.ToString() == config.EvalToken)
-            {
-                await next(); return;
-            }
-
-            bool isAuthPath = ctx.Request.Path == "/auth/login"
-                || ctx.Request.Path == "/auth/callback"
-                || ctx.Request.Path.StartsWithSegments("/signin-google")
-                || ctx.Request.Path.StartsWithSegments("/images")
-                || ctx.Request.Path.StartsWithSegments("/assets")
-                || ctx.Request.Path == "/favicon.ico"
-                || ctx.Request.Path == "/manifest.json"
-                || ctx.Request.Path == "/sw.js";
-
-            if (isAuthPath) { await next(); return; }
-
-            if (ctx.User.Identity?.IsAuthenticated == true)
-            {
-                string? email = ctx.User.FindFirstValue(ClaimTypes.Email);
-                if (!config.Google.AllowedEmails.Any(e => string.Equals(email, e, StringComparison.OrdinalIgnoreCase)))
-                {
-                    await ctx.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-                    ctx.Response.Redirect("/auth/login?error=unauthorized");
-                    return;
-                }
-            }
-            else
-            {
-                ctx.Response.Redirect("/auth/login");
-                return;
-            }
-
-            await next();
-        });
 
         app.MapControllers();
         app.MapFallbackToFile("index.html");

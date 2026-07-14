@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using ARI.Common;
 
 namespace ARI.Brain;
 
@@ -29,7 +30,7 @@ public static class BrainModule
     {
         VaultRoot = config.VaultPath.Length > 0
             ? config.VaultPath
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "Brain");
+            : Paths.Brain;
         VaultName = Path.GetFileName(VaultRoot);
         Database.Path = Path.Combine(VaultRoot, ".ari", "index.db");
         backupPath = config.BackupPath;

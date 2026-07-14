@@ -30,7 +30,7 @@ internal static class RunLogger
     {
         try
         {
-            string dir = LogPaths.Dir("Logs");
+            string dir = Paths.Logs;
 
             DateTime now  = DateTime.Now;
             string   file = Path.Combine(dir, $"{now:yyyyMMdd-HHmmss-fff}_{agent}_{Sanitize(runLabel)}.md");

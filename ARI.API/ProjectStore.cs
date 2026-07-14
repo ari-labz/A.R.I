@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ARI.Common;
 
 namespace ARI.API;
 
@@ -26,9 +27,7 @@ public class ProjectStore
 
     public ProjectStore()
     {
-        string dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "Client");
-        Directory.CreateDirectory(dir);
+        string dir = Paths.ClientData;
         _filePath       = Path.Combine(dir, "Projects.json");
         _threadMapPath  = Path.Combine(dir, "thread-projects.json");
         _attachmentsDir = Path.Combine(dir, "project-attachments");

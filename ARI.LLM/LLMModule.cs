@@ -269,7 +269,7 @@ public class LLMModule : ILLMModule, IDisposable
         thread.Deleted          += () => { threads.TryRemove(threadKey, out _); Broadcast(new AppEvent("threadDeleted", threadKey)); };
         thread.Streaming        += text => Broadcast(new AppEvent("streaming", threadKey, text));
         thread.StreamingFinished += () => Broadcast(new AppEvent("streamingFinished", threadKey));
-        // Persist a plain-text transcript to chat_history after every completed exchange.
+        // Persist a plain-text transcript to ChatHistory after every completed exchange.
         thread.ExchangeCompleted += (_, _) => ChatHistoryLogger.Write(thread);
         // Engram (or a mark-processed no-op) fires on entry to dormant — the single gate before deletion.
         thread.BecameDormant    += () => OnThreadDormant(thread);
@@ -692,8 +692,7 @@ public class LLMModule : ILLMModule, IDisposable
 
     // Canonical persistent-data location (same as the Scheduler tasks use). Only needed by the manual
     // /brainscan and /proactive commands, which don't receive it from ARI.Core.
-    private static string PersistentDataDir =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "Server", "PersistentData");
+    private static string PersistentDataDir => Paths.PersistentData;
 
     /// <summary>Runs a full graph-walk refactor pass (honours the token so it yields when cancelled).</summary>
     public Task RunRefactorAsync(CancellationToken ct) =>
