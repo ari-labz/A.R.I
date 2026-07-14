@@ -1,15 +1,10 @@
 ## ── ARI custom ignores ──────────────────────────────────────────────
-## External vendored repos — subdirectory gitignores handle per-project exclusions.
+## Vendored repos manage their own contents.
 External/*/.git
-## Eval/research workspace — entirely local (harness scripts, prompts, results, scores). Not shipped.
-eval/
-## Markdown files — personal notes/brain stay out; only these root docs are tracked.
+## Only these root docs are tracked; other markdown stays local.
 *.md
 !README.md
 !THIRD_PARTY.md
-## Generated runtime data (chat transcripts + Engram/Memory run logs) — now live at the repo root, not tracked.
-/chat_history/
-/Logs/
 *.log
 
 ## Ignore Visual Studio temporary files, build results, and
@@ -446,19 +441,12 @@ FodyWeavers.xsd
 *.msp
 /.idea
 
-# ARI's Brain data
-/Brain/
-
-# Downloaded model files
-/Models/
-
-# StyleTTS2 — entire repo is a git submodule / external clone; exclude large runtime dirs
+# StyleTTS2 submodule runtime dirs
 External/StyleTTS2/venv/
 External/StyleTTS2/Data/
 External/StyleTTS2/Models/
 
-# Trained voice checkpoints — kept in Voices/, not External
-/Voices/
+# Local tooling config
 /.claude
 
 # Release builds
