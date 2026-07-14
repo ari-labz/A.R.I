@@ -15,7 +15,7 @@
     },
     "Voice": {
       "Enabled": true,
-      "ModelName": "Voice v1"
+      "ModelName": ""
     },
     "Brain": {
       "Enabled": true,
