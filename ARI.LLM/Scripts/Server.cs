@@ -304,7 +304,7 @@ public class Server : IDisposable
 
         args.RemoveAll(string.IsNullOrWhiteSpace);
 
-        _process = Process.Start(new ProcessStartInfo("llama-server", string.Join(" ", args))
+        _process = Process.Start(new ProcessStartInfo(Shared.LlamaServer, string.Join(" ", args))
         {
             UseShellExecute = false,
             RedirectStandardOutput = false,
