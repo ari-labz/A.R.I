@@ -34,6 +34,8 @@ A·R·I has a voice — and can make her own. Give her a few minutes of audio an
 
 Beyond the core pipelines, A·R·I can reach you on **Discord** (servers or DMs) and even **message first** — a proactive system lets her open a conversation when she has something to say, rather than only responding. You can talk to her by voice via local **speech-to-text** (Whisper), and manage everything — models, config, voice training — from a web **control panel**.
 
+The web interface runs anywhere the server does, but there's also a native **[desktop app](https://github.com/ari-labz/A.R.I-Desktop)** that wraps the same interface and connects to your server.
+
 ## Multiple models at once *(in development)*
 
 Each agent can be pointed at its own model server, so — if your hardware can handle it — A·R·I can run several LLMs concurrently and give each agent the model best suited to its job: a strong coding model for the Code pipeline, a small fast one for classification, and so on, instead of forcing a single model to do everything. This is still in development and not adequately tested yet, so treat it as experimental.
