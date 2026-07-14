@@ -49,7 +49,7 @@ for (const { flag, zip } of platforms) {
 
 // ── Launcher builds ───────────────────────────────────────────────────────────
 
-const launcherDir = path.join(repoRoot, "ARI.Launcher")
+const launcherDir = path.join(repoRoot, "ARI.Desktop.Installer")
 const launcherEb  = path.join(launcherDir, "node_modules", ".bin", "electron-builder")
 
 // Ensure launcher deps are installed

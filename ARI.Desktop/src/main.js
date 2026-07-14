@@ -11,9 +11,9 @@ if (needsInstall) {
         ? path.join(process.env.USERPROFILE ?? "", ".bun", "bin", "bun.exe")
         : path.join(process.env.HOME ?? "", ".bun", "bin", "bun")
     const installer = fs.existsSync(bunPath) ? `"${bunPath}"` : "npm"
-    console.log("[ARI.App] Installing dependencies…")
+    console.log("[ARI.Desktop] Installing dependencies…")
     execSync(`${installer} install`, { cwd: appDir, stdio: "inherit" })
-    console.log("[ARI.App] Dependencies ready.")
+    console.log("[ARI.Desktop] Dependencies ready.")
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -43,7 +43,7 @@ const appReady = new Promise(resolve => { appReadyResolve = resolve })
 
 // Initialise logger as early as possible so we capture everything
 initLogger(app.getPath("userData"))
-const log = makeLogger("ARI.App")
+const log = makeLogger("ARI.Desktop")
 
 log.info(`ARI client starting  (electron ${process.versions.electron}, node ${process.versions.node})`)
 log.info(`Platform: ${process.platform} ${process.arch}`)
