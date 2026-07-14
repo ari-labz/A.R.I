@@ -3,9 +3,10 @@
 External/*/.git
 ## Eval/research workspace — entirely local (harness scripts, prompts, results, scores). Not shipped.
 eval/
-## Markdown files — only the root README is tracked.
+## Markdown files — personal notes/brain stay out; only these root docs are tracked.
 *.md
 !README.md
+!THIRD_PARTY.md
 ## Generated runtime data (chat transcripts + Engram/Memory run logs) — now live at the repo root, not tracked.
 /chat_history/
 /Logs/

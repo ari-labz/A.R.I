@@ -1,65 +1,57 @@
+<img width="1810" height="869" alt="A·R·I" src="https://github.com/user-attachments/assets/d0743f8e-5a59-4db1-b10c-ee1824aebfbf" />
 
-<img width="1810" height="869" alt="image" src="https://github.com/user-attachments/assets/d0743f8e-5a59-4db1-b10c-ee1824aebfbf" />
+*A·R·I is a locally-hosted, privacy-first intelligence framework built on one core principle: an AI can only be truly personal if it is truly private.*
 
+## What is A·R·I
 
-**A private, local-first LLM framework that learns over time.**
+A·R·I treats the language model as a component, not the product. She's the orchestration layer around it: persistent memory that survives model swaps, a coding pipeline, voice synthesis, and a continuous personality — all running locally.
 
-A·R·I is a locally-hosted, privacy-first intelligence framework built on one core principle:  **an AI can only be truly personal if it is truly private.**
+## How she works
 
-The most useful assistant is one that knows everything about you — your habits, your history, your health, your relationships, your work. That's exactly the data no corporation should ever hold, and exactly the data cloud assistants can't ethically collect. A·R·I resolves the contradiction by being local-only: no corporate servers, no external calls, no telemetry. You own every byte. Because nothing leaves your machine, there is no privacy line to cross — so A·R·I can go as deep as you let her.
+A·R·I's agents are organized into **pipelines**, each with its own prompt set tuned for a different kind of work. A lightweight classifier reads each incoming message and routes it to the most suitable pipeline — much like a mixture-of-experts model routing a token to the right expert, but at the level of whole conversations.
 
+- **Dialogue pipeline** — companionship and everyday conversation.
+- **Code pipeline** — an architect agent explores the codebase, plans the change, and carries it out itself. For non-trivial changes it proposes a plan and waits for approval before editing.
+- **Speech pipeline** — spoken, voice-mode conversation. *(in development)*
 
----
+The same underlying model can serve all three; what changes is the pipeline wrapped around it.
 
-## She actually learns
+## Memory
 
-Most assistants have no knowledge persistance — a capable general-purpose model that forgets you the moment the session ends. Some keep a small memory file, usually a markdown document with a handful of notes the model has opted to carry forward. It's better than nothing, but it's shallow.
-Rather than appending lines to a flat file, A·R·I develops and curates a living knowledge graph.
-She will infer which facts thoughts and feeligns are worth keeing, then add them to her knowledge graph.  
-Critically, this memory graph persists between Models; swap the underlying LLM to suit your hardware or budget, Her capabilities may change with different models, but  her memories and personalitye persist.
+She remembers. Facts, events, and preferences go into a knowledge graph she curates herself — deciding what's worth keeping rather than appending to a flat file. The graph is stored as an **Obsidian vault**: each idea is a markdown note, and notes are linked to one another with **wikilinks**. She organizes it on a **small-world** principle, so related ideas stay within a few hops of each other — keeping recall fast and associative.
 
----
+It works in two passes around a conversation: a **Recall agent** pulls relevant memories from the graph and injects them into the prompt before she responds, and an **Engram agent** reads conversation excerpts afterward, extracts useful information, and saves it to the graph. Because the vault is plain markdown that lives independently of the model, swapping models doesn't reset her — and you can open and browse her memory in Obsidian yourself.
 
-## Frontier coding, entirely on your machine
+## Coding
 
-A·R·I's internal prompts and model settings were refined over hundreds of iterations — small, deliberate adjustments, each one benchmarked. not unlike fine-tuning a model, except the fine-tune is at the prompt level. meaning these refinements are model-agnostic; this training is not baked into any particular set of weights, but can be used with any underlying model.
-During these iterations, her internal system prompts were, in effect, *trained* — shaped cycle by cycle until they reliably guide the underlying model to produce frontier-quality code. 
-The cost is time. She is may not be as fast or reliable as frontier cloud models but she runs entirely on-device.
-That is the price of data sovereignty.
+**Pair programmer.** The interesting part is the harness, not the model: the Code pipeline runs an architect agent that explores the codebase, plans a change — proposing it for approval when it's non-trivial — and edits the files directly, all with prompts tuned to lift a mid-tier local model's coding above its baseline. Good enough to help with actual work — not a Claude/GPT replacement.
 
----
+## Voice
 
-## Capabilities
+A·R·I has a voice — and can make her own. Give her a few minutes of audio and she'll train a StyleTTS2 model, then use it to speak her responses. A built-in dataset builder handles the prep (isolating vocals, splitting, transcribing).
 
-**Voice synthesis.** Ari's voice is not chosen from a dropdown — it is made. Provide audio clips of a voice you like, and she handles the rest: isolating the vocals from noise and music, segmenting and transcribing the clips into a training dataset, and training a text-to-speech model that speaks with that voice — entirely on-device. Very few projects of any kind offer this pipeline end-to-end; for Ari, it is simply how she gets a voice.
+## Other features
 
----
+Beyond the core pipelines, A·R·I can reach you on **Discord** (servers or DMs) and even **message first** — a proactive system lets her open a conversation when she has something to say, rather than only responding. You can talk to her by voice via local **speech-to-text** (Whisper), and manage everything — models, config, voice training — from a web **control panel**.
 
-## What she does differently
+## Multiple models at once *(in development)*
 
-- **Cloud assistants** are limited to what is ethical to share with them. Ari can be trusted with everything, because nothing leaves home.
-- **Local model wrappers** offer a chat window with amnesia. Ari offers continuity.
-- **RAG frameworks** index your documents. Ari curates her own understanding — and writes her own thoughts in the margins.
-- **The industry ships models.** Ari treats the model as a component, and the identity built around it as the product.
+Each agent can be pointed at its own model server, so — if your hardware can handle it — A·R·I can run several LLMs concurrently and give each agent the model best suited to its job: a strong coding model for the Code pipeline, a small fast one for classification, and so on, instead of forcing a single model to do everything. This is still in development and not adequately tested yet, so treat it as experimental.
 
----
+## Limitations
 
-## Philosophy
+A·R·I is a personal project, and the rough edges show. She's only as good as the model you can run — weaker hardware, weaker A·R·I. She's slower than any cloud assistant because nothing leaves your machine. Her coding is genuinely useful but local-model-tier, not a frontier agent.
 
-> "The AI that knows you best should be the one that answers to you alone."
+## Requirements & setup
 
-Cloud assistants are capped not by intelligence, but by trust. Ari removes that cap: a continuous character you live alongside — one that remembers, forms opinions, and belongs entirely to you.
+[TODO]
 
----
+## Third-party components
 
-*A·R·I technically stands for something. So did HAL. It doesn't matter — Ari is her name.*
-
----
+A·R·I builds on a lot of other people's work — llama.cpp, StyleTTS2, Whisper, and more. See [THIRD_PARTY.md](THIRD_PARTY.md) for the full list and their licenses.
 
 ## License & credit
 
 A·R·I is licensed under the [Apache License 2.0](LICENSE). You're free to use, modify, redistribute, and even sell it — including your own forks and derivatives. The only ask: keep the attribution (the `LICENSE` and `NOTICE` files) intact, so the work always traces back to where it came from.
 
 If you build on A·R·I, please **fork** rather than re-upload — it keeps the credit trail and the network graph pointing home. Created by [Xywren](https://github.com/Xywren).
-
-
