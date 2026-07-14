@@ -27,16 +27,9 @@
       "Enabled": true,
       "Token": "${DISCORD_TOKEN}",
       "OwnerId": 0,
-      "WhitelistedUserIds": [
-        0,
-        0
-      ],
-      "WatchedChannelIds": [
-        0
-      ],
-      "AllowedGuildIds": [
-        0
-      ]
+      "WhitelistedUserIds": [],
+      "WatchedChannelIds": [],
+      "AllowedGuildIds": []
     },
     "Listener": {
       "Enabled": true,
