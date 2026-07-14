@@ -1,0 +1,26 @@
+{
+  "name": "ari-installer",
+  "version": "1.0.0",
+  "description": "ARI Server Installer",
+  "author": "Xywren",
+  "private": true,
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "ai.ari.installer",
+    "productName": "ARI Server Installer",
+    "icon": "assets/icon.png",
+    "directories": { "output": "dist" },
+    "files": ["src/**/*", "assets/**/*"],
+    "mac":   { "target": "zip", "icon": "assets/icon.icns", "artifactName": "ARIServerInstaller-mac.${ext}" },
+    "win":   { "target": "zip", "artifactName": "ARIServerInstaller-win.${ext}" },
+    "linux": { "target": "zip", "artifactName": "ARIServerInstaller-linux.${ext}" }
+  }
+}

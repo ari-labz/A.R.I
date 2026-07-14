@@ -47,6 +47,17 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "ARI.Orb", "ARI.Orb", "{D4E5
 		ARI.Orb\src\amplitude.ts = ARI.Orb\src\amplitude.ts
 	EndProjectSection
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "ARI.Installer", "ARI.Installer", "{D5E6F7A8-B9C0-1234-DEF5-345678901234}"
+	ProjectSection(SolutionItems) = preProject
+		ARI.Installer\package.json = ARI.Installer\package.json
+		ARI.Installer\dev.sh = ARI.Installer\dev.sh
+		ARI.Installer\src\main.js = ARI.Installer\src\main.js
+		ARI.Installer\src\preload.js = ARI.Installer\src\preload.js
+		ARI.Installer\src\index.html = ARI.Installer\src\index.html
+		ARI.Installer\src\renderer.js = ARI.Installer\src\renderer.js
+		ARI.Installer\src\styles.css = ARI.Installer\src\styles.css
+	EndProjectSection
+EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{0DAA7B43-52F3-4E18-B2F9-C86162C35A30}"
 	ProjectSection(SolutionItems) = preProject
 		compose.yaml = compose.yaml

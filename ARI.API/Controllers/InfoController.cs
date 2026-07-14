@@ -10,6 +10,15 @@ public class InfoController : ControllerBase
     private const string RequiredClientVersion = "0.6.0";
 
     [HttpGet("version")]
-    public IActionResult GetVersion() =>
-        Ok(new { requiredClientVersion = RequiredClientVersion });
+    public async Task<IActionResult> GetVersion()
+    {
+        await UpdateCheck.EnsureCheckedAsync();
+        return Ok(new
+        {
+            requiredClientVersion = RequiredClientVersion,
+            serverVersion         = UpdateCheck.ServerVersion,
+            latestVersion         = UpdateCheck.LatestVersion,
+            serverOutdated        = UpdateCheck.Outdated,
+        });
+    }
 }

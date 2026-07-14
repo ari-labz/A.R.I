@@ -5,6 +5,10 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>dotnet-ARI.Core-f9caf1c1-b2ea-4e29-bcc9-19eb3eb245aa</UserSecretsId>
+    <!-- Referenced projects each ship a default appsettings.json; on publish they collide at the
+         same output path (NETSDK1152). They're unused template defaults (config is AriConfig.json),
+         so let publish resolve the duplicates instead of failing. -->
+    <ErrorOnDuplicatePublishOutputFiles>false</ErrorOnDuplicatePublishOutputFiles>
   </PropertyGroup>
 
   <!--
@@ -41,6 +45,12 @@
 		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 	</Content>
 	<Content Update="AriConfig.json">
+		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	</Content>
+	<!-- Repo-root manifest: server version + protocol. Shipped so the server can read its own
+	     version (UpdateCheck) and so the release carries it for the installer. -->
+	<Content Include="..\manifest.json">
+		<Link>manifest.json</Link>
 		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 	</Content>
   	<Content Include="..\ARI.API\wwwroot\**\*">
