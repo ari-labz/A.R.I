@@ -83,7 +83,8 @@ public class ARI : BackgroundService
         config.modules.VoiceSynthesis.DataDir = Paths.StyleTts2Data;
 
         await Dependency.CheckPython();
-        await Dependency.CheckHomebrew();
+        if (OperatingSystem.IsMacOS())
+            await Dependency.CheckHomebrew();
         await Dependency.CheckLlamaCpp();
 
         // ── Shared infrastructure ────────────────────────────────────────────────

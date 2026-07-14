@@ -12,6 +12,10 @@ public static class Shared
 
     public static string LogPath { get; set; } = "";
 
+    // Resolved llama-server executable, set by Dependency.CheckLlamaCpp at startup. Defaults to the
+    // bare command name (found on PATH); becomes a full path when we download a managed build.
+    public static string LlamaServer { get; set; } = "llama-server";
+
     public static void InitialiseLogger(ILoggerFactory factory, string categoryName = "ARI")
     {
         _factory = factory;
