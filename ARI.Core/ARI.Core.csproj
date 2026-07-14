@@ -6,7 +6,21 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>dotnet-ARI.Core-f9caf1c1-b2ea-4e29-bcc9-19eb3eb245aa</UserSecretsId>
   </PropertyGroup>
-	
+
+  <!--
+    APP_INSTALL_ROOT: where the build lands — contains only build output, no user data (that's
+    AppDataRoot, see ARI.Common/Scripts/AriPaths.cs). Env var wins; otherwise the OS default
+    install location. Stands in for a real installer until one exists.
+  -->
+  <PropertyGroup>
+    <AppInstallRoot Condition="'$(AppInstallRoot)' == '' AND '$(APP_INSTALL_ROOT)' != ''">$(APP_INSTALL_ROOT)</AppInstallRoot>
+    <AppInstallRoot Condition="'$(AppInstallRoot)' == '' AND '$(OS)' == 'Windows_NT'">$(ProgramFiles)\A.R.I</AppInstallRoot>
+    <AppInstallRoot Condition="'$(AppInstallRoot)' == '' AND '$(OS)' != 'Windows_NT'">/Applications/A.R.I</AppInstallRoot>
+    <OutputPath>$(AppInstallRoot)\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+  </PropertyGroup>
+
   <!-- Build the React UI and sync it into wwwroot before compiling -->
   <Target Name="BuildUI" BeforeTargets="Build">
     <PropertyGroup>
@@ -29,20 +43,28 @@
 	<Content Update="AriConfig.json">
 		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 	</Content>
-<Content Include="..\compose.yaml">
-  		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-  		<Link>compose.yaml</Link>
-  	</Content>
-  	<Content Include="..\\.env">
-  		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-  		<Link>.env</Link>
-  	</Content>
   	<Content Include="..\ARI.API\wwwroot\**\*">
   		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
   		<LinkBase>wwwroot</LinkBase>
   	</Content>
   	<Content Update="..\ARI.API\wwwroot\images\Black Code .png">
   	  <Link>wwwroot\images\Black Code .png</Link>
+  	</Content>
+  	<!-- StyleTTS2 source ships with the install (repo-relative wins during dev — see
+  	     AriPaths.ResolveInstallAsset in ARI.cs). venv/Models/per-model training dirs are AppData-based
+  	     mutable state (StyleTtsTrainer/StyleTtsSetupService — see VoiceSynthesisConfig.DataDir) and
+  	     never live here; Data/Data is a stray leftover nested duplicate, not shipped either.
+  	     What DOES ship from Data/: the shared scaffold (OOD_texts.txt, Dummy/, train_list.txt,
+  	     val_list.txt) that Utils-relative training config paths need at the StyleTTS2 source root. -->
+  	<Content Include="..\External\StyleTTS2\**\*"
+  	         Exclude="..\External\StyleTTS2\venv\**;..\External\StyleTTS2\Data\Data\**;..\External\StyleTTS2\Models\**;..\External\StyleTTS2\__pycache__\**">
+  	  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+  	  <LinkBase>External\StyleTTS2</LinkBase>
+  	</Content>
+  	<!-- Listener's whisper-server script; its venv is gitignored/generated and never copied. -->
+  	<Content Include="..\ARI.Listener\python\whisper_serve.py;..\ARI.Listener\python\requirements.txt">
+  	  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+  	  <LinkBase>Listener</LinkBase>
   	</Content>
   </ItemGroup>
 	

@@ -32,7 +32,6 @@ public class ARI : BackgroundService
 
     private readonly ILoggerFactory loggerFactory;
     private ILogger _logger = Shared.Logger;
-    private Docker?              docker;
     private StyleTtsSynthesiser? synthesiser;
     private SpeechQueue?         speechQueue;
     private bool startupFailed;
@@ -64,35 +63,43 @@ public class ARI : BackgroundService
         // leftover process from a terminal launch blocks a fresh run from Rider.
         ProcessGuard.KillStaleInstances(_logger);
 
-        string executableDirectory = AppDomain.CurrentDomain.BaseDirectory;
-        config = AriConfig.LoadFrom(Path.Combine(executableDirectory, "AriConfig.json"));
+        config = AriConfig.Load();
 
-        // Resolve relative paths to absolute up front so all modules see consistent paths.
-        if (!string.IsNullOrEmpty(config.modules.VoiceSynthesis.StyleTtsPath))
-            config.modules.VoiceSynthesis.StyleTtsPath = ResolvePath(executableDirectory, config.modules.VoiceSynthesis.StyleTtsPath);
-        if (!string.IsNullOrEmpty(config.modules.VoiceSynthesis.VoicesPath))
-            config.modules.VoiceSynthesis.VoicesPath = ResolvePath(executableDirectory, config.modules.VoiceSynthesis.VoicesPath);
+        // Resolve paths up front so all modules see consistent, absolute paths. An explicit config
+        // value always wins (ResolveOverride handles relative-vs-absolute); otherwise everything
+        // defaults through Paths — the single source of truth for every on-disk location.
+        config.modules.VoiceSynthesis.StyleTtsPath = !string.IsNullOrEmpty(config.modules.VoiceSynthesis.StyleTtsPath)
+            ? Paths.ResolveOverride(config.modules.VoiceSynthesis.StyleTtsPath)
+            : Paths.StyleTts2Source;
+
+        // Voices are user data, not install content — default under AppData unless overridden.
+        config.modules.VoiceSynthesis.VoicesPath = !string.IsNullOrEmpty(config.modules.VoiceSynthesis.VoicesPath)
+            ? Paths.ResolveOverride(config.modules.VoiceSynthesis.VoicesPath)
+            : Paths.Voices;
+
+        // StyleTTS2's mutable working state (venv, per-model training work dirs, the downloaded
+        // pretrained checkpoint cache) — always AppData, never inside StyleTtsPath (install content,
+        // may be read-only / replaced wholesale on update).
+        config.modules.VoiceSynthesis.DataDir = Paths.StyleTts2Data;
 
         await Dependency.CheckPython();
-        await Dependency.CheckDocker();
         await Dependency.CheckHomebrew();
         await Dependency.CheckLlamaCpp();
-
-        docker = new Docker(Path.Combine(executableDirectory, config.DockerComposePath));
-        await docker.IsRunning();
-        await docker.StartContainers();
 
         // ── Shared infrastructure ────────────────────────────────────────────────
         PersistentData persistentData = new();
 
-        string ariPersistentDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "Server", "PersistentData");
+        string ariPersistentDir = Paths.PersistentData;
         // Agents.json is now source-controlled (ARI.Core/Agents.json, copied to the output dir at build) —
         // edited in the repo, not in PersistentData. Load the built copy directly.
-        string agentsPath = Path.Combine(executableDirectory, "Agents.json");
+        string agentsPath = Path.Combine(Paths.BuildPath, "Agents.json");
 
         // ── LLM module ───────────────────────────────────────────────────────────
-        string modelsPath = ResolvePath(executableDirectory, config.modules.LLM.ModelsPath);
+        // Models are large and often already live elsewhere (another app's model library) — an
+        // explicit config value wins, otherwise Paths.Models (AppData, or MODELS_PATH if set).
+        string modelsPath = !string.IsNullOrEmpty(config.modules.LLM.ModelsPath)
+            ? Paths.ResolveOverride(config.modules.LLM.ModelsPath)
+            : Paths.Models;
 
         if (config.modules.LLM.Enabled)
         {
@@ -116,16 +123,18 @@ public class ARI : BackgroundService
         if (config.modules.VoiceSynthesis.Enabled)
         {
             _logger.LogInformation("VoiceSynthesis module is enabled. Installing StyleTTS2...");
-            string sttPath = ResolvePath(executableDirectory, config.modules.VoiceSynthesis.StyleTtsPath);
-            await new StyleTtsSetupService(sttPath, loggerFactory.CreateLogger("ARI.VoiceSynthesis")).Install();
+            string sttPath    = config.modules.VoiceSynthesis.StyleTtsPath;
+            string sttDataDir = config.modules.VoiceSynthesis.DataDir;
+            await new StyleTtsSetupService(sttPath, sttDataDir, loggerFactory.CreateLogger("ARI.VoiceSynthesis")).Install();
             voiceSynthesisModule.MarkSetupComplete();
             _logger.LogInformation("VoiceSynthesis ready.");
         }
 
         if (config.modules.Voice.Enabled)
         {
-            string sttPath    = ResolvePath(executableDirectory, config.modules.VoiceSynthesis.StyleTtsPath);
-            string voicesPath = ResolvePath(executableDirectory, config.modules.VoiceSynthesis.VoicesPath);
+            string sttPath    = config.modules.VoiceSynthesis.StyleTtsPath;
+            string sttDataDir = config.modules.VoiceSynthesis.DataDir;
+            string voicesPath = config.modules.VoiceSynthesis.VoicesPath;
             string modelName  = persistentData.GetDefaultVoiceModel() ?? config.modules.Voice.ModelName;
             if (!Directory.Exists(Path.Combine(voicesPath, modelName)) && modelName != config.modules.Voice.ModelName)
             {
@@ -135,7 +144,7 @@ public class ARI : BackgroundService
             string modelDir   = Path.Combine(voicesPath, modelName);
             string modelPath  = Path.Combine(modelDir, "model.pth");
             string configPath = Path.Combine(modelDir, "config.yml");
-            string refAudio   = FindReferenceAudio(modelDir, sttPath, modelName);
+            string refAudio   = FindReferenceAudio(modelDir, sttDataDir, modelName);
 
             if (!File.Exists(modelPath) || !File.Exists(configPath))
                 _logger.LogWarning("Voice module enabled but no model found at {Path} — skipping.", modelDir);
@@ -145,13 +154,13 @@ public class ARI : BackgroundService
             {
                 ILogger voiceLogger = loggerFactory.CreateLogger("ARI.Voice");
                 _logger.LogInformation("Voice loading model: {Model}", modelName);
-                synthesiser = new StyleTtsSynthesiser(sttPath, modelPath, configPath, refAudio, voiceLogger);
+                synthesiser = new StyleTtsSynthesiser(sttPath, sttDataDir, modelPath, configPath, refAudio, voiceLogger);
                 await synthesiser.Start(stoppingToken);
                 try { await synthesiser.Warmup(stoppingToken); }
                 catch (Exception ex) { _logger.LogError("Voice warmup failed (model may have corrupt weights): {Error}", ex.Message); }
 
                 speechQueue = new SpeechQueue(synthesiser, voiceLogger);
-                string pythonPath = Path.Combine(sttPath, OperatingSystem.IsWindows() ? @"venv\Scripts\python.exe" : "venv/bin/python");
+                string pythonPath = Path.Combine(sttDataDir, OperatingSystem.IsWindows() ? @"venv\Scripts\python.exe" : "venv/bin/python");
                 speechQueue.AudioReady += wav => PlayAudio(wav, pythonPath, voiceLogger);
 
                 voiceModule = new VoiceModule(synthesiser, speechQueue, modelName);
@@ -191,9 +200,19 @@ public class ARI : BackgroundService
         // ── Listener (audio hub) ───────────────────────────────────────────────────
         if (config.modules.Listener.Enabled && llmModule is not null)
         {
-            _logger.LogInformation("Listener module is enabled. Starting audio hub...");
-            if (!string.IsNullOrEmpty(config.modules.Listener.ScriptPath))
-                config.modules.Listener.ScriptPath = ResolvePath(executableDirectory, config.modules.Listener.ScriptPath);
+            _logger.LogInformation("Listener module is enabled. Installing Whisper worker environment...");
+            config.modules.Listener.ScriptPath = !string.IsNullOrEmpty(config.modules.Listener.ScriptPath)
+                ? Paths.ResolveOverride(config.modules.Listener.ScriptPath)
+                : Paths.ListenerScript;
+
+            // "python3" is ListenerConfig's own default (i.e. "not customized") — provision and use
+            // a dedicated venv unless the user explicitly pointed PythonPath somewhere themselves.
+            if (config.modules.Listener.PythonPath == "python3")
+            {
+                config.modules.Listener.PythonPath = await new ListenerSetupService(loggerFactory.CreateLogger("ARI.Listener")).Install();
+            }
+
+            _logger.LogInformation("Starting audio hub...");
             listenerModule = new ListenerModule(llmModule, config.modules.Listener, loggerFactory.CreateLogger("ARI.Listener"));
             listenerModule.Start();
             CommonModules.Register(listener: listenerModule);
@@ -254,7 +273,7 @@ public class ARI : BackgroundService
         }
 
         if (config.modules.API.Enabled)
-            LaunchClient(executableDirectory, config.modules.API.Port);
+            LaunchClient(Paths.BuildPath, config.modules.API.Port);
 
         _logger.LogInformation("ARI is ready.");
 
@@ -264,12 +283,12 @@ public class ARI : BackgroundService
             await Task.Delay(Timeout.Infinite, stoppingToken);
     }
 
-    private static string FindReferenceAudio(string modelDir, string styleTtsPath, string modelName)
+    private static string FindReferenceAudio(string modelDir, string sttDataDir, string modelName)
     {
         string bundled = Path.Combine(modelDir, "reference.wav");
         if (File.Exists(bundled)) return bundled;
 
-        string audioDir = Path.Combine(styleTtsPath, "Data", modelName, "wavs");
+        string audioDir = Path.Combine(sttDataDir, "Data", modelName, "wavs");
         if (!Directory.Exists(audioDir)) return "";
         string[] wavs = Directory.GetFiles(audioDir, "*.wav");
         return wavs.Length > 0 ? wavs.OrderBy(f => f).First() : "";
@@ -356,12 +375,6 @@ public class ARI : BackgroundService
         catch (Exception ex) { _logger.LogWarning("[Client] Failed to launch client: {Error}", ex.Message); }
     }
 
-    private static string ResolvePath(string baseDir, string path)
-    {
-        if (string.IsNullOrEmpty(path)) return "";
-        return Path.IsPathRooted(path) ? path : Path.GetFullPath(Path.Combine(baseDir, path));
-    }
-
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
         if (startupFailed) return;
@@ -392,9 +405,6 @@ public class ARI : BackgroundService
 
         if (apiModule is not null)
             await apiModule.Stop(cancellationToken);
-
-        if (docker != null && docker.containersRunning)
-            await docker.StopContainers();
 
         await base.StopAsync(cancellationToken);
     }

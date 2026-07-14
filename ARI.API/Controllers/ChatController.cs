@@ -738,9 +738,9 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         }
 
         // Heartbeat: while the model processes (prompt-processing a large context, running tools, thinking) no
-        // content deltas are produced, so the SSE connection sits idle. Proxies/tunnels (e.g. Cloudflare's
-        // ~100s idle cap) then cut it and the client shows "[connection error]". An SSE comment line (":")
-        // every 15s keeps the connection warm; the client ignores comment lines. All writes to the response
+        // content deltas are produced, so the SSE connection sits idle. Reverse proxies/tunnels sitting in
+        // front of ARI often cap idle connections (commonly ~100s) and cut it, showing "[connection error]".
+        // An SSE comment line (":") every 15s keeps the connection warm; the client ignores comment lines. All writes to the response
         // body are serialised through writeLock so the heartbeat and the content callback never issue
         // concurrent writes (which would corrupt the stream).
         using SemaphoreSlim writeLock = new(1, 1);

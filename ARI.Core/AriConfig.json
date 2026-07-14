@@ -1,26 +1,17 @@
 {
-  "DockerComposePath": "Compose.yaml",
   "Modules": {
     "API": {
       "Enabled": true,
-      "Port": 5074,
-      "EvalToken": "${API_EVAL_TOKEN}",
-      "Google": {
-        "ClientId": "886723798260-eapta34u4n4bug81ut10bq2399leu9vn.apps.googleusercontent.com",
-        "ClientSecret": "${GOOGLE_CLIENT_SECRET}",
-        "AllowedEmails": [
-          "owner@example.com"
-        ]
-      }
+      "Port": 5074
     },
     "LLM": {
       "Enabled": true,
-      "ModelsPath": "/Users/user/Documents/GitHub/A.R.I/Models"
+      "ModelsPath": ""
     },
     "VoiceSynthesis": {
       "Enabled": true,
-      "StyleTtsPath": "../../../../External/StyleTTS2",
-      "VoicesPath": "../../../../Voices"
+      "StyleTtsPath": "",
+      "VoicesPath": ""
     },
     "Voice": {
       "Enabled": true,
@@ -50,8 +41,7 @@
     "Listener": {
       "Enabled": true,
       "WhisperPort": 8123,
-      "PythonPath": "/Users/user/Documents/GitHub/A.R.I/ARI.Listener/python/venv/bin/python",
-      "ScriptPath": "../../../../ARI.Listener/python/whisper_serve.py",
+      "ScriptPath": "",
       "Model": "base.en",
       "CpuThreads": 10,
       "SilenceMs": 300

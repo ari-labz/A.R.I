@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ARI.Common;
 using ARI.LLM;
 
 namespace ARI.API.Data;
@@ -80,9 +81,7 @@ public class PersistentData
 
     public PersistentData()
     {
-        string ariDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ari", "Server");
-        _dir = Path.Combine(ariDir, "PersistentData");
-        Directory.CreateDirectory(_dir);
+        _dir = Paths.PersistentData;
 
         _serversPath = Path.Combine(_dir, "Servers.json");
         _modelsPath  = Path.Combine(_dir, "Models.json");

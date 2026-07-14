@@ -448,6 +448,7 @@ public class VoiceController(
         {
             StyleTtsTrainer trainer = new(
                 styleTtsPath:    vsConfig.StyleTtsPath,
+                dataDir:         vsConfig.DataDir,
                 voicesPath:      vsConfig.VoicesPath,
                 audioPath:       req.StagingPath,
                 modelName:       req.ModelName,
@@ -535,7 +536,7 @@ public class VoiceController(
                 wrote = true;
             }
 
-            // Send an SSE comment every 30 s so Cloudflare Tunnel doesn't close the idle connection
+            // Send an SSE comment every 30 s so a reverse proxy/tunnel in front of ARI doesn't close the idle connection
             if (Environment.TickCount64 - lastKeepalive > 30_000)
             {
                 await Response.WriteAsync(": keepalive\n\n", ct);
@@ -824,6 +825,7 @@ public class VoiceController(
         {
             StyleTtsTrainer trainer = new(
                 styleTtsPath:     vsConfig.StyleTtsPath,
+                dataDir:          vsConfig.DataDir,
                 voicesPath:       vsConfig.VoicesPath,
                 audioPath:        settings.AudioPath,
                 modelName:        settings.ModelName,
@@ -882,7 +884,7 @@ public class VoiceController(
             return StatusCode(503, new { error = "StyleTTS2 is still installing. Please wait." });
 
         DatasetBuilder builder;
-        try { builder = DatasetBuilder.Start(vsConfig.StyleTtsPath, stageDir, logger, lifetime.ApplicationStopping); }
+        try { builder = DatasetBuilder.Start(vsConfig.StyleTtsPath, vsConfig.DataDir, stageDir, logger, lifetime.ApplicationStopping); }
         catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
 
         logger.LogInformation("[Voice] Dataset processing started for stage {StageId}", req.StageId);

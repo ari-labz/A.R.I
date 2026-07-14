@@ -6,7 +6,7 @@ using Serilog;
 using Serilog.Core;
 using Serilog.Events;
 
-string logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ARI.log");
+string logPath = Path.Combine(Paths.Logs, "ARI.log");
 Shared.LogPath = logPath;
 
 if (File.Exists(logPath))
@@ -44,15 +44,7 @@ void EmergencyShutdown()
 {
     try
     {
-        string executableDirectory = AppDomain.CurrentDomain.BaseDirectory;
-        AriConfig config = AriConfig.LoadFrom(Path.Combine(executableDirectory, "AriConfig.json"));
-        Docker docker = new Docker(Path.Combine(executableDirectory, config.DockerComposePath));
-        docker.StopContainers().GetAwaiter().GetResult();
         Log.Information("Emergency shutdown complete.");
-    }
-    catch (Exception ex)
-    {
-        Log.Fatal("Emergency shutdown failed: {Error}", ex.Message);
     }
     finally
     {
