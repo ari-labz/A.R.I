@@ -1,0 +1,198 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #1b2e38;
+    color: #c8d8df;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+    -webkit-app-region: drag;
+}
+
+#app {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    width: 100%;
+    padding: 0 32px;
+}
+
+#header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+
+#logo { width: 48px; height: 48px; border-radius: 11px; }
+#wordmark { font-size: 20px; font-weight: 600; letter-spacing: 0.15em; color: #e2ecf0; }
+#subtitle { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: #5a7a8a; }
+
+.screen {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+}
+
+.hidden { display: none !important; }
+.muted  { color: #5a7a8a; }
+
+/* protocol tag — de-emphasised italic so it isn't mistaken for the ARI version */
+.proto {
+    font-style: italic;
+    font-size: 11px;
+    color: #5f7f8f;
+    margin-left: 6px;
+}
+.proto.unknown { color: #47606d; }
+
+/* Buttons */
+button {
+    -webkit-app-region: no-drag;
+    width: 100%;
+    background: #223742;
+    border: 1px solid #2e4a5a;
+    border-radius: 8px;
+    color: #c8d8df;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 9px 0;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+button:hover  { background: #2a4555; border-color: #3a5a6a; }
+button:active { background: #1e3040; }
+button.secondary { background: #172630; border-color: #24333d; color: #9fb8c4; }
+button.secondary:hover { background: #1e3038; }
+
+/* Installed box */
+#installed-box {
+    -webkit-app-region: no-drag;
+    width: 100%;
+    background: #132028;
+    border: 1px solid #24333d;
+    border-radius: 8px;
+    padding: 12px 14px;
+}
+.box-label {
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #5a7a8a;
+    margin-bottom: 4px;
+}
+#installed-line { font-size: 14px; }
+#installed-line b { color: #e2ecf0; font-weight: 600; }
+
+/* Action row — two buttons side by side */
+#action-row { display: flex; gap: 10px; width: 100%; }
+
+/* Version list */
+#version-list {
+    -webkit-app-region: no-drag;
+    width: 100%;
+    max-height: 168px;
+    overflow-y: auto;
+    background: #132028;
+    border: 1px solid #24333d;
+    border-radius: 8px;
+}
+.version-row {
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid #1c2b34;
+    transition: background 0.12s;
+}
+.version-row:last-child { border-bottom: none; }
+.version-row:hover  { background: #182833; }
+.version-row.active { background: #1f3542; }
+.version-row .ver { font-size: 13px; font-weight: 600; color: #e2ecf0; min-width: 56px; }
+.version-row .badges { margin-left: auto; display: flex; gap: 5px; }
+
+.badge {
+    font-size: 9px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: #24333d;
+    color: #8fabb8;
+}
+.badge.installed { background: #274536; color: #7bc49a; }
+.badge.pre       { background: #3a3320; color: #c4ac6f; }
+
+#selected-line { font-size: 13px; color: #9fb8c4; }
+#selected-line b { color: #e2ecf0; }
+
+/* Toggles */
+#toggles { width: 100%; display: flex; flex-direction: column; gap: 8px; }
+.toggle {
+    -webkit-app-region: no-drag;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #9fb8c4;
+    cursor: pointer;
+}
+.toggle input { accent-color: #3a6070; cursor: pointer; }
+
+/* Token screen */
+#token-message { font-size: 13px; color: #7a9aaa; text-align: center; line-height: 1.5; }
+#token-input {
+    -webkit-app-region: no-drag;
+    width: 100%;
+    background: #132028;
+    border: 1px solid #2a3f4d;
+    border-radius: 8px;
+    color: #c8d8df;
+    font-size: 13px;
+    padding: 9px 12px;
+    outline: none;
+    transition: border-color 0.15s;
+}
+#token-input:focus { border-color: #3a6070; }
+#token-input::placeholder { color: #3f5a68; }
+#token-help {
+    -webkit-app-region: no-drag;
+    font-size: 11px;
+    color: #3a6070;
+    text-decoration: none;
+    cursor: pointer;
+}
+#token-help:hover { color: #7a9aaa; }
+
+/* Progress screen */
+#status-text { font-size: 13px; color: #7a9aaa; text-align: center; }
+#progress-wrap {
+    width: 100%;
+    height: 5px;
+    background: #132028;
+    border-radius: 99px;
+    overflow: hidden;
+}
+#progress-bar {
+    height: 100%;
+    width: 0%;
+    background: #3a6070;
+    border-radius: 99px;
+    transition: width 0.2s ease;
+}
+#progress-label { font-size: 11px; color: #3f5a68; text-align: center; min-height: 16px; }
+
+/* Done screen */
+#done-text { font-size: 14px; color: #c8d8df; text-align: center; }
+#done-text b { color: #e2ecf0; }
+
+/* Error screen */
+#error-icon { width: 28px; height: 28px; color: #c87832; }
+#error-text { font-size: 12px; color: #7a9aaa; text-align: center; line-height: 1.5; word-break: break-word; }
+#btn-retry { margin-top: 4px; }

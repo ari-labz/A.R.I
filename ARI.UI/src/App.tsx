@@ -353,22 +353,20 @@ export default function App() {
         // Long fallback poll — events drive updates; this is only a safety net.
         const pollId = setInterval(loadThreads, 60_000)
 
-        async function checkVersion(ver: string) {
+        // Shows the outdated banner when a newer stable server release exists on GitHub.
+        // The server does the GitHub comparison and caches it; we just read the flag.
+        async function checkVersion() {
             const res = await fetch("/api/info/version").catch(() => null)
             if (!res?.ok) return
-            const { requiredClientVersion } = await res.json()
-            setOutdated(!!requiredClientVersion && requiredClientVersion !== ver)
+            const { serverOutdated } = await res.json()
+            setOutdated(!!serverOutdated)
         }
 
-        env.getVersion().then(async ver => {
-            if (!ver) return
-            setClientVersion(ver)
-            await checkVersion(ver)
-            const versionPollId = setInterval(() => checkVersion(ver), 60 * 1000)
-            return () => clearInterval(versionPollId)
-        })
+        env.getVersion().then(ver => { if (ver) setClientVersion(ver) })
+        checkVersion()
+        const versionPollId = setInterval(checkVersion, 60 * 1000)
 
-        return () => { clearInterval(pollId); globalEsRef.current?.close() }
+        return () => { clearInterval(pollId); clearInterval(versionPollId); globalEsRef.current?.close() }
     }, [connectAndInit, loadThreads, loadProjects])
 
     // ── toast ─────────────────────────────────────────────
