@@ -54,4 +54,12 @@ Cloud assistants are capped not by intelligence, but by trust. Ari removes that 
 
 *A·R·I technically stands for something. So did HAL. It doesn't matter — Ari is her name.*
 
+---
+
+## License & credit
+
+A·R·I is licensed under the [Apache License 2.0](LICENSE). You're free to use, modify, redistribute, and even sell it — including your own forks and derivatives. The only ask: keep the attribution (the `LICENSE` and `NOTICE` files) intact, so the work always traces back to where it came from.
+
+If you build on A·R·I, please **fork** rather than re-upload — it keeps the credit trail and the network graph pointing home. Created by [Xywren](https://github.com/Xywren).
+
 
