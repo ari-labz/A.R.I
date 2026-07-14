@@ -17,15 +17,15 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ARI.API", "ARI.API\ARI.API.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ARI.Discord", "ARI.Discord\ARI.Discord.csproj", "{6BC8B0F9-67D7-417F-9E1B-5AAB7C58DFC0}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "ARI.Launcher", "ARI.Launcher", "{C3D4E5F6-A7B8-9012-CDEF-123456789012}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "ARI.Desktop.Installer", "ARI.Desktop.Installer", "{C3D4E5F6-A7B8-9012-CDEF-123456789012}"
 	ProjectSection(SolutionItems) = preProject
-		ARI.Launcher\package.json = ARI.Launcher\package.json
-		ARI.Launcher\src\main.js = ARI.Launcher\src\main.js
-		ARI.Launcher\src\preload.js = ARI.Launcher\src\preload.js
-		ARI.Launcher\src\index.html = ARI.Launcher\src\index.html
-		ARI.Launcher\src\styles.css = ARI.Launcher\src\styles.css
-		ARI.Launcher\src\renderer.js = ARI.Launcher\src\renderer.js
-		ARI.Launcher\dev.sh = ARI.Launcher\dev.sh
+		ARI.Desktop.Installer\package.json = ARI.Desktop.Installer\package.json
+		ARI.Desktop.Installer\src\main.js = ARI.Desktop.Installer\src\main.js
+		ARI.Desktop.Installer\src\preload.js = ARI.Desktop.Installer\src\preload.js
+		ARI.Desktop.Installer\src\index.html = ARI.Desktop.Installer\src\index.html
+		ARI.Desktop.Installer\src\styles.css = ARI.Desktop.Installer\src\styles.css
+		ARI.Desktop.Installer\src\renderer.js = ARI.Desktop.Installer\src\renderer.js
+		ARI.Desktop.Installer\dev.sh = ARI.Desktop.Installer\dev.sh
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "ARI.UI", "ARI.UI", "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
@@ -58,15 +58,15 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "ARI.Orb", "ARI.Orb", "{D4E5
 		ARI.Orb\src\amplitude.ts = ARI.Orb\src\amplitude.ts
 	EndProjectSection
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "ARI.App", "ARI.App", "{B2C3D4E5-F6A7-8901-BCDE-F12345678901}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "ARI.Desktop", "ARI.Desktop", "{B2C3D4E5-F6A7-8901-BCDE-F12345678901}"
 	ProjectSection(SolutionItems) = preProject
-		ARI.App\package.json = ARI.App\package.json
-		ARI.App\setup.sh = ARI.App\setup.sh
-		ARI.App\src\main.js = ARI.App\src\main.js
-		ARI.App\src\preload.js = ARI.App\src\preload.js
-		ARI.App\src\fs.js = ARI.App\src\fs.js
-		ARI.App\src\splash.html = ARI.App\src\splash.html
-		ARI.App\dev.sh = ARI.App\dev.sh
+		ARI.Desktop\package.json = ARI.Desktop\package.json
+		ARI.Desktop\setup.sh = ARI.Desktop\setup.sh
+		ARI.Desktop\src\main.js = ARI.Desktop\src\main.js
+		ARI.Desktop\src\preload.js = ARI.Desktop\src\preload.js
+		ARI.Desktop\src\fs.js = ARI.Desktop\src\fs.js
+		ARI.Desktop\src\splash.html = ARI.Desktop\src\splash.html
+		ARI.Desktop\dev.sh = ARI.Desktop\dev.sh
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{0DAA7B43-52F3-4E18-B2F9-C86162C35A30}"

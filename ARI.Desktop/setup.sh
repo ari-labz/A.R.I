@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# ARI.App bootstrap — installs dependencies and launches the desktop client.
+# ARI.Desktop bootstrap — installs dependencies and launches the desktop client.
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UI_DIR="$(cd "$SCRIPT_DIR/../ARI.UI" && pwd)"
 
-log() { echo "[ARI.App] $*"; }
+log() { echo "[ARI.Desktop] $*"; }
 
 # ── 1. Bun ────────────────────────────────────────────────────────────────────
 if ! command -v bun &>/dev/null && [ ! -f "$HOME/.bun/bin/bun" ]; then
@@ -18,8 +18,8 @@ export PATH="$HOME/.bun/bin:$PATH"
 log "Installing ARI.UI dependencies..."
 bun install --cwd "$UI_DIR"
 
-# ── 3. ARI.App dependencies ───────────────────────────────────────────────────
-log "Installing ARI.App dependencies..."
+# ── 3. ARI.Desktop dependencies ───────────────────────────────────────────────────
+log "Installing ARI.Desktop dependencies..."
 bun install --cwd "$SCRIPT_DIR"
 
 # ── 4. Build ARI.UI ───────────────────────────────────────────────────────────
@@ -40,6 +40,6 @@ done
 log "ARI is online."
 
 # ── 6. Launch ─────────────────────────────────────────────────────────────────
-log "Starting ARI.App..."
+log "Starting ARI.Desktop..."
 cd "$SCRIPT_DIR"
 exec bunx electron .

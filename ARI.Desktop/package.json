@@ -1,5 +1,5 @@
 {
-  "name": "ari-app",
+  "name": "ari-desktop",
   "version": "0.6.0",
   "description": "ARI Desktop Client",
   "author": "Xywren",
@@ -19,7 +19,7 @@
     "electron-builder": "^24.9.1"
   },
   "build": {
-    "appId":       "ai.ari.app",
+    "appId":       "ai.ari.desktop",
     "productName": "ARI",
     "icon":        "assets/icon.png",
     "directories": { "output": "dist" },

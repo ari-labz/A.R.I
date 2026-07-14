@@ -6,8 +6,8 @@ const path   = require("path")
 const os     = require("os")
 const { execFile, spawn } = require("child_process")
 
-const OWNER = "Xywren"
-const REPO  = "A.R.I"
+const OWNER = "ari-labz"
+const REPO  = "A.R.I-Desktop"
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
