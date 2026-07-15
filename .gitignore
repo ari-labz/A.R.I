@@ -449,8 +449,8 @@ External/StyleTTS2/Models/
 # Local tooling config
 /.claude
 
-# Release builds
-/Builds/
+# Release builds (root or nested — e.g. stray electron-builder output under a project)
+Builds/
 
 # ARI.Listener dedicated Python venv
 ARI.Listener/python/venv/

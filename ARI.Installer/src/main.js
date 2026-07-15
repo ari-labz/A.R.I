@@ -69,12 +69,14 @@ ipcMain.handle("get-platform", () => process.platform)
 ipcMain.handle("needs-token", () => REPO_PRIVATE)
 
 ipcMain.handle("get-token", () => {
-    const env = process.env.GITHUB_TOKEN
-    if (env?.trim()) return env.trim()
+    // A token the user saved here wins over an ambient GITHUB_TOKEN env var, so re-entering a
+    // valid token sticks even on a machine where the env var holds a stale/wrong one.
     if (fs.existsSync(tokenFile)) {
         const t = fs.readFileSync(tokenFile, "utf8").trim()
         if (t) return t
     }
+    const env = process.env.GITHUB_TOKEN
+    if (env?.trim()) return env.trim()
     return null
 })
 
