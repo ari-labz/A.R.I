@@ -159,7 +159,7 @@ async function loadMain() {
         releases  = await window.installer.fetchReleases(token)
         installed = await window.installer.installedInfo()
     } catch (e) {
-        if (e.message === "TOKEN_INVALID") {
+        if (e.message.includes("TOKEN_INVALID")) {
             $("token-input").value = ""
             $("token-message").textContent = "Token is invalid or expired. Please enter a new one."
             show("token")
