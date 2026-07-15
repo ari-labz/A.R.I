@@ -18,6 +18,12 @@ public class StyleTtsSetupService(string styleTtsPath, string dataDir, ILogger? 
     // Python virtual environment (never committed, must be created locally) and its dependencies.
     public async Task Install()
     {
+        // StyleTTS2's monotonic_align compiles a native extension. On Windows with no MSVC toolchain
+        // that build fails after a multi-minute install, so fail fast with the fix hint instead.
+        if (SetupDiagnostics.WindowsMissingMsvcBuildTools())
+            throw new SetupException("Setup skipped: monotonic_align requires a C++ compiler that is not installed.",
+                                     SetupDiagnostics.MsvcBuildToolsHint);
+
         string venv = Paths.StyleTts2Venv;
         Directory.CreateDirectory(dataDir);
         Directory.CreateDirectory(Path.GetDirectoryName(venv)!);
