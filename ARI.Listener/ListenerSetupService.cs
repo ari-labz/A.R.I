@@ -19,8 +19,9 @@ public class ListenerSetupService(ILogger? logger = null)
     /// <summary>Returns the venv's python interpreter path, provisioning the venv first if needed.</summary>
     public async Task<string> Install()
     {
-        string venv = Path.Combine(Paths.ListenerData, VENV_SUBDIR);
+        string venv = Paths.ListenerVenv;
         Directory.CreateDirectory(Paths.ListenerData);
+        Directory.CreateDirectory(Path.GetDirectoryName(venv)!);
 
         string venvPy = Path.Combine(venv, OperatingSystem.IsWindows() ? @"Scripts\python.exe" : "bin/python");
 

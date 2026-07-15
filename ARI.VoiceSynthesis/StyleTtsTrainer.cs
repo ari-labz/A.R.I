@@ -23,8 +23,6 @@ public class StyleTtsTrainer(
     int      saveEveryNEpochs = 5,
     ILogger? logger           = null)
 {
-    private static string VenvPython  => OperatingSystem.IsWindows() ? @"venv\Scripts\python.exe" : "venv/bin/python";
-    private static string VenvWhisper => OperatingSystem.IsWindows() ? @"venv\Scripts\whisper.exe" : "venv/bin/whisper";
     private const int    CHUNK_SECS   = 8;
     private const int    MIN_CHUNK_SECS = 2;
 
@@ -126,7 +124,7 @@ public class StyleTtsTrainer(
 
     private async Task ChunkAudio(string source, string audioDir, CancellationToken ct)
     {
-        string python     = Path.Combine(dataDir, VenvPython);
+        string python     = Paths.StyleTts2Python;
         string scriptPath = Path.Combine(Path.GetTempPath(), "ari_chunk.py");
         await File.WriteAllTextAsync(scriptPath, BuildChunkScript(source, audioDir, CHUNK_SECS, MIN_CHUNK_SECS), ct);
         await RunPython(python, scriptPath, null, ct);
@@ -183,7 +181,7 @@ public class StyleTtsTrainer(
 
     private async Task<string> Transcribe(string audioDir, string workDir, CancellationToken ct)
     {
-        string whisper    = Path.Combine(dataDir, VenvWhisper);
+        string whisper    = Paths.StyleTts2Whisper;
         string[] wavs     = Directory.GetFiles(audioDir, "*.wav");
         StringBuilder list = new();
 
@@ -214,7 +212,7 @@ public class StyleTtsTrainer(
         Directory.CreateDirectory(modelsDir);
         logger?.LogInformation("[StyleTTS2-Train] Downloading pretrained LibriTTS model...");
 
-        string python     = Path.Combine(dataDir, VenvPython);
+        string python     = Paths.StyleTts2Python;
         string scriptPath = Path.Combine(Path.GetTempPath(), "ari_dl_pretrained.py");
         string script =
             "from cached_path import cached_path\n" +
@@ -340,7 +338,7 @@ slmadv_params:
         IProgress<TrainingProgress>? progress,
         CancellationToken ct)
     {
-        string python      = Path.Combine(dataDir, VenvPython);
+        string python      = Paths.StyleTts2Python;
         string trainScript = Path.Combine(Path.GetTempPath(), "ari_train_stt2.py");
         await File.WriteAllTextAsync(trainScript,
             // MPS fallback: ops not natively supported on Apple GPU fall back to CPU instead of crashing.
@@ -525,7 +523,7 @@ slmadv_params:
     // at speak-time and can only approximate (mispronunciations, wrong pitch).
     private async Task PhonemiseTrainList(string trainList, CancellationToken ct)
     {
-        string python     = Path.Combine(dataDir, VenvPython);
+        string python     = Paths.StyleTts2Python;
         string scriptPath = Path.Combine(Path.GetTempPath(), "ari_phonemise_list.py");
         string repoRoot   = Path.GetFullPath(styleTtsPath);
         string listPath   = Path.GetFullPath(trainList);

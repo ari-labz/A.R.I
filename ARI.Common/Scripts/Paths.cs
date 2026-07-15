@@ -40,6 +40,15 @@ public static class Paths
     // directory, which is install content.
     public static string ListenerData { get; }
 
+    // Python venvs live at a SHORT path (…/ARI/venvs/*), managed and auto-installed by ARI (like
+    // llama.cpp's tools dir), rather than buried under the deep StyleTts2Data / ListenerData trees —
+    // otherwise nested package paths (e.g. torch's license files) blow past Windows' 260-char limit.
+    public static string StyleTts2Venv    { get; }
+    public static string StyleTts2Python  { get; }
+    public static string StyleTts2Whisper { get; }
+    public static string ListenerVenv     { get; }
+    public static string ListenerPython   { get; }
+
     // Config + secrets — never in BuildPath, which may be wiped/replaced wholesale on update.
     // AriConfig.json is seeded from the bundled default (see AriConfig.Load) the first time it's
     // missing here, then edited in place — so instance customization survives updates. secrets.env
@@ -125,6 +134,12 @@ public static class Paths
         LLMConfigs     = ServerDir("LLMConfigs");
         StyleTts2Data  = ServerDir("External/StyleTTS2");
         ListenerData   = ServerDir("External/Listener");
+
+        StyleTts2Venv    = Path.Combine(AppData, "venvs", "stt");
+        StyleTts2Python  = Path.Combine(StyleTts2Venv, OperatingSystem.IsWindows() ? @"Scripts\python.exe" : "bin/python");
+        StyleTts2Whisper = Path.Combine(StyleTts2Venv, OperatingSystem.IsWindows() ? @"Scripts\whisper.exe" : "bin/whisper");
+        ListenerVenv     = Path.Combine(AppData, "venvs", "listener");
+        ListenerPython   = Path.Combine(ListenerVenv, OperatingSystem.IsWindows() ? @"Scripts\python.exe" : "bin/python");
 
         AriConfig = Path.Combine(AppData, "Server", "AriConfig.json");
         Secrets   = Path.Combine(AppData, "Server", "secrets.env");

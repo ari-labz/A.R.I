@@ -51,7 +51,7 @@ public class StyleTtsSynthesiser(string styleTtsPath, string dataDir, string mod
     {
         LoadSettings();
 
-        string python = Path.Combine(dataDir, "venv", "bin", "python");
+        string python = Paths.StyleTts2Python;
         string script = Path.Combine(styleTtsPath, SERVER_SCRIPT);
 
         KillPortOwner(SERVER_PORT);
