@@ -1,6 +1,6 @@
 {
   "name": "ari-console",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "A·R·I Server console — runs and monitors the local server, stops it when closed.",
   "author": "Xywren",
   "private": true,
@@ -20,7 +20,8 @@
     "icon": "assets/icon.png",
     "directories": { "output": "dist" },
     "files": ["src/**/*", "assets/**/*"],
-    "mac":   { "target": "zip", "icon": "assets/icon.icns", "artifactName": "ARIConsole-mac.${ext}" },
+    "afterPack": "./afterPack.js",
+    "mac":   { "target": "zip", "icon": "assets/icon.icns", "identity": null, "artifactName": "ARIConsole-mac.${ext}" },
     "win":   { "target": "zip", "artifactName": "ARIConsole-win.${ext}" },
     "linux": { "target": "zip", "artifactName": "ARIConsole-linux.${ext}" }
   }
