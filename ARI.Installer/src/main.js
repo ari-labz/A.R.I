@@ -13,6 +13,11 @@ const REPO  = "A.R.I"
 // repo goes public — the installer then fetches releases anonymously and never asks for a token.
 const REPO_PRIVATE = true
 
+// App releases are tagged ARI_Server_v<ver> (pre-releases). The installer's own releases are
+// ARI_Server_Installer_v<ver>, excluded because they don't start with this prefix.
+const APP_PREFIX = "ARI_Server_v"
+const verFromTag = tag => tag.slice(APP_PREFIX.length)
+
 // ── Paths ─────────────────────────────────────────────────────────────────────
 // Server versions live under {base}/server/{version}. The desktop installer
 // keeps its own versions flat under {base}/{version}, so the two never collide.
@@ -85,11 +90,11 @@ ipcMain.handle("fetch-releases", async (_, token) => {
         throw new Error("No releases found on GitHub.")
 
     const list = releases
-        .filter(r => !r.draft)
-        .sort((a, b) => compareVersions(b.tag_name, a.tag_name))
+        .filter(r => !r.draft && r.tag_name.startsWith(APP_PREFIX))
+        .sort((a, b) => compareVersions(verFromTag(b.tag_name), verFromTag(a.tag_name)))
         .map(r => ({
             tagName:    r.tag_name,
-            version:    r.tag_name.replace(/^v/i, ""),
+            version:    verFromTag(r.tag_name),
             prerelease: r.prerelease,
             assets:     r.assets.map(a => ({ id: a.id, name: a.name })),
         }))
@@ -303,9 +308,9 @@ function compareVersions(a, b) {
 }
 
 function getAssetName(version) {
-    if (process.platform === "win32")  return `ARI-${version}-win.zip`
-    if (process.platform === "darwin") return `ARI-${version}-mac.zip`
-    return `ARI-${version}-linux.zip`
+    if (process.platform === "win32")  return `ARI_Server_v${version}_win.zip`
+    if (process.platform === "darwin") return `ARI_Server_v${version}_mac.zip`
+    return `ARI_Server_v${version}_linux.zip`
 }
 
 function extract(zipPath, destDir) {
