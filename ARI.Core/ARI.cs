@@ -121,17 +121,28 @@ public class ARI : BackgroundService
         voiceSynthesisModule = new VoiceSynthesisModule();
         CommonModules.Register(voiceSynthesis: voiceSynthesisModule);
 
+        bool voiceSynthReady = false;
         if (config.modules.VoiceSynthesis.Enabled)
         {
-            _logger.LogInformation("VoiceSynthesis module is enabled. Installing StyleTTS2...");
-            string sttPath    = config.modules.VoiceSynthesis.StyleTtsPath;
-            string sttDataDir = config.modules.VoiceSynthesis.DataDir;
-            await new StyleTtsSetupService(sttPath, sttDataDir, loggerFactory.CreateLogger("ARI.VoiceSynthesis")).Install();
-            voiceSynthesisModule.MarkSetupComplete();
-            _logger.LogInformation("VoiceSynthesis ready.");
+            try
+            {
+                _logger.LogInformation("VoiceSynthesis module is enabled. Installing StyleTTS2...");
+                string sttPath    = config.modules.VoiceSynthesis.StyleTtsPath;
+                string sttDataDir = config.modules.VoiceSynthesis.DataDir;
+                await new StyleTtsSetupService(sttPath, sttDataDir, loggerFactory.CreateLogger("ARI.VoiceSynthesis")).Install();
+                voiceSynthesisModule.MarkSetupComplete();
+                _logger.LogInformation("VoiceSynthesis ready.");
+                voiceSynthReady = true;
+            }
+            catch (Exception ex)
+            {
+                // Voice synthesis is optional — a setup failure (e.g. no torch wheel for this
+                // platform) must not abort the whole server. Skip voice/speech and carry on.
+                _logger.LogError("VoiceSynthesis setup failed — continuing without voice. {Error}", ex.Message);
+            }
         }
 
-        if (config.modules.Voice.Enabled)
+        if (config.modules.Voice.Enabled && voiceSynthReady)
         {
             string sttPath    = config.modules.VoiceSynthesis.StyleTtsPath;
             string sttDataDir = config.modules.VoiceSynthesis.DataDir;

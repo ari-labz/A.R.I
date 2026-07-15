@@ -223,17 +223,38 @@ function latestInstalledDir() {
     return v ? path.join(serverDir, v) : null
 }
 
-function launch(versionDir) {
-    const exe = findExecutable(versionDir)
-    if (!exe) throw new Error(`Could not find the ARI server executable in ${versionDir}`)
-    // The server reads its BuildPath (wwwroot, StyleTTS2, manifest) from APP_INSTALL_ROOT;
-    // point it at the version dir it was installed to, else it looks in the OS default.
-    const opts = { detached: true, stdio: "ignore", env: { ...process.env, APP_INSTALL_ROOT: versionDir } }
-    if (process.platform === "darwin" && exe.endsWith(".app")) {
-        spawn("open", [exe], opts).unref()
-    } else {
-        spawn(exe, [], opts).unref()
+// The A·R·I Console (the window that runs and shows the server) bundled inside the version dir.
+// mac: A.R.I.app at the root; win/linux: the Console/ folder with the Electron app.
+function findConsole(versionDir) {
+    if (process.platform === "darwin") {
+        const app = path.join(versionDir, "A.R.I.app")
+        return fs.existsSync(app) ? app : null
     }
+    const consoleDir = path.join(versionDir, "Console")
+    if (!fs.existsSync(consoleDir)) return null
+    if (process.platform === "win32") {
+        const exe = fs.readdirSync(consoleDir).find(f => f.endsWith(".exe") && !/ARI\.Core/i.test(f))
+        return exe ? path.join(consoleDir, exe) : null
+    }
+    const bin = fs.readdirSync(consoleDir, { withFileTypes: true })
+        .find(e => e.isFile() && !path.extname(e.name) && !/^ARI\.Core$/i.test(e.name))
+    return bin ? path.join(consoleDir, bin.name) : null
+}
+
+function launch(versionDir) {
+    // Launch the console — it spawns ARI.Core (with APP_INSTALL_ROOT) and shows the log window.
+    const con = findConsole(versionDir)
+    if (con) {
+        if (process.platform === "darwin") spawn("open", [con], { detached: true }).unref()
+        else spawn(con, [], { detached: true, stdio: "ignore" }).unref()
+        return
+    }
+    // Fallback: no console bundled — run the server headless so it at least starts.
+    const exe = findExecutable(versionDir)
+    if (!exe) throw new Error(`Could not find the ARI server in ${versionDir}`)
+    const opts = { detached: true, stdio: "ignore", env: { ...process.env, APP_INSTALL_ROOT: versionDir } }
+    if (process.platform === "darwin" && exe.endsWith(".app")) spawn("open", [exe], opts).unref()
+    else spawn(exe, [], opts).unref()
 }
 
 // ── Helpers: GitHub ─────────────────────────────────────────────────────────────
@@ -379,70 +400,38 @@ function writeCache(cache) {
 // ── Helpers: OS shortcuts ────────────────────────────────────────────────────────
 
 async function addShortcut(versionDir) {
-    if (process.platform === "darwin")      await createMacLauncher()
-    else if (process.platform === "win32")  addToStartMenu(createWinLauncher())
+    if (process.platform === "darwin")      await placeMacConsole(versionDir)
+    else if (process.platform === "win32")  addToStartMenu(createWinLauncher(versionDir))
 }
 
 // macOS: a thin launcher app in /Applications that runs whichever server version is current.
 // Version-agnostic (reads current.txt at launch), so it's created once; switching versions never
 // touches it. Writing to /Applications needs admin, hence the one-time authorization prompt.
-function createMacLauncher() {
-    if (fs.existsSync(LAUNCHER_APP)) return Promise.resolve()   // already installed
-
-    const tmp = path.join(os.tmpdir(), "A.R.I.app")
-    fs.rmSync(tmp, { recursive: true, force: true })
-    fs.mkdirSync(path.join(tmp, "Contents", "MacOS"), { recursive: true })
-    fs.mkdirSync(path.join(tmp, "Contents", "Resources"), { recursive: true })
-
-    fs.writeFileSync(path.join(tmp, "Contents", "Info.plist"),
-        `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>CFBundleName</key><string>A.R.I</string>
-  <key>CFBundleDisplayName</key><string>A.R.I</string>
-  <key>CFBundleIdentifier</key><string>ai.ari.server</string>
-  <key>CFBundleVersion</key><string>1.0</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleExecutable</key><string>ari-launch</string>
-  <key>CFBundleIconFile</key><string>icon</string>
-</dict></plist>`)
-
-    const runner = path.join(tmp, "Contents", "MacOS", "ari-launch")
-    fs.writeFileSync(runner,
-        `#!/bin/bash
-BASE="$HOME/Library/Application Support/ARI/server"
-VER="$(cat "$BASE/current.txt" 2>/dev/null)"
-DIR="$BASE/$VER"
-if [ -z "$VER" ] || [ ! -x "$DIR/ARI.Core" ]; then
-  osascript -e 'display alert "A·R·I" message "No installed server version found. Open the A·R·I installer first."'
-  exit 1
-fi
-export APP_INSTALL_ROOT="$DIR"
-exec "$DIR/ARI.Core"
-`)
-    fs.chmodSync(runner, 0o755)
-
-    const icon = path.join(__dirname, "..", "assets", "icon.icns")
-    if (fs.existsSync(icon)) fs.copyFileSync(icon, path.join(tmp, "Contents", "Resources", "icon.icns"))
-
-    // Move into /Applications with a single admin authorization.
+// Copy the bundled A·R·I Console app into /Applications so the server is launchable from there.
+// The console reads current.txt at launch, so it always runs the active version — placing it once
+// is enough. Writing to /Applications needs a single admin authorization.
+function placeMacConsole(versionDir) {
+    const bundled = path.join(versionDir, "A.R.I.app")
+    if (!fs.existsSync(bundled)) return Promise.resolve()   // no console in this build — nothing to place
     return new Promise(resolve => {
-        const shell = `rm -rf '${LAUNCHER_APP}' && cp -R '${tmp}' '${LAUNCHER_APP}'`
+        const shell = `rm -rf '${LAUNCHER_APP}' && cp -R '${bundled}' '${LAUNCHER_APP}'`
         const osa   = `do shell script "${shell.replace(/"/g, '\\"')}" with administrator privileges`
-        execFile("osascript", ["-e", osa], () => { fs.rmSync(tmp, { recursive: true, force: true }); resolve() })
+        execFile("osascript", ["-e", osa], () => resolve())
     })
 }
 
 // Windows: a small launcher .cmd (reads current.txt, sets APP_INSTALL_ROOT) plus a Start Menu
 // shortcut pointing at it — so the shortcut survives version switches and starts the server right.
+// Launches the A·R·I Console for the active version (it spawns ARI.Core and shows the window).
+// Resolves via current.txt so it survives updates/downgrades; the for-loop avoids hardcoding the
+// console's exact exe name.
 function createWinLauncher() {
     const cmd = path.join(baseDir, "ari-launch.cmd")
     fs.writeFileSync(cmd,
         `@echo off\r\n` +
         `set "BASE=${serverDir}"\r\n` +
         `set /p VER=<"%BASE%\\current.txt"\r\n` +
-        `set "APP_INSTALL_ROOT=%BASE%\\%VER%"\r\n` +
-        `start "" "%APP_INSTALL_ROOT%\\ARI.Core.exe"\r\n`)
+        `for %%f in ("%BASE%\\%VER%\\Console\\*.exe") do start "" "%%f"\r\n`)
     return cmd
 }
 

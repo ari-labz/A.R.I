@@ -30,11 +30,12 @@ public class StyleTtsSetupService(string styleTtsPath, string dataDir, ILogger? 
         logger?.LogInformation("Installing StyleTTS2 dependencies...");
         await RunExe(venvPy, "-m pip install -q --upgrade pip", dataDir);
 
-        // Platform-specific torch: macOS gets default PyPI build (includes MPS),
-        // Windows gets CUDA 12.1 build, Linux falls back to CPU.
+        // Torch build by platform: macOS uses the default PyPI wheel (MPS). On Windows/Linux use the
+        // CUDA build only when an NVIDIA GPU is actually present, else CPU — otherwise non-NVIDIA
+        // machines fail to resolve torch from the CUDA index ("No matching distribution").
         string torchInstall = OperatingSystem.IsMacOS()
             ? "install -q torch torchaudio"
-            : OperatingSystem.IsWindows()
+            : HasNvidiaGpu()
                 ? "install -q torch torchaudio --index-url https://download.pytorch.org/whl/cu124"
                 : "install -q torch torchaudio --index-url https://download.pytorch.org/whl/cpu";
         await RunExe(pip, torchInstall, dataDir);
@@ -47,6 +48,24 @@ public class StyleTtsSetupService(string styleTtsPath, string dataDir, ILogger? 
         await EnsureEspeakNg();
 
         logger?.LogInformation("StyleTTS2 environment ready.");
+    }
+
+    // True when an NVIDIA GPU is available (nvidia-smi runs and exits 0).
+    private static bool HasNvidiaGpu()
+    {
+        try
+        {
+            using Process? p = Process.Start(new ProcessStartInfo("nvidia-smi")
+            {
+                UseShellExecute        = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError  = true,
+            });
+            if (p is null) return false;
+            p.WaitForExit(4000);
+            return p.HasExited && p.ExitCode == 0;
+        }
+        catch { return false; }
     }
 
     private async Task EnsureEspeakNg()
