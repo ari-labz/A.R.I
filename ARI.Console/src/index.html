@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline';" />
+    <title>A·R·I Server</title>
+    <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+    <div id="titlebar"><span id="title">A·R·I Server</span></div>
+
+    <div id="statusbar">
+        <div id="status"><span id="dot" class="stopped"></span><span id="status-text">Stopped</span></div>
+        <div id="version"></div>
+    </div>
+
+    <div id="endpoint-row">
+        <span id="endpoint">http://localhost:5074</span>
+        <div class="endpoint-actions">
+            <button id="btn-open" class="mini">Open</button>
+            <button id="btn-copy" class="mini">Copy</button>
+        </div>
+    </div>
+
+    <div id="console-wrap">
+        <div id="console"></div>
+    </div>
+
+    <div id="controls">
+        <div class="left">
+            <button id="btn-stop">■ Stop</button>
+            <button id="btn-restart" class="secondary">⟳ Restart</button>
+        </div>
+        <div class="right">
+            <button id="btn-logs" class="link">Logs ↗</button>
+            <button id="btn-config" class="link">Config ↗</button>
+        </div>
+    </div>
+
+    <div id="footer">Closing this window stops the server.</div>
+
+    <script src="renderer.js"></script>
+</body>
+</html>
