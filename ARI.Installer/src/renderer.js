@@ -110,6 +110,8 @@ async function install() {
     const startServer = $("toggle-start").checked
     const options = {
         addShortcut: $("toggle-shortcut").checked,
+        addDesktop:  $("toggle-desktop").checked,
+        addDock:     $("toggle-dock").checked,
         startServer,
     }
     try {
@@ -178,12 +180,19 @@ async function loadMain() {
 }
 
 async function start() {
-    // Label the OS-specific shortcut toggle.
+    // Label the OS-specific shortcut toggle and show only the shortcut kinds this OS supports.
     const platform = await window.installer.getPlatform()
     const toggle   = $("toggle-shortcut").closest(".toggle")
-    if (platform === "win32")      $("toggle-shortcut-label").textContent = "Add to Start Menu"
-    else if (platform === "darwin") $("toggle-shortcut-label").textContent = "Add to Applications"
-    else                            toggle.classList.add("hidden")   // no shortcut on Linux
+    if (platform === "win32") {
+        $("toggle-shortcut-label").textContent = "Add to Start Menu"
+        $("toggle-dock-row").classList.add("hidden")        // no Dock on Windows
+    } else if (platform === "darwin") {
+        $("toggle-shortcut-label").textContent = "Add to Applications"
+    } else {
+        toggle.classList.add("hidden")                       // Linux: no shortcuts
+        $("toggle-desktop-row").classList.add("hidden")
+        $("toggle-dock-row").classList.add("hidden")
+    }
 
     // A token is only needed while the repo is private (REPO_PRIVATE in main.js).
     const needsToken = await window.installer.needsToken()
