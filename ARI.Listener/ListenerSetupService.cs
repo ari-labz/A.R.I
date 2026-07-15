@@ -19,6 +19,13 @@ public class ListenerSetupService(ILogger? logger = null)
     /// <summary>Returns the venv's python interpreter path, provisioning the venv first if needed.</summary>
     public async Task<string> Install()
     {
+        // webrtcvad has no prebuilt Windows wheel and compiles a native extension. Without the MSVC
+        // toolchain that build is doomed, so fail fast with the fix hint instead of spending time on a
+        // venv + multi-minute pip run that we already know ends in a compiler error.
+        if (SetupDiagnostics.WindowsMissingMsvcBuildTools())
+            throw new SetupException("Setup skipped: webrtcvad requires a C++ compiler that is not installed.",
+                                     SetupDiagnostics.MsvcBuildToolsHint);
+
         string venv = Paths.ListenerVenv;
         Directory.CreateDirectory(Paths.ListenerData);
         Directory.CreateDirectory(Path.GetDirectoryName(venv)!);
