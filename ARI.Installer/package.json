@@ -19,7 +19,7 @@
     "icon": "assets/icon.png",
     "directories": { "output": "dist" },
     "files": ["src/**/*", "assets/**/*"],
-    "mac":   { "target": "zip", "icon": "assets/icon.icns", "artifactName": "ARIServerInstaller-mac.${ext}" },
+    "mac":   { "target": "dmg", "icon": "assets/icon.icns", "artifactName": "ARIServerInstaller-mac.${ext}" },
     "win":   { "target": "zip", "artifactName": "ARIServerInstaller-win.${ext}" },
     "linux": { "target": "zip", "artifactName": "ARIServerInstaller-linux.${ext}" }
   }
