@@ -439,10 +439,16 @@ function addToStartMenu(target) {
     const programs = path.join(process.env.APPDATA || os.homedir(), "Microsoft", "Windows", "Start Menu", "Programs")
     const lnk = path.join(programs, "A.R.I.lnk")
     const ps = [
-        `$s = (New-Object -COM WScript.Shell).CreateShortcut('${lnk}');`,
+        `$WS = New-Object -ComObject WScript.Shell;`,
+        `$s = $WS.CreateShortcut('${lnk}');`,
         `$s.TargetPath = '${target}';`,
         `$s.WorkingDirectory = '${path.dirname(target)}';`,
         `$s.Save()`,
     ].join(" ")
-    execFile("powershell.exe", ["-NoProfile", "-Command", ps], () => {})
+    execFile("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps], (err, _stdout, stderr) => {
+        if (err || (stderr && stderr.trim())) {
+            // Surface the reason — the installer is a window, but this writes a breadcrumb we can read.
+            try { fs.appendFileSync(path.join(baseDir, "installer.log"), `[start-menu] target=${target} err=${err?.message || ""} stderr=${stderr || ""}\n`) } catch {}
+        }
+    })
 }
