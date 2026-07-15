@@ -18,8 +18,9 @@ public class StyleTtsSetupService(string styleTtsPath, string dataDir, ILogger? 
     // Python virtual environment (never committed, must be created locally) and its dependencies.
     public async Task Install()
     {
-        string venv = Path.Combine(dataDir, VENV_SUBDIR);
+        string venv = Paths.StyleTts2Venv;
         Directory.CreateDirectory(dataDir);
+        Directory.CreateDirectory(Path.GetDirectoryName(venv)!);
 
         if (!Directory.Exists(venv))
         {

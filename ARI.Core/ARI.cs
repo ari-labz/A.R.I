@@ -173,7 +173,7 @@ public class ARI : BackgroundService
                 catch (Exception ex) { _logger.LogError("Voice warmup failed (model may have corrupt weights): {Error}", ex.Message); }
 
                 speechQueue = new SpeechQueue(synthesiser, voiceLogger);
-                string pythonPath = Path.Combine(sttDataDir, OperatingSystem.IsWindows() ? @"venv\Scripts\python.exe" : "venv/bin/python");
+                string pythonPath = Paths.StyleTts2Python;
                 speechQueue.AudioReady += wav => PlayAudio(wav, pythonPath, voiceLogger);
 
                 voiceModule = new VoiceModule(synthesiser, speechQueue, modelName);

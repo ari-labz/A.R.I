@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using ARI.Common;
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
@@ -13,8 +14,6 @@ public class DatasetBuilder
 {
     private const string PROCESS_SCRIPT = "dataset_process.py";
     private const int    PERCENT_SCALE  = 100;
-    private static readonly string VenvPython =
-        OperatingSystem.IsWindows() ? @"venv\Scripts\python.exe" : "venv/bin/python";
 
     private static readonly JsonSerializerOptions manifestFormat = new()
     {
@@ -95,7 +94,7 @@ public class DatasetBuilder
 
     private async Task RunScript()
     {
-        string python = Path.Combine(dataDir, VenvPython);
+        string python = Paths.StyleTts2Python;
         string script = Path.Combine(styleTtsPath, PROCESS_SCRIPT);
 
         ProcessStartInfo info = new()
