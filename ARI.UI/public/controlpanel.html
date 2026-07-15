@@ -113,9 +113,9 @@ html, body {
 .cp-widget-body { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 10px 14px; scrollbar-width: thin; scrollbar-color: #d1d5db transparent; font-size: 13px; }
 
 /* ── log ─────────────────────────────────────────────── */
-.log-body { font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; line-height: 1.65; color: #374151; padding: 10px 12px; display: flex; flex-direction: column; gap: 0; }
-.log-line           { white-space: pre-wrap; word-break: break-all; }
-.log-line.log-warn  { color: #b45309; }
+.log-body { font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; line-height: 1.65; color: #374151; padding: 10px 12px; overflow-x: auto; }
+.log-line           { white-space: pre; }
+.log-line.log-warn  { color: #ca8a04; }
 .log-line.log-error { color: #dc2626; }
 .log-line.log-info  { color: #374151; }
 .cp-scroll-hint { font-size: 11px; color: #16a34a; animation: hint-pulse 1.4s ease-in-out infinite; display: none; }
@@ -1356,9 +1356,8 @@ logLines.addEventListener('scroll', () => {
     else { logUserScrolled = true; }
 });
 function classifyLog(line) {
-    const l = line.toLowerCase();
-    if (l.includes('[err') || l.includes('error') || l.includes('fatal')) return 'log-error';
-    if (l.includes('[wrn') || l.includes('warn')) return 'log-warn';
+    if (line.includes('[ERROR]')) return 'log-error';
+    if (line.includes('[WARN]'))  return 'log-warn';
     return 'log-info';
 }
 function appendLogLine(text) {

@@ -5,12 +5,18 @@ using Microsoft.Extensions.Hosting;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
+using Serilog.Templates;
 
 string logPath = Path.Combine(Paths.Logs, "ARI.log");
 Shared.LogPath = logPath;
 
 if (File.Exists(logPath))
     File.Delete(logPath);
+
+// Level token after the timestamp — [WARN] for warnings, [ERROR] for errors/fatals, nothing
+// otherwise — so the server console window can colour whole lines by level.
+ExpressionTemplate logTemplate = new(
+    "[{@t:HH:mm:ss}] {#if @l = 'Warning'}[WARN] {#else if @l = 'Error' or @l = 'Fatal'}[ERROR] {#end}[{ShortSourceContext}] {@m}\n{@x}");
 
 // Strip "ARI." prefix from SourceContext for cleaner log output
 Log.Logger = new LoggerConfiguration()
@@ -19,8 +25,8 @@ Log.Logger = new LoggerConfiguration()
         e.Properties.TryGetValue("SourceContext", out LogEventPropertyValue? source) &&
         source.ToString().StartsWith("\"Microsoft"))
     .Enrich.With<ShortSourceContextEnricher>()
-    .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss}] [{ShortSourceContext}] {Message:lj}{NewLine}{Exception}")
-    .WriteTo.File(logPath, outputTemplate: "[{Timestamp:HH:mm:ss}] [{ShortSourceContext}] {Message:lj}{NewLine}{Exception}")
+    .WriteTo.Console(logTemplate)
+    .WriteTo.File(logTemplate, logPath)
     .CreateLogger();
 
 IHost host = Host.CreateDefaultBuilder(args)
