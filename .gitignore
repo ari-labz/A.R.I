@@ -454,3 +454,6 @@ Builds/
 
 # ARI.Listener dedicated Python venv
 ARI.Listener/python/venv/
+
+# Dev build output (Rider / dotnet build without APP_INSTALL_ROOT)
+devbuild/

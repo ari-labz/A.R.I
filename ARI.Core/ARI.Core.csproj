@@ -18,8 +18,9 @@
   -->
   <PropertyGroup>
     <AppInstallRoot Condition="'$(AppInstallRoot)' == '' AND '$(APP_INSTALL_ROOT)' != ''">$(APP_INSTALL_ROOT)</AppInstallRoot>
-    <AppInstallRoot Condition="'$(AppInstallRoot)' == '' AND '$(OS)' == 'Windows_NT'">$(ProgramFiles)\A.R.I</AppInstallRoot>
-    <AppInstallRoot Condition="'$(AppInstallRoot)' == '' AND '$(OS)' != 'Windows_NT'">/Applications/A.R.I</AppInstallRoot>
+    <!-- Dev builds (Rider / `dotnet build` with no APP_INSTALL_ROOT) land in the repo's devbuild/
+         folder. /Applications and %ProgramFiles% are reserved for real installs done by the installer. -->
+    <AppInstallRoot Condition="'$(AppInstallRoot)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\devbuild'))</AppInstallRoot>
     <OutputPath>$(AppInstallRoot)\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>

@@ -93,7 +93,17 @@ public static class Paths
         }
 
         string? installOverride = Environment.GetEnvironmentVariable("APP_INSTALL_ROOT");
-        if (installOverride is null)
+        if (installOverride is not null)
+        {
+            BuildPath = installOverride;
+        }
+        else if (TryFindDevBuildRoot() is { } devBuild)
+        {
+            // Running from a source checkout (Rider / `dotnet run`): keep build output in the repo's
+            // devbuild/ folder so /Applications (and %ProgramFiles%) stay reserved for real installs.
+            BuildPath = devBuild;
+        }
+        else
         {
             switch (0)
             {
@@ -108,10 +118,6 @@ public static class Paths
                     BuildPath = "/opt/A.R.I";
                     break;
             }
-        }
-        else
-        {
-            BuildPath = installOverride;
         }
 
         string? modelsOverride = Environment.GetEnvironmentVariable("MODELS_PATH");
@@ -151,6 +157,21 @@ public static class Paths
         StyleTts2Source = Path.Combine(BuildPath, "External", "StyleTTS2");
         ListenerScript       = Path.Combine(BuildPath, "Listener", "whisper_serve.py");
         ListenerRequirements = Path.Combine(BuildPath, "Listener", "requirements.txt");
+    }
+
+    /// <summary>When the app runs from a source checkout, returns "&lt;repoRoot&gt;/devbuild" (the dev
+    /// OutputPath — see ARI.Core.csproj). Returns null for installed builds, where no ARI.sln sits
+    /// above the executable, so the OS install location is used instead.</summary>
+    private static string? TryFindDevBuildRoot()
+    {
+        DirectoryInfo? dir = new(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            if (dir.GetFiles("ARI.sln").Length > 0)
+                return Path.Combine(dir.FullName, "devbuild");
+            dir = dir.Parent;
+        }
+        return null;
     }
 
     /// <summary>Server-side persistent data subfolder not already exposed above (creates it if missing).</summary>
