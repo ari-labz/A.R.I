@@ -13,10 +13,10 @@ Shared.LogPath = logPath;
 if (File.Exists(logPath))
     File.Delete(logPath);
 
-// Level token after the timestamp — [WARN] for warnings, [ERROR] for errors/fatals, nothing
-// otherwise — so the server console window can colour whole lines by level.
+// Level token after the timestamp — [WARN] for warnings, [ERROR] for errors, [FATAL] for fatals,
+// nothing otherwise — so the server console window can colour whole lines by level.
 ExpressionTemplate logTemplate = new(
-    "[{@t:HH:mm:ss}] {#if @l = 'Warning'}[WARN] {#else if @l = 'Error' or @l = 'Fatal'}[ERROR] {#end}[{ShortSourceContext}] {@m}\n{@x}");
+    "[{@t:HH:mm:ss}] {#if @l = 'Warning'}[WARN] {#else if @l = 'Error'}[ERROR] {#else if @l = 'Fatal'}[FATAL] {#end}[{ShortSourceContext}] {@m}\n{@x}");
 
 // Strip "ARI." prefix from SourceContext for cleaner log output
 Log.Logger = new LoggerConfiguration()
@@ -39,7 +39,7 @@ IHost host = Host.CreateDefaultBuilder(args)
 
 AppDomain.CurrentDomain.UnhandledException += (sender, eventArgs) =>
 {
-    Log.Fatal("[FATAL] Unhandled exception: {Exception}", eventArgs.ExceptionObject);
+    Log.Fatal("Unhandled exception: {Exception}", eventArgs.ExceptionObject);
     EmergencyShutdown();
 };
 

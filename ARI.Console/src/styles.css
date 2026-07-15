@@ -10,6 +10,7 @@
     --log:       #d3ddd6;   /* off-white default log line */
     --log-warn:  #e2c04a;   /* yellow */
     --log-error: #e56b6b;   /* red */
+    --log-fatal: #a11212;   /* dark red */
     --green:     #5fc487;
     --amber:     #d8a63a;
     --grey:      #5a6f77;
@@ -97,6 +98,7 @@ body {
 #console .line { color: var(--log); }
 #console .line.warn  { color: var(--log-warn); }
 #console .line.error { color: var(--log-error); }
+#console .line.fatal { color: var(--log-fatal); font-weight: 600; }
 
 /* Controls */
 #controls {

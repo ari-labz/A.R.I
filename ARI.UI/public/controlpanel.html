@@ -117,6 +117,7 @@ html, body {
 .log-line           { white-space: pre; }
 .log-line.log-warn  { color: #ca8a04; }
 .log-line.log-error { color: #dc2626; }
+.log-line.log-fatal { color: #7f1010; font-weight: 600; }
 .log-line.log-info  { color: #374151; }
 .cp-scroll-hint { font-size: 11px; color: #16a34a; animation: hint-pulse 1.4s ease-in-out infinite; display: none; }
 .cp-scroll-hint.visible { display: inline; }
@@ -1356,6 +1357,7 @@ logLines.addEventListener('scroll', () => {
     else { logUserScrolled = true; }
 });
 function classifyLog(line) {
+    if (line.includes('[FATAL]')) return 'log-fatal';
     if (line.includes('[ERROR]')) return 'log-error';
     if (line.includes('[WARN]'))  return 'log-warn';
     return 'log-info';
