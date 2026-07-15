@@ -30,6 +30,8 @@ const serverDir   = path.join(baseDir, "server")
 const tokenFile   = path.join(baseDir, "github_token.txt")
 const currentFile = path.join(serverDir, "current.txt")
 const cacheFile   = path.join(baseDir, "protocol-cache.json")
+// macOS launch point: a thin app in /Applications that runs the active user-space version.
+const LAUNCHER_APP = "/Applications/A.R.I.app"
 fs.mkdirSync(serverDir, { recursive: true })
 
 // ── Window ────────────────────────────────────────────────────────────────────
@@ -193,8 +195,8 @@ ipcMain.handle("download-and-install", async (event, token, release, options) =>
     cleanOldVersions(ver)
 
     if (options?.addShortcut) {
-        event.sender.send("status", "Creating shortcut…")
-        try { addShortcut(versionDir) } catch (e) { /* best-effort */ }
+        event.sender.send("status", "Adding to Applications…")
+        try { await addShortcut(versionDir) } catch (e) { /* best-effort */ }
     }
     if (options?.startServer) {
         event.sender.send("status", "Starting server…")
@@ -217,10 +219,13 @@ function latestInstalledDir() {
 function launch(versionDir) {
     const exe = findExecutable(versionDir)
     if (!exe) throw new Error(`Could not find the ARI server executable in ${versionDir}`)
+    // The server reads its BuildPath (wwwroot, StyleTTS2, manifest) from APP_INSTALL_ROOT;
+    // point it at the version dir it was installed to, else it looks in the OS default.
+    const opts = { detached: true, stdio: "ignore", env: { ...process.env, APP_INSTALL_ROOT: versionDir } }
     if (process.platform === "darwin" && exe.endsWith(".app")) {
-        spawn("open", [exe], { detached: true }).unref()
+        spawn("open", [exe], opts).unref()
     } else {
-        spawn(exe, [], { detached: true, stdio: "ignore" }).unref()
+        spawn(exe, [], opts).unref()
     }
 }
 
@@ -366,32 +371,81 @@ function writeCache(cache) {
 
 // ── Helpers: OS shortcuts ────────────────────────────────────────────────────────
 
-function addShortcut(versionDir) {
-    const exe = findExecutable(versionDir)
-    if (!exe) return
-    if (process.platform === "darwin")      addToDock(exe)
-    else if (process.platform === "win32")  addToStartMenu(exe)
+async function addShortcut(versionDir) {
+    if (process.platform === "darwin")      await createMacLauncher()
+    else if (process.platform === "win32")  addToStartMenu(createWinLauncher())
 }
 
-// macOS: add a .app to the Dock's persistent-apps and reload the Dock.
-function addToDock(appPath) {
-    if (!appPath.endsWith(".app")) return
-    const item = `<dict><key>tile-data</key><dict><key>file-data</key><dict>` +
-        `<key>_CFURLString</key><string>${appPath}</string>` +
-        `<key>_CFURLStringType</key><integer>0</integer></dict></dict></dict>`
-    execFile("defaults", ["write", "com.apple.dock", "persistent-apps", "-array-add", item], () => {
-        execFile("killall", ["Dock"], () => {})
+// macOS: a thin launcher app in /Applications that runs whichever server version is current.
+// Version-agnostic (reads current.txt at launch), so it's created once; switching versions never
+// touches it. Writing to /Applications needs admin, hence the one-time authorization prompt.
+function createMacLauncher() {
+    if (fs.existsSync(LAUNCHER_APP)) return Promise.resolve()   // already installed
+
+    const tmp = path.join(os.tmpdir(), "A.R.I.app")
+    fs.rmSync(tmp, { recursive: true, force: true })
+    fs.mkdirSync(path.join(tmp, "Contents", "MacOS"), { recursive: true })
+    fs.mkdirSync(path.join(tmp, "Contents", "Resources"), { recursive: true })
+
+    fs.writeFileSync(path.join(tmp, "Contents", "Info.plist"),
+        `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>A.R.I</string>
+  <key>CFBundleDisplayName</key><string>A.R.I</string>
+  <key>CFBundleIdentifier</key><string>ai.ari.server</string>
+  <key>CFBundleVersion</key><string>1.0</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleExecutable</key><string>ari-launch</string>
+  <key>CFBundleIconFile</key><string>icon</string>
+</dict></plist>`)
+
+    const runner = path.join(tmp, "Contents", "MacOS", "ari-launch")
+    fs.writeFileSync(runner,
+        `#!/bin/bash
+BASE="$HOME/Library/Application Support/ARI/server"
+VER="$(cat "$BASE/current.txt" 2>/dev/null)"
+DIR="$BASE/$VER"
+if [ -z "$VER" ] || [ ! -x "$DIR/ARI.Core" ]; then
+  osascript -e 'display alert "A·R·I" message "No installed server version found. Open the A·R·I installer first."'
+  exit 1
+fi
+export APP_INSTALL_ROOT="$DIR"
+exec "$DIR/ARI.Core"
+`)
+    fs.chmodSync(runner, 0o755)
+
+    const icon = path.join(__dirname, "..", "assets", "icon.icns")
+    if (fs.existsSync(icon)) fs.copyFileSync(icon, path.join(tmp, "Contents", "Resources", "icon.icns"))
+
+    // Move into /Applications with a single admin authorization.
+    return new Promise(resolve => {
+        const shell = `rm -rf '${LAUNCHER_APP}' && cp -R '${tmp}' '${LAUNCHER_APP}'`
+        const osa   = `do shell script "${shell.replace(/"/g, '\\"')}" with administrator privileges`
+        execFile("osascript", ["-e", osa], () => { fs.rmSync(tmp, { recursive: true, force: true }); resolve() })
     })
 }
 
-// Windows: drop a .lnk in the Start Menu Programs folder.
-function addToStartMenu(exePath) {
+// Windows: a small launcher .cmd (reads current.txt, sets APP_INSTALL_ROOT) plus a Start Menu
+// shortcut pointing at it — so the shortcut survives version switches and starts the server right.
+function createWinLauncher() {
+    const cmd = path.join(baseDir, "ari-launch.cmd")
+    fs.writeFileSync(cmd,
+        `@echo off\r\n` +
+        `set "BASE=${serverDir}"\r\n` +
+        `set /p VER=<"%BASE%\\current.txt"\r\n` +
+        `set "APP_INSTALL_ROOT=%BASE%\\%VER%"\r\n` +
+        `start "" "%APP_INSTALL_ROOT%\\ARI.Core.exe"\r\n`)
+    return cmd
+}
+
+function addToStartMenu(target) {
     const programs = path.join(process.env.APPDATA || os.homedir(), "Microsoft", "Windows", "Start Menu", "Programs")
-    const lnk = path.join(programs, "ARI Server.lnk")
+    const lnk = path.join(programs, "A.R.I.lnk")
     const ps = [
         `$s = (New-Object -COM WScript.Shell).CreateShortcut('${lnk}');`,
-        `$s.TargetPath = '${exePath}';`,
-        `$s.WorkingDirectory = '${path.dirname(exePath)}';`,
+        `$s.TargetPath = '${target}';`,
+        `$s.WorkingDirectory = '${path.dirname(target)}';`,
         `$s.Save()`,
     ].join(" ")
     execFile("powershell.exe", ["-NoProfile", "-Command", ps], () => {})
