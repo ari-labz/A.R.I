@@ -16,7 +16,8 @@ function appendLine(line) {
 }
 
 function levelClass(line) {
-    if (line.includes("[ERROR]") || line.includes("[FATAL]")) return "error"
+    if (line.includes("[FATAL]")) return "fatal"
+    if (line.includes("[ERROR]")) return "error"
     if (line.includes("[WARN]")) return "warn"
     return ""
 }
