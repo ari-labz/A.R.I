@@ -178,7 +178,7 @@ async function start() {
     const platform = await window.installer.getPlatform()
     const toggle   = $("toggle-shortcut").closest(".toggle")
     if (platform === "win32")      $("toggle-shortcut-label").textContent = "Add to Start Menu"
-    else if (platform === "darwin") $("toggle-shortcut-label").textContent = "Add to Dock"
+    else if (platform === "darwin") $("toggle-shortcut-label").textContent = "Add to Applications"
     else                            toggle.classList.add("hidden")   // no shortcut on Linux
 
     // A token is only needed while the repo is private (REPO_PRIVATE in main.js).
