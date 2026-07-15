@@ -139,6 +139,7 @@ public class ARI : BackgroundService
                 // Voice synthesis is optional — a setup failure (e.g. no torch wheel for this
                 // platform) must not abort the whole server. Skip voice/speech and carry on.
                 _logger.LogError("VoiceSynthesis setup failed — continuing without voice. {Error}", ex.Message);
+                if (ex is SetupException { Hint: { } hint }) _logger.LogWarning("{Hint}", hint);
             }
         }
 
@@ -212,23 +213,34 @@ public class ARI : BackgroundService
         // ── Listener (audio hub) ───────────────────────────────────────────────────
         if (config.modules.Listener.Enabled && llmModule is not null)
         {
-            _logger.LogInformation("Listener module is enabled. Installing Whisper worker environment...");
-            config.modules.Listener.ScriptPath = !string.IsNullOrEmpty(config.modules.Listener.ScriptPath)
-                ? Paths.ResolveOverride(config.modules.Listener.ScriptPath)
-                : Paths.ListenerScript;
-
-            // "python3" is ListenerConfig's own default (i.e. "not customized") — provision and use
-            // a dedicated venv unless the user explicitly pointed PythonPath somewhere themselves.
-            if (config.modules.Listener.PythonPath == "python3")
+            try
             {
-                config.modules.Listener.PythonPath = await new ListenerSetupService(loggerFactory.CreateLogger("ARI.Listener")).Install();
-            }
+                _logger.LogInformation("Listener module is enabled. Installing Whisper worker environment...");
+                config.modules.Listener.ScriptPath = !string.IsNullOrEmpty(config.modules.Listener.ScriptPath)
+                    ? Paths.ResolveOverride(config.modules.Listener.ScriptPath)
+                    : Paths.ListenerScript;
 
-            _logger.LogInformation("Starting audio hub...");
-            listenerModule = new ListenerModule(llmModule, config.modules.Listener, loggerFactory.CreateLogger("ARI.Listener"));
-            listenerModule.Start();
-            CommonModules.Register(listener: listenerModule);
-            _logger.LogInformation("Listener ready (whisper worker running: {Running}).", listenerModule.IsReady);
+                // "python3" is ListenerConfig's own default (i.e. "not customized") — provision and use
+                // a dedicated venv unless the user explicitly pointed PythonPath somewhere themselves.
+                if (config.modules.Listener.PythonPath == "python3")
+                {
+                    config.modules.Listener.PythonPath = await new ListenerSetupService(loggerFactory.CreateLogger("ARI.Listener")).Install();
+                }
+
+                _logger.LogInformation("Starting audio hub...");
+                listenerModule = new ListenerModule(llmModule, config.modules.Listener, loggerFactory.CreateLogger("ARI.Listener"));
+                listenerModule.Start();
+                CommonModules.Register(listener: listenerModule);
+                _logger.LogInformation("Listener ready (whisper worker running: {Running}).", listenerModule.IsReady);
+            }
+            catch (Exception ex)
+            {
+                // Listener is optional — a setup failure (e.g. no C++ build tools for webrtcvad) must
+                // not abort the server.
+                _logger.LogError("Listener setup failed — continuing without voice input. {Error}", ex.Message);
+                if (ex is SetupException { Hint: { } hint }) _logger.LogWarning("{Hint}", hint);
+                listenerModule = null;
+            }
         }
 
         // ── Discord ──────────────────────────────────────────────────────────────

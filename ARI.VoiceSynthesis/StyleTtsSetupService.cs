@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Text;
+using ARI.Common;
 using Microsoft.Extensions.Logging;
 
 namespace ARI.VoiceSynthesis;
@@ -111,15 +113,19 @@ public class StyleTtsSetupService(string styleTtsPath, string dataDir, ILogger? 
         using Process process = Process.Start(info)
             ?? throw new InvalidOperationException($"Failed to start: {exe}");
 
+        StringBuilder captured = new();
+
         Task stdoutTask = StreamLines(process.StandardOutput, line =>
         {
-            if (!string.IsNullOrWhiteSpace(line))
-                logger?.LogDebug("[setup] {Line}", line);
+            if (string.IsNullOrWhiteSpace(line)) return;
+            captured.AppendLine(line);
+            logger?.LogDebug("[setup] {Line}", line);
         });
 
         Task stderrTask = StreamLines(process.StandardError, line =>
         {
             if (string.IsNullOrWhiteSpace(line)) return;
+            captured.AppendLine(line);
             if (line.StartsWith("WARNING", StringComparison.OrdinalIgnoreCase))
                 logger?.LogDebug("[setup] {Line}", line);
             else
@@ -130,7 +136,7 @@ public class StyleTtsSetupService(string styleTtsPath, string dataDir, ILogger? 
         await process.WaitForExitAsync();
 
         if (process.ExitCode != 0)
-            throw new Exception($"Setup step failed (exit {process.ExitCode}): {exe} {args}");
+            throw new SetupException($"Setup step failed (exit {process.ExitCode}): {exe} {args}", SetupDiagnostics.Diagnose(captured.ToString()));
     }
 
     private static async Task StreamLines(StreamReader reader, Action<string> onLine)
