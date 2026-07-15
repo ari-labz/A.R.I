@@ -1,7 +1,9 @@
 using ARI.Common;
+using System.Net;
 using System.Text;
 using ARI.LLM;
 using Discord;
+using Discord.Net;
 using Discord.WebSocket;
 using DiscordAttachment = global::Discord.Attachment;
 using LlmAttachment = ARI.LLM.Attachment;
@@ -47,17 +49,63 @@ public class DiscordModule : BackgroundService, IDiscordModule
 
         client.Log             += LogAsync;
         client.Ready           += OnReady;
+        client.Disconnected    += OnDisconnected;
         client.MessageReceived += message => { _ = Task.Run(() => OnMessageReceived(message)); return Task.CompletedTask; };
         client.SlashCommandExecuted += cmd => { _ = Task.Run(() => OnSlashCommand(cmd)); return Task.CompletedTask; };
     }
 
+    // Tripped when Discord rejects our credentials (401 / invalid token). Discord.Net would otherwise
+    // reconnect forever; cancelling this token unblocks ExecuteAsync so the module shuts itself down.
+    private readonly CancellationTokenSource authFailedCts = new();
+    private volatile bool authFailed;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("Connecting to Discord...");
-        await client.LoginAsync(TokenType.Bot, config.Token);
-        await client.StartAsync();
 
-        await Task.Delay(Timeout.Infinite, stoppingToken);
+        using CancellationTokenSource linked =
+            CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, authFailedCts.Token);
+
+        try
+        {
+            await client.LoginAsync(TokenType.Bot, config.Token);
+            await client.StartAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError("Discord login failed - disabling module, will not retry. {Message}", ex.Message);
+            return;
+        }
+
+        try { await Task.Delay(Timeout.Infinite, linked.Token); }
+        catch (OperationCanceledException) { }
+
+        if (authFailed)
+        {
+            _logger.LogError("Discord authentication failed (401 Unauthorized) - module disabled, will not retry.");
+            try { await client.StopAsync(); await client.LogoutAsync(); } catch { /* best-effort */ }
+        }
+    }
+
+    // Discord.Net auto-reconnects on every drop. When the drop is an auth failure (bad/revoked token),
+    // retrying is pointless and just spams 401s, so trip authFailed to stop the module for good.
+    private Task OnDisconnected(Exception ex)
+    {
+        if (IsAuthFailure(ex, null)) TripAuthFailure();
+        return Task.CompletedTask;
+    }
+
+    private static bool IsAuthFailure(Exception? ex, string? message) =>
+        ex is HttpException { HttpCode: HttpStatusCode.Unauthorized }
+        || ex is ArgumentException                                        // token too short / malformed
+        || (message?.Contains("token was invalid", StringComparison.OrdinalIgnoreCase) ?? false);
+
+    // Signals ExecuteAsync to stop the client and never reconnect. Idempotent.
+    private void TripAuthFailure()
+    {
+        if (authFailed) return;
+        authFailed = true;
+        authFailedCts.Cancel();
     }
 
 
@@ -471,6 +519,15 @@ public class DiscordModule : BackgroundService, IDiscordModule
 
     private Task LogAsync(LogMessage log)
     {
+        // Discord.Net reports a bad token as a mere Warning ("A supplied token was invalid.") and then
+        // keeps reconnecting. That means the module cannot run — escalate to Error and shut it down.
+        if (IsAuthFailure(log.Exception, log.Message))
+        {
+            _logger.LogError(log.Exception, "[Discord.Net] {Message} — disabling Discord, will not retry.", log.Message);
+            TripAuthFailure();
+            return Task.CompletedTask;
+        }
+
         LogLevel level = log.Severity switch
         {
             LogSeverity.Critical => LogLevel.Critical,

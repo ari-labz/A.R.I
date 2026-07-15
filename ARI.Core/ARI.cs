@@ -139,7 +139,7 @@ public class ARI : BackgroundService
                 // Voice synthesis is optional — a setup failure (e.g. no torch wheel for this
                 // platform) must not abort the whole server. Skip voice/speech and carry on.
                 _logger.LogError("VoiceSynthesis setup failed — continuing without voice. {Error}", ex.Message);
-                if (ex is SetupException { Hint: { } hint }) _logger.LogWarning("{Hint}", hint);
+                if (ex is SetupException { Hint: { } hint }) _logger.LogError("{Hint}", hint);
             }
         }
 
@@ -238,7 +238,7 @@ public class ARI : BackgroundService
                 // Listener is optional — a setup failure (e.g. no C++ build tools for webrtcvad) must
                 // not abort the server.
                 _logger.LogError("Listener setup failed — continuing without voice input. {Error}", ex.Message);
-                if (ex is SetupException { Hint: { } hint }) _logger.LogWarning("{Hint}", hint);
+                if (ex is SetupException { Hint: { } hint }) _logger.LogError("{Hint}", hint);
                 listenerModule = null;
             }
         }
@@ -248,13 +248,23 @@ public class ARI : BackgroundService
 
         if (config.modules.Discord.Enabled)
         {
-            _logger.LogInformation("Discord module is enabled. Starting...");
-            discordService = new DiscordModule(loggerFactory, llmModule, config.modules.Discord);
-            await discordService.StartAsync(stoppingToken);
-            if (discordService.ExecuteTask is not null)
-                moduleTasks.Add(discordService.ExecuteTask);
+            // An unresolved ${DISCORD_TOKEN} placeholder (no secrets.env / env value) means there is
+            // no usable token — starting Discord would only spin on 401s, so skip the module instead.
+            string discordToken = config.modules.Discord.Token;
+            if (string.IsNullOrWhiteSpace(discordToken) || discordToken.Contains("${"))
+            {
+                _logger.LogWarning("Discord module is enabled but no valid token was found (DISCORD_TOKEN unresolved) - skipping Discord.");
+            }
+            else
+            {
+                _logger.LogInformation("Discord module is enabled. Starting...");
+                discordService = new DiscordModule(loggerFactory, llmModule, config.modules.Discord);
+                await discordService.StartAsync(stoppingToken);
+                if (discordService.ExecuteTask is not null)
+                    moduleTasks.Add(discordService.ExecuteTask);
 
-            CommonModules.Register(discord: discordService);
+                CommonModules.Register(discord: discordService);
+            }
         }
 
         // ── Scheduler ─────────────────────────────────────────────────────────────

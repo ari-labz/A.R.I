@@ -48,7 +48,7 @@ public class SpeechQueue : IDisposable
             }
             catch (Exception ex)
             {
-                logger?.LogError("[Voice] Synthesis failed: {Error}", ex.Message);
+                logger?.LogWarning("[Voice] Synthesis failed: {Error}", ex.Message);
             }
         }
     }
