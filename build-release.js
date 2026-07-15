@@ -97,19 +97,18 @@ for (const target of targets) {
 
 // ── 2. Server installer ──────────────────────────────────────────────────────────
 for (const target of targets) {
-    const zip    = `ARI_Server_Installer_v${installerVersion}_${target.plat}.zip`
-    const out    = path.join(versionDir, `.inst-${target.rid}`)
-    const outZip = path.join(versionDir, zip)
-
+    const out = path.join(versionDir, `.inst-${target.rid}`)
     fs.rmSync(out, { recursive: true, force: true })
-    fs.rmSync(outZip, { force: true })
 
     console.log(`\n══ Server installer ${target.plat} ══\n`)
     execSync(`bunx electron-builder ${target.eb} --config.directories.output="${out}"`,
         { stdio: "inherit", cwd: installerDir, env })
-    const built = fs.readdirSync(out).find(f => f.endsWith(".zip"))
-    if (!built) throw new Error(`Installer build produced no zip for ${target.plat}`)
-    fs.renameSync(path.join(out, built), outZip)
+    // mac ships a .dmg, win/linux a .zip.
+    const built = fs.readdirSync(out).find(f => f.endsWith(".dmg") || f.endsWith(".zip"))
+    if (!built) throw new Error(`Installer build produced no artifact for ${target.plat}`)
+    const outFile = path.join(versionDir, `ARI_Server_Installer_v${installerVersion}_${target.plat}${path.extname(built)}`)
+    fs.rmSync(outFile, { force: true })
+    fs.renameSync(path.join(out, built), outFile)
     fs.rmSync(out, { recursive: true, force: true })
 }
 
