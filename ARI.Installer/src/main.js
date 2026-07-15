@@ -201,9 +201,9 @@ ipcMain.handle("download-and-install", async (event, token, release, options) =>
     fs.writeFileSync(currentFile, ver, "utf8")
     cleanOldVersions(ver)
 
-    if (options?.addShortcut) {
-        event.sender.send("status", "Adding to Applications…")
-        try { await addShortcut(versionDir) } catch (e) { /* best-effort */ }
+    if (options?.addShortcut || options?.addDesktop || options?.addDock) {
+        event.sender.send("status", "Adding shortcuts…")
+        try { await addShortcut(versionDir, options) } catch (e) { /* best-effort */ }
     }
     if (options?.startServer) {
         event.sender.send("status", "Starting server…")
@@ -399,9 +399,24 @@ function writeCache(cache) {
 
 // ── Helpers: OS shortcuts ────────────────────────────────────────────────────────
 
-async function addShortcut(versionDir) {
-    if (process.platform === "darwin")      await placeMacConsole(versionDir)
-    else if (process.platform === "win32")  addToStartMenu(createWinLauncher(versionDir))
+const SHORTCUT_NAME = "A.R.I"   // Start Menu / Desktop label (mac app bundle = LAUNCHER_APP)
+
+function logInstaller(line) {
+    try { fs.appendFileSync(path.join(baseDir, "installer.log"), `${line}\n`) } catch {}
+}
+
+async function addShortcut(versionDir, options = {}) {
+    if (process.platform === "darwin") {
+        // The Desktop alias and Dock entry both point at the /Applications app, so make sure it is
+        // placed whenever any of the three mac options is selected.
+        if (options.addShortcut || options.addDesktop || options.addDock) await placeMacConsole(versionDir)
+        if (options.addDesktop) await addMacDesktopAlias()
+        if (options.addDock)    await addMacDock()
+    } else if (process.platform === "win32") {
+        const launcher = createWinLauncher()
+        if (options.addShortcut) await createWinShortcut(launcher, "Programs")
+        if (options.addDesktop)  await createWinShortcut(launcher, "Desktop")
+    }
 }
 
 // macOS: a thin launcher app in /Applications that runs whichever server version is current.
@@ -435,20 +450,55 @@ function createWinLauncher() {
     return cmd
 }
 
-function addToStartMenu(target) {
-    const programs = path.join(process.env.APPDATA || os.homedir(), "Microsoft", "Windows", "Start Menu", "Programs")
-    const lnk = path.join(programs, "A.R.I.lnk")
+// Creates a .lnk in a Windows special folder ('Programs' = Start Menu, 'Desktop') pointing at the
+// version-agnostic launcher. The folder is resolved inside PowerShell via GetFolderPath so
+// OneDrive-redirected Desktops and roaming Start Menus are handled. Awaited (so an early window
+// close can't kill it mid-write) and the outcome is always written to installer.log.
+function createWinShortcut(target, folder) {
+    const psExe = path.join(process.env.SystemRoot || "C:\\Windows",
+        "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
     const ps = [
-        `$WS = New-Object -ComObject WScript.Shell;`,
-        `$s = $WS.CreateShortcut('${lnk}');`,
-        `$s.TargetPath = '${target}';`,
-        `$s.WorkingDirectory = '${path.dirname(target)}';`,
-        `$s.Save()`,
+        `$ErrorActionPreference='Stop';`,
+        `try {`,
+        `  $dir=[Environment]::GetFolderPath('${folder}');`,
+        `  $lnk=Join-Path $dir '${SHORTCUT_NAME}.lnk';`,
+        `  $WS=New-Object -ComObject WScript.Shell;`,
+        `  $s=$WS.CreateShortcut($lnk);`,
+        `  $s.TargetPath='${target}';`,
+        `  $s.WorkingDirectory='${path.dirname(target)}';`,
+        `  $s.Save();`,
+        `  Write-Output ('created '+$lnk)`,
+        `} catch { Write-Output ('ERROR '+$_.Exception.Message); exit 1 }`,
     ].join(" ")
-    execFile("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps], (err, _stdout, stderr) => {
-        if (err || (stderr && stderr.trim())) {
-            // Surface the reason — the installer is a window, but this writes a breadcrumb we can read.
-            try { fs.appendFileSync(path.join(baseDir, "installer.log"), `[start-menu] target=${target} err=${err?.message || ""} stderr=${stderr || ""}\n`) } catch {}
-        }
+    return new Promise(resolve => {
+        execFile(psExe, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps], (err, stdout, stderr) => {
+            logInstaller(`[shortcut ${folder}] ${(stdout || "").trim()}` +
+                `${err ? " err=" + err.message : ""}${stderr && stderr.trim() ? " stderr=" + stderr.trim() : ""}`)
+            resolve()
+        })
+    })
+}
+
+// macOS: a Desktop alias (symlink) to the /Applications app. Version-agnostic because that app
+// resolves current.txt at launch, so the alias keeps working across updates/downgrades.
+function addMacDesktopAlias() {
+    return new Promise(resolve => {
+        const link = path.join(os.homedir(), "Desktop", path.basename(LAUNCHER_APP))
+        try { fs.rmSync(link, { recursive: true, force: true }) } catch {}
+        try { fs.symlinkSync(LAUNCHER_APP, link) } catch (e) { logInstaller(`[desktop-alias] ${e.message}`) }
+        resolve()
+    })
+}
+
+// macOS: add the /Applications app to the Dock (persistent-apps) and restart the Dock so it shows.
+function addMacDock() {
+    return new Promise(resolve => {
+        const tile = `<dict><key>tile-data</key><dict><key>file-data</key><dict>` +
+                     `<key>_CFURLString</key><string>${LAUNCHER_APP}</string>` +
+                     `<key>_CFURLStringType</key><integer>0</integer></dict></dict></dict>`
+        execFile("defaults", ["write", "com.apple.dock", "persistent-apps", "-array-add", tile], err => {
+            if (err) { logInstaller(`[dock] ${err.message}`); return resolve() }
+            execFile("killall", ["Dock"], () => resolve())
+        })
     })
 }
