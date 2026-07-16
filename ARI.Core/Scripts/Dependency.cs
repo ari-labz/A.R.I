@@ -40,13 +40,16 @@ public class Dependency
         return Task.CompletedTask;
     }
 
-    // Locates the brew binary by its real install path (Apple Silicon → /opt/homebrew, Intel →
-    // /usr/local), which is reliable even for a Finder-launched app that doesn't inherit a login PATH.
-    private static string? FindBrew()
+    private static string? FindBrew() => FindInBrewBins("brew");
+
+    // Locates a binary in the Homebrew bin dirs (Apple Silicon → /opt/homebrew/bin, Intel →
+    // /usr/local/bin) by absolute path, which is reliable even for a Finder-launched app that
+    // doesn't inherit a login PATH.
+    private static string? FindInBrewBins(string name)
     {
         foreach (string dir in BrewPaths)
         {
-            string p = Path.Combine(dir, "brew");
+            string p = Path.Combine(dir, name);
             if (File.Exists(p)) return p;
         }
         return null;
@@ -60,13 +63,15 @@ public class Dependency
     /// </summary>
     public static async Task CheckLlamaCpp()
     {
-        // Resolve to an ABSOLUTE path — a Finder-launched app can't spawn a bare command name off a
-        // login PATH it never inherited, even if `which` (with our EnsureBrewInPath) can see it.
-        string? onPath = await ResolveCommandPath("llama-server");
-        if (onPath is not null)
+        // A Finder-launched app gets a stripped PATH without /opt/homebrew/bin, so `which` misses a
+        // brew-installed llama-server that a dev shell finds fine. Check the brew bins directly first,
+        // then fall back to a PATH lookup (resolved to an absolute path, since we can't spawn a bare
+        // command name off a login PATH we never inherited).
+        string? existing = FindInBrewBins("llama-server") ?? await ResolveCommandPath("llama-server");
+        if (existing is not null)
         {
-            Shared.LlamaServer = onPath;
-            Shared.Logger.LogInformation("llama-server found on PATH: {Path}", onPath);
+            Shared.LlamaServer = existing;
+            Shared.Logger.LogInformation("Using existing llama-server: {Path}", existing);
             return;
         }
 
