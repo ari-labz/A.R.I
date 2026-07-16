@@ -3,7 +3,7 @@ using ARI.Common;
 namespace ARI.API;
 
 /// <summary>
-/// Persists the global coding-conventions rulebook under AppDataRoot/Server/PersistentData.
+/// Persists the global coding-conventions rulebook under AppDataRoot/Server.
 /// Edited from the control panel (api/cp/conventions) and read by the Code agent at the start of
 /// every Code thread. Single source of truth — there is no per-machine renderer copy.
 /// </summary>

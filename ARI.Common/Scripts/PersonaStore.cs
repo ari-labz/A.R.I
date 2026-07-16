@@ -1,7 +1,7 @@
 namespace ARI.Common;
 
 /// <summary>
-/// Persists Ari's persona to ~/.ari/Server/PersistentData/Persona.md.
+/// Persists Ari's persona to AppDataRoot/Server/Persona.md.
 /// This is the single source of truth for her identity/voice, injected as the stable prefix of
 /// every persona-bearing agent's system prompt (agents with UsePersona = true). Edited from the
 /// control panel (admin/persona). On first read with no file present, the built-in Seed is written
