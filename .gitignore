@@ -5,6 +5,7 @@ External/*/.git
 *.md
 !README.md
 !THIRD_PARTY.md
+!.github/release-notes/*.md
 *.log
 
 ## Ignore Visual Studio temporary files, build results, and
