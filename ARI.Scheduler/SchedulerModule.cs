@@ -13,7 +13,8 @@ namespace ARI.Scheduler;
 /// a cancelled job is not marked complete, it stays due and resumes on the next idle window.
 ///
 /// Register jobs with AddTask before Start. Cron schedules come from the task's default or a
-/// SchedulerConfig override. Last-run times persist to Scheduler.json so overdue survives restarts.
+/// SchedulerConfig override. Last-run times persist to Scheduler.json; slots are only owed from the
+/// point the server came up, so a schedule missed while Ari was off is skipped rather than caught up.
 /// </summary>
 public sealed class SchedulerModule : IDisposable, ISchedulerModule
 {
@@ -26,11 +27,17 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
     private readonly List<ScheduledTask> _tasks = new();
     private readonly Dictionary<string, DateTime> _lastRun;
 
+    // Slots that fell before this are never owed — that is what stops a boot from firing everything
+    // that passed while Ari was off.
+    private readonly DateTime _startedUtc = DateTime.UtcNow;
+
     private CancellationTokenSource? _loopCts;
     private Task? _loop;
 
-    // How often, while a job runs, we re-check that Ari is still idle. Small so we yield promptly.
-    private static readonly TimeSpan IdlePoll = TimeSpan.FromSeconds(1);
+    // The job in flight, if any, and the token that stops it (shutdown or the control panel).
+    private readonly object _runLock = new();
+    private string? _runningTask;
+    private CancellationTokenSource? _jobCts;
 
     public SchedulerModule(SchedulerConfig config, string persistentDataDir, ILogger logger)
     {
@@ -44,14 +51,14 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
 
     /// <summary>Register a job. Cron precedence: runtime override (control panel) &gt; AriConfig override
     /// &gt; the task's built-in default.</summary>
-    public void AddTask(string name, string defaultCron, Func<CancellationToken, Task> handler, bool uninterruptible = false)
+    public void AddTask(string name, string defaultCron, Func<CancellationToken, Task> handler)
     {
         string cron =
             _settings.Schedules.TryGetValue(name, out string? s) && IsValidCron(s) ? s
           : _config.Schedules.TryGetValue(name, out string? c) && !string.IsNullOrWhiteSpace(c) ? c
           : defaultCron;
         DateTime lastRun = _lastRun.TryGetValue(name, out DateTime lr) ? lr : DateTime.UtcNow;
-        _tasks.Add(new ScheduledTask(name, cron, handler, lastRun, uninterruptible));
+        _tasks.Add(new ScheduledTask(name, cron, handler, lastRun));
         _logger.LogInformation("[Scheduler] Registered task '{Name}' (cron: {Cron}).", name, cron);
     }
 
@@ -61,11 +68,28 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
 
     public IReadOnlyList<SchedulerTaskInfo> GetTasks()
     {
+        string? running = RunningTask;
         lock (_settingsLock)
             return _tasks.Select(t => new SchedulerTaskInfo(
                 t.Name, t.CronText,
                 _lastRun.TryGetValue(t.Name, out DateTime lr) && lr != default ? lr : (DateTime?)null,
-                t.NextRunUtc())).ToList();
+                t.NextRunUtc(_startedUtc),
+                t.Name == running)).ToList();
+    }
+
+    public string? RunningTask { get { lock (_runLock) return _runningTask; } }
+
+    /// <summary>Stops the named job if it is the one currently running. The slot is consumed — the
+    /// task waits for its next scheduled time rather than resuming.</summary>
+    public bool StopTask(string name)
+    {
+        lock (_runLock)
+        {
+            if (_runningTask != name || _jobCts is null) return false;
+            _jobCts.Cancel();
+        }
+        _logger.LogInformation("[Scheduler] Stop requested for '{Name}'.", name);
+        return true;
     }
 
     public bool SetTaskCron(string name, string cron)
@@ -134,15 +158,13 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
         {
             try
             {
-                // Only touch background work when nothing is live.
-                if (Activity.IsIdle())
+                // Background jobs run whether or not Ari is busy — they share the llama server with
+                // live conversation rather than waiting for an idle window.
+                foreach (ScheduledTask task in _tasks)
                 {
-                    foreach (ScheduledTask task in _tasks)
-                    {
-                        if (ct.IsCancellationRequested || !Activity.IsIdle()) break;
-                        if (task.IsDue(DateTime.UtcNow))
-                            await RunTask(task, ct);
-                    }
+                    if (ct.IsCancellationRequested) break;
+                    if (task.IsDue(DateTime.UtcNow, _startedUtc))
+                        await RunTask(task, ct);
                 }
             }
             catch (Exception ex)
@@ -159,35 +181,18 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
     {
         _logger.LogInformation("[Scheduler] Running '{Name}'...", task.Name);
 
-        // This token trips when Ari becomes busy OR the module shuts down — the handler yields on it.
+        // Trips on shutdown or a Stop from the control panel — the handler yields on it.
         using CancellationTokenSource jobCts = CancellationTokenSource.CreateLinkedTokenSource(loopCt);
-
-        // Watchdog: cancel the job the moment Ari is no longer idle. Uninterruptible tasks skip it —
-        // they still only START in an idle window (the loop gates on IsIdle), but once running they
-        // finish even if Ari becomes active again. The proactive messenger needs this: its own draft
-        // thread marks Ari busy, so a watchdog would cancel the very message it is generating.
-        Task watchdog = task.Uninterruptible ? Task.CompletedTask : Task.Run(async () =>
-        {
-            while (!jobCts.IsCancellationRequested)
-            {
-                if (!Activity.IsIdle()) { jobCts.Cancel(); break; }
-                try { await Task.Delay(IdlePoll, jobCts.Token); } catch { break; }
-            }
-        });
+        lock (_runLock) { _runningTask = task.Name; _jobCts = jobCts; }
 
         try
         {
             await task.Handler(jobCts.Token);
-            // Completed fully — mark run so the next occurrence is computed from now.
-            task.LastRunUtc = DateTime.UtcNow;
-            _lastRun[task.Name] = task.LastRunUtc;
-            SaveState();
             _logger.LogInformation("[Scheduler] '{Name}' complete.", task.Name);
         }
         catch (OperationCanceledException)
         {
-            // Interrupted by activity/shutdown — NOT marked complete, so it stays due and resumes.
-            _logger.LogInformation("[Scheduler] '{Name}' yielded (Ari became busy); will resume when idle.", task.Name);
+            _logger.LogInformation("[Scheduler] '{Name}' stopped; waiting for its next scheduled time.", task.Name);
         }
         catch (Exception ex)
         {
@@ -195,9 +200,19 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
         }
         finally
         {
-            jobCts.Cancel();
-            try { await watchdog; } catch { }
+            // The slot is consumed however the run ended — completed, stopped or failed. Anything
+            // else leaves the task due and, with no idle gate to hold it back, retrying every tick.
+            MarkRun(task);
+            lock (_runLock) { _runningTask = null; _jobCts = null; }
         }
+    }
+
+    // Marks the slot as consumed so the next occurrence is measured from now.
+    private void MarkRun(ScheduledTask task)
+    {
+        task.LastRunUtc = DateTime.UtcNow;
+        _lastRun[task.Name] = task.LastRunUtc;
+        SaveState();
     }
 
     // ── State persistence ─────────────────────────────────────────────────────────────
