@@ -1,6 +1,6 @@
 {
   "name": "ari-installer",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "ARI Server Installer",
   "author": "Xywren",
   "private": true,
