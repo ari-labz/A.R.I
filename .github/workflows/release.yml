@@ -78,9 +78,10 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
-      # electron-builder needs wine to stamp the Windows portable .exe when built on Linux.
-      - name: Install wine (Linux, installer only)
-        if: runner.os == 'Linux' && needs.setup.outputs.target == 'installer'
+      # electron-builder runs rcedit via wine to stamp any Windows .exe (app console + portable
+      # installer), so wine is needed for every Windows build on the Linux runner.
+      - name: Install wine (Linux — needed to stamp Windows .exe)
+        if: runner.os == 'Linux'
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
@@ -89,6 +90,7 @@ jobs:
       - name: Install dependencies
         run: |
           if [[ "${{ needs.setup.outputs.target }}" == "app" ]]; then
+            (cd ARI.Orb && bun install)   # provides "three" for the UI build (file: dep of ARI.UI)
             (cd ARI.UI && bun install)
             (cd ARI.Console && bun install)
           else
