@@ -21,7 +21,7 @@
     "files": ["src/**/*", "assets/**/*"],
     "afterPack": "./afterPack.js",
     "mac":   { "target": "dmg", "icon": "assets/icon.icns", "identity": null, "artifactName": "ARIServerInstaller-mac.${ext}" },
-    "win":   { "target": "zip", "artifactName": "ARIServerInstaller-win.${ext}" },
-    "linux": { "target": "zip", "artifactName": "ARIServerInstaller-linux.${ext}" }
+    "win":   { "target": "portable", "artifactName": "ARIServerInstaller-win.${ext}" },
+    "linux": { "target": "AppImage", "artifactName": "ARIServerInstaller-linux.${ext}" }
   }
 }

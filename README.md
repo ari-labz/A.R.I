@@ -54,7 +54,7 @@ The installers are **not** signed with a paid Apple/Windows certificate, so your
 
 - **macOS** — if you see *"A·R·I … can't be opened because Apple cannot check it for malicious software"* (or *"is damaged"*), **right-click (Control-click) the app → Open → Open**. You only need to do this once. (Do not double-click — that offers no bypass.)
 - **Windows** — if SmartScreen shows *"Windows protected your PC"*, click **More info → Run anyway**.
-- **Linux** — mark the extracted file executable (`chmod +x`, or right-click → Properties → allow executing) and run it.
+- **Linux** — the installer is an AppImage; mark it executable (`chmod +x ARI_Server_Installer_*.AppImage`, or right-click → Properties → allow executing) and run it.
 
 ## Third-party components
 

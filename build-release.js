@@ -35,11 +35,15 @@ for (const d of [consoleDir, installerDir]) {
     }
 }
 
+// BUILD_PLATFORM (space/comma list) restricts which OS artifacts are built, so CI can split mac
+// onto a macOS runner and win+linux onto a Linux runner. Unset = all (local default).
+const wantedPlats = (process.env.BUILD_PLATFORM || "mac win linux").split(/[\s,]+/).filter(Boolean)
+
 const targets = [
     { rid: "osx-arm64", plat: "mac",   eb: "--mac" },
     { rid: "win-x64",   plat: "win",   eb: "--win --x64" },
     { rid: "linux-x64", plat: "linux", eb: "--linux --x64" },
-]
+].filter(t => wantedPlats.includes(t.plat))
 
 // Recursively find electron-builder's output: a .app (mac) or a *-unpacked dir (win/linux).
 function findConsoleBuild(dir) {
@@ -109,8 +113,9 @@ for (const target of targets) {
     console.log(`\n══ Server installer ${target.plat} ══\n`)
     execSync(`bunx electron-builder ${target.eb} --config.directories.output="${out}"`,
         { stdio: "inherit", cwd: installerDir, env })
-    // mac ships a .dmg, win/linux a .zip.
-    const built = fs.readdirSync(out).find(f => f.endsWith(".dmg") || f.endsWith(".zip"))
+    // mac ships a .dmg, win a portable .exe, linux an .AppImage (.zip kept as a fallback).
+    const built = fs.readdirSync(out).find(f =>
+        f.endsWith(".dmg") || f.endsWith(".exe") || f.endsWith(".AppImage") || f.endsWith(".zip"))
     if (!built) throw new Error(`Installer build produced no artifact for ${target.plat}`)
     const outFile = path.join(versionDir, `ARI_Server_Installer_v${installerVersion}_${target.plat}${path.extname(built)}`)
     fs.rmSync(outFile, { force: true })
