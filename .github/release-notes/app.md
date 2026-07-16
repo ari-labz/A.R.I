@@ -1,3 +1,3 @@
-Changes since the previous release:
+Changes since v0.1.4:
 
-- Describe the server app changes here before pushing the ARI_Server_v<version> tag.
+- No functional changes — first server app build produced by the new GitHub Actions release pipeline.
