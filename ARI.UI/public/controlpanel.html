@@ -916,6 +916,7 @@ function switchTab(name) {
     if (gw) gw.style.display = name === 'overview' ? '' : 'none';
     if (name !== 'servers') { clearTimeout(srvPollTimer); srvPollTimer = null; }
     if (name !== 'debug') dbgCloseWatch();
+    if (name !== 'scheduler') schStopPoll();
     if (name === 'conventions') loadConventions();
     if (name === 'persona') loadPersona();
     if (name === 'models') loadModels();
@@ -964,6 +965,33 @@ function fillHourSelect(sel) {
     }
 }
 let schActiveStartEl, schActiveEndEl;
+// Running state changes without any user action, so the scheduler tab polls while it is open.
+// var, not let: switchTab('overview') runs above this line on load and calls schStopPoll().
+var schPollTimer = null;
+function schStopPoll() { if (schPollTimer) { clearInterval(schPollTimer); schPollTimer = null; } }
+
+function schSetRunningState(card, t) {
+    const badge = card.querySelector('.sch-running');
+    const stop  = card.querySelector('.sch-stop');
+    const next  = card.querySelector('.sch-next');
+    if (badge) badge.style.display = t.running ? '' : 'none';
+    if (stop)  stop.style.display  = t.running ? '' : 'none';
+    if (next)  next.textContent    = t.nextRunUtc ? `next: ${fmtDate(t.nextRunUtc)}` : '';
+}
+
+// Updates the existing rows in place — a full rebuild would wipe whatever cron edit is mid-flight.
+async function schRefreshRunning() {
+    try {
+        const r = await fetch('/admin/scheduler');
+        if (!r.ok) return;
+        const d = await r.json();
+        (d.tasks || []).forEach(t => {
+            const card = document.querySelector(`[data-sch-task="${CSS.escape(t.name)}"]`);
+            if (card) schSetRunningState(card, t);
+        });
+    } catch {}
+}
+
 async function loadScheduler() {
     const listEl = document.getElementById('sch-task-list');
     if (!schActiveStartEl) {
@@ -988,6 +1016,9 @@ async function loadScheduler() {
         (d.tasks || []).forEach(t => listEl.appendChild(buildTaskRow(t)));
         if (!d.tasks || d.tasks.length === 0)
             listEl.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">No scheduled jobs.</span>';
+
+        schStopPoll();
+        schPollTimer = setInterval(schRefreshRunning, 3000);
     } catch {
         listEl.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Failed to load scheduler.</span>';
     }
@@ -995,16 +1026,43 @@ async function loadScheduler() {
 function buildTaskRow(t) {
     const card = document.createElement('div');
     card.style.cssText = 'border:1px solid var(--border,#2a2a2a);border-radius:10px;padding:14px 16px;';
+    card.dataset.schTask = t.name;
 
     const head = document.createElement('div');
     head.style.cssText = 'display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:10px;';
+
+    const left = document.createElement('div');
+    left.style.cssText = 'display:flex;align-items:center;gap:8px;';
     const name = document.createElement('div');
     name.style.cssText = 'font-size:14px;font-weight:600;';
     name.textContent = t.name;
+    const badge = document.createElement('span');
+    badge.className = 'sch-running';
+    badge.style.cssText = 'font-size:10px;font-weight:600;padding:2px 7px;border-radius:999px;background:#dcfce7;color:#166534;';
+    badge.textContent = 'Running';
+    left.append(name, badge);
+
+    const right = document.createElement('div');
+    right.style.cssText = 'display:flex;align-items:center;gap:8px;';
     const next = document.createElement('div');
+    next.className = 'sch-next';
     next.style.cssText = 'font-size:11px;color:var(--text-dim);';
     next.textContent = t.nextRunUtc ? `next: ${fmtDate(t.nextRunUtc)}` : '';
-    head.append(name, next);
+    const stop = document.createElement('button');
+    stop.type = 'button';
+    stop.className = 'sch-stop';
+    stop.style.cssText = 'font-size:11px;padding:3px 10px;border:1px solid var(--border,#2a2a2a);border-radius:6px;background:transparent;color:var(--text,#ddd);cursor:pointer;';
+    stop.textContent = 'Stop';
+    stop.addEventListener('click', async () => {
+        stop.disabled = true;
+        // The slot is consumed server-side, so a stopped job waits for its next scheduled time.
+        try { await fetch(`/admin/scheduler/task/${encodeURIComponent(t.name)}/stop`, { method: 'POST' }); } catch {}
+        setTimeout(() => { stop.disabled = false; schRefreshRunning(); }, 400);
+    });
+    right.append(next, stop);
+
+    head.append(left, right);
+    schSetRunningState(card, t);
 
     const presets = document.createElement('div');
     presets.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;';

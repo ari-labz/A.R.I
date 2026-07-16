@@ -40,7 +40,7 @@ public interface IVoiceSynthesisModule
 public interface IBrainModule { }
 
 /// <summary>Live view of one scheduled job for the control panel.</summary>
-public record SchedulerTaskInfo(string Name, string Cron, DateTime? LastRunUtc, DateTime? NextRunUtc);
+public record SchedulerTaskInfo(string Name, string Cron, DateTime? LastRunUtc, DateTime? NextRunUtc, bool Running);
 
 public interface ISchedulerModule
 {
@@ -49,6 +49,13 @@ public interface ISchedulerModule
 
     /// <summary>Current jobs with their cron, last-run and next-run times.</summary>
     IReadOnlyList<SchedulerTaskInfo> GetTasks();
+
+    /// <summary>Name of the job currently running, or null when nothing is in flight.</summary>
+    string? RunningTask { get; }
+
+    /// <summary>Stops the named job if it is the one running. The slot is consumed — the task waits
+    /// for its next scheduled time rather than resuming. False if it is not currently running.</summary>
+    bool StopTask(string name);
 
     /// <summary>Updates a job's cron expression live and persists it. Returns false if the cron is invalid
     /// or the task is unknown.</summary>

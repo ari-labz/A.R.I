@@ -110,8 +110,20 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
                 cron       = t.Cron,
                 lastRunUtc = t.LastRunUtc,
                 nextRunUtc = t.NextRunUtc,
+                running    = t.Running,
             }),
         });
+    }
+
+    /// <summary>Stops a running background job. The slot is consumed — it waits for its next
+    /// scheduled time rather than resuming.</summary>
+    [HttpPost("scheduler/task/{name}/stop")]
+    public IActionResult StopSchedulerTask(string name)
+    {
+        ISchedulerModule? sched = Modules.Scheduler;
+        if (sched is null) return StatusCode(503, "Scheduler is not available.");
+        if (!sched.StopTask(name)) return BadRequest(new { error = $"'{name}' is not currently running." });
+        return Ok(new { ok = true });
     }
 
     [HttpPost("scheduler/task")]
