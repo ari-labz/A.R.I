@@ -33,7 +33,7 @@ public sealed class AgentDefinition
 }
 
 /// <summary>
-/// Persists LLM data across three files under ~/.ari/PersistentData/:
+/// Persists LLM data across three files under AppDataRoot/Server/:
 ///   Servers.json, Models.json, Agents.json
 /// All mutations go through this class. Thread-safe per-file.
 /// </summary>

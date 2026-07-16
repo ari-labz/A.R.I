@@ -130,7 +130,10 @@ public static class Paths
             Models = Path.Combine(AppData, "Models");
         }
 
-        PersistentData = ServerDir("PersistentData");
+        // Config files (Servers, Models, Persona, Scheduler, Agents…) sit directly in the server
+        // app-data root — there is no PersistentData subfolder.
+        PersistentData = Path.Combine(AppData, "Server");
+        Directory.CreateDirectory(PersistentData);
         Voices         = ServerDir("Voices");
         Brain          = ServerDir("Brain");
         Logs           = ServerDir("Logs");
