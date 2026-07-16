@@ -96,6 +96,20 @@ for (const target of targets) {
         { stdio: "inherit", env },
     )
 
+    // Ship the web UI. The csproj's <Content Include="ARI.API/wwwroot/**"> glob is evaluated at
+    // project load — before the BuildUI target generates wwwroot — so on a clean checkout (CI) the
+    // publish output has no UI (the API works but "/" 404s). BuildUI DID run during the publish above
+    // and populated ARI.API/wwwroot, so copy that into the publish output explicitly.
+    const wwwSrc = path.join(__dirname, "ARI.API", "wwwroot")
+    const wwwDst = path.join(pubDir, "wwwroot")
+    if (fs.existsSync(path.join(wwwSrc, "index.html"))) {
+        fs.mkdirSync(wwwDst, { recursive: true })
+        execSync(`cp -R "${wwwSrc}/." "${wwwDst}/"`)
+        console.log(`── Bundled web UI into ${zip} (wwwroot)`)
+    } else {
+        throw new Error(`Web UI missing: ${wwwSrc}/index.html not found (BuildUI did not produce it)`)
+    }
+
     bundleConsole(target, pubDir)
 
     console.log(`\n── Zipping ${zip}\n`)
