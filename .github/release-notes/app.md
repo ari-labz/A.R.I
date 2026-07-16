@@ -1,4 +1,3 @@
-Changes since v0.1.8:
+Changes since v0.1.9:
 
-- The published server now includes the web UI. A build-ordering bug (the wwwroot content glob was evaluated before the UI build ran) meant releases shipped without the compiled front-end, so the API worked but the website returned 404 (both in the browser and the desktop app). The build now copies the built UI into the published output explicitly.
-- llama-server's very verbose output no longer floods the A·R·I console. It's redirected to its own file (Logs/llama-<server>.log) instead.
+- Fixed the A·R·I console window closing when you stop and then start the server again. Killing the server broke the stdout/stderr pipes the console reads, and the resulting unhandled stream error crashed the console process. Those pipe errors are now handled, and a global safety net keeps the console alive (and logs) instead of closing on any unexpected error.

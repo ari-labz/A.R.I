@@ -5,6 +5,10 @@ const fs   = require("fs")
 const path = require("path")
 const os   = require("os")
 
+// Safety net: never let a stray error tear the console window down — log it and keep running.
+process.on("uncaughtException",  err => { try { emit(`[ERROR] ${err?.stack || err}`) } catch {} })
+process.on("unhandledRejection", err => { try { emit(`[ERROR] ${err?.stack || err}`) } catch {} })
+
 // ── Paths (mirror the installer's layout) ──────────────────────────────────────
 
 function getBaseDir() {
@@ -99,7 +103,13 @@ function startServer() {
     child = spawn(srv.exe, [], { cwd: srv.root, env: { ...process.env, APP_INSTALL_ROOT: srv.root } })
 
     for (const stream of [child.stdout, child.stderr]) {
-        readline.createInterface({ input: stream }).on("line", line => {
+        // A killed server (stop/restart) breaks these pipes; without an error handler the stream's
+        // 'error' event goes unhandled and crashes the whole console. Swallow it — the exit handler
+        // below reports the stop.
+        stream.on("error", () => {})
+        const rl = readline.createInterface({ input: stream })
+        rl.on("error", () => {})
+        rl.on("line", line => {
             emit(line)
             if (line.includes("ARI is ready")) setStatus("running")
         })
