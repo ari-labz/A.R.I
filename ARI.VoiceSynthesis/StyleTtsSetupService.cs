@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text;
 using ARI.Common;
 using Microsoft.Extensions.Logging;
@@ -10,8 +11,26 @@ namespace ARI.VoiceSynthesis;
 public class StyleTtsSetupService(string styleTtsPath, string dataDir, ILogger? logger = null)
 {
     private const string VENV_SUBDIR = "venv";
+    // Bump when the inline package list in Install() changes. The stamp already covers
+    // requirements.txt and the torch variant on its own — this only tracks the list below.
+    private const int     DEPS_VERSION = 1;
     private static string Python     => OperatingSystem.IsWindows() ? "python" : "/opt/homebrew/bin/python3.11";
     private static string PythonArgs => "";
+
+    // Written only once a full install succeeds, so an interrupted run repairs itself next launch
+    // instead of being mistaken for a finished one.
+    private string MarkerPath => Path.Combine(dataDir, ".deps-installed");
+
+    // Identifies the exact dependency set: our own package list (DEPS_VERSION), the vendored
+    // requirements.txt, and the torch build — switching platform or GPU must reinstall.
+    private string DepsStamp(string torchInstall)
+    {
+        string reqPath = Path.Combine(styleTtsPath, "requirements.txt");
+        string reqHash = File.Exists(reqPath)
+            ? Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(reqPath)))
+            : "no-requirements";
+        return $"v{DEPS_VERSION}|{torchInstall}|{reqHash}";
+    }
 
     // StyleTTS2 is now vendored as a git submodule (Xywren/StyleTTS2 fork), so the source files
     // are always present — no clone or source-patching on first run. This only provisions the
@@ -36,8 +55,6 @@ public class StyleTtsSetupService(string styleTtsPath, string dataDir, ILogger? 
 
         string pip    = Path.Combine(venv, OperatingSystem.IsWindows() ? @"Scripts\pip.exe"    : "bin/pip");
         string venvPy = Path.Combine(venv, OperatingSystem.IsWindows() ? @"Scripts\python.exe" : "bin/python");
-        logger?.LogInformation("Installing StyleTTS2 dependencies...");
-        await RunExe(venvPy, "-m pip install -q --upgrade pip", dataDir);
 
         // Torch build by platform: macOS uses the default PyPI wheel (MPS). On Windows/Linux use the
         // CUDA build only when an NVIDIA GPU is actually present, else CPU — otherwise non-NVIDIA
@@ -47,6 +64,19 @@ public class StyleTtsSetupService(string styleTtsPath, string dataDir, ILogger? 
             : HasNvidiaGpu()
                 ? "install -q torch torchaudio --index-url https://download.pytorch.org/whl/cu124"
                 : "install -q torch torchaudio --index-url https://download.pytorch.org/whl/cpu";
+
+        // pip is idempotent but not free: every one of these resolves against PyPI over the network
+        // and blocks startup. Once a full install has succeeded for this exact dependency set, skip
+        // the lot — which also keeps an offline machine from stalling here on an ordinary launch.
+        string stamp = DepsStamp(torchInstall);
+        if (File.Exists(MarkerPath) && File.ReadAllText(MarkerPath) == stamp)
+        {
+            logger?.LogInformation("StyleTTS2 dependencies already installed.");
+            return;
+        }
+
+        logger?.LogInformation("Installing StyleTTS2 dependencies...");
+        await RunExe(venvPy, "-m pip install -q --upgrade pip", dataDir);
         await RunExe(pip, torchInstall, dataDir);
 
         await RunExe(pip, $"install -q --prefer-binary -r \"{Path.Combine(styleTtsPath, "requirements.txt")}\"", styleTtsPath);
@@ -56,6 +86,7 @@ public class StyleTtsSetupService(string styleTtsPath, string dataDir, ILogger? 
         await RunExe(pip, $"install -q openai-whisper flask sounddevice soundfile cached-path tensorboard pandas ipython gruut phonemizer", dataDir);
         await EnsureEspeakNg();
 
+        File.WriteAllText(MarkerPath, stamp);
         logger?.LogInformation("StyleTTS2 environment ready.");
     }
 
