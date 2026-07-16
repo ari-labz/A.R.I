@@ -47,10 +47,17 @@ function exePath(dir)   { return path.join(dir, process.platform === "win32" ? "
 
 const isDev = process.env.NODE_ENV === "development"
 
-// In dev the server is the dotnet build at APP_INSTALL_ROOT (default /Applications/A.R.I or
-// %ProgramFiles%\A.R.I). ARI_DEV_SERVER overrides it.
+// In dev the server is the dotnet build in the repo's devbuild/ folder — found by walking up from
+// here, the same way Paths.cs TryFindDevBuildRoot does. Falls back to the installed location when
+// there is no devbuild/ (running the packaged console against a real install). ARI_DEV_SERVER wins.
 function devServerRoot() {
     if (process.env.ARI_DEV_SERVER) return process.env.ARI_DEV_SERVER
+
+    for (let dir = __dirname; dir !== path.dirname(dir); dir = path.dirname(dir)) {
+        const candidate = path.join(dir, "devbuild")
+        if (fs.existsSync(exePath(candidate))) return candidate
+    }
+
     return process.platform === "win32"
         ? path.join(process.env.ProgramFiles || "C:\\Program Files", "A.R.I")
         : "/Applications/A.R.I"
