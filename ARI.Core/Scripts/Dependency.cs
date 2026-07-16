@@ -24,47 +24,32 @@ public class Dependency
         }
     }
 
-    public static async Task CheckHomebrew()
+    // Homebrew is OPTIONAL: it's only used to install llama.cpp (which now falls back to a prebuilt
+    // download when brew is absent) and espeak-ng for voice (which degrades on its own). So this only
+    // detects brew and puts it on PATH — it never installs it (the official installer needs an
+    // interactive sudo/TTY that a GUI-launched app can't provide) and never aborts startup.
+    public static Task CheckHomebrew()
     {
         EnsureBrewInPath();
-        if (await CommandExistsAsync("brew"))
-        {
+        if (FindBrew() is not null)
             Shared.Logger.LogInformation("Homebrew is installed.");
-            return;
-        }
+        else
+            Shared.Logger.LogWarning(
+                "Homebrew not found — it's optional (only needed for espeak-ng voice). " +
+                "Install it from https://brew.sh if you want voice. Continuing without it.");
+        return Task.CompletedTask;
+    }
 
-        Shared.Logger.LogInformation("Homebrew not found. Attempting to install...");
-
-        string scriptPath = Path.GetTempFileName() + ".sh";
-        try
+    // Locates the brew binary by its real install path (Apple Silicon → /opt/homebrew, Intel →
+    // /usr/local), which is reliable even for a Finder-launched app that doesn't inherit a login PATH.
+    private static string? FindBrew()
+    {
+        foreach (string dir in BrewPaths)
         {
-            using HttpClient hc = new();
-            string script = await hc.GetStringAsync("https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh");
-            await File.WriteAllTextAsync(scriptPath, script);
+            string p = Path.Combine(dir, "brew");
+            if (File.Exists(p)) return p;
         }
-        catch (Exception ex)
-        {
-            throw new Exception(
-                $"Could not download Homebrew install script: {ex.Message}\n" +
-                "Please install Homebrew manually: https://brew.sh");
-        }
-
-        Process? proc = Process.Start(new ProcessStartInfo("/bin/bash", scriptPath)
-        {
-            UseShellExecute = false,
-        });
-
-        if (proc is not null)
-        {
-            await proc.WaitForExitAsync();
-            if (File.Exists(scriptPath)) File.Delete(scriptPath);
-            EnsureBrewInPath();
-            if (proc.ExitCode == 0 && await CommandExistsAsync("brew")) return;
-        }
-
-        throw new Exception(
-            "Homebrew could not be installed automatically.\n" +
-            "Please install it manually: https://brew.sh");
+        return null;
     }
 
     /// <summary>
@@ -95,8 +80,18 @@ public class Dependency
         switch (0)
         {
             case 0 when OperatingSystem.IsMacOS():
-                await InstallLlamaViaBrew();
-                Shared.LlamaServer = "llama-server";
+                // Prefer brew when it's available; otherwise fall back to a prebuilt download so the
+                // server still runs on machines without Homebrew (e.g. non-admin accounts).
+                if (FindBrew() is not null)
+                {
+                    await InstallLlamaViaBrew();
+                    Shared.LlamaServer = "llama-server";
+                }
+                else
+                {
+                    Shared.Logger.LogInformation("Homebrew not available — downloading a prebuilt llama.cpp instead.");
+                    Shared.LlamaServer = await DownloadLlamaPrebuilt();
+                }
                 break;
             case 0 when OperatingSystem.IsWindows():
             case 0 when OperatingSystem.IsLinux():
@@ -177,7 +172,7 @@ public class Dependency
     // e.g. llama-b<build>-bin-win-vulkan-x64.zip / llama-b<build>-bin-ubuntu-vulkan-x64.zip.
     private static string? SelectAsset(JsonElement assets)
     {
-        string os   = OperatingSystem.IsWindows() ? "win" : "ubuntu";
+        string os   = OperatingSystem.IsWindows() ? "win" : OperatingSystem.IsMacOS() ? "macos" : "ubuntu";
         string arch = RuntimeInformation.OSArchitecture == Architecture.Arm64 ? "arm64" : "x64";
 
         List<(string Name, string Url)> candidates = new();
