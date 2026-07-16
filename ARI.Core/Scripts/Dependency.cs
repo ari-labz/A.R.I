@@ -60,10 +60,13 @@ public class Dependency
     /// </summary>
     public static async Task CheckLlamaCpp()
     {
-        if (await CommandExistsAsync("llama-server"))
+        // Resolve to an ABSOLUTE path — a Finder-launched app can't spawn a bare command name off a
+        // login PATH it never inherited, even if `which` (with our EnsureBrewInPath) can see it.
+        string? onPath = await ResolveCommandPath("llama-server");
+        if (onPath is not null)
         {
-            Shared.LlamaServer = "llama-server";
-            Shared.Logger.LogInformation("llama-server found on PATH.");
+            Shared.LlamaServer = onPath;
+            Shared.Logger.LogInformation("llama-server found on PATH: {Path}", onPath);
             return;
         }
 
@@ -82,16 +85,11 @@ public class Dependency
             case 0 when OperatingSystem.IsMacOS():
                 // Prefer brew when it's available; otherwise fall back to a prebuilt download so the
                 // server still runs on machines without Homebrew (e.g. non-admin accounts).
-                if (FindBrew() is not null)
-                {
-                    await InstallLlamaViaBrew();
-                    Shared.LlamaServer = "llama-server";
-                }
-                else
-                {
+                string? brew = FindBrew();
+                string? viaBrew = brew is not null ? await TryInstallLlamaViaBrew(brew) : null;
+                if (viaBrew is null && brew is null)
                     Shared.Logger.LogInformation("Homebrew not available — downloading a prebuilt llama.cpp instead.");
-                    Shared.LlamaServer = await DownloadLlamaPrebuilt();
-                }
+                Shared.LlamaServer = viaBrew ?? await DownloadLlamaPrebuilt();
                 break;
             case 0 when OperatingSystem.IsWindows():
             case 0 when OperatingSystem.IsLinux():
@@ -101,26 +99,39 @@ public class Dependency
         }
     }
 
-    private static async Task InstallLlamaViaBrew()
+    // Installs llama.cpp with Homebrew and returns the absolute path to the installed llama-server,
+    // or null if the install fails (caller falls back to a prebuilt download). Uses brew's absolute
+    // path — a Finder-launched app can't resolve the bare "brew" name off a login PATH it never got.
+    private static async Task<string?> TryInstallLlamaViaBrew(string brewPath)
     {
         Shared.Logger.LogInformation("Installing llama.cpp via Homebrew...");
-
-        Process process = Process.Start(new ProcessStartInfo("brew", "install llama.cpp")
+        try
         {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        }) ?? throw new Exception("Failed to start brew install.");
+            Process process = Process.Start(new ProcessStartInfo(brewPath, "install llama.cpp")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            }) ?? throw new Exception("Failed to start brew.");
 
-        process.OutputDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) Shared.Logger.LogInformation("[brew] {Line}", e.Data); };
-        process.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) Shared.Logger.LogInformation("[brew] {Line}", e.Data); };
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
+            process.OutputDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) Shared.Logger.LogInformation("[brew] {Line}", e.Data); };
+            process.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) Shared.Logger.LogInformation("[brew] {Line}", e.Data); };
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+            await process.WaitForExitAsync();
 
-        await process.WaitForExitAsync();
+            // brew installs into its own bin dir (same dir as the brew binary).
+            string llamaServer = Path.Combine(Path.GetDirectoryName(brewPath)!, "llama-server");
+            if (process.ExitCode == 0 && File.Exists(llamaServer))
+                return llamaServer;
 
-        if (process.ExitCode != 0 || !await CommandExistsAsync("llama-server"))
-            throw new Exception("Failed to install llama.cpp. Please run: brew install llama.cpp");
+            Shared.Logger.LogWarning("Homebrew install of llama.cpp did not succeed — falling back to a prebuilt download.");
+        }
+        catch (Exception ex)
+        {
+            Shared.Logger.LogWarning("Homebrew install of llama.cpp failed ({Error}) — falling back to a prebuilt download.", ex.Message);
+        }
+        return null;
     }
 
     // Downloads a prebuilt llama.cpp release into the managed tools dir and returns the full path
@@ -211,7 +222,8 @@ public class Dependency
                 Environment.SetEnvironmentVariable("PATH", $"{dir}:{current}");
     }
 
-    private static async Task<bool> CommandExistsAsync(string cmd)
+    // Returns the absolute path of a command as resolved by which/where, or null if not found.
+    private static async Task<string?> ResolveCommandPath(string cmd)
     {
         try
         {
@@ -222,9 +234,13 @@ public class Dependency
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             })!;
+            string outp = (await p.StandardOutput.ReadToEndAsync()).Trim();
             await p.WaitForExitAsync();
-            return p.ExitCode == 0;
+            if (p.ExitCode == 0 && outp.Length > 0)
+                return outp.Split('\n')[0].Trim();   // `where` can list multiple matches
+            return null;
         }
-        catch { return false; }
+        catch { return null; }
     }
+
 }

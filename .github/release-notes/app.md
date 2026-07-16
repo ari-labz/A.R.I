@@ -1,4 +1,4 @@
-Changes since v0.1.5:
+Changes since v0.1.6:
 
-- Homebrew is no longer required to start the server on macOS. It's now detected reliably (by its real install path, not PATH) and treated as optional — a missing Homebrew is a warning, not a fatal error.
-- On macOS without Homebrew (e.g. a non-admin account), llama.cpp is now downloaded as a prebuilt binary instead of failing. The server no longer attempts the interactive Homebrew installer, which could never succeed from a GUI-launched app.
+- Fixed the server failing to start on macOS while installing llama.cpp. Homebrew is now invoked by its absolute path (a GUI-launched app can't resolve the bare "brew" or "llama-server" name off a login PATH it never inherited), and the resulting llama-server path is resolved absolutely.
+- If the Homebrew install of llama.cpp fails for any reason, the server now falls back to downloading a prebuilt llama.cpp binary instead of aborting.
