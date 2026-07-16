@@ -1,0 +1,95 @@
+name: Release
+
+# Push a tag to build and publish ONE artifact:
+#   ARI_Server_v<ver>            -> builds the server app, published as a pre-release
+#   ARI_Server_Installer_v<ver>  -> builds the installer,  published as Latest
+# Pushing an app tag never rebuilds the installer, and vice versa.
+#
+# Before tagging, edit the matching notes file under .github/release-notes/ — its contents become
+# the release changelog verbatim (no # headings; the release title is the heading).
+
+on:
+  push:
+    tags:
+      - "ARI_Server_v*"
+      - "ARI_Server_Installer_v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # macOS can cross-build the win/linux zips and is required for the mac .dmg + ad-hoc signing.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse tag
+        id: meta
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ "$TAG" == ARI_Server_Installer_v* ]]; then
+            V="${TAG#ARI_Server_Installer_v}"
+            {
+              echo "target=installer"
+              echo "version=$V"
+              echo "title=A·R·I Server Installer v$V"
+              echo "prerelease=false"
+              echo "latest=true"
+              echo "notes=.github/release-notes/installer.md"
+              echo "glob=Builds/*/ARI_Server_Installer_v*"
+              echo "vfile=ARI.Installer/package.json"
+            } >> "$GITHUB_OUTPUT"
+          else
+            V="${TAG#ARI_Server_v}"
+            {
+              echo "target=app"
+              echo "version=$V"
+              echo "title=A·R·I Server v$V"
+              echo "prerelease=true"
+              echo "latest=false"
+              echo "notes=.github/release-notes/app.md"
+              echo "glob=Builds/*/ARI_Server_v*"
+              echo "vfile=manifest.json"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sync tag version into the build file
+        run: |
+          f="${{ steps.meta.outputs.vfile }}"
+          tmp="$(mktemp)"
+          jq --arg v "${{ steps.meta.outputs.version }}" '.version = $v' "$f" > "$tmp" && mv "$tmp" "$f"
+          echo "$f -> ${{ steps.meta.outputs.version }}"
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Install dependencies
+        run: |
+          if [[ "${{ steps.meta.outputs.target }}" == "app" ]]; then
+            (cd ARI.UI && bun install)
+            (cd ARI.Console && bun install)
+          else
+            (cd ARI.Installer && bun install)
+          fi
+
+      - name: Build
+        env:
+          BUILD_TARGET: ${{ steps.meta.outputs.target }}
+        run: bun build-release.js
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ARGS=()
+          [[ "${{ steps.meta.outputs.prerelease }}" == "true" ]] && ARGS+=(--prerelease)
+          [[ "${{ steps.meta.outputs.latest }}" == "true" ]] && ARGS+=(--latest)
+          gh release create "$GITHUB_REF_NAME" \
+            --title "${{ steps.meta.outputs.title }}" \
+            --notes-file "${{ steps.meta.outputs.notes }}" \
+            "${ARGS[@]}" \
+            ${{ steps.meta.outputs.glob }}

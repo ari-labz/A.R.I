@@ -21,6 +21,10 @@ const installerDir = path.join(__dirname, "ARI.Installer")
 
 fs.mkdirSync(versionDir, { recursive: true })
 
+// BUILD_TARGET lets CI build just the app or just the installer, so pushing an app tag never
+// rebuilds the installer (and vice versa). Unset / "all" = both (local default).
+const buildTarget = process.env.BUILD_TARGET || "all"   // app | installer | all
+
 // bun on PATH for the csproj BuildUI target and bunx electron-builder.
 const env = { ...process.env, PATH: `${path.join(process.env.HOME || "", ".bun", "bin")}:${process.env.PATH}` }
 
@@ -69,6 +73,7 @@ function bundleConsole(target, pubDir) {
 }
 
 // ── 1. Server app: Core + Console ────────────────────────────────────────────────
+if (buildTarget !== "installer")
 for (const target of targets) {
     const zip      = `ARI_Server_v${appVersion}_${target.plat}.zip`
     const stage    = path.join(versionDir, `.stage-${target.rid}`)
@@ -96,6 +101,7 @@ for (const target of targets) {
 }
 
 // ── 2. Server installer ──────────────────────────────────────────────────────────
+if (buildTarget !== "app")
 for (const target of targets) {
     const out = path.join(versionDir, `.inst-${target.rid}`)
     fs.rmSync(out, { recursive: true, force: true })
