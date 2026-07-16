@@ -18,58 +18,77 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    # macOS can cross-build the win/linux zips and is required for the mac .dmg + ad-hoc signing.
-    runs-on: macos-latest
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      target: ${{ steps.meta.outputs.target }}
+      version: ${{ steps.meta.outputs.version }}
+      title: ${{ steps.meta.outputs.title }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      latest: ${{ steps.meta.outputs.latest }}
+      notes: ${{ steps.meta.outputs.notes }}
+      pattern: ${{ steps.meta.outputs.pattern }}
+      vfile: ${{ steps.meta.outputs.vfile }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Parse tag
-        id: meta
+      - id: meta
         run: |
           TAG="${GITHUB_REF_NAME}"
           if [[ "$TAG" == ARI_Server_Installer_v* ]]; then
             V="${TAG#ARI_Server_Installer_v}"
             {
-              echo "target=installer"
-              echo "version=$V"
+              echo "target=installer"; echo "version=$V"
               echo "title=A·R·I Server Installer v$V"
-              echo "prerelease=false"
-              echo "latest=true"
+              echo "prerelease=false"; echo "latest=true"
               echo "notes=.github/release-notes/installer.md"
-              echo "glob=Builds/*/ARI_Server_Installer_v*"
+              echo "pattern=ARI_Server_Installer_v*"
               echo "vfile=ARI.Installer/package.json"
             } >> "$GITHUB_OUTPUT"
           else
             V="${TAG#ARI_Server_v}"
             {
-              echo "target=app"
-              echo "version=$V"
+              echo "target=app"; echo "version=$V"
               echo "title=A·R·I Server v$V"
-              echo "prerelease=true"
-              echo "latest=false"
+              echo "prerelease=true"; echo "latest=false"
               echo "notes=.github/release-notes/app.md"
-              echo "glob=Builds/*/ARI_Server_v*"
+              echo "pattern=ARI_Server_v*"
               echo "vfile=manifest.json"
             } >> "$GITHUB_OUTPUT"
           fi
 
+  build:
+    needs: setup
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { id: mac,   os: macos-latest,  plats: mac }        # dmg + native codesign
+          - { id: other, os: ubuntu-latest, plats: win linux }  # AppImage native, win via wine
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
       - name: Sync tag version into the build file
         run: |
-          f="${{ steps.meta.outputs.vfile }}"
+          f="${{ needs.setup.outputs.vfile }}"
           tmp="$(mktemp)"
-          jq --arg v "${{ steps.meta.outputs.version }}" '.version = $v' "$f" > "$tmp" && mv "$tmp" "$f"
-          echo "$f -> ${{ steps.meta.outputs.version }}"
+          jq --arg v "${{ needs.setup.outputs.version }}" '.version = $v' "$f" > "$tmp" && mv "$tmp" "$f"
 
       - uses: oven-sh/setup-bun@v2
-
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
 
+      # electron-builder needs wine to stamp the Windows portable .exe when built on Linux.
+      - name: Install wine (Linux, installer only)
+        if: runner.os == 'Linux' && needs.setup.outputs.target == 'installer'
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine wine32 wine64 || sudo apt-get install -y --no-install-recommends wine
+
       - name: Install dependencies
         run: |
-          if [[ "${{ steps.meta.outputs.target }}" == "app" ]]; then
+          if [[ "${{ needs.setup.outputs.target }}" == "app" ]]; then
             (cd ARI.UI && bun install)
             (cd ARI.Console && bun install)
           else
@@ -78,18 +97,36 @@ jobs:
 
       - name: Build
         env:
-          BUILD_TARGET: ${{ steps.meta.outputs.target }}
+          BUILD_TARGET: ${{ needs.setup.outputs.target }}
+          BUILD_PLATFORM: ${{ matrix.plats }}
         run: bun build-release.js
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.id }}
+          path: Builds/**/${{ needs.setup.outputs.pattern }}
+          if-no-files-found: error
+
+  publish:
+    needs: [setup, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          mapfile -t FILES < <(find dist -type f -name '${{ needs.setup.outputs.pattern }}')
+          echo "Uploading: ${FILES[*]}"
           ARGS=()
-          [[ "${{ steps.meta.outputs.prerelease }}" == "true" ]] && ARGS+=(--prerelease)
-          [[ "${{ steps.meta.outputs.latest }}" == "true" ]] && ARGS+=(--latest)
+          [[ "${{ needs.setup.outputs.prerelease }}" == "true" ]] && ARGS+=(--prerelease)
+          [[ "${{ needs.setup.outputs.latest }}" == "true" ]] && ARGS+=(--latest)
           gh release create "$GITHUB_REF_NAME" \
-            --title "${{ steps.meta.outputs.title }}" \
-            --notes-file "${{ steps.meta.outputs.notes }}" \
+            --title "${{ needs.setup.outputs.title }}" \
+            --notes-file "${{ needs.setup.outputs.notes }}" \
             "${ARGS[@]}" \
-            ${{ steps.meta.outputs.glob }}
+            "${FILES[@]}"
