@@ -1,3 +1,4 @@
-Changes since v0.1.7:
+Changes since v0.1.8:
 
-- The server now finds an existing Homebrew-installed llama-server directly by its path, instead of relying on a PATH lookup that a Finder-launched app doesn't have. This means an installed server reuses the same llama.cpp your dev environment already uses, rather than reporting "not found" and reinstalling it.
+- The published server now includes the web UI. A build-ordering bug (the wwwroot content glob was evaluated before the UI build ran) meant releases shipped without the compiled front-end, so the API worked but the website returned 404 (both in the browser and the desktop app). The build now copies the built UI into the published output explicitly.
+- llama-server's very verbose output no longer floods the A·R·I console. It's redirected to its own file (Logs/llama-<server>.log) instead.

@@ -68,6 +68,7 @@ public class Server : IDisposable
 
     private ILogger? _logger;
     private Process? _process;
+    private StreamWriter? _llamaLog;   // llama-server's own output — kept out of ARI's console/log
     private string _modelsPath = "";
 
     public void SetLogger(ILogger logger) => _logger = logger;
@@ -147,6 +148,9 @@ public class Server : IDisposable
         _process?.Dispose();
         _process = null;
         Pid = -1;
+
+        _llamaLog?.Dispose();
+        _llamaLog = null;
     }
 
     public async Task RestartAsync()
@@ -304,12 +308,22 @@ public class Server : IDisposable
 
         args.RemoveAll(string.IsNullOrWhiteSpace);
 
+        // Redirect llama-server's (very verbose) output to its own file instead of letting it inherit
+        // ARI's stdout — otherwise it floods the console window and any captured log. Draining the
+        // pipes is also required, or llama-server blocks once the OS buffer fills.
         _process = Process.Start(new ProcessStartInfo(Shared.LlamaServer, string.Join(" ", args))
         {
             UseShellExecute = false,
-            RedirectStandardOutput = false,
-            RedirectStandardError = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
         }) ?? throw new Exception($"[{Name}] Failed to start llama-server process.");
+
+        Directory.CreateDirectory(Paths.Logs);
+        _llamaLog = new StreamWriter(Path.Combine(Paths.Logs, $"llama-{Name}.log"), append: false) { AutoFlush = true };
+        _process.OutputDataReceived += (_, e) => { if (e.Data is not null) lock (_llamaLog) _llamaLog.WriteLine(e.Data); };
+        _process.ErrorDataReceived  += (_, e) => { if (e.Data is not null) lock (_llamaLog) _llamaLog.WriteLine(e.Data); };
+        _process.BeginOutputReadLine();
+        _process.BeginErrorReadLine();
 
         Pid = _process.Id;
         Log.LogInformation("[{Server}] llama-server started (PID {Pid}).", Name, Pid);
