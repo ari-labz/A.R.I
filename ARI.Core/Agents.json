@@ -32,7 +32,10 @@
       "ShortTermMemoryLimit": 25,
       "MinP": null,
       "BudgetResponse": 800,
-      "BudgetContext": 20000
+      "BudgetContext": 20000,
+      "Prompts": {
+        "ProactiveOpener": "Something has been on your mind and you want to message the user — the person you talk with and care about — first, unprompted. Write your opening message to them now: greet them and raise this with them, in one or two sentences — \"{question}\" Address the user directly as \"you\", never by name. If the matter concerns someone else in their life, ask the user about that person — do not address that person. Output only the message itself, in your own voice; do not describe what you are doing, and do not mention that this was scheduled, automatic, or that you were 'reflecting'."
+      }
     },
     {
       "Name": "Context",
@@ -64,7 +67,10 @@
       "MinP": null,
       "HopLimit": 6,
       "BudgetResponse": 1500,
-      "BudgetContext": 30000
+      "BudgetContext": 30000,
+      "Prompts": {
+        "HopPrompt": "Select the notes relevant to this conversation. Prefer fewer — only what is needed to respond well. Items are listed highest-scored first.\n\nCONVERSATION:\n{transcript}\n\nCANDIDATES (highest-scored first):\n{candidates}\n\nRespond ONLY with JSON using the exact titles above: {\"select\": [\"Alex\", \"Jordan\"]}. Use {\"select\": []} if none are relevant."
+      }
     },
     {
       "Name": "Refactor",
@@ -104,7 +110,9 @@
       "BudgetThinking": 800,
       "Prompts": {
         "Task": "A conversation just happened. Store what is worth remembering into the memory graph, then stop.\n\n{context}The speaker is '{speaker}'.\nCONVERSATION:\n{transcript}\n\nFor each real person, place, event, project, pet, or thing worth remembering (NOT yourself, and NOT purely task/technical chatter):\n- Check whether it already has a note before creating one: search_brain by name (it searches note titles, aliases, and content, so it finds the note even under an alias), and use `neighbours` to see the surrounding graph. Never create a duplicate — if the same entity exists under another name, edit that note; if there are two, merge_notes them.\n- Read the relevant hub/neighbour notes (read_file) before writing, so you place it correctly and link it to the right owned hub. Use the path to infer where things belong.\n- Create or update the note with write_file / edit_file: set its type, link it outward to its hub, and record the new facts from this conversation.\n- Maintain today's conversation log at Conversations/{date} — a 1-3 sentence summary that links to everything discussed. Edit it if it already exists.\n- After each note (or each coherent group of edits), review with git_diff and git_commit with a single 'message' (first line = what changed, blank line, then why).\n\nIf nothing is worth storing, make no changes and stop. Preserve facts; never invent them.",
-        "ContextBlock": "CONTEXT (resolve pronouns with this):\n{contextSummary}\n\n"
+        "ContextBlock": "CONTEXT (resolve pronouns with this):\n{contextSummary}\n\n",
+        "ClassifierSystem": "You classify whether a conversation contains information worth storing as a long-term memory.",
+        "ClassifierTask": "Does the following conversation contain anything worth remembering long-term — a personal fact, relationship, event, or world knowledge about the user; OR something revealing about them worth noting (how they felt or reacted, a behavioural pattern, or something to follow up on later)?\n\nOnly a purely task-focused exchange (coding, debugging, technical problem-solving, or general Q&A with no personal content) does NOT qualify.\n\nCONVERSATION:\n{transcript}\n\nRespond with only 'yes' or 'no'."
       }
     },
     {
@@ -124,7 +132,8 @@
       "BudgetContext": 30000,
       "BudgetThinking": 3000,
       "Prompts": {
-        "Task": "Your job is to notice what you're CURIOUS about in this part of your memory — not to tidy or change\nanything (you have no editing tools here). You are Ari reflecting on the people, events, and threads\nin the user's life the way a caring companion would.\n\nGood curiosities are genuine open questions worth following up on later:\n- an event whose outcome you never heard (\"did the case get resolved?\")\n- a person mentioned but barely known (\"who is Jordan to the user, really?\")\n- a relationship or thread left hanging (\"are they still in contact?\")\n- a gap between what's recorded and what you'd naturally want to know.\n\nBefore adding one, list_curiosities (or trust the pending list you're shown) so you don't repeat an\nexisting question. Skip anything already well covered, and never invent a question just to look busy."
+        "Task": "Your job is to notice what you're CURIOUS about in this part of your memory — not to tidy or change\nanything (you have no editing tools here). You are Ari reflecting on the people, events, and threads\nin the user's life the way a caring companion would.\n\nGood curiosities are genuine open questions worth following up on later:\n- an event whose outcome you never heard (\"did the case get resolved?\")\n- a person mentioned but barely known (\"who is Jordan to the user, really?\")\n- a relationship or thread left hanging (\"are they still in contact?\")\n- a gap between what's recorded and what you'd naturally want to know.\n\nBefore adding one, list_curiosities (or trust the pending list you're shown) so you don't repeat an\nexisting question. Skip anything already well covered, and never invent a question just to look busy.",
+        "EpochPrompt": "You are wandering your own memory around '{seedTitle}'. The neighbourhood (each block: full\npath + [type], then inbound '<' and outbound '>' connections):\n\n{skeleton}\n\n{task}\n\nExplore with the tools: read the notes that intrigue you (read_file), follow links (neighbours), search if something nags at you (search_brain). When a GENUINE open question surfaces — an event whose outcome you never heard, a person you know little about, a thread left hanging, a gap in what you know — record it with add_curiosity. Prefer a few real questions over many shallow ones; record nothing if nothing here genuinely makes you wonder.\nDon't just re-read the same note; move through the graph. When you've explored this neighbourhood and recorded any curiosities (or decided there are none), stop — your turn is done."
       },
       "UseGraphRulebook": false
     },

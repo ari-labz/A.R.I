@@ -2010,8 +2010,17 @@ const AG_TREE = [
     { name: 'Classifier', prompts: [] },
     { name: 'Context',    prompts: [],
       systemTokens: [['memoryLimit', "Dialogue's short-term memory limit — how many messages back stay relevant"]] },
-    { name: 'Dialogue',   prompts: [] },
-    { name: 'Memory',     prompts: [] },
+    { name: 'Dialogue',   prompts: [
+        { key: 'ProactiveOpener', label: 'Proactive opener',
+          hint: 'her turn when she messages you first, unprompted',
+          tokens: [['question', 'the curiosity she picked to raise with you']] },
+    ]},
+    { name: 'Memory',     prompts: [
+        { key: 'HopPrompt', label: 'Hop prompt',
+          hint: 'sent on each hop while she decides which notes are relevant',
+          tokens: [['transcript', 'the conversation so far'],
+                   ['candidates', 'the candidate notes, highest-scored first']] },
+    ]},
     { name: 'Coder',      prompts: [], phases: true },
     { name: 'MemoryAgent', abstract: true, shared: 'MemoryAgent', children: [
         { name: 'Engram', prompts: [
@@ -2022,12 +2031,23 @@ const AG_TREE = [
                        ['date', "today's date, for the conversation log note"]] },
             { key: 'ContextBlock', label: 'Context block',  hint: 'omitted entirely when there is no context summary',
               tokens: [['contextSummary', 'the resolved context used to fix pronouns']] },
+            { key: 'ClassifierSystem', label: 'Worth-remembering gate — system',
+              hint: 'a separate yes/no call BEFORE the task above — a "no" here means nothing is stored at all',
+              tokens: [] },
+            { key: 'ClassifierTask', label: 'Worth-remembering gate — question',
+              hint: 'the question that gate is asked',
+              tokens: [['transcript', 'the conversation being judged']] },
         ]},
         { name: 'Refactor',  prompts: [
             { key: 'Task', label: 'Task', hint: 'the turn sent on each scheduled run', tokens: [] },
         ]},
         { name: 'Curiosity', prompts: [
             { key: 'Task', label: 'Task', hint: 'the turn sent on each scheduled run', tokens: [] },
+            { key: 'EpochPrompt', label: 'Epoch prompt',
+              hint: 'overrides the shared one above — Curiosity wanders rather than tidies',
+              tokens: [['seedTitle', 'the note at the centre of this neighbourhood'],
+                       ['skeleton', "the neighbourhood's notes and their links"],
+                       ['task', "Curiosity's own task text, inserted here"]] },
         ]},
     ]},
 ];

@@ -206,16 +206,10 @@ internal class Engram : MemoryAgent, IDisposable
             model    = "local",
             messages = new[]
             {
-                new { role = "system", content = "You classify whether a conversation contains information worth storing as a long-term memory.\n<|think_off|>" },
-                new { role = "user",   content =
-                    "Does the following conversation contain anything worth remembering long-term — a personal " +
-                    "fact, relationship, event, or world knowledge about the user; OR something revealing about " +
-                    "them worth noting (how they felt or reacted, a behavioural pattern, or something to follow " +
-                    "up on later)?\n\n" +
-                    "Only a purely task-focused exchange (coding, debugging, technical problem-solving, or general " +
-                    "Q&A with no personal content) does NOT qualify.\n\n" +
-                    $"CONVERSATION:\n{transcript}\n\n" +
-                    "Respond with only 'yes' or 'no'." }
+                // <|think_off|> is appended in code, not stored with the prompt: it is a model control
+                // token, not prose, and editing it would silently stop think-off rather than reword anything.
+                new { role = "system", content = PromptText("ClassifierSystem", "") + "\n<|think_off|>" },
+                new { role = "user",   content = PromptText("ClassifierTask", "", ("transcript", transcript)) }
             },
             stream      = false,
             max_tokens  = 5,

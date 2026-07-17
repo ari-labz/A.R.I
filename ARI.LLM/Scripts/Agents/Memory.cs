@@ -145,13 +145,9 @@ internal class Memory : Agent
                 $"- {p.From.Title} connects to {p.To.Title} via {string.Join(" -> ", p.Notes.Select(n => n.Title))}"))
             : string.Empty;
 
-        string prompt =
-            "Select the notes relevant to this conversation. Prefer fewer — only what is needed to respond well. " +
-            "Items are listed highest-scored first.\n\n" +
-            $"CONVERSATION:\n{transcript}\n\n" +
-            $"CANDIDATES (highest-scored first):\n{candidateBlock}{pathBlock}\n\n" +
-            "Respond ONLY with JSON using the exact titles above: {\"select\": [\"Alex\", \"Jordan\"]}. " +
-            "Use {\"select\": []} if none are relevant.";
+        string prompt = PromptText("HopPrompt", "",
+            ("transcript", transcript),
+            ("candidates", candidateBlock + pathBlock));
 
         Stopwatch timer = Stopwatch.StartNew();
         string raw = await SendPrompt(memThread, prompt, ct: ct, thinkingBudgetOverride: THINKING_BUDGET);
