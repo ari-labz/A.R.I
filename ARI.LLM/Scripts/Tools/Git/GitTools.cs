@@ -107,7 +107,7 @@ internal sealed class GitLog : GitTool
 
 internal sealed class GitCommit : GitTool
 {
-    private readonly string? coAuthor;   // e.g. "A.R.I <ari@xywren.net>" → appended as a Co-Authored-By trailer
+    private readonly string? coAuthor;   // e.g. "A.R.I <ari@ari.local>" → appended as a Co-Authored-By trailer
     internal GitCommit(string root, string? coAuthor = null) : base(root) => this.coAuthor = coAuthor;
     internal override string Name => "git_commit";
     internal override object Schema => new

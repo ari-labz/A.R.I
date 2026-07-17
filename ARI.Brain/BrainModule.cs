@@ -113,7 +113,7 @@ public static class BrainModule
     }
 
     // Terminal guardrail: after a sweep, any [[link]] that resolves to no title, alias, or path is
-    // genuinely dead (aliases already resolved, e.g. [[Nickname]] -> [Name], so those survive). De-link it
+    // genuinely dead (aliases already resolved, e.g. [[Nickname]] -> Person A, so those survive). De-link it
     // to its plain display text rather than leave a broken reference. Returns files changed; reindexes.
     public static int StripUnresolvedLinks()
     {
@@ -224,7 +224,7 @@ public static class BrainModule
         return best.Values.ToList();
     }
 
-    // One anchor per distinct term, not per result — connects "the [Name] thing" to "the [Name] thing"
+    // One anchor per distinct term, not per result — connects "the alex thing" to "the jordan thing"
     // instead of cross-linking every matched note (which is mostly noise on a dense graph). Each note
     // on a connecting path is boosted once, regardless of how many paths cross it.
     private static (List<SearchResult> Boosted, List<RecallPath> Paths) Pathfind(IReadOnlyList<string> terms, int hopLimit, List<SearchResult> results)
@@ -370,7 +370,7 @@ public static class BrainModule
         return created;
     }
 
-    // Merges a drifted title variant ("[Name] — User", "[Name] - partner") back into its base note when
+    // Merges a drifted title variant ("Person A — User", "Person C - partner") back into its base note when
     // the base exists — the write phase sometimes appends a descriptor to a resolved note's title, which
     // would otherwise leave a duplicate. The variant title becomes an alias on the base (via MergeNotes).
     public static int MergeTitleVariants()
