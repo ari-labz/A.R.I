@@ -156,6 +156,46 @@ public class PersistentData
         }
     }
 
+    /// <summary>
+    /// Seeds Servers.json and Models.json from the bundled defaults on first run — the demo server and
+    /// the one model it expects. Same rule as the agents: only when the user has none, and never again,
+    /// so a machine's own servers are not touched by an update.
+    /// </summary>
+    public void EnsureServersAndModelsFromFallback(string serversFallback, string modelsFallback)
+    {
+        lock (_serversLock)
+        {
+            if (LoadServers().Servers.Count == 0)
+                SeedFile(serversFallback, _serversPath, "Servers");
+        }
+        lock (_modelsLock)
+        {
+            if (LoadModels().Models.Count == 0)
+                SeedFile(modelsFallback, _modelsPath, "Models");
+        }
+    }
+
+    // Copies a bundled default verbatim. Verbatim matters: it keeps the shipped file the single source
+    // of the demo config, rather than a shape this class has to re-describe in C#.
+    private static void SeedFile(string fallbackPath, string destPath, string label)
+    {
+        if (!File.Exists(fallbackPath))
+        {
+            Shared.Logger.LogError("[PersistentData] No {Label}.json in app data and no bundled default at {Path}.", label, fallbackPath);
+            return;
+        }
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+            File.Copy(fallbackPath, destPath, overwrite: false);
+            Shared.Logger.LogInformation("[PersistentData] Seeded {Label}.json from the bundled default.", label);
+        }
+        catch (Exception ex)
+        {
+            Shared.Logger.LogError(ex, "[PersistentData] Could not seed {Label}.json from {Path}.", label, fallbackPath);
+        }
+    }
+
     // ── Servers ─────────────────────────────────────────────────────────────────
 
     public IReadOnlyList<Server> GetServers()

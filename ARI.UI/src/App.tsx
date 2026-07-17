@@ -229,6 +229,8 @@ export default function App() {
 
     const [clientVersion,  setClientVersion]  = useState<string | null>(null)
     const [outdated,       setOutdated]       = useState(false)
+    // Assume ready until told otherwise, so a slow/failed check never blocks the composer.
+    const [serverReady,    setServerReady]    = useState(true)
 
     const globalEsRef      = useRef<EventSource | null>(null)
     const abortRef         = useRef<AbortController | null>(null)
@@ -362,11 +364,23 @@ export default function App() {
             setOutdated(!!serverOutdated)
         }
 
+        // Is any model server online? A fresh install has none running by design, so the composer
+        // says so rather than accepting a message nothing can answer. Polled often enough that the
+        // warning clears shortly after the user starts a server.
+        async function checkReady() {
+            const res = await fetch("/api/info/ready").catch(() => null)
+            if (!res?.ok) return
+            const { ready } = await res.json()
+            setServerReady(!!ready)
+        }
+
         env.getVersion().then(ver => { if (ver) setClientVersion(ver) })
         checkVersion()
+        checkReady()
+        const readyPollId   = setInterval(checkReady, 5 * 1000)
         const versionPollId = setInterval(checkVersion, 60 * 1000)
 
-        return () => { clearInterval(pollId); clearInterval(versionPollId); globalEsRef.current?.close() }
+        return () => { clearInterval(pollId); clearInterval(versionPollId); clearInterval(readyPollId); globalEsRef.current?.close() }
     }, [connectAndInit, loadThreads, loadProjects])
 
     // ── toast ─────────────────────────────────────────────
@@ -1105,6 +1119,7 @@ export default function App() {
             ) : (
                 <Main
                     mode={mode}
+                    serverReady={serverReady}
                     codeMode={codeMode}
                     items={items}
                     planProposed={!isStreaming && items[items.length - 1]?.type === "ariResponse"

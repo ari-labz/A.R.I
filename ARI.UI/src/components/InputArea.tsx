@@ -18,6 +18,9 @@ interface Props {
     onPipelineChange: (id: string | null) => void
     onBeginSpeech:    () => void
     threadLocked:     boolean
+    // False when no model server is online — the composer is disabled and says why, rather than
+    // accepting a message nothing can answer. Null while we have not checked yet (assume fine).
+    serverReady:      boolean
     onSend:           (text: string) => void
     onUploadFiles:    (files: File[]) => void
     onRemoveAttach:   (name: string) => void
@@ -36,7 +39,7 @@ function fileExtLabel(name: string) {
 export default function InputArea({
     isStreaming, planProposed, pendingAttach, commands,
     projects, selectedProject, onProjectChange,
-    pipelines, selectedPipeline, onPipelineChange, onBeginSpeech, threadLocked,
+    pipelines, selectedPipeline, onPipelineChange, onBeginSpeech, threadLocked, serverReady,
     onSend, onUploadFiles, onRemoveAttach,
     onHeartbeatStart, onHeartbeatStop,
     codeMode, safetyMode, onToggleSafety,
@@ -77,6 +80,7 @@ export default function InputArea({
     }
 
     function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+        if (!serverReady) { e.preventDefault(); return }
         if (cmdMatches.length > 0) {
             if (e.key === "ArrowDown") { e.preventDefault(); setCmdIndex(i => (i + 1) % cmdMatches.length); return }
             if (e.key === "ArrowUp")   { e.preventDefault(); setCmdIndex(i => (i - 1 + cmdMatches.length) % cmdMatches.length); return }
@@ -201,12 +205,24 @@ export default function InputArea({
                     </div>
                 )}
 
+                {!serverReady && (
+                    <div id="no-server-warning">
+                        No model server is running. Open the control panel, choose the model you want to run,
+                        and start the server.
+                    </div>
+                )}
+
                 <textarea
                     id="input"
                     ref={textareaRef}
                     rows={1}
                     value={input}
-                    placeholder={amending ? "Describe the changes to the plan…" : "Message A·R·I..."}
+                    disabled={!serverReady}
+                    placeholder={
+                        !serverReady ? "Waiting for a model server…"
+                        : amending    ? "Describe the changes to the plan…"
+                        : "Message A·R·I..."
+                    }
                     onChange={e => { setInput(e.target.value); updateCmdPopup(e.target.value) }}
                     onKeyDown={handleKeyDown}
                     onPaste={handlePaste}
@@ -253,7 +269,7 @@ export default function InputArea({
                         />
                         <button
                             className="btn-send"
-                            disabled={isStreaming || (!input.trim() && pendingAttach.length === 0)}
+                            disabled={!serverReady || isStreaming || (!input.trim() && pendingAttach.length === 0)}
                             onClick={submit}
                             title="Send"
                         >

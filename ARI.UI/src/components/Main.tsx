@@ -43,6 +43,7 @@ interface Props {
     onBeginSpeech:    () => void
     speechCaption:    string | null
     speechOrbState:   "listening" | "thinking" | "speaking"
+    serverReady:      boolean
 }
 
 export default function Main({
@@ -56,7 +57,7 @@ export default function Main({
     projects, selectedProject, onProjectChange,
     pipelines, selectedPipeline, onPipelineChange,
     speechMode, onBeginSpeech, speechCaption, speechOrbState,
-    safetyMode, onToggleSafety,
+    safetyMode, onToggleSafety, serverReady,
 }: Props) {
     const [threadPanelOpen, setThreadPanelOpen] = useState(false)
     const [dropVisible,     setDropVisible]     = useState(false)
@@ -231,6 +232,7 @@ export default function Main({
                         onPipelineChange={onPipelineChange}
                         onBeginSpeech={onBeginSpeech}
                         threadLocked={activeThread !== null}
+                        serverReady={serverReady}
                         onSend={onSend}
                         onUploadFiles={onUploadMessageFiles}
                         onRemoveAttach={onRemoveMessageAttach}

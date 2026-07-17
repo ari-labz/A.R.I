@@ -662,6 +662,18 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         // here until every boot-startup server reports Online (the client's typing indicator covers the
         // wait), and only error out if boot genuinely never completes. Prompting mid-boot used to surface
         // raw connection errors to the user.
+        // Nothing online at all and nothing coming: the user has not started a server yet (a fresh
+        // install ships one that does not boot on startup). Say so plainly instead of waiting four
+        // minutes for a boot that was never going to happen, or handing back a raw connection error.
+        if (!Llm.Servers.Any(s => s.Status == ARI.LLM.ServerStatus.Online)
+            && !Llm.Servers.Any(s => s.BootStartup || s.Status == ARI.LLM.ServerStatus.Starting))
+        {
+            await Response.WriteAsync("data: [ERROR] No model server is running. Open the control panel, choose the model you want, and start a server.\n\n", cancellationToken);
+            await Response.WriteAsync("data: [DONE]\n\n", cancellationToken);
+            await Response.Body.FlushAsync(cancellationToken);
+            return;
+        }
+
         if (Llm.Servers.Any(s => s.BootStartup && s.Status != ARI.LLM.ServerStatus.Online))
         {
             DateTime bootDeadline = DateTime.UtcNow.AddMinutes(4);

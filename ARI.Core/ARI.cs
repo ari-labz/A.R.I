@@ -96,6 +96,12 @@ public class ARI : BackgroundService
         // shipped one is never consulted again — so prompts and bindings the user tunes here are never
         // overwritten by an update.
         persistentData.EnsureAgentsFileFromFallback(Path.Combine(Paths.BuildPath, "Agents.json"));
+        // The demo server and the model it expects, so a fresh install has something to bind to rather
+        // than an empty list. Seeded not-running and not-downloaded — nothing is fetched or launched
+        // until the user asks.
+        persistentData.EnsureServersAndModelsFromFallback(
+            Path.Combine(Paths.BuildPath, "Servers.json"),
+            Path.Combine(Paths.BuildPath, "Models.json"));
         string agentsPath = Path.Combine(ariPersistentDir, "Agents.json");
 
         // ── LLM module ───────────────────────────────────────────────────────────

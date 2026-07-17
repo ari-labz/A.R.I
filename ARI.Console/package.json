@@ -1,6 +1,6 @@
 {
   "name": "ari-console",
-  "version": "0.1.10",
+  "version": "0.2.0",
   "description": "A·R·I Server console — runs and monitors the local server, stops it when closed.",
   "author": "Xywren",
   "private": true,
