@@ -123,8 +123,34 @@ public class LLMModule : ILLMModule, IDisposable
         T Deserialize<T>(JsonElement el) where T : Agent
         {
             T agent = JsonSerializer.Deserialize<T>(el.GetRawText(), JsonOptions)!;
+
             if (serverEndpoints.TryGetValue(agent.ServerName, out string? ep))
+            {
                 agent.Endpoint = ep;
+            }
+            else if (_servers.Count > 0)
+            {
+                // No binding, or one naming a server that no longer exists. Bindings are machine facts,
+                // so the shipped Agents.json carries none — on a fresh install this is how every agent
+                // finds the demo server. Lowest-index server, lowest-index slot, unless the user said
+                // otherwise. Logged because "why is this agent on that server" should be answerable
+                // from the log rather than by reading this method.
+                Server first = _servers[0];
+                _logger.LogInformation(
+                    agent.ServerName.Length == 0
+                        ? "Agent '{Agent}' has no server binding — defaulting to '{Server}' slot 0."
+                        : "Agent '{Agent}' is bound to unknown server '{Missing}' — defaulting to '{Server}' slot 0.",
+                    agent.Name, agent.ServerName.Length == 0 ? first.Name : agent.ServerName, first.Name);
+
+                agent.ServerName = first.Name;
+                agent.Endpoint   = first.FullEndpoint;
+            }
+            else
+            {
+                _logger.LogError("Agent '{Agent}' cannot be bound — no servers are configured.", agent.Name);
+            }
+
+            agent.Slot ??= 0;
             return agent;
         }
 
