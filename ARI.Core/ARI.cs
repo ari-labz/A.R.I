@@ -246,19 +246,45 @@ public class ARI : BackgroundService
         // ── Discord ──────────────────────────────────────────────────────────────
         List<Task> moduleTasks = new();
 
-        if (config.modules.Discord.Enabled)
+        // Discord.json (app data, control-panel edited) is the source of truth. On first run it is
+        // seeded from the AriConfig.json section so existing setups keep working — including a token
+        // still coming from secrets.env, which is copied in and can then be deleted from there.
+        if (!DiscordStore.Exists())
         {
-            // An unresolved ${DISCORD_TOKEN} placeholder (no secrets.env / env value) means there is
-            // no usable token — starting Discord would only spin on 401s, so skip the module instead.
-            string discordToken = config.modules.Discord.Token;
-            if (string.IsNullOrWhiteSpace(discordToken) || discordToken.Contains("${"))
+            DiscordConfig seed = config.modules.Discord;
+            string seedToken = seed.Token.Contains("${") ? "" : seed.Token;
+            DiscordStore.Set(new DiscordSettings
             {
-                _logger.LogWarning("Discord module is enabled but no valid token was found (DISCORD_TOKEN unresolved) - skipping Discord.");
+                Enabled            = seed.Enabled,
+                Token              = seedToken,
+                OwnerId            = seed.OwnerId,
+                WhitelistedUserIds = seed.WhitelistedUserIds ?? [],
+                WatchedChannelIds  = seed.WatchedChannelIds,
+                AllowedGuildIds    = seed.AllowedGuildIds,
+            });
+            _logger.LogInformation("Discord settings seeded to Discord.json from AriConfig.json.");
+        }
+
+        DiscordSettings discord = DiscordStore.Get();
+
+        if (discord.Enabled)
+        {
+            if (string.IsNullOrWhiteSpace(discord.Token))
+            {
+                _logger.LogWarning("Discord module is enabled but no token is set — add one in the control panel. Skipping Discord.");
             }
             else
             {
                 _logger.LogInformation("Discord module is enabled. Starting...");
-                discordService = new DiscordModule(loggerFactory, llmModule, config.modules.Discord);
+                discordService = new DiscordModule(loggerFactory, llmModule, new DiscordConfig
+                {
+                    Enabled            = discord.Enabled,
+                    Token              = discord.Token,
+                    OwnerId            = discord.OwnerId,
+                    WhitelistedUserIds = discord.WhitelistedUserIds,
+                    WatchedChannelIds  = discord.WatchedChannelIds,
+                    AllowedGuildIds    = discord.AllowedGuildIds,
+                });
                 await discordService.StartAsync(stoppingToken);
                 if (discordService.ExecuteTask is not null)
                     moduleTasks.Add(discordService.ExecuteTask);
