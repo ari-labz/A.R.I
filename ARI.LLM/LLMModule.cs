@@ -729,14 +729,7 @@ public class LLMModule : ILLMModule, IDisposable
         // Framed to make Ari WRITE its own opening message, not narrate the task. The earlier "Greet them
         // and ask this" phrasing was echoed back as a stage direction ("Ari greets you warmly and asks…");
         // "write your opening message now / output only the message" stops that.
-        string instruction =
-            "Something has been on your mind and you want to message the user — the person you talk with and care " +
-            "about — first, unprompted. Write your opening message to them now: greet them and raise this with them, " +
-            $"in one or two sentences — \"{pick.Question}\" " +
-            "Address the user directly as \"you\", never by name. If the matter concerns someone else in their life, " +
-            "ask the user about that person — do not address that person. Output only the message itself, in your own " +
-            "voice; do not describe what you are doing, and do not mention that this was scheduled, automatic, or that " +
-            "you were 'reflecting'.";
+        string instruction = dialogue.PromptText("ProactiveOpener", "", ("question", pick.Question));
 
         // Generate through the full Dialogue pipeline (not raw SendPrompt) so the opener is grounded in memory
         // recall + context — otherwise Ari phrases blind, with no idea who the people in the question are. The

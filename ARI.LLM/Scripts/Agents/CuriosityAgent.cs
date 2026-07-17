@@ -91,24 +91,17 @@ internal sealed class CuriosityAgent : MemoryAgent
         return null;
     }
 
+    // Curiosity wanders rather than tidies, so it carries its own epoch prompt; with no entry of its
+    // own it falls back to the shared MemoryAgent one.
     protected override string BuildEpochPrompt(string task, string seedTitle, string skeleton)
     {
-        StringBuilder sb = new();
-        sb.AppendLine($"You are wandering your own memory around '{seedTitle}'. The neighbourhood (each block: full");
-        sb.AppendLine("path + [type], then inbound '<' and outbound '>' connections):");
-        sb.AppendLine();
-        sb.AppendLine(skeleton.Length > 0 ? skeleton : "(no connections)");
-        sb.AppendLine();
-        sb.AppendLine(task);
-        sb.AppendLine();
-        sb.AppendLine("Explore with the tools: read the notes that intrigue you (read_file), follow links (neighbours), " +
-                      "search if something nags at you (search_brain). When a GENUINE open question surfaces — an event " +
-                      "whose outcome you never heard, a person you know little about, a thread left hanging, a gap in " +
-                      "what you know — record it with add_curiosity. Prefer a few real questions over many shallow ones; " +
-                      "record nothing if nothing here genuinely makes you wonder.");
-        sb.AppendLine("Don't just re-read the same note; move through the graph. When you've explored this neighbourhood " +
-                      "and recorded any curiosities (or decided there are none), stop — your turn is done.");
-        return sb.ToString();
+        if (Prompts is null || !Prompts.ContainsKey("EpochPrompt"))
+            return base.BuildEpochPrompt(task, seedTitle, skeleton);
+
+        return PromptText("EpochPrompt", "",
+            ("seedTitle", seedTitle),
+            ("skeleton",  skeleton.Length > 0 ? skeleton : "(no connections)"),
+            ("task",      task));
     }
 
     // The exploration brief handed to each epoch alongside the neighbourhood skeleton. Persona lives in config.
