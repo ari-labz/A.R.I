@@ -823,7 +823,38 @@ html, body {
 
     <div id="tab-discord" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
-        <div class="vs-section-title">Discord</div>
+        <div class="vs-section-title">Connection</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
+          A·R·I reads these when she starts, so changes need a restart to take effect.
+        </p>
+
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:14px;cursor:pointer;">
+          <input type="checkbox" id="dc-enabled"> Enable Discord
+        </label>
+
+        <label class="vs-label" style="display:block;font-size:12px;margin-bottom:4px;">Bot token</label>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+          <input type="password" id="dc-token" class="vs-input" style="flex:1;max-width:520px;" placeholder="Paste a bot token">
+          <button type="button" id="dc-token-show" class="vs-btn" style="font-size:11px;padding:5px 10px;border:1px solid var(--border,#2a2a2a);border-radius:6px;background:transparent;color:var(--text-dim);cursor:pointer;">Show</button>
+        </div>
+        <p id="dc-token-state" style="color:var(--text-dim);font-size:11px;margin:0 0 16px;"></p>
+
+        <label class="vs-label" style="display:block;font-size:12px;margin-bottom:4px;">Owner ID</label>
+        <input type="text" id="dc-owner" class="vs-input" style="max-width:280px;margin-bottom:16px;" placeholder="e.g. 171691421407903744" inputmode="numeric">
+
+        <div id="dc-lists"></div>
+
+        <div style="display:flex;align-items:center;gap:12px;margin-top:16px;">
+          <button class="vs-btn-primary" id="dc-save" type="button">Save settings</button>
+          <span id="dc-status" style="font-size:12px;color:var(--text-dim);"></span>
+        </div>
+        <div id="dc-restart" style="display:none;margin-top:12px;padding:10px 12px;border:1px solid #fde68a;background:#fffbeb;color:#92400e;border-radius:8px;font-size:12px;">
+          Saved. Restart A·R·I for these changes to take effect.
+        </div>
+      </div>
+
+      <div class="vs-section">
+        <div class="vs-section-title">Delete recent messages</div>
         <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
           Delete every message A·R·I sent in the last 24 hours across all reachable channels
           (server text channels and the owner DM). This cannot be undone.
@@ -925,6 +956,7 @@ function switchTab(name) {
     if (name === 'agents') loadAgents();
     if (name === 'llmconfigs') loadLLMConfigs();
     if (name === 'scheduler') loadScheduler();
+    if (name === 'discord') loadDiscord();
     if (name === 'debug') loadDebugThreads();
 }
 navItems.forEach(n => n.addEventListener('click', () => switchTab(n.dataset.tab)));
@@ -1195,6 +1227,148 @@ document.getElementById('discord-delete-btn').addEventListener('click', async (e
     } catch { s.textContent = 'Delete failed.'; }
     finally { btn.disabled = false; }
 });
+
+// ── discord settings ──────────────────────────────────────
+// IDs are kept as strings end to end: Discord snowflakes exceed 2^53 and Number() mangles them.
+const DC_LISTS = [
+    { key: 'whitelistedUserIds', title: 'Whitelisted users',  hint: 'User IDs A·R·I will respond to.',            ph: 'User ID' },
+    { key: 'watchedChannelIds',  title: 'Watched channels',   hint: 'Channel IDs she reads and can reply in.',    ph: 'Channel ID' },
+    { key: 'allowedGuildIds',    title: 'Allowed guilds',     hint: 'Servers she is permitted to operate in.',    ph: 'Guild ID' },
+];
+var dcState = null;
+
+async function loadDiscord() {
+    const host = document.getElementById('dc-lists');
+    try {
+        const r = await fetch('/admin/discord/config');
+        if (!r.ok) throw new Error();
+        dcState = await r.json();
+    } catch {
+        host.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Failed to load Discord settings.</span>';
+        return;
+    }
+    document.getElementById('dc-enabled').checked = !!dcState.enabled;
+    document.getElementById('dc-owner').value = dcState.ownerId && dcState.ownerId !== '0' ? dcState.ownerId : '';
+    document.getElementById('dc-token').value = '';
+    document.getElementById('dc-token-state').textContent = dcState.tokenConfigured
+        ? 'A token is saved. Leave blank to keep it, or paste a new one to replace it.'
+        : 'No token saved — Discord will not start without one.';
+
+    host.innerHTML = '';
+    DC_LISTS.forEach(spec => host.appendChild(dcBuildList(spec, dcState[spec.key] || [])));
+    document.getElementById('dc-restart').style.display = 'none';
+}
+
+function dcBuildList(spec, ids) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'margin-bottom:18px;';
+    wrap.dataset.dcList = spec.key;
+
+    const t = document.createElement('div');
+    t.style.cssText = 'font-size:12px;font-weight:600;margin-bottom:2px;';
+    t.textContent = spec.title;
+    const h = document.createElement('div');
+    h.style.cssText = 'font-size:11px;color:var(--text-dim);margin-bottom:6px;';
+    h.textContent = spec.hint;
+
+    const chips = document.createElement('div');
+    chips.className = 'dc-chips';
+    chips.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;';
+
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:6px;';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'vs-input';
+    input.style.cssText = 'max-width:280px;';
+    input.placeholder = spec.ph;
+    input.inputMode = 'numeric';
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'vs-btn';
+    add.style.cssText = 'font-size:11px;padding:4px 12px;border:1px solid var(--border,#2a2a2a);border-radius:6px;background:transparent;color:var(--text,#ddd);cursor:pointer;';
+    add.textContent = 'Add';
+
+    function addId() {
+        const v = input.value.trim();
+        if (!v) return;
+        if (!/^\d+$/.test(v)) { input.style.borderColor = '#dc2626'; return; }
+        input.style.borderColor = '';
+        if (!dcIds(wrap).includes(v)) chips.appendChild(dcChip(v));
+        input.value = '';
+    }
+    add.addEventListener('click', addId);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addId(); } });
+
+    row.append(input, add);
+    (ids || []).forEach(id => chips.appendChild(dcChip(id)));
+    wrap.append(t, h, chips, row);
+    return wrap;
+}
+
+function dcChip(id) {
+    const c = document.createElement('span');
+    c.className = 'dc-chip';
+    c.dataset.id = id;
+    c.style.cssText = 'display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:3px 8px;border:1px solid var(--border,#2a2a2a);border-radius:999px;';
+
+    const label = document.createElement('span');
+    label.textContent = id;
+
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.title = 'Remove';
+    x.style.cssText = 'background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:13px;line-height:1;padding:0;';
+    x.textContent = '×';
+    x.addEventListener('click', () => c.remove());
+
+    c.append(label, x);
+    return c;
+}
+
+function dcIds(wrap) {
+    return Array.from(wrap.querySelectorAll('.dc-chip')).map(c => c.dataset.id);
+}
+
+document.getElementById('dc-token-show').addEventListener('click', e => {
+    const t = document.getElementById('dc-token');
+    const showing = t.type === 'text';
+    t.type = showing ? 'password' : 'text';
+    e.currentTarget.textContent = showing ? 'Show' : 'Hide';
+});
+
+document.getElementById('dc-save').addEventListener('click', async e => {
+    const btn = e.currentTarget;
+    const s = document.getElementById('dc-status');
+    const body = {
+        enabled: document.getElementById('dc-enabled').checked,
+        // Blank means "keep the saved token" — the panel never holds it, so it cannot round-trip it.
+        token:   document.getElementById('dc-token').value.trim(),
+        ownerId: document.getElementById('dc-owner').value.trim(),
+    };
+    DC_LISTS.forEach(spec => {
+        const wrap = document.querySelector(`[data-dc-list="${spec.key}"]`);
+        body[spec.key] = wrap ? dcIds(wrap) : [];
+    });
+
+    btn.disabled = true; s.textContent = 'Saving…';
+    try {
+        const r = await fetch('/admin/discord/config', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { s.textContent = d.error || 'Save failed.'; return; }
+        s.textContent = '';
+        document.getElementById('dc-restart').style.display = '';
+        document.getElementById('dc-token').value = '';
+        document.getElementById('dc-token-state').textContent =
+            'A token is saved. Leave blank to keep it, or paste a new one to replace it.';
+    } catch { s.textContent = 'Save failed.'; }
+    finally { btn.disabled = false; }
+});
+
 async function restoreBackup(file, count) {
     if (!confirm(`Restore ${count} note(s) from\n${file}?\n\nThis recreates missing notes and overwrites present ones to the snapshot. It does not delete anything.`)) return;
     const s = brainStatus(); s.textContent = 'Restoring…';
