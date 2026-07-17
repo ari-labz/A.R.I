@@ -13,6 +13,11 @@ public abstract class Agent
     [JsonPropertyName("name")]          public string  Name          { get; init; } = "";
     [JsonPropertyName("serverName")]    public string  ServerName    { get; set; }  = "";
     [JsonPropertyName("systemPrompt")]  public string  SystemPrompt  { get; init; } = "";
+
+    // Every other prompt this agent sends, keyed by name (e.g. "Task", "EpochPrompt"). Editable in
+    // Agents.json / the control panel. Tokens like {speaker} are substituted at send time by Prompt();
+    // a token the user deletes simply never reaches the model — the defaults are the tested shape.
+    [JsonPropertyName("prompts")]       public Dictionary<string, string>? Prompts { get; init; }
     [JsonPropertyName("enabled")]       public bool    Enabled       { get; init; }
     [JsonPropertyName("budgetResponse")]     public int     BudgetResponse     { get; init; } = -1;
     [JsonPropertyName("maxToolCalls")]  public int     MaxToolCalls  { get; init; }
@@ -71,6 +76,52 @@ public abstract class Agent
     // The agent's role/mode system-prompt body for THIS thread. Default: the flat configured prompt.
     // A stateful agent (CodeArchitect) overrides this to swap the [Mode] block per CodePhase.
     internal virtual string SystemPromptFor(Thread thread) => SystemPrompt;
+
+    /// <summary>Renders the shared [Budgets] footer from its Agents.json template. A line whose only token
+    /// resolves to 0 is dropped (a think-off agent should not be told "Thinking Token Budget: 0"); if every
+    /// value is 0 the block is omitted entirely.</summary>
+    private static string RenderBudgets(int thinking, int reply, int context, int toolCalls)
+    {
+        if (thinking <= 0 && reply <= 0 && context <= 0 && toolCalls <= 0) return "";
+
+        string template = SharedPrompts.BudgetsBlock;
+        if (template.Length == 0) return "";
+
+        (string Token, int Value)[] values =
+        [
+            ("thinkingTokens", thinking),
+            ("replyTokens",    reply),
+            ("contextTokens",  context),
+            ("toolBudget",     toolCalls),
+        ];
+
+        List<string> kept = new();
+        foreach (string line in template.Replace("\r\n", "\n").Split('\n'))
+        {
+            (string Token, int Value)? owner = values.Cast<(string Token, int Value)?>()
+                .FirstOrDefault(v => line.Contains("{" + v!.Value.Token + "}", StringComparison.Ordinal));
+            if (owner is not null && owner.Value.Value <= 0) continue;   // drop the line, not just the number
+            kept.Add(line);
+        }
+
+        string rendered = string.Join("\n", kept);
+        foreach ((string token, int value) in values)
+            rendered = rendered.Replace("{" + token + "}", value.ToString());
+
+        return "\n\n" + rendered.Trim('\n');
+    }
+
+    /// <summary>Looks up a named prompt by key and substitutes {tokens}. Falls back to the built-in default when
+    /// the entry is missing, so a partial Agents.json still runs.</summary>
+    internal string PromptText(string key, string fallback, params (string Token, string Value)[] tokens)
+    {
+        string text = Prompts is not null && Prompts.TryGetValue(key, out string? v) && !string.IsNullOrWhiteSpace(v)
+            ? v
+            : fallback;
+        foreach ((string token, string value) in tokens)
+            text = text.Replace("{" + token + "}", value);
+        return text;
+    }
 
     // Per-turn sampling override (null members fall back to the flat agent config, then server baseline).
     // Default: no override. A stateful agent overrides this to sample differently per CodePhase.
@@ -320,14 +371,7 @@ public abstract class Agent
         // coming; the numbers let it self-allocate and finish cleanly instead of being guillotined mid-answer.
         int thinkBudget = effectiveThink ? (thinkingBudgetOverride > 0 ? thinkingBudgetOverride : BudgetThinking) : 0;
         int respBudget  = maxTokensOverride  != 0 ? maxTokensOverride : BudgetResponse;
-        List<string> budgetLines = new();
-        if (thinkBudget   > 0) budgetLines.Add($"Thinking Token Budget: {thinkBudget}");
-        if (respBudget    > 0) budgetLines.Add($"Reply Token Budget: {respBudget}");
-        if (BudgetContext > 0) budgetLines.Add($"Context Token Budget: {BudgetContext}");
-        if (MaxToolCalls  > 0) budgetLines.Add($"Tool Call Budget: {MaxToolCalls}");
-        string budgetsBlock = budgetLines.Count > 0
-            ? $"\n\n[Budgets]\n{string.Join("\n", budgetLines)}\ndeliver a COMPLETE answer within these budgets."
-            : "";
+        string budgetsBlock = RenderBudgets(thinkBudget, respBudget, BudgetContext, MaxToolCalls);
 
         string thinkSuffix = effectiveThink ? "" : "\n<|think_off|>";
 

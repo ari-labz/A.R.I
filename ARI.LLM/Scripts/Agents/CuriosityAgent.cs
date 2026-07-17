@@ -34,7 +34,7 @@ internal sealed class CuriosityAgent : MemoryAgent
         {
             Shared.Logger.LogInformation("[Curiosity] Starting curiosity walk (up to {Epochs} neighbourhoods).", CURIOSITY_EPOCHS);
             Thread parent = new(ThreadPipeline.Dialogue, $"curiosity:{Guid.NewGuid():N}") { Internal = true };
-            return await RunWalk(parent, parent.Key, CuriosityTask, PersistentDir, CURIOSITY_EPOCHS, ct, null,
+            return await RunWalk(parent, parent.Key, PromptText("Task", ""), PersistentDir, CURIOSITY_EPOCHS, ct, null,
                                  convergeOnNoChange: false);
         }
         catch (Exception ex)
@@ -112,18 +112,4 @@ internal sealed class CuriosityAgent : MemoryAgent
     }
 
     // The exploration brief handed to each epoch alongside the neighbourhood skeleton. Persona lives in config.
-    private const string CuriosityTask = """
-        Your job is to notice what you're CURIOUS about in this part of your memory — not to tidy or change
-        anything (you have no editing tools here). You are Ari reflecting on the people, events, and threads
-        in Xywren's life the way a caring companion would.
-
-        Good curiosities are genuine open questions worth following up on later:
-        - an event whose outcome you never heard ("did the case get resolved?")
-        - a person mentioned but barely known ("who is [REDACT] to [REDACT], really?")
-        - a relationship or thread left hanging ("are they still in contact?")
-        - a gap between what's recorded and what you'd naturally want to know.
-
-        Before adding one, list_curiosities (or trust the pending list you're shown) so you don't repeat an
-        existing question. Skip anything already well covered, and never invent a question just to look busy.
-        """;
 }

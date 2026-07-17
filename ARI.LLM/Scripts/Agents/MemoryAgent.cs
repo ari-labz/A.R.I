@@ -1,12 +1,14 @@
 using System.Collections.Concurrent;
 using System.Text;
+using System.Text.Json.Serialization;
 using ARI.Brain;
 using ARI.Common;
 using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
-// Base for the tool-driven memory agents (Refactor, Engram). Unlike the old BrainAgent — which emitted
+// Base for the tool-driven memory agents (Engram, Refactor, Curiosity). Unlike the old plan-then-write
+// approach it replaced — which emitted
 // add/edit/merge/delete JSON and applied it in one batch — a MemoryAgent treats the vault as a
 // filesystem and edits it through real tools (file + git + graph), one committed change at a time.
 //
@@ -25,9 +27,15 @@ internal abstract class MemoryAgent : Agent
     protected const int CONVERGED_AFTER       = 3;    // consecutive "no change needed" epochs ⇒ converged, stop early
     protected const int STALL_LIMIT           = 5;    // consecutive stalled epochs (no act, no "no change") ⇒ bail
 
-    // The taxonomy/hub/type/linking rulebook both memory agents obey, injected into every turn's system
+    // The taxonomy/hub/type/linking rulebook the memory agents obey, injected into every turn's system
     // context so it stays the single source of truth (the config systemPrompt carries only the persona/role).
-    internal override string BuildPersistentContext(Thread thread) => "\n\n" + BrainRulebook.RULES;
+    // Shared by all three; Curiosity opts out via UseGraphRulebook.
+    // Nullable: the control panel writes null for agents that never set it, and a non-nullable bool
+    // makes that a fatal deserialise error at startup.
+    [JsonPropertyName("useGraphRulebook")] public bool? UseGraphRulebook { get; init; }
+
+    internal override string BuildPersistentContext(Thread thread)
+        => (UseGraphRulebook ?? true) ? "\n\n" + SharedPrompts.GraphRulebook : "";
 
     // ── Per-turn guard state ──────────────────────────────────────────────────────────────
     // Distinct notes the model may read in one epoch before it's pushed to act. The model fills its whole
@@ -301,33 +309,11 @@ internal abstract class MemoryAgent : Agent
     }
 
     // The per-epoch prompt: the seed's neighbourhood skeleton + the agent's task + the one-change-then-
-    // commit contract. The rules/persona live in the agent's SystemPrompt (config); this is operational.
     protected virtual string BuildEpochPrompt(string task, string seedTitle, string skeleton)
-    {
-        StringBuilder sb = new();
-        sb.AppendLine($"You are walking the memory graph. Current neighbourhood around '{seedTitle}'");
-        sb.AppendLine("(each block: full path + [type], then its inbound '<' and outbound '>' connections):");
-        sb.AppendLine();
-        sb.AppendLine(skeleton.Length > 0 ? skeleton : "(no connections)");
-        sb.AppendLine();
-        sb.AppendLine(task);
-        sb.AppendLine();
-        sb.AppendLine("RESPOND WITH TOOL CALLS ONLY — never write analysis, a plan, or explanation as your reply; " +
-                      "prose with no tool call ends your turn having done NOTHING. The moment you know the fix, emit " +
-                      "the tool call (edit_file/delete_file/merge_notes), then git_diff, then git_commit. To reduce a " +
-                      "note's outbound links, DELETE those link lines with edit_file (empty new_string) — do not re-type them.");
-        sb.AppendLine();
-        sb.AppendLine("Work quickly and DECISIVELY. Pick the single clearest fix in this neighbourhood, read only " +
-                      "the 1-3 notes you actually need to make it safely (read_file), then MAKE the change with the " +
-                      "tools — do not keep analysing, re-reading, or planning once you know the fix. One logical " +
-                      "change this turn (it may touch several files if they are one coherent change).");
-        sb.AppendLine("You MUST end this turn one of two ways: (a) apply the change (write_file/edit_file/move_file/" +
-                      "delete_file/merge_notes), then git_diff to review it, then git_commit with a single 'message' " +
-                      "(first line = what changed, blank line, then why); or (b) if nothing here genuinely needs " +
-                      "changing, reply with exactly 'no change'. Do NOT stop after thinking without doing one of " +
-                      "these — a turn that only reasons is a wasted turn.");
-        return sb.ToString();
-    }
+        => SharedPrompts.Epoch(
+            ("seedTitle", seedTitle),
+            ("skeleton",  skeleton.Length > 0 ? skeleton : "(no connections)"),
+            ("task",      task));
 
     protected enum EpochOutcome { Committed, NoChange, Stalled }
 
