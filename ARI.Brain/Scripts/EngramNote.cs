@@ -2,7 +2,7 @@ namespace ARI.Brain;
 
 public class EngramAdd
 {
-    public string                NoteName { get; init; } = string.Empty; // e.g. "People/[REDACT]"
+    public string                NoteName { get; init; } = string.Empty; // e.g. "People/Alex"
     public string                Content  { get; init; } = string.Empty; // markdown
     public IReadOnlyList<string> Aliases  { get; init; } = Array.Empty<string>(); // searchable alternate names
     public string?               Type     { get; init; }                  // node type for colouring; null = leaf

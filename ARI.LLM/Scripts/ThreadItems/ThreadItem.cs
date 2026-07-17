@@ -45,7 +45,7 @@ public abstract class ThreadItem
 
     /// <summary>
     /// The speaker name used when formatting this item for the LLM.
-    /// e.g. "xywren" for a user, "ARI" for a response.
+    /// e.g. "Alex" for a user, "ARI" for a response.
     /// </summary>
     [JsonIgnore]
     public virtual string AuthorName { get; init; } = string.Empty;

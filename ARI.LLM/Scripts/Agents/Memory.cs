@@ -150,7 +150,7 @@ internal class Memory : Agent
             "Items are listed highest-scored first.\n\n" +
             $"CONVERSATION:\n{transcript}\n\n" +
             $"CANDIDATES (highest-scored first):\n{candidateBlock}{pathBlock}\n\n" +
-            "Respond ONLY with JSON using the exact titles above: {\"select\": [\"[REDACT]\", \"[REDACT]\"]}. " +
+            "Respond ONLY with JSON using the exact titles above: {\"select\": [\"Alex\", \"Jordan\"]}. " +
             "Use {\"select\": []} if none are relevant.";
 
         Stopwatch timer = Stopwatch.StartNew();
@@ -179,7 +179,7 @@ internal class Memory : Agent
         }
 
         // The model is asked for exact titles but often echoes the whole decorated candidate line
-        // ("Xywren: (aka [REDACT]) - **Formal Name:** [REDACT]"). Constrain the fuzzy fallback to the notes
+        // ("Alex: (aka Al) - **Formal Name:** Alexander"). Constrain the fuzzy fallback to the notes
         // actually offered, so a mangled pick can never resolve to a note that wasn't in the list.
         HashSet<string> offered = recall.Candidates.Select(c => c.Note.Name).ToHashSet();
 

@@ -213,7 +213,7 @@ internal abstract class MemoryAgent : Agent
         new GitDiff(root).Register(thread);
         new GitLog(root).Register(thread);
         // Ari tends her own memory, so she co-authors the commits she makes to it.
-        new GitCommit(root, "A.R.I <ari@xywren.net>").Register(thread);
+        new GitCommit(root, "A.R.I <ari@ari.local>").Register(thread);
 
         new Neighbours().Register(thread);
         new MergeNotesTool().Register(thread);

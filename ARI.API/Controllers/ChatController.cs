@@ -42,11 +42,14 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     /// <summary>Derives a display username from the authenticated user's email (strips @domain).</summary>
     private string GetUsername()
     {
+        // ARI ships with no auth, so this claim is absent unless a reverse proxy (Cloudflare Access
+        // et al) supplies it — which is the common case. The fallback must therefore be neutral: it is
+        // what Ari calls whoever is talking to her on a fresh install.
         string? email = User.FindFirstValue(ClaimTypes.Email);
-        if (string.IsNullOrEmpty(email)) return "xywren";
+        if (string.IsNullOrEmpty(email)) return "User";
         int at = email.IndexOf('@');
         string raw = at > 0 ? email[..at] : email;
-        // Capitalise first letter for display (xywren → Xywren)
+        // Capitalise first letter for display (alex → Alex)
         return raw.Length > 0 ? char.ToUpper(raw[0]) + raw[1..] : raw;
     }
 

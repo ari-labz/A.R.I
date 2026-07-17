@@ -69,7 +69,7 @@ internal sealed class Neighbours : Tool
 
 // Alias-aware lookup over the memory index. Where a raw file search sees only filenames (find_files) or
 // literal text (search_files), this resolves by note title, alias, AND content — so an entity referred to
-// by an alias (e.g. "[REDACT]" → the "Xywren" note) is still found. Reindexes first so results reflect edits
+// by an alias (e.g. "Al" → the "Alex" note) is still found. Reindexes first so results reflect edits
 // the agent just made. Ranked: exact title, then alias, then content.
 internal sealed class SearchBrain : Tool
 {
@@ -88,7 +88,7 @@ internal sealed class SearchBrain : Tool
                 type       = "object",
                 properties = new
                 {
-                    query = new { type = "string",  description = "Plain words to look up, e.g. '[REDACT]' or '[REDACT]'. Not a regex or glob." },
+                    query = new { type = "string",  description = "Plain words to look up, e.g. 'Alex' or 'holiday plans'. Not a regex or glob." },
                     limit = new { type = "integer", description = $"Max results to return (default {DEFAULT_LIMIT})." }
                 },
                 required = new[] { "query" }
@@ -157,7 +157,7 @@ internal sealed class MergeNotesTool : Tool
 
 // ── curiosities ────────────────────────────────────────────────────────────────────────
 
-// Things Ari wants to ask Xywren about. The agent can add and remove. Ari's own note-anchored thoughts
+// Things Ari wants to ask the user about. The agent can add and remove. Ari's own note-anchored thoughts
 // stay as inline callouts (a separate sink) — these are the ask-later queue consumed by proactive messaging.
 internal sealed class AddCuriosity : Tool
 {
@@ -171,7 +171,7 @@ internal sealed class AddCuriosity : Tool
         function = new
         {
             name        = "add_curiosity",
-            description = "Record something Ari is curious about and would like to ask Xywren later. Use for genuine open questions surfaced while tidying the graph — not for facts (those go in notes).",
+            description = "Record something Ari is curious about and would like to ask the user later. Use for genuine open questions surfaced while tidying the graph — not for facts (those go in notes).",
             parameters  = new
             {
                 type       = "object",
