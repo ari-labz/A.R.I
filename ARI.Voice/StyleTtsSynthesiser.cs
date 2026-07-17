@@ -162,14 +162,31 @@ public class StyleTtsSynthesiser(string styleTtsPath, string dataDir, string mod
         throw new TimeoutException($"StyleTTS2 server did not become ready within {STARTUP_TIMEOUT_SECS}s.");
     }
 
+    // Python uses stderr for anything that isn't the payload — deprecation notices, request logs, our
+    // own per-call diagnostics — so a blanket LogWarning here labelled all of it a recoverable problem.
+    // Only lines that actually describe a failure stay at WARN/ERROR.
     private async Task StreamErrors(StreamReader reader)
     {
         string? line;
         while ((line = await reader.ReadLineAsync()) != null)
         {
             if (string.IsNullOrWhiteSpace(line)) continue;
-            if (line.Contains("WARNING", StringComparison.OrdinalIgnoreCase)) continue;
             if (line.Contains("HTTP/1.1")) continue;
+
+            // A Python warning is two lines: the "…UserWarning: …" header, then an indented echo of the
+            // offending source line (WeightNorm.apply(...), super().__init__(...)). The header was already
+            // dropped; the echo has to go with it or it is logged on its own with no context.
+            if (line.Contains("WARNING", StringComparison.OrdinalIgnoreCase)) continue;
+            if (line.StartsWith(" ", StringComparison.Ordinal)) continue;
+
+            // serve.py's synthesis diagnostics: worth having when chasing NaN output, noise otherwise.
+            if (line.StartsWith("[synthesise]", StringComparison.Ordinal))
+            {
+                if (line.Contains("ERROR", StringComparison.Ordinal)) logger?.LogError("[StyleTTS2] {Line}", line);
+                else                                                  logger?.LogDebug("[StyleTTS2] {Line}", line);
+                continue;
+            }
+
             logger?.LogWarning("[StyleTTS2] {Line}", line);
         }
     }
