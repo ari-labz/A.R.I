@@ -22,8 +22,7 @@ public class LLMModule : ILLMModule, IDisposable
     
     //agents
     private readonly Dialogue?         dialogue;
-    private readonly Coder?            code;
-    private readonly CodeArchitect?    codeArchitect;
+    private readonly Coder?            codeArchitect;
     private readonly Memory?           memory;
     private readonly Context?          context;
     private readonly Engram?           engram;
@@ -101,6 +100,19 @@ public class LLMModule : ILLMModule, IDisposable
         if (File.Exists(agentsJsonPath))
         {
             using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(agentsJsonPath), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
+
+            // Prompts owned by no single agent: the MemoryAgent block its three children share, and the
+            // [Budgets] footer every agent gets. Same file, so the panel edits one place.
+            Dictionary<string, string>? sharedMemory = null, sharedBudgets = null;
+            if (TryGetPropCI(doc.RootElement, "Shared", out JsonElement sharedEl))
+            {
+                if (TryGetPropCI(sharedEl, "MemoryAgent", out JsonElement memEl))
+                    sharedMemory = JsonSerializer.Deserialize<Dictionary<string, string>>(memEl.GetRawText(), JsonOptions);
+                if (TryGetPropCI(sharedEl, "Budgets", out JsonElement budEl))
+                    sharedBudgets = JsonSerializer.Deserialize<Dictionary<string, string>>(budEl.GetRawText(), JsonOptions);
+            }
+            SharedPrompts.Load(sharedMemory, sharedBudgets);
+
             if (TryGetPropCI(doc.RootElement, "Agents", out JsonElement arr) && arr.ValueKind == JsonValueKind.Array)
                 foreach (JsonElement el in arr.EnumerateArray())
                     if (TryGetPropCI(el, "name", out JsonElement nameEl) && nameEl.GetString() is string name)
@@ -154,18 +166,11 @@ public class LLMModule : ILLMModule, IDisposable
             agentMap["Dialogue"] = dialogue;
         }
 
-        if (rawAgents.TryGetValue("Coder", out JsonElement codeEl))
+        if (rawAgents.TryGetValue("Coder", out JsonElement architectEl))
         {
-            code = Deserialize<Coder>(codeEl);
-            agentMap["Code"] = code;
-            _logger.LogInformation("Coder agent is active. MaxContext: {Ctx} tokens.", code.BudgetContext);
-        }
-
-        if (rawAgents.TryGetValue("CodeArchitect", out JsonElement architectEl))
-        {
-            codeArchitect = Deserialize<CodeArchitect>(architectEl);
-            agentMap["CodeArchitect"] = codeArchitect;
-            _logger.LogInformation("CodeArchitect agent is active. MaxContext: {Ctx} tokens.", codeArchitect.BudgetContext);
+            codeArchitect = Deserialize<Coder>(architectEl);
+            agentMap["Coder"] = codeArchitect;
+            _logger.LogInformation("Coder agent is active. MaxContext: {Ctx} tokens.", codeArchitect.BudgetContext);
         }
 
         if (rawAgents.TryGetValue("Classifier", out JsonElement classifierEl))
@@ -183,10 +188,10 @@ public class LLMModule : ILLMModule, IDisposable
         }
         else if (classifier is not null)
         {
-            awareness = new Awareness { Name = "Awareness", ServerName = classifier.ServerName, SystemPrompt = Awareness.DefaultSystemPrompt };
+            awareness = new Awareness { Name = "Awareness", ServerName = classifier.ServerName };
             awareness.Endpoint = classifier.Endpoint;
             awareness.Slot     = classifier.Slot;
-            _logger.LogInformation("Awareness using Classifier server (default config).");
+            _logger.LogWarning("No Awareness entry in Agents.json — using the Classifier's server with no system prompt. Add an Awareness entry to configure it.");
         }
 
         if (BrainModule.Ready && rawAgents.TryGetValue("Memory", out JsonElement memoryEl))
@@ -254,8 +259,8 @@ public class LLMModule : ILLMModule, IDisposable
             speechPipeline.ThreadBecameInactive += key => NotifyWatchers(key);
         }
 
-        if (code is not null)
-            codePipeline = new CodePipeline(code, codeArchitect, processingThreads, liveCalls, NotifyWatchers);
+        if (codeArchitect is not null)
+            codePipeline = new CodePipeline(codeArchitect, processingThreads, liveCalls, NotifyWatchers);
     }
 
     // ── Thread registry ──────────────────────────────────────────────────────────
@@ -794,7 +799,7 @@ public class LLMModule : ILLMModule, IDisposable
     /// <summary>Returns the Code thread for a given key, creating it if needed, for tool registration.</summary>
     public Thread GetOrCreateCodeThread(string threadKey)
     {
-        if (code is null) throw new InvalidOperationException("Code agent not loaded");
+        if (codeArchitect is null) throw new InvalidOperationException("Coder agent not loaded");
         return GetOrCreateThread(ThreadPipeline.Code, threadKey);
     }
 
@@ -821,7 +826,7 @@ public class LLMModule : ILLMModule, IDisposable
     }
 
     public void SetCodeThreadContext(string threadKey, string? projectMap, string? conventions, string? rules)
-        => code?.SetThreadContext(threadKey, projectMap, conventions, rules);
+        => codeArchitect?.SetThreadContext(threadKey, projectMap, conventions, rules);
 
     /// <summary>Sends a prompt directly through the Code pipeline, bypassing classification.
     /// Used by the desktop client which always needs code-aware responses.</summary>
@@ -834,7 +839,7 @@ public class LLMModule : ILLMModule, IDisposable
         CancellationToken   ct        = default,
         string?             localPath = null)
     {
-        if (code is null) throw new InvalidOperationException("Code agent not loaded");
+        if (codeArchitect is null) throw new InvalidOperationException("Coder agent not loaded");
         CancellationTokenSource cts = ct.CanBeCanceled
             ? CancellationTokenSource.CreateLinkedTokenSource(ct)
             : new CancellationTokenSource();

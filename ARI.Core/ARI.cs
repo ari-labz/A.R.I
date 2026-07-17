@@ -91,9 +91,12 @@ public class ARI : BackgroundService
         PersistentData persistentData = new();
 
         string ariPersistentDir = Paths.PersistentData;
-        // Agents.json is now source-controlled (ARI.Core/Agents.json, copied to the output dir at build) —
-        // edited in the repo, not in PersistentData. Load the built copy directly.
-        string agentsPath = Path.Combine(Paths.BuildPath, "Agents.json");
+        // The repo ships a default Agents.json (ARI.Core/Agents.json, copied to the output dir at build).
+        // On first run it is copied into app data; from then on THAT copy is the source of truth and the
+        // shipped one is never consulted again — so prompts and bindings the user tunes here are never
+        // overwritten by an update.
+        persistentData.EnsureAgentsFileFromFallback(Path.Combine(Paths.BuildPath, "Agents.json"));
+        string agentsPath = Path.Combine(ariPersistentDir, "Agents.json");
 
         // ── LLM module ───────────────────────────────────────────────────────────
         // Models are large and often already live elsewhere (another app's model library) — an

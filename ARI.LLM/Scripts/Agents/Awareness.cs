@@ -9,12 +9,6 @@ internal class Awareness : Agent
 {
     public Awareness() { }
 
-    // Baked-in default so the gate works even without an Agents.json entry (JSON systemPrompt overrides).
-    internal const string DefaultSystemPrompt =
-        "You are Ari. You are given a short transcript of speech that was just heard. Decide whether the " +
-        "speaker is addressing you directly, or whether it is background talk / cross-conversation you are " +
-        "merely overhearing. Reply with ONLY one word — ADDRESSED or OVERHEARD — and nothing else.";
-
     internal override bool QuietLogging => true;
 
     /// <summary>Returns true if the transcript appears to be addressed to Ari.</summary>

@@ -315,7 +315,18 @@ public class AgentsApiController(PersistentData persistentData) : ControllerBase
     public IActionResult GetAgents()
     {
         var agents = persistentData.GetAgents();
-        return Ok(new { agents });
+        var shared = persistentData.GetSharedPrompts();
+        var servers = persistentData.GetServers().Select(s => new { name = s.Name, slots = s.ParallelSlots });
+        return Ok(new { agents, shared, servers });
+    }
+
+    /// <summary>Saves the prompts owned by no single agent (the MemoryAgent block, the Budgets footer).
+    /// Read at startup, so it takes effect on restart.</summary>
+    [HttpPut("shared")]
+    public IActionResult UpdateShared([FromBody] SharedPromptsFile req)
+    {
+        persistentData.UpdateSharedPrompts(req);
+        return Ok(new { ok = true, restartRequired = true });
     }
 
     [HttpPut("{name}")]

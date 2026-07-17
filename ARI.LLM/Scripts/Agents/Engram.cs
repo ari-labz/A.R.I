@@ -175,33 +175,19 @@ internal class Engram : MemoryAgent, IDisposable
 
     // ── Placement task ─────────────────────────────────────────────────────────────────
 
-    private static string EngramTask(string transcript, string contextSummary, string speaker)
+    // The task turn, templated from Agents.json. The context block is its own entry so that an empty
+    // context emits nothing at all rather than a bare "CONTEXT:" header.
+    private string EngramTask(string transcript, string contextSummary, string speaker)
     {
-        StringBuilder sb = new();
-        sb.AppendLine("A conversation just happened. Store what is worth remembering into the memory graph, then stop.");
-        sb.AppendLine();
-        if (!string.IsNullOrWhiteSpace(contextSummary))
-            sb.AppendLine($"CONTEXT (resolve pronouns with this):\n{contextSummary}\n");
-        sb.AppendLine($"The speaker is '{speaker}'.");
-        sb.AppendLine($"CONVERSATION:\n{transcript}");
-        sb.AppendLine();
-        sb.AppendLine("For each real person, place, event, project, pet, or thing worth remembering (NOT yourself, " +
-                       "and NOT purely task/technical chatter):");
-        sb.AppendLine("- Check whether it already has a note before creating one: search_brain by name (it searches " +
-                       "note titles, aliases, and content, so it finds the note even under an alias), and use `neighbours` " +
-                       "to see the surrounding graph. Never create a duplicate — if the same entity exists under another " +
-                       "name, edit that note; if there are two, merge_notes them.");
-        sb.AppendLine("- Read the relevant hub/neighbour notes (read_file) before writing, so you place it correctly " +
-                       "and link it to the right owned hub. Use the path to infer where things belong.");
-        sb.AppendLine("- Create or update the note with write_file / edit_file: set its type, link it outward to its hub, " +
-                       "and record the new facts from this conversation.");
-        sb.AppendLine($"- Maintain today's conversation log at Conversations/{DateTime.Now:yyyy-MM-dd} — a 1-3 sentence " +
-                       "summary that links to everything discussed. Edit it if it already exists.");
-        sb.AppendLine("- After each note (or each coherent group of edits), review with git_diff and git_commit with a " +
-                       "single 'message' (first line = what changed, blank line, then why).");
-        sb.AppendLine();
-        sb.AppendLine("If nothing is worth storing, make no changes and stop. Preserve facts; never invent them.");
-        return sb.ToString();
+        string context = string.IsNullOrWhiteSpace(contextSummary)
+            ? ""
+            : PromptText("ContextBlock", "", ("contextSummary", contextSummary));
+
+        return PromptText("Task", "",
+            ("context",    context),
+            ("speaker",    speaker),
+            ("transcript", transcript),
+            ("date",       DateTime.Now.ToString("yyyy-MM-dd")));
     }
 
     // ── Classify (unchanged) ─────────────────────────────────────────────────────────

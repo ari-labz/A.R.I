@@ -798,10 +798,16 @@ html, body {
 
     <!-- Brain tab -->
     <div id="tab-agents" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
-        <span style="font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--text-dim);text-transform:uppercase;">Agents</span>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+        <span style="font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--text-dim);text-transform:uppercase;">Agent prompts</span>
+        <span id="ag-status" style="font-size:12px;color:var(--text-dim);"></span>
       </div>
-      <div id="agent-cards" style="display:flex;flex-direction:column;gap:12px;"></div>
+      <p style="color:var(--text-dim);font-size:12px;margin:0 0 16px;">
+        Saved to <code>Agents.json</code> in your app-data folder. A·R·I reads these when she starts —
+        restart for changes to take effect.
+      </p>
+      <div id="agent-shared" style="margin-bottom:16px;"></div>
+      <div id="agent-cards" style="display:flex;flex-direction:column;gap:10px;"></div>
     </div>
 
     <div id="tab-brain" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
@@ -1993,183 +1999,264 @@ function srvStatusBg(s) {
 
 // ── Agents ────────────────────────────────────────────────────────────────────
 
-async function loadAgents() {
-    const container = document.getElementById('agent-cards');
-    container.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Loading…</span>';
-    let agents, servers;
-    try {
-        const [ra, rs] = await Promise.all([fetch('/agents'), fetch('/models')]);
-        agents  = (await ra.json()).agents  ?? [];
-        servers = (await rs.json()).servers ?? [];
-    } catch { container.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Failed to load.</span>'; return; }
+// ── Agents ────────────────────────────────────────────────────────────────────
+// Every prompt A·R·I sends, grouped by the agent that sends it. Tokens like {speaker} are substituted
+// at send time; delete one and that value simply never reaches the model.
 
-    container.innerHTML = '';
-    agents.forEach(a => {
-        const card = document.createElement('div');
-        card.className = 'mdl-card';
-        card.style.cssText = 'padding:18px 20px;';
+// Which agents exist, in display order, and what their non-system prompts are called.
+// tokens: shown above the field so the user knows what each {placeholder} carries.
+const AG_TREE = [
+    { name: 'Awareness',  prompts: [] },
+    { name: 'Classifier', prompts: [] },
+    { name: 'Context',    prompts: [],
+      systemTokens: [['memoryLimit', "Dialogue's short-term memory limit — how many messages back stay relevant"]] },
+    { name: 'Dialogue',   prompts: [] },
+    { name: 'Memory',     prompts: [] },
+    { name: 'Coder',      prompts: [], phases: true },
+    { name: 'MemoryAgent', abstract: true, shared: 'MemoryAgent', children: [
+        { name: 'Engram', prompts: [
+            { key: 'Task',         label: 'Task',          hint: 'the turn sent after a conversation',
+              tokens: [['context', 'the context block below, or nothing when there is no context'],
+                       ['speaker', 'who was talking'],
+                       ['transcript', 'the conversation being stored'],
+                       ['date', "today's date, for the conversation log note"]] },
+            { key: 'ContextBlock', label: 'Context block',  hint: 'omitted entirely when there is no context summary',
+              tokens: [['contextSummary', 'the resolved context used to fix pronouns']] },
+        ]},
+        { name: 'Refactor',  prompts: [
+            { key: 'Task', label: 'Task', hint: 'the turn sent on each scheduled run', tokens: [] },
+        ]},
+        { name: 'Curiosity', prompts: [
+            { key: 'Task', label: 'Task', hint: 'the turn sent on each scheduled run', tokens: [] },
+        ]},
+    ]},
+];
 
-        const serverOpts = servers.map(s =>
-            `<option value="${escHtml(s.name)}" ${s.name === a.serverName ? 'selected' : ''}>${escHtml(s.name)}</option>`
-        ).join('');
+const AG_SHARED = {
+    MemoryAgent: [
+        { key: 'GraphRulebook', label: 'Graph rulebook',
+          hint: "appended to each child's system prompt — the one taxonomy/hub/dedup rulebook", tokens: [] },
+        { key: 'EpochPrompt',  label: 'Epoch prompt',
+          hint: 'sent after each look at the graph',
+          tokens: [['seedTitle', 'the note at the centre of this neighbourhood'],
+                   ['skeleton', "the neighbourhood's notes and their links"],
+                   ['task', "the child agent's own task text, inserted here"]] },
+    ],
+};
 
-        const fv = (v, def = '') => v != null ? v : def;
-        const enabledStyle = a.enabled
-            ? 'background:#dcfce7;color:#166534;'
-            : 'background:#f3f4f6;color:#6b7280;';
+const AG_BUDGET_TOKENS = [
+    ['thinkingTokens', 'thinking tokens allowed before the chain of thought is cut off mid-sentence'],
+    ['replyTokens',    'tokens allowed for the reply itself before it is truncated'],
+    ['contextTokens',  'total context the agent may use before older turns are dropped'],
+    ['toolBudget',     'tool calls allowed in one turn before the loop is stopped'],
+];
 
-        card.innerHTML = `
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-                <div style="display:flex;align-items:center;gap:10px;">
-                    <span style="font-weight:700;font-size:14px;">${escHtml(a.name)}</span>
-                    <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text-dim);cursor:pointer;">
-                        <input type="checkbox" class="ag-enabled" ${a.enabled ? 'checked' : ''}> Enabled
-                    </label>
-                </div>
-                <button class="ag-expand-btn" style="font-size:11px;padding:3px 10px;border:1px solid var(--border);border-radius:4px;background:transparent;color:var(--text-dim);cursor:pointer;">Details ▾</button>
-            </div>
-            <div style="display:grid;grid-template-columns:2fr 1fr;gap:8px;align-items:end;">
-                <label class="vs-label" style="font-size:12px;">Server
-                    <select class="vs-input ag-server" style="font-size:12px;padding:5px 8px;margin-top:3px;">${serverOpts}</select>
-                </label>
-                <label class="vs-label" style="font-size:12px;">Slot
-                    <input class="vs-input ag-slot" type="number" min="0" value="${fv(a.slot, 0)}" style="font-size:12px;padding:5px 8px;margin-top:3px;">
-                </label>
-            </div>
-            <div class="ag-details" style="display:none;border-top:1px solid var(--border);padding-top:14px;margin-top:12px;">
-                <div style="font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em;">System Prompt</div>
-                <div class="ag-sysprompt-tabs" style="display:flex;gap:6px;margin-bottom:8px;">
-                    <button class="ag-tab-edit vs-btn-primary" style="font-size:11px;padding:3px 10px;">Edit</button>
-                    <button class="ag-tab-preview" style="font-size:11px;padding:3px 10px;border:1px solid var(--border);border-radius:4px;background:transparent;color:var(--text-dim);cursor:pointer;">Preview</button>
-                </div>
-                <textarea class="vs-input ag-sysprompt" rows="7" style="font-size:12px;padding:6px 8px;font-family:monospace;resize:vertical;width:100%;margin-bottom:8px;">${escHtml(fv(a.systemPrompt, ''))}</textarea>
-                <div class="ag-sysprompt-preview" style="display:none;border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-size:13px;line-height:1.6;min-height:80px;max-height:320px;overflow-y:auto;margin-bottom:8px;"></div>
-                <div style="font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:8px;margin-top:4px;text-transform:uppercase;letter-spacing:.06em;">Sampling</div>
-                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px;">
-                    <label class="vs-label" style="font-size:12px;">Temperature<input class="vs-input ag-temp" type="number" step="0.05" min="0" max="2" value="${fv(a.temperature, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
-                    <label class="vs-label" style="font-size:12px;">Top-P<input class="vs-input ag-topp" type="number" step="0.01" min="0" max="1" value="${fv(a.topP, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
-                    <label class="vs-label" style="font-size:12px;">Top-K<input class="vs-input ag-topk" type="number" min="0" value="${fv(a.topK, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
-                </div>
-                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px;">
-                    <label class="vs-label" style="font-size:12px;">Repeat penalty<input class="vs-input ag-rep" type="number" step="0.01" min="0" value="${fv(a.repeatPenalty, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
-                    <label class="vs-label" style="font-size:12px;">Presence penalty<input class="vs-input ag-pres" type="number" step="0.01" value="${fv(a.presencePenalty, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
-                    <label class="vs-label" style="font-size:12px;">Frequency penalty<input class="vs-input ag-freq" type="number" step="0.01" value="${fv(a.frequencyPenalty, '')}" placeholder="default" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
-                </div>
-                <div style="font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:8px;text-transform:uppercase;letter-spacing:.06em;">Limits</div>
-                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px;">
-                    <label class="vs-label" style="font-size:12px;">Max tokens<input class="vs-input ag-maxtok" type="number" min="-1" value="${fv(a.maxTokens, -1)}" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
-                    <label class="vs-label" style="font-size:12px;">Max context<input class="vs-input ag-maxctx" type="number" min="0" value="${fv(a.maxContextTokens, 0)}" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
-                    <label class="vs-label" style="font-size:12px;">Max tool calls<input class="vs-input ag-maxtool" type="number" min="0" value="${fv(a.maxToolCalls, 0)}" style="font-size:12px;padding:5px 8px;margin-top:3px;"></label>
-                </div>
-                <div style="display:flex;align-items:center;gap:16px;">
-                    <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text-dim);cursor:pointer;">
-                        <input type="checkbox" class="ag-think" ${a.think ? 'checked' : ''}> Think
-                    </label>
-                    <label class="vs-label" style="font-size:12px;flex-direction:row;align-items:center;gap:8px;margin:0;">
-                        Thinking budget <input class="vs-input ag-thinkbudget" type="number" min="0" value="${fv(a.thinkingBudget, 0)}" style="font-size:12px;padding:5px 8px;width:90px;">
-                    </label>
-                </div>
-            </div>
-            <div class="ag-save-status" style="font-size:11px;color:var(--text-dim);margin-top:6px;min-height:14px;"></div>`;
+var agData = null;
 
-        const agServer    = card.querySelector('.ag-server');
-        const agSlot      = card.querySelector('.ag-slot');
-        const agEnabled   = card.querySelector('.ag-enabled');
-        const agSysprompt = card.querySelector('.ag-sysprompt');
-        const agTemp      = card.querySelector('.ag-temp');
-        const agTopP      = card.querySelector('.ag-topp');
-        const agTopK      = card.querySelector('.ag-topk');
-        const agRep       = card.querySelector('.ag-rep');
-        const agPres      = card.querySelector('.ag-pres');
-        const agFreq      = card.querySelector('.ag-freq');
-        const agMaxTok    = card.querySelector('.ag-maxtok');
-        const agMaxCtx    = card.querySelector('.ag-maxctx');
-        const agMaxTool   = card.querySelector('.ag-maxtool');
-        const agThink     = card.querySelector('.ag-think');
-        const agThinkBudget = card.querySelector('.ag-thinkbudget');
-        const agDetails   = card.querySelector('.ag-details');
-        const agExpandBtn = card.querySelector('.ag-expand-btn');
-        const saveStatus  = card.querySelector('.ag-save-status');
-        let saveTimer;
+function agEl(tag, css, text) {
+    const e = document.createElement(tag);
+    if (css)  e.style.cssText = css;
+    if (text) e.textContent = text;
+    return e;
+}
 
-        agExpandBtn.addEventListener('click', () => {
-            const open = agDetails.style.display === 'none';
-            agDetails.style.display = open ? '' : 'none';
-            agExpandBtn.textContent = open ? 'Details ▴' : 'Details ▾';
+// Token legend + a markdown textarea. Returns the textarea so the save walk can read it.
+function agField(host, label, hint, tokens, value, onInput) {
+    const wrap = agEl('div', 'margin-bottom:14px;');
+    const head = agEl('div', 'display:flex;align-items:baseline;gap:8px;');
+    head.append(agEl('div', 'font-size:12px;font-weight:600;', label));
+    if (hint) head.append(agEl('div', 'font-size:11px;color:var(--text-dim);', '— ' + hint));
+    wrap.append(head);
+
+    if (tokens && tokens.length) {
+        const legend = agEl('div', 'font-size:11px;color:var(--text-dim);margin:4px 0 5px;line-height:1.5;');
+        tokens.forEach(([tok, desc]) => {
+            const row = agEl('div');
+            const code = agEl('code', 'background:var(--border,#2a2a2a);padding:1px 5px;border-radius:4px;margin-right:6px;', '{' + tok + '}');
+            row.append(code, document.createTextNode(desc));
+            legend.append(row);
         });
+        wrap.append(legend);
+    }
 
-        const agTabEdit    = card.querySelector('.ag-tab-edit');
-        const agTabPreview = card.querySelector('.ag-tab-preview');
-        const agPreviewDiv = card.querySelector('.ag-sysprompt-preview');
+    const ta = agEl('textarea', 'width:100%;min-height:90px;font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.5;padding:8px 10px;border:1px solid var(--border,#2a2a2a);border-radius:6px;background:transparent;color:var(--text,#ddd);resize:vertical;');
+    ta.value = value || '';
+    ta.addEventListener('input', () => { agAutoGrow(ta); onInput && onInput(ta.value); agDirty(); });
+    wrap.append(ta);
+    host.append(wrap);
+    return ta;
+}
 
-        function showEditTab() {
-            agSysprompt.style.display = '';
-            agPreviewDiv.style.display = 'none';
-            agTabEdit.style.opacity = '1';
-            agTabPreview.style.opacity = '.5';
-        }
-        function showPreviewTab() {
-            agPreviewDiv.innerHTML = typeof marked !== 'undefined'
-                ? marked.parse(agSysprompt.value || '_No system prompt set._')
-                : `<pre style="white-space:pre-wrap">${escHtml(agSysprompt.value)}</pre>`;
-            agSysprompt.style.display = 'none';
-            agPreviewDiv.style.display = '';
-            agTabEdit.style.opacity = '.5';
-            agTabPreview.style.opacity = '1';
-        }
-        agTabEdit.addEventListener('click', showEditTab);
-        agTabPreview.addEventListener('click', showPreviewTab);
-        showEditTab();
+function agAutoGrow(ta) {
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight + 2, 600) + 'px';
+}
 
-        const parseNum = (el, fallback = null) => {
-            const v = parseFloat(el.value);
-            return isNaN(v) ? fallback : v;
-        };
-        const parseInt2 = (el, fallback = null) => {
-            const v = parseInt(el.value, 10);
-            return isNaN(v) ? fallback : v;
-        };
+function agDirty() {
+    document.getElementById('ag-status').textContent = 'Unsaved changes';
+}
 
-        async function saveAgent() {
-            clearTimeout(saveTimer);
-            saveTimer = setTimeout(async () => {
-                const body = {
-                    name:             a.name,
-                    serverName:       agServer.value,
-                    slot:             parseInt2(agSlot, 0),
-                    enabled:          agEnabled.checked,
-                    systemPrompt:     agSysprompt.value,
-                    temperature:      parseNum(agTemp),
-                    topP:             parseNum(agTopP),
-                    topK:             parseInt2(agTopK),
-                    repeatPenalty:    parseNum(agRep),
-                    presencePenalty:  parseNum(agPres),
-                    frequencyPenalty: parseNum(agFreq),
-                    maxTokens:        parseInt2(agMaxTok, -1),
-                    maxContextTokens: parseInt2(agMaxCtx, 0),
-                    maxToolCalls:     parseInt2(agMaxTool, 0),
-                    think:            agThink.checked,
-                    thinkingBudget:   parseInt2(agThinkBudget, 0),
-                };
-                try {
-                    const r = await fetch(`/agents/${encodeURIComponent(a.name)}`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(body),
-                    });
-                    if (!r.ok) throw new Error();
-                    saveStatus.textContent = 'Saved.';
-                    setTimeout(() => { saveStatus.textContent = ''; }, 2000);
-                } catch { saveStatus.textContent = 'Save failed.'; }
-            }, 600);
-        }
+// A collapsible section. Collapsed by default — the header keeps the server/slot pickers visible.
+function agSection(title, opts) {
+    opts = opts || {};
+    const card = agEl('div', 'border:1px solid var(--border,#2a2a2a);border-radius:10px;overflow:hidden;');
+    const head = agEl('div', 'display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;user-select:none;');
+    const caret = agEl('span', 'font-size:10px;color:var(--text-dim);width:10px;', '▶');
+    const name  = agEl('span', 'font-size:13px;font-weight:600;', title);
+    head.append(caret, name);
+    if (opts.note) head.append(agEl('span', 'font-size:11px;color:var(--text-dim);', opts.note));
+    head.append(agEl('div', 'flex:1;'));
+    if (opts.right) head.append(opts.right);
 
-        [agServer, agSlot, agEnabled, agThink].forEach(el => el.addEventListener('change', saveAgent));
-        [agSysprompt, agTemp, agTopP, agTopK, agRep, agPres, agFreq, agMaxTok, agMaxCtx, agMaxTool, agThinkBudget]
-            .forEach(el => el.addEventListener('input', saveAgent));
-
-        container.appendChild(card);
+    const body = agEl('div', 'display:none;padding:4px 14px 14px;border-top:1px solid var(--border,#2a2a2a);');
+    head.addEventListener('click', e => {
+        if (e.target.closest('select')) return;          // don't collapse when using the pickers
+        const open = body.style.display !== 'none';
+        body.style.display = open ? 'none' : '';
+        caret.textContent  = open ? '▶' : '▼';
+        if (!open) body.querySelectorAll('textarea').forEach(agAutoGrow);
     });
+    card.append(head, body);
+    return { card, body };
+}
+
+// Server + slot pickers, shown on the header so they are readable while collapsed.
+function agBindingPickers(agent) {
+    const wrap = agEl('div', 'display:flex;align-items:center;gap:6px;');
+    const srv  = agEl('select', 'font-size:11px;padding:3px 6px;border:1px solid var(--border,#2a2a2a);border-radius:5px;background:transparent;color:var(--text,#ddd);');
+    const slot = agEl('select', 'font-size:11px;padding:3px 6px;border:1px solid var(--border,#2a2a2a);border-radius:5px;background:transparent;color:var(--text,#ddd);');
+
+    (agData.servers || []).forEach(s => {
+        const o = document.createElement('option');
+        o.value = s.name; o.textContent = s.name;
+        if (s.name === agent.serverName) o.selected = true;
+        srv.append(o);
+    });
+    if (!(agData.servers || []).length) {
+        const o = document.createElement('option');
+        o.value = ''; o.textContent = 'no servers';
+        srv.append(o);
+    }
+
+    function fillSlots() {
+        const s = (agData.servers || []).find(x => x.name === srv.value);
+        const n = s ? (s.slots || 1) : 1;
+        slot.innerHTML = '';
+        for (let i = 0; i < n; i++) {
+            const o = document.createElement('option');
+            o.value = String(i); o.textContent = 'Slot ' + i;
+            if (i === (agent.slot ?? 0)) o.selected = true;
+            slot.append(o);
+        }
+    }
+    fillSlots();
+
+    srv.addEventListener('change', () => { agent.serverName = srv.value; fillSlots(); agent.slot = parseInt(slot.value, 10) || 0; agDirty(); });
+    slot.addEventListener('change', () => { agent.slot = parseInt(slot.value, 10) || 0; agDirty(); });
+    wrap.append(srv, slot);
+    return wrap;
+}
+
+function agBuildAgent(spec, agent, host, depth) {
+    if (!agent) return;   // an agent in the tree with no Agents.json entry
+    const sec = agSection(spec.name, { right: agBindingPickers(agent) });
+    if (depth) sec.card.style.marginTop = '8px';
+
+    agField(sec.body, 'System Prompt', '', spec.systemTokens || [], agent.systemPrompt, v => agent.systemPrompt = v);
+
+    (spec.prompts || []).forEach(p => {
+        agent.prompts = agent.prompts || {};
+        agField(sec.body, p.label, p.hint, p.tokens, agent.prompts[p.key], v => agent.prompts[p.key] = v);
+    });
+
+    if (spec.phases && agent.phases) {
+        Object.keys(agent.phases).forEach(ph => {
+            agField(sec.body, 'Mode: ' + ph, 'swapped in for the ' + ph.toLowerCase() + ' phase', [],
+                    agent.phases[ph].systemPrompt, v => agent.phases[ph].systemPrompt = v);
+        });
+    }
+    host.append(sec.card);
+}
+
+async function loadAgents() {
+    const host   = document.getElementById('agent-cards');
+    const shared = document.getElementById('agent-shared');
+    host.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Loading…</span>';
+    try {
+        const r = await fetch('/agents');
+        if (!r.ok) throw new Error();
+        agData = await r.json();
+    } catch {
+        host.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Failed to load agents.</span>';
+        return;
+    }
+    agData.shared = agData.shared || {};
+    agData.shared.budgets     = agData.shared.budgets     || {};
+    agData.shared.memoryAgent = agData.shared.memoryAgent || {};
+
+    const byName = {};
+    (agData.agents || []).forEach(a => byName[a.name] = a);
+
+    // Budgets: appended to every agent, so it sits above the tree rather than inside any one section.
+    shared.innerHTML = '';
+    const bsec = agSection('Budgets block', { note: "appended to the bottom of every agent's prompt" });
+    agField(bsec.body, 'Template', '', AG_BUDGET_TOKENS, agData.shared.budgets.Block,
+            v => agData.shared.budgets.Block = v);
+    bsec.body.append(agEl('div', 'font-size:11px;color:var(--text-dim);line-height:1.5;',
+        'A line whose token is 0 is dropped; if all four are 0 the block is omitted. The numbers come from ' +
+        "each agent's own settings. The block always sits at the bottom of the system prompt — the values " +
+        'change every turn, and everything above must stay identical or the llama-server KV cache re-prefills.'));
+    shared.append(bsec.card);
+
+    host.innerHTML = '';
+    AG_TREE.forEach(spec => {
+        if (!spec.abstract) { agBuildAgent(spec, byName[spec.name], host, 0); return; }
+
+        const sec = agSection(spec.name, { note: 'shared by the three below · abstract, no slot' });
+        (AG_SHARED[spec.shared] || []).forEach(p => {
+            agField(sec.body, p.label, p.hint, p.tokens, agData.shared.memoryAgent[p.key],
+                    v => agData.shared.memoryAgent[p.key] = v);
+        });
+        const kids = agEl('div', 'margin-top:10px;padding-left:12px;border-left:2px solid var(--border,#2a2a2a);');
+        (spec.children || []).forEach(c => agBuildAgent(c, byName[c.name], kids, 1));
+        sec.body.append(kids);
+        host.append(sec.card);
+    });
+
+    const bar = agEl('div', 'display:flex;align-items:center;gap:12px;margin-top:16px;');
+    const save = agEl('button', '', 'Save');
+    save.className = 'vs-btn-primary'; save.type = 'button';
+    save.addEventListener('click', agSave);
+    bar.append(save);
+    host.append(bar);
+
+    const restart = agEl('div', 'display:none;margin-top:12px;padding:10px 12px;border:1px solid #fde68a;background:#fffbeb;color:#92400e;border-radius:8px;font-size:12px;',
+        'Saved. Restart A·R·I for these changes to take effect.');
+    restart.id = 'ag-restart';
+    host.append(restart);
+    document.getElementById('ag-status').textContent = '';
+}
+
+async function agSave() {
+    const status = document.getElementById('ag-status');
+    status.textContent = 'Saving…';
+    try {
+        for (const a of agData.agents || []) {
+            const r = await fetch(`/agents/${encodeURIComponent(a.name)}`, {
+                method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(a),
+            });
+            if (!r.ok) throw new Error(a.name);
+        }
+        const r2 = await fetch('/agents/shared', {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ memoryAgent: agData.shared.memoryAgent, budgets: agData.shared.budgets }),
+        });
+        if (!r2.ok) throw new Error('shared');
+        status.textContent = '';
+        document.getElementById('ag-restart').style.display = '';
+    } catch (e) {
+        status.textContent = 'Save failed' + (e.message ? ` (${e.message})` : '') + '.';
+    }
 }
 
 async function loadServers() {

@@ -1,14 +1,27 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using ARI.Common;
 using ARI.LLM;
 
 namespace ARI.API.Data;
+
+/// <summary>Prompts owned by no single agent — the MemoryAgent block its children share, and the
+/// [Budgets] footer appended to every agent.</summary>
+public sealed class SharedPromptsFile
+{
+    public Dictionary<string, string>? MemoryAgent { get; set; }
+    public Dictionary<string, string>? Budgets     { get; set; }
+}
 
 public sealed class AgentDefinition
 {
     public string  Name              { get; set; } = "";
     public string  ServerName        { get; set; } = "";
     public string  SystemPrompt      { get; set; } = "";
+    public Dictionary<string, string>? Prompts { get; set; }
+    // Modelled here or Save() drops them: the Coder's per-phase prompts, and Curiosity's rulebook opt-out.
+    public Dictionary<string, PhaseConfig>? Phases { get; set; }
+    public bool?   UseGraphRulebook  { get; set; }
     public bool    Enabled           { get; set; } = true;
     public int?    Slot              { get; set; }
     public bool    Think             { get; set; }
@@ -52,6 +65,9 @@ public class PersistentData
 
     private sealed class AgentsFile
     {
+        // Must be modelled here: Save() rewrites the whole file, so anything absent from this class is
+        // dropped the first time an agent is edited.
+        public SharedPromptsFile?    Shared { get; set; }
         public List<AgentDefinition> Agents { get; set; } = new();
     }
 
@@ -101,12 +117,22 @@ public class PersistentData
             AgentsFile existing = LoadAgents();
             if (existing.Agents.Count > 0) return;
 
-            if (!File.Exists(fallbackPath)) return;
+            // Every path out of here used to be silent, so a failed seed looked identical to a working
+            // one until the Agents tab came up empty. It is load-bearing now: say what went wrong.
+            if (!File.Exists(fallbackPath))
+            {
+                Shared.Logger.LogError("[PersistentData] No Agents.json in app data and no bundled default at {Path} — ARI will start with no agents.", fallbackPath);
+                return;
+            }
             try
             {
                 using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(fallbackPath),
                     new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
-                if (!doc.RootElement.TryGetProperty("Agents", out JsonElement arr)) return;
+                if (!doc.RootElement.TryGetProperty("Agents", out JsonElement arr))
+                {
+                    Shared.Logger.LogError("[PersistentData] Bundled Agents.json at {Path} has no 'Agents' array — cannot seed.", fallbackPath);
+                    return;
+                }
 
                 var agents = arr.EnumerateArray()
                     .Select(el => JsonSerializer.Deserialize<AgentDefinition>(el.GetRawText(), JsonOpts))
@@ -114,10 +140,19 @@ public class PersistentData
                     .Select(a => a!)
                     .ToList();
 
-                if (agents.Count > 0)
-                    Save(_agentsPath, new AgentsFile { Agents = agents });
+                if (agents.Count == 0)
+                {
+                    Shared.Logger.LogError("[PersistentData] Bundled Agents.json at {Path} contained no readable agents — cannot seed.", fallbackPath);
+                    return;
+                }
+
+                Save(_agentsPath, new AgentsFile { Agents = agents });
+                Shared.Logger.LogInformation("[PersistentData] Seeded {Count} agent(s) into {Path} from the bundled default.", agents.Count, _agentsPath);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Shared.Logger.LogError(ex, "[PersistentData] Could not seed Agents.json from {Path}.", fallbackPath);
+            }
         }
     }
 
@@ -259,6 +294,21 @@ public class PersistentData
     public IReadOnlyList<AgentDefinition> GetAgents()
     {
         lock (_agentsLock) return LoadAgents().Agents;
+    }
+
+    public SharedPromptsFile GetSharedPrompts()
+    {
+        lock (_agentsLock) return LoadAgents().Shared ?? new SharedPromptsFile();
+    }
+
+    public void UpdateSharedPrompts(SharedPromptsFile updated)
+    {
+        lock (_agentsLock)
+        {
+            AgentsFile data = LoadAgents();
+            data.Shared = updated;
+            Save(_agentsPath, data);
+        }
     }
 
     public AgentDefinition? GetAgent(string name)
