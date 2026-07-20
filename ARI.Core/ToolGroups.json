@@ -1,0 +1,8 @@
+{
+  "Groups": {
+    "git_tools": {
+      "Description": "Git status, diff, log, and commit for the current vault/repo.",
+      "Tools": ["git_status", "git_diff", "git_log", "git_commit"]
+    }
+  }
+}

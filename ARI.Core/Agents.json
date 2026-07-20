@@ -6,6 +6,9 @@
     },
     "Budgets": {
       "Block": "[Budgets]\nThinking Token Budget: {thinkingTokens}\nReply Token Budget: {replyTokens}\nContext Token Budget: {contextTokens}\nTool Call Budget: {toolBudget}\ndeliver a COMPLETE answer within these budgets."
+    },
+    "ToolSystem": {
+      "Block": "[Tools]\nSome tools are grouped and not loaded by default to save context. Call list_tools to see every group and what it's for, then request_tools with a group name to load it — its tools become callable immediately after. You don't need to do this for tools already listed in # Tools below; those are already loaded."
     }
   },
   "Agents": [
