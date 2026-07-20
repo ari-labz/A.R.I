@@ -26,6 +26,9 @@ internal static class ToolFactories
         ["write_file"]     = t => Fs(t) is { } fs ? new WriteFile(fs)     : null,
 
         ["build_project"] = t => t is { ProjectRoot: { } r, IsRemoteProject: false } ? new BuildProjectTool(t, r) : null,
+
+        // No index, no database, nothing shared with ARI.Brain — see SearchVault.cs.
+        ["search_vault"] = t => Fs(t) is { } fs ? new SearchVault(fs) : null,
     };
 
     private static ServerFileSystem? Fs(Thread t)

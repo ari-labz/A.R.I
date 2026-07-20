@@ -723,10 +723,24 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                 }
                 platformContext = ctx.ToString().TrimEnd();
 
+                ARI.LLM.Thread? boundThread = FindThread(threadKey);
+
                 // Force code pipeline before the classifier runs (first message only)
-                bool isFirstMessage = FindThread(threadKey)?.History.Count is null or 0;
+                bool isFirstMessage = boundThread?.History.Count is null or 0;
                 if (isFirstMessage && project.Type == ProjectType.Repository)
                     Llm.ForceCodeThread(threadKey);
+
+                // ObsidianGraph + ServerFs: bind this thread's project context so filesystem_tools/
+                // obsidian_tools (request_tools) resolve against the vault folder — mirrors what
+                // Coder.RunLoop does for a Repository project, just for a Dialogue thread instead.
+                // Re-set every message (cheap, idempotent) rather than gated to isFirstMessage, so it
+                // still applies if the thread existed before the project was bound.
+                if (boundThread is not null && project is { Type: ProjectType.ObsidianGraph, Backend: StorageBackend.ServerFs, RootPath: { } vaultRoot })
+                {
+                    boundThread.ProjectRoot   = vaultRoot;
+                    boundThread.IsBrainVault  = false;
+                    boundThread.Ct            = CancellationToken.None;
+                }
 
                 // On the first message, inject project-level attachments as thread attachments
                 if (isFirstMessage)
