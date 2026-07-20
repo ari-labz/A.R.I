@@ -178,6 +178,9 @@ internal sealed class Coder : Agent
 
         // build_project() — build the touched project(s); errors grouped by file, tagged yours vs pre-existing.
         // Remote: the build runs on the client via its forwarded run_command; local: dotnet build on this disk.
+        // NOT deferred: the Development nudge below calls for "edit, then build to verify" on nearly every
+        // turn, so this is a hot tool, not the "~once per session" case #126 targets — deferring it would
+        // add a round-trip on most turns instead of saving one.
         parent.RegisterTool("build_project", BuildProjectSchema,
             async _ => remote ? await BuildRemote(parent, parent.TouchedFiles, cts.Token) : await BuildTouched(parent.TouchedFiles, root, cts.Token),
             displayFormatter: _ => "<!--ari-tool-start:build_project:project-->");
