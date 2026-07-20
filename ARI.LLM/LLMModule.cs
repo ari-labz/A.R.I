@@ -302,9 +302,9 @@ public class LLMModule : ILLMModule, IDisposable
         // list_tools is always warm (issue #126) on Dialogue/Speech — a name+one-liner catalog read,
         // cheap enough to never defer. request_tools itself is registered per-agent (e.g.
         // MemoryAgent.RegisterTools) because constructing a group's actual tools needs context — a root
-        // path, a bound project — that only the owning agent has at hand. Excluded from Code: today's
-        // groups (git_tools) are already CodeArchitect/Coder's own eager toolset, and no group yet exists
-        // that a coding thread could actually use, so this would be a pure prompt-bloat dead end for it.
+        // path, a bound project — that only the owning agent has at hand. Excluded from Code: no group
+        // exists yet that a coding thread could actually use (build_project is hot, not cold — see
+        // Coder.RunLoop), so this would be a pure prompt-bloat dead end for it.
         if (type is ThreadPipeline.Dialogue or ThreadPipeline.Speech)
             new ListTools().Register(thread);
         thread.Updated          += () => Broadcast(new AppEvent("threadUpdated", threadKey));
