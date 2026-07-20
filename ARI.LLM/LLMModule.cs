@@ -103,15 +103,18 @@ public class LLMModule : ILLMModule, IDisposable
 
             // Prompts owned by no single agent: the MemoryAgent block its three children share, and the
             // [Budgets] footer every agent gets. Same file, so the panel edits one place.
-            Dictionary<string, string>? sharedMemory = null, sharedBudgets = null;
+            Dictionary<string, string>? sharedMemory = null, sharedBudgets = null, sharedToolSystem = null;
             if (TryGetPropCI(doc.RootElement, "Shared", out JsonElement sharedEl))
             {
                 if (TryGetPropCI(sharedEl, "MemoryAgent", out JsonElement memEl))
                     sharedMemory = JsonSerializer.Deserialize<Dictionary<string, string>>(memEl.GetRawText(), JsonOptions);
                 if (TryGetPropCI(sharedEl, "Budgets", out JsonElement budEl))
                     sharedBudgets = JsonSerializer.Deserialize<Dictionary<string, string>>(budEl.GetRawText(), JsonOptions);
+                if (TryGetPropCI(sharedEl, "ToolSystem", out JsonElement toolEl))
+                    sharedToolSystem = JsonSerializer.Deserialize<Dictionary<string, string>>(toolEl.GetRawText(), JsonOptions);
             }
-            SharedPrompts.Load(sharedMemory, sharedBudgets);
+            SharedPrompts.Load(sharedMemory, sharedBudgets, sharedToolSystem);
+            ToolGroups.Load(Path.Combine(Path.GetDirectoryName(agentsJsonPath) ?? ".", "ToolGroups.json"));
 
             if (TryGetPropCI(doc.RootElement, "Agents", out JsonElement arr) && arr.ValueKind == JsonValueKind.Array)
                 foreach (JsonElement el in arr.EnumerateArray())
@@ -296,6 +299,14 @@ public class LLMModule : ILLMModule, IDisposable
         if (threads.TryGetValue(threadKey, out Thread? existing)) return existing;
         Thread thread = new Thread(type, threadKey, platformContext);
         threads[threadKey] = thread;
+        // list_tools is always warm (issue #126) on Dialogue/Speech — a name+one-liner catalog read,
+        // cheap enough to never defer. request_tools itself is registered per-agent (e.g.
+        // MemoryAgent.RegisterTools) because constructing a group's actual tools needs context — a root
+        // path, a bound project — that only the owning agent has at hand. Excluded from Code: today's
+        // groups (git_tools) are already CodeArchitect/Coder's own eager toolset, and no group yet exists
+        // that a coding thread could actually use, so this would be a pure prompt-bloat dead end for it.
+        if (type is ThreadPipeline.Dialogue or ThreadPipeline.Speech)
+            new ListTools().Register(thread);
         thread.Updated          += () => Broadcast(new AppEvent("threadUpdated", threadKey));
         thread.Deleted          += () => { threads.TryRemove(threadKey, out _); Broadcast(new AppEvent("threadDeleted", threadKey)); };
         thread.Streaming        += text => Broadcast(new AppEvent("streaming", threadKey, text));

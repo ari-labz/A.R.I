@@ -209,11 +209,21 @@ internal abstract class MemoryAgent : Agent
         new SearchFiles(fs).Register(thread);
         new FindFiles(fs).Register(thread);
 
-        new GitStatus(root).Register(thread);
-        new GitDiff(root).Register(thread);
-        new GitLog(root).Register(thread);
-        // Ari tends her own memory, so she co-authors the commits she makes to it.
-        new GitCommit(root, "A.R.I <ari@ari.local>").Register(thread);
+        // Git tools are used ~once per session (issue #126) — deferred behind request_tools("git_tools")
+        // instead of always sitting in context. PreloadedTools can still name "git_tools" in Agents.json
+        // to keep them warm/eager for an agent that calls them almost every turn.
+        Dictionary<string, Func<Tool>> gitFactories = new()
+        {
+            // Ari tends her own memory, so she co-authors the commits she makes to it.
+            ["git_status"] = () => new GitStatus(root),
+            ["git_diff"]   = () => new GitDiff(root),
+            ["git_log"]    = () => new GitLog(root),
+            ["git_commit"] = () => new GitCommit(root, "A.R.I <ari@ari.local>"),
+        };
+        new ListTools().Register(thread);
+        new RequestTools(thread, gitFactories).Register(thread);
+        if (PreloadedTools?.Contains("git_tools", StringComparer.OrdinalIgnoreCase) == true)
+            foreach (Func<Tool> factory in gitFactories.Values) factory().Register(thread);
 
         new Neighbours().Register(thread);
         new MergeNotesTool().Register(thread);

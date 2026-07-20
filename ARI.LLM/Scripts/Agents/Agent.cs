@@ -18,6 +18,10 @@ public abstract class Agent
     // Agents.json / the control panel. Tokens like {speaker} are substituted at send time by Prompt();
     // a token the user deletes simply never reaches the model — the defaults are the tested shape.
     [JsonPropertyName("prompts")]       public Dictionary<string, string>? Prompts { get; init; }
+    // Tool group names (see ToolGroups.json) this agent registers eagerly/warm instead of behind
+    // request_tools — for an agent that calls a group almost every turn, the deferred round-trip
+    // (issue #126) isn't worth paying. Null/empty = defer everything as normal.
+    [JsonPropertyName("preloadedTools")]  public string[]? PreloadedTools { get; init; }
     [JsonPropertyName("enabled")]       public bool    Enabled       { get; init; }
     [JsonPropertyName("budgetResponse")]     public int     BudgetResponse     { get; init; } = -1;
     [JsonPropertyName("maxToolCalls")]  public int     MaxToolCalls  { get; init; }
@@ -365,6 +369,11 @@ public abstract class Agent
         // pipeline does".
         string baseSystem = persona.Length == 0 ? roleBlock : $"[Persona]\n{persona}\n\n{roleBlock}";
         baseSystem += BuildPersistentContext(thread);
+        // list_tools/request_tools manifest (#126) — only for threads that actually carry list_tools
+        // (ephemeral internal threads like Classifier/Awareness never register it). Static text, so it
+        // sits in the cached KV prefix rather than being rebuilt per turn like the live tool catalog.
+        if (thread.tools.ContainsKey("list_tools"))
+            baseSystem += "\n\n" + SharedPrompts.ToolSystemBlock;
 
         // [Budgets] footer (#127): terse, at the BOTTOM of the system prompt so its per-turn-accurate values
         // don't invalidate the cached prefix above. max_tokens/thinking are hard cuts the model can't feel
