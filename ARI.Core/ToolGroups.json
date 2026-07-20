@@ -11,6 +11,10 @@
     "coding_tools": {
       "Description": "Build the current project to verify edits compile.",
       "Tools": ["build_project"]
+    },
+    "obsidian_tools": {
+      "Description": "Search this project's notes (regex, no index) — a project's own vault, not the brain.",
+      "Tools": ["search_vault"]
     }
   }
 }
