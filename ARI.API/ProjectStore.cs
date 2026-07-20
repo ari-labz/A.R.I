@@ -23,7 +23,11 @@ public record Project(
     [property: JsonConverter(typeof(JsonStringEnumConverter))] ProjectType Type,
     // Open vocabulary, purely descriptive (search/sort/LLM context) — never mechanically significant.
     string         Category    = "",
-    [property: JsonConverter(typeof(JsonStringEnumConverter))] StorageBackend Backend = StorageBackend.ServerFs,
+    // Default only matters for a row missing this field (every project created before Backend existed) —
+    // Create() always computes an explicit value, never relying on this. RemoteFs is the correct default
+    // for those legacy rows: ServerFs didn't exist yet, so every one of them has, by construction, been
+    // relying on the desktop app's own per-device local-path store (see ProjectsPage.tsx) this whole time.
+    [property: JsonConverter(typeof(JsonStringEnumConverter))] StorageBackend Backend = StorageBackend.RemoteFs,
     string?        RootPath    = null,
     List<string>?  Attachments = null);
 
