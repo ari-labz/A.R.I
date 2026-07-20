@@ -133,10 +133,10 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         }
         // Pre-register in LLMModule so the newThread event fires immediately and
         // all sidebar observers see the thread without waiting for the first message.
-        // An explicit pipeline selection wins; otherwise projects with ForceCodePipeline open in code-mode.
+        // An explicit pipeline selection wins; otherwise a Repository project opens in code-mode.
         if (Enum.TryParse(req?.Pipeline, ignoreCase: true, out ARI.LLM.ThreadPipeline selected))
             Llm.ForcePipeline(key, selected);
-        else if (project?.ForceCodePipeline == true)
+        else if (project?.Type == ProjectType.Repository)
             Llm.ForceCodeThread(key);
         else
             Llm.GetOrCreateDialogueThread(key);
@@ -725,7 +725,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 
                 // Force code pipeline before the classifier runs (first message only)
                 bool isFirstMessage = FindThread(threadKey)?.History.Count is null or 0;
-                if (isFirstMessage && project.ForceCodePipeline)
+                if (isFirstMessage && project.Type == ProjectType.Repository)
                     Llm.ForceCodeThread(threadKey);
 
                 // On the first message, inject project-level attachments as thread attachments
@@ -795,12 +795,21 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
             // Pass CancellationToken.None so HTTP client disconnect does NOT cancel the LLM.
             // The LLM runs to completion; explicit cancel via DELETE /processing still works
             // because LLMModule.Cancel() cancels the thread's internal CTS directly.
+            // A ServerFs project's root is server-managed — resolve it from the bound project when the
+            // client didn't send one explicitly (RemoteFs keeps relying on the client-sent LocalPath,
+            // sourced from the desktop app's own per-device folder store, same as before).
+            string? effectiveLocalPath = string.IsNullOrWhiteSpace(body.LocalPath) ? null : body.LocalPath;
+            if (effectiveLocalPath is null
+                && ThreadProjects.TryGetValue(threadKey, out string? boundProjectId)
+                && projectStore.Get(boundProjectId) is { Backend: StorageBackend.ServerFs } boundProject)
+                effectiveLocalPath = boundProject.RootPath;
+
             await Llm.PromptStreaming(threadKey, prompt, username, platformContext, async accumulated =>
             {
                 string escaped = accumulated.Replace("\n", "\\n").Replace("\r", "");
                 await WriteEventAsync($"data: {escaped}\n\n");
             }, CancellationToken.None, messageAttachments: msgAtts, threadAttachments: threadAtts,
-               localPath: string.IsNullOrWhiteSpace(body.LocalPath) ? null : body.LocalPath);
+               localPath: effectiveLocalPath);
             await WriteEventAsync("data: [DONE]\n\n");
         }
         catch (OperationCanceledException)
