@@ -14,12 +14,18 @@ export interface ThreadEntry {
     title?:       string | null
 }
 
+export type ProjectType    = "Repository" | "ObsidianGraph"
+export type StorageBackend = "ServerFs" | "RemoteFs"
+
 export interface Project {
-    id:                string
-    name:              string
-    description:       string
-    instructions:      string
-    forceCodePipeline: boolean
+    id:           string
+    name:         string
+    description:  string
+    instructions: string
+    type:         ProjectType
+    category:     string
+    backend:      StorageBackend
+    rootPath:     string | null
 }
 
 export function useThreads() {
