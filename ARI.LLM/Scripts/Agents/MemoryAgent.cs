@@ -197,6 +197,10 @@ internal abstract class MemoryAgent : Agent
     protected virtual void RegisterTools(Thread thread, string persistentDir, CancellationToken ct)
     {
         string root = BrainModule.VaultRoot;
+        thread.ProjectRoot = root;
+        thread.IsBrainVault = true;
+        thread.Ct = ct;
+
         ServerFileSystem fs = new(root, ct, brainVault: true);
         new ReadFile(fs).Register(thread);
         new WriteFile(fs).Register(thread);
@@ -210,20 +214,13 @@ internal abstract class MemoryAgent : Agent
         new FindFiles(fs).Register(thread);
 
         // Git tools are used ~once per session (issue #126) — deferred behind request_tools("git_tools")
-        // instead of always sitting in context. PreloadedTools can still name "git_tools" in Agents.json
-        // to keep them warm/eager for an agent that calls them almost every turn.
-        Dictionary<string, Func<Tool>> gitFactories = new()
-        {
-            // Ari tends her own memory, so she co-authors the commits she makes to it.
-            ["git_status"] = () => new GitStatus(root),
-            ["git_diff"]   = () => new GitDiff(root),
-            ["git_log"]    = () => new GitLog(root),
-            ["git_commit"] = () => new GitCommit(root, "A.R.I <ari@ari.local>"),
-        };
+        // instead of always sitting in context, resolved generically via ToolFactories (agent-agnostic —
+        // see Thread.ProjectRoot). PreloadedTools can still name "git_tools" in Agents.json to keep them
+        // warm/eager for an agent that calls them almost every turn.
         new ListTools().Register(thread);
-        new RequestTools(thread, gitFactories).Register(thread);
+        new RequestTools(thread).Register(thread);
         if (PreloadedTools?.Contains("git_tools", StringComparer.OrdinalIgnoreCase) == true)
-            foreach (Func<Tool> factory in gitFactories.Values) factory().Register(thread);
+            ToolFactories.LoadGroup("git_tools", thread);
 
         new Neighbours().Register(thread);
         new MergeNotesTool().Register(thread);
