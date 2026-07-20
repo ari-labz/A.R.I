@@ -3,6 +3,14 @@
     "git_tools": {
       "Description": "Git status, diff, log, and commit for the current vault/repo.",
       "Tools": ["git_status", "git_diff", "git_log", "git_commit"]
+    },
+    "filesystem_tools": {
+      "Description": "View and edit files in the current project: preview, read, list, search, find, edit, write.",
+      "Tools": ["preview_file", "read_file", "list_directory", "search_files", "find_files", "edit_file", "write_file"]
+    },
+    "coding_tools": {
+      "Description": "Build the current project to verify edits compile.",
+      "Tools": ["build_project"]
     }
   }
 }
