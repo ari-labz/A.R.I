@@ -114,6 +114,18 @@ public class Thread
     /// the architect edits directly instead of dispatching a Coder.</summary>
     public readonly HashSet<string> TouchedFiles = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>The root filesystem path this thread is bound to (a project root, or the brain vault) —
+    /// set once per turn by whichever agent knows it (Coder.RunLoop, MemoryAgent.RegisterTools). Null
+    /// means no project is bound. ToolFactories reads this to construct project-scoped tools (git,
+    /// filesystem, build) for ANY agent's request_tools call — availability depends on this state, not on
+    /// which agent is asking. There is no per-agent tool allowlist; a group resolves or it doesn't based
+    /// on what's actually bound here.</summary>
+    internal string? ProjectRoot   { get; set; }
+    internal FileSnapshots? Snapshots     { get; set; }
+    internal bool     IsBrainVault { get; set; }
+    internal bool     IsRemoteProject { get; set; }
+    internal CancellationToken Ct  { get; set; }
+
     /// <summary>Monotonic user-turn counter, incremented by the pipeline at the start of each user request.
     /// Client-side tool guardrails (e.g. the read-dedup "already read" short-circuit) scope their state to the
     /// current turn via this: content read in an earlier turn may have been condensed out of the model's

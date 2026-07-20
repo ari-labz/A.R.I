@@ -155,42 +155,29 @@ internal sealed class Coder : Agent
         // Remote projects: the client's forwarded read/preview/list/search/find tools are ALREADY on `parent`
         // (they run on the client's machine) — reuse them. Local projects: bind ServerFileSystem to this disk.
         //
+        // Bind this turn's project context onto the thread. ToolFactories (global, agent-agnostic) reads
+        // this to construct filesystem_tools/coding_tools for request_tools — there is no per-agent
+        // allowlist; a group resolves for whichever thread actually has a project bound, local only (a
+        // remote project's files live on the client's disk, not this server's, so ProjectRoot stays null
+        // and those groups correctly report unavailable — the client's forwarded tools cover that case).
+        parent.ProjectRoot     = remote ? null : root;
+        parent.Snapshots       = remote ? null : snapshots;
+        parent.IsRemoteProject = remote;
+        parent.Ct              = cts.Token;
+
         // filesystem_tools and coding_tools (ToolGroups.json) are catalogued groups, but BOTH are hot for this
         // agent — filesystem tools fire almost every turn, and build_project is called on nearly every
         // Development turn ("edit, then build to verify" below) — so #126's deferral saving doesn't apply
         // here (a request_tools round-trip on most turns costs more than the schema tokens it'd save).
-        // PreloadedTools in Agents.json defaults both groups to eager for exactly that reason; the group
-        // wiring stays in place so a future context (a leaner sub-agent, a different budget) can defer them
-        // by removing the entry, without duplicating the tool list a second time.
-        new ListTools().Register(parent);
+        // PreloadedTools in Agents.json defaults both groups to eager for exactly that reason; nothing stops
+        // this agent (or any other) from calling request_tools for them explicitly too — preloading just
+        // means it doesn't have to.
         if (!remote)
         {
-            ServerFileSystem fs = new(root, cts.Token, snapshots);
-            Dictionary<string, Func<Tool>> filesystemFactories = new()
-            {
-                ["preview_file"]    = () => new PreviewFile(fs),
-                ["read_file"]       = () => new ReadFile(fs),
-                ["list_directory"]  = () => new ListDirectory(fs),
-                ["search_files"]    = () => new SearchFiles(fs),
-                ["find_files"]      = () => new FindFiles(fs),
-                // The architect edits DIRECTLY (no Coder sub-agent) — its reads stay resident, so there is no
-                // blind re-read barrier. (Remote: the client's edit_file/write_file are already on the thread.)
-                ["edit_file"]       = () => new EditFile(fs),
-                ["write_file"]      = () => new WriteFile(fs),
-            };
-            Dictionary<string, Func<Tool>> codingFactories = new()
-            {
-                // build_project() — build the touched project(s); errors grouped by file, tagged yours vs
-                // pre-existing. Remote: the build runs on the client via its forwarded run_command; local:
-                // dotnet build on this disk.
-                ["build_project"] = () => new BuildProjectTool(this, parent, remote, root, cts),
-            };
-            new RequestTools(parent, filesystemFactories.Concat(codingFactories).ToDictionary(kv => kv.Key, kv => kv.Value)).Register(parent);
-
-            bool preloadFs      = PreloadedTools?.Contains("filesystem_tools", StringComparer.OrdinalIgnoreCase) == true;
-            bool preloadCoding  = PreloadedTools?.Contains("coding_tools", StringComparer.OrdinalIgnoreCase) == true;
-            if (preloadFs)     foreach (Func<Tool> factory in filesystemFactories.Values) factory().Register(parent);
-            if (preloadCoding) foreach (Func<Tool> factory in codingFactories.Values) factory().Register(parent);
+            if (PreloadedTools?.Contains("filesystem_tools", StringComparer.OrdinalIgnoreCase) == true)
+                ToolFactories.LoadGroup("filesystem_tools", parent);
+            if (PreloadedTools?.Contains("coding_tools", StringComparer.OrdinalIgnoreCase) == true)
+                ToolFactories.LoadGroup("coding_tools", parent);
         }
 
         // Files edited this turn — the build-error owner tag + "did anything change". Populated by the edit
@@ -201,8 +188,9 @@ internal sealed class Coder : Agent
         // tool layer by PreToolGuard alongside the Planning-mode edit block.
         bool editsForbidden = UserForbadeEdits(prompt);
 
-        // Remote: build_project isn't behind the group system above (no local factory context there) — the
-        // client's forwarded tools already put it on `parent`, same as its other forwarded edit tools.
+        // Remote: build_project isn't behind the group system above (ProjectRoot is null for a remote project,
+        // by design — see comment above) — the client's forwarded tools already put its equivalents on
+        // `parent`, so this is registered directly the same way, outside ToolFactories.
         if (remote)
             parent.RegisterTool("build_project", BuildProjectSchema,
                 async _ => await BuildRemote(parent, parent.TouchedFiles, cts.Token),
@@ -276,28 +264,7 @@ internal sealed class Coder : Agent
     // ── spawn_coder / build_project tools ─────────────────────────────────────────
 
 
-    /// <summary>Wraps build_project as a Tool so it can sit in the coding_tools factory map alongside
-    /// filesystem_tools (both preloaded eager by default — see RunLoop). BuildTouched is an instance
-    /// method (needs the owning Coder), so this closes over both the agent and this turn's root/cts.</summary>
-    private sealed class BuildProjectTool : Tool
-    {
-        private readonly Coder owner; private readonly Thread parent; private readonly bool remote;
-        private readonly string root;  private readonly CancellationTokenSource cts;
-
-        internal BuildProjectTool(Coder owner, Thread parent, bool remote, string root, CancellationTokenSource cts)
-        {
-            this.owner = owner; this.parent = parent; this.remote = remote; this.root = root; this.cts = cts;
-        }
-
-        internal override string Name  => "build_project";
-        internal override object Schema => BuildProjectSchema;
-        internal override Func<string, string>? Display => _ => "<!--ari-tool-start:build_project:project-->";
-
-        internal override Task<string> Execute(string argsJson)
-            => remote ? BuildRemote(parent, parent.TouchedFiles, cts.Token) : owner.BuildTouched(parent.TouchedFiles, root, cts.Token);
-    }
-
-    private static readonly object BuildProjectSchema = new
+    internal static readonly object BuildProjectSchema = new
     {
         type = "function",
         function = new
@@ -450,7 +417,7 @@ internal sealed class Coder : Agent
 
     /// <summary>Builds the project(s) containing the touched files; groups CS errors by file and tags each file
     /// as one the architect edited (fix it) or pre-existing (leave it, mention in the summary).</summary>
-    private async Task<string> BuildTouched(HashSet<string> touched, string root, CancellationToken ct)
+    internal static async Task<string> BuildTouched(HashSet<string> touched, string root, CancellationToken ct)
     {
         if (touched.Count == 0) return "[System: no files have been changed yet — make your edits first.]";
         // TouchedFiles holds project-relative paths (from the edit tool args); resolve to absolute for the
@@ -496,7 +463,7 @@ internal sealed class Coder : Agent
     /// <summary>Remote build: there's no dotnet on this server for the client's project, so run `dotnet build` on
     /// the CLIENT via its forwarded run_command and hand the raw output back to the architect. (The yours-vs-
     /// pre-existing tagging that BuildTouched does needs local disk; on remote we return the client's output as-is.)</summary>
-    private static async Task<string> BuildRemote(Thread parent, HashSet<string> touched, CancellationToken ct)
+    internal static async Task<string> BuildRemote(Thread parent, HashSet<string> touched, CancellationToken ct)
     {
         if (touched.Count == 0) return "[System: no files have been changed yet — make your edits first.]";
         if (!parent.tools.TryGetValue("run_command", out var rc))

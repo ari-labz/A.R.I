@@ -299,13 +299,13 @@ public class LLMModule : ILLMModule, IDisposable
         if (threads.TryGetValue(threadKey, out Thread? existing)) return existing;
         Thread thread = new Thread(type, threadKey, platformContext);
         threads[threadKey] = thread;
-        // list_tools is always warm (issue #126) — a name+one-liner catalog read, cheap enough to never
-        // defer. request_tools itself is registered per-agent (e.g. MemoryAgent.RegisterTools,
-        // Coder.RunLoop) because constructing a group's actual tools needs context — a root path, a
-        // bound project — that only the owning agent has at hand. Code registers its own list_tools
-        // inside RunLoop instead of here, since that's where its local/remote fs context already lives.
-        if (type is ThreadPipeline.Dialogue or ThreadPipeline.Speech)
-            new ListTools().Register(thread);
+        // list_tools/request_tools are always warm (issue #126) and universal — no agent-identity gate.
+        // What a group actually resolves to depends on ToolFactories reading this thread's bound context
+        // (ProjectRoot etc.), set by whichever agent runs on it (Coder.RunLoop, MemoryAgent.RegisterTools).
+        // Threads created outside this choke point (MemoryAgent's internal epoch threads) register their
+        // own copy for the same reason.
+        new ListTools().Register(thread);
+        new RequestTools(thread).Register(thread);
         thread.Updated          += () => Broadcast(new AppEvent("threadUpdated", threadKey));
         thread.Deleted          += () => { threads.TryRemove(threadKey, out _); Broadcast(new AppEvent("threadDeleted", threadKey)); };
         thread.Streaming        += text => Broadcast(new AppEvent("streaming", threadKey, text));
