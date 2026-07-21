@@ -1,3 +1,5 @@
+using ARI.Common;
+
 namespace ARI.LLM;
 
 /// <summary>
@@ -29,6 +31,15 @@ internal static class ToolFactories
 
         // No index, no database, nothing shared with ARI.Brain — see SearchVault.cs.
         ["search_vault"] = t => Fs(t) is { } fs ? new SearchVault(fs) : null,
+
+        // project_tools — reach project creation only through Modules.Projects (ARI.Common's
+        // IProjectService), never a direct ARI.API reference. Unavailable if nothing's registered it
+        // yet (shouldn't happen post-startup, but the null-check keeps this consistent with every
+        // other "not available in this context" factory here).
+        ["list_projects"]  = _ => Modules.Projects is not null ? new ListProjects()  : null,
+        ["create_project"] = _ => Modules.Projects is not null ? new CreateProject() : null,
+        ["rename_project"] = _ => Modules.Projects is not null ? new RenameProject() : null,
+        ["bind_project"]   = t => Modules.Projects is not null ? new BindProject(t)  : null,
     };
 
     private static ServerFileSystem? Fs(Thread t)

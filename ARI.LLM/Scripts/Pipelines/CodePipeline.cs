@@ -64,8 +64,25 @@ internal sealed class CodePipeline : Pipeline
         }
         else thread.Phase = CodePhase.Planning;
 
-        bool          remote       = thread.tools.ContainsKey("read_file");
-        string        resolvedRoot = remote ? (localPath ?? "") : Path.GetFullPath(string.IsNullOrWhiteSpace(localPath) ? "." : localPath);
+        bool remote = thread.tools.ContainsKey("read_file");
+
+        // No fallback. A local Code thread with nothing bound and no client-sent path used to default
+        // to Path.GetFullPath(".") — this SERVER's own working directory, which for a dev run is this
+        // very repo. That's a real hazard: a misrouted or unbound thread should never get edit tools
+        // pointed at anything, let alone ARI's own source. Refuse instead of guessing.
+        if (!remote && string.IsNullOrWhiteSpace(localPath))
+        {
+            const string refusal = "No project is selected for this conversation, so I have no filesystem to work in. Bind a project first (or open one from the sidebar) before asking me to code.";
+            // A plain return string here would NOT surface as a visible message — RunAsync's return
+            // value is just handed back up ExecuteAsync, not turned into a Response. Build one directly,
+            // same as any completed turn, and stream it so the client sees it immediately.
+            Response response = new() { State = State.Complete, Content = ContentBlock.Parse(refusal), Timestamp = DateTime.Now };
+            thread.AddItem(response);
+            onDelta?.Invoke(refusal);
+            return Task.FromResult(refusal);
+        }
+
+        string        resolvedRoot = remote ? (localPath ?? "") : Path.GetFullPath(localPath!);
         FileSnapshots snapshots    = new();
 
         if (coder is null)

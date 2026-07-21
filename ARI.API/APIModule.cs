@@ -74,6 +74,7 @@ public class APIModule : IAsyncDisposable
         builder.Services.AddSingleton(persistentData);
         builder.Services.AddSingleton(systemInfo);
         builder.Services.AddSingleton<ProjectStore>();
+        builder.Services.AddSingleton<ProjectServiceAdapter>();
 
         // Clear stale staging folders from a previous run
         string stagingRoot = Path.Combine(Path.GetTempPath(), "ari-voice-staging");
@@ -88,6 +89,10 @@ public class APIModule : IAsyncDisposable
         // basic-auth layer). Keeping auth out of ARI keeps it identity-provider-agnostic.
 
         app = builder.Build();
+
+        // ARI.LLM's project_tools reach project creation/binding only through this interface — never
+        // a direct reference to ProjectStore/ProjectServiceAdapter (the wrong dependency direction).
+        Modules.Register(projects: app.Services.GetRequiredService<ProjectServiceAdapter>());
 
         app.UseExceptionHandler(errorApp => errorApp.Run(async ctx =>
         {
