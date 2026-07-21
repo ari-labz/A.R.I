@@ -239,14 +239,22 @@ public class Note
     }
 
     // temp + rename: a crash can never leave a half-written note.
-    // type is sticky: when a write doesn't set one, the note's existing type is preserved so passes
-    // that rewrite a note for other reasons (hub-links, thoughts, merges) never strip its colour group.
+    // type and created are both sticky: when a write doesn't set one, the note's existing value is
+    // preserved — so a pass that rewrites a note for other reasons (hub-links, thoughts, merges,
+    // renames) never strips its colour group or, worse, silently backdates-forward when it was
+    // created. No caller decides this; it's enforced here so it can't be gotten wrong per call site.
+    // updated is never sticky — every write is, definitionally, an update.
     internal static void Write(string relativePath, string body, IReadOnlyList<string> aliases, DateTime? created, string? type = null)
     {
         string file = System.IO.Path.Combine(BrainModule.VaultRoot, relativePath);
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file)!);
 
-        if (type is null && File.Exists(file)) type = Parse(File.ReadAllText(file)).Type;
+        if (File.Exists(file))
+        {
+            Parsed existing = Parse(File.ReadAllText(file));
+            type    ??= existing.Type;
+            created ??= existing.Created;
+        }
 
         StringBuilder content = new();
         content.AppendLine("---");
