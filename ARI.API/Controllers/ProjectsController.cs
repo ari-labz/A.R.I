@@ -18,11 +18,10 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest(new { error = "Name is required." });
 
-        // The adapter only takes name/type/category (the shape a tool call also needs) — Description/
-        // Instructions/explicit Backend aren't part of that shared contract, so they're applied here,
-        // after creation, REST-only. The adapter always uses the type's default Backend; this patches
-        // it if the request explicitly asked for something else.
-        var summary = projects.Create(req.Name, (req.Type ?? ProjectType.Repository).ToString(), req.Category);
+        // The adapter takes name/type/category/backend — the shape a tool call also needs. Description/
+        // Instructions aren't part of that shared contract, so they're applied here, after creation,
+        // REST-only.
+        var summary = projects.Create(req.Name, (req.Type ?? ProjectType.Repository).ToString(), req.Category, req.Backend?.ToString());
         if (summary is null) return BadRequest(new { error = "Failed to create project." });
 
         Project? created = store.Get(summary.Id);
@@ -33,16 +32,6 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
             Description  = req.Description?.Trim() ?? created.Description,
             Instructions = req.Instructions?.Trim() ?? created.Instructions,
         };
-        if (req.Backend is { } explicitBackend && explicitBackend != created.Backend)
-            created = created with
-            {
-                Backend  = explicitBackend,
-                // RootPath only ever means something for ServerFs — clear it going the other way,
-                // create it (if not already there) going this way.
-                RootPath = explicitBackend == StorageBackend.ServerFs
-                    ? created.RootPath ?? ProjectStore.CreateServerFolder(created.Id, created.Name)
-                    : null,
-            };
         store.Update(created);
 
         return Ok(created);

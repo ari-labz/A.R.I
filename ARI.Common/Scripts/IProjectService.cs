@@ -15,8 +15,9 @@ public interface IProjectService
     IReadOnlyList<ProjectSummary> List();
 
     /// <summary>type must be "Repository" or "ObsidianGraph" (case-insensitive); an unrecognised value
-    /// falls back to Repository. category is free text. Backend defaults per type, same as the REST API.</summary>
-    ProjectSummary? Create(string name, string type, string? category);
+    /// falls back to Repository. category is free text. backend must be "ServerFs" or "RemoteFs"
+    /// (case-insensitive); null/unrecognised defaults per type, same as the REST API.</summary>
+    ProjectSummary? Create(string name, string type, string? category, string? backend = null);
 
     bool Rename(string id, string newName);
 

@@ -1,6 +1,20 @@
 import { useState, useRef, useEffect } from "react"
 import type { Project, ProjectType, StorageBackend } from "../hooks/useThreads"
 import { env } from "../env"
+import SegmentedControl from "./SegmentedControl"
+
+const TYPE_OPTIONS: { value: ProjectType; label: string }[] = [
+    { value: "Repository",    label: "Repository" },
+    { value: "ObsidianGraph", label: "Obsidian Graph" },
+]
+const TYPE_HELP: Record<ProjectType, string> = {
+    Repository:    "Code — always routes to the Code agent.",
+    ObsidianGraph: "Notes — gets its own searchable knowledge vault.",
+}
+const BACKEND_OPTIONS: { value: StorageBackend; label: string }[] = [
+    { value: "ServerFs", label: "This server" },
+    { value: "RemoteFs", label: "Attached device" },
+]
 
 interface Props {
     projects:         Project[]
@@ -211,10 +225,8 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                         </label>
                         <label>
                             Type
-                            <select value={editType} onChange={e => setEditType(e.target.value as ProjectType)}>
-                                <option value="Repository">Repository — code, always routes to the Code agent</option>
-                                <option value="ObsidianGraph">Obsidian Graph — notes, its own knowledge vault</option>
-                            </select>
+                            <SegmentedControl options={TYPE_OPTIONS} value={editType} onChange={setEditType} />
+                            <span className="field-optional">{TYPE_HELP[editType]}</span>
                         </label>
                         <label>
                             Category <span className="field-optional">(optional — for your own search/sort, no effect on behavior)</span>
@@ -317,10 +329,8 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                     </label>
                     <label>
                         Type
-                        <select value={type} onChange={e => handleTypeChange(e.target.value as ProjectType)}>
-                            <option value="Repository">Repository — code, always routes to the Code agent</option>
-                            <option value="ObsidianGraph">Obsidian Graph — notes, its own knowledge vault</option>
-                        </select>
+                        <SegmentedControl options={TYPE_OPTIONS} value={type} onChange={handleTypeChange} />
+                        <span className="field-optional">{TYPE_HELP[type]}</span>
                     </label>
                     <label>
                         Category <span className="field-optional">(optional — for your own search/sort, no effect on behavior)</span>
@@ -328,10 +338,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                     </label>
                     <label>
                         Storage <span className="field-optional">(where the files live — can't be changed after creation)</span>
-                        <select value={backend} onChange={e => setBackend(e.target.value as StorageBackend)}>
-                            <option value="ServerFs">On this server</option>
-                            <option value="RemoteFs">On the attached device (desktop app)</option>
-                        </select>
+                        <SegmentedControl options={BACKEND_OPTIONS} value={backend} onChange={setBackend} />
                     </label>
                     {error && <p className="form-error">{error}</p>}
                     <div className="form-actions">
