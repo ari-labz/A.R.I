@@ -46,7 +46,8 @@ internal sealed class CreateProject : Tool
                 properties = new
                 {
                     name     = new { type = "string", description = "The project's name." },
-                    type     = new { type = "string", @enum = new[] { "Repository", "ObsidianGraph" }, description = "Repository = code, always opens in the Code agent. ObsidianGraph = notes, gets its own searchable vault." },
+                    type     = new { type = "string", @enum = new[] { "Repository", "ObsidianGraph" }, description = "Repository = an actual source-code codebase, always opens in the Code agent. ObsidianGraph = everything else that isn't code — notes, worldbuilding, game design, stories, brainstorming, campaigns — gets its own searchable vault. Default to ObsidianGraph unless the user is explicitly working with source code." },
+                    backend  = new { type = "string", @enum = new[] { "ServerFs", "RemoteFs" }, description = "Where the files live. ServerFs = stored centrally on this server. RemoteFs = stored on the user's own device, via the desktop app. If the user hasn't said which, ask — don't guess; each type has a sensible default (ObsidianGraph -> ServerFs, Repository -> RemoteFs) that only applies when omitted." },
                     category = new { type = "string", description = "Optional free-text label for search/sort (e.g. 'Book', 'Game', 'DND Campaign') — purely descriptive, no effect on behavior." }
                 },
                 required = new[] { "name", "type" }
@@ -61,9 +62,10 @@ internal sealed class CreateProject : Tool
         string  name     = Str(root, "name");
         string  type     = Str(root, "type", "Repository");
         string? category = root.TryGetProperty("category", out JsonElement c) ? c.GetString() : null;
+        string? backend  = root.TryGetProperty("backend", out JsonElement b) ? b.GetString() : null;
         if (name.Length == 0) return Task.FromResult("Error: 'name' is required.");
 
-        ProjectSummary? created = svc.Create(name, type, category);
+        ProjectSummary? created = svc.Create(name, type, category, backend);
         if (created is null) return Task.FromResult("Failed to create the project.");
         return Task.FromResult($"Created '{created.Name}' [{created.Id}] — {created.Type}, storage: {created.Backend}. Call bind_project with this id to start using it in this conversation.");
     }

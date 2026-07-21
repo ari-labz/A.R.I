@@ -15,17 +15,19 @@ public class ProjectServiceAdapter(ProjectStore store) : IProjectService
 {
     public IReadOnlyList<ProjectSummary> List() => store.GetAll().Select(ToSummary).ToList();
 
-    public ProjectSummary? Create(string name, string type, string? category)
+    public ProjectSummary? Create(string name, string type, string? category, string? backend = null)
     {
         if (string.IsNullOrWhiteSpace(name)) return null;
         if (!Enum.TryParse(type, ignoreCase: true, out ProjectType parsedType)) parsedType = ProjectType.Repository;
 
         string id = Guid.NewGuid().ToString("N");
-        // Default per type (a repo is usually worked on locally via the desktop app; a note graph is
-        // small enough to live centrally) — matches ProjectsController.Create exactly.
-        StorageBackend backend = parsedType == ProjectType.ObsidianGraph ? StorageBackend.ServerFs : StorageBackend.RemoteFs;
+        // An explicit backend wins; otherwise default per type (a repo is usually worked on locally
+        // via the desktop app; a note graph is small enough to live centrally).
+        StorageBackend resolvedBackend = Enum.TryParse(backend, ignoreCase: true, out StorageBackend explicitBackend)
+            ? explicitBackend
+            : parsedType == ProjectType.ObsidianGraph ? StorageBackend.ServerFs : StorageBackend.RemoteFs;
         string trimmedName = name.Trim();
-        string? rootPath = backend == StorageBackend.ServerFs ? ProjectStore.CreateServerFolder(id, trimmedName) : null;
+        string? rootPath = resolvedBackend == StorageBackend.ServerFs ? ProjectStore.CreateServerFolder(id, trimmedName) : null;
 
         Project project = new(
             Id:           id,
@@ -35,7 +37,7 @@ public class ProjectServiceAdapter(ProjectStore store) : IProjectService
             CreatedAt:    DateTime.UtcNow,
             Type:         parsedType,
             Category:     category?.Trim() ?? "",
-            Backend:      backend,
+            Backend:      resolvedBackend,
             RootPath:     rootPath);
 
         store.Add(project);

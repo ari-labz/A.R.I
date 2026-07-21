@@ -17,7 +17,7 @@
       "Tools": ["search_vault"]
     },
     "project_tools": {
-      "Description": "List, create, rename, and bind projects — the workspaces (code repos or note vaults) a conversation can be scoped to.",
+      "Description": "List, create, rename, and bind projects — the workspaces (code repos or note vaults) a conversation can be scoped to. Use this for any request to start/open/make a new project, workspace, or \"project file\" — that phrase means a new project, not a file inside one.",
       "Tools": ["list_projects", "create_project", "rename_project", "bind_project"]
     }
   }
