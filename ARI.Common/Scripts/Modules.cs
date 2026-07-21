@@ -106,6 +106,7 @@ public static class Modules
     public static IListenerModule?       Listener       { get; private set; }
     public static IWebPushModule?        WebPush        { get; private set; }
     public static ISchedulerModule?      Scheduler      { get; private set; }
+    public static IProjectService?       Projects       { get; private set; }
 
     public static void Register(
         IDiscordModule?        discord        = null,
@@ -115,7 +116,8 @@ public static class Modules
         IBrainModule?          brain          = null,
         IListenerModule?       listener       = null,
         IWebPushModule?        webPush        = null,
-        ISchedulerModule?      scheduler      = null)
+        ISchedulerModule?      scheduler      = null,
+        IProjectService?       projects       = null)
     {
         if (discord        is not null) Discord        = discord;
         if (llm            is not null) Llm            = llm;
@@ -125,5 +127,6 @@ public static class Modules
         if (listener       is not null) Listener       = listener;
         if (webPush        is not null) WebPush        = webPush;
         if (scheduler      is not null) Scheduler      = scheduler;
+        if (projects       is not null) Projects       = projects;
     }
 }

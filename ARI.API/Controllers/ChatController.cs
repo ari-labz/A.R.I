@@ -24,16 +24,9 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     // this, bare Serialize emits PascalCase ("Type") and the client's event switch silently never matches.
     private static readonly JsonSerializerOptions SseJson = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    // Maps threadKey → projectId — backed by a persistent JSON file so it survives rebuilds
-    private static ConcurrentDictionary<string, string>? _threadProjects;
-    private static ConcurrentDictionary<string, string> GetThreadProjects(ProjectStore store)
-    {
-        if (_threadProjects is not null) return _threadProjects;
-        _threadProjects = new ConcurrentDictionary<string, string>(store.LoadThreadMap());
-        return _threadProjects;
-    }
-    private ConcurrentDictionary<string, string> ThreadProjects => GetThreadProjects(projectStore);
-    private void PersistThreadProjects() => projectStore.SaveThreadMap(new Dictionary<string, string>(ThreadProjects));
+    // Maps threadKey → projectId. Lives on ProjectStore (not here) so both this controller and
+    // ProjectServiceAdapter — the REST path and the tool-call path — share the exact same state.
+    private ConcurrentDictionary<string, string> ThreadProjects => projectStore.ThreadProjects;
 
     // Pending attachments staged before a thread exists — flushed at send time.
     private static readonly ConcurrentDictionary<string, List<Attachment>> pendingAttachments        = new();
@@ -127,10 +120,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         string key = $"{(req?.Desktop == true ? "client" : "web")}-{Guid.NewGuid():N}";
         Project? project = !string.IsNullOrWhiteSpace(req?.ProjectId) ? projectStore.Get(req.ProjectId) : null;
         if (project is not null)
-        {
-            ThreadProjects[key] = req!.ProjectId!;
-            PersistThreadProjects();
-        }
+            projectStore.BindThread(key, req!.ProjectId!);
         // Pre-register in LLMModule so the newThread event fires immediately and
         // all sidebar observers see the thread without waiting for the first message.
         // An explicit pipeline selection wins; otherwise a Repository project opens in code-mode.

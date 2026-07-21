@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ARI.Common;
@@ -122,6 +123,14 @@ public class ProjectStore
     }
 
     // ── Thread → Project mapping (in-memory only — threads don't survive restarts) ──
+    // Owned here (not by a controller) so both ThreadsController and ProjectServiceAdapter — the
+    // REST path and the tool-call path — read/write the exact same shared state.
+
+    private ConcurrentDictionary<string, string>? _threadProjects;
+    public ConcurrentDictionary<string, string> ThreadProjects
+        => _threadProjects ??= new ConcurrentDictionary<string, string>(LoadThreadMap());
+
+    public void BindThread(string threadKey, string projectId) => ThreadProjects[threadKey] = projectId;
 
     public Dictionary<string, string> LoadThreadMap()
     {
@@ -129,11 +138,6 @@ public class ProjectStore
         if (File.Exists(_threadMapPath))
             try { File.Delete(_threadMapPath); } catch { /* best-effort */ }
         return new();
-    }
-
-    public void SaveThreadMap(Dictionary<string, string> map)
-    {
-        // No-op — thread→project mappings are not persisted across restarts.
     }
 
     // ── Project attachments ───────────────────────────────────────────────────────

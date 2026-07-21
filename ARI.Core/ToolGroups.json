@@ -15,6 +15,10 @@
     "obsidian_tools": {
       "Description": "Search this project's notes (regex, no index) — a project's own vault, not the brain.",
       "Tools": ["search_vault"]
+    },
+    "project_tools": {
+      "Description": "List, create, rename, and bind projects — the workspaces (code repos or note vaults) a conversation can be scoped to.",
+      "Tools": ["list_projects", "create_project", "rename_project", "bind_project"]
     }
   }
 }
