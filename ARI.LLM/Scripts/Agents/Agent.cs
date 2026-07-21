@@ -472,7 +472,14 @@ public abstract class Agent
         if (!QuietLogging && !SuppressPromptLog)
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) prompt\n\"{Prompt}\"", Name, thread.Key, prompt);
 
-        int             maxTokens            = maxTokensOverride != 0 ? maxTokensOverride : BudgetResponse;
+        // max_tokens is the server's hard ceiling over the WHOLE generation (reasoning + content
+        // combined) — thinking_budget_tokens only softly targets when the model should stop reasoning,
+        // it doesn't add room. Sending just respBudget here meant thinking ate into (and could exhaust)
+        // the response budget itself: with a small BudgetResponse and a real BudgetThinking, generation
+        // hit the ceiling mid-thought, never reached an answer, and retried in a loop. respBudget must
+        // stay the number that governs the answer alone; thinkBudget is added on top so BudgetResponse
+        // means what its name says regardless of whether thinking is on.
+        int             maxTokens            = respBudget + thinkBudget;
         int             toolCallCount        = 0;
         int             parseFailures        = 0;
         int             consecutiveFallbacks = 0;
