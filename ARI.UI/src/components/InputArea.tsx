@@ -226,14 +226,8 @@ export default function InputArea({
                     onChange={e => { setInput(e.target.value); updateCmdPopup(e.target.value) }}
                     onKeyDown={handleKeyDown}
                     onPaste={handlePaste}
-                    onFocus={() => {
-                        if (input.trim()) onHeartbeatStart()
-                        // Collapse #main-header (CSS, see app.css) while typing on a short mobile
-                        // viewport — with the keyboard open there's little vertical room, and the
-                        // header was eating a fixed share of it regardless (#168).
-                        document.body.classList.add("composer-focused")
-                    }}
-                    onBlur={() => { onHeartbeatStop(); document.body.classList.remove("composer-focused") }}
+                    onFocus={() => { if (input.trim()) onHeartbeatStart() }}
+                    onBlur={onHeartbeatStop}
                     onInput={() => { if (input.trim()) onHeartbeatStart(); else onHeartbeatStop() }}
                 />
                 <div id="input-footer">
