@@ -152,7 +152,7 @@
       "PresencePenalty": null,
       "FrequencyPenalty": null,
       "MinP": null,
-      "BudgetResponse": 200,
+      "BudgetResponse": 10,
       "BudgetThinking": 150,
       "BudgetContext": 30000
     },
