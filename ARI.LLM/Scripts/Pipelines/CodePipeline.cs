@@ -66,24 +66,18 @@ internal sealed class CodePipeline : Pipeline
 
         bool remote = thread.tools.ContainsKey("read_file");
 
-        // No fallback. A local Code thread with nothing bound and no client-sent path used to default
-        // to Path.GetFullPath(".") — this SERVER's own working directory, which for a dev run is this
-        // very repo. That's a real hazard: a misrouted or unbound thread should never get edit tools
-        // pointed at anything, let alone ARI's own source. Refuse instead of guessing.
-        if (!remote && string.IsNullOrWhiteSpace(localPath))
-        {
-            const string refusal = "No project is selected for this conversation, so I have no filesystem to work in. Bind a project first (or open one from the sidebar) before asking me to code.";
-            // A plain return string here would NOT surface as a visible message — RunAsync's return
-            // value is just handed back up ExecuteAsync, not turned into a Response. Build one directly,
-            // same as any completed turn, and stream it so the client sees it immediately.
-            Response response = new() { State = State.Complete, Content = ContentBlock.Parse(refusal), Timestamp = DateTime.Now };
-            thread.AddItem(response);
-            onDelta?.Invoke(refusal);
-            return Task.FromResult(refusal);
-        }
-
-        string        resolvedRoot = remote ? (localPath ?? "") : Path.GetFullPath(localPath!);
-        FileSnapshots snapshots    = new();
+        // No disk fallback, ever — a local Code thread with nothing bound and no client-sent path
+        // used to default to Path.GetFullPath("."), the SERVER's own working directory (a real
+        // hazard: a misrouted or unbound thread could get edit tools pointed at ARI's own source).
+        // Rather than refusing outright, root just stays null: Coder.RunLoop then attaches no
+        // filesystem tools at all. The architect still runs — plenty of coding requests ("optimise
+        // this query", "what does this code do?") only need an attachment or pasted content already
+        // in the conversation, not a bound project. It asks the user to attach a file when it
+        // genuinely needs to see one it doesn't have, instead of reaching for a tool that isn't there.
+        string? resolvedRoot = remote
+            ? (localPath ?? "")
+            : (string.IsNullOrWhiteSpace(localPath) ? null : Path.GetFullPath(localPath));
+        FileSnapshots snapshots = new();
 
         if (coder is null)
             throw new InvalidOperationException("Coder is not configured — the code pipeline cannot run.");

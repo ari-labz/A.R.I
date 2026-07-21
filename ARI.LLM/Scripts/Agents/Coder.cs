@@ -146,7 +146,7 @@ internal sealed class Coder : Agent
     // call. The plan prose lives in History — nothing is stashed; the phase (Thread.Phase) is the only state.
     internal async Task<string> RunLoop(
         Thread parent, string threadKey, string prompt, string username,
-        string root, FileSnapshots snapshots, CancellationTokenSource cts, Func<string, Task>? onDelta,
+        string? root, FileSnapshots snapshots, CancellationTokenSource cts, Func<string, Task>? onDelta,
         bool remote = false)
     {
         // The architect is a conversational coding agent driving its OWN tool loop: exploration (read-only) plus
@@ -172,7 +172,11 @@ internal sealed class Coder : Agent
         // PreloadedTools in Agents.json defaults both groups to eager for exactly that reason; nothing stops
         // this agent (or any other) from calling request_tools for them explicitly too — preloading just
         // means it doesn't have to.
-        if (!remote)
+        // root is null when no project is bound and the client sent no path — no ServerFileSystem,
+        // no filesystem_tools/coding_tools (ToolFactories resolves both off ProjectRoot, which is
+        // null here). The architect still runs: a request that only needs what's already in the
+        // conversation (an attachment, pasted code) doesn't need a project at all.
+        if (!remote && root is not null)
         {
             if (PreloadedTools?.Contains("filesystem_tools", StringComparer.OrdinalIgnoreCase) == true)
                 ToolFactories.LoadGroup("filesystem_tools", parent);
