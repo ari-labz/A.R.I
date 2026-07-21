@@ -1,7 +1,10 @@
 using System.Text.Json.Serialization;
 using ARI.API;
+using ARI.Brain;
+using ARI.Common;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 
 namespace ARI.API.Controllers;
 
@@ -40,6 +43,7 @@ public class ProjectsController(ProjectStore store) : ControllerBase
             RootPath:     rootPath);
 
         store.Add(project);
+        EnsureBrainNote(project);
         return Ok(project);
     }
 
@@ -63,6 +67,7 @@ public class ProjectsController(ProjectStore store) : ControllerBase
             Category     = req.Category?.Trim() ?? existing.Category,
         };
         store.Update(updated);
+        if (updated.Name != existing.Name) RenameBrainNote(existing.Name, updated.Name);
         return Ok(updated);
     }
 
@@ -70,9 +75,73 @@ public class ProjectsController(ProjectStore store) : ControllerBase
     public IActionResult Delete(string id)
     {
         if (store.Get(id) is null) return NotFound();
+        // The brain note is deliberately left alone — a project you delete may still be worth
+        // remembering happened. Nothing here ever deletes or archives it.
         store.Delete(id);
         return Ok();
     }
+
+    // ── Brain note (Projects/[Name]) ────────────────────────────────────────────────
+    // Deterministic, structural fields only (type/category/backend) — the descriptive summary is
+    // Engram's job over time, same tending discipline as any other note, not something this
+    // controller ever overwrites.
+
+    private static void EnsureBrainNote(Project project)
+    {
+        if (!BrainModule.Ready) return;
+        try
+        {
+            List<EngramAdd> adds = new();
+            if (BrainModule.GetNote("Projects") is null)
+                adds.Add(new EngramAdd { NoteName = "Projects", Content = "Hub for every project Ari knows about.", Type = "hub" });
+            adds.Add(new EngramAdd
+            {
+                NoteName = $"Projects/{project.Name}",
+                Content  = ProjectNoteBody(project),
+                Type     = "project",
+            });
+            BrainModule.AddNotes(adds);
+            // The hub links DOWN to each direct child (GraphRulebook) — deterministic, idempotent,
+            // safe to call even if other hubs in the vault also happen to be missing a member link.
+            BrainModule.EnsureHubChildLinks();
+        }
+        catch (Exception ex)
+        {
+            Shared.Logger.LogWarning(ex, "[Projects] Failed to create brain note for project '{Name}'.", project.Name);
+        }
+    }
+
+    private static void RenameBrainNote(string oldName, string newName)
+    {
+        if (!BrainModule.Ready) return;
+        try
+        {
+            Note? existing = BrainModule.GetNote(oldName);
+            if (existing is null) return; // no note to rename (e.g. brain wasn't ready at creation)
+            BrainModule.EditNotes(new[]
+            {
+                new EngramEdit
+                {
+                    NoteName    = oldName,
+                    NewNoteName = $"Projects/{newName}",
+                    Content     = existing.Content,
+                    Aliases     = existing.Aliases,
+                    Type        = "project",
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Shared.Logger.LogWarning(ex, "[Projects] Failed to rename brain note '{Old}' -> '{New}'.", oldName, newName);
+        }
+    }
+
+    private static string ProjectNoteBody(Project project) =>
+        $"Type: {project.Type}\n" +
+        $"Category: {(project.Category.Length > 0 ? project.Category : "none")}\n" +
+        $"Storage: {project.Backend}\n\n" +
+        "(No summary yet — Ari will fill this in as we discuss the project.)\n\n" +
+        "[[Projects]]\n";
 
     // ── Project attachments ───────────────────────────────────────────────────────
 
