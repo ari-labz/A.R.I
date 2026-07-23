@@ -316,7 +316,7 @@ public class AgentsApiController(PersistentData persistentData) : ControllerBase
     {
         var agents = persistentData.GetAgents();
         var shared = persistentData.GetSharedPrompts();
-        var servers = persistentData.GetServers().Select(s => new { name = s.Name, slots = s.ParallelSlots });
+        var servers = persistentData.GetServers().Select(s => new { name = s.Name, slots = s.Slots });
         return Ok(new { agents, shared, servers });
     }
 
@@ -340,7 +340,7 @@ public class AgentsApiController(PersistentData persistentData) : ControllerBase
         if (Llm is not null)
         {
             Llm.AssignAgentServer(name, req.ServerName);
-            if (req.Slot.HasValue) Llm.AssignAgentSlot(name, req.Slot.Value);
+            if (req.SlotName is { Length: > 0 }) Llm.AssignAgentSlot(name, req.SlotName);
         }
 
         return NoContent();
@@ -1011,12 +1011,38 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
                 port            = s.Port,
                 contextSize     = s.ContextSize,
                 parallelSlots   = s.ParallelSlots,
+                slots           = s.Slots,
                 kvCacheQuantK   = s.KvCacheQuantK,
                 kvCacheQuantV   = s.KvCacheQuantV,
 
                 currentModelName = s.CurrentModelName,
                 autoStart       = s.BootStartup,
                 unifiedCache    = s.UnifiedCache,
+
+                // Sampler defaults — the control panel's server modal edits these directly.
+                temperature      = s.Temperature,
+                topP             = s.TopP,
+                topK             = s.TopK,
+                minP             = s.MinP,
+                topNSigma        = s.TopNSigma,
+                typicalP         = s.TypicalP,
+                xtcProbability   = s.XtcProbability,
+                xtcThreshold     = s.XtcThreshold,
+                dynatempRange    = s.DynatempRange,
+                dynatempExp      = s.DynatempExp,
+                repeatLastN      = s.RepeatLastN,
+                repeatPenalty    = s.RepeatPenalty,
+                presencePenalty  = s.PresencePenalty,
+                frequencyPenalty = s.FrequencyPenalty,
+                dryMultiplier    = s.DryMultiplier,
+                dryBase          = s.DryBase,
+                dryAllowedLength = s.DryAllowedLength,
+                dryPenaltyLastN  = s.DryPenaltyLastN,
+                drySequenceBreakers = s.DrySequenceBreakers,
+                mirostat         = s.Mirostat,
+                mirostatLr       = s.MirostatLr,
+                mirostatEnt      = s.MirostatEnt,
+                seed             = s.Seed,
             };
         }).ToList();
 

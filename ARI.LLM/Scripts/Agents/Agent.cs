@@ -28,15 +28,47 @@ public abstract class Agent
     [JsonPropertyName("think")]         public bool    Think         { get; init; }
     // Per-agent thinking-token budget, sent to llama-server as `thinking_budget_tokens` per request.
     [JsonPropertyName("budgetThinking")]public int     BudgetThinking{ get; init; }
-    [JsonPropertyName("slot")]          public int?    Slot          { get; set; }
-    [JsonPropertyName("temperature")]   public double? Temperature   { get; init; }
-    [JsonPropertyName("topP")]          public double? TopP          { get; init; }
-    [JsonPropertyName("topK")]          public int?    TopK          { get; init; }
-    [JsonPropertyName("minP")]          public double? MinP          { get; init; }
-    [JsonPropertyName("repeatPenalty")] public double? RepeatPenalty { get; init; }
+    // Which of the bound server's named slots this agent runs on — resolved to BoundSlot (and from
+    // there, the numeric id_slot) at bind time. Null/unmatched = no slot pin, server picks any free one.
+    [JsonPropertyName("slotName")]      public string? SlotName      { get; set; }
+    // Sampler overrides — ALL nullable, and ALL ignored unless OverrideSamplerSettings is true. When
+    // it's false (the default), the agent runs with exactly the bound server's sampler settings, no
+    // per-field mixing. When true, each null field still falls through to the server's value — the
+    // toggle doesn't require filling in every field, just permits overriding the ones you set.
+    [JsonPropertyName("overrideSamplerSettings")] public bool OverrideSamplerSettings { get; init; }
+    [JsonPropertyName("temperature")]      public double? Temperature      { get; init; }
+    [JsonPropertyName("topP")]             public double? TopP             { get; init; }
+    [JsonPropertyName("topK")]             public int?    TopK             { get; init; }
+    [JsonPropertyName("minP")]             public double? MinP             { get; init; }
+    [JsonPropertyName("topNSigma")]        public double? TopNSigma        { get; init; }
+    [JsonPropertyName("typicalP")]         public double? TypicalP         { get; init; }
+    [JsonPropertyName("xtcProbability")]   public double? XtcProbability   { get; init; }
+    [JsonPropertyName("xtcThreshold")]     public double? XtcThreshold     { get; init; }
+    [JsonPropertyName("dynatempRange")]    public double? DynatempRange    { get; init; }
+    [JsonPropertyName("dynatempExp")]      public double? DynatempExp      { get; init; }
+    [JsonPropertyName("repeatLastN")]      public int?    RepeatLastN      { get; init; }
+    [JsonPropertyName("repeatPenalty")]    public double? RepeatPenalty    { get; init; }
     [JsonPropertyName("presencePenalty")]  public double? PresencePenalty  { get; init; }
-    [JsonPropertyName("frequencyPenalty")]  public double? FrequencyPenalty  { get; init; }
-    [JsonPropertyName("budgetContext")] public int     BudgetContext  { get; init; }
+    [JsonPropertyName("frequencyPenalty")] public double? FrequencyPenalty { get; init; }
+    [JsonPropertyName("dryMultiplier")]    public double? DryMultiplier    { get; init; }
+    [JsonPropertyName("dryBase")]          public double? DryBase          { get; init; }
+    [JsonPropertyName("dryAllowedLength")] public int?    DryAllowedLength { get; init; }
+    [JsonPropertyName("dryPenaltyLastN")]  public int?    DryPenaltyLastN  { get; init; }
+    [JsonPropertyName("drySequenceBreakers")] public string[]? DrySequenceBreakers { get; init; }
+    [JsonPropertyName("mirostat")]         public int?    Mirostat         { get; init; }
+    [JsonPropertyName("mirostatLr")]       public double? MirostatLr       { get; init; }
+    [JsonPropertyName("mirostatEnt")]      public double? MirostatEnt      { get; init; }
+    [JsonPropertyName("seed")]             public long?   Seed             { get; init; }
+    // Context is a SLOT property, not an agent one — derived from BoundSlot, never configured directly.
+    [JsonIgnore] internal int BudgetContext => BoundSlot?.ContextLimit ?? 0;
+
+    // Compaction: off by default. When on, stubs oldest tool outputs one at a time, once usage exceeds
+    // CompactHighPct of the bound slot's context, until it drops under CompactLowPct — both percentages
+    // (0-100) of BudgetContext. An agent that doesn't support compaction (one-shot, no long tool-call
+    // history) relies on the server's --context-shift as its only safety net instead.
+    [JsonPropertyName("supportsCompaction")] public bool SupportsCompaction { get; init; }
+    [JsonPropertyName("compactHighPct")]     public int  CompactHighPct     { get; init; } = 80;
+    [JsonPropertyName("compactLowPct")]      public int  CompactLowPct     { get; init; } = 60;
     // When true, send tools via the native OpenAI `tools` field and parse native tool_calls, instead
     // of the text protocol (BuildToolCatalog + ParseTextCalls). Native relies on llama.cpp's --jinja
     // chat-template tool parsing (qwen3_coder format) being reliable for this model/build.
@@ -47,6 +79,12 @@ public abstract class Agent
 
     // ── Runtime-only ─────────────────────────────────────────────────────────
     [JsonIgnore] public string Endpoint { get; internal set; } = "";
+    // The server this agent's slot lives on — the fallback for every sampler field the agent doesn't
+    // (or isn't allowed to) override. Wired alongside Endpoint wherever an agent is bound to a server.
+    [JsonIgnore] internal Server? BoundServer { get; set; }
+    // Resolved from SlotName against BoundServer.Slots at bind time. Null = no pin (server picks any
+    // free slot) — BudgetContext is then 0 (unbounded/unknown), same as today's unpinned behaviour.
+    [JsonIgnore] internal NamedSlot? BoundSlot { get; set; }
 
     // 0 = unlimited. Overridden by agents that trim short-term history.
     [JsonIgnore] internal virtual int  MemoryLimit => 0;
@@ -56,17 +94,11 @@ public abstract class Agent
     [JsonIgnore] protected virtual bool TraceReasoning   => false;
     [JsonIgnore] internal virtual bool SuppressPromptLog => false;
 
-    // ── Sampling defaults (overridden by agent config; server defaults are the baseline) ──
+    // ── Sampling: agent override (if OverrideSamplerSettings) falls back to BoundServer, the one and
+    // only baseline — there is no further ARI-side hardcoded constant to fall back to below that. ──
     private const int    CHARS_PER_TOKEN     = 4;
-    private const double TEMPERATURE         = 0.7;
-    private const double TOP_P               = 0.95;
-    private const int    TOP_K               = 20;
-    private const double MIN_P               = 0.05;
-    private const double REPEAT_PENALTY      = 1.0;
     private const double TOKEN_WARNING_RATIO = 0.8;
-    private const double COMPACT_RATIO_HIGH  = 0.6;  // trigger: compact once context chars exceed this fraction of budget
-    private const double COMPACT_RATIO_LOW   = 0.4;  // target: stub down to here in one pass (hysteresis — one prefix invalidation buys many stable turns)
-    private const int    COMPACT_KEEP_RECENT = 3;
+    private const int    COMPACT_KEEP_RECENT = 3;  // never stub the N most recent tool outputs, regardless of threshold
     private const int    MAX_DEGRADE_EVENTS  = 5;
     private const int    DEFAULT_MEMORY_LIMIT = 25;
     private const string ATTACHMENT_DIVIDER  = "-------------------";
@@ -370,7 +402,7 @@ public abstract class Agent
         string baseSystem = persona.Length == 0 ? roleBlock : $"[Persona]\n{persona}\n\n{roleBlock}";
         baseSystem += BuildPersistentContext(thread);
         // list_tools/request_tools manifest (#126) — only for threads that actually carry list_tools
-        // (ephemeral internal threads like Classifier/Awareness never register it). Static text, so it
+        // (an ephemeral internal thread like Awareness never registers it). Static text, so it
         // sits in the cached KV prefix rather than being rebuilt per turn like the live tool catalog.
         if (thread.tools.ContainsKey("list_tools"))
             baseSystem += "\n\n" + SharedPrompts.ToolSystemBlock;
@@ -488,7 +520,7 @@ public abstract class Agent
         // All Code-specific per-turn guard state (read/edit/command dedup, build state, loop counters) lives
         // here; the generic loop only reads ToolTurnState.ForceNoMoreTools. See Code.ToolLoop.cs.
         ToolTurnState           toolTurn      = CreateToolTurnState();
-        List<(int Index, string CallId, string Name)> toolResultSlots = new();
+        List<(int Index, string CallId, string Name, string? Path)> toolResultSlots = new();
         int degradeEvents = 0;
         void Degrade()
         {
@@ -600,7 +632,10 @@ public abstract class Agent
             // model: ~100 t/s prompt-eval vs ~19 t/s generation).
             messages[0] = new { role = "system", content = baseSystem + toolCatalog + budgetsBlock + thinkSuffix };
 
-            CompactToolOutput(messages, toolResultSlots, BudgetContext);
+            // No compaction support = rely on the server's --context-shift safety net instead; a
+            // non-compacting agent (short one-shot calls) is very unlikely to ever need it.
+            if (SupportsCompaction)
+                CompactToolOutput(messages, toolResultSlots, BudgetContext, CompactHighPct, CompactLowPct, thread.Snapshots);
 
             if (thread.liveCallInfo is { } lci)
             {
@@ -613,8 +648,12 @@ public abstract class Agent
                     Name, thread.Key,
                     toolSchemas is not null ? $"{toolSchemas.Length} tool(s) available: {string.Join(", ", thread.tools.Keys)}" : "no tools registered");
 
-            // Per-turn sampling: a stateful agent (CodeArchitect) can override per CodePhase; each null member
-            // falls back to the flat agent config, then the server baseline.
+            // Per-turn sampling: a stateful agent (CodeArchitect) can override per CodePhase; that falls
+            // back to the agent's own override (only if OverrideSamplerSettings is on); that falls back
+            // to the bound server's settings — the one baseline every agent ultimately shares.
+            if (BoundServer is null)
+                throw new InvalidOperationException($"[{Name}] has no BoundServer — cannot resolve sampler settings.");
+            Server srv = BoundServer;
             var s = SamplingFor(thread);
             Dictionary<string, object?> body = new()
             {
@@ -623,17 +662,33 @@ public abstract class Agent
                 ["stream"]         = true,
                 ["stream_options"] = new { include_usage = true },
                 ["max_tokens"]     = maxTokens,
-                ["temperature"]    = s.Temperature   ?? Temperature   ?? TEMPERATURE,
-                ["top_p"]          = s.TopP          ?? TopP          ?? TOP_P,
-                ["top_k"]          = s.TopK          ?? TopK          ?? TOP_K,
-                ["min_p"]          = s.MinP          ?? MinP          ?? MIN_P,
-                ["repeat_penalty"] = s.RepeatPenalty ?? RepeatPenalty ?? REPEAT_PENALTY
+                ["temperature"]      = s.Temperature      ?? (OverrideSamplerSettings ? Temperature      : null) ?? srv.Temperature,
+                ["top_p"]            = s.TopP             ?? (OverrideSamplerSettings ? TopP             : null) ?? srv.TopP,
+                ["top_k"]            = s.TopK              ?? (OverrideSamplerSettings ? TopK              : null) ?? srv.TopK,
+                ["min_p"]            = s.MinP             ?? (OverrideSamplerSettings ? MinP             : null) ?? srv.MinP,
+                ["repeat_penalty"]   = s.RepeatPenalty    ?? (OverrideSamplerSettings ? RepeatPenalty    : null) ?? srv.RepeatPenalty,
+                ["top_n_sigma"]      = (OverrideSamplerSettings ? TopNSigma        : null) ?? srv.TopNSigma,
+                ["typical_p"]        = (OverrideSamplerSettings ? TypicalP         : null) ?? srv.TypicalP,
+                ["xtc_probability"]  = (OverrideSamplerSettings ? XtcProbability   : null) ?? srv.XtcProbability,
+                ["xtc_threshold"]    = (OverrideSamplerSettings ? XtcThreshold     : null) ?? srv.XtcThreshold,
+                ["dynatemp_range"]   = (OverrideSamplerSettings ? DynatempRange    : null) ?? srv.DynatempRange,
+                ["dynatemp_exponent"]= (OverrideSamplerSettings ? DynatempExp      : null) ?? srv.DynatempExp,
+                ["repeat_last_n"]    = (OverrideSamplerSettings ? RepeatLastN      : null) ?? srv.RepeatLastN,
+                ["dry_multiplier"]   = (OverrideSamplerSettings ? DryMultiplier    : null) ?? srv.DryMultiplier,
+                ["dry_base"]         = (OverrideSamplerSettings ? DryBase          : null) ?? srv.DryBase,
+                ["dry_allowed_length"] = (OverrideSamplerSettings ? DryAllowedLength : null) ?? srv.DryAllowedLength,
+                ["dry_penalty_last_n"] = (OverrideSamplerSettings ? DryPenaltyLastN  : null) ?? srv.DryPenaltyLastN,
+                ["dry_sequence_breakers"] = (OverrideSamplerSettings ? DrySequenceBreakers : null) ?? srv.DrySequenceBreakers,
+                ["mirostat"]         = (OverrideSamplerSettings ? Mirostat        : null) ?? srv.Mirostat,
+                ["mirostat_tau"]     = (OverrideSamplerSettings ? MirostatEnt     : null) ?? srv.MirostatEnt,
+                ["mirostat_eta"]     = (OverrideSamplerSettings ? MirostatLr      : null) ?? srv.MirostatLr,
+                ["seed"]             = (OverrideSamplerSettings ? Seed            : null) ?? srv.Seed,
             };
 
-            double? presence  = s.PresencePenalty  ?? PresencePenalty;
-            double? frequency = s.FrequencyPenalty ?? FrequencyPenalty;
-            if (presence.HasValue)  body["presence_penalty"]  = presence.Value;
-            if (frequency.HasValue) body["frequency_penalty"] = frequency.Value;
+            double? presence  = s.PresencePenalty  ?? (OverrideSamplerSettings ? PresencePenalty  : null) ?? srv.PresencePenalty;
+            double? frequency = s.FrequencyPenalty ?? (OverrideSamplerSettings ? FrequencyPenalty : null) ?? srv.FrequencyPenalty;
+            body["presence_penalty"]  = presence;
+            body["frequency_penalty"] = frequency;
 
             // Thinking mode is decided ONCE for the thread/turn and never flipped mid-turn: switching
             // enable_thinking changes the chat template, which invalidates the server's whole cached
@@ -669,7 +724,11 @@ public abstract class Agent
             // and sets no "</tool_call>" stop, so the model can batch several calls per turn before
             // stopping naturally (<|im_end|>) — the main lever against TTFT. Guards bound any run-on.
             if (nativeTools)             body["tools"] = toolSchemas;
-            if (Slot.HasValue)           body["id_slot"] = Slot.Value;
+            if (BoundSlot is not null)
+            {
+                int slotIndex = srv.Slots.FindIndex(sl => sl.Id == BoundSlot.Id);
+                if (slotIndex >= 0) body["id_slot"] = slotIndex;
+            }
 
             // Cache-friendly dynamic context: append the volatile checklist as a transient LAST message just
             // for this request, then remove it so the persistent history (and its cached prefix) stays stable.
@@ -1423,7 +1482,20 @@ public abstract class Agent
                     {
                         int addedIndex = messages.Count;
                         messages.Add(new { role = "tool", tool_call_id = call.Id, name = call.Name, content = result });
-                        toolResultSlots.Add((addedIndex, call.Id, call.Name));
+                        // Capture the path for read_file/preview_file specifically — if this output later gets
+                        // stubbed by compaction, we need it to clear the file's read-dedup ledger too, or the
+                        // model gets told to re-read a file the guard then refuses to let it re-read.
+                        string? readPath = null;
+                        if (call.Name is "read_file" or "preview_file")
+                        {
+                            try
+                            {
+                                using JsonDocument pDoc = JsonDocument.Parse(argsJson);
+                                if (pDoc.RootElement.TryGetProperty("path", out var pe)) readPath = pe.GetString();
+                            }
+                            catch { /* ignore — dedup exemption just won't fire for this call */ }
+                        }
+                        toolResultSlots.Add((addedIndex, call.Id, call.Name, readPath));
                         if (thread.liveCallInfo is { } lc) lc.EstimatedInputTokens += result.Length / CHARS_PER_TOKEN;
                         AfterToolAppended(toolTurn, messages, call.Name, call.Id, argsJson, result, addedIndex);
                     }
@@ -1745,12 +1817,13 @@ public abstract class Agent
 
     private static string? ContentOf(object m) => m.GetType().GetProperty("content")?.GetValue(m) as string;
 
-    private static void CompactToolOutput(List<object> messages, List<(int Index, string CallId, string Name)> slots, int maxContextTokens)
+    private static void CompactToolOutput(List<object> messages, List<(int Index, string CallId, string Name, string? Path)> slots,
+        int maxContextTokens, int highPct, int lowPct, FileSnapshots? snapshots)
     {
         if (maxContextTokens <= 0) return;
 
-        long trigger = (long)(maxContextTokens * (long)CHARS_PER_TOKEN * COMPACT_RATIO_HIGH);
-        long target  = (long)(maxContextTokens * (long)CHARS_PER_TOKEN * COMPACT_RATIO_LOW);
+        long trigger = (long)(maxContextTokens * (long)CHARS_PER_TOKEN * (highPct / 100.0));
+        long target  = (long)(maxContextTokens * (long)CHARS_PER_TOKEN * (lowPct  / 100.0));
         long total   = 0;
         foreach (object m in messages) total += ContentOf(m)?.Length ?? 0;
 
@@ -1759,19 +1832,25 @@ public abstract class Agent
         // re-prefill of the whole context each step (~125s on a large context), and (2) throws away file
         // contents the model just read, forcing wasteful re-reads. When triggered, stub all the way down
         // to the LOW watermark rather than just below the trigger — otherwise a session hovering at the
-        // budget stubs one more output (and re-prefills) almost every turn.
+        // budget stubs one more output (and re-prefills) almost every turn. Stubs one at a time, re-checking
+        // the running total after each, rather than a fixed single-pass estimate.
         if (total <= trigger) return;
 
         int stubbable = slots.Count - COMPACT_KEEP_RECENT;
         for (int i = 0; i < stubbable && total > target; i++)
         {
-            (int idx, string callId, string name) = slots[i];
+            (int idx, string callId, string name, string? path) = slots[i];
             if (idx < 0 || idx >= messages.Count) continue;
             string? cur = ContentOf(messages[idx]);
             if (cur is null || cur.Length < 200) continue;
-            string stub = $"[Earlier {name} output omitted to save context — re-run the tool if you need it again.]";
+            string stub = path is not null
+                ? $"[Earlier {name} of '{path}' omitted to save context — re-read it if you still need it; that is not blocked, the prior read no longer counts.]"
+                : $"[Earlier {name} output omitted to save context — re-run the tool if you need it again.]";
             messages[idx] = new { role = "tool", tool_call_id = callId, name, content = stub };
             total -= cur.Length - stub.Length;
+            // The dedup ledger still thinks this file/range is "in context" — it no longer is. Without
+            // this, the model is told to re-read but the read-dedup guard then refuses the very re-read.
+            if (path is not null) snapshots?.InvalidateReads(path);
         }
     }
 

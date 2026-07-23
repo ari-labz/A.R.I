@@ -215,7 +215,7 @@ public class ARI : BackgroundService
             foreach (var agent in persistentData.GetAgents())
             {
                 llmModule.AssignAgentServer(agent.Name, agent.ServerName);
-                if (agent.Slot.HasValue) llmModule.AssignAgentSlot(agent.Name, agent.Slot.Value);
+                if (agent.SlotName is { Length: > 0 }) llmModule.AssignAgentSlot(agent.Name, agent.SlotName);
             }
         }
 
