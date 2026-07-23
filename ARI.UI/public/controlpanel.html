@@ -387,6 +387,29 @@ html, body {
 .dbg-sub-label { font-weight: 700; color: #334155; }
 .dbg-sub-key { font-family: ui-monospace, monospace; font-size: 10px; color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dbg-sub-body { padding: 11px 12px; display: flex; flex-direction: column; gap: 12px; max-height: 70vh; overflow-y: auto; overscroll-behavior: contain; }
+
+/* Dual-handle range slider (compaction low/high thresholds): the two overlapping <input type=range>
+   tracks are transparent and click-through by default (pointer-events:none, set inline) — only the
+   thumb itself should be draggable, so both handles stay independently grabbable across the full track. */
+.ag-dual-slider input[type=range]::-webkit-slider-thumb { pointer-events: auto; }
+.ag-dual-slider input[type=range]::-moz-range-thumb      { pointer-events: auto; }
+
+/* iOS-style toggle switch, used in place of plain checkboxes (Unified cache, Auto-start, …) */
+.cp-toggle { position: relative; display: inline-block; width: 42px; height: 24px; flex-shrink: 0; cursor: pointer; }
+.cp-toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+.cp-toggle-track { position: absolute; inset: 0; border-radius: 12px; background: #d1d5db; transition: background .15s; }
+.cp-toggle-thumb { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.2); transition: transform .15s; }
+.cp-toggle.on .cp-toggle-track { background: var(--accent, #223742); }
+.cp-toggle.on .cp-toggle-thumb { transform: translateX(18px); }
+
+/* Softer nested sections inside a server card — a faint tint distinguishes Settings/Slots/Sampler
+   from the plain-white outer card, and a touch more breathing room than the dense default. */
+#srv-cards .mdl-card, #srv-cards > div > div { border-radius: 12px; }
+.srv-subsection { background: #fafbfc; border-radius: 10px !important; margin-bottom: 10px; }
+.srv-subsection:last-child { margin-bottom: 0; }
+.srv-field-row { margin-bottom: 14px; }
+.srv-field-row:last-child { margin-bottom: 0; }
+.srv-field-label { font-size: 12px; color: var(--text-dim); margin-bottom: 5px; display: block; }
 </style>
 </head>
 <body>
@@ -444,65 +467,7 @@ html, body {
         <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);">LLM Servers</div>
         <button class="vs-btn-primary" id="srv-add-btn" type="button" style="font-size:12px;padding:6px 16px;">+ New server</button>
       </div>
-      <div id="srv-cards" style="display:flex;flex-direction:column;gap:16px;"></div>
-
-      <!-- Create / Edit modal -->
-      <div id="srv-modal-overlay" style="display:none;position:fixed;inset:0;z-index:400;background:rgba(0,0,0,.45);align-items:center;justify-content:center;">
-        <div style="background:#fff;border-radius:14px;padding:28px 28px 22px;width:480px;max-width:calc(100vw - 32px);box-shadow:0 8px 40px rgba(0,0,0,.18);max-height:90vh;overflow-y:auto;">
-          <div style="font-size:15px;font-weight:700;margin-bottom:20px;" id="srv-modal-title">New server</div>
-          <div style="display:flex;flex-direction:column;gap:14px;">
-            <label class="vs-label">Name<input type="text" id="srv-f-name" class="vs-input" placeholder="e.g. Logic" autocomplete="off"></label>
-            <div style="display:flex;gap:12px;">
-              <label class="vs-label" style="flex:1;">Port<input type="number" id="srv-f-port" class="vs-input" value="8081" min="1" max="65535"></label>
-              <label class="vs-label" style="flex:1;">Parallel slots<input type="number" id="srv-f-slots" class="vs-input" value="1" min="1" max="32"></label>
-            </div>
-            <div class="vs-label" style="gap:8px;">
-              Context size
-              <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
-                <input type="range" id="srv-f-ctx-slider" min="0" max="6" step="1" value="3"
-                  style="flex:1;accent-color:var(--accent,#223742);">
-                <input type="text" id="srv-f-ctx" class="vs-input" value="32K"
-                  style="width:72px;text-align:center;" placeholder="e.g. 48K">
-              </div>
-              <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-dim);margin-top:2px;padding:0 1px;">
-                <span>4K</span><span>8K</span><span>16K</span><span>32K</span><span>64K</span><span>128K</span><span>256K</span>
-              </div>
-              <label style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;cursor:pointer;">
-                <span style="font-size:13px;color:var(--text);font-weight:400;">Unified cache</span>
-                <span style="position:relative;display:inline-block;width:44px;height:26px;flex-shrink:0;">
-                  <input type="checkbox" id="srv-f-unified" style="opacity:0;width:0;height:0;position:absolute;">
-                  <span id="srv-f-unified-track" style="position:absolute;inset:0;border-radius:13px;background:#d1d5db;transition:background .2s;"></span>
-                  <span id="srv-f-unified-thumb" style="position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .2s;"></span>
-                </span>
-              </label>
-            </div>
-            <div style="display:flex;gap:12px;">
-              <label class="vs-label" style="flex:1;">KV quant K<select id="srv-f-kvk" class="vs-input"><option value="4">Q4</option><option value="8">Q8</option><option value="16">F16</option></select></label>
-              <label class="vs-label" style="flex:1;">KV quant V<select id="srv-f-kvv" class="vs-input"><option value="4">Q4</option><option value="8">Q8</option><option value="16">F16</option></select></label>
-            </div>
-            <label class="vs-label">Startup model<select id="srv-f-model" class="vs-input"><option value="">— none —</option></select></label>
-            <div style="display:flex;gap:24px;">
-              <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:var(--text);">
-                <input type="checkbox" id="srv-f-boot" style="width:15px;height:15px;accent-color:var(--accent,#223742);">
-                Auto-start on boot
-              </label>
-            </div>
-          </div>
-          <div id="srv-ram-estimate" style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-size:12px;color:var(--text-dim);margin-top:4px;display:none;">
-            <div style="font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;color:var(--text-dim);">Estimated RAM</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px 16px;">
-              <div>Model weights<br><span id="srv-ram-weights" style="font-size:13px;font-weight:700;color:var(--text);">—</span></div>
-              <div>KV cache<br><span id="srv-ram-kv" style="font-size:13px;font-weight:700;color:var(--text);">—</span></div>
-              <div>Total<br><span id="srv-ram-total" style="font-size:13px;font-weight:700;color:#0369a1;">—</span></div>
-            </div>
-          </div>
-          <div style="display:flex;gap:10px;margin-top:22px;justify-content:flex-end;">
-            <button class="mdl-btn-secondary" id="srv-modal-cancel" type="button">Cancel</button>
-            <button class="vs-btn-primary" id="srv-modal-save" type="button">Save</button>
-          </div>
-          <div id="srv-modal-err" style="font-size:12px;color:#dc2626;margin-top:8px;min-height:16px;"></div>
-        </div>
-      </div>
+      <div id="srv-cards" style="display:flex;flex-direction:column;gap:12px;"></div>
     </div>
 
     <!-- Models tab -->
@@ -1876,31 +1841,16 @@ pollRam(); setInterval(pollRam, 1000);
 pollStats(); setInterval(pollStats, 5000);
 
 // ── Servers ───────────────────────────────────────────────
-const srvCards      = document.getElementById('srv-cards');
-const srvModalOverlay = document.getElementById('srv-modal-overlay');
-const srvModalTitle  = document.getElementById('srv-modal-title');
-const srvModalErr    = document.getElementById('srv-modal-err');
-const srvFName       = document.getElementById('srv-f-name');
-const srvFPort       = document.getElementById('srv-f-port');
-const srvFSlots      = document.getElementById('srv-f-slots');
-const srvFCtx        = document.getElementById('srv-f-ctx');
-const srvFCtxSlider  = document.getElementById('srv-f-ctx-slider');
-const srvFKvk        = document.getElementById('srv-f-kvk');
-const srvFKvv        = document.getElementById('srv-f-kvv');
-const srvFModel      = document.getElementById('srv-f-model');
-const srvFBoot       = document.getElementById('srv-f-boot');
-const srvFUnified    = document.getElementById('srv-f-unified');
-const srvFUnifiedTrack = document.getElementById('srv-f-unified-track');
-const srvFUnifiedThumb = document.getElementById('srv-f-unified-thumb');
+// No modal — each server is a collapsible card (agSection, shared with the Agents tab) containing
+// three independently-collapsible sub-sections: Settings, Slots, Sampler defaults. Edits mutate a
+// per-card working-copy object directly (agDirty-style), Save/Cancel are per card.
+const srvCards = document.getElementById('srv-cards');
 const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#223742';
-function syncUnifiedToggle() {
-    const on = srvFUnified.checked;
-    srvFUnifiedTrack.style.background = on ? accent : '#d1d5db';
-    srvFUnifiedThumb.style.transform  = on ? 'translateX(18px)' : 'translateX(0)';
-}
-srvFUnified.addEventListener('change', () => { syncUnifiedToggle(); updateSrvRamEstimate(); });
 
 const CTX_STEPS = [4096, 8192, 16384, 32768, 65536, 131072, 262144];
+// Per-slot context slider: 1K-100K snapping points (not the server-level 4K-256K power-of-two ladder) —
+// free typing (e.g. "72K") is still allowed in between, same as the server-level Context size field.
+const SLOT_CTX_STEPS = [1024, 2048, 4096, 8192, 16384, 32768, 65536, 102400];
 
 function ctxTokensToText(tokens) { return (tokens / 1024).toFixed(0) + 'K'; }
 function ctxTextToTokens(text) {
@@ -1909,86 +1859,81 @@ function ctxTextToTokens(text) {
     const n = parseFloat(m[1]);
     return text.trim().toUpperCase().endsWith('K') ? Math.round(n * 1024) : Math.round(n);
 }
-function ctxSliderIndex(tokens) {
+function ctxSliderIndex(tokens, steps) {
+    steps = steps || CTX_STEPS;
     let best = 0;
-    for (let i = 0; i < CTX_STEPS.length; i++) if (CTX_STEPS[i] <= tokens) best = i;
+    for (let i = 0; i < steps.length; i++) if (steps[i] <= tokens) best = i;
     return best;
 }
-
-srvFCtxSlider.addEventListener('input', () => {
-    const tokens = CTX_STEPS[parseInt(srvFCtxSlider.value, 10)];
-    srvFCtx.value = ctxTokensToText(tokens);
-    updateSrvRamEstimate();
-});
-srvFCtx.addEventListener('change', () => {
-    const tokens = ctxTextToTokens(srvFCtx.value);
-    if (tokens) {
-        srvFCtxSlider.value = ctxSliderIndex(tokens);
-        srvFCtx.value = ctxTokensToText(tokens);
-    }
-    updateSrvRamEstimate();
-});
 
 function fmtRamMb(mb) {
     return mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB';
 }
 
-function updateSrvRamEstimate() {
-    const ctx     = ctxTextToTokens(srvFCtx.value) ?? 32768;
-    const slots   = Math.max(1, parseInt(srvFSlots.value, 10) || 1);
-    const kBits   = parseInt(srvFKvk.value, 10) || 4;
-    const vBits   = parseInt(srvFKvv.value, 10) || 4;
-    // Unified cache shares one KV pool across all slots — only pay for 1 slot's worth.
-    const kvSlots = srvFUnified.checked ? 1 : slots;
+// ── Sampler defaults (full llama.cpp param list) ─────────────────────────────
+// [jsonKey, label, type, step, hint]. type: 'num' | 'int'. Matches Server.cs field names 1:1.
+const SRV_SAMPLER_SPEC = [
+    ['temperature',      'Temperature',        'num', 0.01, 'default 0.80'],
+    ['topP',             'Top-P',              'num', 0.01, 'default 0.95, 1.0 = disabled'],
+    ['topK',             'Top-K',              'int', 1,    'default 40, 0 = disabled'],
+    ['minP',             'Min-P',              'num', 0.01, 'default 0.05, 0.0 = disabled'],
+    ['topNSigma',        'Top-N-Sigma',        'num', 0.01, 'default -1.0 = disabled'],
+    ['typicalP',         'Typical-P',          'num', 0.01, 'default 1.0 = disabled'],
+    ['xtcProbability',   'XTC probability',    'num', 0.01, 'default 0.0 = disabled'],
+    ['xtcThreshold',     'XTC threshold',      'num', 0.01, 'default 0.10'],
+    ['dynatempRange',    'Dynatemp range',     'num', 0.01, 'default 0.0 = disabled'],
+    ['dynatempExp',      'Dynatemp exponent',  'num', 0.01, 'default 1.0'],
+    ['repeatLastN',      'Repeat last N',      'int', 1,    'default 64, 0 = disabled, -1 = ctx size'],
+    ['repeatPenalty',    'Repeat penalty',     'num', 0.01, 'default 1.0 = disabled'],
+    ['presencePenalty',  'Presence penalty',   'num', 0.01, 'default 0.0 = disabled'],
+    ['frequencyPenalty', 'Frequency penalty',  'num', 0.01, 'default 0.0 = disabled'],
+    ['dryMultiplier',    'DRY multiplier',     'num', 0.01, 'default 0.0 = disabled'],
+    ['dryBase',          'DRY base',           'num', 0.01, 'default 1.75'],
+    ['dryAllowedLength', 'DRY allowed length', 'int', 1,    'default 2'],
+    ['dryPenaltyLastN',  'DRY penalty last N', 'int', 1,    'default -1 = ctx size'],
+    ['mirostat',         'Mirostat',           'int', 1,    '0 = off, 1 = Mirostat, 2 = Mirostat 2.0'],
+    ['mirostatLr',       'Mirostat learning rate (eta)', 'num', 0.01, 'default 0.10'],
+    ['mirostatEnt',      'Mirostat target entropy (tau)', 'num', 0.01, 'default 5.00'],
+    ['seed',             'Seed',               'int', 1,    '-1 = random'],
+];
 
-    const modelName = srvFModel.value;
-    const modelObj  = srvAllModels.find(m => m.name === modelName);
-    const weightsMb = modelObj?.fileSizeMb ?? 0;
-
-    // KV cache: n_layers * n_kv_heads * head_dim * 2 (K+V) * bytes_per_element * ctx * slots
-    // Use exact arch params from GGUF when available; fall back to param-count heuristic.
-    let kvMb = null;
-    const arch = modelObj?.kvArch;
-    if (arch) {
-        const bytesPerElem = (kBits + vBits) / 8 / 2; // avg of K and V quant in bytes
-        const bytesPerToken = arch.nLayers * arch.nKvHeads * arch.headDim * 2 * bytesPerElem;
-        kvMb = (bytesPerToken * ctx * kvSlots) / (1024 * 1024);
-    } else if (weightsMb > 0) {
-        // Fallback: estimate param count from file size at ~4.5 bpw, then use 7B MHA reference
-        // 7B dense MHA (32L × 32kv × 128d): 524288 bytes/token at f16 = 500 MB/K-tokens
-        const totalP = weightsMb * 8 / (4.5 * 1000);
-        const kvPerKtokPerSlotF16 = (totalP / 7) * 500;
-        const quantScale = (kBits + vBits) / 32;
-        kvMb = (ctx / 1024) * kvSlots * kvPerKtokPerSlotF16 * quantScale;
-    }
-
-    const ramEl   = document.getElementById('srv-ram-estimate');
-    const wEl     = document.getElementById('srv-ram-weights');
-    const kvEl    = document.getElementById('srv-ram-kv');
-    const totEl   = document.getElementById('srv-ram-total');
-
-    ramEl.style.display = '';
-    wEl.textContent  = weightsMb > 0 ? fmtRamMb(weightsMb) : '—';
-    kvEl.textContent = kvMb !== null ? '~' + fmtRamMb(kvMb) : '—';
-    if (weightsMb > 0 && kvMb !== null) {
-        totEl.textContent = '~' + fmtRamMb(weightsMb + kvMb);
-    } else if (kvMb !== null) {
-        totEl.textContent = '~' + fmtRamMb(kvMb) + ' (KV only)';
-    } else if (weightsMb > 0) {
-        totEl.textContent = fmtRamMb(weightsMb) + ' (weights only)';
-    } else {
-        totEl.textContent = '—';
-    }
+// Renders SRV_SAMPLER_SPEC into `body` as labelled inputs, reading/writing plain fields on `target`.
+// Shared between server cards (target = the server draft being edited) and the Agents tab (target =
+// an agent's own override fields) — same spec, same layout, different backing object.
+function renderSamplerFields(body, target, onDirty) {
+    body.innerHTML = '';
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;';
+    SRV_SAMPLER_SPEC.forEach(([key, label, type, step, hint]) => {
+        const wrap = document.createElement('label');
+        wrap.className = 'vs-label';
+        wrap.style.cssText = 'font-size:12px;';
+        const val = target[key];
+        wrap.innerHTML = `${escHtml(label)}<input type="number" step="${step}" class="vs-input" style="font-size:12px;padding:5px 8px;" value="${val ?? ''}" placeholder="${escHtml(hint)}">`;
+        const input = wrap.querySelector('input');
+        input.addEventListener('input', () => {
+            target[key] = input.value === '' ? null : (type === 'int' ? parseInt(input.value, 10) : parseFloat(input.value));
+            onDirty && onDirty();
+        });
+        grid.appendChild(wrap);
+    });
+    body.appendChild(grid);
 }
 
-let srvEditId = null;
 let srvAllModels = [];
+// Per-server working-copy state, keyed by id ('__new__' for an in-progress, not-yet-saved server).
+// Only servers with an open card have an entry — created on first expand, discarded on collapse/save.
+let srvDrafts = {};
+let srvExpandedIds = new Set();
+let srvNewDraftActive = false;
 
-// Wire up live RAM estimate updates
-['srv-f-slots', 'srv-f-kvk', 'srv-f-kvv', 'srv-f-model'].forEach(id => {
-    document.getElementById(id).addEventListener('change', updateSrvRamEstimate);
-});
-document.getElementById('srv-f-slots').addEventListener('input', updateSrvRamEstimate);
+function freshServerDraft() {
+    return {
+        id: null, name: '', port: 8081, contextSize: 32768, unifiedCache: false,
+        kvCacheQuantK: 4, kvCacheQuantV: 4, currentModelName: null, autoStart: true,
+        slots: [{ id: '00000000-0000-0000-0000-000000000000', name: 'Default', contextLimit: 32768 }],
+    };
+}
 
 function srvStatusColor(s) {
     return { Online:'#16a34a', Starting:'#ca8a04', Stopping:'#ca8a04', Offline:'#9ca3af' }[s] ?? '#9ca3af';
@@ -2007,7 +1952,6 @@ function srvStatusBg(s) {
 // tokens: shown above the field so the user knows what each {placeholder} carries.
 const AG_TREE = [
     { name: 'Awareness',  prompts: [] },
-    { name: 'Classifier', prompts: [] },
     { name: 'Context',    prompts: [],
       systemTokens: [['memoryLimit', "Dialogue's short-term memory limit — how many messages back stay relevant"]] },
     { name: 'Dialogue',   prompts: [
@@ -2137,7 +2081,7 @@ function agSection(title, opts) {
         if (!open) body.querySelectorAll('textarea').forEach(agAutoGrow);
     });
     card.append(head, body);
-    return { card, body };
+    return { card, head, body };
 }
 
 // Server + slot pickers, shown on the header so they are readable while collapsed.
@@ -2160,19 +2104,21 @@ function agBindingPickers(agent) {
 
     function fillSlots() {
         const s = (agData.servers || []).find(x => x.name === srv.value);
-        const n = s ? (s.slots || 1) : 1;
+        const slots = (s && s.slots && s.slots.length) ? s.slots : [{ name: 'Default' }];
         slot.innerHTML = '';
-        for (let i = 0; i < n; i++) {
+        slots.forEach(sl => {
             const o = document.createElement('option');
-            o.value = String(i); o.textContent = 'Slot ' + i;
-            if (i === (agent.slot ?? 0)) o.selected = true;
+            o.value = sl.name; o.textContent = sl.name;
+            if (sl.name === agent.slotName) o.selected = true;
             slot.append(o);
-        }
+        });
+        // Nothing matched (unnamed / renamed since) — fall back to whatever's first, same as the server.
+        if (!slots.some(sl => sl.name === agent.slotName)) slot.value = slots[0]?.name ?? '';
     }
     fillSlots();
 
-    srv.addEventListener('change', () => { agent.serverName = srv.value; fillSlots(); agent.slot = parseInt(slot.value, 10) || 0; agDirty(); });
-    slot.addEventListener('change', () => { agent.slot = parseInt(slot.value, 10) || 0; agDirty(); });
+    srv.addEventListener('change', () => { agent.serverName = srv.value; agent.slotName = null; fillSlots(); agent.slotName = slot.value; agDirty(); });
+    slot.addEventListener('change', () => { agent.slotName = slot.value; agDirty(); });
     wrap.append(srv, slot);
     return wrap;
 }
@@ -2195,7 +2141,90 @@ function agBuildAgent(spec, agent, host, depth) {
                     agent.phases[ph].systemPrompt, v => agent.phases[ph].systemPrompt = v);
         });
     }
+
+    agBuildSamplerOverride(sec.body, agent);
+    agBuildCompaction(sec.body, agent);
+
     host.append(sec.card);
+}
+
+// Sampler override: off by default (agent runs on the bound server's settings verbatim). On reveals
+// the full param list, editing agent[key] directly — same spec/renderer as the server modal.
+function agBuildSamplerOverride(body, agent) {
+    const wrap = agEl('div', 'margin-bottom:14px;padding-top:10px;border-top:1px solid var(--border,#2a2a2a);');
+    const row = agEl('label', 'display:flex;align-items:center;justify-content:space-between;cursor:pointer;');
+    row.innerHTML = `<span style="font-size:12px;font-weight:600;">Override sampler settings
+        <span style="font-size:11px;color:var(--text-dim);font-weight:400;">— off uses the bound server's settings as-is</span></span>`;
+    const toggle = agEl('input'); toggle.type = 'checkbox';
+    toggle.style.cssText = 'width:15px;height:15px;accent-color:var(--accent,#223742);';
+    toggle.checked = !!agent.overrideSamplerSettings;
+    row.append(toggle);
+    wrap.append(row);
+
+    const fieldsBody = agEl('div', 'margin-top:10px;display:' + (toggle.checked ? '' : 'none') + ';');
+    renderSamplerFields(fieldsBody, agent, agDirty);
+    wrap.append(fieldsBody);
+
+    toggle.addEventListener('change', () => {
+        agent.overrideSamplerSettings = toggle.checked;
+        fieldsBody.style.display = toggle.checked ? '' : 'none';
+        agDirty();
+    });
+    body.append(wrap);
+}
+
+// Compaction: off by default (agent relies on the server's --context-shift safety net). On reveals a
+// two-knob range — high% triggers a compaction pass, low% is the target it stubs old tool outputs
+// down to. Both are percentages of the agent's bound slot's context limit.
+function agBuildCompaction(body, agent) {
+    const wrap = agEl('div', 'margin-bottom:4px;padding-top:10px;border-top:1px solid var(--border,#2a2a2a);');
+    const row = agEl('label', 'display:flex;align-items:center;justify-content:space-between;cursor:pointer;');
+    row.innerHTML = `<span style="font-size:12px;font-weight:600;">Supports compaction
+        <span style="font-size:11px;color:var(--text-dim);font-weight:400;">— off relies on the server's context-shift instead</span></span>`;
+    const toggle = agEl('input'); toggle.type = 'checkbox';
+    toggle.style.cssText = 'width:15px;height:15px;accent-color:var(--accent,#223742);';
+    toggle.checked = !!agent.supportsCompaction;
+    row.append(toggle);
+    wrap.append(row);
+
+    const sliderWrap = agEl('div', 'margin-top:12px;display:' + (toggle.checked ? '' : 'none') + ';');
+    const label = agEl('div', 'font-size:11px;color:var(--text-dim);margin-bottom:6px;');
+    const updateLabel = () => label.textContent =
+        `Compact when context exceeds ${agent.compactHighPct ?? 80}% of the slot's limit, down to ${agent.compactLowPct ?? 60}%.`;
+    updateLabel();
+
+    const track = agEl('div', 'position:relative;height:22px;');
+    track.className = 'ag-dual-slider';
+    track.innerHTML = `
+        <input type="range" min="0" max="100" step="5" style="position:absolute;width:100%;top:6px;margin:0;pointer-events:none;accent-color:var(--accent,#223742);">
+        <input type="range" min="0" max="100" step="5" style="position:absolute;width:100%;top:6px;margin:0;pointer-events:none;accent-color:var(--accent,#223742);">`;
+    const [lowSlider, highSlider] = track.querySelectorAll('input');
+    lowSlider.value  = agent.compactLowPct  ?? 60;
+    highSlider.value = agent.compactHighPct ?? 80;
+    // The <input> itself stays pointer-events:none (inline, above) so clicks pass through to whichever
+    // handle is on top; .ag-dual-slider's CSS re-enables pointer-events on just the ::-webkit/-moz thumb,
+    // so both handles stay independently draggable across the whole track instead of one shadowing the other.
+
+    lowSlider.addEventListener('input', () => {
+        if (parseInt(lowSlider.value, 10) > parseInt(highSlider.value, 10)) lowSlider.value = highSlider.value;
+        agent.compactLowPct = parseInt(lowSlider.value, 10);
+        updateLabel(); agDirty();
+    });
+    highSlider.addEventListener('input', () => {
+        if (parseInt(highSlider.value, 10) < parseInt(lowSlider.value, 10)) highSlider.value = lowSlider.value;
+        agent.compactHighPct = parseInt(highSlider.value, 10);
+        updateLabel(); agDirty();
+    });
+
+    sliderWrap.append(label, track);
+    wrap.append(sliderWrap);
+
+    toggle.addEventListener('change', () => {
+        agent.supportsCompaction = toggle.checked;
+        sliderWrap.style.display = toggle.checked ? '' : 'none';
+        agDirty();
+    });
+    body.append(wrap);
 }
 
 async function loadAgents() {
@@ -2293,142 +2322,405 @@ async function loadServers() {
     srvPollTimer = setTimeout(loadServers, hasTransient ? 1500 : 6000);
 }
 
-function renderServerCards(servers) {
-    srvCards.innerHTML = '';
-    if (servers.length === 0) {
-        srvCards.innerHTML = '<div class="cp-placeholder">No servers configured. Click "+ New server" to add one.</div>';
-        return;
-    }
-    servers.forEach(s => {
-        const card = document.createElement('div');
-        card.className = 'mdl-card';
-        const statusColor = srvStatusColor(s.status);
-        const statusBg    = srvStatusBg(s.status);
-        const isOnline  = s.status === 'Online';
-        const isOffline = s.status === 'Offline';
-        const isBusy    = s.status === 'Starting' || s.status === 'Stopping';
-
-        const activeModel = s.activeModelName ? escHtml(s.activeModelName) : '<span style="color:var(--text-dim);font-style:italic">idle</span>';
-        const startupModel = s.currentModelName ? escHtml(s.currentModelName) : '<span style="color:var(--text-dim);font-style:italic">none</span>';
-
-        card.innerHTML = `
-            <div class="mdl-card-header" style="margin-bottom:14px;">
-                <span class="mdl-card-name">${escHtml(s.name)}</span>
-                <span style="font-size:11px;font-weight:600;border-radius:20px;padding:2px 10px;background:${statusBg};color:${statusColor};">${escHtml(s.status)}</span>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 20px;font-size:12px;color:var(--text-dim);margin-bottom:14px;">
-                <div>Port <span style="color:var(--text);font-weight:600;">${s.port}</span></div>
-                <div>Slots <span style="color:var(--text);font-weight:600;">${s.parallelSlots}</span></div>
-                <div>Context <span style="color:var(--text);font-weight:600;">${(s.contextSize/1024).toFixed(0)}K${s.unifiedCache ? ' <span style="color:#0369a1;">(unified)</span>' : ''}</span></div>
-                <div>KV <span style="color:var(--text);font-weight:600;">K${s.kvCacheQuantK}/V${s.kvCacheQuantV}</span></div>
-                <div>Active model <span style="color:var(--text);font-weight:600;">${activeModel}</span></div>
-                <div>Startup model <span style="color:var(--text);font-weight:600;">${startupModel}</span></div>
-                <div>Auto-start <span style="color:var(--text);font-weight:600;">${s.autoStart ? 'Yes' : 'No'}</span></div>
-            </div>
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                <button class="vs-btn-primary srv-start-btn" data-id="${s.id}" ${!isOffline?'disabled':''} style="font-size:12px;padding:6px 14px;background:${isOffline?'#16a34a':'#6b9e7a'};border-color:${isOffline?'#16a34a':'#6b9e7a'};color:#fff;opacity:${isOffline?'1':'0.6'};">Start</button>
-                <button class="mdl-btn-secondary srv-stop-btn"    data-id="${s.id}" ${!isOnline?'disabled':''} style="font-size:12px;background:#c0392b;border-color:#c0392b;color:#fff;">Stop</button>
-                <button class="mdl-btn-secondary srv-restart-btn" data-id="${s.id}" ${!isOnline?'disabled':''} style="font-size:12px;background:#d68910;border-color:#d68910;color:#fff;">Restart</button>
-                <select class="vs-input srv-model-select" data-id="${s.id}" data-current="${escHtml(s.currentModelName??'')}" style="font-size:12px;padding:5px 8px;flex:1;min-width:140px;">
-                    ${srvAllModels.map(m => `<option value="${escHtml(m.name)}" ${m.name===s.currentModelName?'selected':''}>${escHtml(m.name)}</option>`).join('')}
-                </select>
-                <button class="mdl-btn-secondary srv-edit-btn"   data-id="${s.id}" style="font-size:12px;">Edit</button>
-                ${isOffline ? `<button class="mdl-btn-secondary srv-delete-btn" data-id="${s.id}" style="font-size:12px;color:#dc2626;border-color:#fca5a5;">Delete</button>` : ''}
-            </div>
-            <div class="srv-model-hint" style="display:none;font-size:11px;color:var(--text-dim);margin-top:6px;">Restart the server for changes to take effect.</div>`;
-
-        card.querySelector('.srv-start-btn').addEventListener('click', async btn => {
-            await srvAction(s.id, 'start'); loadServers();
-        });
-        card.querySelector('.srv-stop-btn').addEventListener('click', async () => {
-            await srvAction(s.id, 'stop'); loadServers();
-        });
-        card.querySelector('.srv-restart-btn').addEventListener('click', async () => {
-            await srvAction(s.id, 'restart'); loadServers();
-        });
-        card.querySelector('.srv-model-select').addEventListener('change', async () => {
-            const sel  = card.querySelector('.srv-model-select');
-            const hint = card.querySelector('.srv-model-hint');
-            const modelName = sel.value;
-            if (!modelName) return;
-            try {
-                const r = await fetch(`/servers/${s.id}/startup-model`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ modelName }) });
-                if (!r.ok) { const e = await r.json().catch(()=>{}); alert(e?.error ?? 'Update failed.'); sel.value = sel.dataset.current; return; }
-                sel.dataset.current = modelName;
-                hint.style.display = modelName !== s.currentModelName ? '' : 'none';
-            } catch { sel.value = sel.dataset.current; }
-        });
-        card.querySelector('.srv-edit-btn').addEventListener('click', () => openSrvModal(s));
-        card.querySelector('.srv-delete-btn')?.addEventListener('click', async () => {
-            if (!confirm(`Delete server "${s.name}"? This cannot be undone.`)) return;
-            await fetch(`/servers/${s.id}`, { method:'DELETE' });
-            loadServers();
-        });
-
-        srvCards.appendChild(card);
-    });
-}
-
 async function srvAction(id, action) {
     await fetch(`/servers/${id}/${action}`, { method:'POST' });
 }
 
-function populateSrvModelSelect(selectedName) {
-    srvFModel.innerHTML = '<option value="">— none —</option>'
-        + srvAllModels.map(m => `<option value="${escHtml(m.name)}" ${m.name === selectedName ? 'selected' : ''}>${escHtml(m.name)}</option>`).join('');
+// Cards that are currently EXPANDED are never torn down by a background poll — only their header
+// (status badge, Start/Stop/Restart) gets patched in place. Rebuilding the whole card on every 6s
+// poll was resetting the nested Settings/Slots/Sampler sections back to collapsed mid-edit, which is
+// what "sections keep auto-collapsing" was — this fixes it at the root instead of papering over it.
+let srvCardEls = {};   // id -> the card's root element currently in the DOM
+
+function renderServerCards(servers) {
+    lastServerList = servers;
+    const wantIds = new Set(servers.map(s => s.id));
+    if (srvNewDraftActive) wantIds.add('__new__');
+
+    Object.keys(srvCardEls).forEach(id => {
+        if (!wantIds.has(id)) {
+            srvCardEls[id].remove();
+            delete srvCardEls[id]; delete srvDrafts[id]; srvExpandedIds.delete(id);
+        }
+    });
+
+    if (servers.length === 0 && !srvNewDraftActive) {
+        srvCards.innerHTML = '<div class="cp-placeholder">No servers configured. Click "+ New server" to add one.</div>';
+        srvCardEls = {};
+        return;
+    }
+    if (srvCards.querySelector('.cp-placeholder')) srvCards.innerHTML = '';
+
+    const order = [];
+    if (srvNewDraftActive) order.push(null);
+    servers.forEach(s => order.push(s));
+
+    order.forEach(s => {
+        const id = s === null ? '__new__' : s.id;
+        if (srvCardEls[id] && (srvExpandedIds.has(id) || id === '__new__')) {
+            patchServerCardHeader(srvCardEls[id], s);   // expanded — leave the body alone
+        } else {
+            const el = buildServerCard(s);
+            if (srvCardEls[id]) srvCardEls[id].replaceWith(el);
+            srvCardEls[id] = el;
+        }
+    });
+    order.forEach(s => srvCards.appendChild(srvCardEls[s === null ? '__new__' : s.id]));
 }
 
-function openSrvModal(server) {
-    srvEditId = server?.id ?? null;
-    srvModalTitle.textContent = server ? 'Edit server' : 'New server';
-    srvModalErr.textContent = '';
-    srvFName.value  = server?.name ?? '';
-    srvFPort.value  = server?.port ?? 8081;
-    srvFSlots.value = server?.parallelSlots ?? 1;
-    const ctxTokens = server?.contextSize ?? 32768;
-    srvFCtx.value = ctxTokensToText(ctxTokens);
-    srvFCtxSlider.value = ctxSliderIndex(ctxTokens);
-    srvFKvk.value   = server?.kvCacheQuantK ?? 4;
-    srvFKvv.value   = server?.kvCacheQuantV ?? 4;
-    srvFBoot.checked    = server?.autoStart    ?? true;
-    srvFUnified.checked = server?.unifiedCache ?? false; syncUnifiedToggle();
-    populateSrvModelSelect(server?.currentModelName ?? '');
-    srvModalOverlay.style.display = 'flex';
-    srvFName.focus();
-    updateSrvRamEstimate();
+// Updates just the live bits of an already-rendered, already-expanded card's header (status badge,
+// button enabled state) without touching its body — so in-progress edits/open sections survive polls.
+function patchServerCardHeader(cardEl, server) {
+    const refs = cardEl._srvRefs;
+    if (!refs || !server) return;
+    const isOnline  = server.status === 'Online';
+    const isOffline = server.status === 'Offline';
+    refs.badge.textContent = server.status;
+    refs.badge.style.background = srvStatusBg(server.status);
+    refs.badge.style.color      = srvStatusColor(server.status);
+    refs.startBtn.disabled = !isOffline;
+    refs.startBtn.style.cssText = 'font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid;cursor:pointer;' + (isOffline ? 'background:#16a34a;border-color:#16a34a;color:#fff;' : 'background:transparent;border-color:var(--border,#2a2a2a);color:var(--text-dim);opacity:.5;');
+    refs.stopBtn.disabled = !isOnline;
+    refs.stopBtn.style.cssText = 'font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid;cursor:pointer;' + (isOnline ? 'background:#c0392b;border-color:#c0392b;color:#fff;' : 'background:transparent;border-color:var(--border,#2a2a2a);color:var(--text-dim);opacity:.5;');
+    refs.restartBtn.disabled = !isOnline;
+    refs.restartBtn.style.cssText = 'font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid;cursor:pointer;' + (isOnline ? 'background:#d68910;border-color:#d68910;color:#fff;' : 'background:transparent;border-color:var(--border,#2a2a2a);color:var(--text-dim);opacity:.5;');
 }
 
-function closeSrvModal() { srvModalOverlay.style.display = 'none'; srvEditId = null; }
+// One collapsible card per server (or one for the in-progress new-server draft when `server` is null).
+// Collapsed: just the header row (name, status, live actions) — nothing else, even while offline.
+// Expanded: three nested collapsible sections (Settings / Slots / Sampler defaults), each collapsed
+// to a one-line summary by default, plus a Save/Cancel/Delete row.
+function buildServerCard(server) {
+    const isNew = server === null;
+    const id = isNew ? '__new__' : server.id;
+    const expanded = isNew || srvExpandedIds.has(id);
+    if (isNew && !srvDrafts[id]) srvDrafts[id] = freshServerDraft();
+    if (!isNew && expanded && !srvDrafts[id]) srvDrafts[id] = { ...server, slots: (server.slots ?? []).map(s => ({ ...s })) };
+    const draft = srvDrafts[id];
 
-document.getElementById('srv-add-btn').addEventListener('click', () => openSrvModal(null));
-document.getElementById('srv-modal-cancel').addEventListener('click', closeSrvModal);
-srvModalOverlay.addEventListener('click', e => { if (e.target === srvModalOverlay) closeSrvModal(); });
+    const isOnline  = server?.status === 'Online';
+    const isOffline = !server || server.status === 'Offline';
 
-document.getElementById('srv-modal-save').addEventListener('click', async () => {
-    srvModalErr.textContent = '';
-    const name = srvFName.value.trim();
-    if (!name) { srvModalErr.textContent = 'Name is required.'; return; }
-    const body = {
-        id: srvEditId ?? '00000000-0000-0000-0000-000000000000',
-        name,
-        port:           parseInt(srvFPort.value, 10),
-        parallelSlots:  parseInt(srvFSlots.value, 10),
-        kvCache:        ctxTextToTokens(srvFCtx.value) ?? 32768,
-        kvCacheQuantK:  parseInt(srvFKvk.value, 10),
-        kvCacheQuantV:  parseInt(srvFKvv.value, 10),
-        currentModelName: srvFModel.value || null,
-        bootStartup:    srvFBoot.checked,
-        unifiedCache:   srvFUnified.checked,
-        endpoint:       'http://127.0.0.1',
+    const headerRight = agEl('div', 'display:flex;align-items:center;gap:8px;');
+    if (!isNew) {
+        const badge = agEl('span', `font-size:11px;font-weight:600;border-radius:20px;padding:2px 10px;background:${srvStatusBg(server.status)};color:${srvStatusColor(server.status)};`, server.status);
+        headerRight.append(badge);
+        const startBtn = agEl('button', 'font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid;cursor:pointer;' + (isOffline ? 'background:#16a34a;border-color:#16a34a;color:#fff;' : 'background:transparent;border-color:var(--border,#2a2a2a);color:var(--text-dim);opacity:.5;'), 'Start');
+        startBtn.disabled = !isOffline;
+        startBtn.addEventListener('click', async e => { e.stopPropagation(); await srvAction(server.id, 'start'); loadServers(); });
+        const stopBtn = agEl('button', 'font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid;cursor:pointer;' + (isOnline ? 'background:#c0392b;border-color:#c0392b;color:#fff;' : 'background:transparent;border-color:var(--border,#2a2a2a);color:var(--text-dim);opacity:.5;'), 'Stop');
+        stopBtn.disabled = !isOnline;
+        stopBtn.addEventListener('click', async e => { e.stopPropagation(); await srvAction(server.id, 'stop'); loadServers(); });
+        const restartBtn = agEl('button', 'font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid;cursor:pointer;' + (isOnline ? 'background:#d68910;border-color:#d68910;color:#fff;' : 'background:transparent;border-color:var(--border,#2a2a2a);color:var(--text-dim);opacity:.5;'), 'Restart');
+        restartBtn.disabled = !isOnline;
+        restartBtn.addEventListener('click', async e => { e.stopPropagation(); await srvAction(server.id, 'restart'); loadServers(); });
+        headerRight.append(startBtn, stopBtn, restartBtn);
+    }
+
+    const sec = agSection(isNew ? 'New server' : server.name, { right: headerRight });
+    sec.card.style.marginTop = '0';
+    if (expanded) { sec.body.style.display = ''; sec.head.querySelector('span').textContent = '▼'; }
+    if (!isNew) sec.card._srvRefs = { badge: headerRight.children[0], startBtn: headerRight.children[1], stopBtn: headerRight.children[2], restartBtn: headerRight.children[3] };
+
+    if (expanded) renderServerCardBody(sec.body, draft, server, isNew);
+
+    // Manual expand/collapse (agSection's own header click already toggles body display — we just
+    // need to also track membership in srvExpandedIds and lazily build the body content on first open).
+    sec.card.firstElementChild.addEventListener('click', e => {
+        if (e.target.closest('button, select, input')) return;
+        if (isNew) return;   // the new-server draft is always expanded until saved/cancelled
+        if (srvExpandedIds.has(id)) { srvExpandedIds.delete(id); delete srvDrafts[id]; }
+        else { srvExpandedIds.add(id); }
+        if (srvCardEls[id]) srvCardEls[id].remove();   // drop the stale node so the rebuild below doesn't duplicate it
+        delete srvCardEls[id];   // force a full rebuild so the body actually gets built/torn down
+        renderServerCards(lastServerList);
+    });
+
+    return sec.card;
+}
+
+let lastServerList = [];
+
+function renderServerCardBody(body, draft, server, isNew) {
+    // ── Settings ──
+    const settingsSummary = agEl('div', 'font-size:12px;color:var(--text-dim);');
+    settingsSummary.textContent = `Port ${draft.port} · Context ${ctxTokensToText(draft.contextSize)}${draft.unifiedCache ? ' (unified)' : ''} · Q${draft.kvCacheQuantK}/Q${draft.kvCacheQuantV} · Model ${draft.currentModelName ?? 'none'} · Auto-start ${draft.autoStart ? 'Yes' : 'No'}`;
+    const settingsSec = agSection('Settings', {});
+    settingsSec.card.classList.add('srv-subsection');
+    settingsSec.head.insertBefore(settingsSummary, settingsSec.head.lastElementChild);
+    buildSettingsFields(settingsSec.body, draft);
+
+    // ── Slots ──
+    const slotsTotal = () => draft.slots.reduce((sum, s) => sum + (s.contextLimit || 0), 0);
+    const slotsSummary = agEl('div', 'font-size:12px;color:var(--text-dim);');
+    const updateSlotsSummary = () => {
+        slotsSummary.textContent = `(${draft.slots.length}) ` + draft.slots.map(s => `${s.name} — ${ctxTokensToText(s.contextLimit)}`).join(', ');
+        slotsSummary.style.color = slotsTotal() > draft.contextSize ? '#b45309' : 'var(--text-dim)';
     };
-    try {
-        const url    = srvEditId ? `/servers/${srvEditId}` : '/servers';
-        const method = srvEditId ? 'PUT' : 'POST';
-        const r = await fetch(url, { method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
-        if (!r.ok) { const e = await r.json().catch(()=>{}); srvModalErr.textContent = e?.error ?? 'Save failed.'; return; }
-        closeSrvModal();
-        loadServers();
-    } catch (ex) { srvModalErr.textContent = 'Network error.'; }
+    updateSlotsSummary();
+    const slotsSec = agSection('Slots', {});
+    slotsSec.card.classList.add('srv-subsection');
+    slotsSec.head.insertBefore(slotsSummary, slotsSec.head.lastElementChild);
+    buildSlotsFields(slotsSec.body, draft, updateSlotsSummary);
+
+    // ── Sampler defaults ──
+    const samplerSec = agSection('Sampler defaults', { note: '— the catch-all every agent falls back to' });
+    samplerSec.card.classList.add('srv-subsection');
+    renderSamplerFields(samplerSec.body, draft, null);
+
+    body.style.display = 'flex'; body.style.flexDirection = 'column'; body.style.gap = '10px';
+    body.append(settingsSec.card, slotsSec.card, samplerSec.card);
+
+    // ── RAM estimate (lives under Settings, updates on any relevant field change) ──
+    const ramBox = agEl('div', 'background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-size:12px;color:var(--text-dim);margin-top:14px;');
+    settingsSec.body.append(ramBox);
+    const updateRam = () => renderRamEstimate(ramBox, draft);
+    updateRam();
+
+    // ── Actions row ──
+    const actions = agEl('div', 'display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-top:14px;');
+    const err = agEl('span', 'font-size:12px;color:#dc2626;flex:1;');
+    actions.append(err);
+    if (!isNew) {
+        const delBtn = agEl('button', 'font-size:12px;padding:7px 14px;border-radius:8px;background:none;color:#dc2626;border:1px solid #fca5a5;cursor:pointer;', 'Delete server');
+        delBtn.disabled = server.status !== 'Offline';
+        if (delBtn.disabled) delBtn.style.opacity = '.5';
+        delBtn.addEventListener('click', async () => {
+            if (!confirm(`Delete server "${server.name}"? This cannot be undone.`)) return;
+            await fetch(`/servers/${server.id}`, { method:'DELETE' });
+            srvExpandedIds.delete(server.id); delete srvDrafts[server.id];
+            loadServers();
+        });
+        actions.append(delBtn);
+    } else {
+        const cancelBtn = agEl('button', 'font-size:12px;padding:7px 14px;border-radius:8px;background:none;color:var(--text-dim);border:1px solid var(--border);cursor:pointer;', 'Cancel');
+        cancelBtn.addEventListener('click', () => { srvNewDraftActive = false; delete srvDrafts.__new__; renderServerCards(lastServerList); });
+        actions.append(cancelBtn);
+    }
+    const saveBtn = agEl('button', 'font-size:12px;padding:7px 16px;border-radius:8px;background:var(--accent,#223742);color:#fff;border:none;cursor:pointer;', 'Save');
+    saveBtn.addEventListener('click', async () => {
+        err.textContent = '';
+        const name = (draft.name ?? '').trim();
+        if (!name) { err.textContent = 'Name is required.'; return; }
+        if (draft.slots.some(s => !s.name.trim())) { err.textContent = 'Every slot needs a name.'; return; }
+        draft.name = name;
+        // For a brand-new server, don't send sampler keys at all — Server.cs's own field initializers
+        // (llama.cpp's defaults) apply. For an existing one, `draft` already carries every loaded field
+        // (spread from `server` at expand time), so it round-trips everything, not just what has a
+        // dedicated control yet.
+        const body = isNew
+            ? { ...draft, id: '00000000-0000-0000-0000-000000000000', endpoint: 'http://127.0.0.1' }
+            : { ...draft, endpoint: 'http://127.0.0.1' };
+        try {
+            const url    = isNew ? '/servers' : `/servers/${server.id}`;
+            const method = isNew ? 'POST' : 'PUT';
+            const r = await fetch(url, { method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+            if (!r.ok) { const e = await r.json().catch(()=>{}); err.textContent = e?.error ?? 'Save failed.'; return; }
+            if (isNew) { srvNewDraftActive = false; delete srvDrafts.__new__; }
+            else { srvExpandedIds.delete(server.id); delete srvDrafts[server.id]; }
+            loadServers();
+        } catch (ex) { err.textContent = 'Network error.'; }
+    });
+    actions.append(saveBtn);
+    body.append(actions);
+
+    // Re-run RAM estimate whenever a relevant field changes (delegated — simplest given the dynamic DOM).
+    body.addEventListener('input', updateRam);
+    body.addEventListener('change', updateRam);
+}
+
+// A small on/off switch (replaces plain checkboxes for Unified cache / Auto-start / …).
+function buildToggle(checked, onChange) {
+    const wrap = agEl('span', '');
+    wrap.className = 'cp-toggle' + (checked ? ' on' : '');
+    wrap.innerHTML = `<input type="checkbox" ${checked ? 'checked' : ''}><span class="cp-toggle-track"></span><span class="cp-toggle-thumb"></span>`;
+    const input = wrap.querySelector('input');
+    wrap.addEventListener('click', e => { e.preventDefault(); input.checked = !input.checked; input.dispatchEvent(new Event('change')); });
+    input.addEventListener('change', () => { wrap.classList.toggle('on', input.checked); onChange(input.checked); });
+    return wrap;
+}
+
+function buildSettingsFields(body, draft) {
+    const nameRow = agEl('div', '', '');
+    nameRow.className = 'srv-field-row';
+    nameRow.innerHTML = `<span class="srv-field-label">Name</span><input type="text" class="vs-input" style="width:100%;font-size:13px;" value="${escHtml(draft.name)}" placeholder="e.g. Logic">`;
+    nameRow.querySelector('input').addEventListener('input', e => draft.name = e.target.value);
+
+    const portRow = agEl('div', '', '');
+    portRow.className = 'srv-field-row';
+    portRow.innerHTML = `<span class="srv-field-label">Port</span><input type="number" class="vs-input" style="width:100%;font-size:13px;" value="${draft.port}" min="1" max="65535">`;
+    portRow.querySelector('input').addEventListener('input', e => draft.port = parseInt(e.target.value, 10) || 8081);
+
+    const ctxRow = agEl('div', '');
+    ctxRow.className = 'srv-field-row';
+    ctxRow.innerHTML = `
+        <span class="srv-field-label">Context size</span>
+        <div style="display:flex;align-items:flex-start;gap:10px;">
+            <div style="flex:1;">
+                <input type="range" min="0" max="6" step="1" style="width:100%;accent-color:var(--accent,#223742);">
+                <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-dim);margin-top:4px;padding:0 1px;">
+                    <span>4K</span><span>8K</span><span>16K</span><span>32K</span><span>64K</span><span>128K</span><span>256K</span>
+                </div>
+            </div>
+            <input type="text" class="vs-input" style="width:72px;text-align:center;font-size:13px;margin-top:1px;" placeholder="e.g. 48K">
+        </div>`;
+    const ctxSlider = ctxRow.querySelector('input[type=range]');
+    const ctxText   = ctxRow.querySelector('input[type=text]');
+    ctxSlider.value = ctxSliderIndex(draft.contextSize);
+    ctxText.value   = ctxTokensToText(draft.contextSize);
+    ctxSlider.addEventListener('input', () => { draft.contextSize = CTX_STEPS[parseInt(ctxSlider.value, 10)]; ctxText.value = ctxTokensToText(draft.contextSize); });
+    ctxText.addEventListener('change', () => {
+        const tokens = ctxTextToTokens(ctxText.value);
+        if (tokens) { draft.contextSize = tokens; ctxSlider.value = ctxSliderIndex(tokens); ctxText.value = ctxTokensToText(tokens); }
+    });
+
+    const unifiedRow = agEl('div', 'display:flex;align-items:center;justify-content:space-between;');
+    unifiedRow.className = 'srv-field-row';
+    unifiedRow.innerHTML = `<span style="font-size:13px;color:var(--text);">Unified cache</span>`;
+    unifiedRow.append(buildToggle(!!draft.unifiedCache, on => draft.unifiedCache = on));
+
+    const kvRow = agEl('div', 'display:flex;gap:12px;');
+    kvRow.className = 'srv-field-row';
+    const kvkWrap = agEl('div', 'flex:1;');
+    kvkWrap.innerHTML = `<span class="srv-field-label">KV quant K</span><select class="vs-input" style="width:100%;font-size:13px;"><option value="4">Q4</option><option value="8">Q8</option><option value="16">F16</option></select>`;
+    kvkWrap.querySelector('select').value = draft.kvCacheQuantK;
+    kvkWrap.querySelector('select').addEventListener('change', e => draft.kvCacheQuantK = parseInt(e.target.value, 10));
+    const kvvWrap = agEl('div', 'flex:1;');
+    kvvWrap.innerHTML = `<span class="srv-field-label">KV quant V</span><select class="vs-input" style="width:100%;font-size:13px;"><option value="4">Q4</option><option value="8">Q8</option><option value="16">F16</option></select>`;
+    kvvWrap.querySelector('select').value = draft.kvCacheQuantV;
+    kvvWrap.querySelector('select').addEventListener('change', e => draft.kvCacheQuantV = parseInt(e.target.value, 10));
+    kvRow.append(kvkWrap, kvvWrap);
+
+    const modelRow = agEl('div', '', '');
+    modelRow.className = 'srv-field-row';
+    modelRow.innerHTML = '<span class="srv-field-label">Startup model</span><select class="vs-input" style="width:100%;font-size:13px;"></select>';
+    const modelSelect = modelRow.querySelector('select');
+    modelSelect.innerHTML = '<option value="">— none —</option>'
+        + srvAllModels.map(m => `<option value="${escHtml(m.name)}" ${m.name === draft.currentModelName ? 'selected' : ''}>${escHtml(m.name)}</option>`).join('');
+    modelSelect.addEventListener('change', () => draft.currentModelName = modelSelect.value || null);
+
+    const bootRow = agEl('div', 'display:flex;align-items:center;justify-content:space-between;');
+    bootRow.className = 'srv-field-row';
+    bootRow.innerHTML = `<span style="font-size:13px;color:var(--text);">Auto-start on boot</span>`;
+    bootRow.append(buildToggle(!!draft.autoStart, on => draft.autoStart = on));
+
+    body.append(nameRow, portRow, ctxRow, unifiedRow, kvRow, modelRow, bootRow);
+}
+
+function buildSlotsFields(body, draft, onChange) {
+    const list = agEl('div', 'display:flex;flex-direction:column;gap:10px;');
+    const warn = agEl('div', 'font-size:11px;color:#b45309;font-weight:600;margin-top:6px;display:none;');
+
+    function renderList() {
+        list.innerHTML = '';
+        draft.slots.forEach((slot, i) => {
+            const row = agEl('div', 'border:1px solid var(--border);border-radius:8px;padding:8px 10px;background:#fff;');
+            row.innerHTML = `
+                <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">
+                    <input type="text" class="srv-slot-name vs-input" style="flex:1;font-size:12px;padding:5px 8px;" value="${escHtml(slot.name)}" placeholder="Slot name">
+                    <button type="button" class="srv-slot-del mdl-btn-secondary" style="font-size:11px;padding:5px 8px;color:#dc2626;border-color:#fca5a5;" ${draft.slots.length <= 1 ? 'disabled' : ''}>×</button>
+                </div>
+                <div style="display:flex;align-items:flex-start;gap:10px;">
+                    <div style="flex:1;">
+                        <input type="range" class="srv-slot-ctx-slider" min="0" max="${SLOT_CTX_STEPS.length - 1}" step="1" style="width:100%;accent-color:var(--accent,#223742);">
+                        <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--text-dim);margin-top:2px;padding:0 1px;">
+                            ${SLOT_CTX_STEPS.map(s => `<span>${ctxTokensToText(s)}</span>`).join('')}
+                        </div>
+                    </div>
+                    <input type="text" class="srv-slot-ctx-text vs-input" style="width:64px;text-align:center;font-size:12px;padding:5px 6px;margin-top:1px;" title="Context limit — type a value like 72K">
+                </div>`;
+            const nameInput = row.querySelector('.srv-slot-name');
+            const delBtn    = row.querySelector('.srv-slot-del');
+            const ctxSlider = row.querySelector('.srv-slot-ctx-slider');
+            const ctxText   = row.querySelector('.srv-slot-ctx-text');
+            ctxSlider.value = ctxSliderIndex(slot.contextLimit, SLOT_CTX_STEPS);
+            ctxText.value   = ctxTokensToText(slot.contextLimit);
+            nameInput.addEventListener('input', () => { slot.name = nameInput.value; });
+            ctxSlider.addEventListener('input', () => {
+                slot.contextLimit = SLOT_CTX_STEPS[parseInt(ctxSlider.value, 10)];
+                ctxText.value = ctxTokensToText(slot.contextLimit);
+                updateWarn(); onChange();
+            });
+            ctxText.addEventListener('change', () => {
+                const tokens = ctxTextToTokens(ctxText.value);
+                if (tokens) {
+                    slot.contextLimit = tokens;
+                    ctxSlider.value = ctxSliderIndex(tokens, SLOT_CTX_STEPS);
+                    ctxText.value = ctxTokensToText(tokens);
+                    updateWarn(); onChange();
+                } else ctxText.value = ctxTokensToText(slot.contextLimit);   // invalid entry — revert
+            });
+            delBtn.addEventListener('click', () => {
+                if (draft.slots.length <= 1) return;
+                draft.slots.splice(i, 1);
+                renderList(); updateWarn(); onChange();
+            });
+            list.appendChild(row);
+        });
+    }
+    function updateWarn() {
+        const total = draft.slots.reduce((sum, s) => sum + (s.contextLimit || 0), 0);
+        if (total > draft.contextSize) {
+            warn.style.display = '';
+            warn.textContent = `This server has ${ctxTokensToText(draft.contextSize)} context but ${ctxTokensToText(total)} is allocated across slots — this may cause issues.`;
+        } else warn.style.display = 'none';
+    }
+    renderList(); updateWarn();
+
+    const addBtn = agEl('button', 'font-size:12px;align-self:flex-start;margin-top:8px;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:none;cursor:pointer;', '+ Add slot');
+    addBtn.type = 'button';
+    addBtn.addEventListener('click', () => {
+        draft.slots.push({ id: '00000000-0000-0000-0000-000000000000', name: `Slot ${draft.slots.length + 1}`, contextLimit: 8192 });
+        renderList(); updateWarn(); onChange();
+    });
+
+    const hint = agEl('div', 'font-size:11px;color:var(--text-dim);margin-top:6px;',
+        "-np is derived from this list. Sum of context limits may exceed the server's total context above — not all slots peak at once — but a warning shows if it does.");
+
+    body.append(list, addBtn, warn, hint);
+}
+
+function renderRamEstimate(box, draft) {
+    const ctx     = draft.contextSize;
+    const slots   = Math.max(1, draft.slots.length);
+    const kBits   = draft.kvCacheQuantK;
+    const vBits   = draft.kvCacheQuantV;
+    const kvSlots = draft.unifiedCache ? 1 : slots;
+
+    const modelObj  = srvAllModels.find(m => m.name === draft.currentModelName);
+    const weightsMb = modelObj?.fileSizeMb ?? 0;
+
+    let kvMb = null;
+    const arch = modelObj?.kvArch;
+    if (arch) {
+        const bytesPerElem = (kBits + vBits) / 8 / 2;
+        const bytesPerToken = arch.nLayers * arch.nKvHeads * arch.headDim * 2 * bytesPerElem;
+        kvMb = (bytesPerToken * ctx * kvSlots) / (1024 * 1024);
+    } else if (weightsMb > 0) {
+        const totalP = weightsMb * 8 / (4.5 * 1000);
+        const kvPerKtokPerSlotF16 = (totalP / 7) * 500;
+        const quantScale = (kBits + vBits) / 32;
+        kvMb = (ctx / 1024) * kvSlots * kvPerKtokPerSlotF16 * quantScale;
+    }
+
+    const wTxt  = weightsMb > 0 ? fmtRamMb(weightsMb) : '—';
+    const kvTxt = kvMb !== null ? '~' + fmtRamMb(kvMb) : '—';
+    const totTxt = (weightsMb > 0 && kvMb !== null) ? '~' + fmtRamMb(weightsMb + kvMb)
+        : kvMb !== null ? '~' + fmtRamMb(kvMb) + ' (KV only)'
+        : weightsMb > 0 ? fmtRamMb(weightsMb) + ' (weights only)' : '—';
+
+    box.innerHTML = `
+        <div style="font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;color:var(--text-dim);">Estimated RAM</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px 16px;">
+            <div>Model weights<br><span style="font-size:13px;font-weight:700;color:var(--text);">${wTxt}</span></div>
+            <div>KV cache<br><span style="font-size:13px;font-weight:700;color:var(--text);">${kvTxt}</span></div>
+            <div>Total<br><span style="font-size:13px;font-weight:700;color:#0369a1;">${totTxt}</span></div>
+        </div>`;
+}
+
+document.getElementById('srv-add-btn').addEventListener('click', () => {
+    srvNewDraftActive = true;
+    renderServerCards(lastServerList);
 });
 
 // ── Models ────────────────────────────────────────────────
