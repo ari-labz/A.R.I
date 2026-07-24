@@ -314,8 +314,34 @@ public class Thread
             }
         }
 
+        // Message-count trim with the SAME whole-turn hysteresis as the char eviction above. A plain
+        // "remove down to exactly maxMessages" slides the window start one message every turn once the
+        // limit is reached, which shifts the prompt prefix every turn and forces a full re-prefill each
+        // time (measured: reuse collapsed 95%→5% and prefill spiked 2.5s→34s the turn a conversation
+        // crossed 25 messages). Instead: only trigger past maxMessages, then evict whole turns down to
+        // EVICT_TO_FRACTION of the limit and advance contextStartIndex, so the window start stays put
+        // for several turns (re-prefill once every ~4 turns, not every turn).
         if (maxMessages > 0 && kept.Count > maxMessages)
-            kept.RemoveRange(0, kept.Count - maxMessages);
+        {
+            int target    = Math.Max(1, (int)(maxMessages * EVICT_TO_FRACTION));
+            int firstKept = 0;
+
+            while (kept.Count - firstKept > target)
+            {
+                int next = firstKept;
+                while (next < kept.Count && !kept[next].EndsTurn) next++;
+                next++;
+                if (next >= kept.Count) break;   // never evict the final (possibly still-open) turn
+
+                firstKept = next;
+            }
+
+            if (firstKept > 0)
+            {
+                contextStartIndex = kept[firstKept].HistoryIndex;
+                kept.RemoveRange(0, firstKept);
+            }
+        }
 
         List<ThreadMessage> result = new(kept.Count);
         foreach ((ThreadMessage msg, _, _, _) in kept) result.Add(msg);
