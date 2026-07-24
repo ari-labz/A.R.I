@@ -1,4 +1,5 @@
 {
+  "DevMode": false,
   "Modules": {
     "API": {
       "Enabled": true,

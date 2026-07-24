@@ -65,6 +65,12 @@ public class ARI : BackgroundService
 
         config = AriConfig.Load();
 
+        Shared.ResolveDevMode(config.DevMode);
+        if (Shared.DevMode)
+            _logger.LogWarning("DevMode is ON — Engram is disabled; no memories will be written to the brain this run.");
+        else
+            _logger.LogInformation("DevMode is off — Engram is active.");
+
         // Resolve paths up front so all modules see consistent, absolute paths. An explicit config
         // value always wins (ResolveOverride handles relative-vs-absolute); otherwise everything
         // defaults through Paths — the single source of truth for every on-disk location.
