@@ -79,6 +79,20 @@ public class Server : IDisposable
     [JsonPropertyName("visionEnabled")]
     public bool VisionEnabled { get; set; } = false;
 
+    /// <summary>Max context checkpoints per slot (--ctx-checkpoints). On the hybrid-SSM Qwen3.6 models a
+    /// checkpoint is the ONLY rollback anchor a divergent prompt can restore from (KV shifting is
+    /// unsupported), but each one costs 75+ MiB of the shared pool. With a byte-stable prompt prefix,
+    /// divergences are rare and near the tail, so a handful per slot suffices. Default 32 matches
+    /// llama-server's own default — a server that doesn't set this keeps today's behaviour.</summary>
+    [JsonPropertyName("ctxCheckpoints")]
+    public int CtxCheckpoints { get; set; } = 32;
+
+    /// <summary>Host prompt-cache ceiling in MiB (--cache-ram). Caps the RAM used to stash idle slot
+    /// states for exact-prefix reuse across turns. Default 8192 matches llama-server; lower it on a
+    /// memory-tight multi-server box so the cache doesn't compete with weights + KV for wired memory.</summary>
+    [JsonPropertyName("cacheRamMib")]
+    public int CacheRamMib { get; set; } = 8192;
+
     // ── Sampler defaults (the catch-all every agent falls back to) ────────────────
     // Non-nullable — a server's sampler settings are never "blank"; they seed from llama.cpp's own
     // binary defaults on creation (see llama-server --help) and are always concrete from then on. An
@@ -245,6 +259,17 @@ public class Server : IDisposable
 
     // ── Model file download ────────────────────────────────────────────────────
 
+    /// <summary>Download this server's model files (weights + optional mmproj) if missing, WITHOUT
+    /// launching the process. Lets the module gate every boot server's download before ANY server
+    /// comes online, so no server starts serving while another is still fetching. Idempotent and safe
+    /// to call again before StartAsync — EnsureFileAsync no-ops when the file already exists.</summary>
+    public async Task EnsureModelsAsync(Model? model, string modelsPath)
+    {
+        _modelsPath = modelsPath;
+        if (model is not null)
+            await EnsureModelFilesAsync(model);
+    }
+
     private async Task EnsureModelFilesAsync(Model model)
     {
         await EnsureFileAsync(model.DownloadLink, model.Path);
@@ -265,7 +290,11 @@ public class Server : IDisposable
         }
 
         Log.LogInformation("[{Server}] Downloading {File}...", Name, filename);
-        Directory.CreateDirectory(_modelsPath);
+        // Create the file's OWN parent dir, not just the models root — a model whose path has a
+        // subdirectory (e.g. "Qwen3.5-9B/model.gguf") needs that subdir to exist before File.Create,
+        // or the download throws DirectoryNotFoundException. CreateDirectory is recursive, so this
+        // covers the models root too.
+        Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
 
         using HttpClient hc = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
         hc.DefaultRequestHeaders.Add("User-Agent", "ARI/1.0");
@@ -352,6 +381,11 @@ public class Server : IDisposable
             "-b 4096 -ub 2048",
             $"--cache-type-k {kvQuantK} --cache-type-v {kvQuantV}",
             $"-c {ContextSize}",
+            // Checkpoint + host-cache caps (see CtxCheckpoints/CacheRamMib). On the hybrid-SSM models
+            // these bound the per-slot rollback state and the cross-turn prompt cache — the two biggest
+            // discretionary RAM draws once several slots run in parallel.
+            $"--ctx-checkpoints {CtxCheckpoints}",
+            $"--cache-ram {CacheRamMib}",
             "--n-predict -1",
             // Sampler defaults for this server — the catch-all every agent falls back to when it has no
             // override (or OverrideSamplerSettings is off). Always concrete, never omitted.
