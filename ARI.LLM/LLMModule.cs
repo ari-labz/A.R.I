@@ -408,15 +408,49 @@ public class LLMModule : ILLMModule, IDisposable
     {
         _allModels  = allModels;
         _modelsPath = modelsPath;
-        List<Task> boots = new();
-        foreach (Server server in _servers.Where(s => s.BootStartup))
+
+        List<(Server Server, Model? Model)> bootList = _servers
+            .Where(s => s.BootStartup)
+            .Select(s => (s, s.CurrentModelName is not null
+                ? allModels.FirstOrDefault(m => m.Name.Equals(s.CurrentModelName, StringComparison.OrdinalIgnoreCase))
+                : null))
+            .ToList();
+
+        // Phase 1 — download gate. Ensure EVERY boot server's model files are present before ANY server
+        // launches, so no server comes online (and starts serving requests) while another is still
+        // downloading. Sequential: on a tight disk, one large download at a time is safer than several
+        // at once. A download that genuinely fails drops that server from the launch set and is logged,
+        // rather than throwing — one bad model must not take down Core or the other servers.
+        List<(Server Server, Model? Model)> ready = new();
+        foreach ((Server server, Model? model) in bootList)
         {
-            Model? model = server.CurrentModelName is not null
-                ? allModels.FirstOrDefault(m => m.Name.Equals(server.CurrentModelName, StringComparison.OrdinalIgnoreCase))
-                : null;
-            boots.Add(server.StartAsync(model, modelsPath));
+            try
+            {
+                await server.EnsureModelsAsync(model, modelsPath);
+                ready.Add((server, model));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[{Server}] model download failed — this server will not start; others continue.", server.Name);
+            }
         }
+
+        // Phase 2 — launch every server whose model is now present, in parallel. A per-server guard keeps
+        // one failed launch from propagating out and crashing Core; the server is left cleanly offline.
+        List<Task> boots = new();
+        foreach ((Server server, Model? model) in ready)
+            boots.Add(BootOne(server, model));
         await Task.WhenAll(boots);
+
+        async Task BootOne(Server server, Model? model)
+        {
+            try { await server.StartAsync(model, modelsPath); }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[{Server}] failed to start — leaving it offline; other servers continue.", server.Name);
+                server.Stop();
+            }
+        }
     }
 
     public Task StopAllServersAsync()
@@ -764,6 +798,12 @@ public class LLMModule : ILLMModule, IDisposable
     // runs background work only while this holds, and long tasks poll it to yield the moment Ari is busy.
     public bool IsIdle => processingThreads.IsEmpty;
 
+    // Actively in conversation = a user-facing thread is live or still inside its response window
+    // (Active/Streaming). Internal threads (the memory walks' own epoch threads) are excluded so a
+    // running background walk never counts as "in conversation" and blocks the next one.
+    public bool ConversationActive =>
+        threads.Values.Any(t => !t.Internal && t.State is ThreadState.Active or ThreadState.Streaming);
+
     /// <summary>True when Refactor is loaded and can be run by the Scheduler (the graph walk that replaced BrainScan).</summary>
     public bool HasRefactor => refactor is not null;
 
@@ -771,9 +811,14 @@ public class LLMModule : ILLMModule, IDisposable
     // /brainscan and /proactive commands, which don't receive it from ARI.Core.
     private static string PersistentDataDir => Paths.PersistentData;
 
-    /// <summary>Runs a full graph-walk refactor pass (honours the token so it yields when cancelled).</summary>
+    /// <summary>Runs a scheduled graph-walk refactor pass, capped at 10 epochs (honours the token so it
+    /// yields when cancelled). The manual /refactor command still runs the full uncapped walk.</summary>
     public Task RunRefactorAsync(CancellationToken ct) =>
-        refactor?.Run(allNotes: true, ct) ?? Task.CompletedTask;
+        refactor?.Run(allNotes: true, ct, epochsOverride: SCHEDULED_REFACTOR_EPOCHS) ?? Task.CompletedTask;
+
+    // The scheduled walk is deliberately short: 10 seeds per run, then it reschedules. Ordering by
+    // LastRefactored (oldest first) means each run advances to notes the previous runs never reached.
+    private const int SCHEDULED_REFACTOR_EPOCHS = 10;
 
     /// <summary>True when the Curiosity agent is loaded and can be run by the Scheduler.</summary>
     public bool HasCuriosity => curiosity is not null;
