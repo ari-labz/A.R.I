@@ -419,6 +419,11 @@ public static class BrainModule
     // Highest total-degree notes — the starting points for a walk, where sprawl concentrates.
     public static List<Note> TopDegreeSeeds(int limit) => Database.SeedsByDegree(limit);
 
+    // Every note, ordered by degree DESC. Refactor re-sorts these by "least-recently refactored" but
+    // keeps this degree order as its tiebreak, so the whole vault rotates through instead of the walk
+    // re-picking the same high-degree hubs each run.
+    public static List<Note> AllSeedsByDegree() => Database.SeedsByDegree(int.MaxValue);
+
     // Adjacency skeleton (path + [type] + inbound '<' / outbound '>' connections) for the neighbourhood
     // BFS-reachable from the seed within `depth` hops, capped at `cap` nodes. Null if the seed is unknown.
     public static string? Skeleton(string seedTitle, int depth = 6, int cap = 1000)

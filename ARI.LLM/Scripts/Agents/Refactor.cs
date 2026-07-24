@@ -23,6 +23,10 @@ internal sealed class Refactor : MemoryAgent
     // Refactor is tidy-only — curiosity-recording is the Curiosity agent's job now.
     protected override bool IncludeCuriosityTools => false;
 
+    // Refactor rotates through the whole vault least-recently-refactored first (see RefactorLog); the
+    // other memory walks keep the plain top-degree seed order.
+    protected override bool TrackLastRefactored => true;
+
     internal async Task<string> Run(bool allNotes = false, CancellationToken ct = default, int? epochsOverride = null)
     {
         if (!await runLock.WaitAsync(TimeSpan.FromSeconds(5)))

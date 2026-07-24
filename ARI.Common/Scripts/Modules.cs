@@ -18,6 +18,11 @@ public interface ILLMModule
     bool AssignAgentSlot(string agentName, string? slotName);
     /// <summary>True when no thread is currently being processed — Ari is idle.</summary>
     bool IsIdle { get; }
+
+    /// <summary>True when Ari is actively in conversation — any non-internal thread is in the
+    /// Active or Streaming state (a live exchange or one still inside its response window). Used by
+    /// the scheduler to defer background walks so they don't land mid-conversation.</summary>
+    bool ConversationActive { get; }
 }
 
 public interface IVoiceModule
