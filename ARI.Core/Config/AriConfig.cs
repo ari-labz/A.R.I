@@ -17,6 +17,10 @@ public class AriConfig
 {
     public Modules modules { get; init; }
 
+    // Global dev flag. When true, Engram (memory writes) never runs — see Shared.DevMode. Defaults
+    // to false (normal operation / official builds). Automated runs force it on via ARI_DEVMODE.
+    public bool DevMode { get; init; }
+
     private static readonly Regex PlaceholderPattern = new(@"\$\{([A-Za-z0-9_]+)\}", RegexOptions.Compiled);
 
     // AriConfig.json is user data (instance identity, whitelists, ports) — it lives in AppData so

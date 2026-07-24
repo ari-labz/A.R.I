@@ -12,6 +12,22 @@ public static class Shared
 
     public static string LogPath { get; set; } = "";
 
+    // Global kill switch for memory writes. When DevMode is ON, Engram never runs, so no autonomous
+    // run can ever mutate the brain vault. Resolved once at startup via ResolveDevMode.
+    //
+    // RULE: DevMode is OFF only for the user running in Rider or for an official build. Every other
+    // run — in particular any build launched by automation/Claude — MUST run with DevMode ON. That
+    // is enforced by the ARI_DEVMODE env var, which can only force DevMode *ON*, never off: an
+    // automated launcher sets ARI_DEVMODE=1 and Engram is guaranteed disabled regardless of config.
+    public static bool DevMode { get; private set; }
+
+    public static void ResolveDevMode(bool configValue)
+    {
+        string env = (Environment.GetEnvironmentVariable("ARI_DEVMODE") ?? "").Trim().ToLowerInvariant();
+        bool envForcesOn = env is "1" or "true" or "yes" or "on";
+        DevMode = envForcesOn || configValue;   // env can only turn it ON, never off
+    }
+
     // Resolved llama-server executable, set by Dependency.CheckLlamaCpp at startup. Defaults to the
     // bare command name (found on PATH); becomes a full path when we download a managed build.
     public static string LlamaServer { get; set; } = "llama-server";
