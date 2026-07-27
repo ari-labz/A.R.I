@@ -397,7 +397,13 @@ button, a, input, select, textarea, label, [role="button"] {
     display: flex; flex-direction: column;
     align-items: center; justify-content: flex-end;
     padding: 0 24px 28px;
-    height: 44vh; flex-shrink: 0;
+    /* Percentage of the REAL visible viewport (--app-vh, kept live by App.tsx from
+       visualViewport — see #168), not raw vh — plain vh doesn't shrink on many mobile browsers
+       when the on-screen keyboard opens, which is why a separate abrupt collapse-on-focus hack
+       existed here before (#186: it caused a jarring jump). Sizing off --app-vh means this
+       already shrinks smoothly as the keyboard opens, in step with the real available space,
+       so that hack is gone — the composer stays where it is; only opening a thread moves it. */
+    height: calc(var(--app-vh, 100dvh) * 0.44); flex-shrink: 0;
     transition: height 0.65s ease-in-out, padding 0.65s ease-in-out, border-color 0.3s ease-in-out;
     border-bottom: 1px solid transparent;
     overflow: hidden;
@@ -1249,7 +1255,7 @@ details.tool-card summary::-webkit-details-marker { display: none; }
     #input-hint { display: none; }
     #main-logo { width: 200px; }
     #main.active #main-logo { width: 90px; }
-    #main-header { height: 38vh; padding-bottom: 20px; }
+    #main-header { height: calc(var(--app-vh, 100dvh) * 0.38); padding-bottom: 20px; }
 }
 
 /* ── tablet (portrait) ───────────────────────────────────────
@@ -1273,21 +1279,9 @@ details.tool-card summary::-webkit-details-marker { display: none; }
    Vertical space is the scarce resource in landscape, not width — 38vh (the portrait figure) would
    eat a huge share of a short viewport, so shrink the header much further and drop its bottom padding. */
 @media (max-height: 500px) and (orientation: landscape) {
-    #main-header { height: 18vh; padding-bottom: 6px; }
+    #main-header { height: calc(var(--app-vh, 100dvh) * 0.18); padding-bottom: 6px; }
     #main-logo { width: 120px; }
     #main.active #main-logo { width: 60px; }
-}
-
-/* ── composer focused (mobile/tablet) ────────────────────────
-   With the on-screen keyboard open, vertical room is scarce and the header (still a fixed vh share
-   otherwise) was eating a chunk of what's left regardless of whether the user was even looking at
-   it. Collapse it to near-nothing for as long as the composer holds focus (class toggled in
-   InputArea.tsx); it reappears immediately on blur. */
-@media (max-width: 1024px) {
-    body.composer-focused #main-header { height: 8px; padding-bottom: 0; overflow: hidden; }
-    body.composer-focused #header-logos { opacity: 0; }
-    #main-header { transition: height .2s ease, padding-bottom .2s ease; }
-    #header-logos { transition: opacity .15s ease; }
 }
 
 /* ── Speech / Orb overlay (issue #92) ───────────────────────────────────── */

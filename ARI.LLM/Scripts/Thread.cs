@@ -114,6 +114,18 @@ public class Thread
     /// the architect edits directly instead of dispatching a Coder.</summary>
     public readonly HashSet<string> TouchedFiles = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>The root filesystem path this thread is bound to (a project root, or the brain vault) —
+    /// set once per turn by whichever agent knows it (Coder.RunLoop, MemoryAgent.RegisterTools). Null
+    /// means no project is bound. ToolFactories reads this to construct project-scoped tools (git,
+    /// filesystem, build) for ANY agent's request_tools call — availability depends on this state, not on
+    /// which agent is asking. There is no per-agent tool allowlist; a group resolves or it doesn't based
+    /// on what's actually bound here.</summary>
+    internal string? ProjectRoot   { get; set; }
+    internal FileSnapshots? Snapshots     { get; set; }
+    internal bool     IsBrainVault { get; set; }
+    internal bool     IsRemoteProject { get; set; }
+    internal CancellationToken Ct  { get; set; }
+
     /// <summary>Monotonic user-turn counter, incremented by the pipeline at the start of each user request.
     /// Client-side tool guardrails (e.g. the read-dedup "already read" short-circuit) scope their state to the
     /// current turn via this: content read in an earlier turn may have been condensed out of the model's
@@ -302,8 +314,34 @@ public class Thread
             }
         }
 
+        // Message-count trim with the SAME whole-turn hysteresis as the char eviction above. A plain
+        // "remove down to exactly maxMessages" slides the window start one message every turn once the
+        // limit is reached, which shifts the prompt prefix every turn and forces a full re-prefill each
+        // time (measured: reuse collapsed 95%→5% and prefill spiked 2.5s→34s the turn a conversation
+        // crossed 25 messages). Instead: only trigger past maxMessages, then evict whole turns down to
+        // EVICT_TO_FRACTION of the limit and advance contextStartIndex, so the window start stays put
+        // for several turns (re-prefill once every ~4 turns, not every turn).
         if (maxMessages > 0 && kept.Count > maxMessages)
-            kept.RemoveRange(0, kept.Count - maxMessages);
+        {
+            int target    = Math.Max(1, (int)(maxMessages * EVICT_TO_FRACTION));
+            int firstKept = 0;
+
+            while (kept.Count - firstKept > target)
+            {
+                int next = firstKept;
+                while (next < kept.Count && !kept[next].EndsTurn) next++;
+                next++;
+                if (next >= kept.Count) break;   // never evict the final (possibly still-open) turn
+
+                firstKept = next;
+            }
+
+            if (firstKept > 0)
+            {
+                contextStartIndex = kept[firstKept].HistoryIndex;
+                kept.RemoveRange(0, firstKept);
+            }
+        }
 
         List<ThreadMessage> result = new(kept.Count);
         foreach ((ThreadMessage msg, _, _, _) in kept) result.Add(msg);

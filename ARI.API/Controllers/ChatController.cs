@@ -24,33 +24,32 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     // this, bare Serialize emits PascalCase ("Type") and the client's event switch silently never matches.
     private static readonly JsonSerializerOptions SseJson = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    // Maps threadKey → projectId — backed by a persistent JSON file so it survives rebuilds
-    private static ConcurrentDictionary<string, string>? _threadProjects;
-    private static ConcurrentDictionary<string, string> GetThreadProjects(ProjectStore store)
-    {
-        if (_threadProjects is not null) return _threadProjects;
-        _threadProjects = new ConcurrentDictionary<string, string>(store.LoadThreadMap());
-        return _threadProjects;
-    }
-    private ConcurrentDictionary<string, string> ThreadProjects => GetThreadProjects(projectStore);
-    private void PersistThreadProjects() => projectStore.SaveThreadMap(new Dictionary<string, string>(ThreadProjects));
+    // Maps threadKey → projectId. Lives on ProjectStore (not here) so both this controller and
+    // ProjectServiceAdapter — the REST path and the tool-call path — share the exact same state.
+    private ConcurrentDictionary<string, string> ThreadProjects => projectStore.ThreadProjects;
 
     // Pending attachments staged before a thread exists — flushed at send time.
     private static readonly ConcurrentDictionary<string, List<Attachment>> pendingAttachments        = new();
     private static readonly ConcurrentDictionary<string, List<Attachment>> pendingMessageAttachments = new();
 
+    // System-context blocks injected by the client (e.g. filesystem skeleton). Merged into the
+    // system prompt at send time — never exposed as user-visible thread attachments.
+    private static readonly ConcurrentDictionary<string, string> pendingSystemContext = new();
+
     /// <summary>Derives a display username from the authenticated user's email (strips @domain).</summary>
     private string GetUsername()
     {
-        // ARI ships with no auth, so this claim is absent unless a reverse proxy (Cloudflare Access
-        // et al) supplies it — which is the common case. The fallback must therefore be neutral: it is
-        // what Ari calls whoever is talking to her on a fresh install.
+        // Proxy auth claim wins if present (Cloudflare Access etc.)
         string? email = User.FindFirstValue(ClaimTypes.Email);
-        if (string.IsNullOrEmpty(email)) return "User";
-        int at = email.IndexOf('@');
-        string raw = at > 0 ? email[..at] : email;
-        // Capitalise first letter for display (alex → Alex)
-        return raw.Length > 0 ? char.ToUpper(raw[0]) + raw[1..] : raw;
+        if (!string.IsNullOrEmpty(email))
+        {
+            int at = email.IndexOf('@');
+            string raw = at > 0 ? email[..at] : email;
+            return raw.Length > 0 ? char.ToUpper(raw[0]) + raw[1..] : raw;
+        }
+        // User-configured display name is the fallback on a fresh local install.
+        string stored = UserNameStore.Get();
+        return string.IsNullOrEmpty(stored) ? "User" : stored;
     }
 
     // ── Thread navigation helpers ───────────────────────────────────────────────
@@ -127,16 +126,13 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         string key = $"{(req?.Desktop == true ? "client" : "web")}-{Guid.NewGuid():N}";
         Project? project = !string.IsNullOrWhiteSpace(req?.ProjectId) ? projectStore.Get(req.ProjectId) : null;
         if (project is not null)
-        {
-            ThreadProjects[key] = req!.ProjectId!;
-            PersistThreadProjects();
-        }
+            projectStore.BindThread(key, req!.ProjectId!);
         // Pre-register in LLMModule so the newThread event fires immediately and
         // all sidebar observers see the thread without waiting for the first message.
-        // An explicit pipeline selection wins; otherwise projects with ForceCodePipeline open in code-mode.
+        // An explicit pipeline selection wins; otherwise a Repository project opens in code-mode.
         if (Enum.TryParse(req?.Pipeline, ignoreCase: true, out ARI.LLM.ThreadPipeline selected))
             Llm.ForcePipeline(key, selected);
-        else if (project?.ForceCodePipeline == true)
+        else if (project?.Type == ProjectType.Repository)
             Llm.ForceCodeThread(key);
         else
             Llm.GetOrCreateDialogueThread(key);
@@ -595,6 +591,15 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     /// hasn't been created yet). Used by the Electron client to supply the project file tree
     /// and file read results without routing through a user message.
     /// </summary>
+    [HttpPost("{threadKey}/system-context")]
+    public IActionResult SetSystemContext(string threadKey, [FromBody] InjectContextRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.Name) || req.Content is null)
+            return BadRequest("Name and Content are required.");
+        pendingSystemContext[threadKey] = req.Content;
+        return Ok();
+    }
+
     [HttpPost("{threadKey}/inject-context")]
     public IActionResult InjectContext(string threadKey, [FromBody] InjectContextRequest req)
     {
@@ -704,6 +709,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 
         pendingMessageAttachments.TryRemove(threadKey, out List<Attachment>? msgAtts);
         pendingAttachments.TryRemove(threadKey, out List<Attachment>? threadAtts);
+        pendingSystemContext.TryRemove(threadKey, out string? systemContextBlock);
 
         string? platformContext = null;
         if (ThreadProjects.TryGetValue(threadKey, out string? pid))
@@ -715,18 +721,32 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                 ctx.AppendLine($"Project: {project.Name}");
                 if (!string.IsNullOrWhiteSpace(project.Instructions))
                     ctx.AppendLine().AppendLine(project.Instructions);
-                // If the client injected a file tree for this thread, tell the LLM about it
-                bool hasTree = threadAtts?.Any(a => a.Name == "_project_tree.txt") == true;
-                if (hasTree)
+
+                // Filesystem skeleton sent via /system-context — lives in the system prompt (stable
+                // cached prefix) and never appears as a user-visible thread attachment.
+                if (systemContextBlock is not null)
                 {
-                    ctx.AppendLine().AppendLine("The complete project file tree is provided in the context attachment `_project_tree.txt`. Use the `read_file` tool to read specific files whenever you need to examine their contents.");
+                    ctx.AppendLine().AppendLine(systemContextBlock);
+                    ctx.AppendLine("Use list_directory to explore subdirectories and read_file to read files.");
                 }
                 platformContext = ctx.ToString().TrimEnd();
 
+                ARI.LLM.Thread? boundThread = FindThread(threadKey);
+
                 // Force code pipeline before the classifier runs (first message only)
-                bool isFirstMessage = FindThread(threadKey)?.History.Count is null or 0;
-                if (isFirstMessage && project.ForceCodePipeline)
+                bool isFirstMessage = boundThread?.History.Count is null or 0;
+                if (isFirstMessage && project.Type == ProjectType.Repository)
                     Llm.ForceCodeThread(threadKey);
+
+                // ServerFs projects: bind ProjectRoot on the thread every message (idempotent) so that
+                // filesystem_tools/coding_tools resolve correctly without waiting for Coder.RunLoop to
+                // set it. Covers Repository+ServerFs (web-created repos) and ObsidianGraph+ServerFs.
+                if (boundThread is not null && project is { Backend: StorageBackend.ServerFs, RootPath: { } serverRoot })
+                {
+                    boundThread.ProjectRoot   = serverRoot;
+                    boundThread.IsBrainVault  = false;
+                    boundThread.Ct            = CancellationToken.None;
+                }
 
                 // On the first message, inject project-level attachments as thread attachments
                 if (isFirstMessage)
@@ -795,12 +815,21 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
             // Pass CancellationToken.None so HTTP client disconnect does NOT cancel the LLM.
             // The LLM runs to completion; explicit cancel via DELETE /processing still works
             // because LLMModule.Cancel() cancels the thread's internal CTS directly.
+            // A ServerFs project's root is server-managed — resolve it from the bound project when the
+            // client didn't send one explicitly (RemoteFs keeps relying on the client-sent LocalPath,
+            // sourced from the desktop app's own per-device folder store, same as before).
+            string? effectiveLocalPath = string.IsNullOrWhiteSpace(body.LocalPath) ? null : body.LocalPath;
+            if (effectiveLocalPath is null
+                && ThreadProjects.TryGetValue(threadKey, out string? boundProjectId)
+                && projectStore.Get(boundProjectId) is { Backend: StorageBackend.ServerFs } boundProject)
+                effectiveLocalPath = boundProject.RootPath;
+
             await Llm.PromptStreaming(threadKey, prompt, username, platformContext, async accumulated =>
             {
                 string escaped = accumulated.Replace("\n", "\\n").Replace("\r", "");
                 await WriteEventAsync($"data: {escaped}\n\n");
             }, CancellationToken.None, messageAttachments: msgAtts, threadAttachments: threadAtts,
-               localPath: string.IsNullOrWhiteSpace(body.LocalPath) ? null : body.LocalPath);
+               localPath: effectiveLocalPath);
             await WriteEventAsync("data: [DONE]\n\n");
         }
         catch (OperationCanceledException)

@@ -19,13 +19,24 @@ internal sealed class ScheduledTask
     // server start, whichever is later — see Floor).
     internal DateTime LastRunUtc { get; set; }
 
-    internal ScheduledTask(string name, string cronExpression, Func<CancellationToken, Task> handler, DateTime lastRunUtc)
+    // When true, a due slot is held (not run) while Ari is actively in conversation, and re-checked
+    // after DeferWindow. The memory walks (Refactor/Curiosity) opt in; jobs like ProactiveMessage don't.
+    internal bool RespectActivity { get; }
+
+    // Activity-deferral state for the CURRENT due slot. DeferredUntil holds the next re-check time;
+    // DeferCount counts how many times this one slot has been pushed back (capped, then the slot is
+    // dropped and the task waits for its next cron occurrence). Both reset when the slot runs or is dropped.
+    internal DateTime? DeferredUntil { get; set; }
+    internal int       DeferCount    { get; set; }
+
+    internal ScheduledTask(string name, string cronExpression, Func<CancellationToken, Task> handler, DateTime lastRunUtc, bool respectActivity = false)
     {
         Name = name;
         CronText = cronExpression;
         Cron = CronExpression.Parse(cronExpression);
         Handler = handler;
         LastRunUtc = lastRunUtc;
+        RespectActivity = respectActivity;
     }
 
     /// <summary>Swaps in a new cron expression live. Throws CronFormatException if invalid (caller validates).</summary>

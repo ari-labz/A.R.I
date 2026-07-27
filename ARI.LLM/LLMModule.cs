@@ -28,7 +28,6 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly Engram?           engram;
     private readonly Refactor?         refactor;
     private readonly CuriosityAgent?   curiosity;
-    private readonly Classifier?       classifier;
     private readonly Awareness?        awareness;
     
     
@@ -94,7 +93,7 @@ public class LLMModule : ILLMModule, IDisposable
 
         _servers.AddRange(servers);
 
-        Dictionary<string, string> serverEndpoints = servers.ToDictionary(s => s.Name, s => s.FullEndpoint);
+        Dictionary<string, Server> serverByName = servers.ToDictionary(s => s.Name, s => s);
 
         Dictionary<string, JsonElement> rawAgents = new(StringComparer.OrdinalIgnoreCase);
         if (File.Exists(agentsJsonPath))
@@ -103,15 +102,21 @@ public class LLMModule : ILLMModule, IDisposable
 
             // Prompts owned by no single agent: the MemoryAgent block its three children share, and the
             // [Budgets] footer every agent gets. Same file, so the panel edits one place.
-            Dictionary<string, string>? sharedMemory = null, sharedBudgets = null;
+            Dictionary<string, string>? sharedMemory = null, sharedBudgets = null, sharedToolSystem = null;
             if (TryGetPropCI(doc.RootElement, "Shared", out JsonElement sharedEl))
             {
                 if (TryGetPropCI(sharedEl, "MemoryAgent", out JsonElement memEl))
                     sharedMemory = JsonSerializer.Deserialize<Dictionary<string, string>>(memEl.GetRawText(), JsonOptions);
                 if (TryGetPropCI(sharedEl, "Budgets", out JsonElement budEl))
                     sharedBudgets = JsonSerializer.Deserialize<Dictionary<string, string>>(budEl.GetRawText(), JsonOptions);
+                if (TryGetPropCI(sharedEl, "ToolSystem", out JsonElement toolEl))
+                    sharedToolSystem = JsonSerializer.Deserialize<Dictionary<string, string>>(toolEl.GetRawText(), JsonOptions);
             }
-            SharedPrompts.Load(sharedMemory, sharedBudgets);
+            SharedPrompts.Load(sharedMemory, sharedBudgets, sharedToolSystem);
+            // Unlike Agents.json, ToolGroups.json has no control-panel edit UI yet — read straight from
+            // the shipped copy (Paths.BuildPath) rather than agentsJsonPath's seeded-into-AppData copy,
+            // which only exists for files a user is meant to tune in place.
+            ToolGroups.Load(Path.Combine(Paths.BuildPath, "ToolGroups.json"));
 
             if (TryGetPropCI(doc.RootElement, "Agents", out JsonElement arr) && arr.ValueKind == JsonValueKind.Array)
                 foreach (JsonElement el in arr.EnumerateArray())
@@ -124,9 +129,10 @@ public class LLMModule : ILLMModule, IDisposable
         {
             T agent = JsonSerializer.Deserialize<T>(el.GetRawText(), JsonOptions)!;
 
-            if (serverEndpoints.TryGetValue(agent.ServerName, out string? ep))
+            if (serverByName.TryGetValue(agent.ServerName, out Server? bound))
             {
-                agent.Endpoint = ep;
+                agent.Endpoint    = bound.FullEndpoint;
+                agent.BoundServer = bound;
             }
             else if (_servers.Count > 0)
             {
@@ -142,15 +148,33 @@ public class LLMModule : ILLMModule, IDisposable
                         : "Agent '{Agent}' is bound to unknown server '{Missing}' — defaulting to '{Server}' slot 0.",
                     agent.Name, agent.ServerName.Length == 0 ? first.Name : agent.ServerName, first.Name);
 
-                agent.ServerName = first.Name;
-                agent.Endpoint   = first.FullEndpoint;
+                agent.ServerName  = first.Name;
+                agent.Endpoint    = first.FullEndpoint;
+                agent.BoundServer = first;
             }
             else
             {
                 _logger.LogError("Agent '{Agent}' cannot be bound — no servers are configured.", agent.Name);
             }
 
-            agent.Slot ??= 0;
+            if (agent.BoundServer is not null)
+            {
+                if (agent.SlotName is { Length: > 0 })
+                {
+                    agent.BoundSlot = agent.BoundServer.Slots.FirstOrDefault(sl => sl.Name.Equals(agent.SlotName, StringComparison.OrdinalIgnoreCase));
+                    if (agent.BoundSlot is null)
+                        _logger.LogWarning("Agent '{Agent}' names slot '{Slot}' which doesn't exist on server '{Server}' — falling back to its first slot.",
+                            agent.Name, agent.SlotName, agent.BoundServer.Name);
+                }
+                // No name given (or it didn't resolve) — default to the server's first slot, same as the
+                // old raw agent.Slot ??= 0 behaviour, so an agent still gets pinned/context-derived out of
+                // the box without needing the control panel touched first.
+                if (agent.BoundSlot is null && agent.BoundServer.Slots.Count > 0)
+                {
+                    agent.BoundSlot = agent.BoundServer.Slots[0];
+                    agent.SlotName  = agent.BoundSlot.Name;
+                }
+            }
             return agent;
         }
 
@@ -199,25 +223,18 @@ public class LLMModule : ILLMModule, IDisposable
             _logger.LogInformation("Coder agent is active. MaxContext: {Ctx} tokens.", codeArchitect.BudgetContext);
         }
 
-        if (rawAgents.TryGetValue("Classifier", out JsonElement classifierEl))
-        {
-            classifier = Deserialize<Classifier>(classifierEl);
-            _logger.LogInformation("Classifier is active.");
-        }
-
         // Speech conversational-awareness gate. Uses its own Agents.json entry if present, otherwise
-        // reuses the Classifier's server/model with awareness-tuned defaults so it works out of the box.
+        // gets the same server/slot-fallback treatment as any other unbound agent (Deserialize on an
+        // empty definition), so it still works out of the box with no system prompt.
         if (rawAgents.TryGetValue("Awareness", out JsonElement awarenessEl))
         {
             awareness = Deserialize<Awareness>(awarenessEl);
             _logger.LogInformation("Awareness is active.");
         }
-        else if (classifier is not null)
+        else if (_servers.Count > 0)
         {
-            awareness = new Awareness { Name = "Awareness", ServerName = classifier.ServerName };
-            awareness.Endpoint = classifier.Endpoint;
-            awareness.Slot     = classifier.Slot;
-            _logger.LogWarning("No Awareness entry in Agents.json — using the Classifier's server with no system prompt. Add an Awareness entry to configure it.");
+            awareness = Deserialize<Awareness>(JsonDocument.Parse("{\"name\":\"Awareness\"}").RootElement);
+            _logger.LogWarning("No Awareness entry in Agents.json — using default server/slot with no system prompt. Add an Awareness entry to configure it.");
         }
 
         if (BrainModule.Ready && rawAgents.TryGetValue("Memory", out JsonElement memoryEl))
@@ -296,6 +313,13 @@ public class LLMModule : ILLMModule, IDisposable
         if (threads.TryGetValue(threadKey, out Thread? existing)) return existing;
         Thread thread = new Thread(type, threadKey, platformContext);
         threads[threadKey] = thread;
+        // list_tools/request_tools are always warm (issue #126) and universal — no agent-identity gate.
+        // What a group actually resolves to depends on ToolFactories reading this thread's bound context
+        // (ProjectRoot etc.), set by whichever agent runs on it (Coder.RunLoop, MemoryAgent.RegisterTools).
+        // Threads created outside this choke point (MemoryAgent's internal epoch threads) register their
+        // own copy for the same reason.
+        new ListTools().Register(thread);
+        new RequestTools(thread).Register(thread);
         thread.Updated          += () => Broadcast(new AppEvent("threadUpdated", threadKey));
         thread.Deleted          += () => { threads.TryRemove(threadKey, out _); Broadcast(new AppEvent("threadDeleted", threadKey)); };
         thread.Streaming        += text => Broadcast(new AppEvent("streaming", threadKey, text));
@@ -320,8 +344,7 @@ public class LLMModule : ILLMModule, IDisposable
     /// Ensures the thread runs on the given pipeline, converting it if it currently runs on another.
     /// The thread is rebuilt as the target type (so it gets that type's event wiring) with its history
     /// and attachments carried over. A no-op when the thread already runs on that pipeline, and equivalent
-    /// to GetOrCreateThread when no thread exists yet. Safe to call at any point in a thread's life — the
-    /// classifier currently only invokes it on the first message, but nothing here assumes that.
+    /// to GetOrCreateThread when no thread exists yet. Safe to call at any point in a thread's life.
     /// </summary>
     private Thread Recategorise(ThreadPipeline type, string threadKey, string? platformContext = null)
     {
@@ -349,19 +372,29 @@ public class LLMModule : ILLMModule, IDisposable
         if (!agentMap.TryGetValue(agentName, out Agent? agent)) return false;
         Server? server = _servers.FirstOrDefault(s => s.Name.Equals(serverName, StringComparison.OrdinalIgnoreCase));
         if (server is null) return false;
-        agent.ServerName = server.Name;
-        agent.Endpoint   = server.FullEndpoint;
+        agent.ServerName  = server.Name;
+        agent.Endpoint    = server.FullEndpoint;
+        agent.BoundServer = server;
+        // A slot name from the old server has no meaning here — re-resolve against the new one, or
+        // fall back to unpinned if it doesn't have a same-named slot.
+        agent.BoundSlot = agent.SlotName is { Length: > 0 }
+            ? server.Slots.FirstOrDefault(sl => sl.Name.Equals(agent.SlotName, StringComparison.OrdinalIgnoreCase))
+            : null;
         return true;
     }
 
     /// <summary>
-    /// Assigns a specific llama-server slot index to a live agent. Pass null to clear.
-    /// Returns false if the agent is not found.
+    /// Assigns a named slot (on the agent's currently-bound server) to a live agent. Pass null/empty
+    /// to unpin. Returns false if the agent is not found; silently unpins if the name doesn't match
+    /// any of the bound server's slots (same behaviour as at load time).
     /// </summary>
-    public bool AssignAgentSlot(string agentName, int? slot)
+    public bool AssignAgentSlot(string agentName, string? slotName)
     {
         if (!agentMap.TryGetValue(agentName, out Agent? agent)) return false;
-        agent.Slot = slot;
+        agent.SlotName = slotName;
+        agent.BoundSlot = agent.BoundServer is not null && slotName is { Length: > 0 }
+            ? agent.BoundServer.Slots.FirstOrDefault(sl => sl.Name.Equals(slotName, StringComparison.OrdinalIgnoreCase))
+            : null;
         return true;
     }
 
@@ -375,15 +408,49 @@ public class LLMModule : ILLMModule, IDisposable
     {
         _allModels  = allModels;
         _modelsPath = modelsPath;
-        List<Task> boots = new();
-        foreach (Server server in _servers.Where(s => s.BootStartup))
+
+        List<(Server Server, Model? Model)> bootList = _servers
+            .Where(s => s.BootStartup)
+            .Select(s => (s, s.CurrentModelName is not null
+                ? allModels.FirstOrDefault(m => m.Name.Equals(s.CurrentModelName, StringComparison.OrdinalIgnoreCase))
+                : null))
+            .ToList();
+
+        // Phase 1 — download gate. Ensure EVERY boot server's model files are present before ANY server
+        // launches, so no server comes online (and starts serving requests) while another is still
+        // downloading. Sequential: on a tight disk, one large download at a time is safer than several
+        // at once. A download that genuinely fails drops that server from the launch set and is logged,
+        // rather than throwing — one bad model must not take down Core or the other servers.
+        List<(Server Server, Model? Model)> ready = new();
+        foreach ((Server server, Model? model) in bootList)
         {
-            Model? model = server.CurrentModelName is not null
-                ? allModels.FirstOrDefault(m => m.Name.Equals(server.CurrentModelName, StringComparison.OrdinalIgnoreCase))
-                : null;
-            boots.Add(server.StartAsync(model, modelsPath));
+            try
+            {
+                await server.EnsureModelsAsync(model, modelsPath);
+                ready.Add((server, model));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[{Server}] model download failed — this server will not start; others continue.", server.Name);
+            }
         }
+
+        // Phase 2 — launch every server whose model is now present, in parallel. A per-server guard keeps
+        // one failed launch from propagating out and crashing Core; the server is left cleanly offline.
+        List<Task> boots = new();
+        foreach ((Server server, Model? model) in ready)
+            boots.Add(BootOne(server, model));
         await Task.WhenAll(boots);
+
+        async Task BootOne(Server server, Model? model)
+        {
+            try { await server.StartAsync(model, modelsPath); }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[{Server}] failed to start — leaving it offline; other servers continue.", server.Name);
+                server.Stop();
+            }
+        }
     }
 
     public Task StopAllServersAsync()
@@ -435,7 +502,7 @@ public class LLMModule : ILLMModule, IDisposable
     // ── Prompting ───────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Pins a thread to a specific pipeline, bypassing the classifier. Honoured by <see cref="Route"/>
+    /// Pins a thread to a specific pipeline, overriding the default routing. Honoured by <see cref="Route"/>
     /// on every send — including threads that already have history — so re-pinning flips the thread to
     /// the new pipeline on the next message (carrying history via <see cref="Recategorise"/>). Used both
     /// for explicit selection at thread creation and for switching a live thread from the UI.
@@ -448,6 +515,19 @@ public class LLMModule : ILLMModule, IDisposable
 
     /// <summary>Pre-marks a thread to run through the Code pipeline. Thin wrapper over <see cref="ForcePipeline"/>.</summary>
     public void ForceCodeThread(string threadKey) => ForcePipeline(threadKey, ThreadPipeline.Code);
+
+    /// <summary>Binds a project's vault context onto a thread immediately — same fields ChatController
+    /// sets for an ObsidianGraph+ServerFs project on the next message, but called synchronously by
+    /// bind_project (project_tools) so the model can use filesystem_tools/obsidian_tools THIS turn
+    /// instead of waiting for the next one. No-op (root stays unbound) for anything else — a RemoteFs
+    /// project's files aren't on this server's disk, same reasoning as Coder.RunLoop's remote branch.</summary>
+    public void BindProjectContext(string threadKey, string? rootPath, bool isServerFsVault)
+    {
+        if (!Threads.TryGetValue(threadKey, out Thread? thread) || !isServerFsVault || rootPath is null) return;
+        thread.ProjectRoot  = rootPath;
+        thread.IsBrainVault = false;
+        thread.Ct           = CancellationToken.None;
+    }
 
     /// <summary>Engram gate on entry to dormant — the ONLY point at which a thread earns the right to be
     /// deleted. Runs a sweep for Dialogue/Speech threads that carry user messages and aren't already
@@ -531,32 +611,32 @@ public class LLMModule : ILLMModule, IDisposable
         processingThreads[threadKey] = cts;
 
         
-        // Discord threads always use Dialogue — never run them through the Classifier
+        // Discord threads always use Dialogue.
         bool isDiscordThread = threadKey.StartsWith("dm:", StringComparison.OrdinalIgnoreCase)
                             || threadKey.StartsWith("guild:", StringComparison.OrdinalIgnoreCase);
-        if (isDiscordThread || classifier is null)
+        if (isDiscordThread)
         {
             Thread dlgThread = GetOrCreateThread(ThreadPipeline.Dialogue, threadKey, platformContext);
             return await dialoguePipeline!.ExecuteAsync(dlgThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments);
         }
 
-        // if the thread already exists, its type tells us which pipeline owns it
+        // No more classifier. Routing is deterministic: an explicit pin (UI selection, or a bound
+        // Repository project — see ChatController.ForceCodeThread) wins outright; a thread that
+        // already has history keeps whatever pipeline it's already on; anything else is Dialogue —
+        // she's multi-purpose by default (list_tools/request_tools cover ad hoc code work), and only
+        // a genuinely bound Repository project switches the pipeline, same as switching from Claude
+        // to Claude Code.
         threads.TryGetValue(threadKey, out Thread? existing);
         string? agent = existing?.Pipeline.ToString();
-        bool hasMessages = existing is { History.Count: > 0 };
 
-        // An explicit pin (UI selection / project) overrides both the classifier and the thread's current
-        // type, on every send — so re-pinning a live thread flips it to the new pipeline on its next message.
         if (forcedPipelines.TryGetValue(threadKey, out ThreadPipeline forced))
         {
             agent = forced.ToString();
-            _logger.LogInformation($"[Classifier] ({threadKey}) → {agent} (forced)");
+            _logger.LogInformation($"[Router] ({threadKey}) → {agent} (forced)");
         }
-        // new or empty thread (may exist for attachment staging) needs classifying
-        else if (!hasMessages)
+        else if (agent is null)
         {
-            agent = await classifier.Classify(prompt, cts.Token);
-            _logger.LogInformation($"[Classifier] ({threadKey}) → {agent}");
+            agent = "Dialogue";
         }
 
         switch (agent)
@@ -718,6 +798,12 @@ public class LLMModule : ILLMModule, IDisposable
     // runs background work only while this holds, and long tasks poll it to yield the moment Ari is busy.
     public bool IsIdle => processingThreads.IsEmpty;
 
+    // Actively in conversation = a user-facing thread is live or still inside its response window
+    // (Active/Streaming). Internal threads (the memory walks' own epoch threads) are excluded so a
+    // running background walk never counts as "in conversation" and blocks the next one.
+    public bool ConversationActive =>
+        threads.Values.Any(t => !t.Internal && t.State is ThreadState.Active or ThreadState.Streaming);
+
     /// <summary>True when Refactor is loaded and can be run by the Scheduler (the graph walk that replaced BrainScan).</summary>
     public bool HasRefactor => refactor is not null;
 
@@ -725,9 +811,14 @@ public class LLMModule : ILLMModule, IDisposable
     // /brainscan and /proactive commands, which don't receive it from ARI.Core.
     private static string PersistentDataDir => Paths.PersistentData;
 
-    /// <summary>Runs a full graph-walk refactor pass (honours the token so it yields when cancelled).</summary>
+    /// <summary>Runs a scheduled graph-walk refactor pass, capped at 10 epochs (honours the token so it
+    /// yields when cancelled). The manual /refactor command still runs the full uncapped walk.</summary>
     public Task RunRefactorAsync(CancellationToken ct) =>
-        refactor?.Run(allNotes: true, ct) ?? Task.CompletedTask;
+        refactor?.Run(allNotes: true, ct, epochsOverride: SCHEDULED_REFACTOR_EPOCHS) ?? Task.CompletedTask;
+
+    // The scheduled walk is deliberately short: 10 seeds per run, then it reschedules. Ordering by
+    // LastRefactored (oldest first) means each run advances to notes the previous runs never reached.
+    private const int SCHEDULED_REFACTOR_EPOCHS = 10;
 
     /// <summary>True when the Curiosity agent is loaded and can be run by the Scheduler.</summary>
     public bool HasCuriosity => curiosity is not null;
