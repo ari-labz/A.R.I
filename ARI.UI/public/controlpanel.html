@@ -3870,10 +3870,12 @@ function dbgRenderTrace(item, host, workers = [], cursor = { i: 0 }, depth = 0) 
                     if (lastUserIdx >= 0) {
                         const raw      = extractText(msgs[lastUserIdx]);
                         const userName = (window._ariUserName ?? 'User');
+                        // Strip "Username: " prefix Agent.cs prepends for LLM multi-user tracking
+                        const display  = raw.replace(/^[^\n:]+: /, '');
                         const r = document.createElement('div');
                         r.className = 'dbg-row right';
                         r.innerHTML = `<div class="dbg-bubble user"><div class="dbg-bhead"><span>${userName}</span></div>`
-                            + `<div class="dbg-bbody dbg-md dbg-prompt-body">${marked.parse(raw)}</div></div>`;
+                            + `<div class="dbg-bbody dbg-md dbg-prompt-body">${marked.parse(display)}</div></div>`;
                         host.appendChild(r);
                     }
                 } catch (e) {

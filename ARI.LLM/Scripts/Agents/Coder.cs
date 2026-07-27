@@ -91,11 +91,17 @@ internal sealed class Coder : Agent
     private PhaseConfig? PhaseFor(Thread t)
         => Phases is not null && Phases.TryGetValue(t.Phase.ToString(), out PhaseConfig? p) ? p : null;
 
-    internal override string SystemPromptFor(Thread thread)
+    internal override string SystemPromptFor(Thread thread) => SystemPrompt;
+
+    // The mode instructions go in the trailing system message (modeNudge) rather than the base system
+    // prompt so they arrive as a clearly-labelled second [SYSTEM] block the LLM can distinguish from the
+    // stable role/persona context. Returns null when there is no phase config (flat mode).
+    internal string? ModePromptFor(Thread thread)
     {
         PhaseConfig? phase = PhaseFor(thread);
-        if (phase is null || phase.SystemPrompt.Length == 0) return SystemPrompt;   // no phase config → flat
-        return $"# Role\n{SystemPrompt}\n\n# Mode: {thread.Phase}\n{phase.SystemPrompt}";
+        return phase is null || phase.SystemPrompt.Length == 0
+            ? null
+            : $"# Mode: {thread.Phase}\n{phase.SystemPrompt}";
     }
 
     internal override (double? Temperature, double? TopP, int? TopK, double? MinP,
@@ -243,9 +249,11 @@ internal sealed class Coder : Agent
         string handoff = parent.Phase == CodePhase.Development && !string.IsNullOrWhiteSpace(parent.HandoffPayload)
             ? $"[Handoff — a plan summary, not the code. Build it now: create the NEW files with write_file; for each EXISTING file, preview_file it once then edit. Never preview a NEW file — it does not exist yet.]\n{parent.HandoffPayload}\n\n"
             : "";
+        string? modePrompt = ModePromptFor(parent);
+        string modeNudge   = modePrompt is not null ? $"{modePrompt}\n\n{nudge}" : nudge;
         string response = await SendPrompt(parent, prompt, username,
             augmentedPrompt: handoff.Length > 0 ? $"{handoff}{prompt}" : null,
-            modeNudge: nudge,
+            modeNudge: modeNudge,
             ct: cts.Token, userMessagePreadded: true, onDelta: onDelta);
 
         // Deterministic safety net for the amend path (NOT a content heuristic). A revision turn is ALWAYS a
