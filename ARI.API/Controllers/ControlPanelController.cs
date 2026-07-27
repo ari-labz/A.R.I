@@ -79,6 +79,17 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
         return Ok(new { ok = true });
     }
 
+    // ── User display name ─────────────────────────────────────────────────────────────
+    [HttpGet("username")]
+    public IActionResult GetUserName() => Ok(new { name = UserNameStore.Get() });
+
+    [HttpPost("username")]
+    public IActionResult SetUserName([FromBody] UserNameRequest req)
+    {
+        UserNameStore.Set(req.Name);
+        return Ok(new { ok = true });
+    }
+
     // ── Persona ───────────────────────────────────────────────────────────────────────
     [HttpGet("persona")]
     public IActionResult GetPersona() => Ok(new { text = PersonaStore.Get() });
@@ -1211,6 +1222,7 @@ public record ModelNotesRequest(string ModelName, string? Notes);
 
 public record ConventionsRequest(string? Text);
 public record PersonaRequest(string? Text);
+public record UserNameRequest(string? Name);
 public record SchedulerTaskRequest(string? Name, string? Cron);
 public record SchedulerProactiveRequest(bool Enabled);
 public record SchedulerQuietHoursRequest(int QuietStartHour, int QuietEndHour);

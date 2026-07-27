@@ -32,18 +32,24 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     private static readonly ConcurrentDictionary<string, List<Attachment>> pendingAttachments        = new();
     private static readonly ConcurrentDictionary<string, List<Attachment>> pendingMessageAttachments = new();
 
+    // System-context blocks injected by the client (e.g. filesystem skeleton). Merged into the
+    // system prompt at send time — never exposed as user-visible thread attachments.
+    private static readonly ConcurrentDictionary<string, string> pendingSystemContext = new();
+
     /// <summary>Derives a display username from the authenticated user's email (strips @domain).</summary>
     private string GetUsername()
     {
-        // ARI ships with no auth, so this claim is absent unless a reverse proxy (Cloudflare Access
-        // et al) supplies it — which is the common case. The fallback must therefore be neutral: it is
-        // what Ari calls whoever is talking to her on a fresh install.
+        // Proxy auth claim wins if present (Cloudflare Access etc.)
         string? email = User.FindFirstValue(ClaimTypes.Email);
-        if (string.IsNullOrEmpty(email)) return "User";
-        int at = email.IndexOf('@');
-        string raw = at > 0 ? email[..at] : email;
-        // Capitalise first letter for display (alex → Alex)
-        return raw.Length > 0 ? char.ToUpper(raw[0]) + raw[1..] : raw;
+        if (!string.IsNullOrEmpty(email))
+        {
+            int at = email.IndexOf('@');
+            string raw = at > 0 ? email[..at] : email;
+            return raw.Length > 0 ? char.ToUpper(raw[0]) + raw[1..] : raw;
+        }
+        // User-configured display name is the fallback on a fresh local install.
+        string stored = UserNameStore.Get();
+        return string.IsNullOrEmpty(stored) ? "User" : stored;
     }
 
     // ── Thread navigation helpers ───────────────────────────────────────────────
@@ -585,6 +591,15 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     /// hasn't been created yet). Used by the Electron client to supply the project file tree
     /// and file read results without routing through a user message.
     /// </summary>
+    [HttpPost("{threadKey}/system-context")]
+    public IActionResult SetSystemContext(string threadKey, [FromBody] InjectContextRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.Name) || req.Content is null)
+            return BadRequest("Name and Content are required.");
+        pendingSystemContext[threadKey] = req.Content;
+        return Ok();
+    }
+
     [HttpPost("{threadKey}/inject-context")]
     public IActionResult InjectContext(string threadKey, [FromBody] InjectContextRequest req)
     {
@@ -694,6 +709,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 
         pendingMessageAttachments.TryRemove(threadKey, out List<Attachment>? msgAtts);
         pendingAttachments.TryRemove(threadKey, out List<Attachment>? threadAtts);
+        pendingSystemContext.TryRemove(threadKey, out string? systemContextBlock);
 
         string? platformContext = null;
         if (ThreadProjects.TryGetValue(threadKey, out string? pid))
@@ -705,11 +721,13 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                 ctx.AppendLine($"Project: {project.Name}");
                 if (!string.IsNullOrWhiteSpace(project.Instructions))
                     ctx.AppendLine().AppendLine(project.Instructions);
-                // If the client injected a file tree for this thread, tell the LLM about it
-                bool hasTree = threadAtts?.Any(a => a.Name == "_project_tree.txt") == true;
-                if (hasTree)
+
+                // Filesystem skeleton sent via /system-context — lives in the system prompt (stable
+                // cached prefix) and never appears as a user-visible thread attachment.
+                if (systemContextBlock is not null)
                 {
-                    ctx.AppendLine().AppendLine("The complete project file tree is provided in the context attachment `_project_tree.txt`. Use the `read_file` tool to read specific files whenever you need to examine their contents.");
+                    ctx.AppendLine().AppendLine(systemContextBlock);
+                    ctx.AppendLine("Use list_directory to explore subdirectories and read_file to read files.");
                 }
                 platformContext = ctx.ToString().TrimEnd();
 

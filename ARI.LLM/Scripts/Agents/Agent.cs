@@ -220,6 +220,7 @@ public abstract class Agent
         string              prompt,
         string              username               = "user",
         string?             augmentedPrompt        = null,
+        string?             modeNudge              = null,
         string?             recallNotes            = null,
         string?             contextSummary         = null,
         int                 maxTokensOverride      = 0,
@@ -232,7 +233,7 @@ public abstract class Agent
         await thread.sendLock.WaitAsync(ct);
         try
         {
-            return await Send(thread, prompt, username, augmentedPrompt, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded, onDelta, thinkingBudgetOverride, chatHidden);
+            return await Send(thread, prompt, username, augmentedPrompt, modeNudge, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded, onDelta, thinkingBudgetOverride, chatHidden);
         }
         catch (OperationCanceledException)
         {
@@ -318,6 +319,7 @@ public abstract class Agent
         string              prompt,
         string              username,
         string?             augmentedPrompt,
+        string?             modeNudge,
         string?             recallNotes,
         string?             contextSummary,
         int                 maxTokensOverride,
@@ -400,7 +402,7 @@ public abstract class Agent
         // Persona is its own labelled block, separated from the pipeline/role prompt (applies to every
         // persona agent — Dialogue and Coding alike), so "who ARI is" is never tangled with "what this
         // pipeline does".
-        string baseSystem = persona.Length == 0 ? roleBlock : $"[Persona]\n{persona}\n\n{roleBlock}";
+        string baseSystem = persona.Length == 0 ? roleBlock : $"# Persona\n{persona}\n\n{roleBlock}";
         baseSystem += BuildPersistentContext(thread);
         // list_tools/request_tools manifest (#126) — only for threads that actually carry list_tools
         // (an ephemeral internal thread like Awareness never registers it). Static text, so it
@@ -425,9 +427,9 @@ public abstract class Agent
             messages.Add(new { role = m.Role, content = $"{m.Username}: {m.Content}" });
         }
 
-        // The chat template only renders the FIRST system message — a mid-conversation system role
-        // is silently dropped at templating (verified against llama-server /apply-template). Memories
-        // are therefore folded into the current user message, never sent as their own system message.
+        // Memories are folded into the current user message so they stay part of the user turn.
+        // Mid-conversation system messages ARE rendered by the Qwen3 chat template (verified via
+        // /apply-template) — modeNudge is therefore sent as a trailing system message after the user turn.
         string memoryBlock = recallNotes != null
             ? $"[ARI's Memories]\n{(string.IsNullOrWhiteSpace(recallNotes) ? "none" : recallNotes.Trim())}\n\n"
             : string.Empty;
@@ -448,6 +450,7 @@ public abstract class Agent
             if (!hasThreadContent && !hasMsgContent)
             {
                 messages.Add(new { role = "user", content = promptText });
+                if (modeNudge is not null) messages.Add(new { role = "system", content = modeNudge });
             }
             else
             {
@@ -499,6 +502,7 @@ public abstract class Agent
 
                 contentParts.Add(new { type = "text", text = promptText });
                 messages.Add(new { role = "user", content = (object)contentParts });
+                if (modeNudge is not null) messages.Add(new { role = "system", content = modeNudge });
             }
         }
 
