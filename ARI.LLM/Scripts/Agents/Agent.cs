@@ -769,7 +769,10 @@ public abstract class Agent
             };
 
             clock.RequestSent();
-            HttpResponseMessage response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+            BoundServer?.BeginRequest(Name);
+            HttpResponseMessage response;
+            try   { response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct); }
+            catch { BoundServer?.EndRequest(); throw; }
             if (!response.IsSuccessStatusCode)
             {
                 string errBody = "";
@@ -795,7 +798,9 @@ public abstract class Agent
 
             using Stream      stream = await response.Content.ReadAsStreamAsync(ct);
             using StreamReader reader = new(stream);
-
+            // EndRequest is called when the stream scope exits (success, error, or cancellation).
+            // The using-block for stream/reader ensures the slot counter is released promptly even
+            // if an exception unwinds through the SSE loop below.
             Dictionary<int, (string Id, string Name, StringBuilder Args)> pendingCalls = new();
             Dictionary<int, string> streamingMarkers = new();
             string? finishReason = null;
@@ -817,6 +822,9 @@ public abstract class Agent
 
             DateTime lastProgress = DateTime.UtcNow;
             string? line;
+            // EndRequest when SSE reading finishes (success, cancel, or exception).
+            try
+            {
             while ((line = await reader.ReadLineAsync(ct)) is not null)
             {
                 if (string.IsNullOrWhiteSpace(line) || !line.StartsWith("data: ")) continue;
@@ -1052,7 +1060,8 @@ public abstract class Agent
                         }
                     }
                 }
-            }
+            } // end SSE while
+            } finally { BoundServer?.EndRequest(); }
 
             // Deep-inspection trace: finalize THIS request's reasoning step (created live at the first
             // reasoning delta).

@@ -29,6 +29,12 @@ public class Model
     [JsonPropertyName("jinja")]
     public bool Jinja { get; set; } = true;
 
+    /// <summary>Path to a custom jinja template file, relative to the ARI Server directory.
+    /// When set, overrides the model's built-in metadata template and --jinja is still passed
+    /// so the engine accepts an arbitrary template rather than only the built-in named set.</summary>
+    [JsonPropertyName("chatTemplatePath")]
+    public string? ChatTemplatePath { get; set; }
+
     // Model metadata
     [JsonPropertyName("modelSize")]
     public string ModelSize { get; set; } = "";

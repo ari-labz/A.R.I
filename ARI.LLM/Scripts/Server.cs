@@ -139,6 +139,24 @@ public class Server : IDisposable
     private Process? _process;
     private StreamWriter? _llamaLog;   // llama-server's own output — kept out of ARI's console/log
     private string _modelsPath = "";
+    private string _serverDir  = "";
+
+    // Active-request counter for saturation detection. Incremented by BeginRequest, decremented by
+    // EndRequest (called from Agent.cs around each HTTP dispatch). When it reaches ParallelSlots,
+    // every slot is busy and the next request will queue in llama-server instead of running immediately.
+    private int _activeRequests;
+
+    /// <summary>Call before each HTTP request to llama-server. Logs a warning when all slots are busy.</summary>
+    public void BeginRequest(string agentName)
+    {
+        int active = Interlocked.Increment(ref _activeRequests);
+        if (active >= ParallelSlots)
+            Log.LogWarning("[{Server}] SLOT SATURATED — {Active}/{Total} slots in use; agent '{Agent}' is queuing. Consider adding a slot or reducing parallel background work.",
+                Name, active, ParallelSlots, agentName);
+    }
+
+    /// <summary>Call after each HTTP request completes (success, error, or cancellation).</summary>
+    public void EndRequest() => Interlocked.Decrement(ref _activeRequests);
 
     public void SetLogger(ILogger logger) => _logger = logger;
 
@@ -152,6 +170,7 @@ public class Server : IDisposable
 
         Status = ServerStatus.Starting;
         _modelsPath = modelsPath;
+        _serverDir  = Paths.PersistentData;
         ActiveModel = model;
 
         Log.LogInformation("[{Server}] Preparing to start...", Name);
@@ -399,7 +418,12 @@ public class Server : IDisposable
             breakers,
             $"--mirostat {Mirostat} --mirostat-lr {MirostatLr:F2} --mirostat-ent {MirostatEnt:F2}",
             $"--seed {Seed}",
-            jinja ? "--jinja" : "",
+            // Custom template file takes priority over the model's built-in template. --jinja is still
+            // required when using --chat-template-file so the engine accepts arbitrary templates rather
+            // than only the built-in named set.
+            jinja && model?.ChatTemplatePath is { Length: > 0 } tmpl
+                ? $"--jinja --chat-template-file \"{Path.Combine(_serverDir, tmpl)}\""
+                : jinja ? "--jinja" : "",
             // Reasoning: separate the chain-of-thought into message.reasoning_content, and — since thinking
             // is budgeted PER-REQUEST via `thinking_budget_tokens` — leave the server budget unset (never pass
             // --reasoning-budget, which would disable per-request overrides). The budget-message is injected
