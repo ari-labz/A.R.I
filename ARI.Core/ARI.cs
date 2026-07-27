@@ -65,6 +65,12 @@ public class ARI : BackgroundService
 
         config = AriConfig.Load();
 
+        Shared.ResolveDevMode(config.DevMode);
+        if (Shared.DevMode)
+            _logger.LogWarning("DevMode is ON — Engram is disabled; no memories will be written to the brain this run.");
+        else
+            _logger.LogInformation("DevMode is off — Engram is active.");
+
         // Resolve paths up front so all modules see consistent, absolute paths. An explicit config
         // value always wins (ResolveOverride handles relative-vs-absolute); otherwise everything
         // defaults through Paths — the single source of truth for every on-disk location.
@@ -215,7 +221,7 @@ public class ARI : BackgroundService
             foreach (var agent in persistentData.GetAgents())
             {
                 llmModule.AssignAgentServer(agent.Name, agent.ServerName);
-                if (agent.Slot.HasValue) llmModule.AssignAgentSlot(agent.Name, agent.Slot.Value);
+                if (agent.SlotName is { Length: > 0 }) llmModule.AssignAgentSlot(agent.Name, agent.SlotName);
             }
         }
 
@@ -307,15 +313,18 @@ public class ARI : BackgroundService
         {
             schedulerModule = new SchedulerModule(config.modules.Scheduler, ariPersistentDir, loggerFactory.CreateLogger("ARI.Scheduler"));
 
-            // Tidy walk: every 6 hours, while idle, Refactor restructures the graph (hubs, dedup, types).
+            // Tidy walk: once a day (04:00 UTC), Refactor restructures the graph (hubs, dedup, types),
+            // capped at 10 seeds/run and rotating through the vault least-recently-refactored first.
+            // Activity-aware: if Ari is in conversation at fire time the slot is deferred (30 min ×3) and
+            // then dropped until the next day.
             if (llmModule.HasRefactor)
-                schedulerModule.AddTask("Refactor", "0 */6 * * *", ct => llmModule.RunRefactorAsync(ct));
+                schedulerModule.AddTask("Refactor", "0 4 * * *", ct => llmModule.RunRefactorAsync(ct), respectActivity: true);
 
-            // Curiosity walk: every 6 hours, while idle, the Curiosity agent explores the graph and records
-            // open questions to Curiosities.json (BrainScan's successor). Staggered off Refactor's slot so
-            // the two brain walks don't fire together.
+            // Curiosity walk: once a day (05:00 UTC), the Curiosity agent explores the graph and records
+            // open questions to Curiosities.json (BrainScan's successor). Staggered an hour off Refactor so
+            // the two brain walks don't fire together; same activity-aware deferral.
             if (llmModule.HasCuriosity)
-                schedulerModule.AddTask("Curiosity", "0 3,9,15,21 * * *", ct => llmModule.RunCuriosityAsync(ct));
+                schedulerModule.AddTask("Curiosity", "0 5 * * *", ct => llmModule.RunCuriosityAsync(ct), respectActivity: true);
 
             // Proactive message: every 2 hours (while idle, outside quiet hours), Ari opens a thread + pushes.
             // The enable switch and quiet-hours window are read LIVE from the scheduler each fire, so control-

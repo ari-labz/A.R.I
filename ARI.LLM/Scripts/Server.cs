@@ -8,6 +8,18 @@ namespace ARI.LLM;
 
 public enum ServerStatus { Offline, Starting, Online, Stopping }
 
+/// <summary>A named parallel slot on a server. Agents are assigned to slots (not servers directly) —
+/// the slot's ContextLimit is the ONLY source of context-window truth an agent has (Agent.BudgetContext
+/// derives from this); an agent's own config never states its own context size. The slot's position in
+/// Server.Slots is its numeric id_slot, resolved at bind time — renaming/reordering is safe, deleting
+/// one out from under a bound agent is not (the agent falls back to unbound-slot behaviour).</summary>
+public class NamedSlot
+{
+    [JsonPropertyName("id")]           public Guid   Id           { get; init; } = Guid.NewGuid();
+    [JsonPropertyName("name")]         public string Name         { get; set; } = "";
+    [JsonPropertyName("contextLimit")] public int    ContextLimit { get; set; } = 8192;
+}
+
 /// <summary>
 /// A single llama-server instance. Config properties are persisted in PersistentData;
 /// runtime state (Status, Pid, ActiveModel) lives only while ARI is running.
@@ -38,8 +50,19 @@ public class Server : IDisposable
     [JsonPropertyName("kvCacheQuantV")]
     public int KvCacheQuantV { get; set; } = 4;
 
-    [JsonPropertyName("parallelSlots")]
-    public int ParallelSlots { get; set; } = 1;
+    // Named, user-managed slots (create/rename/delete in the control panel). The list IS the source of
+    // truth for how many parallel streams this server runs — -np is derived from its length, never set
+    // independently. A fresh server seeds one "Default" slot covering the full context.
+    [JsonPropertyName("slots")]
+    public List<NamedSlot> Slots { get; set; } = new() { new NamedSlot { Name = "Default", ContextLimit = 32768 } };
+
+    [JsonIgnore]
+    public int ParallelSlots => Math.Max(1, Slots.Count);
+
+    /// <summary>Sum of every slot's ContextLimit — may legitimately exceed ContextSize (not all slots
+    /// peak at once under kv-unified's shared pool), but the UI should warn when it does.</summary>
+    [JsonIgnore]
+    public int TotalAllocatedContext => Slots.Sum(s => s.ContextLimit);
 
     /// <summary>Model this server loads on startup — matches Model.Name in PersistentData.</summary>
     [JsonPropertyName("currentModelName")]
@@ -56,6 +79,52 @@ public class Server : IDisposable
     [JsonPropertyName("visionEnabled")]
     public bool VisionEnabled { get; set; } = false;
 
+    /// <summary>Max context checkpoints per slot (--ctx-checkpoints). On the hybrid-SSM Qwen3.6 models a
+    /// checkpoint is the ONLY rollback anchor a divergent prompt can restore from (KV shifting is
+    /// unsupported), but each one costs 75+ MiB of the shared pool. With a byte-stable prompt prefix,
+    /// divergences are rare and near the tail, so a handful per slot suffices. Default 32 matches
+    /// llama-server's own default — a server that doesn't set this keeps today's behaviour.</summary>
+    [JsonPropertyName("ctxCheckpoints")]
+    public int CtxCheckpoints { get; set; } = 32;
+
+    /// <summary>Host prompt-cache ceiling in MiB (--cache-ram). Caps the RAM used to stash idle slot
+    /// states for exact-prefix reuse across turns. Default 8192 matches llama-server; lower it on a
+    /// memory-tight multi-server box so the cache doesn't compete with weights + KV for wired memory.</summary>
+    [JsonPropertyName("cacheRamMib")]
+    public int CacheRamMib { get; set; } = 8192;
+
+    // ── Sampler defaults (the catch-all every agent falls back to) ────────────────
+    // Non-nullable — a server's sampler settings are never "blank"; they seed from llama.cpp's own
+    // binary defaults on creation (see llama-server --help) and are always concrete from then on. An
+    // agent may override any of these individually via its own nullable fields, gated by
+    // OverrideSamplerSettings; when that's off (or a given field is left blank even with it on), the
+    // agent falls through to whatever's here. This is the ONLY place that fallback bottoms out —
+    // there is no further fallback to "let llama.cpp decide" by omitting the param.
+
+    [JsonPropertyName("temperature")]      public double Temperature      { get; set; } = 0.80;
+    [JsonPropertyName("topP")]             public double TopP             { get; set; } = 0.95;
+    [JsonPropertyName("topK")]             public int    TopK             { get; set; } = 40;
+    [JsonPropertyName("minP")]             public double MinP             { get; set; } = 0.05;
+    [JsonPropertyName("topNSigma")]        public double TopNSigma        { get; set; } = -1.00;
+    [JsonPropertyName("typicalP")]         public double TypicalP         { get; set; } = 1.00;
+    [JsonPropertyName("xtcProbability")]   public double XtcProbability   { get; set; } = 0.00;
+    [JsonPropertyName("xtcThreshold")]     public double XtcThreshold     { get; set; } = 0.10;
+    [JsonPropertyName("dynatempRange")]    public double DynatempRange    { get; set; } = 0.00;
+    [JsonPropertyName("dynatempExp")]      public double DynatempExp      { get; set; } = 1.00;
+    [JsonPropertyName("repeatLastN")]      public int    RepeatLastN      { get; set; } = 64;
+    [JsonPropertyName("repeatPenalty")]    public double RepeatPenalty    { get; set; } = 1.00;
+    [JsonPropertyName("presencePenalty")]  public double PresencePenalty  { get; set; } = 0.00;
+    [JsonPropertyName("frequencyPenalty")] public double FrequencyPenalty { get; set; } = 0.00;
+    [JsonPropertyName("dryMultiplier")]    public double DryMultiplier    { get; set; } = 0.00;
+    [JsonPropertyName("dryBase")]          public double DryBase          { get; set; } = 1.75;
+    [JsonPropertyName("dryAllowedLength")] public int    DryAllowedLength { get; set; } = 2;
+    [JsonPropertyName("dryPenaltyLastN")]  public int    DryPenaltyLastN  { get; set; } = -1;
+    [JsonPropertyName("drySequenceBreakers")] public string[] DrySequenceBreakers { get; set; } = new[] { "\n", ":", "\"", "*" };
+    [JsonPropertyName("mirostat")]         public int    Mirostat         { get; set; } = 0;
+    [JsonPropertyName("mirostatLr")]       public double MirostatLr       { get; set; } = 0.10;
+    [JsonPropertyName("mirostatEnt")]      public double MirostatEnt      { get; set; } = 5.00;
+    [JsonPropertyName("seed")]             public long   Seed             { get; set; } = -1;
+
     // ── Runtime state (not persisted) ───────────────────────────────────────────
 
     [JsonIgnore] public ServerStatus Status { get; private set; } = ServerStatus.Offline;
@@ -70,6 +139,24 @@ public class Server : IDisposable
     private Process? _process;
     private StreamWriter? _llamaLog;   // llama-server's own output — kept out of ARI's console/log
     private string _modelsPath = "";
+    private string _serverDir  = "";
+
+    // Active-request counter for saturation detection. Incremented by BeginRequest, decremented by
+    // EndRequest (called from Agent.cs around each HTTP dispatch). When it reaches ParallelSlots,
+    // every slot is busy and the next request will queue in llama-server instead of running immediately.
+    private int _activeRequests;
+
+    /// <summary>Call before each HTTP request to llama-server. Logs a warning when all slots are busy.</summary>
+    public void BeginRequest(string agentName)
+    {
+        int active = Interlocked.Increment(ref _activeRequests);
+        if (active >= ParallelSlots)
+            Log.LogWarning("[{Server}] SLOT SATURATED — {Active}/{Total} slots in use; agent '{Agent}' is queuing. Consider adding a slot or reducing parallel background work.",
+                Name, active, ParallelSlots, agentName);
+    }
+
+    /// <summary>Call after each HTTP request completes (success, error, or cancellation).</summary>
+    public void EndRequest() => Interlocked.Decrement(ref _activeRequests);
 
     public void SetLogger(ILogger logger) => _logger = logger;
 
@@ -83,6 +170,7 @@ public class Server : IDisposable
 
         Status = ServerStatus.Starting;
         _modelsPath = modelsPath;
+        _serverDir  = Paths.PersistentData;
         ActiveModel = model;
 
         Log.LogInformation("[{Server}] Preparing to start...", Name);
@@ -190,6 +278,17 @@ public class Server : IDisposable
 
     // ── Model file download ────────────────────────────────────────────────────
 
+    /// <summary>Download this server's model files (weights + optional mmproj) if missing, WITHOUT
+    /// launching the process. Lets the module gate every boot server's download before ANY server
+    /// comes online, so no server starts serving while another is still fetching. Idempotent and safe
+    /// to call again before StartAsync — EnsureFileAsync no-ops when the file already exists.</summary>
+    public async Task EnsureModelsAsync(Model? model, string modelsPath)
+    {
+        _modelsPath = modelsPath;
+        if (model is not null)
+            await EnsureModelFilesAsync(model);
+    }
+
     private async Task EnsureModelFilesAsync(Model model)
     {
         await EnsureFileAsync(model.DownloadLink, model.Path);
@@ -210,7 +309,11 @@ public class Server : IDisposable
         }
 
         Log.LogInformation("[{Server}] Downloading {File}...", Name, filename);
-        Directory.CreateDirectory(_modelsPath);
+        // Create the file's OWN parent dir, not just the models root — a model whose path has a
+        // subdirectory (e.g. "Qwen3.5-9B/model.gguf") needs that subdir to exist before File.Create,
+        // or the download throws DirectoryNotFoundException. CreateDirectory is recursive, so this
+        // covers the models root too.
+        Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
 
         using HttpClient hc = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
         hc.DefaultRequestHeaders.Add("User-Agent", "ARI/1.0");
@@ -268,13 +371,18 @@ public class Server : IDisposable
         // it boots. vQuantOverride is the rung being attempted; null uses the configured value.
         string kvQuantV = KvQuantLabel(vQuantOverride ?? KvCacheQuantV);
 
-        float temp = model?.Temp ?? 0.6f;
-        float topP = model?.TopP ?? 0.95f;
-        int topK = model?.TopK ?? 40;
-        float minP = model?.MinP ?? 0.0f;
-        float repeatPenalty = model?.RepeatPenalty ?? 1.0f;
         bool jinja = model?.Jinja ?? true;
         bool mtp = model?.MTP ?? false;
+        // llama-server deprecated repeating --dry-sequence-breaker (comma-separated now); the default
+        // set itself contains raw '"' and '\n', which mangle a shell-joined argument string either way.
+        // Cheapest correct fix: omit the flag entirely for the default set (llama.cpp's own built-in
+        // default is identical, so behaviour is unchanged) — only emit it, comma-joined and escaped,
+        // when actually customised away from the default.
+        string[] defaultBreakers = { "\n", ":", "\"", "*" };
+        string breakers =
+            DrySequenceBreakers.Length == 0 ? "--dry-sequence-breaker none" :
+            DrySequenceBreakers.SequenceEqual(defaultBreakers) ? "" :
+            $"--dry-sequence-breaker \"{string.Join(",", DrySequenceBreakers.Select(b => b.Replace("\\", "\\\\").Replace("\"", "\\\"")))}\"";
 
         List<string> args = new()
         {
@@ -292,9 +400,30 @@ public class Server : IDisposable
             "-b 4096 -ub 2048",
             $"--cache-type-k {kvQuantK} --cache-type-v {kvQuantV}",
             $"-c {ContextSize}",
+            // Checkpoint + host-cache caps (see CtxCheckpoints/CacheRamMib). On the hybrid-SSM models
+            // these bound the per-slot rollback state and the cross-turn prompt cache — the two biggest
+            // discretionary RAM draws once several slots run in parallel.
+            $"--ctx-checkpoints {CtxCheckpoints}",
+            $"--cache-ram {CacheRamMib}",
             "--n-predict -1",
-            $"--temp {temp:F2} --top-p {topP:F2} --top-k {topK} --min-p {minP:F2} --repeat-penalty {repeatPenalty:F2}",
-            jinja ? "--jinja" : "",
+            // Sampler defaults for this server — the catch-all every agent falls back to when it has no
+            // override (or OverrideSamplerSettings is off). Always concrete, never omitted.
+            $"--temp {Temperature:F2} --top-p {TopP:F2} --top-k {TopK} --min-p {MinP:F2}",
+            $"--top-n-sigma {TopNSigma:F2} --typical-p {TypicalP:F2}",
+            $"--xtc-probability {XtcProbability:F2} --xtc-threshold {XtcThreshold:F2}",
+            $"--dynatemp-range {DynatempRange:F2} --dynatemp-exp {DynatempExp:F2}",
+            $"--repeat-last-n {RepeatLastN} --repeat-penalty {RepeatPenalty:F2}",
+            $"--presence-penalty {PresencePenalty:F2} --frequency-penalty {FrequencyPenalty:F2}",
+            $"--dry-multiplier {DryMultiplier:F2} --dry-base {DryBase:F2} --dry-allowed-length {DryAllowedLength} --dry-penalty-last-n {DryPenaltyLastN}",
+            breakers,
+            $"--mirostat {Mirostat} --mirostat-lr {MirostatLr:F2} --mirostat-ent {MirostatEnt:F2}",
+            $"--seed {Seed}",
+            // Custom template file takes priority over the model's built-in template. --jinja is still
+            // required when using --chat-template-file so the engine accepts arbitrary templates rather
+            // than only the built-in named set.
+            jinja && model?.ChatTemplatePath is { Length: > 0 } tmpl
+                ? $"--jinja --chat-template-file \"{Path.Combine(_serverDir, tmpl)}\""
+                : jinja ? "--jinja" : "",
             // Reasoning: separate the chain-of-thought into message.reasoning_content, and — since thinking
             // is budgeted PER-REQUEST via `thinking_budget_tokens` — leave the server budget unset (never pass
             // --reasoning-budget, which would disable per-request overrides). The budget-message is injected
@@ -303,6 +432,9 @@ public class Server : IDisposable
             "--reasoning-budget-message \"I've used most of my thinking budget. Let me finish this thought, state my conclusion in one line, and act on it now.\"",
             $"-np {ParallelSlots} -ngl 99 --port {Port}",
             "--host 127.0.0.1",
+            // Last-resort safety net for a request that overflows its slot's context despite compaction
+            // (e.g. a non-compacting agent) — costs nothing until it actually triggers (see design notes).
+            "--context-shift",
             UnifiedCache ? "--kv-unified --cache-reuse 256" : "",
         };
 

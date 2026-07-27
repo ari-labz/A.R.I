@@ -64,9 +64,20 @@ internal sealed class CodePipeline : Pipeline
         }
         else thread.Phase = CodePhase.Planning;
 
-        bool          remote       = thread.tools.ContainsKey("read_file");
-        string        resolvedRoot = remote ? (localPath ?? "") : Path.GetFullPath(string.IsNullOrWhiteSpace(localPath) ? "." : localPath);
-        FileSnapshots snapshots    = new();
+        bool remote = thread.tools.ContainsKey("read_file");
+
+        // No disk fallback, ever — a local Code thread with nothing bound and no client-sent path
+        // used to default to Path.GetFullPath("."), the SERVER's own working directory (a real
+        // hazard: a misrouted or unbound thread could get edit tools pointed at ARI's own source).
+        // Rather than refusing outright, root just stays null: Coder.RunLoop then attaches no
+        // filesystem tools at all. The architect still runs — plenty of coding requests ("optimise
+        // this query", "what does this code do?") only need an attachment or pasted content already
+        // in the conversation, not a bound project. It asks the user to attach a file when it
+        // genuinely needs to see one it doesn't have, instead of reaching for a tool that isn't there.
+        string? resolvedRoot = remote
+            ? (localPath ?? "")
+            : (string.IsNullOrWhiteSpace(localPath) ? null : Path.GetFullPath(localPath));
+        FileSnapshots snapshots = new();
 
         if (coder is null)
             throw new InvalidOperationException("Coder is not configured — the code pipeline cannot run.");

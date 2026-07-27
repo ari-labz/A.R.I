@@ -2,7 +2,8 @@ import { useRef, useState, useEffect, useLayoutEffect } from "react"
 
 interface Props {
     pipelines:   string[]
-    // null = Auto (let the classifier decide). A pipeline id pins the thread, bypassing the classifier.
+    // null = Default (Dialogue unless a bound Repository project forces Code — no explicit pin).
+    // A pipeline id pins the thread outright, same idea as switching from Claude to Claude Code.
     value:       string | null
     onChange:    (id: string | null) => void
     orientation?: "horizontal" | "vertical"
@@ -10,11 +11,12 @@ interface Props {
 }
 
 // Display label per known pipeline id. Unknown ids fall back to a capitalized name so a future backend
-// pipeline still renders without a change here.
+// pipeline still renders without a change here. "dialogue" has no button of its own — it's what
+// "Default" resolves to, not a separate explicit pin (mirrors Claude vs. Claude Code: you don't select
+// "Claude" mode, you're just in it unless you switch to Code).
 const LABELS: Record<string, string> = {
-    dialogue: "Text",
-    code:     "Code",
-    speech:   "Talk",
+    code:   "Code",
+    speech: "Talk",
 }
 
 function labelFor(id: string) {
@@ -23,8 +25,8 @@ function labelFor(id: string) {
 
 export default function PipelineSelector({ pipelines, value, onChange, orientation = "horizontal", disabled = false }: Props) {
     const options: Array<{ id: string | null; label: string }> = [
-        { id: null, label: "Auto" },
-        ...pipelines.map(id => ({ id, label: labelFor(id) })),
+        { id: null, label: "Default" },
+        ...pipelines.filter(id => id !== "dialogue").map(id => ({ id, label: labelFor(id) })),
     ]
 
     const activeIndex = Math.max(0, options.findIndex(o => o.id === value))
@@ -65,13 +67,13 @@ export default function PipelineSelector({ pipelines, value, onChange, orientati
             )}
             {options.map((o, i) => (
                 <button
-                    key={o.id ?? "auto"}
+                    key={o.id ?? "default"}
                     ref={el => { btnRefs.current[i] = el }}
                     type="button"
                     className={`pipeline-option${value === o.id ? " active" : ""}`}
                     role="radio"
                     aria-checked={value === o.id}
-                    title={o.id === null ? "Auto — the classifier picks the pipeline" : o.label}
+                    title={o.id === null ? "Default — Dialogue, unless a bound Repository project switches to Code" : o.label}
                     disabled={disabled}
                     onClick={e => { e.stopPropagation(); onChange(o.id) }}
                 >

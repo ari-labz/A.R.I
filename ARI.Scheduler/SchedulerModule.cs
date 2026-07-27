@@ -51,16 +51,22 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
 
     /// <summary>Register a job. Cron precedence: runtime override (control panel) &gt; AriConfig override
     /// &gt; the task's built-in default.</summary>
-    public void AddTask(string name, string defaultCron, Func<CancellationToken, Task> handler)
+    public void AddTask(string name, string defaultCron, Func<CancellationToken, Task> handler, bool respectActivity = false)
     {
         string cron =
             _settings.Schedules.TryGetValue(name, out string? s) && IsValidCron(s) ? s
           : _config.Schedules.TryGetValue(name, out string? c) && !string.IsNullOrWhiteSpace(c) ? c
           : defaultCron;
         DateTime lastRun = _lastRun.TryGetValue(name, out DateTime lr) ? lr : DateTime.UtcNow;
-        _tasks.Add(new ScheduledTask(name, cron, handler, lastRun));
-        _logger.LogInformation("[Scheduler] Registered task '{Name}' (cron: {Cron}).", name, cron);
+        _tasks.Add(new ScheduledTask(name, cron, handler, lastRun, respectActivity));
+        _logger.LogInformation("[Scheduler] Registered task '{Name}' (cron: {Cron}{Activity}).",
+            name, cron, respectActivity ? ", activity-aware" : "");
     }
+
+    // How long a due slot is pushed back each time Ari is busy, and how many times before the slot is
+    // dropped and the task falls through to its next cron occurrence.
+    private static readonly TimeSpan DeferWindow = TimeSpan.FromMinutes(30);
+    private const int MaxDeferrals = 3;
 
     // ── ISchedulerModule (control-panel surface) ──────────────────────────────────────
 
@@ -158,13 +164,15 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
         {
             try
             {
-                // Background jobs run whether or not Ari is busy — they share the llama server with
-                // live conversation rather than waiting for an idle window.
+                // Most background jobs run whether or not Ari is busy — they share the llama server with
+                // live conversation. Activity-aware jobs (RespectActivity) instead defer their slot while
+                // Ari is in conversation; see ClearedByActivityGate.
                 foreach (ScheduledTask task in _tasks)
                 {
                     if (ct.IsCancellationRequested) break;
-                    if (task.IsDue(DateTime.UtcNow, _startedUtc))
-                        await RunTask(task, ct);
+                    if (!task.IsDue(DateTime.UtcNow, _startedUtc)) continue;
+                    if (task.RespectActivity && !ClearedByActivityGate(task)) continue;
+                    await RunTask(task, ct);
                 }
             }
             catch (Exception ex)
@@ -175,6 +183,41 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
             try { await Task.Delay(TimeSpan.FromSeconds(Math.Max(5, _config.TickSeconds)), ct); }
             catch (OperationCanceledException) { break; }
         }
+    }
+
+    // Returns true if an activity-aware task's due slot may run now. While Ari is in conversation the
+    // slot is pushed back by DeferWindow; after MaxDeferrals pushes it is dropped (the slot is consumed)
+    // and the task falls through to its next cron occurrence. The deferral state resets whenever the
+    // slot clears — either because Ari went idle or because it was dropped.
+    private bool ClearedByActivityGate(ScheduledTask task)
+    {
+        DateTime now = DateTime.UtcNow;
+
+        // Still waiting out a previous deferral — leave it until the re-check time.
+        if (task.DeferredUntil is DateTime until && now < until) return false;
+
+        if (!(Modules.Llm?.ConversationActive ?? false))
+        {
+            task.DeferredUntil = null;
+            task.DeferCount = 0;
+            return true;   // Ari is idle — clear to run.
+        }
+
+        task.DeferCount++;
+        if (task.DeferCount >= MaxDeferrals)
+        {
+            _logger.LogInformation("[Scheduler] '{Name}' deferred {Count}× while Ari was in conversation — dropping this slot; waiting for its next scheduled time.",
+                task.Name, task.DeferCount);
+            task.DeferredUntil = null;
+            task.DeferCount = 0;
+            MarkRun(task);   // consume the slot so the next occurrence is measured from now
+            return false;
+        }
+
+        task.DeferredUntil = now + DeferWindow;
+        _logger.LogInformation("[Scheduler] '{Name}' deferred {Count}/{Max} — Ari in conversation; re-checking in {Minutes} min.",
+            task.Name, task.DeferCount, MaxDeferrals, (int)DeferWindow.TotalMinutes);
+        return false;
     }
 
     private async Task RunTask(ScheduledTask task, CancellationToken loopCt)

@@ -101,6 +101,16 @@ internal class Engram : MemoryAgent, IDisposable
     /// flag is left untouched so the caller's delete-retry poll tries again.</summary>
     internal async Task RunEngram(string threadKey, string trigger, bool force = false)
     {
+        // Global dev kill switch — force-proof. In DevMode Engram never runs (not even on a manual
+        // close, which passes force), so an autonomous run can never mutate the brain. The thread is
+        // still marked processed so its deletion timer proceeds normally.
+        if (Shared.DevMode)
+        {
+            if (threads.TryGetValue(threadKey, out Thread? devThread)) devThread.EngramProcessed = true;
+            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] skipped — DevMode is on.", threadKey);
+            return;
+        }
+
         if (!IsEnabled && !force) return;
         if (force) await engramLock.WaitAsync();
         else if (!await engramLock.WaitAsync(0)) return;

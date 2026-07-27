@@ -2,8 +2,8 @@ namespace ARI.LLM;
 
 /// <summary>
 /// Fast "conversational awareness" gate for the Speech pipeline: given a voice transcript, decides whether
-/// Ari is being addressed or is merely overhearing background talk. Mirrors <see cref="Classifier"/> — one
-/// ephemeral, Internal, no-thinking call with a tiny token budget, tuned to be as low-latency as possible.
+/// Ari is being addressed or is merely overhearing background talk. One ephemeral, Internal, no-thinking
+/// call with a tiny token budget, tuned to be as low-latency as possible.
 /// </summary>
 internal class Awareness : Agent
 {

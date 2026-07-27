@@ -1,6 +1,20 @@
 import { useState, useRef, useEffect } from "react"
-import type { Project } from "../hooks/useThreads"
+import type { Project, ProjectType, StorageBackend } from "../hooks/useThreads"
 import { env } from "../env"
+import SegmentedControl from "./SegmentedControl"
+
+const TYPE_OPTIONS: { value: ProjectType; label: string }[] = [
+    { value: "Repository",    label: "Repository" },
+    { value: "ObsidianGraph", label: "Obsidian Graph" },
+]
+const TYPE_HELP: Record<ProjectType, string> = {
+    Repository:    "Code — always routes to the Code agent.",
+    ObsidianGraph: "Notes — gets its own searchable knowledge vault.",
+}
+const BACKEND_OPTIONS: { value: StorageBackend; label: string }[] = [
+    { value: "ServerFs", label: "This server" },
+    { value: "RemoteFs", label: "Attached device" },
+]
 
 interface Props {
     projects:         Project[]
@@ -9,12 +23,18 @@ interface Props {
 
 interface AttachmentEntry { name: string }
 
+// Type implies a default backend (overridable at creation) — a repo is usually worked on locally via
+// the desktop app; a note graph is small enough to live centrally on the server.
+const defaultBackendFor = (_t: ProjectType): StorageBackend => "ServerFs"
+
 export default function ProjectsPage({ projects, onProjectCreated }: Props) {
     const [showForm,          setShowForm]          = useState(false)
     const [name,              setName]              = useState("")
     const [description,       setDescription]       = useState("")
     const [instructions,      setInstructions]      = useState("")
-    const [forceCode,         setForceCode]         = useState(true)
+    const [type,              setType]              = useState<ProjectType>("Repository")
+    const [category,          setCategory]          = useState("")
+    const [backend,           setBackend]           = useState<StorageBackend>(defaultBackendFor("Repository"))
     const [saving,            setSaving]            = useState(false)
     const [error,             setError]             = useState<string | null>(null)
 
@@ -22,7 +42,9 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
     const [editName,          setEditName]          = useState("")
     const [editDescription,   setEditDescription]   = useState("")
     const [editInstructions,  setEditInstructions]  = useState("")
-    const [editForceCode,     setEditForceCode]     = useState(true)
+    const [editType,          setEditType]          = useState<ProjectType>("Repository")
+    const [editBackend,       setEditBackend]       = useState<StorageBackend>("ServerFs")
+    const [editCategory,      setEditCategory]      = useState("")
     const [editSaving,        setEditSaving]        = useState(false)
     const [editError,         setEditError]         = useState<string | null>(null)
     const [attachments,       setAttachments]       = useState<AttachmentEntry[]>([])
@@ -56,10 +78,13 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
             const res = await fetch("/projects", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name: name.trim(), description: description.trim(), instructions: instructions.trim(), forceCodePipeline: forceCode }),
+                body: JSON.stringify({
+                    name: name.trim(), description: description.trim(), instructions: instructions.trim(),
+                    type, category: category.trim(), backend,
+                }),
             })
             if (!res.ok) { setError((await res.json().catch(() => null))?.error ?? "Failed to create project."); return }
-            setName(""); setDescription(""); setInstructions(""); setForceCode(true)
+            setName(""); setDescription(""); setInstructions(""); setType("Repository"); setCategory(""); setBackend(defaultBackendFor("Repository"))
             setShowForm(false)
             onProjectCreated()
         } catch { setError("Could not reach ARI.") }
@@ -68,7 +93,12 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
 
     function handleCancelCreate() {
         setShowForm(false)
-        setName(""); setDescription(""); setInstructions(""); setForceCode(true); setError(null)
+        setName(""); setDescription(""); setInstructions(""); setType("Repository"); setCategory(""); setBackend(defaultBackendFor("Repository")); setError(null)
+    }
+
+    function handleTypeChange(t: ProjectType) {
+        setType(t)
+        setBackend(defaultBackendFor(t))
     }
 
     // ── Project detail ────────────────────────────────────────────────────────────
@@ -79,7 +109,9 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
         setEditDescription(p.description)
         setEditInstructions(p.instructions)
         setEditPath(localPaths[p.id] ?? null)
-        setEditForceCode(p.forceCodePipeline)
+        setEditType(p.type)
+        setEditBackend(p.backend)
+        setEditCategory(p.category)
         setEditError(null)
         await loadAttachments(p.id)
     }
@@ -116,7 +148,10 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
             const res = await fetch(`/projects/${selected.id}`, {
                 method: "PUT",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name: editName.trim(), description: editDescription.trim(), instructions: editInstructions.trim(), forceCodePipeline: editForceCode }),
+                body: JSON.stringify({
+                    name: editName.trim(), description: editDescription.trim(), instructions: editInstructions.trim(),
+                    type: editType, category: editCategory.trim(), backend: editBackend,
+                }),
             })
             if (!res.ok) { setEditError((await res.json().catch(() => null))?.error ?? "Failed to save."); return }
             setSelected(await res.json())
@@ -190,17 +225,22 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                             <textarea value={editInstructions} onChange={e => setEditInstructions(e.target.value)} rows={5}
                                 placeholder={"Coding standards or preferences injected into every conversation."} />
                         </label>
-                        <div className="toggle-row">
-                            <div className="toggle-label">
-                                <span>Force Code pipeline</span>
-                                <span className="field-optional">Skip classification — always route to Code agent</span>
-                            </div>
-                            <button
-                                type="button"
-                                className={`ios-toggle${editForceCode ? " on" : ""}`}
-                                onClick={() => setEditForceCode(v => !v)}
-                                aria-pressed={editForceCode}
-                            />
+                        <label>
+                            Type
+                            <SegmentedControl options={TYPE_OPTIONS} value={editType} onChange={setEditType} />
+                            <span className="field-optional">{TYPE_HELP[editType]}</span>
+                        </label>
+                        <label>
+                            Storage
+                            <SegmentedControl options={BACKEND_OPTIONS} value={editBackend} onChange={setEditBackend} />
+                        </label>
+                        <label>
+                            Category <span className="field-optional">(optional — for your own search/sort, no effect on behavior)</span>
+                            <input type="text" value={editCategory} onChange={e => setEditCategory(e.target.value)} placeholder="e.g. Book, Game, DND Campaign" />
+                        </label>
+                        <div className="field-optional" style={{ marginTop: "4px" }}>
+                            Storage: {selected.backend === "ServerFs" ? "On this server" : "On the attached device"} — set at creation, not editable here.
+                            {selected.backend === "ServerFs" && selected.rootPath && <> ({selected.rootPath})</>}
                         </div>
 
                         <div className="project-section-header" style={{ marginTop: "20px" }}>
@@ -239,8 +279,8 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                     </form>
                 </div>
 
-                {/* ── App settings (local, Electron only) ── */}
-                {isElectron && (
+                {/* ── App settings (local, Electron only) — RemoteFs projects only; ServerFs has no local path ── */}
+                {isElectron && selected.backend === "RemoteFs" && (
                     <div className="project-section">
                         <div className="project-section-header">
                             <h2>App settings</h2>
@@ -293,18 +333,19 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                             placeholder={"Coding standards or preferences injected into every conversation.\n\nExample: Use TypeScript strict mode. Prefer functional components."}
                             rows={5} />
                     </label>
-                    <div className="toggle-row">
-                        <div className="toggle-label">
-                            <span>Force Code pipeline</span>
-                            <span className="field-optional">Skip classification — always route to Code agent</span>
-                        </div>
-                        <button
-                            type="button"
-                            className={`ios-toggle${forceCode ? " on" : ""}`}
-                            onClick={() => setForceCode(v => !v)}
-                            aria-pressed={forceCode}
-                        />
-                    </div>
+                    <label>
+                        Type
+                        <SegmentedControl options={TYPE_OPTIONS} value={type} onChange={handleTypeChange} />
+                        <span className="field-optional">{TYPE_HELP[type]}</span>
+                    </label>
+                    <label>
+                        Category <span className="field-optional">(optional — for your own search/sort, no effect on behavior)</span>
+                        <input type="text" value={category} onChange={e => setCategory(e.target.value)} placeholder="e.g. Book, Game, DND Campaign" />
+                    </label>
+                    <label>
+                        Storage <span className="field-optional">(where the files live — can't be changed after creation)</span>
+                        <SegmentedControl options={BACKEND_OPTIONS} value={backend} onChange={setBackend} />
+                    </label>
                     {error && <p className="form-error">{error}</p>}
                     <div className="form-actions">
                         <button type="button" className="btn-secondary" onClick={handleCancelCreate} disabled={saving}>Cancel</button>
@@ -333,17 +374,24 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                                 </svg>
                             </div>
                             <div className="project-card-body">
-                                <span className="project-card-name">{p.name}</span>
+                                <span className="project-card-name">
+                                    {p.name}
+                                    {p.category && <span className="field-optional" style={{ marginLeft: "6px" }}>· {p.category}</span>}
+                                </span>
                                 {p.description && <span className="project-card-desc">{p.description}</span>}
-                                {isElectron && (
-                                    localPaths[p.id]
+                                {p.backend === "RemoteFs" ? (
+                                    isElectron && localPaths[p.id]
                                         ? <span className="project-card-path">{localPaths[p.id]}</span>
                                         : <span className="project-card-path project-card-path--unavailable">
                                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{display:"inline",verticalAlign:"middle",marginRight:"4px",marginTop:"-1px"}}>
                                                 <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
                                             </svg>
-                                            Not available on this device
+                                            Local — {isElectron ? "not linked on this device" : "link via desktop app"}
                                           </span>
+                                ) : (
+                                    <span className="project-card-path" style={{ opacity: 0.55 }}>
+                                        Remote · {p.rootPath ?? "server"}
+                                    </span>
                                 )}
                             </div>
                             <svg className="project-card-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

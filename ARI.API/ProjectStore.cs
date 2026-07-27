@@ -1,16 +1,36 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using ARI.Common;
 
 namespace ARI.API;
 
+// Closed set — drives mechanics (toolset, pipeline routing). New types are a deliberate code change,
+// never something minted at runtime; that's what Category is for.
+public enum ProjectType { Repository, ObsidianGraph }
+
+// ServerFs: the project's files live under Paths.ServerDir("Projects") on this server, and RootPath is
+// server-managed (derived + created at project creation, never user-typed). RemoteFs: the files live on
+// whichever machine the desktop app attaches from — RootPath stays null server-side; the existing
+// Electron per-device local-path store (see ProjectsPage.tsx) is the only record of where.
+public enum StorageBackend { ServerFs, RemoteFs }
+
 public record Project(
-    string       Id,
-    string       Name,
-    string       Description,
-    string       Instructions,
-    DateTime     CreatedAt,
-    List<string>? Attachments      = null,
-    bool         ForceCodePipeline = true);
+    string         Id,
+    string         Name,
+    string         Description,
+    string         Instructions,
+    DateTime       CreatedAt,
+    [property: JsonConverter(typeof(JsonStringEnumConverter))] ProjectType Type,
+    // Open vocabulary, purely descriptive (search/sort/LLM context) — never mechanically significant.
+    string         Category    = "",
+    // Default only matters for a row missing this field (every project created before Backend existed) —
+    // Create() always computes an explicit value, never relying on this. RemoteFs is the correct default
+    // for those legacy rows: ServerFs didn't exist yet, so every one of them has, by construction, been
+    // relying on the desktop app's own per-device local-path store (see ProjectsPage.tsx) this whole time.
+    [property: JsonConverter(typeof(JsonStringEnumConverter))] StorageBackend Backend = StorageBackend.RemoteFs,
+    string?        RootPath    = null,
+    List<string>?  Attachments = null);
 
 public class ProjectStore
 {
@@ -81,7 +101,36 @@ public class ProjectStore
     private void Save(List<Project> projects)
         => File.WriteAllText(_filePath, JsonSerializer.Serialize(projects, JsonOpts));
 
+    // ── Server-side project folder (ServerFs backend only) ──────────────────────────
+
+    /// <summary>Derives and creates this project's folder under Paths.ServerDir("Projects") — never
+    /// user-typed. Disambiguates a name collision by appending a short suffix of the project's Id.</summary>
+    public static string CreateServerFolder(string projectId, string projectName)
+    {
+        string root = Paths.ServerDir("Projects");
+        string safeName = SanitizeFolderName(projectName);
+        string path = Path.Combine(root, safeName);
+        if (Directory.Exists(path))
+            path = Path.Combine(root, $"{safeName}-{projectId[..Math.Min(8, projectId.Length)]}");
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    private static string SanitizeFolderName(string name)
+    {
+        string safe = new(name.Trim().Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '-' : c).ToArray());
+        return safe.Length == 0 ? "project" : safe;
+    }
+
     // ── Thread → Project mapping (in-memory only — threads don't survive restarts) ──
+    // Owned here (not by a controller) so both ThreadsController and ProjectServiceAdapter — the
+    // REST path and the tool-call path — read/write the exact same shared state.
+
+    private ConcurrentDictionary<string, string>? _threadProjects;
+    public ConcurrentDictionary<string, string> ThreadProjects
+        => _threadProjects ??= new ConcurrentDictionary<string, string>(LoadThreadMap());
+
+    public void BindThread(string threadKey, string projectId) => ThreadProjects[threadKey] = projectId;
 
     public Dictionary<string, string> LoadThreadMap()
     {
@@ -89,11 +138,6 @@ public class ProjectStore
         if (File.Exists(_threadMapPath))
             try { File.Delete(_threadMapPath); } catch { /* best-effort */ }
         return new();
-    }
-
-    public void SaveThreadMap(Dictionary<string, string> map)
-    {
-        // No-op — thread→project mappings are not persisted across restarts.
     }
 
     // ── Project attachments ───────────────────────────────────────────────────────

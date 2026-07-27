@@ -22,24 +22,18 @@ public class Model
     [JsonPropertyName("mmprojDownloadLink")]
     public string MmprojDownloadLink { get; set; } = "";
 
-    // Inference settings — stored on the model, applied at server startup
-    [JsonPropertyName("temp")]
-    public float Temp { get; set; } = 0.6f;
-
-    [JsonPropertyName("topP")]
-    public float TopP { get; set; } = 0.95f;
-
-    [JsonPropertyName("topK")]
-    public int TopK { get; set; } = 40;
-
-    [JsonPropertyName("minP")]
-    public float MinP { get; set; } = 0.0f;
-
-    [JsonPropertyName("repeatPenalty")]
-    public float RepeatPenalty { get; set; } = 1.0f;
+    // Sampler settings (temp/topP/topK/minP/repeatPenalty/...) live on Server, not here — a server
+    // only ever runs one model at a time, and sampling is an inference-serving concern, not a model
+    // metadata concern. See Server.cs.
 
     [JsonPropertyName("jinja")]
     public bool Jinja { get; set; } = true;
+
+    /// <summary>Path to a custom jinja template file, relative to the ARI Server directory.
+    /// When set, overrides the model's built-in metadata template and --jinja is still passed
+    /// so the engine accepts an arbitrary template rather than only the built-in named set.</summary>
+    [JsonPropertyName("chatTemplatePath")]
+    public string? ChatTemplatePath { get; set; }
 
     // Model metadata
     [JsonPropertyName("modelSize")]

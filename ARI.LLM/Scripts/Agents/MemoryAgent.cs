@@ -50,6 +50,10 @@ internal abstract class MemoryAgent : Agent
     // recon several entities before writing, so it overrides this to null (no ceiling).
     protected virtual int? EpochToolCeiling => 8;
 
+    // When true, the walk ranks seeds by least-recently-refactored (never-refactored first), degree as
+    // the tiebreak, and stamps each seed's title when its epoch ends. Only Refactor opts in.
+    protected virtual bool TrackLastRefactored => false;
+
     protected sealed class MemoryTurnState : ToolTurnState
     {
         public bool DiffViewedSinceWrite;                                         // a git_diff since the last mutation
@@ -197,6 +201,10 @@ internal abstract class MemoryAgent : Agent
     protected virtual void RegisterTools(Thread thread, string persistentDir, CancellationToken ct)
     {
         string root = BrainModule.VaultRoot;
+        thread.ProjectRoot = root;
+        thread.IsBrainVault = true;
+        thread.Ct = ct;
+
         ServerFileSystem fs = new(root, ct, brainVault: true);
         new ReadFile(fs).Register(thread);
         new WriteFile(fs).Register(thread);
@@ -209,11 +217,14 @@ internal abstract class MemoryAgent : Agent
         new SearchFiles(fs).Register(thread);
         new FindFiles(fs).Register(thread);
 
-        new GitStatus(root).Register(thread);
-        new GitDiff(root).Register(thread);
-        new GitLog(root).Register(thread);
-        // Ari tends her own memory, so she co-authors the commits she makes to it.
-        new GitCommit(root, "A.R.I <ari@ari.local>").Register(thread);
+        // Git tools are used ~once per session (issue #126) — deferred behind request_tools("git_tools")
+        // instead of always sitting in context, resolved generically via ToolFactories (agent-agnostic —
+        // see Thread.ProjectRoot). PreloadedTools can still name "git_tools" in Agents.json to keep them
+        // warm/eager for an agent that calls them almost every turn.
+        new ListTools().Register(thread);
+        new RequestTools(thread).Register(thread);
+        if (PreloadedTools?.Contains("git_tools", StringComparer.OrdinalIgnoreCase) == true)
+            ToolFactories.LoadGroup("git_tools", thread);
 
         new Neighbours().Register(thread);
         new MergeNotesTool().Register(thread);
@@ -243,6 +254,9 @@ internal abstract class MemoryAgent : Agent
     {
         int epoch = 0, changes = 0, noChange = 0, stalled = 0;
         HashSet<string> visitedThisPass = new(StringComparer.OrdinalIgnoreCase);
+        // Refactor rotates through the vault least-recently-refactored first; other walks pass null and
+        // keep the plain top-degree seed order.
+        RefactorLog? refactorLog = TrackLastRefactored ? new RefactorLog(persistentDir) : null;
         PublishForInspection(parent);   // surface the walk in the DTI before the first epoch
 
         while (epoch < maxEpochs && (!convergeOnNoChange || noChange < CONVERGED_AFTER) && stalled < STALL_LIMIT)
@@ -250,7 +264,12 @@ internal abstract class MemoryAgent : Agent
             ct.ThrowIfCancellationRequested();
             BrainModule.Index();
 
-            List<Note> seeds = BrainModule.TopDegreeSeeds(SEED_COUNT);
+            // Default: top-degree seeds. Refactor instead ranks the WHOLE vault by least-recently-
+            // refactored (never-refactored = DateTime.MinValue, so it sorts first), with the SQL
+            // degree-DESC order preserved as the tiebreak because OrderBy is a stable sort.
+            List<Note> seeds = refactorLog is null
+                ? BrainModule.TopDegreeSeeds(SEED_COUNT)
+                : BrainModule.AllSeedsByDegree().OrderBy(s => refactorLog.SortKey(s.Title)).ToList();
             if (seeds.Count == 0) break;
 
             Note? seed = seeds.FirstOrDefault(s => !visitedThisPass.Contains(s.Title));
@@ -295,6 +314,10 @@ internal abstract class MemoryAgent : Agent
                 // graph is clean, so it must not count toward convergence — only guard against an endless loop.
                 case EpochOutcome.Stalled:   stalled++; Shared.Logger.LogWarning("[{Agent}] epoch {Epoch} stalled.", Name, epoch); break;
             }
+            // Stamp the seed as refactored regardless of outcome (committed OR no-change) so a clean
+            // note isn't re-picked ahead of never-refactored ones on the next run. A stalled epoch is
+            // NOT stamped — it never really examined the note, so it stays eligible.
+            if (outcome != EpochOutcome.Stalled) refactorLog?.Touch(seed.Title);
             epoch++;
         }
 

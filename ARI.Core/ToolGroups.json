@@ -1,0 +1,24 @@
+{
+  "Groups": {
+    "git_tools": {
+      "Description": "Git status, diff, log, and commit for the current vault/repo.",
+      "Tools": ["git_status", "git_diff", "git_log", "git_commit"]
+    },
+    "filesystem_tools": {
+      "Description": "View and edit files in the current project: preview, read, list, search, find, edit, write.",
+      "Tools": ["preview_file", "read_file", "list_directory", "search_files", "find_files", "edit_file", "write_file"]
+    },
+    "coding_tools": {
+      "Description": "Build the current project to verify edits compile.",
+      "Tools": ["build_project"]
+    },
+    "obsidian_tools": {
+      "Description": "Search this project's notes (regex, no index) — a project's own vault, not the brain.",
+      "Tools": ["search_vault"]
+    },
+    "project_tools": {
+      "Description": "List, create, rename, and bind projects — the workspaces (code repos or note vaults) a conversation can be scoped to. Use this for any request to start/open/make a new project, workspace, or \"project file\" — that phrase means a new project, not a file inside one.",
+      "Tools": ["list_projects", "create_project", "rename_project", "bind_project"]
+    }
+  }
+}

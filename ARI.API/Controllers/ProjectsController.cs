@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using ARI.API;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -6,7 +7,7 @@ namespace ARI.API.Controllers;
 
 [Route("projects")]
 [ApiController]
-public class ProjectsController(ProjectStore store) : ControllerBase
+public class ProjectsController(ProjectStore store, ProjectServiceAdapter projects) : ControllerBase
 {
     [HttpGet]
     public IActionResult GetAll() => Ok(store.GetAll());
@@ -17,16 +18,23 @@ public class ProjectsController(ProjectStore store) : ControllerBase
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest(new { error = "Name is required." });
 
-        Project project = new(
-            Id:                Guid.NewGuid().ToString("N"),
-            Name:              req.Name.Trim(),
-            Description:       req.Description?.Trim() ?? "",
-            Instructions:      req.Instructions?.Trim() ?? "",
-            CreatedAt:         DateTime.UtcNow,
-            ForceCodePipeline: req.ForceCodePipeline ?? true);
+        // The adapter takes name/type/category/backend — the shape a tool call also needs. Description/
+        // Instructions aren't part of that shared contract, so they're applied here, after creation,
+        // REST-only.
+        var summary = projects.Create(req.Name, (req.Type ?? ProjectType.Repository).ToString(), req.Category, req.Backend?.ToString());
+        if (summary is null) return BadRequest(new { error = "Failed to create project." });
 
-        store.Add(project);
-        return Ok(project);
+        Project? created = store.Get(summary.Id);
+        if (created is null) return StatusCode(500);
+
+        created = created with
+        {
+            Description  = req.Description?.Trim() ?? created.Description,
+            Instructions = req.Instructions?.Trim() ?? created.Instructions,
+        };
+        store.Update(created);
+
+        return Ok(created);
     }
 
     [HttpPut("{id}")]
@@ -37,12 +45,28 @@ public class ProjectsController(ProjectStore store) : ControllerBase
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest(new { error = "Name is required." });
 
-        Project updated = existing with
+        // Rename (if any) goes through the adapter so the brain note stays in sync; other fields are
+        // plain REST-only updates.
+        if (req.Name.Trim() != existing.Name) projects.Rename(id, req.Name.Trim());
+
+        Project current = store.Get(id) ?? existing;
+        StorageBackend newBackend = req.Backend ?? current.Backend;
+        string? newRootPath = current.RootPath;
+        if (newBackend != current.Backend)
         {
-            Name              = req.Name.Trim(),
-            Description       = req.Description?.Trim() ?? "",
-            Instructions      = req.Instructions?.Trim() ?? "",
-            ForceCodePipeline = req.ForceCodePipeline ?? existing.ForceCodePipeline,
+            newRootPath = newBackend == StorageBackend.ServerFs
+                ? ProjectStore.CreateServerFolder(id, req.Name.Trim())
+                : null;
+        }
+
+        Project updated = current with
+        {
+            Description  = req.Description?.Trim() ?? "",
+            Instructions = req.Instructions?.Trim() ?? "",
+            Type         = req.Type ?? current.Type,
+            Category     = req.Category?.Trim() ?? current.Category,
+            Backend      = newBackend,
+            RootPath     = newRootPath,
         };
         store.Update(updated);
         return Ok(updated);
@@ -52,6 +76,8 @@ public class ProjectsController(ProjectStore store) : ControllerBase
     public IActionResult Delete(string id)
     {
         if (store.Get(id) is null) return NotFound();
+        // The brain note is deliberately left alone — a project you delete may still be worth
+        // remembering happened. Nothing here ever deletes or archives it.
         store.Delete(id);
         return Ok();
     }
@@ -87,4 +113,8 @@ public class ProjectsController(ProjectStore store) : ControllerBase
     }
 }
 
-public record CreateProjectRequest(string Name, string? Description, string? Instructions, bool? ForceCodePipeline);
+public record CreateProjectRequest(
+    string Name, string? Description, string? Instructions,
+    [property: JsonConverter(typeof(JsonStringEnumConverter))] ProjectType? Type,
+    string? Category,
+    [property: JsonConverter(typeof(JsonStringEnumConverter))] StorageBackend? Backend);

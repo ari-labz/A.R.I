@@ -14,13 +14,15 @@ namespace ARI.LLM;
 /// </summary>
 internal static class SharedPrompts
 {
-    private static Dictionary<string, string> _memory  = new();
-    private static Dictionary<string, string> _budgets = new();
+    private static Dictionary<string, string> _memory     = new();
+    private static Dictionary<string, string> _budgets    = new();
+    private static Dictionary<string, string> _toolSystem = new();
 
-    internal static void Load(Dictionary<string, string>? memoryAgent, Dictionary<string, string>? budgets)
+    internal static void Load(Dictionary<string, string>? memoryAgent, Dictionary<string, string>? budgets, Dictionary<string, string>? toolSystem = null)
     {
-        _memory  = memoryAgent ?? new();
-        _budgets = budgets     ?? new();
+        _memory     = memoryAgent ?? new();
+        _budgets    = budgets     ?? new();
+        _toolSystem = toolSystem  ?? new();
     }
 
     private static string Get(Dictionary<string, string> src, string section, string key)
@@ -52,4 +54,10 @@ internal static class SharedPrompts
     /// <summary>The [Budgets] footer. Tokens: {thinkingTokens} {replyTokens} {contextTokens} {toolBudget}.
     /// A line whose token resolves to 0 is dropped by the caller.</summary>
     internal static string BudgetsBlock => Get(_budgets, "Budgets", "Block");
+
+    // ── ToolSystem — appended to every agent whose thread carries list_tools/request_tools ──────
+
+    /// <summary>The static block describing list_tools/request_tools (issue #126), appended once to
+    /// baseSystem so it's part of the cached KV prefix rather than rebuilt every turn.</summary>
+    internal static string ToolSystemBlock => Get(_toolSystem, "ToolSystem", "Block");
 }
