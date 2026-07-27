@@ -425,16 +425,16 @@ export default function App() {
         const localPath = await env.getLocalPath(projectId)
         if (!localPath) return
         try {
-            let tree: string[] = await window.electronBridge.getFileTree(localPath)
-            const MAX_PATHS = 800
-            let truncated = false
-            if (tree.length > MAX_PATHS) { tree = tree.slice(0, MAX_PATHS); truncated = true }
-            const header = `Project: ${project.name}\nRoot: ${localPath}\nFiles (${tree.length}${truncated ? "+" : ""}):\n`
-            const content = header + tree.join("\n") + (truncated ? "\n... (truncated)" : "")
-            const res = await fetch(`/threads/${threadKey}/inject-context`, {
+            const dirs: string[] = await window.electronBridge.getShallowTree(localPath, 2)
+            const header = `Project root: ${localPath}\nDirectory structure (folders only — use list_directory to explore):\n`
+            const content = header + dirs.join("\n")
+            // Inject as _fs_skeleton — a system-context hint, NOT a user-turn attachment.
+            // The server reads this name specially and places it in the system prompt rather
+            // than prepending it to every user message.
+            const res = await fetch(`/threads/${threadKey}/system-context`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name: "_project_tree.txt", content }),
+                body: JSON.stringify({ name: "_fs_skeleton", content }),
             })
             if (res.ok) treeInjectedRef.current.add(threadKey)
         } catch (e) { console.error("[FileTree] Error:", e) }
@@ -558,8 +558,12 @@ export default function App() {
                     ws.send(JSON.stringify({ type: "file_content", callId, content: result }))
 
                 } else if (type === "list_directory") {
-                    const entries = await window.electronBridge!.listDirectory(localPath, params.path)
-                    result = `[directory: "${params.path ?? "."}"]\n${entries.join("\n")}`
+                    const depth = typeof (params as Record<string, unknown>).depth === "number"
+                        ? (params as Record<string, unknown>).depth as number
+                        : undefined
+                    const entries = await window.electronBridge!.listDirectory(localPath, params.path, depth)
+                    const depthNote = depth && depth > 1 ? ` depth=${depth}` : ""
+                    result = `[directory: "${params.path ?? "."}${depthNote}"]\n${entries.join("\n")}`
                     console.warn(`[ToolSocket] → file_content (list_directory)  callId=${callId}`)
                     ws.send(JSON.stringify({ type: "file_content", callId, content: result }))
 
@@ -926,7 +930,7 @@ export default function App() {
                 const resp = await fetch(`/threads/${keyForStream}/stream`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(localPath ? { prompt, localPath } : { prompt }),
+                    body: JSON.stringify({ prompt, ...(localPath ? { localPath } : {}), ...(safetyMode ? { safeMode: true } : {}) }),
                     signal: ctrl.signal,
                 })
 
@@ -1121,6 +1125,7 @@ export default function App() {
                     mode={mode}
                     serverReady={serverReady}
                     codeMode={codeMode}
+                    shieldMode={codeMode || selectedPipeline === "code"}
                     items={items}
                     planProposed={!isStreaming && items[items.length - 1]?.type === "ariResponse"
                         && (items[items.length - 1]?.blocks ?? []).some(b => (b as { type?: string }).type === "plan")}

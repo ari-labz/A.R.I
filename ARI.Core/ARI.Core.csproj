@@ -9,6 +9,10 @@
          same output path (NETSDK1152). They're unused template defaults (config is AriConfig.json),
          so let publish resolve the duplicates instead of failing. -->
     <ErrorOnDuplicatePublishOutputFiles>false</ErrorOnDuplicatePublishOutputFiles>
+    <!-- Force Rider/VS to always invoke MSBuild on Run so the BuildUI target (bun build + wwwroot sync)
+         always fires even when no .cs files have changed. Without this, Rider's fast up-to-date check
+         skips the build entirely, leaving a stale wwwroot when only UI source files have changed. -->
+    <DisableFastUpToDateCheck>true</DisableFastUpToDateCheck>
   </PropertyGroup>
 
   <!--

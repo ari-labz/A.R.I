@@ -90,6 +90,17 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
         return Ok(new { ok = true });
     }
 
+    // ── Safe-mode prompt ──────────────────────────────────────────────────────────────
+    [HttpGet("safemode-prompt")]
+    public IActionResult GetSafeModePrompt() => Ok(new { text = SafeModePromptStore.Get() });
+
+    [HttpPost("safemode-prompt")]
+    public IActionResult SetSafeModePrompt([FromBody] SafeModePromptRequest req)
+    {
+        SafeModePromptStore.Set(req.Text);
+        return Ok(new { ok = true });
+    }
+
     // ── Persona ───────────────────────────────────────────────────────────────────────
     [HttpGet("persona")]
     public IActionResult GetPersona() => Ok(new { text = PersonaStore.Get() });
@@ -1223,6 +1234,7 @@ public record ModelNotesRequest(string ModelName, string? Notes);
 public record ConventionsRequest(string? Text);
 public record PersonaRequest(string? Text);
 public record UserNameRequest(string? Name);
+public record SafeModePromptRequest(string? Text);
 public record SchedulerTaskRequest(string? Name, string? Cron);
 public record SchedulerProactiveRequest(bool Enabled);
 public record SchedulerQuietHoursRequest(int QuietStartHour, int QuietEndHour);

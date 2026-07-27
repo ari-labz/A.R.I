@@ -12,6 +12,7 @@ interface Command { cmd: string; desc: string }
 interface Props {
     mode:          AppMode
     codeMode:      boolean
+    shieldMode:    boolean
     planProposed:  boolean
     items:         ThreadItem[]
     isRemembering: boolean
@@ -47,7 +48,7 @@ interface Props {
 }
 
 export default function Main({
-    mode, codeMode, planProposed, items, isRemembering, isStreaming,
+    mode, codeMode, shieldMode, planProposed, items, isRemembering, isStreaming,
     activeThread, isInternal, agentName,
     sidebarCollapsed, onOpenSidebar,
     pendingAttach, threadAttach,
@@ -238,7 +239,7 @@ export default function Main({
                         onRemoveAttach={onRemoveMessageAttach}
                         onHeartbeatStart={onHeartbeatStart}
                         onHeartbeatStop={onHeartbeatStop}
-                        codeMode={codeMode}
+                        codeMode={shieldMode}
                         safetyMode={safetyMode}
                         onToggleSafety={onToggleSafety}
                     />

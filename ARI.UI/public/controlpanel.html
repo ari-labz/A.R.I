@@ -675,7 +675,7 @@ html, body {
     <!-- Overview tab -->
     <!-- Coding Conventions tab -->
     <div id="tab-conventions" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
-      <div class="vs-section">
+      <div class="vs-section" style="margin-bottom:24px;">
         <div class="vs-section-title">Coding Conventions</div>
         <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
           A global rulebook given to the Code agent at the start of every coding thread. Use it for
@@ -685,6 +685,17 @@ html, body {
         <div style="display:flex;align-items:center;gap:12px;margin-top:12px;">
           <button class="vs-btn-primary" id="cv-save-btn" type="button">Save conventions</button>
           <span id="cv-status" style="font-size:12px;color:var(--text-dim);"></span>
+        </div>
+      </div>
+      <div class="vs-section">
+        <div class="vs-section-title">Safe mode prompt</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
+          Appended to every message sent while the shield (safe mode) is active. The agent sees it as part of your message — use it to prevent file edits while you design.
+        </p>
+        <textarea id="safemode-text" class="vs-input" style="width:100%;min-height:80px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;line-height:1.5;resize:vertical;" placeholder="I don't want you to make any changes to the files yet. Just help me design this without making any changes."></textarea>
+        <div style="display:flex;align-items:center;gap:12px;margin-top:12px;">
+          <button class="vs-btn-primary" id="safemode-save-btn" type="button">Save prompt</button>
+          <span id="safemode-status" style="font-size:12px;color:var(--text-dim);"></span>
         </div>
       </div>
     </div>
@@ -1377,6 +1388,11 @@ async function loadConventions() {
         document.getElementById('cv-text').value = d.text || '';
         conventionsLoaded = true;
     } catch { document.getElementById('cv-status').textContent = 'Failed to load.'; }
+    try {
+        const r2 = await fetch('/api/cp/safemode-prompt');
+        const d2 = await r2.json();
+        document.getElementById('safemode-text').value = d2.text || '';
+    } catch {}
 }
 document.getElementById('cv-save-btn').addEventListener('click', async () => {
     const status = document.getElementById('cv-status');
@@ -1390,6 +1406,20 @@ document.getElementById('cv-save-btn').addEventListener('click', async () => {
         });
         status.textContent = 'Saved — applies to new coding threads.';
         setTimeout(() => { status.textContent = ''; }, 4000);
+    } catch { status.textContent = 'Save failed.'; }
+});
+document.getElementById('safemode-save-btn').addEventListener('click', async () => {
+    const status = document.getElementById('safemode-status');
+    const text   = document.getElementById('safemode-text').value.trim();
+    status.textContent = 'Saving…';
+    try {
+        await fetch('/api/cp/safemode-prompt', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ text }),
+        });
+        status.textContent = 'Saved.';
+        setTimeout(() => { status.textContent = ''; }, 3000);
     } catch { status.textContent = 'Save failed.'; }
 });
 

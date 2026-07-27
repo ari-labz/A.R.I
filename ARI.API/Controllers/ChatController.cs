@@ -652,6 +652,10 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     public async Task Stream(string threadKey, [FromBody] StreamRequest body, CancellationToken cancellationToken)
     {
         string prompt = body?.Prompt ?? string.Empty;
+        if (body?.SafeMode == true)
+            prompt = string.IsNullOrWhiteSpace(prompt)
+                ? SafeModePromptStore.Get()
+                : $"{prompt}\n\n{SafeModePromptStore.Get()}";
         Response.Headers[HeaderNames.ContentType] = "text/event-stream";
         Response.Headers[HeaderNames.CacheControl] = "no-cache";
         Response.Headers["X-Accel-Buffering"] = "no";
@@ -848,7 +852,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     }
 }
 
-public record StreamRequest(string Prompt, string? LocalPath = null);
+public record StreamRequest(string Prompt, string? LocalPath = null, bool SafeMode = false);
 public record CommandRequest(string? ThreadKey, string Input);
 public record NewThreadRequest(string? ProjectId, bool Desktop = false, string? Pipeline = null);
 public record InjectContextRequest(string Name, string Content);
