@@ -21,8 +21,8 @@ public class InfoController : ControllerBase
         try
         {
             string path = Path.Combine(AppContext.BaseDirectory, "manifest.json");
-            if (!File.Exists(path)) return null;
-            using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(path));
+            if (!System.IO.File.Exists(path)) return null;
+            using JsonDocument doc = JsonDocument.Parse(System.IO.File.ReadAllText(path));
             if (doc.RootElement.TryGetProperty("protocol", out JsonElement p) && p.ValueKind == JsonValueKind.Number)
                 _protocol = p.GetInt32();
         }
