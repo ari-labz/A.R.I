@@ -379,15 +379,19 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                                     {p.category && <span className="field-optional" style={{ marginLeft: "6px" }}>· {p.category}</span>}
                                 </span>
                                 {p.description && <span className="project-card-desc">{p.description}</span>}
-                                {isElectron && p.backend === "RemoteFs" && (
-                                    localPaths[p.id]
+                                {p.backend === "RemoteFs" ? (
+                                    isElectron && localPaths[p.id]
                                         ? <span className="project-card-path">{localPaths[p.id]}</span>
                                         : <span className="project-card-path project-card-path--unavailable">
                                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{display:"inline",verticalAlign:"middle",marginRight:"4px",marginTop:"-1px"}}>
                                                 <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
                                             </svg>
-                                            Not available on this device
+                                            Local — {isElectron ? "not linked on this device" : "link via desktop app"}
                                           </span>
+                                ) : (
+                                    <span className="project-card-path" style={{ opacity: 0.55 }}>
+                                        Remote · {p.rootPath ?? "server"}
+                                    </span>
                                 )}
                             </div>
                             <svg className="project-card-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
