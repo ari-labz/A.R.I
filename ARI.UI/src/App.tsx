@@ -356,8 +356,10 @@ export default function App() {
             const infoRes = await fetch("/api/info/ready").catch(() => null)
             if (infoRes?.ok) {
                 const { protocol: serverProtocol } = await infoRes.json()
-                if (typeof serverProtocol === "number" && serverProtocol !== CLIENT_PROTOCOL)
-                    setProtocolMismatch(serverProtocol)
+                // Servers older than protocol 2 don't return this field — treat as v1.
+                const effective = typeof serverProtocol === "number" ? serverProtocol : 1
+                if (effective !== CLIENT_PROTOCOL)
+                    setProtocolMismatch(effective)
             }
         }
     }, [loadThreads, loadProjects])
