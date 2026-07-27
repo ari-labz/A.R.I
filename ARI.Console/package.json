@@ -1,6 +1,6 @@
 {
   "name": "ari-console",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A·R·I Server console — runs and monitors the local server, stops it when closed.",
   "author": "Xywren",
   "private": true,
@@ -8,7 +8,8 @@
   "scripts": {
     "start": "electron .",
     "dev": "NODE_ENV=development electron .",
-    "build": "electron-builder"
+    "build": "electron-builder",
+    "postinstall": "xattr -dr com.apple.quarantine node_modules/electron/dist/Electron.app 2>/dev/null || true; codesign --force --deep --sign - node_modules/electron/dist/Electron.app 2>/dev/null || true"
   },
   "devDependencies": {
     "electron": "^31.0.0",

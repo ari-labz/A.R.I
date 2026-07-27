@@ -625,31 +625,33 @@ internal sealed class ServerFileSystem : FileSystem
         {
             using JsonDocument doc = JsonDocument.Parse(argsJson);
 
-            string relPath  = doc.RootElement.TryGetProperty("path",      out JsonElement pathEl) ? (pathEl.GetString() ?? ".").Trim('"', '\'', ' ') : ".";
-            // The text tool protocol delivers every parameter as a STRING, so "recursive":"true" would throw on
-            // GetBoolean(). Accept a real bool OR a "true"/"false" string.
-            bool   recurse  = doc.RootElement.TryGetProperty("recursive", out JsonElement recEl)
-                && (recEl.ValueKind == JsonValueKind.True
-                    || (recEl.ValueKind == JsonValueKind.String && bool.TryParse(recEl.GetString(), out bool rb) && rb));
-            string? absPath = Resolve(relPath);
+            string relPath = doc.RootElement.TryGetProperty("path", out JsonElement pathEl)
+                ? (pathEl.GetString() ?? ".").Trim('"', '\'', ' ') : ".";
 
-            if (absPath is null)             return Task.FromResult("Access denied: path traversal is not allowed.");
-            if (!Directory.Exists(absPath))  return Task.FromResult($"Directory not found: {relPath}");
-
-            if (!recurse)
+            // depth: int (1 = flat, N = recurse N levels). Also accept legacy recursive:true → depth=999.
+            int depth = 1;
+            if (doc.RootElement.TryGetProperty("depth", out JsonElement depthEl))
             {
-                IEnumerable<string> entries = Directory.GetFileSystemEntries(absPath)
-                    .Select(e => Path.GetFileName(e) + (Directory.Exists(e) ? "/" : ""))
-                    .OrderBy(e => e);
-                return Task.FromResult($"[directory: \"{relPath}\"]\n{string.Join("\n", entries)}");
+                if (depthEl.ValueKind == JsonValueKind.Number) depth = depthEl.GetInt32();
+                else if (depthEl.ValueKind == JsonValueKind.String && int.TryParse(depthEl.GetString(), out int dp)) depth = dp;
             }
+            else if (doc.RootElement.TryGetProperty("recursive", out JsonElement recEl)
+                && (recEl.ValueKind == JsonValueKind.True
+                    || (recEl.ValueKind == JsonValueKind.String && bool.TryParse(recEl.GetString(), out bool rb) && rb)))
+            {
+                depth = 999;
+            }
+
+            string? absPath = Resolve(relPath);
+            if (absPath is null)            return Task.FromResult("Access denied: path traversal is not allowed.");
+            if (!Directory.Exists(absPath)) return Task.FromResult($"Directory not found: {relPath}");
 
             StringBuilder sb        = new();
             int           count     = 0;
             bool          truncated = false;
 
-            sb.AppendLine($"[directory: \"{relPath}\" (recursive)]");
-            BuildTree(sb, absPath, "", ref count, ref truncated);
+            sb.AppendLine($"[directory: \"{relPath}\"]");
+            BuildTree(sb, absPath, "", 1, depth, ref count, ref truncated);
 
             if (truncated)
                 sb.AppendLine($"... (truncated at {MAX_ENTRIES} entries — narrow with path or use search_files)");
@@ -659,23 +661,50 @@ internal sealed class ServerFileSystem : FileSystem
         catch (Exception ex) { return Task.FromResult($"Error listing directory: {ex.Message}"); }
     }
 
-    private void BuildTree(StringBuilder sb, string absDir, string indent, ref int count, ref bool truncated)
+    private void BuildTree(StringBuilder sb, string absDir, string indent, int currentDepth, int maxDepth, ref int count, ref bool truncated)
     {
         if (truncated) return;
 
         IOrderedEnumerable<string> entries = Directory.GetFileSystemEntries(absDir).OrderBy(Path.GetFileName);
+
+        // Collect dirs and files separately so dirs are listed first
+        List<string> dirs  = new();
+        List<string> files = new();
         foreach (string entry in entries)
         {
-            if (count >= MAX_ENTRIES) { truncated = true; return; }
             if (!entry.StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;
+            if (Directory.Exists(entry)) dirs.Add(entry);
+            else files.Add(entry);
+        }
 
-            bool   isDir = Directory.Exists(entry);
-            string name  = Path.GetFileName(entry) + (isDir ? "/" : "");
-            sb.AppendLine($"{indent}{name}");
+        // At depths below maxDepth, show dirs with file count hint and recurse; show files too
+        // At the deepest level (currentDepth == maxDepth) show everything flat
+        foreach (string entry in dirs)
+        {
+            if (count >= MAX_ENTRIES) { truncated = true; return; }
+            string name = Path.GetFileName(entry);
+            if (currentDepth < maxDepth)
+            {
+                // Count direct source files for the hint
+                int fc = 0;
+                try { fc = Directory.GetFiles(entry).Length; } catch { /* ignore */ }
+                string hint = fc > 0 ? $"  ({fc} file{(fc == 1 ? "" : "s")})" : "";
+                sb.AppendLine($"{indent}{name}/{hint}");
+                count++;
+                BuildTree(sb, entry, indent + "  ", currentDepth + 1, maxDepth, ref count, ref truncated);
+            }
+            else
+            {
+                sb.AppendLine($"{indent}{name}/");
+                count++;
+            }
+        }
+
+        foreach (string entry in files)
+        {
+            if (count >= MAX_ENTRIES) { truncated = true; return; }
+            sb.AppendLine($"{indent}{Path.GetFileName(entry)}");
             count++;
-
-            if (isDir)
-                BuildTree(sb, entry, indent + "  ", ref count, ref truncated);
         }
     }
 

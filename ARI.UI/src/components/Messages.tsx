@@ -166,16 +166,17 @@ function formatTime(ts: string) {
     return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
 }
 
-function MdBubble({ content, className, msgIndex = 0, blocks }: { content: string; className: string; msgIndex?: number; blocks?: ContentBlock[] }) {
+function MdBubble({ content, baseClass = "bubble", msgIndex = 0, blocks }: { content: string; baseClass?: string; msgIndex?: number; blocks?: ContentBlock[] }) {
     const ref = useRef<HTMLDivElement>(null)
-    // Prefer the typed block list (each block its own DOM segment); fall back to the flattened string.
     const blocksKey = blocks ? JSON.stringify(blocks) : ""
     useEffect(() => {
         if (!ref.current) return
-        if (blocks && blocks.length) setBubbleBlocks(ref.current, blocks)
-        else setBubbleMd(ref.current, content, msgIndex)
-    }, [content, msgIndex, blocksKey, blocks])
-    return <div ref={ref} className={className} />
+        // The render functions own el.className: "bubble" for plain text, "blocks-container" when
+        // tool cards are present so each card is its own separate row in the thread.
+        if (blocks && blocks.length) setBubbleBlocks(ref.current, blocks, baseClass)
+        else setBubbleMd(ref.current, content, msgIndex, baseClass)
+    }, [content, msgIndex, blocksKey, blocks, baseClass])
+    return <div ref={ref} />
 }
 
 function UserMessage({ item, activeThread }: { item: ThreadItem; activeThread: string | null }) {
@@ -205,7 +206,7 @@ function UserMessage({ item, activeThread }: { item: ThreadItem; activeThread: s
             {item.content && (
                 <div className="msg-row user">
                     <div>
-                        <MdBubble content={item.content} className="bubble" />
+                        <MdBubble content={item.content} baseClass="bubble" />
                         <div className="msg-time">{t}</div>
                     </div>
                 </div>
@@ -255,7 +256,7 @@ function AriResponse({ item, isInternal, agentName, msgIndex }: { item: ThreadIt
         <div className="msg-row assistant">
             <div className="sender">{senderLabel}</div>
             {(item.content || (item.blocks && item.blocks.length > 0)) &&
-                <MdBubble content={item.content} blocks={item.blocks} className="bubble" msgIndex={msgIndex} />}
+                <MdBubble content={item.content} blocks={item.blocks} baseClass="bubble" msgIndex={msgIndex} />}
             {streaming && (
                 <div className="typing-indicator">
                     <span>A·R·I is thinking</span>
@@ -310,7 +311,7 @@ function CommandResponse({ item }: { item: ThreadItem }) {
     const t = formatTime(item.timestamp)
     return (
         <div className="msg-row command-response-row">
-            <MdBubble content={item.response ?? ""} className="command-response-block" />
+            <MdBubble content={item.response ?? ""} baseClass="command-response-block" />
             <div className="msg-time">{t}</div>
         </div>
     )
