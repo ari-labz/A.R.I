@@ -49,15 +49,24 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
         // plain REST-only updates.
         if (req.Name.Trim() != existing.Name) projects.Rename(id, req.Name.Trim());
 
-        // Type/Category are editable after creation; Backend/RootPath are not — changing where a
-        // project's files actually live is a bigger operation (a move, not a field edit) and isn't
-        // wired up yet.
-        Project updated = (store.Get(id) ?? existing) with
+        Project current = store.Get(id) ?? existing;
+        StorageBackend newBackend = req.Backend ?? current.Backend;
+        string? newRootPath = current.RootPath;
+        if (newBackend != current.Backend)
+        {
+            newRootPath = newBackend == StorageBackend.ServerFs
+                ? ProjectStore.CreateServerFolder(id, req.Name.Trim())
+                : null;
+        }
+
+        Project updated = current with
         {
             Description  = req.Description?.Trim() ?? "",
             Instructions = req.Instructions?.Trim() ?? "",
-            Type         = req.Type ?? existing.Type,
-            Category     = req.Category?.Trim() ?? existing.Category,
+            Type         = req.Type ?? current.Type,
+            Category     = req.Category?.Trim() ?? current.Category,
+            Backend      = newBackend,
+            RootPath     = newRootPath,
         };
         store.Update(updated);
         return Ok(updated);

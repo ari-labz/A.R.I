@@ -43,6 +43,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
     const [editDescription,   setEditDescription]   = useState("")
     const [editInstructions,  setEditInstructions]  = useState("")
     const [editType,          setEditType]          = useState<ProjectType>("Repository")
+    const [editBackend,       setEditBackend]       = useState<StorageBackend>("ServerFs")
     const [editCategory,      setEditCategory]      = useState("")
     const [editSaving,        setEditSaving]        = useState(false)
     const [editError,         setEditError]         = useState<string | null>(null)
@@ -109,6 +110,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
         setEditInstructions(p.instructions)
         setEditPath(localPaths[p.id] ?? null)
         setEditType(p.type)
+        setEditBackend(p.backend)
         setEditCategory(p.category)
         setEditError(null)
         await loadAttachments(p.id)
@@ -148,7 +150,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     name: editName.trim(), description: editDescription.trim(), instructions: editInstructions.trim(),
-                    type: editType, category: editCategory.trim(),
+                    type: editType, category: editCategory.trim(), backend: editBackend,
                 }),
             })
             if (!res.ok) { setEditError((await res.json().catch(() => null))?.error ?? "Failed to save."); return }
@@ -227,6 +229,10 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                             Type
                             <SegmentedControl options={TYPE_OPTIONS} value={editType} onChange={setEditType} />
                             <span className="field-optional">{TYPE_HELP[editType]}</span>
+                        </label>
+                        <label>
+                            Storage
+                            <SegmentedControl options={BACKEND_OPTIONS} value={editBackend} onChange={setEditBackend} />
                         </label>
                         <label>
                             Category <span className="field-optional">(optional — for your own search/sort, no effect on behavior)</span>
