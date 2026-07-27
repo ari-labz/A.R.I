@@ -720,14 +720,12 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                 if (isFirstMessage && project.Type == ProjectType.Repository)
                     Llm.ForceCodeThread(threadKey);
 
-                // ObsidianGraph + ServerFs: bind this thread's project context so filesystem_tools/
-                // obsidian_tools (request_tools) resolve against the vault folder — mirrors what
-                // Coder.RunLoop does for a Repository project, just for a Dialogue thread instead.
-                // Re-set every message (cheap, idempotent) rather than gated to isFirstMessage, so it
-                // still applies if the thread existed before the project was bound.
-                if (boundThread is not null && project is { Type: ProjectType.ObsidianGraph, Backend: StorageBackend.ServerFs, RootPath: { } vaultRoot })
+                // ServerFs projects: bind ProjectRoot on the thread every message (idempotent) so that
+                // filesystem_tools/coding_tools resolve correctly without waiting for Coder.RunLoop to
+                // set it. Covers Repository+ServerFs (web-created repos) and ObsidianGraph+ServerFs.
+                if (boundThread is not null && project is { Backend: StorageBackend.ServerFs, RootPath: { } serverRoot })
                 {
-                    boundThread.ProjectRoot   = vaultRoot;
+                    boundThread.ProjectRoot   = serverRoot;
                     boundThread.IsBrainVault  = false;
                     boundThread.Ct            = CancellationToken.None;
                 }
