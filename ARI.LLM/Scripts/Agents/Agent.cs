@@ -69,10 +69,11 @@ public abstract class Agent
     [JsonPropertyName("supportsCompaction")] public bool SupportsCompaction { get; init; }
     [JsonPropertyName("compactHighPct")]     public int  CompactHighPct     { get; init; } = 80;
     [JsonPropertyName("compactLowPct")]      public int  CompactLowPct     { get; init; } = 60;
-    // When true, send tools via the native OpenAI `tools` field and parse native tool_calls, instead
-    // of the text protocol (BuildToolCatalog + ParseTextCalls). Native relies on llama.cpp's --jinja
-    // chat-template tool parsing (qwen3_coder format) being reliable for this model/build.
-    [JsonPropertyName("nativeTools")]   public bool    NativeTools   { get; init; }
+    // Tool calls use the native OpenAI `tools` field exclusively. The froggeric v21.3 jinja template
+    // (Server/Templates/qwen3-froggeric.jinja) handles tool formatting and returns native tool_calls
+    // objects. The old text-protocol (BuildToolCatalog + ParseTextCalls) has been removed.
+    // To revert: git revert the "drop text tool-call protocol" commit and set chatTemplatePath to "".
+    [JsonPropertyName("nativeTools")]   public bool    NativeTools   { get; init; } = true;
     // When true, Ari's persona (PersonaStore) is prepended as the stable prefix of this agent's system
     // prompt. Set on user-facing agents (Dialogue, CodeArchitect); left false on autonomic agents.
     [JsonPropertyName("usePersona")]    public bool    UsePersona    { get; init; }
@@ -615,22 +616,12 @@ public abstract class Agent
             object[]? toolSchemas    = !toolsExhausted && thread.tools.Count > 0
                                         ? thread.tools.Values.Select(t => t.Schema).ToArray()
                                         : null;
-            // Tool protocol. Text (default): advertise tools as text in the system prompt and parse the
-            // model's <tool_call> XML ourselves (BuildToolCatalog + ParseTextCalls) — robust against the
-            // llama.cpp 9430 runaway where the native parser half-parses Qwen3.6's XML and leaks the tail
-            // into the arguments. Native (NativeTools=true): send the OpenAI `tools` field and let the
-            // server's --jinja qwen3_coder template parse tool_calls. The text-call parser still runs as a
-            // fallback in native mode, so a leak degrades rather than corrupts.
-            bool   nativeTools = toolSchemas is not null && NativeTools;
-            bool   textTools   = toolSchemas is not null && !NativeTools;
-            string toolCatalog = textTools ? BuildToolCatalog(toolSchemas!) : "";
-
             // Keep the system message (and thus the whole prompt prefix) STATIC across turns so the server's
             // KV cache is reused — the volatile per-turn checklist is injected as a transient LAST message at
             // request time instead (see below). Putting changing content here at position 0 invalidates the
             // entire cache every turn, forcing a full re-process of the context (the dominant cost on a dense
             // model: ~100 t/s prompt-eval vs ~19 t/s generation).
-            messages[0] = new { role = "system", content = baseSystem + toolCatalog + budgetsBlock + thinkSuffix };
+            messages[0] = new { role = "system", content = baseSystem + budgetsBlock + thinkSuffix };
 
             // No compaction support = rely on the server's --context-shift safety net instead; a
             // non-compacting agent (short one-shot calls) is very unlikely to ever need it.
@@ -719,11 +710,7 @@ public abstract class Agent
                 body["chat_template_kwargs"] = new { enable_thinking = true };
             }
 
-            // Native mode: hand the server the OpenAI `tools` field so its --jinja template formats and
-            // parses tool calls. Text mode deliberately omits it (tools are in the system prompt instead)
-            // and sets no "</tool_call>" stop, so the model can batch several calls per turn before
-            // stopping naturally (<|im_end|>) — the main lever against TTFT. Guards bound any run-on.
-            if (nativeTools)             body["tools"] = toolSchemas;
+            if (toolSchemas is not null) body["tools"] = toolSchemas;
             if (BoundSlot is not null)
             {
                 int slotIndex = srv.Slots.FindIndex(sl => sl.Id == BoundSlot.Id);
@@ -804,7 +791,6 @@ public abstract class Agent
             Dictionary<int, (string Id, string Name, StringBuilder Args)> pendingCalls = new();
             Dictionary<int, string> streamingMarkers = new();
             string? finishReason = null;
-            string? xmlFallbackOriginalText = null;
             responseBuilder.Clear();
 
             (string Id, string Name, string Args, string Error)? earlyAbort = null;
@@ -1046,17 +1032,9 @@ public abstract class Agent
                             // half-typed opening tag) is stripped so it never flashes as prose in the client
                             // (#78). View-only transforms of the streamed text; responseBuilder and the
                             // parse/execute path are untouched.
-                            string liveView = StripStreamingToolText(InjectLiveToolCards(visible));
-                            // NOT a flip trigger: this text can't be trusted as "Ari's real reply" yet — the
-                            // text-protocol path routinely narrates a lead-in ("Now let's check X...") immediately
-                            // before ANOTHER tool call (see the "preserve any narration" handling below), so any
-                            // nonzero liveView flipped cards the instant that narration began, often a fraction of
-                            // a second before the very next tool call. The batch-boundary flush (further down)
-                            // already covers "another tool block was emitted"; the turn-end flush covers a genuine
-                            // final reply once we know for certain no more tool calls followed.
-                            if (liveText is null && liveView.Trim().Length > 0) { liveText = new TraceStep { Kind = "text", Text = "" }; trace.Add(liveText); }
-                            if (liveText is not null) liveText.Text = liveView;
-                            await onDelta(contentBuilder.ToString() + liveView);
+                            if (liveText is null && visible.Trim().Length > 0) { liveText = new TraceStep { Kind = "text", Text = "" }; trace.Add(liveText); }
+                            if (liveText is not null) liveText.Text = visible;
+                            await onDelta(contentBuilder.ToString() + visible);
                         }
                     }
                 }
@@ -1166,75 +1144,6 @@ public abstract class Agent
                     responseBuilder.Clear();
                     continue;
                 }
-
-                // Guard against a tool call truncated before its closing tag (e.g. hit max_tokens): if an
-                // opening <tool_call> has no matching close, add one so ParseTextCalls can still match it.
-                if (textTools && responseBuilder.ToString().Contains("<tool_call>") && !responseBuilder.ToString().Contains("</tool_call>"))
-                    responseBuilder.Append("\n</tool_call>");
-
-                List<ToolCallParser.Call>? textCalls = ToolCallParser.ParseTextCalls(responseBuilder.ToString());
-                if (textCalls is not null)
-                {
-                    if (!textTools)
-                    {
-                        // Unexpected text format from a native-tools model — treat as a degraded fallback.
-                        consecutiveFallbacks++;
-                        Degrade();
-                        if (consecutiveFallbacks > 3)
-                            throw new LlmRequestFailedException($"Model stuck in text tool call fallback loop ({consecutiveFallbacks} consecutive) — aborting.");
-                        Shared.Logger.LogWarning("[{Agent}] ({Thread}) model used text tool call format — parsing fallback.", Name, thread.Key);
-                    }
-                    else
-                    {
-                        // Expected path: preserve any narration the model wrote before the tool call so the
-                        // user still sees "Now I'll look at…" style updates (reasoning in <think> is dropped).
-                        string rb    = responseBuilder.ToString();
-                        int    tcIdx = rb.IndexOf("<tool_call>", StringComparison.OrdinalIgnoreCase);
-                        if (tcIdx > 0)
-                        {
-                            string pre = System.Text.RegularExpressions.Regex.Replace(
-                                rb[..tcIdx], "<think>.*?</think>", "",
-                                System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                            pre = pre.Replace("<think>", "").Replace("</think>", "").Trim();
-                            if (pre.Length > 0) { contentBuilder.Append(pre); trace.Add(new TraceStep { Kind = "text", Text = pre }); }
-                        }
-                    }
-                    int fakeIndex = 0;
-                    foreach (ToolCallParser.Call c in textCalls)
-                        pendingCalls[fakeIndex++] = (c.Id, c.Name, new StringBuilder(c.Args));
-
-                    responseBuilder.Clear();
-                    finishReason = "tool_calls";
-                }
-
-                if (pendingCalls.Count == 0 && thread.tools.Count > 0)
-                {
-                    ToolCallParser.XmlParse? xml = ToolCallParser.ParseXmlCalls(responseBuilder.ToString(), thread.tools.Keys);
-                    if (xml is not null)
-                    {
-                        consecutiveFallbacks++;
-                        Degrade();
-                        if (consecutiveFallbacks > 3)
-                            throw new LlmRequestFailedException($"Model stuck in XML tool call fallback loop ({consecutiveFallbacks} consecutive) — aborting.");
-                        Shared.Logger.LogWarning("[{Agent}] ({Thread}) model used Qwen3 XML tool call format — parsing fallback.", Name, thread.Key);
-
-                        xmlFallbackOriginalText = responseBuilder.ToString();
-
-                        if (xml.FirstIndex > 0)
-                        {
-                            string preXml = xmlFallbackOriginalText[..xml.FirstIndex].TrimEnd();
-                            contentBuilder.Append(preXml);
-                            if (preXml.Length > 0) trace.Add(new TraceStep { Kind = "text", Text = preXml });
-                        }
-
-                        int fakeIndex = 0;
-                        foreach (ToolCallParser.Call c in xml.Calls)
-                            pendingCalls[fakeIndex++] = (c.Id, c.Name, new StringBuilder(c.Args));
-
-                        responseBuilder.Clear();
-                        finishReason = "tool_calls";
-                    }
-                }
             }
 
             if (pendingCalls.Count > 0 && (finishReason == "tool_calls" || finishReason == "stop" || finishReason == null))
@@ -1265,36 +1174,23 @@ public abstract class Agent
                         pendingCalls[key] = (id, name, new StringBuilder(repaired));
                 }
 
-                bool isXmlFallback = pendingCalls.Values.Any(c => c.Id.StartsWith("fallback_xml_"));
-
                 toolCallCount += pendingCalls.Count;
 
-                if (isXmlFallback)
-                {
-                    messages.Add(new { role = "assistant", content = stepThink + (xmlFallbackOriginalText ?? "") });
-                }
+                var toolCallList = pendingCalls
+                    .OrderBy(kv => kv.Key)
+                    .Select(kv => new
+                    {
+                        id       = kv.Value.Id,
+                        type     = "function",
+                        function = new { name = kv.Value.Name, arguments = ToolCallParser.TrimArgs(kv.Value.Name, kv.Value.Args.ToString()) }
+                    })
+                    .ToArray();
+
+                // Reinject the reasoning as the assistant's content alongside the tool calls (preserve_thinking).
+                if (stepThink.Length > 0)
+                    messages.Add(new { role = "assistant", content = stepThink, tool_calls = toolCallList });
                 else
-                {
-                    var toolCallList = pendingCalls
-                        .OrderBy(kv => kv.Key)
-                        .Select(kv => new
-                        {
-                            id       = kv.Value.Id,
-                            type     = "function",
-                            function = new { name = kv.Value.Name, arguments = ToolCallParser.TrimArgs(kv.Value.Name, kv.Value.Args.ToString()) }
-                        })
-                        .ToArray();
-
-                    // Reinject the reasoning as the assistant's content alongside the tool calls (preserve_thinking).
-                    if (stepThink.Length > 0)
-                        messages.Add(new { role = "assistant", content = stepThink, tool_calls = toolCallList });
-                    else
-                        messages.Add(new { role = "assistant", tool_calls = toolCallList });
-                }
-
-                StringBuilder? xmlResultsMsg = isXmlFallback
-                    ? new StringBuilder("Here are the results of the tool calls you made:\n\n")
-                    : null;
+                    messages.Add(new { role = "assistant", tool_calls = toolCallList });
 
                 OnToolBatchStart(toolTurn);
 
@@ -1481,40 +1377,24 @@ public abstract class Agent
                     if (!result.StartsWith("[System:", StringComparison.OrdinalIgnoreCase) && !ToolCallParser.IsError(result))
                         productiveBatch = true;
 
-                    if (isXmlFallback)
+                    int addedIndex = messages.Count;
+                    messages.Add(new { role = "tool", tool_call_id = call.Id, name = call.Name, content = result });
+                    // Capture the path for read_file/preview_file specifically — if this output later gets
+                    // stubbed by compaction, we need it to clear the file's read-dedup ledger too, or the
+                    // model gets told to re-read a file the guard then refuses to let it re-read.
+                    string? readPath = null;
+                    if (call.Name is "read_file" or "preview_file")
                     {
-                        xmlResultsMsg!.AppendLine($"--- {call.Name} ---");
-                        xmlResultsMsg.AppendLine(result);
-                        xmlResultsMsg.AppendLine();
-                    }
-                    else
-                    {
-                        int addedIndex = messages.Count;
-                        messages.Add(new { role = "tool", tool_call_id = call.Id, name = call.Name, content = result });
-                        // Capture the path for read_file/preview_file specifically — if this output later gets
-                        // stubbed by compaction, we need it to clear the file's read-dedup ledger too, or the
-                        // model gets told to re-read a file the guard then refuses to let it re-read.
-                        string? readPath = null;
-                        if (call.Name is "read_file" or "preview_file")
+                        try
                         {
-                            try
-                            {
-                                using JsonDocument pDoc = JsonDocument.Parse(argsJson);
-                                if (pDoc.RootElement.TryGetProperty("path", out var pe)) readPath = pe.GetString();
-                            }
-                            catch { /* ignore — dedup exemption just won't fire for this call */ }
+                            using JsonDocument pDoc = JsonDocument.Parse(argsJson);
+                            if (pDoc.RootElement.TryGetProperty("path", out var pe)) readPath = pe.GetString();
                         }
-                        toolResultSlots.Add((addedIndex, call.Id, call.Name, readPath));
-                        if (thread.liveCallInfo is { } lc) lc.EstimatedInputTokens += result.Length / CHARS_PER_TOKEN;
-                        AfterToolAppended(toolTurn, messages, call.Name, call.Id, argsJson, result, addedIndex);
+                        catch { /* ignore — dedup exemption just won't fire for this call */ }
                     }
-                }
-
-                if (isXmlFallback)
-                {
-                    string xmlMsg = xmlResultsMsg!.ToString().TrimEnd();
-                    messages.Add(new { role = "user", content = xmlMsg });
-                    if (thread.liveCallInfo is { } lc) lc.EstimatedInputTokens += xmlMsg.Length / CHARS_PER_TOKEN;
+                    toolResultSlots.Add((addedIndex, call.Id, call.Name, readPath));
+                    if (thread.liveCallInfo is { } lc) lc.EstimatedInputTokens += result.Length / CHARS_PER_TOKEN;
+                    AfterToolAppended(toolTurn, messages, call.Name, call.Id, argsJson, result, addedIndex);
                 }
 
                 contentBuilder.Append("<!--ari-batch-end-->");
@@ -1529,9 +1409,8 @@ public abstract class Agent
                 }
 
                 // Loop-breaker: a weak model can call tools forever without progressing (e.g. re-reading a
-                // file it already read). The per-tool nags only scold; nothing terminates. Under the text
-                // protocol MaxToolCalls doesn't help either — text calls still execute after tools are
-                // "exhausted". So after enough consecutive no-progress batches, end the turn outright.
+                // file it already read). The per-tool nags only scold; nothing terminates. So after enough
+                // consecutive no-progress batches, end the turn outright.
                 if (OnBatchEndShouldBreak(thread, toolTurn, productiveBatch))
                 {
                     contentBuilder.Append("\n\n_Stopped — repeated tool calls were not making progress._");
@@ -1539,9 +1418,8 @@ public abstract class Agent
                     break;
                 }
 
-                // Only nag about format when NOT on the text protocol — under it, text-format tool calls
-                // (fallback_* ids) are the expected, correct form, not an error to be corrected.
-                bool wasFallback = !textTools && pendingCalls.Values.Any(c => c.Id.StartsWith("fallback_"));
+                // Nag if the model fell back to text/XML format instead of native tool_calls.
+                bool wasFallback = pendingCalls.Values.Any(c => c.Id.StartsWith("fallback_"));
                 if (wasFallback)
                 {
                     string correctionHint =
@@ -1698,115 +1576,6 @@ public abstract class Agent
     }
 
     // ── Static helpers ────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Builds the textual tool catalog appended to the system prompt. We deliberately do NOT send the
-    /// native `tools` field to llama-server for this model. Qwen3.6's chat template trains the model to
-    /// emit tool calls as &lt;tool_call&gt;&lt;function=name&gt;&lt;parameter=..&gt; TEXT; llama.cpp 9430 only
-    /// intermittently re-parses that into native tool_calls, and when it half-parses the XML tail leaks
-    /// into the JSON arguments (the "runaway"). Advertising tools as text and parsing the response
-    /// ourselves (ParseTextCalls) makes every tool call deterministic. Mirrors the model template's
-    /// own tool-advertisement block so the format the model sees is exactly what it was trained on.
-    /// </summary>
-    private static string BuildToolCatalog(object[] schemas)
-    {
-        StringBuilder sb = new();
-        sb.Append("\n\n# Tools\n\nYou have access to the following functions:\n\n<tools>");
-        foreach (object schema in schemas)
-        {
-            using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(schema));
-            JsonElement fn = doc.RootElement.TryGetProperty("function", out JsonElement f) ? f : doc.RootElement;
-            sb.Append('\n').Append(fn.GetRawText());
-        }
-        sb.Append("\n</tools>\n\n");
-        sb.Append(
-            "To call a function, reply with ONLY this format and NOTHING after it:\n" +
-            "<tool_call>\n<function=FUNCTION_NAME>\n<parameter=PARAM_NAME>\nVALUE\n</parameter>\n</function>\n</tool_call>\n" +
-            "Rules:\n" +
-            "- Put the <tool_call> block at the start of a new line with no indentation.\n" +
-            "- One <parameter=NAME> block per argument; a value may span multiple lines.\n" +
-            "- Use the XML format above exactly — do NOT emit JSON for the call.\n" +
-            "- Stop immediately after </tool_call>; the tool result will be provided to you.\n" +
-            "- When you are done and need no tool, reply normally with your final answer.");
-        return sb.ToString();
-    }
-
-    // Matches an edit_file/write_file text tool call (complete, or still streaming to end-of-string).
-    private static readonly System.Text.RegularExpressions.Regex LiveEditRe = new(
-        @"<tool_call>\s*<function=(edit_file|write_file)>(.*?)(?:</tool_call>|\z)",
-        System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
-
-    /// <summary>
-    /// Replaces an in-progress (or just-completed) edit_file/write_file text tool call in a streamed chunk
-    /// with a live "active" tool-card marker (file + line counts), so the UI shows what is being edited as
-    /// the model streams it rather than a frozen "thinking". Other tool calls are left for the UI to strip.
-    /// The added count grows as new_string/content streams in; removed comes from start_line/end_line.
-    /// </summary>
-    private static string InjectLiveToolCards(string text)
-    {
-        if (!text.Contains("<function=edit_file", StringComparison.OrdinalIgnoreCase) &&
-            !text.Contains("<function=write_file", StringComparison.OrdinalIgnoreCase))
-            return text;
-
-        return LiveEditRe.Replace(text, m =>
-        {
-            string name = m.Groups[1].Value.ToLowerInvariant();
-            string body = m.Groups[2].Value;
-            string? path = LiveParam(body, "path");
-            if (path is null) return m.Value; // path not streamed yet — leave for the UI to strip
-            string label = System.IO.Path.GetFileName(path.Trim()).Replace("--", "&#45;&#45;");
-            string? content = LiveParam(body, name == "write_file" ? "content" : "new_string");
-            int added = string.IsNullOrEmpty(content) ? 0 : content.Split('\n').Length;
-            int removed = 0;
-            if (int.TryParse(LiveParam(body, "start_line"), out int s) &&
-                int.TryParse(LiveParam(body, "end_line"),   out int e) && e >= s)
-                removed = e - s + 1;
-            return $"<!--ari-tool-start:{name}:{label}|+{added}|-{removed}-->";
-        });
-    }
-
-    // Complete or trailing-partial text tool calls in the STREAMED view. Ordered alternation: closed
-    // blocks first, then an unterminated block running to end-of-string (the still-streaming case).
-    private static readonly System.Text.RegularExpressions.Regex StreamToolTextRe = new(
-        @"<tool_call>[\s\S]*?</tool_call>|<tool_call>[\s\S]*$|<function=[^>]*>[\s\S]*?</function[^>]*>|<function=[^>]*>[\s\S]*$",
-        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
-
-    // Opening tags a leak can start with — a bare partial prefix of one of these at the very end of the
-    // stream ("<tool_ca") is held back until enough arrives to classify it.
-    private static readonly string[] ToolTagPrefixes = { "<tool_call", "</tool_call", "<function=", "</function", "<parameter=", "</parameter" };
-
-    /// <summary>
-    /// View-only strip of text-protocol tool-call XML from the streamed text (#78): complete blocks,
-    /// a block still streaming to end-of-string, and a partially-typed opening tag at the very tail
-    /// (e.g. "&lt;tool_ca") — without this the raw call flashes as prose in every client until the
-    /// post-stream parser strips it. The underlying builders are untouched.
-    /// </summary>
-    private static string StripStreamingToolText(string text)
-    {
-        if (text.IndexOf('<') < 0) return text;
-        text = StreamToolTextRe.Replace(text, "");
-
-        int lt = text.LastIndexOf('<');
-        if (lt >= 0)
-        {
-            string tail = text[lt..];
-            if (!tail.Contains('>'))
-                foreach (string tag in ToolTagPrefixes)
-                    if (tag.StartsWith(tail, StringComparison.OrdinalIgnoreCase) || tail.StartsWith(tag, StringComparison.OrdinalIgnoreCase))
-                        return text[..lt];
-        }
-        return text;
-    }
-
-    /// <summary>Extracts a parameter value from a possibly-incomplete text tool-call body (up to
-    /// &lt;/parameter&gt; if closed, else the partial trailing value). Null if the parameter hasn't started.</summary>
-    private static string? LiveParam(string body, string key)
-    {
-        var m = System.Text.RegularExpressions.Regex.Match(body,
-            $@"<parameter={System.Text.RegularExpressions.Regex.Escape(key)}>\s*(.*?)\s*(?:</parameter>|\z)",
-            System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        return m.Success ? m.Groups[1].Value : null;
-    }
 
     private static string ExtractLogText(string content) =>
         string.Concat(ContentBlock.Parse(content).OfType<TextBlock>().Select(b => b.Text))
