@@ -229,6 +229,7 @@ export default function App() {
 
     const [clientVersion,  setClientVersion]  = useState<string | null>(null)
     const [outdated,       setOutdated]       = useState(false)
+    const [protocolMismatch, setProtocolMismatch] = useState<number | null>(null)
     // Assume ready until told otherwise, so a slow/failed check never blocks the composer.
     const [serverReady,    setServerReady]    = useState(true)
 
@@ -348,6 +349,17 @@ export default function App() {
         openGlobalStream()
         setConnState("connected")
         window.electronBridge?.markReady()
+        // Check protocol compatibility — only relevant in the Desktop app where the
+        // client has a fixed protocol baked in and the server may be a different build.
+        if (window.electronBridge) {
+            const CLIENT_PROTOCOL = 2
+            const infoRes = await fetch("/api/info/ready").catch(() => null)
+            if (infoRes?.ok) {
+                const { protocol: serverProtocol } = await infoRes.json()
+                if (typeof serverProtocol === "number" && serverProtocol !== CLIENT_PROTOCOL)
+                    setProtocolMismatch(serverProtocol)
+            }
+        }
     }, [loadThreads, loadProjects])
 
     useEffect(() => {
@@ -1099,6 +1111,12 @@ export default function App() {
                             </button>
                         </div>
                     )}
+                </div>
+            )}
+            {protocolMismatch !== null && (
+                <div id="protocol-mismatch-banner">
+                    ⚠ This app may not function correctly — the server is running protocol v{protocolMismatch}.
+                    <button onClick={() => setProtocolMismatch(null)}>✕</button>
                 </div>
             )}
             <Sidebar

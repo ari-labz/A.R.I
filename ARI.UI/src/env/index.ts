@@ -9,7 +9,7 @@ export interface AriEnvironment {
   isDesktop: boolean
   readFile(root: string, path: string): Promise<string>
   writeFile(root: string, path: string, content: string): Promise<void>
-  listDirectory(root: string, dirPath?: string): Promise<string[]>
+  listDirectory(root: string, dirPath?: string, depth?: number): Promise<string[]>
   searchFiles(root: string, pattern: string, searchPath?: string, glob?: string, ignoreCase?: boolean): Promise<string[]>
   editFile(root: string, filePath: string, newString: string, options?: EditOptions): Promise<{ ok: boolean; error?: string; message?: string }>
   runCommand(root: string, command: string): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }>
@@ -20,6 +20,7 @@ export interface AriEnvironment {
   moveFile(root: string, source: string, destination: string): Promise<{ ok: boolean; error?: string }>
   pickFolder(): Promise<string | null>
   getFileTree(root: string): Promise<string[]>
+  getShallowTree(root: string, depth?: number): Promise<string[]>
   getEndpoint(): string
   setEndpoint(url: string): void
   getLocalPath(projectId: string): Promise<string | null>
@@ -33,7 +34,7 @@ declare global {
       platform: string
       readFile(root: string, path: string): Promise<string>
       writeFile(root: string, path: string, content: string): Promise<void>
-      listDirectory(root: string, dirPath?: string): Promise<string[]>
+      listDirectory(root: string, dirPath?: string, depth?: number): Promise<string[]>
       searchFiles(root: string, pattern: string, searchPath?: string, glob?: string, ignoreCase?: boolean): Promise<string[]>
       editFile(root: string, filePath: string, newString: string, options?: EditOptions): Promise<{ ok: boolean; error?: string; message?: string }>
       runCommand(root: string, command: string): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }>
@@ -44,6 +45,7 @@ declare global {
       moveFile(root: string, source: string, destination: string): Promise<{ ok: boolean; error?: string }>
       pickFolder(): Promise<string | null>
       getFileTree(root: string): Promise<string[]>
+      getShallowTree(root: string, depth?: number): Promise<string[]>
       getEndpoint(): string
       setEndpoint(url: string): void
       moveWindowBy(dx: number, dy: number): void
@@ -62,7 +64,8 @@ const browserEnv: AriEnvironment = {
   isDesktop:     false,
   readFile:      () => Promise.reject(new Error("No local filesystem in browser")),
   writeFile:     () => Promise.reject(new Error("No local filesystem in browser")),
-  listDirectory: () => Promise.reject(new Error("No local filesystem in browser")),
+  listDirectory:  () => Promise.reject(new Error("No local filesystem in browser")),
+  getShallowTree: () => Promise.resolve([]),
   searchFiles:   () => Promise.reject(new Error("No local filesystem in browser")),
   editFile:      () => Promise.reject(new Error("No local filesystem in browser")),
   runCommand:          () => Promise.reject(new Error("No local shell in browser")),
@@ -84,7 +87,7 @@ const electronEnv: AriEnvironment = {
   isDesktop:     true,
   readFile:      (root, path)                        => window.electronBridge!.readFile(root, path),
   writeFile:     (root, path, content)               => window.electronBridge!.writeFile(root, path, content),
-  listDirectory: (root, dirPath)                     => window.electronBridge!.listDirectory(root, dirPath),
+  listDirectory:  (root, dirPath, depth)              => window.electronBridge!.listDirectory(root, dirPath, depth),
   searchFiles:   (root, pattern, searchPath, glob, ignoreCase) => window.electronBridge!.searchFiles(root, pattern, searchPath, glob, ignoreCase),
   editFile:      (root, filePath, newStr, options) => window.electronBridge!.editFile(root, filePath, newStr, options),
   runCommand:          (root, command)               => window.electronBridge!.runCommand(root, command),
@@ -94,7 +97,8 @@ const electronEnv: AriEnvironment = {
   deleteFile:           (root, filePath)             => window.electronBridge!.deleteFile(root, filePath),
   moveFile:             (root, source, destination)  => window.electronBridge!.moveFile(root, source, destination),
   pickFolder:    ()                                  => window.electronBridge!.pickFolder(),
-  getFileTree:   (root)                              => window.electronBridge!.getFileTree(root),
+  getFileTree:    (root)                              => window.electronBridge!.getFileTree(root),
+  getShallowTree: (root, depth)                      => window.electronBridge!.getShallowTree(root, depth),
   getEndpoint:   ()                                  => window.electronBridge!.getEndpoint(),
   setEndpoint:   (url)                               => window.electronBridge!.setEndpoint(url),
   getLocalPath:  (projectId)                         => window.electronBridge!.getLocalPath(projectId),

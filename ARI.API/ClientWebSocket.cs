@@ -1163,9 +1163,11 @@ public static class ClientWebSocket
 
                             string conventions = ConventionsStore.Get();
                             string? projectRules = doc.RootElement.TryGetProperty("projectRules", out var prEl) ? prEl.GetString()?.Trim() : null;
+                            // projectMap is omitted — the desktop sends a lazy skeleton via /system-context
+                            // instead of the full flat list, saving ~800 tokens per message.
                             llm.SetCodeThreadContext(
                                 threadKey,
-                                projectMap:   BuildProjectMap(fileTree),
+                                projectMap:   null,
                                 conventions:  string.IsNullOrWhiteSpace(conventions) ? null : conventions.Trim(),
                                 rules:        string.IsNullOrWhiteSpace(projectRules) ? null : projectRules);
 

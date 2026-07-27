@@ -18,15 +18,16 @@ internal sealed class ListDirectory : Tool
         function = new
         {
             name        = "list_directory",
-            description = $"List the files and subdirectories at a path within the project. " +
-                          $"Set recursive to true to see the full tree (capped at {MAX_ENTRIES} entries).",
+            description = "List the contents of a directory. By default shows files and immediate subdirectories " +
+                          "(depth=1). Set depth to 2 or more to see nested folders. Directories include a file count " +
+                          $"hint so you know which ones are worth exploring. Capped at {MAX_ENTRIES} total entries.",
             parameters  = new
             {
                 type       = "object",
                 properties = new
                 {
-                    path      = new { type = "string",  description = "Directory path relative to project root. Defaults to project root if omitted." },
-                    recursive = new { type = "boolean", description = $"If true, list all nested files and folders as a tree (max {MAX_ENTRIES} entries). Defaults to false." }
+                    path  = new { type = "string",  description = "Directory path relative to project root. Omit for project root." },
+                    depth = new { type = "integer",  description = "How many levels to recurse. 1 = immediate contents only (default), 2+ = nested. Files are only shown at the deepest level." }
                 },
                 required = Array.Empty<string>()
             }

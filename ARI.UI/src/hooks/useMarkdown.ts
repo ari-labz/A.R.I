@@ -300,24 +300,83 @@ export function attachCopyButtons(el: HTMLElement) {
     })
 }
 
-export function setBubbleMd(el: HTMLElement, content: string, msgIndex = 0) {
-    el.innerHTML = renderMd(content, msgIndex)
+// Splits already-rendered HTML into alternating text/card segments by examining top-level DOM children.
+// Tool-card elements (div or details with class "tool-card") become card segments; everything else is
+// accumulated into text segments. Used to give each card its own separate row outside the text bubble.
+function splitHtmlSegments(html: string): Array<{ isCard: boolean; html: string }> {
+    const tmp = document.createElement("div")
+    tmp.innerHTML = html
+    const result: Array<{ isCard: boolean; html: string }> = []
+    let textBuf = ""
+    for (const node of Array.from(tmp.childNodes)) {
+        if (node.nodeType === Node.ELEMENT_NODE) {
+            const el = node as HTMLElement
+            if (el.classList.contains("tool-card")) {
+                if (textBuf.trim()) { result.push({ isCard: false, html: textBuf }); textBuf = "" }
+                result.push({ isCard: true, html: el.outerHTML })
+                continue
+            }
+            textBuf += el.outerHTML
+        } else {
+            textBuf += node.textContent ?? ""
+        }
+    }
+    if (textBuf.trim()) result.push({ isCard: false, html: textBuf })
+    return result
+}
+
+function applySegments(el: HTMLElement, segs: Array<{ isCard: boolean; html: string }>) {
+    el.className = "blocks-container"
+    el.innerHTML = ""
+    for (const seg of segs) {
+        const div = document.createElement("div")
+        div.className = seg.isCard ? "block-seg-tool" : "bubble block-seg"
+        div.innerHTML = seg.html
+        el.appendChild(div)
+    }
+}
+
+export function setBubbleMd(el: HTMLElement, content: string, msgIndex = 0, baseClass = "bubble") {
+    const html = renderMd(content, msgIndex)
+    const segs = splitHtmlSegments(html)
+    if (segs.some(s => s.isCard)) {
+        applySegments(el, segs)
+    } else {
+        el.className = baseClass
+        el.innerHTML = html
+    }
     attachCopyButtons(el)
 }
 
-// Renders a Response's typed block list — each block is its own DOM segment, so the plan text, each
-// Coder's card + summary, and the final summary are visually distinct blocks (not one flattened blob).
-export function setBubbleBlocks(el: HTMLElement, blocks: BlockLike[]) {
-    const parts = blocks
-        .filter(b => (b as { isVisible?: boolean }).isVisible !== false)
-        .map(b => renderBlockHtml(b))
-        .filter(h => h.trim().length > 0)
+// Renders a Response's typed block list — tool cards get their own row outside the text bubble so the
+// thread reads like a timeline: card → card → text, not one blob with everything inside one bubble.
+export function setBubbleBlocks(el: HTMLElement, blocks: BlockLike[], baseClass = "bubble") {
+    const visible = blocks.filter(b => (b as { isVisible?: boolean }).isVisible !== false)
+    const hasCards = visible.some(b => b.type !== "text" && b.type !== "thinking")
+
     el.innerHTML = ""
-    for (const html of parts) {
-        const seg = document.createElement("div")
-        seg.className = "block-seg"
-        seg.innerHTML = html
-        el.appendChild(seg)
+    if (!hasCards) {
+        el.className = baseClass
+        for (const b of visible) {
+            const html = renderBlockHtml(b)
+            if (!html.trim()) continue
+            const seg = document.createElement("div")
+            seg.className = "block-seg"
+            seg.innerHTML = html
+            el.appendChild(seg)
+        }
+        attachCopyButtons(el)
+        return
+    }
+
+    el.className = "blocks-container"
+    for (const b of visible) {
+        const html = renderBlockHtml(b)
+        if (!html.trim()) continue
+        const div = document.createElement("div")
+        div.className = (b.type === "text") ? "bubble block-seg" : "block-seg-tool"
+        div.innerHTML = html
+        el.appendChild(div)
     }
     attachCopyButtons(el)
 }

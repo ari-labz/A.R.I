@@ -1019,7 +1019,12 @@ details.tool-card summary,
 }
 
 /* expandable diff tool card */
-/* Separate segments of one A·R·I response (plan / per-coder summary / final summary) and inline sub-threads. */
+/* When a response contains tool cards, the bubble is replaced with a column container so each card and
+   each text run are separate rows in the thread (not embedded inside one balloon). */
+.blocks-container { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+/* Tool-card row: no bubble chrome — the .tool-card element already has its own border/bg. */
+.block-seg-tool { display: block; }
+/* Separate segments within a text-only bubble or subthread body. */
 .block-seg + .block-seg { margin-top: 10px; }
 
 /* A sub-thread rendered inline inside the parent response. Default-expanded; when open it looks like the
@@ -1121,6 +1126,19 @@ details.tool-card summary::-webkit-details-marker { display: none; }
 .msg-attach-chip.uploading { opacity: 0.6; }
 .chip-uploading-icon { animation: chip-pulse 1s ease-in-out infinite; }
 @keyframes chip-pulse { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
+
+/* ── protocol mismatch banner ───────────────────────────── */
+#protocol-mismatch-banner {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 8000;
+    background: #7c4a00; color: #fde8b0;
+    padding: 8px 16px; font-size: 0.82rem; text-align: center;
+    display: flex; align-items: center; justify-content: center; gap: 12px;
+}
+#protocol-mismatch-banner button {
+    background: none; border: none; color: inherit; cursor: pointer;
+    font-size: 1rem; line-height: 1; padding: 0 4px; opacity: 0.7;
+}
+#protocol-mismatch-banner button:hover { opacity: 1; }
 
 /* ── toast ───────────────────────────────────────────────── */
 .toast {
