@@ -21,11 +21,14 @@ public class ProjectServiceAdapter(ProjectStore store) : IProjectService
         if (!Enum.TryParse(type, ignoreCase: true, out ProjectType parsedType)) parsedType = ProjectType.Repository;
 
         string id = Guid.NewGuid().ToString("N");
-        // An explicit backend wins; otherwise default per type (a repo is usually worked on locally
-        // via the desktop app; a note graph is small enough to live centrally).
+        // An explicit backend wins; otherwise both types default to ServerFs — the server manages the
+        // project folder so web-panel threads can use filesystem tools without a local Electron bridge.
+        // Desktop app (Electron) threads that need a local disk path will pass LocalPath explicitly,
+        // which overrides effectiveLocalPath regardless of backend. RemoteFs is still selectable via
+        // the explicit backend param when the caller needs it (legacy desktop-only repos).
         StorageBackend resolvedBackend = Enum.TryParse(backend, ignoreCase: true, out StorageBackend explicitBackend)
             ? explicitBackend
-            : parsedType == ProjectType.ObsidianGraph ? StorageBackend.ServerFs : StorageBackend.RemoteFs;
+            : StorageBackend.ServerFs;
         string trimmedName = name.Trim();
         string? rootPath = resolvedBackend == StorageBackend.ServerFs ? ProjectStore.CreateServerFolder(id, trimmedName) : null;
 

@@ -25,7 +25,7 @@ interface AttachmentEntry { name: string }
 
 // Type implies a default backend (overridable at creation) — a repo is usually worked on locally via
 // the desktop app; a note graph is small enough to live centrally on the server.
-const defaultBackendFor = (t: ProjectType): StorageBackend => t === "ObsidianGraph" ? "ServerFs" : "RemoteFs"
+const defaultBackendFor = (_t: ProjectType): StorageBackend => "ServerFs"
 
 export default function ProjectsPage({ projects, onProjectCreated }: Props) {
     const [showForm,          setShowForm]          = useState(false)
