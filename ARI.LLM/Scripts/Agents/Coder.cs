@@ -95,7 +95,7 @@ internal sealed class Coder : Agent
     {
         PhaseConfig? phase = PhaseFor(thread);
         if (phase is null || phase.SystemPrompt.Length == 0) return SystemPrompt;   // no phase config → flat
-        return $"[Role]\n{SystemPrompt}\n\n[Mode: {thread.Phase}]\n{phase.SystemPrompt}";
+        return $"# Role\n{SystemPrompt}\n\n# Mode: {thread.Phase}\n{phase.SystemPrompt}";
     }
 
     internal override (double? Temperature, double? TopP, int? TopK, double? MinP,
@@ -244,7 +244,8 @@ internal sealed class Coder : Agent
             ? $"[Handoff — a plan summary, not the code. Build it now: create the NEW files with write_file; for each EXISTING file, preview_file it once then edit. Never preview a NEW file — it does not exist yet.]\n{parent.HandoffPayload}\n\n"
             : "";
         string response = await SendPrompt(parent, prompt, username,
-            augmentedPrompt: $"{handoff}[Task]\n{prompt}\n\n[System]\n{nudge}",
+            augmentedPrompt: handoff.Length > 0 ? $"{handoff}{prompt}" : null,
+            modeNudge: nudge,
             ct: cts.Token, userMessagePreadded: true, onDelta: onDelta);
 
         // Deterministic safety net for the amend path (NOT a content heuristic). A revision turn is ALWAYS a

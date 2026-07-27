@@ -5,10 +5,10 @@
       "EpochPrompt": "You are walking the memory graph. Current neighbourhood around '{seedTitle}'\n(each block: full path + [type], then its inbound '<' and outbound '>' connections):\n\n{skeleton}\n\n{task}\n\nRESPOND WITH TOOL CALLS ONLY \u2014 never write analysis, a plan, or explanation as your reply; prose with no tool call ends your turn having done NOTHING. The moment you know the fix, emit the tool call (edit_file/delete_file/merge_notes), then git_diff, then git_commit. To reduce a note's outbound links, DELETE those link lines with edit_file (empty new_string) \u2014 do not re-type them.\n\nWork quickly and DECISIVELY. Pick the single clearest fix in this neighbourhood, read only the 1-3 notes you actually need to make it safely (read_file), then MAKE the change with the tools \u2014 do not keep analysing, re-reading, or planning once you know the fix. One logical change this turn (it may touch several files if they are one coherent change).\nYou MUST end this turn one of two ways: (a) apply the change (write_file/edit_file/move_file/delete_file/merge_notes), then git_diff to review it, then git_commit with a single 'message' "
     },
     "Budgets": {
-      "Block": "[Budgets]\nThinking Token Budget: {thinkingTokens}\nReply Token Budget: {replyTokens}\nContext Token Budget: {contextTokens}\nTool Call Budget: {toolBudget}\ndeliver a COMPLETE answer within these budgets."
+      "Block": "# Budgets\nThinking Token Budget: {thinkingTokens}\nReply Token Budget: {replyTokens}\nContext Token Budget: {contextTokens}\nTool Call Budget: {toolBudget}\ndeliver a COMPLETE answer within these budgets."
     },
     "ToolSystem": {
-      "Block": "[Tools]\nSome tools are grouped and not loaded by default to save context. Call list_tools to see every group and what it's for, then request_tools with a group name to load it \u2014 its tools become callable immediately after. You don't need to do this for tools already listed in # Tools below; those are already loaded."
+      "Block": "# Tools\nSome tools are grouped and not loaded by default to save context. Call list_tools to see every group and what it's for, then request_tools with a group name to load it \u2014 its tools become callable immediately after. You don't need to do this for tools already listed in # Tools below; those are already loaded."
     }
   },
   "Agents": [
