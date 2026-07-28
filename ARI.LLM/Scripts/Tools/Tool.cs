@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace ARI.LLM;
 
 /// <summary>
@@ -9,6 +11,23 @@ internal abstract class Tool
 {
     internal abstract string Name   { get; }
     internal abstract object Schema { get; }
+
+    /// <summary>One-line description extracted from the schema's function.description field.</summary>
+    internal string SchemaDescription
+    {
+        get
+        {
+            try
+            {
+                using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(Schema));
+                if (doc.RootElement.TryGetProperty("function", out JsonElement fn) &&
+                    fn.TryGetProperty("description", out JsonElement desc))
+                    return desc.GetString() ?? string.Empty;
+            }
+            catch { }
+            return string.Empty;
+        }
+    }
 
     internal abstract Task<string> Execute(string argsJson);
 

@@ -89,6 +89,22 @@ public class Note
         ? $"Path: {Name}\nAliases: {string.Join(", ", Aliases)}\n\n{Content}"
         : $"Path: {Name}\n\n{Content}";
 
+    /// <summary>Returns only the frontmatter header block of the note: title, aliases, and the lines
+    /// up to (but not including) the first level-2 heading. Used for identity pinning where full
+    /// note content would be irrelevant and wasteful.</summary>
+    public string ToHeader()
+    {
+        string[] lines = Content.Split('\n');
+        var sb = new StringBuilder();
+        if (Aliases.Count > 0) sb.AppendLine($"Aliases: {string.Join(", ", Aliases)}");
+        foreach (string line in lines)
+        {
+            if (line.StartsWith("## ")) break;
+            sb.AppendLine(line);
+        }
+        return $"Path: {Name}\n\n{sb.ToString().TrimEnd()}";
+    }
+
     // spanText must be a verbatim substring of this note's current content — anchors the callout
     // directly under the line/bullet it's about. Falls back to an orphaned, re-anchorable entry
     // if the text can't be found (e.g. the note changed between when the thought was formed and written).
