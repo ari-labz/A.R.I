@@ -72,6 +72,14 @@ internal class Memory : Agent
 
         Thread memThread = new Thread(ThreadPipeline.Dialogue, $"memory:{Guid.NewGuid()}") { Internal = true };
 
+        // If a brain note exists whose title or alias matches the user's name, pin it — always surface
+        // it without model selection so pronouns and identity are always visible to downstream agents.
+        string? speakerName = chatHistory.LastOrDefault(m => m.Username != "ARI")?.Username;
+        Note? userNote = string.IsNullOrWhiteSpace(speakerName) ? null : BrainModule.GetNote(speakerName);
+        string pinnedBlock = userNote is not null
+            ? $"[{userNote.Title}|{userNote.Url}]\n{userNote.ToPrompt()}\n\n"
+            : string.Empty;
+
         // Recall always runs — it's fast enough that a keyword gate only ever costs a real hit.
         // If nothing matches, the SQL seed returns no candidates and we bail below at near-zero cost.
 
@@ -81,8 +89,7 @@ internal class Memory : Agent
         List<string> selfSeed = new();
         if (SelfReference.IsMatch(incomingPrompt))
         {
-            string? speaker = chatHistory.LastOrDefault()?.Username;
-            if (!string.IsNullOrWhiteSpace(speaker)) selfSeed.Add(speaker);
+            if (!string.IsNullOrWhiteSpace(speakerName)) selfSeed.Add(speakerName);
         }
 
         // Not the full transcript — avoids noisy seeds from ARI's own words. Self-seed and prompt terms
@@ -103,7 +110,7 @@ internal class Memory : Agent
                 $"Incoming prompt: {RunLogger.Trunc(incomingPrompt)}",
                 "Outcome: no search terms survived tokenisation — nothing to recall",
             });
-            return string.Empty;
+            return string.IsNullOrEmpty(pinnedBlock) ? string.Empty : pinnedBlock.TrimEnd();
         }
 
         // Pure SQL, no LLM yet — see BrainModule.Recall.
@@ -122,7 +129,7 @@ internal class Memory : Agent
                 $"Search terms: {string.Join(", ", terms)}",
                 "Outcome: no candidate notes found — nothing shown to the model",
             });
-            return string.Empty;
+            return string.IsNullOrEmpty(pinnedBlock) ? string.Empty : pinnedBlock.TrimEnd();
         }
 
         // Snippets only, highest-scored first — a well-separated top score is a fast decision even though the model always runs.
@@ -171,7 +178,7 @@ internal class Memory : Agent
                 $"Total: {timer.Elapsed.TotalSeconds:F1}s, {completionTokens} tokens, {tokPerSec:F1} t/s",
                 "Outcome: model declined to select any candidate — no memories recalled",
             });
-            return string.Empty;
+            return string.IsNullOrEmpty(pinnedBlock) ? string.Empty : pinnedBlock.TrimEnd();
         }
 
         // The model is asked for exact titles but often echoes the whole decorated candidate line
@@ -211,7 +218,7 @@ internal class Memory : Agent
             $"Recalled {fetched.Count} note(s): {string.Join(", ", fetched)}"
                 + (unresolved.Count > 0 ? $" · unresolved: {string.Join(", ", unresolved)}" : string.Empty),
         });
-        return result.ToString().TrimEnd();
+        return (pinnedBlock + result.ToString()).TrimEnd();
     }
 
     // Resolve a model's selection to a note. Fast path: exact title/alias/path via GetNote. Fallback:
