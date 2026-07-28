@@ -40,11 +40,18 @@ internal sealed class RequestTools : Tool
         if (!ToolGroups.TryGet(group, out _))
             return Task.FromResult($"Unknown tool group '{group}'. Call list_tools to see what's available.");
 
-        (List<string> loaded, List<string> unavailable) = ToolFactories.LoadGroup(group, thread);
+        (List<Tool> loaded, List<string> unavailable) = ToolFactories.LoadGroup(group, thread);
 
         if (loaded.Count == 0) return Task.FromResult($"'{group}' isn't available in this context (no project/vault is bound here).");
-        string result = $"Loaded: {string.Join(", ", loaded)}. They're ready to call now.";
-        if (unavailable.Count > 0) result += $" (Not available here: {string.Join(", ", unavailable)}.)";
-        return Task.FromResult(result);
+
+        ToolGroups.TryGet(group, out ToolGroupDef groupDef);
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"Group: {group} — {groupDef?.Description}");
+        sb.AppendLine("Tools loaded:");
+        foreach (Tool tool in loaded)
+            sb.AppendLine($"  • {tool.Name} — {tool.SchemaDescription}");
+        if (unavailable.Count > 0)
+            sb.AppendLine($"Not available here: {string.Join(", ", unavailable)}.");
+        return Task.FromResult(sb.ToString().TrimEnd());
     }
 }

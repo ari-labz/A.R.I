@@ -19,6 +19,10 @@
     "project_tools": {
       "Description": "List, create, rename, and bind projects — the workspaces (code repos or note vaults) a conversation can be scoped to. Use this for any request to start/open/make a new project, workspace, or \"project file\" — that phrase means a new project, not a file inside one.",
       "Tools": ["list_projects", "create_project", "rename_project", "bind_project"]
+    },
+    "discord_tools": {
+      "Description": "Discord voice-channel control: find which VC a user is in, join a voice channel, or leave one.",
+      "Tools": ["discord_list_voice_channels", "discord_join_voice_channel", "discord_leave_voice_channel"]
     }
   }
 }

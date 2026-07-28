@@ -3,6 +3,7 @@ using System.Net;
 using System.Text;
 using ARI.LLM;
 using Discord;
+using Discord.Audio;
 using Discord.Net;
 using Discord.WebSocket;
 using DiscordAttachment = global::Discord.Attachment;
@@ -25,6 +26,14 @@ public class DiscordModule : BackgroundService, IDiscordModule
     private readonly LLMModule llmModule;
     private readonly HttpClient httpClient = new();
     private readonly ILogger _logger;
+    private readonly Dictionary<ulong, IAudioClient> audioClients = new();
+    private readonly Dictionary<ulong, CancellationTokenSource> silenceLoops = new();
+    // Channels ARI intends to be in. Populated by JoinVoiceChannelAsync, cleared by LeaveVoiceChannelAsync.
+    // As long as an entry exists, auto-reconnect will fire on unexpected disconnects.
+    private readonly Dictionary<ulong, ulong> intendedChannels = new();
+
+    // 20ms of silence at 48kHz stereo 16-bit PCM — the minimum heartbeat to keep a voice connection alive.
+    private static readonly byte[] SilenceFrame = new byte[48000 / 50 * 2 * 2];
     
     
     private const string PassToken = "[PASS]";
@@ -32,7 +41,9 @@ public class DiscordModule : BackgroundService, IDiscordModule
     private const string ServerPlatformContext =
         "You are present in a Discord server. Each message shows who is speaking and in which channel. " +
         "If the conversation was clearly not directed at you and you don't need to be involved, reply with only: [PASS] — nothing else. " +
-        "Otherwise, reply normally.";
+        "Otherwise, reply normally. " +
+        "The 'discord_tools' group contains tools for interacting with Discord — worth loading if the request involves Discord itself. " +
+        "When you perform an action (join VC, leave VC, etc.) send NO text reply — the action is the response. Only reply with text if the user asked a question or the action failed.";
 
     public DiscordModule(ILoggerFactory loggerFactory, LLMModule llmModule, DiscordConfig config)
     {
@@ -44,14 +55,17 @@ public class DiscordModule : BackgroundService, IDiscordModule
 
         client = new DiscordSocketClient(new DiscordSocketConfig
         {
-            GatewayIntents = GatewayIntents.AllUnprivileged | GatewayIntents.MessageContent
+            GatewayIntents             = GatewayIntents.AllUnprivileged | GatewayIntents.MessageContent | GatewayIntents.GuildVoiceStates,
+            ConnectionTimeout          = 60000,
+            EnableVoiceDaveEncryption  = true,   // Discord mandated E2EE (DAVE protocol) on all voice channels
         });
 
-        client.Log             += LogAsync;
-        client.Ready           += OnReady;
-        client.Disconnected    += OnDisconnected;
-        client.MessageReceived += message => { _ = Task.Run(() => OnMessageReceived(message)); return Task.CompletedTask; };
+        client.Log                 += LogAsync;
+        client.Ready               += OnReady;
+        client.Disconnected        += OnDisconnected;
+        client.MessageReceived     += message => { _ = Task.Run(() => OnMessageReceived(message)); return Task.CompletedTask; };
         client.SlashCommandExecuted += cmd => { _ = Task.Run(() => OnSlashCommand(cmd)); return Task.CompletedTask; };
+        client.UserVoiceStateUpdated += OnUserVoiceStateUpdated;
     }
 
     // Tripped when Discord rejects our credentials (401 / invalid token). Discord.Net would otherwise
@@ -470,7 +484,10 @@ public class DiscordModule : BackgroundService, IDiscordModule
             string response = await llmModule.Prompt(conversationKey, prompt, username, platformContext, messageAttachments: attachments);
             typingCts.Cancel();
 
-            if (response.Trim() == PassToken)
+            // Strip internal markers that are only meaningful to the web client.
+            response = response.Replace("<!--ari-batch-end-->", "").Trim();
+
+            if (response == PassToken || response.Length == 0)
             {
                 _logger.LogInformation("Ari chose not to respond in [{ConversationKey}]", conversationKey);
                 return;
@@ -496,6 +513,155 @@ public class DiscordModule : BackgroundService, IDiscordModule
             typingCts.Cancel();
             _logger.LogError("Dialogue model not available: {Error}", ex.Message);
             await message.Channel.SendMessageAsync(AsBlockQuote("A·R·I is unable to respond right now."));
+        }
+    }
+
+    public IReadOnlyList<VoiceChannelInfo> GetVoiceChannelsForUser(string username)
+    {
+        var results = new List<VoiceChannelInfo>();
+        foreach (SocketGuild guild in client.Guilds)
+        {
+            SocketGuildUser? user = guild.Users.FirstOrDefault(u =>
+                string.Equals(u.Username, username, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(u.DisplayName, username, StringComparison.OrdinalIgnoreCase));
+            if (user?.VoiceChannel is { } vc)
+                results.Add(new VoiceChannelInfo(vc.Id, vc.Name, guild.Id, guild.Name));
+        }
+        return results;
+    }
+
+    public Task<string> JoinVoiceChannelAsync(ulong channelId)
+    {
+        foreach (SocketGuild guild in client.Guilds)
+        {
+            if (guild.GetChannel(channelId) is not SocketVoiceChannel vc) continue;
+
+            // Record intent before attempting — reconnect loop checks this.
+            intendedChannels[guild.Id] = channelId;
+
+            // Fire-and-forget: return immediately so the LLM turn ends while the connection establishes.
+            _ = Task.Run(async () =>
+            {
+                string? err = await ConnectToChannelAsync(vc);
+                if (err is not null)
+                {
+                    intendedChannels.Remove(guild.Id);
+                    _logger.LogError("[Discord] Failed to join #{ChannelName}: {Error}", vc.Name, err);
+                }
+            });
+
+            return Task.FromResult($"Joining #{vc.Name} in {guild.Name}.");
+        }
+        return Task.FromResult($"Voice channel {channelId} not found.");
+    }
+
+    // Shared by initial join and auto-reconnect. Returns null on success, error message on failure.
+    private async Task<string?> ConnectToChannelAsync(SocketVoiceChannel vc)
+    {
+        await StopSilenceLoopAsync(vc.Guild.Id);
+
+        IAudioClient audio;
+        try { audio = await vc.ConnectAsync(selfDeaf: false, selfMute: false); }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "ConnectAsync failed for channel #{ChannelName} in {GuildName}", vc.Name, vc.Guild.Name);
+            return ex.Message;
+        }
+
+        audioClients[vc.Guild.Id] = audio;
+        CancellationTokenSource cts = new();
+        silenceLoops[vc.Guild.Id] = cts;
+        _ = Task.Run(() => RunSilenceLoopAsync(audio, cts.Token));
+        return null;
+    }
+
+    public async Task<string> LeaveVoiceChannelAsync(ulong? guildId = null)
+    {
+        var left = new List<string>();
+        foreach (SocketGuild guild in client.Guilds)
+        {
+            if (guildId.HasValue && guild.Id != guildId.Value) continue;
+            string? channelName = guild.CurrentUser?.VoiceChannel?.Name;
+            if (channelName is null) continue;
+
+            // Clear intent first so the voice-state handler doesn't fight the leave.
+            intendedChannels.Remove(guild.Id);
+            await StopSilenceLoopAsync(guild.Id);
+
+            if (audioClients.TryGetValue(guild.Id, out IAudioClient? audio))
+            {
+                await audio.StopAsync();
+                audioClients.Remove(guild.Id);
+            }
+            await guild.CurrentUser!.VoiceChannel.DisconnectAsync();
+            left.Add($"#{channelName} in {guild.Name}");
+            _logger.LogInformation("Left voice channel #{ChannelName} in {GuildName}", channelName, guild.Name);
+        }
+        return left.Count > 0 ? $"Left {string.Join(", ", left)}." : "Not in any voice channel.";
+    }
+
+    // Fires when any user's voice state changes. Used to detect when ARI is unexpectedly disconnected
+    // and reconnect automatically as long as intendedChannels still has an entry for that guild.
+    private Task OnUserVoiceStateUpdated(SocketUser user, SocketVoiceState before, SocketVoiceState after)
+    {
+        if (user.Id != client.CurrentUser?.Id) return Task.CompletedTask;
+        if (after.VoiceChannel is not null) return Task.CompletedTask;  // still/newly in a channel — fine
+        if (before.VoiceChannel is null) return Task.CompletedTask;     // wasn't in one before either
+
+        ulong guildId = before.VoiceChannel.Guild.Id;
+        if (!intendedChannels.TryGetValue(guildId, out ulong targetChannelId)) return Task.CompletedTask;
+
+        _logger.LogWarning("[Discord] Unexpectedly left voice in guild {GuildId} — reconnecting to channel {ChannelId}", guildId, targetChannelId);
+        _ = Task.Run(() => ReconnectLoopAsync(guildId, targetChannelId));
+        return Task.CompletedTask;
+    }
+
+    private async Task ReconnectLoopAsync(ulong guildId, ulong channelId)
+    {
+        int delay = 2000;
+        while (intendedChannels.TryGetValue(guildId, out ulong intended) && intended == channelId)
+        {
+            await Task.Delay(delay);
+            if (!intendedChannels.TryGetValue(guildId, out intended) || intended != channelId) break;
+
+            SocketVoiceChannel? vc = client.GetGuild(guildId)?.GetChannel(channelId) as SocketVoiceChannel;
+            if (vc is null) { _logger.LogWarning("[Discord] Reconnect: channel {ChannelId} not found", channelId); break; }
+
+            _logger.LogInformation("[Discord] Reconnecting to #{ChannelName}...", vc.Name);
+            string? err = await ConnectToChannelAsync(vc);
+            if (err is null) { _logger.LogInformation("[Discord] Reconnected to #{ChannelName}", vc.Name); break; }
+
+            _logger.LogWarning("[Discord] Reconnect failed: {Error} — retrying in {Delay}ms", err, delay);
+            delay = Math.Min(delay * 2, 30000);
+        }
+    }
+
+    private async Task StopSilenceLoopAsync(ulong guildId)
+    {
+        if (silenceLoops.TryGetValue(guildId, out CancellationTokenSource? cts))
+        {
+            await cts.CancelAsync();
+            cts.Dispose();
+            silenceLoops.Remove(guildId);
+        }
+    }
+
+    private static async Task RunSilenceLoopAsync(IAudioClient audio, CancellationToken ct)
+    {
+        try
+        {
+            using AudioOutStream pcm = audio.CreatePCMStream(AudioApplication.Mixed);
+            while (!ct.IsCancellationRequested)
+            {
+                await pcm.WriteAsync(SilenceFrame, ct);
+                await Task.Delay(20, ct);
+            }
+            await pcm.FlushAsync(ct);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Shared.Logger.LogWarning("[Discord] Silence loop ended unexpectedly: {Message}", ex.Message);
         }
     }
 

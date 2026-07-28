@@ -8,7 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Discord.Net" Version="3.19.1" />
+    <PackageReference Include="Discord.Net" Version="3.20.1" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.8" />
   </ItemGroup>
 
@@ -20,4 +20,11 @@
   <ItemGroup>
     <Folder Include="Scripts\" />
   </ItemGroup>
+
+  <!-- Discord.Net voice requires libopus, libsodium, and libdave (E2EE/DAVE protocol) as native deps. -->
+  <Target Name="CopyVoiceNativeLibs" AfterTargets="Build" Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+    <Copy SourceFiles="/opt/homebrew/lib/libopus.dylib"   DestinationFiles="$(OutputPath)runtimes/osx-arm64/native/libopus.dylib"   SkipUnchangedFiles="true" />
+    <Copy SourceFiles="/opt/homebrew/lib/libsodium.dylib" DestinationFiles="$(OutputPath)runtimes/osx-arm64/native/libsodium.dylib" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)../devbuild/runtimes/osx-arm64/native/libdave.dylib" DestinationFiles="$(OutputPath)runtimes/osx-arm64/native/libdave.dylib" SkipUnchangedFiles="true" />
+  </Target>
 </Project>

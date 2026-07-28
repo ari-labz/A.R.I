@@ -1,5 +1,7 @@
 namespace ARI.Common;
 
+public record VoiceChannelInfo(ulong ChannelId, string ChannelName, ulong GuildId, string GuildName);
+
 public interface IDiscordModule
 {
     Task NotifyOwner(string message);
@@ -8,6 +10,15 @@ public interface IDiscordModule
     /// <summary>Deletes every message ARI sent within the given window, across all reachable
     /// channels (guild text channels and the owner DM). Returns the number of messages deleted.</summary>
     Task<int> DeleteRecentMessagesAsync(TimeSpan window);
+
+    /// <summary>Returns all voice channels across all guilds that the given user (by username) is currently in.</summary>
+    IReadOnlyList<VoiceChannelInfo> GetVoiceChannelsForUser(string username);
+
+    /// <summary>Joins the specified voice channel. Leaves any current channel in the same guild first.</summary>
+    Task<string> JoinVoiceChannelAsync(ulong channelId);
+
+    /// <summary>Leaves the voice channel in the specified guild, or all voice channels if guildId is null.</summary>
+    Task<string> LeaveVoiceChannelAsync(ulong? guildId = null);
 }
 
 public interface ILLMModule

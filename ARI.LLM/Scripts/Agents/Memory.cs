@@ -72,12 +72,12 @@ internal class Memory : Agent
 
         Thread memThread = new Thread(ThreadPipeline.Dialogue, $"memory:{Guid.NewGuid()}") { Internal = true };
 
-        // If a brain note exists whose title or alias matches the user's name, pin it — always surface
-        // it without model selection so pronouns and identity are always visible to downstream agents.
+        // If a brain note exists whose title or alias matches the user's name, pin its header — always
+        // surface identity/pronoun facts without model selection, but only the top block, not the full note.
         string? speakerName = chatHistory.LastOrDefault(m => m.Username != "ARI")?.Username;
         Note? userNote = string.IsNullOrWhiteSpace(speakerName) ? null : BrainModule.GetNote(speakerName);
         string pinnedBlock = userNote is not null
-            ? $"[{userNote.Title}|{userNote.Url}]\n{userNote.ToPrompt()}\n\n"
+            ? $"[{userNote.Title}|{userNote.Url}]\n{userNote.ToHeader()}\n\n"
             : string.Empty;
 
         // Recall always runs — it's fast enough that a keyword gate only ever costs a real hit.
@@ -190,7 +190,8 @@ internal class Memory : Agent
         List<string> fetched = new();
         List<string> fuzzy = new();
         List<string> unresolved = new();
-        HashSet<string> seen = new();
+        // Pre-seed seen with the pinned user note so the model-selected pass never emits it again.
+        HashSet<string> seen = userNote is not null ? new() { userNote.Name } : new();
         foreach (string title in selected)
         {
             Note? note = Resolve(title, offered, out bool viaFuzzy);

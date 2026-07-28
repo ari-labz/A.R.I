@@ -40,6 +40,10 @@ internal static class ToolFactories
         ["create_project"] = _ => Modules.Projects is not null ? new CreateProject() : null,
         ["rename_project"] = _ => Modules.Projects is not null ? new RenameProject() : null,
         ["bind_project"]   = t => Modules.Projects is not null ? new BindProject(t)  : null,
+
+        ["discord_list_voice_channels"] = _ => Modules.Discord is not null ? new DiscordListVoiceChannels() : null,
+        ["discord_join_voice_channel"]  = _ => Modules.Discord is not null ? new DiscordJoinVoiceChannel()  : null,
+        ["discord_leave_voice_channel"] = _ => Modules.Discord is not null ? new DiscordLeaveVoiceChannel() : null,
     };
 
     private static ServerFileSystem? Fs(Thread t)
@@ -56,12 +60,12 @@ internal static class ToolFactories
 
     /// <summary>Registers every tool in a group that resolves for this thread. The one code path behind
     /// both request_tools and an agent's eager PreloadedTools — "make a group real" happens exactly once.</summary>
-    internal static (List<string> Loaded, List<string> Unavailable) LoadGroup(string group, Thread thread)
+    internal static (List<Tool> Loaded, List<string> Unavailable) LoadGroup(string group, Thread thread)
     {
-        List<string> loaded = new(), unavailable = new();
+        List<Tool> loaded = new(); List<string> unavailable = new();
         if (ToolGroups.TryGet(group, out ToolGroupDef def))
             foreach (string name in def.Tools)
-                if (TryBuild(name, thread, out Tool tool)) { tool.Register(thread); loaded.Add(name); }
+                if (TryBuild(name, thread, out Tool tool)) { tool.Register(thread); loaded.Add(tool); }
                 else unavailable.Add(name);
         return (loaded, unavailable);
     }
