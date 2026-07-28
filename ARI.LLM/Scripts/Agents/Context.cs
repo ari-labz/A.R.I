@@ -1,3 +1,4 @@
+using ARI.Brain;
 using ARI.Common;
 using System.Diagnostics;
 using System.Text;
@@ -57,7 +58,7 @@ internal class Context : Agent
         return null;
     }
 
-    internal async Task Update(string threadKey, string userMessage, string assistantResponse)
+    internal async Task Update(string threadKey, string userMessage, string assistantResponse, string username = "User")
     {
         await updateLock.WaitAsync();
         try
@@ -65,6 +66,13 @@ internal class Context : Agent
             string contextBlock = string.IsNullOrWhiteSpace(contexts.GetValueOrDefault(threadKey))
                 ? "No context yet — this is the first exchange."
                 : contexts[threadKey];
+
+            // If the brain has a note for this user (matched by title or alias), inject it so the
+            // context model has explicit identity/pronoun facts rather than inferring them.
+            Note? userNote = BrainModule.GetNote(username);
+            string userProfile = userNote is not null
+                ? $"USER PROFILE ({username}):\n{userNote.ToPrompt()}\n\n"
+                : string.Empty;
 
             object body = new
             {
@@ -74,8 +82,9 @@ internal class Context : Agent
                     new { role = "system", content = $"{resolvedPrompt}\n<|think_off|>" },
                     new { role = "user",   content =
                         $"TODAY: {DateTime.Now:dddd, d MMMM yyyy}\n\n" +
+                        userProfile +
                         $"CURRENT CONTEXT:\n{contextBlock}\n\n" +
-                        $"NEW EXCHANGE:\nWren: {userMessage}\nARI: {assistantResponse}\n\n" +
+                        $"NEW EXCHANGE:\n{username}: {userMessage}\nARI: {assistantResponse}\n\n" +
                         "Update the context summary. Then, on a final separate line, write exactly " +
                         "\"TITLE: \" followed by a 3-4 word title naming this conversation's topic." }
                 },

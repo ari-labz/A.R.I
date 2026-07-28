@@ -334,7 +334,11 @@ public class LLMModule : ILLMModule, IDisposable
             thread.BufferFull     += () => dialogue.RaiseThreadBufferFull(threadKey);
             thread.BecameInactive += () => dialogue.RaiseThreadBecameInactive(threadKey);
             if (context is not null)
-                thread.ExchangeCompleted += (user, asst) => _ = context.Update(threadKey, user, asst);
+                thread.ExchangeCompleted += (user, asst) =>
+                {
+                    string uname = thread.History.OfType<Prompt>().LastOrDefault()?.AuthorName ?? "User";
+                    _ = context.Update(threadKey, user, asst, uname);
+                };
         }
         Broadcast(new AppEvent("newThread", threadKey));
         return thread;
