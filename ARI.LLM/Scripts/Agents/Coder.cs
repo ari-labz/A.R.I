@@ -36,7 +36,7 @@ internal sealed class Coder : Agent
     public Coder() { }
 
     // Coding prompts are verbose and already logged by the pipeline; don't double-log them.
-    [JsonIgnore] internal override bool SuppressPromptLog => true;
+    [JsonIgnore] internal override bool SuppressLog() => true;
 
     // ── Per-thread code context ──────────────────────────────────────────────
     // The client sends the project map, the coding-conventions rulebook and any project rules when it
@@ -76,7 +76,7 @@ internal sealed class Coder : Agent
         return sb.ToString();
     }
 
-    internal override string BuildPersistentContext(Thread thread) => BuildStaticContext(GetOrCreateState(thread.Key));
+    internal override string PersistentContext(Thread thread) => BuildStaticContext(GetOrCreateState(thread.Key));
 
     // #112: during long exploration the agent goes minutes emitting only tool calls. Every ~90s of
     // tool-only work, force a one-sentence check-in — better UX and it re-anchors purpose against the
@@ -91,8 +91,6 @@ internal sealed class Coder : Agent
     private PhaseConfig? PhaseFor(Thread t)
         => Phases is not null && Phases.TryGetValue(t.Phase.ToString(), out PhaseConfig? p) ? p : null;
 
-    internal override string SystemPromptFor(Thread thread) => SystemPrompt;
-
     // The mode instructions go in the trailing system message (modeNudge) rather than the base system
     // prompt so they arrive as a clearly-labelled second [SYSTEM] block the LLM can distinguish from the
     // stable role/persona context. Returns null when there is no phase config (flat mode).
@@ -106,7 +104,7 @@ internal sealed class Coder : Agent
 
     internal override (double? Temperature, double? TopP, int? TopK, double? MinP,
                        double? RepeatPenalty, double? PresencePenalty, double? FrequencyPenalty)
-        SamplingFor(Thread thread)
+        ResolveSampler(Thread thread)
     {
         PhaseConfig? p = PhaseFor(thread);
         return p is null
@@ -117,7 +115,7 @@ internal sealed class Coder : Agent
 
     // Phase enforcement. Runs before EVERY tool call on this thread (local ServerFileSystem tools AND the
     // client's forwarded edit/write tools), so "no building in Planning" holds on both paths uniformly.
-    protected override string? PreToolGuard(Thread thread, ToolTurnState state, string toolName, string callId, string argsJson)
+    protected override string? BeforeTool(Thread thread, ToolTurnState state, string toolName, string callId, string argsJson)
     {
         if (thread.Phase == CodePhase.Planning
             && toolName is "edit_file" or "write_file" or "delete_file" or "move_file" or "build_project")
@@ -132,7 +130,7 @@ internal sealed class Coder : Agent
 
     // Track files this agent edits, so build_project knows what to build. Runs after every tool on both
     // the local and remote paths.
-    protected override string PostToolProcess(Thread thread, ToolTurnState state, string toolName, string argsJson, string result)
+    protected override string AfterTool(Thread thread, ToolTurnState state, string toolName, string argsJson, string result)
     {
         if (toolName is "edit_file" or "write_file"
             && !ToolCallParser.IsError(result) && !result.StartsWith("[System:", StringComparison.Ordinal))
@@ -191,11 +189,11 @@ internal sealed class Coder : Agent
         }
 
         // Files edited this turn — the build-error owner tag + "did anything change". Populated by the edit
-        // tools via PostToolProcess (works for both the local wrappers and the client's forwarded edit tools).
+        // tools via AfterTool (works for both the local wrappers and the client's forwarded edit tools).
         parent.TouchedFiles.Clear();
 
         // Deterministic edit freeze: when the user forbids changes this turn ("planning only") — enforced at the
-        // tool layer by PreToolGuard alongside the Planning-mode edit block.
+        // tool layer by BeforeTool alongside the Planning-mode edit block.
         bool editsForbidden = UserForbadeEdits(prompt);
 
         // Remote: build_project isn't behind the group system above (ProjectRoot is null for a remote project,
@@ -251,10 +249,15 @@ internal sealed class Coder : Agent
             : "";
         string? modePrompt = ModePromptFor(parent);
         string modeNudge   = modePrompt is not null ? $"{modePrompt}\n\n{nudge}" : nudge;
-        string response = await SendPrompt(parent, prompt, username,
-            augmentedPrompt: handoff.Length > 0 ? $"{handoff}{prompt}" : null,
-            modeNudge: modeNudge,
-            ct: cts.Token, userMessagePreadded: true, onDelta: onDelta);
+        string response = await Prompt(parent, prompt, new PromptOptions
+        {
+            Username            = username,
+            AugmentedPrompt     = handoff.Length > 0 ? $"{handoff}{prompt}" : null,
+            ModeNudge           = modeNudge,
+            Ct                  = cts.Token,
+            UserMessagePreadded = true,
+            OnDelta             = onDelta,
+        });
 
         // Deterministic safety net for the amend path (NOT a content heuristic). A revision turn is ALWAYS a
         // proposal: the user already stated the change, so the model never needs to ask a question here — its

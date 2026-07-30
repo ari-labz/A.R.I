@@ -81,12 +81,14 @@ internal sealed class DialoguePipeline : Pipeline
             }
         }
 
-        return await dialogue.SendPrompt(
-            thread, effectivePrompt, username,
-            recallNotes:     recallBlock,
-            contextSummary:  contextSummary,
-            ct:              cts.Token,
-            userMessagePreadded: true,
-            onDelta:         onDelta);
+        return await dialogue.Prompt(thread, effectivePrompt, new PromptOptions
+        {
+            Username            = username,
+            RecallNotes         = recallBlock,
+            ContextSummary      = contextSummary,
+            Ct                  = cts.Token,
+            UserMessagePreadded = true,
+            OnDelta             = onDelta,
+        });
     }
 }

@@ -90,10 +90,10 @@ public abstract class Agent
     // 0 = unlimited. Overridden by agents that trim short-term history.
     [JsonIgnore] internal virtual int  MemoryLimit => 0;
 
-    [JsonIgnore] internal virtual bool QuietLogging      => false;
+    // should this prompt appear in ARI.log?
+    [JsonIgnore] internal virtual bool SuppressLog()    => false;
     // Memory agents override this to dump each step's raw reasoning to reasoning-{Name}.log for training.
-    [JsonIgnore] protected virtual bool TraceReasoning   => false;
-    [JsonIgnore] internal virtual bool SuppressPromptLog => false;
+    [JsonIgnore] protected virtual bool LogReasoning    => false;
 
     // ── Sampling: agent override (if OverrideSamplerSettings) falls back to BoundServer, the one and
     // only baseline — there is no further ARI-side hardcoded constant to fall back to below that. ──
@@ -101,23 +101,23 @@ public abstract class Agent
     private const double TOKEN_WARNING_RATIO = 0.8;
     private const int    COMPACT_KEEP_RECENT = 3;  // never stub the N most recent tool outputs, regardless of threshold
     private const int    MAX_DEGRADE_EVENTS  = 5;
-    private const int    DEFAULT_MEMORY_LIMIT = 25;
+    private const int    AVERAGE_RESPONSE_WINDOW = 25;
     private const string ATTACHMENT_DIVIDER  = "-------------------";
 
     private readonly HttpClient httpClient = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
 
     // ── Context-building hooks (overridden by specialised agents) ────────────
-    internal virtual string BuildPersistentContext(Thread thread)    => "";
-    internal virtual string RenderDynamicContextBlock(Thread thread) => "";
+    internal virtual string PersistentContext(Thread thread)    => "";
+    internal virtual string DynamicContext(Thread thread) => "";
 
     // The agent's role/mode system-prompt body for THIS thread. Default: the flat configured prompt.
     // A stateful agent (CodeArchitect) overrides this to swap the [Mode] block per CodePhase.
-    internal virtual string SystemPromptFor(Thread thread) => SystemPrompt;
+    internal virtual string BuildSystemPrompt(Thread thread) => SystemPrompt;
 
     /// <summary>Renders the shared [Budgets] footer from its Agents.json template. A line whose only token
     /// resolves to 0 is dropped (a think-off agent should not be told "Thinking Token Budget: 0"); if every
     /// value is 0 the block is omitted entirely.</summary>
-    private static string RenderBudgets(int thinking, int reply, int context, int toolCalls)
+    private static string BuildBudgets(int thinking, int reply, int context, int toolCalls)
     {
         if (thinking <= 0 && reply <= 0 && context <= 0 && toolCalls <= 0) return "";
 
@@ -164,7 +164,7 @@ public abstract class Agent
     // Default: no override. A stateful agent overrides this to sample differently per CodePhase.
     internal virtual (double? Temperature, double? TopP, int? TopK, double? MinP,
                       double? RepeatPenalty, double? PresencePenalty, double? FrequencyPenalty)
-        SamplingFor(Thread thread) => (null, null, null, null, null, null, null);
+        ResolveSampler(Thread thread) => (null, null, null, null, null, null, null);
 
     // Periodic forced narration (#112). When > 0, if the agent has gone this many seconds emitting only
     // tool calls (no visible text), a one-line "tell the user what you've learned and what you're doing"
@@ -175,65 +175,53 @@ public abstract class Agent
 
     // ── Tool-loop hooks (Code overrides; base = generic, no-guard behaviour) ──────
     // Per-turn state for the tool loop. The base carries only what the generic loop reads; Code's
-    // CodeTurnState subclass adds its guard counters. Created fresh per SendPrompt turn (never shared
+    // CodeTurnState subclass adds its guard counters. Created fresh per Prompt turn (never shared
     // between threads) so one agent instance can serve many threads concurrently.
     protected class ToolTurnState
     {
-        public bool ForceNoMoreTools;   // a guard cut tools off for the rest of this turn
-        public bool BlindFirstRead;     // transient: the last read was of a file not previewed this turn
+        public bool toolsCancelled;   // a guard cut tools off for the rest of this turn
+        public bool unpreviewedRead;     // transient: the last read was of a file not previewed this turn
     }
-    protected virtual ToolTurnState CreateToolTurnState() => new();
+    protected virtual ToolTurnState NewTurnState() => new();
     // Called once per tool batch, before its calls are executed.
-    protected virtual void OnToolBatchStart(ToolTurnState state) { }
+    protected virtual void OnBatchStart(ToolTurnState state) { }
     // Mid-stream veto of an edit_file whose target hasn't been read this turn. Returns an abort message or null.
-    protected virtual string? StreamEditPrecheck(Thread thread, ToolTurnState state, string toolName, string argsJson,
+    protected virtual string? EditPrecheck(Thread thread, ToolTurnState state, string toolName, string argsJson,
         IEnumerable<string> pendingReadPaths, List<Attachment> threadAtts, List<Attachment> msgAtts) => null;
     // Before executing a tool: return a short-circuit result (dedup / nudge / cache hit) or null to proceed.
-    protected virtual string? PreToolGuard(Thread thread, ToolTurnState state, string toolName, string callId, string argsJson) => null;
+    protected virtual string? BeforeTool(Thread thread, ToolTurnState state, string toolName, string callId, string argsJson) => null;
     // After executing a tool: post-process / track state; returns the (possibly modified) result. May throw to abort the turn.
-    protected virtual string PostToolProcess(Thread thread, ToolTurnState state, string toolName, string argsJson, string result) => result;
+    protected virtual string AfterTool(Thread thread, ToolTurnState state, string toolName, string argsJson, string result) => result;
     // After a tool result is appended to messages: maintain read-stub / cache bookkeeping.
-    protected virtual void AfterToolAppended(ToolTurnState state, List<object> messages, string toolName, string callId, string argsJson, string result, int addedIndex) { }
+    protected virtual void OnToolAdded(ToolTurnState state, List<object> messages, string toolName, string callId, string argsJson, string result, int addedIndex) { }
     // At batch end: should the turn stop for lack of progress?
-    protected virtual bool OnBatchEndShouldBreak(Thread thread, ToolTurnState state, bool productiveBatch) => false;
-
-    internal List<ThreadMessage> ContextSnapshot(Thread thread)
-    {
-        // Phase 5 (#151): ~3.5 chars/token is the measured rate for real code (was a too-conservative ×2 that
-        // capped the architect at ~40k of its 70k budget). Consistent with compaction's estimate.
-        int maxChars = BudgetContext > 0 ? (int)(BudgetContext * 3.5) : 0;
-        return thread.GetChatHistory(MemoryLimit, maxChars);
-    }
+    protected virtual bool ShouldBreak(Thread thread, ToolTurnState state, bool productiveBatch) => false;
 
     public (int Used, int Limit) GetContextStats(Thread? thread)
     {
         if (thread is null) return (0, BudgetContext);
-        List<ThreadMessage> ctx = ContextSnapshot(thread);
+        int maxChars = BudgetContext > 0 ? (int)(BudgetContext * 3.5) : 0;
+        List<ThreadMessage> ctx = thread.GetChatHistory(MemoryLimit, maxChars);
         int chars = ctx.Sum(m => (m.Username?.Length ?? 0) + 2 + (m.Content?.Length ?? 0));
         return (chars / CHARS_PER_TOKEN, BudgetContext);
     }
 
     // ── Send loop ────────────────────────────────────────────────────────────
 
-    internal async Task<string> SendPrompt(
-        Thread              thread,
-        string              prompt,
-        string              username               = "user",
-        string?             augmentedPrompt        = null,
-        string?             modeNudge              = null,
-        string?             recallNotes            = null,
-        string?             contextSummary         = null,
-        int                 maxTokensOverride      = 0,
-        CancellationToken   ct                     = default,
-        bool                userMessagePreadded    = false,
-        Func<string, Task>? onDelta                = null,
-        int                 thinkingBudgetOverride = 0,
-        bool                chatHidden             = false)
+    internal virtual async Task Steer(Thread thread, string steering) { }
+    internal virtual void Cancel(Thread thread) { }
+
+    internal async Task<string> Prompt(Thread thread, string prompt, PromptOptions opts)
     {
-        await thread.sendLock.WaitAsync(ct);
+        await thread.sendLock.WaitAsync(opts.Ct);
         try
         {
-            return await Send(thread, prompt, username, augmentedPrompt, modeNudge, recallNotes, contextSummary, maxTokensOverride, ct, userMessagePreadded, onDelta, thinkingBudgetOverride, chatHidden);
+            return await Send(thread, prompt,
+                opts.Username, opts.AugmentedPrompt, opts.ModeNudge,
+                opts.RecallNotes, opts.ContextSummary, opts.MaxTokensOverride,
+                opts.Ct, opts.UserMessagePreadded, opts.OnDelta,
+                opts.ThinkingBudget, opts.ChatHidden,
+                opts.UserStillTalking, opts.ConsumeNextPartial);
         }
         catch (OperationCanceledException)
         {
@@ -270,21 +258,8 @@ public abstract class Agent
         {
             thread.liveCallInfo = null;
             thread.sendLock.Release();
-            // Cancel/error exited before OnResponseComplete ran — leave the thread active (with a fresh
-            // response window) instead of stranded in Streaming with no timers.
             thread.OnGenerationAborted();
         }
-    }
-
-    /// <summary>True if the reasoning buffer ends on a sentence boundary (. ! ? or newline), ignoring trailing
-    /// whitespace — the point at which it is safe to cut thinking off gracefully (see the #35 time budget).</summary>
-    private static bool EndsSentence(System.Text.StringBuilder sb)
-    {
-        int i = sb.Length - 1;
-        while (i >= 0 && (sb[i] == ' ' || sb[i] == '\t' || sb[i] == '\r')) i--;
-        if (i < 0) return false;
-        char c = sb[i];
-        return c is '.' or '!' or '?' or '\n';
     }
 
     /// <summary>Wall-clock split of one turn (#35 v2). Prefill = request sent → first delta of each request
@@ -300,7 +275,7 @@ public abstract class Agent
 
         public void RequestSent() { sent = DateTime.UtcNow; lastDelta = null; }
 
-        public void Tick(bool reasoning)
+        public void Mark(bool reasoning)
         {
             DateTime now = DateTime.UtcNow;
             if (lastDelta is null)
@@ -327,7 +302,9 @@ public abstract class Agent
         bool                userMessagePreadded,
         Func<string, Task>? onDelta               = null,
         int                 thinkingBudgetOverride = 0,
-        bool                chatHidden             = false)
+        bool                chatHidden             = false,
+        Func<bool>?         userStillTalking       = null,
+        Func<string?>?      consumeNextPartial     = null)
     {
         // Thinking on/off is a PIPELINE-LEVEL setting (the agent's configured Think) — never flipped per
         // turn or mid-turn. Flipping it changes the chat template, which invalidates the server's entire
@@ -342,7 +319,7 @@ public abstract class Agent
 
         if (thread.ariRepliedAt != DateTime.MinValue)
         {
-            int sampleWindow = MemoryLimit > 0 ? MemoryLimit : DEFAULT_MEMORY_LIMIT;
+            int sampleWindow = MemoryLimit > 0 ? MemoryLimit : AVERAGE_RESPONSE_WINDOW;
             thread.responseSamples.Add(DateTime.UtcNow - thread.ariRepliedAt);
             if (thread.responseSamples.Count > sampleWindow)
                 thread.responseSamples.RemoveAt(0);
@@ -395,7 +372,7 @@ public abstract class Agent
         // Persona is the stable prefix — it must come FIRST so it stays byte-identical across turns and
         // the llama-server KV cache survives (role prompt, then persistent context, then recall follow).
         string persona = UsePersona ? PersonaStore.Get() : "";
-        string roleBody = SystemPromptFor(thread);   // stateful agents swap the [Mode] block here per CodePhase
+        string roleBody = BuildSystemPrompt(thread);   // stateful agents swap the [Mode] block here per CodePhase
         string roleBlock = thread.PlatformContext is null
             ? roleBody
             : $"{roleBody}\n\n{thread.PlatformContext}";
@@ -403,7 +380,7 @@ public abstract class Agent
         // persona agent — Dialogue and Coding alike), so "who ARI is" is never tangled with "what this
         // pipeline does".
         string baseSystem = persona.Length == 0 ? roleBlock : $"# Persona\n{persona}\n\n{roleBlock}";
-        baseSystem += BuildPersistentContext(thread);
+        baseSystem += PersistentContext(thread);
         // list_tools/request_tools manifest (#126) — only for threads that actually carry list_tools
         // (an ephemeral internal thread like Awareness never registers it). Static text, so it
         // sits in the cached KV prefix rather than being rebuilt per turn like the live tool catalog.
@@ -415,7 +392,7 @@ public abstract class Agent
         // coming; the numbers let it self-allocate and finish cleanly instead of being guillotined mid-answer.
         int thinkBudget = effectiveThink ? (thinkingBudgetOverride > 0 ? thinkingBudgetOverride : BudgetThinking) : 0;
         int respBudget  = maxTokensOverride  != 0 ? maxTokensOverride : BudgetResponse;
-        string budgetsBlock = RenderBudgets(thinkBudget, respBudget, BudgetContext, MaxToolCalls);
+        string budgetsBlock = BuildBudgets(thinkBudget, respBudget, BudgetContext, MaxToolCalls);
 
         string thinkSuffix = effectiveThink ? "" : "\n<|think_off|>";
 
@@ -506,7 +483,7 @@ public abstract class Agent
             }
         }
 
-        if (!QuietLogging && !SuppressPromptLog)
+        if (!SuppressLog())
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) prompt\n\"{Prompt}\"", Name, thread.Key, prompt);
 
         // max_tokens is the server's hard ceiling over the WHOLE generation (reasoning + content
@@ -523,8 +500,8 @@ public abstract class Agent
         List<string>    toolResults          = new();
         int                     continueNudges = 0;
         // All Code-specific per-turn guard state (read/edit/command dedup, build state, loop counters) lives
-        // here; the generic loop only reads ToolTurnState.ForceNoMoreTools. See Code.ToolLoop.cs.
-        ToolTurnState           toolTurn      = CreateToolTurnState();
+        // here; the generic loop only reads ToolTurnState.toolsCancelled. See Code.ToolLoop.cs.
+        ToolTurnState           toolTurn      = NewTurnState();
         List<(int Index, string CallId, string Name, string? Path)> toolResultSlots = new();
         int degradeEvents = 0;
         void Degrade()
@@ -616,7 +593,7 @@ public abstract class Agent
 
         while (true)
         {
-            bool      toolsExhausted = toolTurn.ForceNoMoreTools || (MaxToolCalls > 0 && toolCallCount >= MaxToolCalls);
+            bool      toolsExhausted = toolTurn.toolsCancelled || (MaxToolCalls > 0 && toolCallCount >= MaxToolCalls);
             object[]? toolSchemas    = !toolsExhausted && thread.tools.Count > 0
                                         ? thread.tools.Values.Select(t => t.Schema).ToArray()
                                         : null;
@@ -630,7 +607,7 @@ public abstract class Agent
             // No compaction support = rely on the server's --context-shift safety net instead; a
             // non-compacting agent (short one-shot calls) is very unlikely to ever need it.
             if (SupportsCompaction)
-                CompactToolOutput(messages, toolResultSlots, BudgetContext, CompactHighPct, CompactLowPct, thread.Snapshots);
+                Compact(messages, toolResultSlots, BudgetContext, CompactHighPct, CompactLowPct, thread.Snapshots);
 
             if (thread.liveCallInfo is { } lci)
             {
@@ -638,7 +615,7 @@ public abstract class Agent
                 lci.EstimatedInputTokens = (int)(totalChars / CHARS_PER_TOKEN);
             }
 
-            if (!QuietLogging && toolCallCount == 0)
+            if (!SuppressLog() && toolCallCount == 0)
                 Shared.Logger.LogInformation("[{Agent}] ({Thread}) {Tools}",
                     Name, thread.Key,
                     toolSchemas is not null ? $"{toolSchemas.Length} tool(s) available: {string.Join(", ", thread.tools.Keys)}" : "no tools registered");
@@ -649,7 +626,7 @@ public abstract class Agent
             if (BoundServer is null)
                 throw new InvalidOperationException($"[{Name}] has no BoundServer — cannot resolve sampler settings.");
             Server srv = BoundServer;
-            var s = SamplingFor(thread);
+            var s = ResolveSampler(thread);
             Dictionary<string, object?> body = new()
             {
                 ["model"]          = "local",
@@ -724,7 +701,7 @@ public abstract class Agent
             // Cache-friendly dynamic context: append the volatile checklist as a transient LAST message just
             // for this request, then remove it so the persistent history (and its cached prefix) stays stable.
             // Only this small block + genuinely new tokens are re-processed each turn instead of the whole context.
-            string dynamicBlock   = RenderDynamicContextBlock(thread);
+            string dynamicBlock   = DynamicContext(thread);
 
             // Periodic forced narration (#112): if we've gone NarrationIntervalSeconds emitting only tool
             // calls, make the model surface one sentence of what it learned + what it's doing next. Piggybacks
@@ -745,7 +722,7 @@ public abstract class Agent
             if (dynamicInjected) messages.Add(new { role = "user", content = dynamicBlock });
 
             string             json    = JsonSerializer.Serialize(body);
-            if (!QuietLogging)
+            if (!SuppressLog())
                 Shared.Logger.LogInformation("[{Agent}] ({Thread}) → request (step {Step}): max_tokens={MT}, tools={N}, msgs={Msgs}, think={Think} (et={ET}/budget={B})",
                     Name, thread.Key, toolCallCount,
                     body.TryGetValue("max_tokens", out object? mtv) ? mtv : "?",
@@ -801,6 +778,8 @@ public abstract class Agent
             HashSet<int> precheckedCalls = new();
             int? runawayCall = null;   // a native call whose args ran away (model looping / leaking text-format markers)
             bool contentRunaway = false; // text content degenerated into a repeated-character spiral (e.g. backslashes)
+            bool steeringRedirect = false; // speech steering aborted this step to inject a partial and keep thinking
+            bool responseContentStarted = false; // first visible content delta has arrived this step
             int  reasoningStartLen = reasoningBuilder.Length; // for slicing THIS request's reasoning into the trace
 
             // Live trace steps (#80/#111): created the moment their content starts streaming and MUTATED as
@@ -856,10 +835,10 @@ public abstract class Agent
                     // that each delta ticks the thinking or typing clock (stalls tick neither — see TurnClock).
                     bool reasoningDelta = delta.TryGetProperty("reasoning_content", out JsonElement rcProbe)
                         && rcProbe.ValueKind == JsonValueKind.String && (rcProbe.GetString()?.Length ?? 0) > 0;
-                    clock.Tick(reasoningDelta);
+                    clock.Mark(reasoningDelta);
 
                     // Live progress so a long/runaway generation is visible in the log as it happens.
-                    if (!QuietLogging && (DateTime.UtcNow - lastProgress).TotalSeconds >= 3)
+                    if (!SuppressLog() && (DateTime.UtcNow - lastProgress).TotalSeconds >= 3)
                     {
                         lastProgress = DateTime.UtcNow;
                         int argChars = pendingCalls.Values.Sum(c => c.Args.Length);
@@ -876,17 +855,11 @@ public abstract class Agent
                         // escalating backslash/quote-escape mess) that never forms a valid tool call and would
                         // run to the token limit. If one non-whitespace character dominates the recent output,
                         // the generation is garbage — stop the stream and end the turn.
-                        if (responseBuilder.Length > 2000)
+                        if (Runaway.IsSpiral(responseBuilder, out char domChar, out double ratio))
                         {
-                            string recent = responseBuilder.ToString();
-                            recent = recent.Length > 600 ? recent[^600..] : recent;
-                            (char domChar, double ratio) = DominantChar(recent);
-                            if (ratio > 0.6 && !char.IsWhiteSpace(domChar))
-                            {
-                                Shared.Logger.LogWarning("[{Agent}] ({Thread}) content runaway: '{Char}' is {Pct}% of recent output — aborting generation.",
-                                    Name, thread.Key, domChar == '\\' ? "\\\\" : domChar.ToString(), (int)(ratio * 100));
-                                contentRunaway = true;
-                            }
+                            Shared.Logger.LogWarning("[{Agent}] ({Thread}) content runaway: '{Char}' is {Pct}% of recent output — aborting generation.",
+                                Name, thread.Key, domChar == '\\' ? "\\\\" : domChar.ToString(), (int)(ratio * 100));
+                            contentRunaway = true;
                         }
                     }
                     if (contentRunaway) break;
@@ -926,7 +899,7 @@ public abstract class Agent
                                 contentBuilder.Append(preText + "\n");
                                 if (liveText is not null) { trace.Remove(liveText); liveText = null; }
                                 trace.Add(new TraceStep { Kind = "text", Text = preText });
-                                if (!QuietLogging)
+                                if (!SuppressLog())
                                     Shared.Logger.LogInformation("[{Agent}] ({Thread}) \"{Text}\"", Name, thread.Key, preText);
                             }
                             responseBuilder.Clear();
@@ -958,7 +931,7 @@ public abstract class Agent
                                     // Runaway guard: native tool-call args must be JSON. If the model leaks
                                     // text-format tool markers into them it has started looping / stuffing extra
                                     // calls inside this one — stop the stream now and salvage the first call.
-                                    if (runawayCall is null && (call.Args.ToString().Contains("<tool_call") || call.Args.ToString().Contains("<function=")))
+                                    if (runawayCall is null && Runaway.IsToolLeak(call.Args.ToString()))
                                     {
                                         runawayCall = index;
                                         Shared.Logger.LogWarning("[{Agent}] ({Thread}) native tool-call runaway ({Tool}, {Len} arg chars — text-format leak) — aborting generation and salvaging.", Name, thread.Key, call.Name, call.Args.Length);
@@ -973,7 +946,7 @@ public abstract class Agent
                                             .Select(pc => ToolCallParser.TryExtractJsonString(pc.Args.ToString(), "path"))
                                             .Where(p => p is not null)!
                                             .Cast<string>();
-                                        string? abortMsg = StreamEditPrecheck(thread, toolTurn, call.Name, call.Args.ToString(), pendingReadPaths, threadAtts, msgAtts);
+                                        string? abortMsg = EditPrecheck(thread, toolTurn, call.Name, call.Args.ToString(), pendingReadPaths, threadAtts, msgAtts);
                                         if (abortMsg is not null)
                                         {
                                             earlyAbort = (call.Id, call.Name, call.Args.ToString(), abortMsg);
@@ -1014,6 +987,23 @@ public abstract class Agent
                     string? deltaText = contentEl.GetString();
                     if (!string.IsNullOrEmpty(deltaText))
                     {
+                        // Speech steering: the model has left <think> and is about to emit a visible response.
+                        // If the user is still speaking, redirect it back into thinking with the new partial.
+                        if (!responseContentStarted && userStillTalking?.Invoke() == true)
+                        {
+                            string? partial = consumeNextPartial?.Invoke();
+                            string capturedThink = reasoningBuilder.Length > reasoningStartLen
+                                ? "<think>\n" + reasoningBuilder.ToString(reasoningStartLen, reasoningBuilder.Length - reasoningStartLen).TrimEnd() + "\n</think>\n"
+                                : "";
+                            messages.Add(new { role = "assistant", content = capturedThink });
+                            messages.Add(new { role = "user", content = string.IsNullOrWhiteSpace(partial)
+                                ? "[Keep thinking — the user is still speaking. Do not respond yet.]"
+                                : $"[Keep thinking — the user is still speaking. Do not respond yet.]\nFurther transcript — {username}: {partial}" });
+                            reasoningStartLen = reasoningBuilder.Length;
+                            steeringRedirect = true;
+                            break;
+                        }
+                        responseContentStarted = true;
                         deltaText = deltaText
                             .Replace("<|think_off|>", "")
                             .Replace("<|think_on|>",  "")
@@ -1064,7 +1054,7 @@ public abstract class Agent
 
             // Training observability: memory agents dump each step's raw reasoning to a per-agent file so the
             // walk's actual thinking (not just tool calls/diffs) can be read back and fine-tuned. Off by default.
-            if (TraceReasoning && reasoningBuilder.Length > reasoningStartLen)
+            if (LogReasoning && reasoningBuilder.Length > reasoningStartLen)
             {
                 try
                 {
@@ -1077,7 +1067,7 @@ public abstract class Agent
                 catch { /* tracing must never break a turn */ }
             }
 
-            if (!QuietLogging)
+            if (!SuppressLog())
             {
                 int doneArgChars = pendingCalls.Values.Sum(c => c.Args.Length);
                 Shared.Logger.LogInformation("[{Agent}] ({Thread}) ← stream done: finish={FR}, completion_tokens={CT}, reasoning_chars={RC}, {PC} native call(s) [{Names}], {CC} content chars, {AC} arg chars",
@@ -1105,6 +1095,13 @@ public abstract class Agent
                 contentBuilder.Append("\n\n_Stopped — the model's output ran away repeating characters._");
                 if (onDelta is not null) await onDelta(contentBuilder.ToString());
                 break;
+            }
+
+            // Speech steering: model was redirected back into thinking. Messages already injected — restart.
+            if (steeringRedirect)
+            {
+                Shared.Logger.LogInformation("[{Agent}] ({Thread}) speech steering: redirected to continue thinking.", Name, thread.Key);
+                continue;
             }
 
             if (earlyAbort is not null)
@@ -1159,7 +1156,7 @@ public abstract class Agent
                     string raw      = original;
                     // Salvage a runaway native call: the model leaked text-format markers into the JSON
                     // args, so keep only the first valid call and discard the looping tail.
-                    if (raw.Contains("<tool_call") || raw.Contains("<function="))
+                    if (Runaway.IsToolLeak(raw))
                     {
                         raw = ToolCallParser.SalvageNativeArgs(raw);
                         Shared.Logger.LogInformation("[{Agent}] ({Thread}) salvaged runaway args for '{Tool}' → {Args}", Name, thread.Key, name, raw);
@@ -1196,7 +1193,7 @@ public abstract class Agent
                 else
                     messages.Add(new { role = "assistant", tool_calls = toolCallList });
 
-                OnToolBatchStart(toolTurn);
+                OnBatchStart(toolTurn);
 
                 HashSet<string> readOnlyTools = new(StringComparer.OrdinalIgnoreCase)
                     { "read_file", "search_files", "list_directory", "find_files", "search_brain" };
@@ -1217,7 +1214,7 @@ public abstract class Agent
 
                     // Code-specific pre-execute guards (dedup / nudges / build-before-test / command cache).
                     // Returns a short-circuit result, or null to run the tool. See Code.ToolLoop.cs.
-                    string? guard = PreToolGuard(thread, toolTurn, call.Name, call.Id, argsJson);
+                    string? guard = BeforeTool(thread, toolTurn, call.Name, call.Id, argsJson);
                     if (guard is not null)
                     {
                         result = guard;
@@ -1234,7 +1231,7 @@ public abstract class Agent
                             // A genuinely NEW tool card is about to appear — NOW is "another tool block was
                             // emitted". Flip cards deferred from the PREVIOUS batch here, once per batch, so
                             // the flip and the new card land in the caller's eyes together. Deliberately NOT
-                            // hooked at the top of the batch (before PreToolGuard runs): a guarded/deduped call
+                            // hooked at the top of the batch (before BeforeTool runs): a guarded/deduped call
                             // never reaches this branch at all, so a batch that produces no visible card can
                             // never flip anything — it used to, which flipped cards with nothing new to show
                             // for it (a guard silently answering a call, then the turn moving on to more
@@ -1276,7 +1273,7 @@ public abstract class Agent
 
                         // Code-specific post-processing (cache, circuit breaker, edit/build tracking). May throw
                         // to abort the turn. See Code.ToolLoop.cs.
-                        result = PostToolProcess(thread, toolTurn, call.Name, argsJson, result);
+                        result = AfterTool(thread, toolTurn, call.Name, argsJson, result);
 
                         // read_file auto-diverted to a preview (result starts with "[preview:", not an error): relabel
                         // its card to a preview card. Keep it PRESENT-tense ("Previewing") and defer the flip to
@@ -1398,7 +1395,7 @@ public abstract class Agent
                     }
                     toolResultSlots.Add((addedIndex, call.Id, call.Name, readPath));
                     if (thread.liveCallInfo is { } lc) lc.EstimatedInputTokens += result.Length / CHARS_PER_TOKEN;
-                    AfterToolAppended(toolTurn, messages, call.Name, call.Id, argsJson, result, addedIndex);
+                    OnToolAdded(toolTurn, messages, call.Name, call.Id, argsJson, result, addedIndex);
                 }
 
                 contentBuilder.Append("<!--ari-batch-end-->");
@@ -1415,7 +1412,7 @@ public abstract class Agent
                 // Loop-breaker: a weak model can call tools forever without progressing (e.g. re-reading a
                 // file it already read). The per-tool nags only scold; nothing terminates. So after enough
                 // consecutive no-progress batches, end the turn outright.
-                if (OnBatchEndShouldBreak(thread, toolTurn, productiveBatch))
+                if (ShouldBreak(thread, toolTurn, productiveBatch))
                 {
                     contentBuilder.Append("\n\n_Stopped — repeated tool calls were not making progress._");
                     if (onDelta is not null) await onDelta(contentBuilder.ToString());
@@ -1436,7 +1433,7 @@ public abstract class Agent
                 continue;
             }
 
-            bool toolsStillAvailable = !toolTurn.ForceNoMoreTools && !(MaxToolCalls > 0 && toolCallCount >= MaxToolCalls);
+            bool toolsStillAvailable = !toolTurn.toolsCancelled && !(MaxToolCalls > 0 && toolCallCount >= MaxToolCalls);
             if (pendingCalls.Count == 0 && toolsStillAvailable && continueNudges < 2)
             {
                 string tail = responseBuilder.ToString().TrimEnd();
@@ -1494,7 +1491,15 @@ public abstract class Agent
             ? contentBuilder.ToString() + responseBuilder.ToString()
             : responseBuilder.ToString();
         responseText = System.Text.RegularExpressions.Regex.Replace(responseText, @"^\s*ARI\s*:\s*", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        // Strip soft-thinking blocks that the model emits as literal text content even when
+        // thinking mode is off (Qwen3.x behaviour). Complete <think>...</think> blocks first,
+        // then any orphaned tags (e.g. a lone </think> at the end of a response).
+        responseText = System.Text.RegularExpressions.Regex.Replace(
+            responseText, @"<think>[\s\S]*?</think>", "",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         responseText = responseText
+            .Replace("<think>", "")
+            .Replace("</think>", "")
             .Replace("<|think_off|>", "")
             .Replace("<|think_on|>", "")
             .Trim();
@@ -1513,7 +1518,7 @@ public abstract class Agent
         double elapsed   = sw.Elapsed.TotalSeconds;
         double tokPerSec = completionTokens > 0 ? completionTokens / elapsed : 0;
 
-        if (!QuietLogging)
+        if (!SuppressLog())
         {
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) responded in {Seconds}s (prefill {Prefill}s, thinking {Thinking}s, typing {Typing}s; {Tokens} tokens, {TokPerSec} t/s)",
                 Name, thread.Key, elapsed.ToString("F1"),
@@ -1586,20 +1591,9 @@ public abstract class Agent
             .Replace("<!--ari-batch-end-->", "")
             .Trim();
 
-    /// <summary>Most-frequent character in s and the fraction of s it makes up — used to detect a
-    /// degenerate repeated-character spiral (e.g. runaway backslash escaping) in streamed output.</summary>
-    private static (char Char, double Ratio) DominantChar(string s)
-    {
-        if (string.IsNullOrEmpty(s)) return ('\0', 0);
-        Dictionary<char, int> counts = new();
-        foreach (char c in s) counts[c] = counts.TryGetValue(c, out int n) ? n + 1 : 1;
-        KeyValuePair<char, int> top = counts.MaxBy(kv => kv.Value);
-        return (top.Key, (double)top.Value / s.Length);
-    }
-
     private static string? ContentOf(object m) => m.GetType().GetProperty("content")?.GetValue(m) as string;
 
-    private static void CompactToolOutput(List<object> messages, List<(int Index, string CallId, string Name, string? Path)> slots,
+    private static void Compact(List<object> messages, List<(int Index, string CallId, string Name, string? Path)> slots,
         int maxContextTokens, int highPct, int lowPct, FileSnapshots? snapshots)
     {
         if (maxContextTokens <= 0) return;

@@ -84,12 +84,18 @@ internal sealed class SpeechPipeline : Pipeline
             }
         }
 
-        return await dialogue.SendPrompt(
-            thread, effectivePrompt, username,
-            recallNotes:     recallBlock,
-            contextSummary:  contextSummary,
-            ct:              cts.Token,
-            userMessagePreadded: true,
-            onDelta:         onDelta);
+        SpeechSteeringContext? steering = thread.ActiveSteering;
+
+        return await dialogue.Prompt(thread, effectivePrompt, new PromptOptions
+        {
+            Username            = username,
+            RecallNotes         = recallBlock,
+            ContextSummary      = contextSummary,
+            Ct                  = cts.Token,
+            UserMessagePreadded = true,
+            OnDelta             = onDelta,
+            UserStillTalking    = steering is not null ? () => steering.UserStillTalking : null,
+            ConsumeNextPartial  = steering is not null ? () => steering.ConsumeAll()     : null,
+        });
     }
 }

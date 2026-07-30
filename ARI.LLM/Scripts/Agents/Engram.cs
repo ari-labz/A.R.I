@@ -157,8 +157,11 @@ internal class Engram : MemoryAgent, IDisposable
             PublishForInspection(parent);   // surface the sweep in the DTI
             writeThreads.Add(("Engram placement", parent));
 
-            await SendPrompt(parent, EngramTask(transcript, contextSummary, speaker), "system",
-                onDelta: async _ => { Notify?.Invoke(parent.Key); await Task.CompletedTask; });
+            await Prompt(parent, EngramTask(transcript, contextSummary, speaker), new PromptOptions
+            {
+                Username = "system",
+                OnDelta  = async _ => { Notify?.Invoke(parent.Key); await Task.CompletedTask; },
+            });
 
             int commits = parent.History.OfType<Response>()
                 .SelectMany(r => r.Trace ?? Enumerable.Empty<TraceStep>())
