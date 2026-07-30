@@ -29,7 +29,6 @@ public class Thread
     private const int INACTIVE_TO_DORMANT_MIN    = 60;  // inactive → dormant
     private const int DORMANT_TO_DELETE_MIN      = 60;  // dormant  → deleted
     private const int DELETE_RETRY_SEC           = 30;  // re-check cadence when Engram hasn't finished at delete time
-    private const int DEFAULT_MEMORY_LIMIT       = 25;
 
     private readonly string threadKey;
 
@@ -106,10 +105,15 @@ public class Thread
     public bool RevisingPlan;
 
     /// <summary>Set by plan_proposed / replan to force the current turn to end after this tool batch (a clean
-    /// phase boundary), read by CodeArchitect.OnBatchEndShouldBreak.</summary>
+    /// phase boundary), read by CodeArchitect.ShouldBreak.</summary>
     public bool EndTurnNow;
 
-    /// <summary>Files the architect has edited/written this turn (populated by the edit tools via PostToolProcess).
+    /// <summary>Active speech steering context for this turn (Speech pipeline only). Set by ListenerSession
+    /// before PromptStreaming so the in-flight Agent.Send can redirect the model back into thinking mode
+    /// when new Whisper partials arrive while the user is still speaking.</summary>
+    internal SpeechSteeringContext? ActiveSteering { get; set; }
+
+    /// <summary>Files the architect has edited/written this turn (populated by the edit tools via AfterTool).
     /// build_project builds the projects containing these. Replaces the old spawn_coder-populated set now that
     /// the architect edits directly instead of dispatching a Coder.</summary>
     public readonly HashSet<string> TouchedFiles = new(StringComparer.OrdinalIgnoreCase);
@@ -189,7 +193,7 @@ public class Thread
     }
 
     // ── Send-loop state ────────────────────────────────────────────────────────
-    // These are accessed by Agent.SendPrompt / Agent.Send during request processing.
+    // These are accessed by Agent.Prompt / Agent.Send during request processing.
     // preserveOnCancel is also set by Pipeline.cs on cancel.
     internal readonly SemaphoreSlim sendLock         = new(1, 1);
     internal bool                   preserveOnCancel = false;

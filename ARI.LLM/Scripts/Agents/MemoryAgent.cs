@@ -34,7 +34,7 @@ internal abstract class MemoryAgent : Agent
     // makes that a fatal deserialise error at startup.
     [JsonPropertyName("useGraphRulebook")] public bool? UseGraphRulebook { get; init; }
 
-    internal override string BuildPersistentContext(Thread thread)
+    internal override string PersistentContext(Thread thread)
         => (UseGraphRulebook ?? true) ? "\n\n" + SharedPrompts.GraphRulebook : "";
 
     // ── Per-turn guard state ──────────────────────────────────────────────────────────────
@@ -44,7 +44,7 @@ internal abstract class MemoryAgent : Agent
     protected const int READ_CEILING = 4;
     // Hard cap on WORK tool calls per epoch (reads + mutations + search/neighbours). The git ritual
     // (status/diff/log/commit) is excluded so the commit at the end of a clean epoch always lands. Anything
-    // past this many work calls is a spiral, so we END the turn gracefully (OnBatchEndShouldBreak breaks the
+    // past this many work calls is a spiral, so we END the turn gracefully (ShouldBreak breaks the
     // loop WITHOUT withdrawing tools mid-generation, which is what triggered the earlier text-fallback aborts).
     // This bound exists for the single-change Refactor epoch; Engram seeds a whole conversation and needs to
     // recon several entities before writing, so it overrides this to null (no ceiling).
@@ -63,7 +63,7 @@ internal abstract class MemoryAgent : Agent
         public readonly HashSet<string> ReadPaths = new(StringComparer.OrdinalIgnoreCase);  // notes read this epoch
     }
 
-    protected override bool OnBatchEndShouldBreak(Thread thread, ToolTurnState state, bool productiveBatch)
+    protected override bool ShouldBreak(Thread thread, ToolTurnState state, bool productiveBatch)
     {
         if (state is not MemoryTurnState m) return false;
         // Commit landed — the epoch's work is DONE. End immediately instead of doing one more LLM turn: with
@@ -81,10 +81,10 @@ internal abstract class MemoryAgent : Agent
         }
         return false;
     }
-    protected override ToolTurnState CreateToolTurnState() => new MemoryTurnState();
+    protected override ToolTurnState NewTurnState() => new MemoryTurnState();
 
     // Dump each step's raw reasoning to reasoning-{Name}.log so training can read the walk's actual thinking.
-    protected override bool TraceReasoning => true;
+    protected override bool LogReasoning => true;
 
     protected static string? ArgPath(string argsJson)
     {
@@ -115,7 +115,7 @@ internal abstract class MemoryAgent : Agent
     }
 
     // Always review the diff before committing; end the epoch as soon as one change is committed.
-    protected override string? PreToolGuard(Thread thread, ToolTurnState state, string toolName, string callId, string argsJson)
+    protected override string? BeforeTool(Thread thread, ToolTurnState state, string toolName, string callId, string argsJson)
     {
         if (state is not MemoryTurnState m) return null;
 
@@ -159,7 +159,7 @@ internal abstract class MemoryAgent : Agent
         return null;
     }
 
-    protected override string PostToolProcess(Thread thread, ToolTurnState state, string toolName, string argsJson, string result)
+    protected override string AfterTool(Thread thread, ToolTurnState state, string toolName, string argsJson, string result)
     {
         if (state is MemoryTurnState m)
         {
@@ -188,7 +188,7 @@ internal abstract class MemoryAgent : Agent
             else if (toolName == "git_commit" && result.StartsWith("Committed", StringComparison.Ordinal))
             {
                 m.Committed = true;
-                if (StopAfterCommit) m.ForceNoMoreTools = true;   // walk: one logical change per epoch
+                if (StopAfterCommit) m.toolsCancelled = true;   // walk: one logical change per epoch
             }
         }
         return result;
@@ -293,8 +293,8 @@ internal abstract class MemoryAgent : Agent
             EpochOutcome outcome;
             try
             {
-                await SendPrompt(epochThread, BuildEpochPrompt(task, seed.Title, skeleton), "system",
-                    ct: ct, onDelta: live);
+                await Prompt(epochThread, BuildEpochPrompt(task, seed.Title, skeleton),
+                    new PromptOptions { Username = "system", Ct = ct, OnDelta = live });
                 outcome = AssessEpoch(epochThread);
             }
             catch (OperationCanceledException) { throw; }   // a real cancel ends the whole walk

@@ -8,7 +8,7 @@ internal class Dialogue : Agent
     [JsonPropertyName("budgetImage")]       public int BudgetImage        { get; init; }
 
     internal override int  MemoryLimit      => ShortTermMemoryLimit ?? 0;
-    internal override bool SuppressPromptLog => true;
+    internal override bool SuppressLog() => true;
 
     internal event Action<string>? ThreadBufferFull;
     internal event Action<string>? ThreadBecameInactive;

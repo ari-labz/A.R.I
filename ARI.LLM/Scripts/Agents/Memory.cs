@@ -20,7 +20,7 @@ internal class Memory : Agent
     private const int SNIPPET_LENGTH    = 160;
     private const int MAX_SEARCH_TERMS  = 15;
 
-    internal override bool QuietLogging => true;
+    internal override bool SuppressLog() => true;
 
     public Memory() { }
 
@@ -157,7 +157,7 @@ internal class Memory : Agent
             ("candidates", candidateBlock + pathBlock));
 
         Stopwatch timer = Stopwatch.StartNew();
-        string raw = await SendPrompt(memThread, prompt, ct: ct, thinkingBudgetOverride: THINKING_BUDGET);
+        string raw = await Prompt(memThread, prompt, new PromptOptions { Ct = ct, ThinkingBudget = THINKING_BUDGET });
         List<string> selected = ParseSelection(raw);
         timer.Stop();
 

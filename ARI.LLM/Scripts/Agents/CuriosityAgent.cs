@@ -22,7 +22,7 @@ internal sealed class CuriosityAgent : MemoryAgent
     private readonly SemaphoreSlim runLock = new(1, 1);
 
     // Background reflection — think as much as it needs, but stay quiet in the main log.
-    internal override bool QuietLogging => true;
+    internal override bool SuppressLog() => true;
 
     public CuriosityAgent() { }
 
@@ -50,7 +50,7 @@ internal sealed class CuriosityAgent : MemoryAgent
     protected override bool StopAfterCommit => false;
 
     // The tidy taxonomy rulebook is irrelevant here; Curiosity's persona/context lives in its SystemPrompt.
-    internal override string BuildPersistentContext(Thread thread) => string.Empty;
+    internal override string PersistentContext(Thread thread) => string.Empty;
 
     // Read-only navigation + curiosity tools. NO write/edit/move/delete/git — Curiosity never changes the
     // vault; it only reads and records questions.
@@ -78,7 +78,7 @@ internal sealed class CuriosityAgent : MemoryAgent
     // Read-only guard: block re-reading a note already read this epoch (its content is in context), but do
     // NOT cap distinct reads the way the tidy walk does — exploring for curiosities legitimately reads more
     // notes. The work-call breaker (EPOCH_TOOL_CEILING) is the real bound on an epoch's length.
-    protected override string? PreToolGuard(Thread thread, ToolTurnState state, string toolName, string callId, string argsJson)
+    protected override string? BeforeTool(Thread thread, ToolTurnState state, string toolName, string callId, string argsJson)
     {
         if (state is not MemoryTurnState m || toolName != "read_file") return null;
         string? path = ArgPath(argsJson);

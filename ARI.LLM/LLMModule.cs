@@ -32,6 +32,7 @@ public class LLMModule : ILLMModule, IDisposable
     
     
     private readonly CommandService    commands;
+    private readonly InferenceScheduler                                      scheduler          = new();
     private readonly ConcurrentDictionary<string, CancellationTokenSource>  processingThreads  = new();
     private readonly ConcurrentDictionary<string, LiveCallInfo>            liveCalls           = new();
     private readonly ConcurrentDictionary<Guid, Channel<AppEvent>>         globalSubscribers   = new();
@@ -320,6 +321,10 @@ public class LLMModule : ILLMModule, IDisposable
         // own copy for the same reason.
         new ListTools().Register(thread);
         new RequestTools(thread).Register(thread);
+        // Discord threads get discord_tools hot — no request_tools round-trip needed.
+        if (threadKey.StartsWith("dm:", StringComparison.OrdinalIgnoreCase) ||
+            threadKey.StartsWith("guild:", StringComparison.OrdinalIgnoreCase))
+            ToolFactories.LoadGroup("discord_tools", thread);
         thread.Updated          += () => Broadcast(new AppEvent("threadUpdated", threadKey));
         thread.Deleted          += () => { threads.TryRemove(threadKey, out _); Broadcast(new AppEvent("threadDeleted", threadKey)); };
         thread.Streaming        += text => Broadcast(new AppEvent("streaming", threadKey, text));
@@ -588,25 +593,33 @@ public class LLMModule : ILLMModule, IDisposable
     public async Task<bool> EvaluateAwareness(string transcript, string? context = null, CancellationToken ct = default)
     {
         if (awareness is null || string.IsNullOrWhiteSpace(transcript)) return true;
-        try { return await awareness.IsAddressed(transcript, context, ct); }
+        try
+        {
+            using IDisposable _ = await scheduler.AcquireAsync(InferencePriority.Voice, ct);
+            return await awareness.IsAddressed(transcript, context, ct);
+        }
+        catch (OperationCanceledException) { throw; }
         catch (Exception ex) { _logger.LogWarning(ex, "[Awareness] evaluation failed; assuming addressed."); return true; }
     }
 
-    public Task<string> Prompt(string threadKey, string prompt, string username, string? platformContext = null, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null)
-        => Route(threadKey, prompt, username, platformContext, null, CancellationToken.None, messageAttachments, threadAttachments);
+    public Task<string> Prompt(string threadKey, string prompt, string username, string? platformContext = null, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null, InferencePriority priority = InferencePriority.Normal)
+        => Route(threadKey, prompt, username, platformContext, null, CancellationToken.None, messageAttachments, threadAttachments, priority: priority);
 
-    public Task<string> PromptStreaming(string threadKey, string prompt, string username, string? platformContext, Func<string, Task> onDelta, CancellationToken ct = default, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null, string? localPath = null)
-        => Route(threadKey, prompt, username, platformContext, onDelta, ct, messageAttachments, threadAttachments, localPath);
+    public Task<string> PromptStreaming(string threadKey, string prompt, string username, string? platformContext, Func<string, Task> onDelta, CancellationToken ct = default, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null, string? localPath = null, InferencePriority priority = InferencePriority.Normal, SpeechSteeringContext? steering = null)
+        => Route(threadKey, prompt, username, platformContext, onDelta, ct, messageAttachments, threadAttachments, localPath, priority, steering);
 
-    private async Task<string> Route(string threadKey, string prompt, string username, string? platformContext, Func<string, Task>? onDelta, CancellationToken externalCt, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null, string? localPath = null)
+    private async Task<string> Route(string threadKey, string prompt, string username, string? platformContext, Func<string, Task>? onDelta, CancellationToken externalCt, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null, string? localPath = null, InferencePriority priority = InferencePriority.Normal, SpeechSteeringContext? steering = null)
     {
         if (dialogue is null)
             throw new ModelNotFoundException("Dialogue model is not loaded or is not enabled.");
 
-        
         // New prompt arrived mid-processing — cancel the previous one
         if (IsThreadProcessing(threadKey))
             Interrupt(threadKey);
+
+        // Acquire the global inference slot before building the CTS so cancellation while waiting
+        // never leaves a stale entry in processingThreads.
+        using IDisposable slot = await scheduler.AcquireAsync(priority, externalCt);
 
         // create a cancellation token in case this prompt needs cancelling later
         CancellationTokenSource cts = externalCt.CanBeCanceled
@@ -614,7 +627,6 @@ public class LLMModule : ILLMModule, IDisposable
             : new CancellationTokenSource();
         processingThreads[threadKey] = cts;
 
-        
         // Discord threads always use Dialogue.
         bool isDiscordThread = threadKey.StartsWith("dm:", StringComparison.OrdinalIgnoreCase)
                             || threadKey.StartsWith("guild:", StringComparison.OrdinalIgnoreCase);
@@ -653,6 +665,7 @@ public class LLMModule : ILLMModule, IDisposable
             case "Speech":
             {
                 Thread speechThread = Recategorise(ThreadPipeline.Speech, threadKey, platformContext);
+                speechThread.ActiveSteering = steering;
                 return await (speechPipeline ?? (Pipeline)dialoguePipeline!).ExecuteAsync(speechThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments, localPath);
             }
             default:
@@ -661,7 +674,6 @@ public class LLMModule : ILLMModule, IDisposable
                 return await dialoguePipeline!.ExecuteAsync(dlgThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments);
             }
         }
-        
     }
 
     // ── Commands ────────────────────────────────────────────────────────────────
@@ -852,7 +864,7 @@ public class LLMModule : ILLMModule, IDisposable
         // "write your opening message now / output only the message" stops that.
         string instruction = dialogue.PromptText("ProactiveOpener", "", ("question", pick.Question));
 
-        // Generate through the full Dialogue pipeline (not raw SendPrompt) so the opener is grounded in memory
+        // Generate through the full Dialogue pipeline (not raw Prompt) so the opener is grounded in memory
         // recall + context — otherwise Ari phrases blind, with no idea who the people in the question are. The
         // draft thread is internal and never registered, so the instruction above never surfaces in the sidebar;
         // we then seed a fresh owner-facing thread with just the resulting message.
@@ -864,7 +876,7 @@ public class LLMModule : ILLMModule, IDisposable
         {
             opener = dialoguePipeline is not null
                 ? await dialoguePipeline.ExecuteAsync(draft, draft.Key, instruction, "user", null, null, draftCts)
-                : await dialogue.SendPrompt(draft, instruction, ct: ct);
+                : await dialogue.Prompt(draft, instruction, new PromptOptions { Ct = ct });
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) { _logger.LogWarning("[Proactive] phrasing failed ({Msg}); using the raw question.", ex.Message); opener = pick.Question; }
@@ -944,7 +956,7 @@ public class LLMModule : ILLMModule, IDisposable
 
     /// <summary>Sends a prompt directly through the Code pipeline, bypassing classification.
     /// Used by the desktop client which always needs code-aware responses.</summary>
-    public Task<string> PromptCodeStreaming(
+    public async Task<string> PromptCodeStreaming(
         string              threadKey,
         string              prompt,
         string              username,
@@ -954,12 +966,13 @@ public class LLMModule : ILLMModule, IDisposable
         string?             localPath = null)
     {
         if (codeArchitect is null) throw new InvalidOperationException("Coder agent not loaded");
+        using IDisposable slot = await scheduler.AcquireAsync(InferencePriority.Normal, ct);
         CancellationTokenSource cts = ct.CanBeCanceled
             ? CancellationTokenSource.CreateLinkedTokenSource(ct)
             : new CancellationTokenSource();
         processingThreads[threadKey] = cts;
         Thread codeThread = GetOrCreateThread(ThreadPipeline.Code, threadKey, platformContext);
-        return codePipeline!.ExecuteAsync(codeThread, threadKey, prompt, username, platformContext, onDelta, cts, localPath: localPath);
+        return await codePipeline!.ExecuteAsync(codeThread, threadKey, prompt, username, platformContext, onDelta, cts, localPath: localPath);
     }
 
     public (int used, int limit) GetContextStats(string threadKey)

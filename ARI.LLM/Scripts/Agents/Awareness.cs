@@ -9,7 +9,7 @@ internal class Awareness : Agent
 {
     public Awareness() { }
 
-    internal override bool QuietLogging => true;
+    internal override bool SuppressLog() => true;
 
     /// <summary>Returns true if the transcript appears to be addressed to Ari.</summary>
     internal async Task<bool> IsAddressed(string transcript, string? context = null, CancellationToken ct = default)
@@ -19,7 +19,7 @@ internal class Awareness : Agent
             ? $"Transcript: \"{transcript}\""
             : $"{context}\nTranscript: \"{transcript}\"";
         // Force a tiny budget regardless of JSON config — the answer is a single word.
-        string result = await SendPrompt(ephemeral, prompt, maxTokensOverride: 8, ct: ct);
+        string result = await Prompt(ephemeral, prompt, new PromptOptions { MaxTokensOverride = 8, Ct = ct });
         return result.Trim().StartsWith("ADDRESSED", StringComparison.OrdinalIgnoreCase);
     }
 }
