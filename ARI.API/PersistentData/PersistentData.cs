@@ -5,12 +5,10 @@ using ARI.LLM;
 
 namespace ARI.API.Data;
 
-/// <summary>Prompts owned by no single agent — the MemoryAgent block its children share, and the
-/// [Budgets] footer appended to every agent.</summary>
 public sealed class SharedPromptsFile
 {
     public Dictionary<string, string>? MemoryAgent { get; set; }
-    public Dictionary<string, string>? Budgets     { get; set; }
+    public Dictionary<string, string>? ToolSystem  { get; set; }
 }
 
 public sealed class AgentDefinition
@@ -18,7 +16,7 @@ public sealed class AgentDefinition
     public string  Name              { get; set; } = "";
     public string  ServerName        { get; set; } = "";
     public string  SystemPrompt      { get; set; } = "";
-    public Dictionary<string, string>? Prompts { get; set; }
+    public Dictionary<string, string>? PromptTemplates { get; set; }
     // Modelled here or Save() drops them: the Coder's per-phase prompts, and Curiosity's rulebook opt-out.
     public Dictionary<string, PhaseConfig>? Phases { get; set; }
     public bool?   UseGraphRulebook  { get; set; }
@@ -30,30 +28,8 @@ public sealed class AgentDefinition
     public int     MaxToolCalls      { get; set; }
     // BudgetContext is no longer settable here — it's derived from the agent's bound slot (Server.cs
     // NamedSlot.ContextLimit), not agent config. See Agent.BudgetContext.
-    public bool    NativeTools       { get; set; }
-    public bool    OverrideSamplerSettings { get; set; }
-    public double? Temperature       { get; set; }
-    public double? TopP              { get; set; }
-    public int?    TopK              { get; set; }
-    public double? RepeatPenalty     { get; set; }
-    public double? PresencePenalty   { get; set; }
-    public double? FrequencyPenalty  { get; set; }
-    public double? TopNSigma         { get; set; }
-    public double? TypicalP          { get; set; }
-    public double? XtcProbability    { get; set; }
-    public double? XtcThreshold      { get; set; }
-    public double? DynatempRange     { get; set; }
-    public double? DynatempExp       { get; set; }
-    public int?    RepeatLastN       { get; set; }
-    public double? DryMultiplier     { get; set; }
-    public double? DryBase           { get; set; }
-    public int?    DryAllowedLength  { get; set; }
-    public int?    DryPenaltyLastN   { get; set; }
-    public string[]? DrySequenceBreakers { get; set; }
-    public int?    Mirostat          { get; set; }
-    public double? MirostatLr        { get; set; }
-    public double? MirostatEnt       { get; set; }
-    public long?   Seed              { get; set; }
+    public bool             NativeTools       { get; set; }
+    public SamplerSettings? SamplerSettings    { get; set; }
     public bool    SupportsCompaction { get; set; }
     public int     CompactHighPct    { get; set; } = 80;
     public int     CompactLowPct     { get; set; } = 60;
@@ -62,8 +38,6 @@ public sealed class AgentDefinition
     // Engram-specific
     public int?    SweepIntervalMinutes { get; set; }
     public int?    RecursiveBrainSearchDepth { get; set; }
-    // Memory-specific (also used by Engram)
-    public int?    MinP              { get; set; }
 }
 
 /// <summary>

@@ -512,13 +512,10 @@ public class VoiceController(
             "[Voice] Training started — model: {ModelName}, epochs: {Epochs}",
             req.ModelName, req.Epochs);
 
-        // Stop llama servers to free RAM, run training, then restart them
         string stagingPath = req.StagingPath;
         string modelName   = req.ModelName;
         _ = Task.Run(async () =>
         {
-            if (llm is not null) await llm.StopAllServersAsync();
-
             while (job.IsRunning)
                 await Task.Delay(2000);
             try { Directory.Delete(stagingPath, recursive: true); }
@@ -534,8 +531,6 @@ public class VoiceController(
             {
                 logger.LogWarning("[Voice] Training failed for {ModelName}: {Error}", modelName, job.Error);
             }
-
-            if (llm is not null) await llm.RestartAllServersAsync();
         });
 
         return Ok(new { jobId = job.JobId, modelName = job.ModelName });
@@ -892,7 +887,6 @@ public class VoiceController(
         string modelName = settings.ModelName;
         _ = Task.Run(async () =>
         {
-            if (llm is not null) await llm.StopAllServersAsync();
             while (job.IsRunning) await Task.Delay(2000);
             if (job.IsSuccess)
             {
@@ -904,7 +898,6 @@ public class VoiceController(
             {
                 logger.LogWarning("[Voice] Training failed for {ModelName}: {Error}", modelName, job.Error);
             }
-            if (llm is not null) await llm.RestartAllServersAsync();
         });
 
         return Ok(new { jobId = job.JobId, modelName = job.ModelName });

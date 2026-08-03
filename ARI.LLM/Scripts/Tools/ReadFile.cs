@@ -37,7 +37,13 @@ internal sealed class ReadFile : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson) => fs.Read(argsJson);
+    internal override async Task<string> Execute(string argsJson)
+    {
+        string result = await fs.Read(argsJson);
+        if (!result.StartsWith("[Error", StringComparison.OrdinalIgnoreCase))
+            fs.MarkRead(argsJson);
+        return result;
+    }
 
     /// <summary>Hard per-call read window shared by every read_file backend (server disk and remote client).
     /// Every token a read returns is uncached prompt the next request must prefill (~60-70 t/s on the local

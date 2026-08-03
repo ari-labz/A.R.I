@@ -183,6 +183,27 @@ internal static class ToolCallParser
         catch { return argsJson; }
     }
 
+    /// <summary>
+    /// Detects when the model has emitted a tool call as plain text rather than a native function call.
+    /// Triggers on &lt;tool_call&gt;/&lt;function= XML bleed, or a known tool name at the very start of output
+    /// followed only by whitespace, '{', or end-of-string. Requires ≥3 chars so it never fires on an
+    /// incomplete first word.
+    /// </summary>
+    internal static bool IsTextToolCall(string accumulated, IEnumerable<string> toolNames)
+    {
+        string t = accumulated.TrimStart();
+        if (t.Length == 0) return false;
+        if (t.StartsWith("<tool_call", StringComparison.Ordinal) || t.StartsWith("<function=", StringComparison.Ordinal)) return true;
+        foreach (string name in toolNames)
+        {
+            if (!t.StartsWith(name, StringComparison.OrdinalIgnoreCase)) continue;
+            if (t.Length == name.Length) return true;
+            char next = t[name.Length];
+            if (next == '\n' || next == '\r' || next == '{' || next == ' ' || next == '\t') return true;
+        }
+        return false;
+    }
+
     internal static bool IsError(string result) =>
         result.StartsWith("[Error:", StringComparison.OrdinalIgnoreCase) ||
         result.StartsWith("Error:", StringComparison.OrdinalIgnoreCase);

@@ -38,6 +38,14 @@ internal abstract class Tool
     /// <summary>Live marker updated as the call's arguments stream in. Null = none.</summary>
     internal virtual Func<string, string?>? StreamingDisplay => null;
 
+    // Veto hooks — return a message to block the call, null to allow.
+    // StreamingPreCheck fires on every args delta; PreCheck fires once post-stream before Execute.
+    // Both bubble: tool → agent → pipeline. Most tools leave these as null.
+    internal virtual string? StreamingPreCheck(Thread thread, string partialArgs) => null;
+    internal virtual string? PreCheck(Thread thread, string argsJson) => null;
+
     internal void Register(Thread thread)
-        => thread.RegisterTool(Name, Schema, Execute, Display, DisplayAfter, StreamingDisplay);
+        => thread.RegisterTool(Name, Schema, Execute, Display, DisplayAfter, StreamingDisplay,
+            partialArgs => StreamingPreCheck(thread, partialArgs),
+            argsJson    => PreCheck(thread, argsJson));
 }

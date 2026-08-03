@@ -4,43 +4,47 @@ using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
-// Standalone copy of DialoguePipeline (issue #84): identical behaviour to start, a baseline the Speech
-// pipeline diverges from through later Speech-Pipeline issues. Deliberately does NOT inherit Dialogue —
-// it reuses the Dialogue agent instance for now so a Speech thread behaves exactly like a Dialogue one.
 internal sealed class SpeechPipeline : Pipeline
 {
-    private readonly Dialogue  dialogue;
-    private readonly Memory?   memory;
-    private readonly Context?  context;
-    private readonly Engram?   engram;
+    private readonly TalkingAgent talkingAgent;
+    private readonly Memory?      memory;
+    private readonly Context?     context;
+    private readonly Engram?      engram;
 
-    protected override Agent  PrimaryAgent => dialogue;
+    // Pending speech steering contexts, keyed by thread key.
+    // Set by LLMModule before ExecuteAsync, consumed and cleared in RunAsync.
+    private readonly ConcurrentDictionary<string, SpeechSteeringContext?> _pendingSteering = new();
+
+    protected override Agent  PrimaryAgent => talkingAgent;
     protected override string PipelineName => "Speech";
 
     internal event Action<string>? ThreadBufferFull;
     internal event Action<string>? ThreadBecameInactive;
 
     internal SpeechPipeline(
-        Dialogue  dialogue,
-        Memory?   memory,
-        Context?  context,
-        Engram?   engram,
+        TalkingAgent talkingAgent,
+        Memory?      memory,
+        Context?     context,
+        Engram?      engram,
         ConcurrentDictionary<string, CancellationTokenSource> processingThreads,
         ConcurrentDictionary<string, LiveCallInfo>             liveCalls,
         Action<string>                                          notifyWatchers)
         : base(processingThreads, liveCalls, notifyWatchers)
     {
-        this.dialogue = dialogue;
-        this.memory   = memory;
-        this.context  = context;
-        this.engram   = engram;
+        this.talkingAgent = talkingAgent;
+        this.memory       = memory;
+        this.context      = context;
+        this.engram       = engram;
 
-        dialogue.ThreadBufferFull    += key => ThreadBufferFull?.Invoke(key);
-        dialogue.ThreadBecameInactive += key => ThreadBecameInactive?.Invoke(key);
+        talkingAgent.ThreadBufferFull     += key => ThreadBufferFull?.Invoke(key);
+        talkingAgent.ThreadBecameInactive += key => ThreadBecameInactive?.Invoke(key);
     }
 
+    internal void SetSteering(string threadKey, SpeechSteeringContext? ctx)
+        => _pendingSteering[threadKey] = ctx;
+
     protected override LiveCallInfo BuildLiveCall(string threadKey) =>
-        new("Speech", threadKey, 0, dialogue.BudgetResponse, dialogue.BudgetContext, dialogue.BudgetImage);
+        new("Speech", threadKey, 0, talkingAgent.BudgetResponse, talkingAgent.BudgetContext, talkingAgent.BudgetImage);
 
     protected override async Task<string> RunAsync(
         Thread               thread,
@@ -72,7 +76,6 @@ internal sealed class SpeechPipeline : Pipeline
             }
             catch (OperationCanceledException) when (cts.IsCancellationRequested)
             {
-                // Superseded by a newer message (common on Discord) — abort quietly, don't surface as an error.
                 throw;
             }
             catch (Exception ex)
@@ -84,18 +87,24 @@ internal sealed class SpeechPipeline : Pipeline
             }
         }
 
-        SpeechSteeringContext? steering = thread.ActiveSteering;
+        _pendingSteering.TryRemove(threadKey, out SpeechSteeringContext? steering);
 
-        return await dialogue.Prompt(thread, effectivePrompt, new PromptOptions
+        talkingAgent.Steering = steering;
+        try
         {
-            Username            = username,
-            RecallNotes         = recallBlock,
-            ContextSummary      = contextSummary,
-            Ct                  = cts.Token,
-            UserMessagePreadded = true,
-            OnDelta             = onDelta,
-            UserStillTalking    = steering is not null ? () => steering.UserStillTalking : null,
-            ConsumeNextPartial  = steering is not null ? () => steering.ConsumeAll()     : null,
-        });
+            return await talkingAgent.Prompt(thread, effectivePrompt, new PromptOptions
+            {
+                Username            = username,
+                RecallNotes         = recallBlock,
+                ContextSummary      = contextSummary,
+                Ct                  = cts.Token,
+                UserMessagePreadded = true,
+                OnDelta             = onDelta,
+            });
+        }
+        finally
+        {
+            talkingAgent.Steering = null;
+        }
     }
 }

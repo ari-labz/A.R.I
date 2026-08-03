@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace ARI.LLM;
 
 /// <summary>
@@ -14,6 +16,22 @@ namespace ARI.LLM;
 /// </summary>
 internal abstract class FileSystem
 {
+    // Paths the model has successfully read or previewed this session.
+    // EditFile checks this to block edits on files the model has never seen.
+    internal readonly HashSet<string> ReadLedger = new(StringComparer.OrdinalIgnoreCase);
+
+    internal void MarkRead(string argsJson)
+    {
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            if (doc.RootElement.TryGetProperty("path", out JsonElement p) && p.GetString() is { } path)
+                ReadLedger.Add(path);
+        }
+        catch { }
+    }
+
+
     public virtual Task<string> Read(string argsJson)    => Unavailable("read_file");
     public virtual Task<string> Preview(string argsJson) => Unavailable("preview_file");
     public virtual Task<string> Edit(string argsJson)    => Unavailable("edit_file");

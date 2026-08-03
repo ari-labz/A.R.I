@@ -25,6 +25,7 @@ public sealed class ListenerModule : IListenerModule, IDisposable
     }
 
     public bool IsReady => worker.Running;
+    public string? WhisperUrl => worker.Running ? worker.WebSocketUrl : null;
 
     /// <summary>Launch the Whisper worker. Safe to call once at startup.</summary>
     public bool Start() => worker.Start();

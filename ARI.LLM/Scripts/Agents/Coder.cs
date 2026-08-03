@@ -36,7 +36,7 @@ internal sealed class Coder : Agent
     public Coder() { }
 
     // Coding prompts are verbose and already logged by the pipeline; don't double-log them.
-    [JsonIgnore] internal override bool SuppressLog() => true;
+    internal override bool SuppressLog() => true;
 
     // ── Per-thread code context ──────────────────────────────────────────────
     // The client sends the project map, the coding-conventions rulebook and any project rules when it
@@ -81,7 +81,20 @@ internal sealed class Coder : Agent
     // #112: during long exploration the agent goes minutes emitting only tool calls. Every ~90s of
     // tool-only work, force a one-sentence check-in — better UX and it re-anchors purpose against the
     // "search because my history is all searches" momentum that drives over-exploration.
-    [JsonIgnore] internal override int NarrationIntervalSeconds => 90;
+    private DateTime _lastNarrationUtc = DateTime.UtcNow;
+    private const int NarrationIntervalSeconds = 90;
+    private const string NarrationNudge =
+        "[System: Pause and check in. In ONE sentence to the user, say what you've " +
+        "learned so far and what you're about to do next and WHY — then continue. This keeps the user " +
+        "informed and keeps you anchored to the goal rather than exploring out of habit.]";
+
+    internal override string DynamicContext(Thread thread, bool lastStepToolOnly)
+    {
+        if (!lastStepToolOnly) return "";
+        if ((DateTime.UtcNow - _lastNarrationUtc).TotalSeconds < NarrationIntervalSeconds) return "";
+        _lastNarrationUtc = DateTime.UtcNow;
+        return NarrationNudge;
+    }
 
     // ── State machine: per-CodePhase prompt + sampling ───────────────────────────────────────────────
     // SystemPrompt (base field) holds the INVARIANT [Role] text; each phase supplies its own [Mode] prompt
@@ -102,20 +115,27 @@ internal sealed class Coder : Agent
             : $"# Mode: {thread.Phase}\n{phase.SystemPrompt}";
     }
 
-    internal override (double? Temperature, double? TopP, int? TopK, double? MinP,
-                       double? RepeatPenalty, double? PresencePenalty, double? FrequencyPenalty)
-        ResolveSampler(Thread thread)
+    internal override SamplerSettings ResolveSampler(Thread thread)
     {
         PhaseConfig? p = PhaseFor(thread);
         return p is null
-            ? (null, null, null, null, null, null, null)
-            : (p.Temperature, p.TopP, p.TopK, p.MinP, p.RepeatPenalty, p.PresencePenalty, p.FrequencyPenalty);
+            ? new()
+            : new SamplerSettings
+            {
+                Temperature      = p.Temperature,
+                TopP             = p.TopP,
+                TopK             = p.TopK,
+                MinP             = p.MinP,
+                RepeatPenalty    = p.RepeatPenalty,
+                PresencePenalty  = p.PresencePenalty,
+                FrequencyPenalty = p.FrequencyPenalty,
+            };
     }
 
 
     // Phase enforcement. Runs before EVERY tool call on this thread (local ServerFileSystem tools AND the
     // client's forwarded edit/write tools), so "no building in Planning" holds on both paths uniformly.
-    protected override string? BeforeTool(Thread thread, ToolTurnState state, string toolName, string callId, string argsJson)
+    internal override string? OnToolCall(Thread thread, ToolTurnState state, string toolName, string callId, string argsJson)
     {
         if (thread.Phase == CodePhase.Planning
             && toolName is "edit_file" or "write_file" or "delete_file" or "move_file" or "build_project")
@@ -130,7 +150,7 @@ internal sealed class Coder : Agent
 
     // Track files this agent edits, so build_project knows what to build. Runs after every tool on both
     // the local and remote paths.
-    protected override string AfterTool(Thread thread, ToolTurnState state, string toolName, string argsJson, string result)
+    internal override string OnToolResult(Thread thread, ToolTurnState state, string toolName, string argsJson, string result)
     {
         if (toolName is "edit_file" or "write_file"
             && !ToolCallParser.IsError(result) && !result.StartsWith("[System:", StringComparison.Ordinal))

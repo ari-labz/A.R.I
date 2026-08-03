@@ -4,24 +4,19 @@ using Microsoft.Extensions.Logging;
 namespace ARI.LLM;
 
 /// <summary>
-/// Prompts that are not owned by any single agent: the MemoryAgent block that Engram/Refactor/Curiosity
-/// share, and the [Budgets] footer appended to every agent. Loaded once from Agents.json at startup
-/// (the "Shared" object), so the control panel edits the same text the model receives.
-///
-/// There are deliberately no built-in fallbacks — #182: the shipped Agents.json is the one source of
-/// prompt text. A missing entry is a broken config, and says so in the log rather than quietly
-/// substituting a different prompt than the one on screen.
+/// Prompts shared across agents: the MemoryAgent rulebook (Engram/Refactor/Curiosity) and the
+/// ToolSystem block (list_tools/request_tools). Loaded once from Agents.json at startup so the
+/// control panel edits the same text the model receives. No built-in fallbacks — a missing entry
+/// is a broken config and logs an error rather than silently substituting.
 /// </summary>
 internal static class SharedPrompts
 {
     private static Dictionary<string, string> _memory     = new();
-    private static Dictionary<string, string> _budgets    = new();
     private static Dictionary<string, string> _toolSystem = new();
 
-    internal static void Load(Dictionary<string, string>? memoryAgent, Dictionary<string, string>? budgets, Dictionary<string, string>? toolSystem = null)
+    internal static void Load(Dictionary<string, string>? memoryAgent, Dictionary<string, string>? toolSystem = null)
     {
         _memory     = memoryAgent ?? new();
-        _budgets    = budgets     ?? new();
         _toolSystem = toolSystem  ?? new();
     }
 
@@ -40,24 +35,14 @@ internal static class SharedPrompts
         return text;
     }
 
-    // ── MemoryAgent — shared by Engram, Refactor, Curiosity ──────────────────────
+    // ── MemoryAgent — shared by Engram, Refactor, Curiosity ─────────────────
 
-    /// <summary>The taxonomy/hub/dedup rulebook appended to each memory agent's system prompt.</summary>
     internal static string GraphRulebook => Get(_memory, "MemoryAgent", "GraphRulebook");
 
-    /// <summary>The turn sent after each look at the graph. Tokens: {seedTitle} {skeleton} {task}.</summary>
     internal static string Epoch(params (string Token, string Value)[] tokens)
         => Sub(Get(_memory, "MemoryAgent", "EpochPrompt"), tokens);
 
-    // ── Budgets — appended to every agent ────────────────────────────────────────
+    // ── ToolSystem ───────────────────────────────────────────────────────────
 
-    /// <summary>The [Budgets] footer. Tokens: {thinkingTokens} {replyTokens} {contextTokens} {toolBudget}.
-    /// A line whose token resolves to 0 is dropped by the caller.</summary>
-    internal static string BudgetsBlock => Get(_budgets, "Budgets", "Block");
-
-    // ── ToolSystem — appended to every agent whose thread carries list_tools/request_tools ──────
-
-    /// <summary>The static block describing list_tools/request_tools (issue #126), appended once to
-    /// baseSystem so it's part of the cached KV prefix rather than rebuilt every turn.</summary>
     internal static string ToolSystemBlock => Get(_toolSystem, "ToolSystem", "Block");
 }

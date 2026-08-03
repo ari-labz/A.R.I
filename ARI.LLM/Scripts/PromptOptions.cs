@@ -13,6 +13,4 @@ internal sealed class PromptOptions
     public bool                ChatHidden          { get; init; }
     public Func<string, Task>? OnDelta             { get; init; }
     public CancellationToken   Ct                  { get; init; }
-    public Func<bool>?         UserStillTalking    { get; init; }
-    public Func<string?>?      ConsumeNextPartial  { get; init; }
 }

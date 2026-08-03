@@ -152,7 +152,7 @@ internal class Memory : Agent
                 $"- {p.From.Title} connects to {p.To.Title} via {string.Join(" -> ", p.Notes.Select(n => n.Title))}"))
             : string.Empty;
 
-        string prompt = PromptText("HopPrompt", "",
+        string prompt = ResolveTemplate("HopPrompt", "",
             ("transcript", transcript),
             ("candidates", candidateBlock + pathBlock));
 

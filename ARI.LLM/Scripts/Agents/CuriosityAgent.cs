@@ -34,7 +34,7 @@ internal sealed class CuriosityAgent : MemoryAgent
         {
             Shared.Logger.LogInformation("[Curiosity] Starting curiosity walk (up to {Epochs} neighbourhoods).", CURIOSITY_EPOCHS);
             Thread parent = new(ThreadPipeline.Dialogue, $"curiosity:{Guid.NewGuid():N}") { Internal = true };
-            return await RunWalk(parent, parent.Key, PromptText("Task", ""), PersistentDir, CURIOSITY_EPOCHS, ct, null,
+            return await RunWalk(parent, parent.Key, ResolveTemplate("Task", ""), PersistentDir, CURIOSITY_EPOCHS, ct, null,
                                  convergeOnNoChange: false);
         }
         catch (Exception ex)
@@ -47,7 +47,7 @@ internal sealed class CuriosityAgent : MemoryAgent
 
     // No commit to stop on — an epoch explores a neighbourhood, records any curiosities, and ends naturally
     // (or at the work-call breaker). StopAfterCommit=false so nothing forces the turn to end early.
-    protected override bool StopAfterCommit => false;
+    internal override bool StopAfterCommit => false;
 
     // The tidy taxonomy rulebook is irrelevant here; Curiosity's persona/context lives in its SystemPrompt.
     internal override string PersistentContext(Thread thread) => string.Empty;
@@ -78,7 +78,7 @@ internal sealed class CuriosityAgent : MemoryAgent
     // Read-only guard: block re-reading a note already read this epoch (its content is in context), but do
     // NOT cap distinct reads the way the tidy walk does — exploring for curiosities legitimately reads more
     // notes. The work-call breaker (EPOCH_TOOL_CEILING) is the real bound on an epoch's length.
-    protected override string? BeforeTool(Thread thread, ToolTurnState state, string toolName, string callId, string argsJson)
+    internal override string? OnToolCall(Thread thread, ToolTurnState state, string toolName, string callId, string argsJson)
     {
         if (state is not MemoryTurnState m || toolName != "read_file") return null;
         string? path = ArgPath(argsJson);
@@ -95,10 +95,10 @@ internal sealed class CuriosityAgent : MemoryAgent
     // own it falls back to the shared MemoryAgent one.
     protected override string BuildEpochPrompt(string task, string seedTitle, string skeleton)
     {
-        if (Prompts is null || !Prompts.ContainsKey("EpochPrompt"))
+        if (PromptTemplates is null || !PromptTemplates.ContainsKey("EpochPrompt"))
             return base.BuildEpochPrompt(task, seedTitle, skeleton);
 
-        return PromptText("EpochPrompt", "",
+        return ResolveTemplate("EpochPrompt", "",
             ("seedTitle", seedTitle),
             ("skeleton",  skeleton.Length > 0 ? skeleton : "(no connections)"),
             ("task",      task));
