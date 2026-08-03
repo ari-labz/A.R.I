@@ -74,10 +74,8 @@ internal sealed class DialoguePipeline : Pipeline
             }
             catch (Exception ex)
             {
-                Shared.Logger.LogError(ex, "[Memory] ({Thread}) Failed to retrieve memories from {Platform}: {Error}", threadKey, platformContext ?? "unknown", ex.Message);
-                string errorMessage = "> error retrieving memories";
-                if (onDelta is not null) await onDelta(errorMessage);
-                return errorMessage;
+                Shared.Logger.LogWarning(ex, "[Memory] ({Thread}) Memory recall failed — continuing without memories. {Error}", threadKey, ex.Message);
+                recallBlock = "Memory recall is unavailable right now — the memory server appears to be offline. Tell the user at the start of your response that you cannot access your memories at the moment and that your answer may be inaccurate or incomplete as a result. Then respond as best you can.";
             }
         }
 

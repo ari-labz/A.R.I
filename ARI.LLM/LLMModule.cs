@@ -130,7 +130,7 @@ public class LLMModule : ILLMModule, IDisposable
             if (serverByName.TryGetValue(agent.ServerName, out Server? bound))
             {
                 agent.Endpoint    = bound.FullEndpoint;
-                agent.BoundServer = bound;
+                agent.Server = bound;
             }
             else if (_servers.Count > 0)
             {
@@ -148,29 +148,29 @@ public class LLMModule : ILLMModule, IDisposable
 
                 agent.ServerName  = first.Name;
                 agent.Endpoint    = first.FullEndpoint;
-                agent.BoundServer = first;
+                agent.Server = first;
             }
             else
             {
                 _logger.LogError("Agent '{Agent}' cannot be bound — no servers are configured.", agent.Name);
             }
 
-            if (agent.BoundServer is not null)
+            if (agent.Server is not null)
             {
                 if (agent.SlotName is { Length: > 0 })
                 {
-                    agent.BoundSlot = agent.BoundServer.Slots.FirstOrDefault(sl => sl.Name.Equals(agent.SlotName, StringComparison.OrdinalIgnoreCase));
-                    if (agent.BoundSlot is null)
+                    agent.Slot = agent.Server.Slots.FirstOrDefault(sl => sl.Name.Equals(agent.SlotName, StringComparison.OrdinalIgnoreCase));
+                    if (agent.Slot is null)
                         _logger.LogWarning("Agent '{Agent}' names slot '{Slot}' which doesn't exist on server '{Server}' — falling back to its first slot.",
-                            agent.Name, agent.SlotName, agent.BoundServer.Name);
+                            agent.Name, agent.SlotName, agent.Server.Name);
                 }
                 // No name given (or it didn't resolve) — default to the server's first slot, same as the
                 // old raw agent.Slot ??= 0 behaviour, so an agent still gets pinned/context-derived out of
                 // the box without needing the control panel touched first.
-                if (agent.BoundSlot is null && agent.BoundServer.Slots.Count > 0)
+                if (agent.Slot is null && agent.Server.Slots.Count > 0)
                 {
-                    agent.BoundSlot = agent.BoundServer.Slots[0];
-                    agent.SlotName  = agent.BoundSlot.Name;
+                    agent.Slot = agent.Server.Slots[0];
+                    agent.SlotName  = agent.Slot.Name;
                 }
             }
             return agent;
@@ -389,10 +389,10 @@ public class LLMModule : ILLMModule, IDisposable
         if (server is null) return false;
         agent.ServerName  = server.Name;
         agent.Endpoint    = server.FullEndpoint;
-        agent.BoundServer = server;
+        agent.Server = server;
         // A slot name from the old server has no meaning here — re-resolve against the new one, or
         // fall back to unpinned if it doesn't have a same-named slot.
-        agent.BoundSlot = agent.SlotName is { Length: > 0 }
+        agent.Slot = agent.SlotName is { Length: > 0 }
             ? server.Slots.FirstOrDefault(sl => sl.Name.Equals(agent.SlotName, StringComparison.OrdinalIgnoreCase))
             : null;
         return true;
@@ -407,8 +407,8 @@ public class LLMModule : ILLMModule, IDisposable
     {
         if (!agentMap.TryGetValue(agentName, out Agent? agent)) return false;
         agent.SlotName = slotName;
-        agent.BoundSlot = agent.BoundServer is not null && slotName is { Length: > 0 }
-            ? agent.BoundServer.Slots.FirstOrDefault(sl => sl.Name.Equals(slotName, StringComparison.OrdinalIgnoreCase))
+        agent.Slot = agent.Server is not null && slotName is { Length: > 0 }
+            ? agent.Server.Slots.FirstOrDefault(sl => sl.Name.Equals(slotName, StringComparison.OrdinalIgnoreCase))
             : null;
         return true;
     }

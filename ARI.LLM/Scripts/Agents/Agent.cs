@@ -22,10 +22,10 @@ public abstract class Agent
     public int MaxToolCalls { get; init; }
     public bool Think { get; init; }
     public int BudgetThinking { get; init; }
-    // Resolved to BoundSlot (and id_slot) at bind time. Null = no slot pin.
+    // Resolved to Slot (and id_slot) at bind time. Null = no slot pin.
     public string? SlotName { get; set; }
     public SamplerSettings? SamplerSettings { get; init; }
-    [JsonIgnore] internal int BudgetContext => BoundSlot?.ContextLimit ?? 0;
+    [JsonIgnore] internal int BudgetContext => Slot?.ContextLimit ?? 0;
 
     // Compaction: off by default. When on, stubs oldest tool outputs one at a time, once usage exceeds
     // CompactHighPct of the bound slot's context, until it drops under CompactLowPct — both percentages
@@ -41,8 +41,8 @@ public abstract class Agent
 
     // ── Runtime-only ─────────────────────────────────────────────────────────
     [JsonIgnore] public string Endpoint { get; internal set; } = "";
-    [JsonIgnore] internal Server? BoundServer { get; set; }
-    [JsonIgnore] internal NamedSlot? BoundSlot { get; set; }
+    [JsonIgnore] internal Server?    Server { get; set; }
+    [JsonIgnore] internal NamedSlot? Slot   { get; set; }
 
     [JsonIgnore] internal virtual int  MemoryLimit => 0;  // 0 = unlimited
     internal virtual bool SuppressLog()    => false;
@@ -534,14 +534,14 @@ public abstract class Agent
         };
 
         turn.Clock.RequestSent();
-        BoundServer?.BeginRequest(Name);
+        Server?.BeginRequest(Name);
         HttpResponseMessage response;
         try   { response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, turn.Ct); }
-        catch { BoundServer?.EndRequest(); throw; }
+        catch { Server?.EndRequest(); throw; }
 
         if (!response.IsSuccessStatusCode)
         {
-            BoundServer?.EndRequest();
+            Server?.EndRequest();
             string errBody = "";
             try { errBody = await response.Content.ReadAsStringAsync(turn.Ct); } catch { /* ignore */ }
 
@@ -580,7 +580,7 @@ public abstract class Agent
 
         Stream       stream = await response.Content.ReadAsStreamAsync(turn.Ct);
         StreamReader reader = new(stream);
-        return new Step(stream, reader, () => BoundServer?.EndRequest());
+        return new Step(stream, reader, () => Server?.EndRequest());
     }
 
     private async Task ProcessDelta(Turn turn, Step step)
@@ -1428,9 +1428,9 @@ public abstract class Agent
     private Dictionary<string, object?> BuildRequest(Thread thread, List<object> messages,
         int maxTokens, int thinkBudget, int thinkingBudgetOverride, object[]? toolSchemas, bool Think)
     {
-        if (BoundServer is null)
-            throw new InvalidOperationException($"[{Name}] has no BoundServer — cannot resolve sampler settings.");
-        Server srv = BoundServer;
+        if (Server is null)
+            throw new InvalidOperationException($"[{Name}] has no Server — cannot resolve sampler settings.");
+        Server srv = Server;
         SamplerSettings s = ResolveSampler(thread);
 
         Dictionary<string, object?> body = new()
@@ -1489,9 +1489,9 @@ public abstract class Agent
         }
 
         if (toolSchemas is not null) body["tools"] = toolSchemas;
-        if (BoundSlot is not null)
+        if (Slot is not null)
         {
-            int slotIndex = srv.Slots.FindIndex(sl => sl.Id == BoundSlot.Id);
+            int slotIndex = srv.Slots.FindIndex(sl => sl.Id == Slot.Id);
             if (slotIndex >= 0) body["id_slot"] = slotIndex;
         }
 
