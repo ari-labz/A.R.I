@@ -7,8 +7,19 @@ internal class Dialogue : Agent
     [JsonPropertyName("shortTermMemoryLimit")] public int? ShortTermMemoryLimit { get; init; }
     [JsonPropertyName("budgetImage")]       public int BudgetImage        { get; init; }
 
-    internal override int  MemoryLimit      => ShortTermMemoryLimit ?? 0;
+    internal override int  MemoryLimit   => ShortTermMemoryLimit ?? 0;
     internal override bool SuppressLog() => true;
+
+    internal override string OnResponse(Thread thread, string response)
+    {
+        if (MemoryLimit > 0 && thread.History.Count >= MemoryLimit)
+        {
+            int engramInterval = Math.Max(1, MemoryLimit / 2);
+            if (thread.History.Count == MemoryLimit || thread.History.Count % engramInterval == 0)
+                thread.RaiseBufferFull();
+        }
+        return response;
+    }
 
     internal event Action<string>? ThreadBufferFull;
     internal event Action<string>? ThreadBecameInactive;

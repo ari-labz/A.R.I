@@ -48,14 +48,15 @@ internal abstract class MemoryAgent : Agent
     // loop WITHOUT withdrawing tools mid-generation, which is what triggered the earlier text-fallback aborts).
     // This bound exists for the single-change Refactor epoch; Engram seeds a whole conversation and needs to
     // recon several entities before writing, so it overrides this to null (no ceiling).
-    protected virtual int? EpochToolCeiling => 8;
+    internal virtual int? EpochToolCeiling => 8;
 
     // When true, the walk ranks seeds by least-recently-refactored (never-refactored first), degree as
     // the tiebreak, and stamps each seed's title when its epoch ends. Only Refactor opts in.
-    protected virtual bool TrackLastRefactored => false;
+    internal virtual bool TrackLastRefactored => false;
 
-    protected sealed class MemoryTurnState : ToolTurnState
+    internal sealed class MemoryTurnState : ToolTurnState
     {
+        public bool Cancelled;                                                     // set after commit when StopAfterCommit; withdraws tools for the rest of the turn
         public bool DiffViewedSinceWrite;                                         // a git_diff since the last mutation
         public bool Committed;                                                     // a git_commit landed this epoch
         public int  ToolCalls;                                                     // total tool calls this epoch (logging)
@@ -63,7 +64,10 @@ internal abstract class MemoryAgent : Agent
         public readonly HashSet<string> ReadPaths = new(StringComparer.OrdinalIgnoreCase);  // notes read this epoch
     }
 
-    protected override bool ShouldBreak(Thread thread, ToolTurnState state, bool productiveBatch)
+    internal override bool ToolsCancelled(ToolTurnState state)
+        => state is MemoryTurnState m && m.Cancelled;
+
+    internal override bool ShouldBreak(Thread thread, ToolTurnState state, bool productiveBatch)
     {
         if (state is not MemoryTurnState m) return false;
         // Commit landed — the epoch's work is DONE. End immediately instead of doing one more LLM turn: with
@@ -81,10 +85,10 @@ internal abstract class MemoryAgent : Agent
         }
         return false;
     }
-    protected override ToolTurnState NewTurnState() => new MemoryTurnState();
+    internal override ToolTurnState NewTurnState() => new MemoryTurnState();
 
     // Dump each step's raw reasoning to reasoning-{Name}.log so training can read the walk's actual thinking.
-    protected override bool LogReasoning => true;
+    internal override bool LogReasoning => true;
 
     protected static string? ArgPath(string argsJson)
     {
@@ -95,7 +99,7 @@ internal abstract class MemoryAgent : Agent
 
     // The walk (Refactor) ends a turn after one committed change — one logical change per epoch. Engram
     // seeds a turn with a whole conversation and places several memories, so it overrides this to false.
-    protected virtual bool StopAfterCommit => true;
+    internal virtual bool StopAfterCommit => true;
 
     // The live thread registry the API/DTI enumerates. Set at wire-up so a walk's (internal) parent thread
     // is discoverable — the DTI then drills into its per-epoch children and their reasoning traces. Without
@@ -115,7 +119,7 @@ internal abstract class MemoryAgent : Agent
     }
 
     // Always review the diff before committing; end the epoch as soon as one change is committed.
-    protected override string? BeforeTool(Thread thread, ToolTurnState state, string toolName, string callId, string argsJson)
+    internal override string? OnToolCall(Thread thread, ToolTurnState state, string toolName, string callId, string argsJson)
     {
         if (state is not MemoryTurnState m) return null;
 
@@ -159,7 +163,7 @@ internal abstract class MemoryAgent : Agent
         return null;
     }
 
-    protected override string AfterTool(Thread thread, ToolTurnState state, string toolName, string argsJson, string result)
+    internal override string OnToolResult(Thread thread, ToolTurnState state, string toolName, string argsJson, string result)
     {
         if (state is MemoryTurnState m)
         {
@@ -188,7 +192,7 @@ internal abstract class MemoryAgent : Agent
             else if (toolName == "git_commit" && result.StartsWith("Committed", StringComparison.Ordinal))
             {
                 m.Committed = true;
-                if (StopAfterCommit) m.toolsCancelled = true;   // walk: one logical change per epoch
+                if (StopAfterCommit) m.Cancelled = true;
             }
         }
         return result;

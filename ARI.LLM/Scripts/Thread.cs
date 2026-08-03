@@ -108,12 +108,7 @@ public class Thread
     /// phase boundary), read by CodeArchitect.ShouldBreak.</summary>
     public bool EndTurnNow;
 
-    /// <summary>Active speech steering context for this turn (Speech pipeline only). Set by ListenerSession
-    /// before PromptStreaming so the in-flight Agent.Send can redirect the model back into thinking mode
-    /// when new Whisper partials arrive while the user is still speaking.</summary>
-    internal SpeechSteeringContext? ActiveSteering { get; set; }
-
-    /// <summary>Files the architect has edited/written this turn (populated by the edit tools via AfterTool).
+    /// <summary>Files the architect has edited/written this turn (populated by the edit tools via OnToolResult).
     /// build_project builds the projects containing these. Replaces the old spawn_coder-populated set now that
     /// the architect edits directly instead of dispatching a Coder.</summary>
     public readonly HashSet<string> TouchedFiles = new(StringComparer.OrdinalIgnoreCase);
@@ -158,7 +153,7 @@ public class Thread
         return blocks;
     }
 
-    internal readonly Dictionary<string, (object Schema, Func<string, Task<string>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter, Func<string, string?>? StreamingDisplay)> tools = new();
+    internal readonly Dictionary<string, (object Schema, Func<string, Task<string>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter, Func<string, string?>? StreamingDisplay, Func<string, string?>? StreamingPreCheck, Func<string, string?>? PreCheck)> tools = new();
 
     // ── Lifecycle ──────────────────────────────────────────────────────────────
     public ThreadState               State           = ThreadState.Active;
@@ -249,8 +244,8 @@ public class Thread
 
     // ── Tools ───────────────────────────────────────────────────────────────────
 
-    public void RegisterTool(string name, object schema, Func<string, Task<string>> executor, Func<string, string>? displayFormatter = null, Func<string, string>? displayAfterFormatter = null, Func<string, string?>? streamingDisplayFormatter = null)
-        => tools[name] = (schema, executor, displayFormatter, displayAfterFormatter, streamingDisplayFormatter);
+    public void RegisterTool(string name, object schema, Func<string, Task<string>> executor, Func<string, string>? displayFormatter = null, Func<string, string>? displayAfterFormatter = null, Func<string, string?>? streamingDisplayFormatter = null, Func<string, string?>? streamingPreCheck = null, Func<string, string?>? preCheck = null)
+        => tools[name] = (schema, executor, displayFormatter, displayAfterFormatter, streamingDisplayFormatter, streamingPreCheck, preCheck);
 
     public void UnregisterTool(string name)
         => tools.Remove(name);

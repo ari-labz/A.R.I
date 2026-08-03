@@ -21,7 +21,8 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly SpeechPipeline?   speechPipeline;
     
     //agents
-    private readonly Dialogue?         dialogue;
+    private readonly TextingAgent?     textingAgent;
+    private readonly TalkingAgent?     talkingAgent;
     private readonly Coder?            codeArchitect;
     private readonly Memory?           memory;
     private readonly Context?          context;
@@ -101,19 +102,15 @@ public class LLMModule : ILLMModule, IDisposable
         {
             using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(agentsJsonPath), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
 
-            // Prompts owned by no single agent: the MemoryAgent block its three children share, and the
-            // [Budgets] footer every agent gets. Same file, so the panel edits one place.
-            Dictionary<string, string>? sharedMemory = null, sharedBudgets = null, sharedToolSystem = null;
+            Dictionary<string, string>? sharedMemory = null, sharedToolSystem = null;
             if (TryGetPropCI(doc.RootElement, "Shared", out JsonElement sharedEl))
             {
                 if (TryGetPropCI(sharedEl, "MemoryAgent", out JsonElement memEl))
                     sharedMemory = JsonSerializer.Deserialize<Dictionary<string, string>>(memEl.GetRawText(), JsonOptions);
-                if (TryGetPropCI(sharedEl, "Budgets", out JsonElement budEl))
-                    sharedBudgets = JsonSerializer.Deserialize<Dictionary<string, string>>(budEl.GetRawText(), JsonOptions);
                 if (TryGetPropCI(sharedEl, "ToolSystem", out JsonElement toolEl))
                     sharedToolSystem = JsonSerializer.Deserialize<Dictionary<string, string>>(toolEl.GetRawText(), JsonOptions);
             }
-            SharedPrompts.Load(sharedMemory, sharedBudgets, sharedToolSystem);
+            SharedPrompts.Load(sharedMemory, sharedToolSystem);
             // Unlike Agents.json, ToolGroups.json has no control-panel edit UI yet — read straight from
             // the shipped copy (Paths.BuildPath) rather than agentsJsonPath's seeded-into-AppData copy,
             // which only exists for files a user is meant to tune in place.
@@ -213,8 +210,9 @@ public class LLMModule : ILLMModule, IDisposable
 
         if (rawAgents.TryGetValue("Dialogue", out JsonElement dialogueEl))
         {
-            dialogue = Deserialize<Dialogue>(dialogueEl);
-            agentMap["Dialogue"] = dialogue;
+            textingAgent = Deserialize<TextingAgent>(dialogueEl);
+            talkingAgent = Deserialize<TalkingAgent>(dialogueEl);
+            agentMap["Dialogue"] = textingAgent;
         }
 
         if (rawAgents.TryGetValue("Coder", out JsonElement architectEl))
@@ -249,7 +247,7 @@ public class LLMModule : ILLMModule, IDisposable
             }
         }
 
-        if (BrainModule.Ready && dialogue is not null)
+        if (BrainModule.Ready && textingAgent is not null)
         {
             if (rawAgents.TryGetValue("Engram", out JsonElement engramEl))
             {
@@ -257,7 +255,7 @@ public class LLMModule : ILLMModule, IDisposable
                 engram.PersistentDir = PersistentDataDir;
                 engram.Registry = threads;
                 engram.Notify = NotifyWatchers;
-                engram.Init(dialogue, context, threads);
+                engram.Init(textingAgent, context, threads);
                 engram.SweepCompleted += key => NotifyWatchers(key);
                 agentMap["Engram"] = engram;
                 _logger.LogInformation("Engram is active. Brain connected.");
@@ -291,15 +289,14 @@ public class LLMModule : ILLMModule, IDisposable
             commands = new CommandService(engram);
         }
 
-        if (dialogue is not null)
+        if (textingAgent is not null && talkingAgent is not null)
         {
-            dialoguePipeline = new DialoguePipeline(dialogue, memory, context, engram, processingThreads, liveCalls, NotifyWatchers);
-            dialoguePipeline.ThreadBufferFull    += key => NotifyWatchers(key);
+            dialoguePipeline = new DialoguePipeline(textingAgent, memory, context, engram, processingThreads, liveCalls, NotifyWatchers);
+            dialoguePipeline.ThreadBufferFull     += key => NotifyWatchers(key);
             dialoguePipeline.ThreadBecameInactive += key => NotifyWatchers(key);
 
-            // Speech reuses the Dialogue agent for now (issue #84) — a baseline to diverge from.
-            speechPipeline = new SpeechPipeline(dialogue, memory, context, engram, processingThreads, liveCalls, NotifyWatchers);
-            speechPipeline.ThreadBufferFull    += key => NotifyWatchers(key);
+            speechPipeline = new SpeechPipeline(talkingAgent, memory, context, engram, processingThreads, liveCalls, NotifyWatchers);
+            speechPipeline.ThreadBufferFull     += key => NotifyWatchers(key);
             speechPipeline.ThreadBecameInactive += key => NotifyWatchers(key);
         }
 
@@ -333,11 +330,20 @@ public class LLMModule : ILLMModule, IDisposable
         thread.ExchangeCompleted += (_, _) => ChatHistoryLogger.Write(thread);
         // Engram (or a mark-processed no-op) fires on entry to dormant — the single gate before deletion.
         thread.BecameDormant    += () => OnThreadDormant(thread);
-        if (type is ThreadPipeline.Dialogue or ThreadPipeline.Speech && dialogue is not null)
+        if (type is ThreadPipeline.Dialogue && textingAgent is not null)
         {
-            thread.Deleted        += () => dialogue.RaiseThreadDeleted(threadKey);
-            thread.BufferFull     += () => dialogue.RaiseThreadBufferFull(threadKey);
-            thread.BecameInactive += () => dialogue.RaiseThreadBecameInactive(threadKey);
+            thread.Deleted        += () => textingAgent.RaiseThreadDeleted(threadKey);
+            thread.BufferFull     += () => textingAgent.RaiseThreadBufferFull(threadKey);
+            thread.BecameInactive += () => textingAgent.RaiseThreadBecameInactive(threadKey);
+        }
+        else if (type is ThreadPipeline.Speech && talkingAgent is not null)
+        {
+            thread.Deleted        += () => talkingAgent.RaiseThreadDeleted(threadKey);
+            thread.BufferFull     += () => talkingAgent.RaiseThreadBufferFull(threadKey);
+            thread.BecameInactive += () => talkingAgent.RaiseThreadBecameInactive(threadKey);
+        }
+        if (type is ThreadPipeline.Dialogue or ThreadPipeline.Speech)
+        {
             if (context is not null)
                 thread.ExchangeCompleted += (user, asst) =>
                 {
@@ -610,7 +616,7 @@ public class LLMModule : ILLMModule, IDisposable
 
     private async Task<string> Route(string threadKey, string prompt, string username, string? platformContext, Func<string, Task>? onDelta, CancellationToken externalCt, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null, string? localPath = null, InferencePriority priority = InferencePriority.Normal, SpeechSteeringContext? steering = null)
     {
-        if (dialogue is null)
+        if (textingAgent is null)
             throw new ModelNotFoundException("Dialogue model is not loaded or is not enabled.");
 
         // New prompt arrived mid-processing — cancel the previous one
@@ -665,7 +671,7 @@ public class LLMModule : ILLMModule, IDisposable
             case "Speech":
             {
                 Thread speechThread = Recategorise(ThreadPipeline.Speech, threadKey, platformContext);
-                speechThread.ActiveSteering = steering;
+                speechPipeline?.SetSteering(threadKey, steering);
                 return await (speechPipeline ?? (Pipeline)dialoguePipeline!).ExecuteAsync(speechThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments, localPath);
             }
             default:
@@ -851,7 +857,7 @@ public class LLMModule : ILLMModule, IDisposable
     /// </summary>
     public async Task RunProactiveMessageAsync(string persistentDir, CancellationToken ct)
     {
-        if (dialogue is null) return;
+        if (textingAgent is null) return;
 
         List<Curiosity> all = CuriosityStore.Load(persistentDir);
         Curiosity? pick = all.Where(c => c.Status == "pending")
@@ -862,7 +868,7 @@ public class LLMModule : ILLMModule, IDisposable
         // Framed to make Ari WRITE its own opening message, not narrate the task. The earlier "Greet them
         // and ask this" phrasing was echoed back as a stage direction ("Ari greets you warmly and asks…");
         // "write your opening message now / output only the message" stops that.
-        string instruction = dialogue.PromptText("ProactiveOpener", "", ("question", pick.Question));
+        string instruction = textingAgent.ResolveTemplate("ProactiveOpener", "", ("question", pick.Question));
 
         // Generate through the full Dialogue pipeline (not raw Prompt) so the opener is grounded in memory
         // recall + context — otherwise Ari phrases blind, with no idea who the people in the question are. The
@@ -876,7 +882,7 @@ public class LLMModule : ILLMModule, IDisposable
         {
             opener = dialoguePipeline is not null
                 ? await dialoguePipeline.ExecuteAsync(draft, draft.Key, instruction, "user", null, null, draftCts)
-                : await dialogue.Prompt(draft, instruction, new PromptOptions { Ct = ct });
+                : await textingAgent.Prompt(draft, instruction, new PromptOptions { Ct = ct });
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) { _logger.LogWarning("[Proactive] phrasing failed ({Msg}); using the raw question.", ex.Message); opener = pick.Question; }
@@ -976,7 +982,7 @@ public class LLMModule : ILLMModule, IDisposable
     }
 
     public (int used, int limit) GetContextStats(string threadKey)
-        => dialogue?.GetContextStats(threads.TryGetValue(threadKey, out Thread? t) ? t : null) ?? (0, 0);
+        => textingAgent?.GetContextStats(threads.TryGetValue(threadKey, out Thread? t) ? t : null) ?? (0, 0);
 
     public void Cancel(string threadKey)
     {

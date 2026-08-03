@@ -26,8 +26,12 @@ public class DiscordModule : BackgroundService, IDiscordModule
     private readonly LLMModule llmModule;
     private readonly HttpClient httpClient = new();
     private readonly ILogger _logger;
-    private readonly Dictionary<ulong, IAudioClient> audioClients = new();
-    private readonly Dictionary<ulong, CancellationTokenSource> silenceLoops = new();
+    private readonly Dictionary<ulong, IAudioClient>            audioClients   = new();
+    private readonly Dictionary<ulong, CancellationTokenSource> silenceLoops   = new();
+    private readonly Dictionary<ulong, SemaphoreSlim>           voiceWriteLock = new();
+    private readonly Dictionary<ulong, DiscordVoiceReceiver>    voiceReceivers = new();
+    // Last text channel where a message was received per guild.
+    private readonly Dictionary<ulong, ISocketMessageChannel> lastTextChannels = new();
     // Channels ARI intends to be in. Populated by JoinVoiceChannelAsync, cleared by LeaveVoiceChannelAsync.
     // As long as an entry exists, auto-reconnect will fire on unexpected disconnects.
     private readonly Dictionary<ulong, ulong> intendedChannels = new();
@@ -42,8 +46,11 @@ public class DiscordModule : BackgroundService, IDiscordModule
         "You are present in a Discord server. Each message shows who is speaking and in which channel. " +
         "If the conversation was clearly not directed at you and you don't need to be involved, reply with only: [PASS] — nothing else. " +
         "Otherwise, reply normally. " +
-        "The 'discord_tools' group contains tools for interacting with Discord — worth loading if the request involves Discord itself. " +
-        "When you perform an action (join VC, leave VC, etc.) send NO text reply — the action is the response. Only reply with text if the user asked a question or the action failed.";
+        "The 'discord_tools' group gives you full Discord control: joining/leaving voice channels, sending messages, listing channels and members, and more. " +
+        "NEVER state that you cannot do something in Discord without first loading discord_tools and attempting it — your capabilities come from those tools, not from assumptions. " +
+        "IMPORTANT: When calling tools, write NO text whatsoever — not before, not after, not between calls. " +
+        "Do not narrate, explain, or acknowledge what you are doing. Execute silently. " +
+        "Only write a text reply if the user asked a direct question or an action explicitly failed.";
 
     public DiscordModule(ILoggerFactory loggerFactory, LLMModule llmModule, DiscordConfig config)
     {
@@ -437,6 +444,9 @@ public class DiscordModule : BackgroundService, IDiscordModule
         }
 
         string conversationKey = $"guild:{guildChannel.Guild.Id}";
+        // Track the most recent text channel per guild so voice replies have a destination.
+        if (message.Channel is ISocketMessageChannel textCh)
+            lastTextChannels[guildChannel.Guild.Id] = textCh;
         string content = message.Content.Replace($"<@{client.CurrentUser.Id}>", "").Trim();
         string timestamp = message.Timestamp.LocalDateTime.ToString("dd/MM/yyyy HH:mm");
         string prompt = $"[{timestamp}] [{message.Author.Username} in #{guildChannel.Name}]: {content}";
@@ -569,9 +579,37 @@ public class DiscordModule : BackgroundService, IDiscordModule
         }
 
         audioClients[vc.Guild.Id] = audio;
+
+        SemaphoreSlim writeLock = new(1, 1);
+        voiceWriteLock[vc.Guild.Id] = writeLock;
+
         CancellationTokenSource cts = new();
         silenceLoops[vc.Guild.Id] = cts;
-        _ = Task.Run(() => RunSilenceLoopAsync(audio, cts.Token));
+        _ = Task.Run(() => RunSilenceLoopAsync(audio, writeLock, cts.Token));
+
+        // Start the voice receive pipeline if the Listener is running.
+        string? whisperUrl = Modules.Listener?.WhisperUrl;
+        if (whisperUrl is not null)
+        {
+            // Tear down any previous receiver for this guild before starting a new one.
+            if (voiceReceivers.TryGetValue(vc.Guild.Id, out DiscordVoiceReceiver? old))
+            {
+                voiceReceivers.Remove(vc.Guild.Id);
+                _ = old.DisposeAsync().AsTask();
+            }
+
+            string threadKey = $"guild:{vc.Guild.Id}";
+            Func<string, Task> sendReply = text => SpeakIntoVoiceAsync(audio, writeLock, text, CancellationToken.None);
+
+            DiscordVoiceReceiver receiver = new(audio, llmModule, threadKey, ServerPlatformContext, sendReply, whisperUrl, _logger);
+            voiceReceivers[vc.Guild.Id] = receiver;
+            _logger.LogInformation("[Discord] Voice receive pipeline started for guild {GuildId}.", vc.Guild.Id);
+        }
+        else
+        {
+            _logger.LogWarning("[Discord] Listener not running — voice receive pipeline disabled.");
+        }
+
         return null;
     }
 
@@ -587,6 +625,12 @@ public class DiscordModule : BackgroundService, IDiscordModule
             // Clear intent first so the voice-state handler doesn't fight the leave.
             intendedChannels.Remove(guild.Id);
             await StopSilenceLoopAsync(guild.Id);
+
+            if (voiceReceivers.TryGetValue(guild.Id, out DiscordVoiceReceiver? receiver))
+            {
+                voiceReceivers.Remove(guild.Id);
+                await receiver.DisposeAsync();
+            }
 
             if (audioClients.TryGetValue(guild.Id, out IAudioClient? audio))
             {
@@ -644,25 +688,82 @@ public class DiscordModule : BackgroundService, IDiscordModule
             cts.Dispose();
             silenceLoops.Remove(guildId);
         }
+        if (voiceWriteLock.TryGetValue(guildId, out SemaphoreSlim? lk))
+        {
+            lk.Dispose();
+            voiceWriteLock.Remove(guildId);
+        }
     }
 
-    private static async Task RunSilenceLoopAsync(IAudioClient audio, CancellationToken ct)
+    private static async Task RunSilenceLoopAsync(IAudioClient audio, SemaphoreSlim writeLock, CancellationToken ct)
     {
+        // Wait for DAVE E2EE handshake to complete before opening the PCM stream.
+        await Task.Delay(1500, ct);
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                using AudioOutStream pcm = audio.CreatePCMStream(AudioApplication.Voice);
+                while (!ct.IsCancellationRequested)
+                {
+                    await writeLock.WaitAsync(ct);
+                    try   { await pcm.WriteAsync(SilenceFrame, ct); }
+                    finally { writeLock.Release(); }
+                    await Task.Delay(20, ct);
+                }
+                await pcm.FlushAsync(ct);
+                return; // clean shutdown
+            }
+            catch (OperationCanceledException) { return; }
+            catch (Exception ex)
+            {
+                Shared.Logger.LogWarning("[Discord] Silence loop restarting after error: {Message}", ex.Message);
+                try { await Task.Delay(1000, ct); } catch (OperationCanceledException) { return; }
+            }
+        }
+    }
+
+    private async Task SpeakIntoVoiceAsync(IAudioClient audio, SemaphoreSlim writeLock, string text, CancellationToken ct)
+    {
+        if (Modules.Voice is not { } voice) return;
         try
         {
-            using AudioOutStream pcm = audio.CreatePCMStream(AudioApplication.Mixed);
-            while (!ct.IsCancellationRequested)
+            byte[] wav = await voice.Synthesise(text, ct);
+            byte[] pcm = ResampleWavTo48kHzStereo(wav);
+
+            await writeLock.WaitAsync(ct);
+            try
             {
-                await pcm.WriteAsync(SilenceFrame, ct);
-                await Task.Delay(20, ct);
+                using AudioOutStream stream = audio.CreatePCMStream(AudioApplication.Voice);
+                await stream.WriteAsync(pcm, ct);
+                await stream.FlushAsync(ct);
             }
-            await pcm.FlushAsync(ct);
+            finally { writeLock.Release(); }
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex)
+        catch (Exception ex) { _logger.LogWarning("[Discord] SpeakIntoVoice failed: {Message}", ex.Message); }
+    }
+
+    // StyleTTS2 outputs 22050 Hz mono 16-bit WAV. Discord wants 48000 Hz stereo 16-bit raw PCM.
+    private static byte[] ResampleWavTo48kHzStereo(byte[] wav)
+    {
+        const int headerSize = 44;
+        const int srcRate    = 22050;
+        const int dstRate    = 48000;
+        int       srcSamples = (wav.Length - headerSize) / 2;
+        int       dstSamples = (int)((long)srcSamples * dstRate / srcRate);
+        byte[]    pcm        = new byte[dstSamples * 4]; // stereo 16-bit = 4 bytes/sample
+        for (int i = 0; i < dstSamples; i++)
         {
-            Shared.Logger.LogWarning("[Discord] Silence loop ended unexpectedly: {Message}", ex.Message);
+            int   srcIdx = (int)((long)i * srcRate / dstRate);
+            int   off    = headerSize + srcIdx * 2;
+            byte  lo     = wav[off];
+            byte  hi     = wav[off + 1];
+            int   o      = i * 4;
+            pcm[o]     = lo; pcm[o + 1] = hi; // L
+            pcm[o + 2] = lo; pcm[o + 3] = hi; // R
         }
+        return pcm;
     }
 
     private static async Task KeepTyping(IMessageChannel channel, CancellationToken ct)

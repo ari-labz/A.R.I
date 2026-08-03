@@ -12,12 +12,12 @@ internal class Engram : MemoryAgent, IDisposable
 {
     // Engram places several memories from one conversation in a single turn, so it does NOT end after
     // the first commit (that's the Refactor walk's behaviour).
-    protected override bool StopAfterCommit => false;
+    internal override bool StopAfterCommit => false;
 
     // No work-call ceiling: the circuit breaker exists for the single-change Refactor epoch. Engram must
     // recon several existing entities (find/search/read) before it can place memories, so an 8-call cap
     // guillotines the sweep during exploration — it never reaches write_file/git_commit. Disable it here.
-    protected override int? EpochToolCeiling => null;
+    internal override int? EpochToolCeiling => null;
 
     [JsonIgnore] internal Dialogue?    dialogue       { get; set; }
     [JsonIgnore] internal Context?     context        { get; set; }
@@ -27,6 +27,7 @@ internal class Engram : MemoryAgent, IDisposable
     private readonly Dictionary<string, int>            lastHistoryCount = new();
     private readonly SemaphoreSlim                      engramLock       = new(1, 1);
     private readonly ConcurrentDictionary<string, byte> sweepingThreads  = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string>                    pendingQueue     = new(StringComparer.OrdinalIgnoreCase);
     private readonly HttpClient                         httpClient       = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
 
     private ConcurrentDictionary<string, Thread> threads = new();
@@ -69,6 +70,7 @@ internal class Engram : MemoryAgent, IDisposable
         {
             lastRun.Remove(threadKey);
             lastHistoryCount.Remove(threadKey);
+            lock (pendingQueue) pendingQueue.Remove(threadKey);
         };
     }
 
@@ -78,6 +80,21 @@ internal class Engram : MemoryAgent, IDisposable
     {
         IsEnabled = true;
         Shared.Logger.LogInformation("[Engram] Enabled.");
+
+        string[] queued;
+        lock (pendingQueue)
+        {
+            queued = [.. pendingQueue];
+            pendingQueue.Clear();
+        }
+        foreach (string key in queued)
+            _ = Task.Run(async () =>
+            {
+                try { await RunEngram(key, "queued"); }
+                catch (Exception ex) { Shared.Logger.LogWarning("[Engram] Queued sweep failed for {Key}: {Err}", key, ex.Message); }
+            });
+        if (queued.Length > 0)
+            Shared.Logger.LogInformation("[Engram] Draining {Count} queued thread(s).", queued.Length);
     }
 
     internal void Disable()
@@ -111,7 +128,11 @@ internal class Engram : MemoryAgent, IDisposable
             return;
         }
 
-        if (!IsEnabled && !force) return;
+        if (!IsEnabled && !force)
+        {
+            lock (pendingQueue) pendingQueue.Add(threadKey);
+            return;
+        }
         if (force) await engramLock.WaitAsync();
         else if (!await engramLock.WaitAsync(0)) return;
         sweepingThreads[threadKey] = 0;
@@ -125,7 +146,7 @@ internal class Engram : MemoryAgent, IDisposable
         try
         {
             List<ThreadItem> allItems = threads.TryGetValue(threadKey, out Thread? dialogueThread) ? dialogueThread.History : new List<ThreadItem>();
-            List<ThreadItem> conversationItems = allItems.Where(i => i is Prompt or Response).ToList();
+            List<ThreadItem> conversationItems = allItems.Where(i => i is LLM.Prompt or Response).ToList();
 
             int lastCount = lastHistoryCount.TryGetValue(threadKey, out int c) ? c : 0;
             List<ThreadItem> recentItems = conversationItems.Skip(lastCount).ToList();
@@ -194,9 +215,9 @@ internal class Engram : MemoryAgent, IDisposable
     {
         string context = string.IsNullOrWhiteSpace(contextSummary)
             ? ""
-            : PromptText("ContextBlock", "", ("contextSummary", contextSummary));
+            : ResolveTemplate("ContextBlock", "", ("contextSummary", contextSummary));
 
-        return PromptText("Task", "",
+        return ResolveTemplate("Task", "",
             ("context",    context),
             ("speaker",    speaker),
             ("transcript", transcript),
@@ -221,8 +242,8 @@ internal class Engram : MemoryAgent, IDisposable
             {
                 // <|think_off|> is appended in code, not stored with the prompt: it is a model control
                 // token, not prose, and editing it would silently stop think-off rather than reword anything.
-                new { role = "system", content = PromptText("ClassifierSystem", "") + "\n<|think_off|>" },
-                new { role = "user",   content = PromptText("ClassifierTask", "", ("transcript", transcript)) }
+                new { role = "system", content = ResolveTemplate("ClassifierSystem", "") + "\n<|think_off|>" },
+                new { role = "user",   content = ResolveTemplate("ClassifierTask", "", ("transcript", transcript)) }
             },
             stream      = false,
             max_tokens  = 5,

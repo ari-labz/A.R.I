@@ -25,7 +25,7 @@ internal sealed class Refactor : MemoryAgent
 
     // Refactor rotates through the whole vault least-recently-refactored first (see RefactorLog); the
     // other memory walks keep the plain top-degree seed order.
-    protected override bool TrackLastRefactored => true;
+    internal override bool TrackLastRefactored => true;
 
     internal async Task<string> Run(bool allNotes = false, CancellationToken ct = default, int? epochsOverride = null)
     {
@@ -47,7 +47,7 @@ internal sealed class Refactor : MemoryAgent
                 allNotes ? "full" : "incremental", epochs);
 
             Thread parent = new(ThreadPipeline.Dialogue, $"refactor:{Guid.NewGuid():N}") { Internal = true };
-            return await RunWalk(parent, parent.Key, PromptText("Task", ""), PersistentDir, epochs, ct, null);
+            return await RunWalk(parent, parent.Key, ResolveTemplate("Task", ""), PersistentDir, epochs, ct, null);
         }
         catch (Exception ex)
         {

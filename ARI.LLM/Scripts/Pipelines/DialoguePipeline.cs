@@ -6,38 +6,38 @@ namespace ARI.LLM;
 
 internal sealed class DialoguePipeline : Pipeline
 {
-    private readonly Dialogue  dialogue;
-    private readonly Memory?   memory;
-    private readonly Context?  context;
-    private readonly Engram?   engram;
+    private readonly TextingAgent textingAgent;
+    private readonly Memory?      memory;
+    private readonly Context?     context;
+    private readonly Engram?      engram;
 
-    protected override Agent  PrimaryAgent => dialogue;
+    protected override Agent  PrimaryAgent => textingAgent;
     protected override string PipelineName => "Dialogue";
 
     internal event Action<string>? ThreadBufferFull;
     internal event Action<string>? ThreadBecameInactive;
 
     internal DialoguePipeline(
-        Dialogue  dialogue,
-        Memory?   memory,
-        Context?  context,
-        Engram?   engram,
+        TextingAgent textingAgent,
+        Memory?      memory,
+        Context?     context,
+        Engram?      engram,
         ConcurrentDictionary<string, CancellationTokenSource> processingThreads,
         ConcurrentDictionary<string, LiveCallInfo>             liveCalls,
         Action<string>                                          notifyWatchers)
         : base(processingThreads, liveCalls, notifyWatchers)
     {
-        this.dialogue = dialogue;
-        this.memory   = memory;
-        this.context  = context;
-        this.engram   = engram;
+        this.textingAgent = textingAgent;
+        this.memory       = memory;
+        this.context      = context;
+        this.engram       = engram;
 
-        dialogue.ThreadBufferFull    += key => ThreadBufferFull?.Invoke(key);
-        dialogue.ThreadBecameInactive += key => ThreadBecameInactive?.Invoke(key);
+        textingAgent.ThreadBufferFull     += key => ThreadBufferFull?.Invoke(key);
+        textingAgent.ThreadBecameInactive += key => ThreadBecameInactive?.Invoke(key);
     }
 
     protected override LiveCallInfo BuildLiveCall(string threadKey) =>
-        new("Dialogue", threadKey, 0, dialogue.BudgetResponse, dialogue.BudgetContext, dialogue.BudgetImage);
+        new("Dialogue", threadKey, 0, textingAgent.BudgetResponse, textingAgent.BudgetContext, textingAgent.BudgetImage);
 
     protected override async Task<string> RunAsync(
         Thread               thread,
@@ -81,7 +81,7 @@ internal sealed class DialoguePipeline : Pipeline
             }
         }
 
-        return await dialogue.Prompt(thread, effectivePrompt, new PromptOptions
+        return await textingAgent.Prompt(thread, effectivePrompt, new PromptOptions
         {
             Username            = username,
             RecallNotes         = recallBlock,

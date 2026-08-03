@@ -34,6 +34,21 @@ internal sealed class EditFile : Tool
         }
     };
 
+    internal override string? PreCheck(Thread thread, string argsJson)
+    {
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            if (doc.RootElement.TryGetProperty("path", out JsonElement p) && p.GetString() is { } path)
+            {
+                if (!fs.ReadLedger.Contains(path))
+                    return $"[Blocked] You must call read_file or preview_file on '{path}' before editing it. Read it first so you have the current line numbers.";
+            }
+        }
+        catch { }
+        return null;
+    }
+
     internal override Task<string> Execute(string argsJson) => fs.Edit(argsJson);
 
     // Emit the enriched tool-start marker (with the +A/-R diff computed from args), not a plain label — so the

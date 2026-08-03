@@ -39,7 +39,13 @@ internal sealed class PreviewFile : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson) => fs.Preview(argsJson);
+    internal override async Task<string> Execute(string argsJson)
+    {
+        string result = await fs.Preview(argsJson);
+        if (!result.StartsWith("[Error", StringComparison.OrdinalIgnoreCase))
+            fs.MarkRead(argsJson);
+        return result;
+    }
 
     internal override Func<string, string>? Display => args =>
     {

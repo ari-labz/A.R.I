@@ -21,6 +21,7 @@ internal sealed class ListenerSession
     private readonly ILogger? logger;
     private readonly List<string> transcript = new();
     private CancellationTokenSource? responseCts;
+    private SpeechSteeringContext? activeSteering;
 
     // Steers the model toward short, speakable replies for a live voice conversation.
     private const string SpeechContext =
@@ -125,13 +126,19 @@ internal sealed class ListenerSession
         catch { return; }
 
         // Forward partial transcripts straight through (ephemeral, no gate).
+        // Also feed them into the active steering context so Ari can keep thinking as the user speaks.
         if (type == "partial" && !string.IsNullOrWhiteSpace(text))
         {
             await SendJson(new { type = "partial", text }, ct);
+            activeSteering?.AddPartial(text!);
             return;
         }
 
         if (type != "final" || string.IsNullOrWhiteSpace(text)) return;
+
+        // Final arrived — close the steering context so the model is allowed to respond.
+        activeSteering?.Finish();
+        activeSteering = null;
 
         transcript.Add(text!);
         bool addressed = await llm.EvaluateAwareness(text!, BuildAwarenessContext(), ct);
@@ -142,17 +149,22 @@ internal sealed class ListenerSession
         if (addressed) StartResponse(text!, ct);
     }
 
-    // Run Ari's spoken response to an addressed turn. A new addressed turn cancels the in-flight one
-    // (a crude interrupt; real barge-in/flush is later work).
+    // Run Ari's spoken response to an addressed turn. A new addressed turn cancels the in-flight one.
     private void StartResponse(string transcript, CancellationToken sessionCt)
     {
         responseCts?.Cancel();
         CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(sessionCt);
         responseCts = cts;
-        _ = Task.Run(() => RespondAsync(transcript, cts.Token), cts.Token);
+
+        // Create a fresh steering context. It starts unfinished so the model keeps thinking if
+        // further partials arrive before the next final. Finish() is called when the next final lands.
+        SpeechSteeringContext steering = new();
+        activeSteering = steering;
+
+        _ = Task.Run(() => RespondAsync(transcript, steering, cts.Token), cts.Token);
     }
 
-    private async Task RespondAsync(string userText, CancellationToken ct)
+    private async Task RespondAsync(string userText, SpeechSteeringContext steering, CancellationToken ct)
     {
         // Sentences are synthesised on a single ordered pump and the WAV streamed to the browser, which
         // plays it through its own audio session (issue #91). Avoids the host-side CoreAudio device conflict
@@ -187,12 +199,17 @@ internal sealed class ListenerSession
                 sentences.Writer.TryWrite(sentence);                     // queue for synthesis → browser
             });
 
+            // Mark steering finished here as a safety net — it should already be finished by the time
+            // the final transcript triggered this call, but guard against timing edge cases.
+            steering.Finish();
+
             await llm.PromptStreaming(
                 ctx.ThreadKey, userText,
                 username:        ctx.UserId ?? "user",
                 platformContext: SpeechContext,
                 onDelta:         delta => { chunker.Feed(delta); return Task.CompletedTask; },
-                ct:              ct);
+                ct:              ct,
+                steering:        steering);
 
             chunker.Flush();
         }

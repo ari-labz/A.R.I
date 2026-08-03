@@ -110,6 +110,8 @@ public interface IWebPushModule
 public interface IListenerModule
 {
     bool IsReady { get; }
+    /// <summary>WebSocket URL of the running Whisper worker, e.g. ws://127.0.0.1:5555/ws. Null if not started.</summary>
+    string? WhisperUrl { get; }
 }
 
 public static class Modules
