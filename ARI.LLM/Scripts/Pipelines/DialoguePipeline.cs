@@ -39,6 +39,33 @@ internal sealed class DialoguePipeline : Pipeline
     protected override LiveCallInfo BuildLiveCall(string threadKey) =>
         new("Dialogue", threadKey, 0, textingAgent.BudgetResponse, textingAgent.BudgetContext, textingAgent.BudgetImage);
 
+    /// <summary>Runs memory recall + Dialogue for a proactive draft thread. The question drives memory
+    /// recall; the instruction is injected as a trailing system nudge so Ari writes the opener rather
+    /// than acknowledging a command.</summary>
+    internal async Task<string> RunProactiveAsync(
+        Thread                  thread,
+        string                  threadKey,
+        string                  question,
+        string                  instruction,
+        CancellationTokenSource cts)
+    {
+        string? contextSummary = context?.GetContext(threadKey);
+        string? recallBlock    = null;
+        if (memory is not null)
+        {
+            try   { recallBlock = await memory.GetNotes(new List<ThreadMessage>(), question, contextSummary, cts.Token); }
+            catch (OperationCanceledException) when (cts.IsCancellationRequested) { throw; }
+            catch (Exception ex) { Shared.Logger.LogWarning(ex, "[Proactive] Memory recall failed — drafting without memories."); }
+        }
+
+        return await textingAgent.Prompt(thread, question, new PromptOptions
+        {
+            RecallNotes  = recallBlock,
+            ModeNudge    = instruction,
+            Ct           = cts.Token,
+        });
+    }
+
     protected override async Task<string> RunAsync(
         Thread               thread,
         string               threadKey,
