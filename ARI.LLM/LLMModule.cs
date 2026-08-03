@@ -859,6 +859,15 @@ public class LLMModule : ILLMModule, IDisposable
     {
         if (textingAgent is null) return;
 
+        if (textingAgent.Server?.Status != ServerStatus.Online ||
+            memory?.Server?.Status      != ServerStatus.Online)
+        {
+            _logger.LogInformation("[Proactive] Skipping — required servers (Dialogue: {D}, Memory: {M}) are not online.",
+                textingAgent.Server?.Status ?? ServerStatus.Offline,
+                memory?.Server?.Status      ?? ServerStatus.Offline);
+            return;
+        }
+
         List<Curiosity> all = CuriosityStore.Load(persistentDir);
         Curiosity? pick = all.Where(c => c.Status == "pending")
             .OrderByDescending(c => c.Priority).ThenBy(c => c.Created)
