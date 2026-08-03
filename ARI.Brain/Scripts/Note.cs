@@ -10,6 +10,7 @@ public class Note
 
     private static readonly Regex frontmatterBlock = new(@"\A---\n(.*?)\n---\n", RegexOptions.Singleline | RegexOptions.Compiled);
     private static readonly Regex aliasesLine = new(@"^aliases: \[(.*)\]$", RegexOptions.Multiline | RegexOptions.Compiled);
+    private static readonly Regex keywordsLine = new(@"^keywords: \[(.*)\]$", RegexOptions.Multiline | RegexOptions.Compiled);
     private static readonly Regex typeLine = new(@"^type: (.+)$", RegexOptions.Multiline | RegexOptions.Compiled);
     private static readonly Regex createdLine = new(@"^created: (\S+)$", RegexOptions.Multiline | RegexOptions.Compiled);
     private static readonly Regex quotedValue = new(@"""((?:[^""\\]|\\.)*)""", RegexOptions.Compiled);
@@ -24,13 +25,15 @@ public class Note
     public string Title { get; }
     public string Path { get; }
     public IReadOnlyList<string> Aliases { get; }
+    public IReadOnlyList<string> Keywords { get; }
 
-    internal Note(long id, string title, string path, IReadOnlyList<string> aliases)
+    internal Note(long id, string title, string path, IReadOnlyList<string> aliases, IReadOnlyList<string> keywords)
     {
         this.id = id;
         Title = title;
         Path = path;
         Aliases = aliases;
+        Keywords = keywords;
     }
 
     public string Name => Path[..^".md".Length];
@@ -53,9 +56,9 @@ public class Note
 
     public List<Note> GetChildren() => Database.ChildrenOf(Name);
 
-    public void Save(string content, IReadOnlyList<string> aliases)
+    public void Save(string content, IReadOnlyList<string> aliases, IReadOnlyList<string>? keywords = null)
     {
-        Write(Path, CarryThoughtsInto(Content, content), aliases, Parse(File.ReadAllText(AbsolutePath)).Created);
+        Write(Path, CarryThoughtsInto(Content, content), aliases, Parse(File.ReadAllText(AbsolutePath)).Created, keywords: keywords ?? Keywords);
         BrainModule.Index();
     }
 
@@ -85,9 +88,14 @@ public class Note
         BrainModule.Index();
     }
 
-    public string ToPrompt() => Aliases.Count > 0
-        ? $"Path: {Name}\nAliases: {string.Join(", ", Aliases)}\n\n{Content}"
-        : $"Path: {Name}\n\n{Content}";
+    public string ToPrompt()
+    {
+        var sb = new StringBuilder($"Path: {Name}");
+        if (Aliases.Count > 0) sb.Append($"\nAliases: {string.Join(", ", Aliases)}");
+        if (Keywords.Count > 0) sb.Append($"\nKeywords: {string.Join(", ", Keywords)}");
+        sb.Append($"\n\n{Content}");
+        return sb.ToString();
+    }
 
     /// <summary>Returns only the frontmatter header block of the note: title, aliases, and the lines
     /// up to (but not including) the first level-2 heading. Used for identity pinning where full
@@ -97,6 +105,7 @@ public class Note
         string[] lines = Content.Split('\n');
         var sb = new StringBuilder();
         if (Aliases.Count > 0) sb.AppendLine($"Aliases: {string.Join(", ", Aliases)}");
+        if (Keywords.Count > 0) sb.AppendLine($"Keywords: {string.Join(", ", Keywords)}");
         foreach (string line in lines)
         {
             if (line.StartsWith("## ")) break;
@@ -227,12 +236,13 @@ public class Note
 
     // ── File format ──────────────────────────────────────────────────────────────────
 
-    internal record Parsed(string Body, IReadOnlyList<string> AliasList, DateTime? Created, string? Type);
+    internal record Parsed(string Body, IReadOnlyList<string> AliasList, IReadOnlyList<string> KeywordList, DateTime? Created, string? Type);
 
     internal static Parsed Parse(string raw)
     {
         string body = raw;
         List<string> aliases = new();
+        List<string> keywords = new();
         DateTime? created = null;
         string? type = null;
 
@@ -245,13 +255,17 @@ public class Note
             if (aliasMatch.Success)
                 foreach (Match value in quotedValue.Matches(aliasMatch.Groups[1].Value))
                     aliases.Add(value.Groups[1].Value.Replace("\\\"", "\"").Replace("\\\\", "\\"));
+            Match keywordMatch = keywordsLine.Match(head);
+            if (keywordMatch.Success)
+                foreach (Match value in quotedValue.Matches(keywordMatch.Groups[1].Value))
+                    keywords.Add(value.Groups[1].Value.Replace("\\\"", "\"").Replace("\\\\", "\\"));
             Match typeMatch = typeLine.Match(head);
             if (typeMatch.Success) type = typeMatch.Groups[1].Value.Trim();
             Match createdMatch = createdLine.Match(head);
             if (createdMatch.Success && DateTime.TryParse(createdMatch.Groups[1].Value, null, DateTimeStyles.AdjustToUniversal, out DateTime parsed))
                 created = parsed;
         }
-        return new Parsed(body, aliases, created, type);
+        return new Parsed(body, aliases, keywords, created, type);
     }
 
     // temp + rename: a crash can never leave a half-written note.
@@ -260,7 +274,7 @@ public class Note
     // renames) never strips its colour group or, worse, silently backdates-forward when it was
     // created. No caller decides this; it's enforced here so it can't be gotten wrong per call site.
     // updated is never sticky — every write is, definitionally, an update.
-    internal static void Write(string relativePath, string body, IReadOnlyList<string> aliases, DateTime? created, string? type = null)
+    internal static void Write(string relativePath, string body, IReadOnlyList<string> aliases, DateTime? created, string? type = null, IReadOnlyList<string>? keywords = null)
     {
         string file = System.IO.Path.Combine(BrainModule.VaultRoot, relativePath);
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file)!);
@@ -268,8 +282,9 @@ public class Note
         if (File.Exists(file))
         {
             Parsed existing = Parse(File.ReadAllText(file));
-            type    ??= existing.Type;
-            created ??= existing.Created;
+            type     ??= existing.Type;
+            created  ??= existing.Created;
+            keywords ??= existing.KeywordList;
         }
 
         StringBuilder content = new();
@@ -277,6 +292,9 @@ public class Note
         if (aliases.Count > 0)
             content.AppendLine("aliases: [" + string.Join(", ",
                 aliases.Select(alias => $"\"{alias.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"")) + "]");
+        if (keywords is { Count: > 0 })
+            content.AppendLine("keywords: [" + string.Join(", ",
+                keywords.Select(kw => $"\"{kw.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"")) + "]");
         if (!string.IsNullOrWhiteSpace(type))
             content.AppendLine($"type: {type.Trim()}");
         content.AppendLine($"created: {(created ?? DateTime.UtcNow).ToString(TIMESTAMP_FORMAT)}");
