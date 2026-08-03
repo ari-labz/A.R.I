@@ -12,6 +12,7 @@ internal static class Database
     internal const string SCHEMA = """
         DROP TABLE IF EXISTS note_search;
         DROP TABLE IF EXISTS annotations;
+        DROP TABLE IF EXISTS keywords;
         DROP TABLE IF EXISTS aliases;
         DROP TABLE IF EXISTS connections;
         DROP TABLE IF EXISTS notes;
@@ -35,6 +36,12 @@ internal static class Database
             alias  TEXT NOT NULL UNIQUE COLLATE NOCASE,
             noteID INTEGER NOT NULL REFERENCES notes(noteID) ON DELETE CASCADE
         );
+        CREATE TABLE keywords (
+            keyword TEXT NOT NULL COLLATE NOCASE,
+            noteID  INTEGER NOT NULL REFERENCES notes(noteID) ON DELETE CASCADE,
+            PRIMARY KEY (keyword, noteID)
+        );
+        CREATE INDEX idx_keywords_note ON keywords(noteID);
         CREATE TABLE annotations (
             annotationID INTEGER PRIMARY KEY AUTOINCREMENT,
             noteID       INTEGER NOT NULL REFERENCES notes(noteID) ON DELETE CASCADE,
@@ -48,13 +55,16 @@ internal static class Database
         """;
 
     // Tier weight per term match: title/alias hits dominate, a bare content mention barely
-    // registers alone but adds up across several terms.
+    // registers alone but adds up across several terms. Keywords are curated semantic tags —
+    // an exact keyword match ranks just below alias, a partial match just above content FTS.
     private const double TIER_TITLE          = 100.0;
     private const double TIER_ALIAS          = 90.0;
+    private const double TIER_KEYWORD        = 75.0;
     private const double TIER_TITLE_PARTIAL  = 50.0;
     private const double TIER_ALIAS_PARTIAL  = 40.0;
     private const double TIER_TITLE_IN_TERM  = 45.0;
     private const double TIER_ALIAS_IN_TERM  = 35.0;
+    private const double TIER_KEYWORD_PARTIAL = 20.0;
     private const double TIER_CONTENT        = 10.0;
 
     internal static string Path { get; set; } = string.Empty;
@@ -109,6 +119,14 @@ internal static class Database
                 idsByName[alias] = idsByName[title];
                 aliasCount++;
             }
+        }
+
+        foreach ((string path, Note.Parsed parsed, DateTime _) in files)
+        {
+            string title = System.IO.Path.GetFileNameWithoutExtension(path);
+            if (!idsByName.TryGetValue(title, out long noteId)) continue;
+            foreach (string keyword in parsed.KeywordList)
+                Run(db, "INSERT OR IGNORE INTO keywords(keyword, noteID) VALUES ($kw, $id)", ("$kw", keyword), ("$id", noteId));
         }
 
         int edgeCount = 0;
@@ -408,7 +426,11 @@ internal static class Database
                 UNION ALL
                 SELECT t.term, n.noteID, 6 FROM aliases a JOIN notes n USING(noteID), termTable t WHERE length(a.alias) >= 4 AND instr(lower(t.term), lower(a.alias)) > 0
                 UNION ALL
-                SELECT t.term, ns.rowid, 7 FROM note_search ns JOIN termTable t ON note_search MATCH t.phrase
+                SELECT t.term, k.noteID, 7 FROM keywords k, termTable t WHERE k.keyword = t.term
+                UNION ALL
+                SELECT t.term, k.noteID, 8 FROM keywords k, termTable t WHERE k.keyword LIKE t.pattern ESCAPE '\'
+                UNION ALL
+                SELECT t.term, ns.rowid, 9 FROM note_search ns JOIN termTable t ON note_search MATCH t.phrase
             )
             """;
     }
@@ -425,6 +447,7 @@ internal static class Database
                        WHEN 1 THEN {TIER_TITLE} WHEN 2 THEN {TIER_ALIAS}
                        WHEN 3 THEN {TIER_TITLE_PARTIAL} WHEN 4 THEN {TIER_ALIAS_PARTIAL}
                        WHEN 5 THEN {TIER_TITLE_IN_TERM} WHEN 6 THEN {TIER_ALIAS_IN_TERM}
+                       WHEN 7 THEN {TIER_KEYWORD} WHEN 8 THEN {TIER_KEYWORD_PARTIAL}
                        ELSE {TIER_CONTENT} END) AS score,
                    COUNT(DISTINCT bestPerTerm.term) AS termsMatched
             FROM bestPerTerm JOIN notes n USING(noteID)
@@ -471,7 +494,9 @@ internal static class Database
 
         List<Note> notes = new();
         foreach ((long id, string title, string notePath) in rows)
-            notes.Add(new Note(id, title, notePath, Column("SELECT alias FROM aliases WHERE noteID = $id", ("$id", id))));
+            notes.Add(new Note(id, title, notePath,
+                Column("SELECT alias FROM aliases WHERE noteID = $id ORDER BY alias", ("$id", id)),
+                Column("SELECT keyword FROM keywords WHERE noteID = $id ORDER BY keyword", ("$id", id))));
         return notes;
     }
 
@@ -488,7 +513,10 @@ internal static class Database
         List<SearchResult> results = new();
         foreach ((long id, string title, string notePath, double score, int termsMatched) in rows)
             results.Add(new SearchResult(
-                new Note(id, title, notePath, Column("SELECT alias FROM aliases WHERE noteID = $id", ("$id", id))), score, termsMatched));
+                new Note(id, title, notePath,
+                    Column("SELECT alias FROM aliases WHERE noteID = $id ORDER BY alias", ("$id", id)),
+                    Column("SELECT keyword FROM keywords WHERE noteID = $id ORDER BY keyword", ("$id", id))),
+                score, termsMatched));
         return results;
     }
 

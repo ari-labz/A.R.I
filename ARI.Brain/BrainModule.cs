@@ -260,22 +260,22 @@ public static class BrainModule
 
     // ── Writes (file first, then reindex) ───────────────────────────────────────────
 
-    public static Note CreateNote(string name, string content, IReadOnlyList<string> aliases)
+    public static Note CreateNote(string name, string content, IReadOnlyList<string> aliases, IReadOnlyList<string>? keywords = null)
     {
         Note? existing = GetNote(name.Contains('/') ? name[(name.LastIndexOf('/') + 1)..] : name) ?? GetNote(name);
         if (existing is not null)
         {
-            existing.Save(content, MergedAliases(existing, aliases));
+            existing.Save(content, MergedAliases(existing, aliases), keywords);
             return GetNote(existing.Title)!;
         }
-        Note.Write(PathFor(name), content, aliases, null);
+        Note.Write(PathFor(name), content, aliases, null, keywords: keywords);
         Index();
         return GetNote(name)!;
     }
 
     public static void AddNotes(IReadOnlyList<EngramAdd> adds)
     {
-        foreach (EngramAdd add in adds) WriteNamed(add.NoteName, add.Content, add.Aliases, add.Type);
+        foreach (EngramAdd add in adds) WriteNamed(add.NoteName, add.Content, add.Aliases, add.Type, add.Keywords);
         Index();
     }
 
@@ -293,7 +293,7 @@ public static class BrainModule
 
             if (!isRename)
             {
-                WriteNamed(edit.NoteName, edit.Content, edit.Aliases, edit.Type);
+                WriteNamed(edit.NoteName, edit.Content, edit.Aliases, edit.Type, edit.Keywords);
                 continue;
             }
             Note? old = GetNote(edit.NoteName);
@@ -307,7 +307,7 @@ public static class BrainModule
                 File.Delete(Path.Combine(VaultRoot, old.Path));
                 renamedFrom = old.Title;
             }
-            Note.Write(PathFor(edit.NewNoteName!), newContent, aliases, null, edit.Type);
+            Note.Write(PathFor(edit.NewNoteName!), newContent, aliases, null, edit.Type, edit.Keywords.Count > 0 ? edit.Keywords : null);
             // Rewrite every [[oldTitle]] in other notes to [[newBareTitle]] so a rename never leaves the
             // referrers pointing at the old name (the alias still resolves them, but the text is repointed).
             if (renamedFrom is not null) RepointReferences(renamedFrom, newBareTitle);
@@ -447,13 +447,13 @@ public static class BrainModule
 
     // ── Backup ──────────────────────────────────────────────────────────────────────
 
-    private record BackupNote(string Title, string Folder, string Content, IReadOnlyList<string>? Aliases);
+    private record BackupNote(string Title, string Folder, string Content, IReadOnlyList<string>? Aliases, IReadOnlyList<string>? Keywords);
 
     public static string Backup()
     {
         Directory.CreateDirectory(backupPath);
         List<BackupNote> notes = Database.AllNotes()
-            .Select(note => new BackupNote(note.Title, note.Folder, note.ToPrompt(), note.Aliases))
+            .Select(note => new BackupNote(note.Title, note.Folder, note.ToPrompt(), note.Aliases, note.Keywords.Count > 0 ? note.Keywords : null))
             .ToList();
 
         string json = JsonSerializer.Serialize(new { timestamp = DateTime.UtcNow, noteCount = notes.Count, notes },
@@ -504,9 +504,12 @@ public static class BrainModule
             List<string> aliases = element.TryGetProperty("aliases", out JsonElement aliasElement) && aliasElement.ValueKind == JsonValueKind.Array
                 ? aliasElement.EnumerateArray().Select(a => a.GetString()!).ToList()
                 : new List<string>();
+            List<string> keywords = element.TryGetProperty("keywords", out JsonElement kwElement) && kwElement.ValueKind == JsonValueKind.Array
+                ? kwElement.EnumerateArray().Select(k => k.GetString()!).ToList()
+                : new List<string>();
 
             int bodyStart = content.StartsWith("Path: ") ? content.IndexOf('\n') + 1 : 0;
-            Note.Write(PathFor(folder.Length > 0 ? $"{folder}/{title}" : title), content[bodyStart..].TrimStart('\n'), aliases, null);
+            Note.Write(PathFor(folder.Length > 0 ? $"{folder}/{title}" : title), content[bodyStart..].TrimStart('\n'), aliases, null, keywords: keywords.Count > 0 ? keywords : null);
             restored++;
         }
         Index();
@@ -515,14 +518,14 @@ public static class BrainModule
 
     // ── Internal ────────────────────────────────────────────────────────────────────
 
-    private static void WriteNamed(string name, string content, IReadOnlyList<string> aliases, string? type = null)
+    private static void WriteNamed(string name, string content, IReadOnlyList<string> aliases, string? type = null, IReadOnlyList<string>? keywords = null)
     {
         string bareTitle = name.Contains('/') ? name[(name.LastIndexOf('/') + 1)..] : name;
         Note? existing = GetNote(bareTitle);
         if (existing is not null)
-            Note.Write(existing.Path, Note.CarryThoughtsInto(existing.Content, content), MergedAliases(existing, aliases), null, type);
+            Note.Write(existing.Path, Note.CarryThoughtsInto(existing.Content, content), MergedAliases(existing, aliases), null, type, keywords);
         else
-            Note.Write(PathFor(name), content, aliases, null, type);
+            Note.Write(PathFor(name), content, aliases, null, type, keywords);
     }
 
     private static List<string> MergedAliases(Note note, IReadOnlyList<string> incoming)

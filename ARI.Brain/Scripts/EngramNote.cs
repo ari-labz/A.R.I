@@ -5,6 +5,7 @@ public class EngramAdd
     public string                NoteName { get; init; } = string.Empty; // e.g. "People/Alex"
     public string                Content  { get; init; } = string.Empty; // markdown
     public IReadOnlyList<string> Aliases  { get; init; } = Array.Empty<string>(); // searchable alternate names
+    public IReadOnlyList<string> Keywords { get; init; } = Array.Empty<string>(); // semantic search tags
     public string?               Type     { get; init; }                  // node type for colouring; null = leaf
 }
 
@@ -14,6 +15,7 @@ public class EngramEdit
     public string?               NewNoteName { get; init; }                  // new path if moving e.g. "Games/VRChat"
     public string                Content     { get; init; } = string.Empty; // full markdown replacement
     public IReadOnlyList<string> Aliases     { get; init; } = Array.Empty<string>(); // searchable alternate names
+    public IReadOnlyList<string> Keywords    { get; init; } = Array.Empty<string>(); // semantic search tags
     public string?               Type        { get; init; }                  // node type for colouring; null = leaf
 }
 
