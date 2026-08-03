@@ -875,14 +875,11 @@ public class LLMModule : ILLMModule, IDisposable
         if (pick is null) { _logger.LogInformation("[Proactive] no pending curiosities to raise."); return; }
 
         // Framed to make Ari WRITE its own opening message, not narrate the task. The earlier "Greet them
-        // and ask this" phrasing was echoed back as a stage direction ("Ari greets you warmly and asks…");
-        // "write your opening message now / output only the message" stops that.
+        // The question drives memory recall; the instruction is a trailing system nudge so Ari writes the
+        // opener rather than acknowledging a command. Keeping them separate prevents weird question wording
+        // from corrupting the instruction framing.
         string instruction = textingAgent.ResolveTemplate("ProactiveOpener", "", ("question", pick.Question));
 
-        // Generate through the full Dialogue pipeline (not raw Prompt) so the opener is grounded in memory
-        // recall + context — otherwise Ari phrases blind, with no idea who the people in the question are. The
-        // draft thread is internal and never registered, so the instruction above never surfaces in the sidebar;
-        // we then seed a fresh owner-facing thread with just the resulting message.
         string opener;
         Thread draft = new(ThreadPipeline.Dialogue, $"proactive-draft:{Guid.NewGuid()}") { Internal = true };
         CancellationTokenSource draftCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -890,8 +887,8 @@ public class LLMModule : ILLMModule, IDisposable
         try
         {
             opener = dialoguePipeline is not null
-                ? await dialoguePipeline.ExecuteAsync(draft, draft.Key, instruction, "user", null, null, draftCts)
-                : await textingAgent.Prompt(draft, instruction, new PromptOptions { Ct = ct });
+                ? await dialoguePipeline.RunProactiveAsync(draft, draft.Key, pick.Question, instruction, draftCts)
+                : await textingAgent.Prompt(draft, pick.Question, new PromptOptions { ModeNudge = instruction, Ct = ct });
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) { _logger.LogWarning("[Proactive] phrasing failed ({Msg}); using the raw question.", ex.Message); opener = pick.Question; }

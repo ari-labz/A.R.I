@@ -33,7 +33,7 @@
       "BudgetResponse": 800,
       "BudgetContext": 20000,
       "PromptTemplates": {
-        "ProactiveOpener": "Something has been on your mind and you want to message the user — the person you talk with and care about — first, unprompted. Write your opening message to them now: greet them and raise this with them, in one or two sentences — \"{question}\" Address the user directly as \"you\", never by name. If the matter concerns someone else in their life, ask the user about that person — do not address that person. Output only the message itself, in your own voice; do not describe what you are doing, and do not mention that this was scheduled, automatic, or that you were 'reflecting'."
+        "ProactiveOpener": "You have been thinking about asking the following question.\nWrite your next message — one or two sentences, in your own voice. Do not mention that this was scheduled or automatic.\n\nHere is the question:\n{question}"
       },
       "SupportsCompaction": true,
       "CompactHighPct": 80,
