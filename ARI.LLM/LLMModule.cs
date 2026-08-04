@@ -13,6 +13,9 @@ namespace ARI.LLM;
 /// <param name="Text">Accumulated streaming text — only present for "streaming" events.</param>
 public record AppEvent(string Type, string ThreadKey, string? Text = null);
 
+/// <summary>The current processing phase of a thread, sent to watching clients via the watch SSE stream.</summary>
+public enum ThreadPhase { Idle, Prefilling, Thinking, Typing }
+
 public class LLMModule : ILLMModule, IDisposable
 {
     //pipelines
@@ -38,7 +41,8 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly ConcurrentDictionary<string, LiveCallInfo>            liveCalls           = new();
     private readonly ConcurrentDictionary<Guid, Channel<AppEvent>>         globalSubscribers   = new();
     private readonly Dictionary<string, Agent>                             agentMap            = new();
-    private readonly ConcurrentDictionary<string, ThreadPipeline>                                 forcedPipelines   = new();
+    private readonly ConcurrentDictionary<string, ThreadPipeline>          forcedPipelines     = new();
+    private readonly ConcurrentDictionary<string, ThreadPhase>             threadPhases        = new();
     private readonly ConcurrentDictionary<string, Thread>                                         threads           = new();
 
     private readonly List<Server>  _servers    = new();
@@ -302,6 +306,17 @@ public class LLMModule : ILLMModule, IDisposable
 
         if (codeArchitect is not null)
             codePipeline = new CodePipeline(codeArchitect, processingThreads, liveCalls, NotifyWatchers);
+
+        // Wire phase tracking on every agent so watch clients know which phase is active.
+        foreach (Agent agent in agentMap.Values)
+        {
+            agent.OnPhaseChange = (threadKey, phase) =>
+            {
+                if (phase == ThreadPhase.Idle) threadPhases.TryRemove(threadKey, out _);
+                else                           threadPhases[threadKey] = phase;
+                NotifyWatchers(threadKey);
+            };
+        }
     }
 
     // ── Thread registry ──────────────────────────────────────────────────────────
@@ -632,6 +647,7 @@ public class LLMModule : ILLMModule, IDisposable
             ? CancellationTokenSource.CreateLinkedTokenSource(externalCt)
             : new CancellationTokenSource();
         processingThreads[threadKey] = cts;
+        NotifyWatchers(threadKey);   // push "prefilling" snapshot immediately so the watch client doesn't wait for the first delta
 
         // Discord threads always use Dialogue.
         bool isDiscordThread = threadKey.StartsWith("dm:", StringComparison.OrdinalIgnoreCase)
@@ -815,6 +831,8 @@ public class LLMModule : ILLMModule, IDisposable
     public bool IsThreadProcessing(string threadKey) => processingThreads.ContainsKey(threadKey);
 
     public bool IsEngramSweeping(string threadKey) => engram?.IsSweeping(threadKey) ?? false;
+
+    public ThreadPhase GetThreadPhase(string threadKey) => threadPhases.TryGetValue(threadKey, out ThreadPhase p) ? p : ThreadPhase.Idle;
 
     // Idle = no thread is currently being processed. Read statically via Activity.IsIdle(); the Scheduler
     // runs background work only while this holds, and long tasks poll it to yield the moment Ari is busy.

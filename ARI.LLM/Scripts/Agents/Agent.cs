@@ -44,6 +44,9 @@ public abstract class Agent
     [JsonIgnore] internal Server?    Server { get; set; }
     [JsonIgnore] internal NamedSlot? Slot   { get; set; }
 
+    /// <summary>Called when the processing phase changes for a thread. Set by LLMModule to update the watch-stream status.</summary>
+    [JsonIgnore] internal Action<string, ThreadPhase>? OnPhaseChange { get; set; }
+
     [JsonIgnore] internal virtual int  MemoryLimit => 0;  // 0 = unlimited
     internal virtual bool SuppressLog()    => false;
     [JsonIgnore] internal virtual bool LogReasoning    => false;
@@ -207,20 +210,25 @@ public abstract class Agent
     private sealed class TurnClock
     {
         public double Prefill, Thinking, Typing;
+        public ThreadPhase CurrentPhase { get; private set; } = ThreadPhase.Prefilling;
         private DateTime  sent;
         private DateTime? lastDelta;
 
-        public void RequestSent() { sent = DateTime.UtcNow; lastDelta = null; }
+        public void RequestSent() { sent = DateTime.UtcNow; lastDelta = null; CurrentPhase = ThreadPhase.Prefilling; }
 
         public void Mark(bool reasoning)
         {
             DateTime now = DateTime.UtcNow;
             if (lastDelta is null)
+            {
                 Prefill += (now - sent).TotalSeconds;
+                CurrentPhase = reasoning ? ThreadPhase.Thinking : ThreadPhase.Typing;
+            }
             else
             {
                 double gap = (now - lastDelta.Value).TotalSeconds;
                 if (gap <= 2) { if (reasoning) Thinking += gap; else Typing += gap; }
+                CurrentPhase = reasoning ? ThreadPhase.Thinking : ThreadPhase.Typing;
             }
             lastDelta = now;
         }
@@ -306,8 +314,21 @@ public abstract class Agent
         internal readonly Response        AriResponse;
         internal readonly List<TraceStep> Trace;
 
+        // ── Session recording ─────────────────────────────────────────────────
+        // Step index and the previous cumulative counters, so each recorded step reports its own
+        // token and clock cost rather than the running total.
+        internal SessionRecorder.Run? Rec;
+        internal int    RecStep;
+        internal int    RecPrevCompletion;
+        internal double RecPrevPrefill;
+        internal double RecPrevThinking;
+        internal double RecPrevTyping;
+
         // ── Streaming callback ────────────────────────────────────────────────
         internal Func<string, Task>? OnDelta;
+
+        // ── Phase tracking ───────────────────────────────────────────────────
+        internal ThreadPhase LastPhase = ThreadPhase.Idle;
 
         // ── Loop control ─────────────────────────────────────────────────────
         // True while the outer turn loop should keep running (more steps needed).
@@ -401,6 +422,11 @@ public abstract class Agent
         turn.RespBudget  = opts.MaxTokensOverride != 0 ? opts.MaxTokensOverride : BudgetResponse;
         turn.MaxTokens   = turn.RespBudget + turn.ThinkBudget;
 
+        // ── Session record ────────────────────────────────────────────────────
+        // Opened here rather than in a pipeline so it covers every agent unconditionally — the
+        // dialogue agent, Memory's recall, Context's summariser, Engram's sweep, a Coder sub-thread.
+        turn.Rec = SessionRecorder.BeginRun(Name, thread, prompt, turn.MaxTokens, turn.ThinkBudget);
+
         // ── System block & messages ───────────────────────────────────────────
         int maxChars = BudgetContext > 0 ? (int)(BudgetContext * 3.5) : 0;
         (turn.BaseSystem, turn.BudgetsBlock, turn.ThinkSuffix) = BuildSystemBlock(thread, turn.ThinkBudget, turn.RespBudget, Think);
@@ -421,50 +447,64 @@ public abstract class Agent
             thread.liveCallInfo = new LiveCallInfo(Name, thread.Key, turn.EstimatedTextTokens, turn.MaxTokens, BudgetContext, hadImages: turn.HadImages);
         }
 
-        // A Turn spans the full agent response — multiple LLM round-trips until no tool calls remain.
-        // A Step is one LLM request/response cycle; it streams until the model stops generating.
-        while (turn.IsStreaming)
+        string responseText;
+        try
         {
-            // ── Prepare step ──────────────────────────────────────────────────
-            // Refresh system message, rebuild tool list (may be exhausted),
-            // compact if context is full, inject dynamic context, serialise.
-            PrepareStep(turn);
-            string json = BuildRequest(turn);
-
-            // ── Stream ────────────────────────────────────────────────────────
-            using Step? step = await OpenStep(turn, json);
-            if (step is null) continue;   // HTTP error recovery; hint injected, retry
-
-            while (await step.IsStreaming(turn.Ct))
+            // A Turn spans the full agent response — multiple LLM round-trips until no tool calls remain.
+            // A Step is one LLM request/response cycle; it streams until the model stops generating.
+            while (turn.IsStreaming)
             {
-                await ProcessDelta(turn, step);
-                if (turn.ContentRunaway)           break;
-                if (turn.SteeringRedirect)         break;
-                if (turn.ThinkingRedirect)         break;
-                if (turn.EarlyAbort is not null)   break;
-                if (turn.RunawayCall  is not null)  break;
-                if (turn.TextToolLeak)             break;
+                // ── Prepare step ──────────────────────────────────────────────
+                // Refresh system message, rebuild tool list (may be exhausted),
+                // compact if context is full, inject dynamic context, serialise.
+                PrepareStep(turn);
+                string json = BuildRequest(turn);
+
+                // ── Stream ────────────────────────────────────────────────────
+                using Step? step = await OpenStep(turn, json);
+                if (step is null) continue;   // HTTP error recovery; hint injected, retry
+
+                while (await step.IsStreaming(turn.Ct))
+                {
+                    await ProcessDelta(turn, step);
+                    if (turn.ContentRunaway)           break;
+                    if (turn.SteeringRedirect)         break;
+                    if (turn.ThinkingRedirect)         break;
+                    if (turn.EarlyAbort is not null)   break;
+                    if (turn.RunawayCall  is not null)  break;
+                    if (turn.TextToolLeak)             break;
+                }
+
+                // ── Process result & execute tools ────────────────────────────
+                await ProcessStep(turn);
+                if (turn.IsStreaming && turn.PendingCalls.Count > 0)
+                    await ExecuteTools(turn);
             }
 
-            // ── Process result & execute tools ────────────────────────────────
-            await ProcessStep(turn);
-            if (turn.IsStreaming && turn.PendingCalls.Count > 0)
-                await ExecuteTools(turn);
+            if (FlushPrefillFlips(turn) && turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
+
+            OnPhaseChange?.Invoke(turn.Thread.Key, ThreadPhase.Idle);
+            turn.Stopwatch.Stop();
+            responseText = CleanResponse(turn.ContentBuilder, turn.ResponseBuilder);
+
+            responseText = OnResponse(thread, responseText);
+            if (OnResponsePipeline is not null) responseText = OnResponsePipeline(thread, responseText);
+
+            FinalizeResponse(thread, prompt, opts, responseText, ariResponse, turn.ReasoningBuilder,
+                turn.ToolResults, turn.Clock, turn.Stopwatch.Elapsed.TotalSeconds,
+                turn.CompletionTokens, turn.PromptTokens, turn.PrefilledTokens, turn.PrefillTokPerSec,
+                turn.MaxTokens, turn.EstimatedTextTokens, turn.HadImages, trace, turn.ResponseBuilder,
+                turn.ToolCallCount);
+        }
+        catch (Exception ex)
+        {
+            // A cancelled or failed run is the interesting one to replay later — close the record
+            // with the reason rather than leaving a run that just stops mid-file.
+            SessionRecorder.EndRun(turn.Rec, null, ex);
+            throw;
         }
 
-        if (FlushPrefillFlips(turn) && turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
-
-        turn.Stopwatch.Stop();
-        string responseText = CleanResponse(turn.ContentBuilder, turn.ResponseBuilder);
-
-        responseText = OnResponse(thread, responseText);
-        if (OnResponsePipeline is not null) responseText = OnResponsePipeline(thread, responseText);
-
-        FinalizeResponse(thread, prompt, opts, responseText, ariResponse, turn.ReasoningBuilder,
-            turn.ToolResults, turn.Clock, turn.Stopwatch.Elapsed.TotalSeconds,
-            turn.CompletionTokens, turn.PromptTokens, turn.PrefilledTokens, turn.PrefillTokPerSec,
-            turn.MaxTokens, turn.EstimatedTextTokens, turn.HadImages, trace, turn.ResponseBuilder);
-
+        SessionRecorder.EndRun(turn.Rec, responseText);
         return responseText;
     }
 
@@ -518,6 +558,12 @@ public abstract class Agent
                 turn.ToolSchemas?.Length ?? 0, turn.Messages.Count,
                 Think, body.TryGetValue("enable_thinking", out object? etv) ? etv : "unset",
                 body.TryGetValue("thinking_budget_tokens", out object? bv) ? bv : "none");
+
+        // Recorded while the dynamic block is still attached — the digests must describe exactly what
+        // the server received, including the transient message that breaks the cached prefix.
+        turn.RecStep++;
+        SessionRecorder.Request(turn.Rec, turn.RecStep, json, turn.Messages, turn.ToolSchemas, dynamicInjected, turn.MaxTokens);
+
         if (dynamicInjected) turn.Messages.RemoveAt(turn.Messages.Count - 1);
 
         turn.AriResponse.Data.DebugRequestJson = json;
@@ -534,6 +580,11 @@ public abstract class Agent
         };
 
         turn.Clock.RequestSent();
+        if (ThreadPhase.Prefilling != turn.LastPhase)
+        {
+            turn.LastPhase = ThreadPhase.Prefilling;
+            OnPhaseChange?.Invoke(turn.Thread.Key, ThreadPhase.Prefilling);
+        }
         Server?.BeginRequest(Name);
         HttpResponseMessage response;
         try   { response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, turn.Ct); }
@@ -615,6 +666,13 @@ public abstract class Agent
         bool reasoningDelta = delta.TryGetProperty("reasoning_content", out JsonElement rcProbe)
             && rcProbe.ValueKind == JsonValueKind.String && (rcProbe.GetString()?.Length ?? 0) > 0;
         turn.Clock.Mark(reasoningDelta);
+
+        ThreadPhase phase = turn.Clock.CurrentPhase;
+        if (phase != turn.LastPhase)
+        {
+            turn.LastPhase = phase;
+            OnPhaseChange?.Invoke(turn.Thread.Key, phase);
+        }
 
         if (!SuppressLog())
         {
@@ -814,9 +872,42 @@ public abstract class Agent
         }
     }
 
+    /// <summary>Records the step the model just finished, before ProcessStep's recovery branches start
+    /// rewriting the builders. Completion tokens and the clock buckets accumulate across a turn, so they
+    /// are differenced here — a recorded step reports its own cost, and the file sums back to the turn.</summary>
+    private static void RecordStepResponse(Turn turn)
+    {
+        if (turn.Rec is null) return;
+
+        string? reasoning = turn.ReasoningBuilder.Length > turn.ReasoningStartLen
+            ? turn.ReasoningBuilder.ToString(turn.ReasoningStartLen, turn.ReasoningBuilder.Length - turn.ReasoningStartLen)
+            : null;
+
+        SessionRecorder.Response(
+            turn.Rec, turn.RecStep,
+            turn.ResponseBuilder.Length > 0 ? turn.ResponseBuilder.ToString() : null,
+            reasoning,
+            turn.FinishReason,
+            turn.PromptTokens,
+            turn.PrefilledTokens,
+            turn.CompletionTokens - turn.RecPrevCompletion,
+            turn.Clock.Prefill  - turn.RecPrevPrefill,
+            turn.Clock.Thinking - turn.RecPrevThinking,
+            turn.Clock.Typing   - turn.RecPrevTyping,
+            turn.PrefillTokPerSec,
+            turn.PendingCalls.Values.Select(c => c.Name));
+
+        turn.RecPrevCompletion = turn.CompletionTokens;
+        turn.RecPrevPrefill    = turn.Clock.Prefill;
+        turn.RecPrevThinking   = turn.Clock.Thinking;
+        turn.RecPrevTyping     = turn.Clock.Typing;
+    }
+
     private async Task ProcessStep(Turn turn)
     {
         Thread thread = turn.Thread;
+
+        RecordStepResponse(turn);
 
         if (turn.ReasoningBuilder.Length > turn.ReasoningStartLen)
         {
@@ -1035,6 +1126,7 @@ public abstract class Agent
             string result;
 
             turn.Trace.Add(new TraceStep { Kind = "tool_call", Name = call.Name, Args = argsJson });
+            SessionRecorder.ToolCall(turn.Rec, turn.RecStep, call.Id, call.Name, argsJson);
 
             string? guard = null;
             bool toolFound = thread.tools.TryGetValue(call.Name, out var tool);
@@ -1179,6 +1271,7 @@ public abstract class Agent
 
             turn.ToolResults.Add(result);
             turn.Trace.Add(new TraceStep { Kind = "tool_result", Name = call.Name, Text = result });
+            SessionRecorder.ToolResult(turn.Rec, turn.RecStep, call.Id, call.Name, result);
             // Guard nags and errors don't count as progress — only real content/mutations do.
             if (!result.StartsWith("[System:", StringComparison.OrdinalIgnoreCase) && !ToolCallParser.IsError(result))
                 productiveBatch = true;
@@ -1554,7 +1647,7 @@ public abstract class Agent
         List<string> toolResults, TurnClock clock, double elapsed,
         int completionTokens, int promptTokens, int prefilledTokens, double prefillTokPerSec,
         int maxTokens, int estimatedTextTokens, bool hadImages,
-        List<TraceStep> trace, StringBuilder responseBuilder)
+        List<TraceStep> trace, StringBuilder responseBuilder, int toolCallCount = 0)
     {
         if (string.IsNullOrWhiteSpace(responseText))
             throw new LlmRequestFailedException("LLM response was empty.");
@@ -1603,6 +1696,8 @@ public abstract class Agent
         ariResponse.PrefillSeconds                 = clock.Prefill;
         ariResponse.TypingSeconds                  = clock.Typing;
         ariResponse.TotalSeconds                   = elapsed;
+        ariResponse.RecallSeconds                  = opts.RecallSeconds;
+        ariResponse.ToolCallCount                  = toolCallCount > 0 ? toolCallCount : null;
         ariResponse.RecallNotes                    = combinedNotes;
         ariResponse.ContextSummary                 = opts.ContextSummary;
         ariResponse.Data.CompletionTokens          = completionTokens;
@@ -1613,6 +1708,7 @@ public abstract class Agent
         ariResponse.Data.HadImageAttachments       = hadImages;
         ariResponse.Data.EstimatedTextPromptTokens = estimatedTextTokens;
         ariResponse.Data.ImageTokenLimit           = 0;
+        ariResponse.Data.PrefillTokPerSec          = prefillTokPerSec;
         ariResponse.State                          = State.Complete;
         ariResponse.StreamText                     = null;
         thread.streamingResponse                   = null;
