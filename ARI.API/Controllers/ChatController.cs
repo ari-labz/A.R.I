@@ -362,10 +362,16 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 
     private async Task SendWatchEvent(string threadKey, CancellationToken ct)
     {
-        bool isProcessing  = Llm?.IsThreadProcessing(threadKey)  ?? false;
-        bool isRemembering = Llm?.IsEngramSweeping(threadKey)     ?? false;
-        bool isCodeMode    = Llm?.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? wt) == true && wt?.Pipeline == ARI.LLM.ThreadPipeline.Code;
-        string payload     = JsonSerializer.Serialize(new { isProcessing, isRemembering, isCodeMode });
+        string status = (Llm?.IsEngramSweeping(threadKey)  ?? false) ? "remembering"
+                      : Llm?.GetThreadPhase(threadKey) switch
+                        {
+                            ARI.LLM.ThreadPhase.Prefilling => "prefilling",
+                            ARI.LLM.ThreadPhase.Thinking   => "thinking",
+                            ARI.LLM.ThreadPhase.Typing     => "typing",
+                            _                              => (Llm?.IsThreadProcessing(threadKey) ?? false) ? "prefilling" : "idle",
+                        };
+        bool isCodeMode = Llm?.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? wt) == true && wt?.Pipeline == ARI.LLM.ThreadPipeline.Code;
+        string payload  = JsonSerializer.Serialize(new { status, isCodeMode });
         await Response.WriteAsync($"data: {payload}\n\n", ct);
         await Response.Body.FlushAsync(ct);
     }
