@@ -104,7 +104,11 @@ internal sealed class SearchBrain : Tool
         int limit = Math.Clamp(a.Int("limit", DEFAULT_LIMIT), 1, 50);
 
         BrainModule.Index();
-        List<string> terms = query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).ToList();
+        List<string> terms = System.Text.RegularExpressions.Regex
+            .Split(query, @"[^a-zA-Z0-9']+")
+            .Select(t => t.Trim('\''))
+            .Where(t => t.Length > 0)
+            .ToList();
         List<SearchResult> hits = BrainModule.Search(terms, limit);
         if (hits.Count == 0) return Task.FromResult($"No notes found for '{query}'. It likely has no note yet.");
 
