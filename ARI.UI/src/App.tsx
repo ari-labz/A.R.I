@@ -753,6 +753,7 @@ export default function App() {
         watchStreamRef.current = openWatchStream(key, (e: WatchEvent) => {
             if (e.deleted) { watchStreamRef.current = null; return }
             if (e.status) {
+                console.log("[WatchSSE] received status:", e.status)
                 setThreadStatus(e.status)
                 setIsRemembering(e.status === "remembering")
             }
