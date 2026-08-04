@@ -148,12 +148,13 @@ function SpeakButton({ content }: { content: string }) {
 }
 
 interface Props {
-    items:        ThreadItem[]
+    items:         ThreadItem[]
     isRemembering: boolean
-    activeThread: string | null
-    isInternal:   boolean
-    agentName:    string | null
-    processing?:  boolean
+    activeThread:  string | null
+    isInternal:    boolean
+    agentName:     string | null
+    processing?:   boolean
+    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "remembering"
 }
 
 function fileExtLabel(name: string) {
@@ -215,31 +216,49 @@ function UserMessage({ item, activeThread }: { item: ThreadItem; activeThread: s
     )
 }
 
-function AriResponse({ item, isInternal, agentName, msgIndex }: { item: ThreadItem; isInternal: boolean; agentName: string | null; msgIndex: number }) {
+function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus }: { item: ThreadItem; isInternal: boolean; agentName: string | null; msgIndex: number; threadStatus?: string }) {
     const streaming = item.isStreaming ?? false
     const t = formatTime(item.timestamp)
     const senderLabel = isInternal ? (agentName ?? "Agent") : "A·R·I"
 
     let thoughtEl: React.ReactNode = null
     if (!streaming && (item.totalSeconds != null || item.thinkingSeconds != null)) {
-        // Header shows the TOTAL turn time; expanding breaks it down into where that time went.
         const total = item.totalSeconds ?? item.thinkingSeconds ?? 0
         const secs  = total.toFixed(1)
-        const timeRow = (label: string, v?: number) => v == null || v <= 0.05 ? null :
-            <div key={label} style={{ display: "flex", justifyContent: "space-between", gap: "14px" }}><span>{label}</span><span>{v.toFixed(1)}s</span></div>
-        const hasBreakdown = (item.prefillSeconds ?? 0) > 0 || (item.thinkingSeconds ?? 0) > 0 || (item.typingSeconds ?? 0) > 0
-        const hasDetails = hasBreakdown || !!(item.recallNotes || item.contextSummary)
+
+        const fmtSpeed = (tokens?: number, seconds?: number) => {
+            if (!tokens || !seconds || seconds <= 0.05) return null
+            const tps = tokens / seconds
+            return `${tps >= 10 ? Math.round(tps) : tps.toFixed(1)}t/s`
+        }
+
+        type Row = { label: string; seconds: number; speed: string | null }
+        const rows: Row[] = []
+        if ((item.recallSeconds ?? 0) > 0.05)
+            rows.push({ label: "Memory Recall", seconds: item.recallSeconds!, speed: null })
+        if ((item.prefillSeconds ?? 0) > 0.05)
+            rows.push({ label: "Reading", seconds: item.prefillSeconds!, speed: item.data?.prefillTokPerSec ? `${Math.round(item.data.prefillTokPerSec)}t/s` : null })
+        if ((item.thinkingSeconds ?? 0) > 0.05)
+            rows.push({ label: "Thinking", seconds: item.thinkingSeconds!, speed: null })
+        if ((item.typingSeconds ?? 0) > 0.05)
+            rows.push({ label: "Typing", seconds: item.typingSeconds!, speed: fmtSpeed(item.data?.completionTokens, item.typingSeconds) })
+        if ((item.toolCallCount ?? 0) > 0)
+            rows.push({ label: "Tool Calls", seconds: item.toolCallCount!, speed: null })
+
+        const hasDetails = rows.length > 0 || !!(item.recallNotes || item.contextSummary)
         if (hasDetails) {
             thoughtEl = (
                 <details className="thought-block">
                     <summary>A·R·I thought for {secs}s</summary>
                     <div className="thought-content">
-                        {hasBreakdown && (
+                        {rows.length > 0 && (
                             <div className="thought-times" style={{ fontSize: "12px", color: "#8e8ea0", width: "fit-content", minWidth: "200px", marginBottom: "8px" }}>
-                                {timeRow("Thinking",           item.thinkingSeconds)}
-                                {timeRow("Prefill",            item.prefillSeconds)}
-                                {timeRow("Inference (typing)", item.typingSeconds)}
-                                {timeRow("Tools & other",      Math.max(0, total - (item.thinkingSeconds ?? 0) - (item.prefillSeconds ?? 0) - (item.typingSeconds ?? 0)))}
+                                {rows.map(r => (
+                                    <div key={r.label} style={{ display: "flex", justifyContent: "space-between", gap: "14px" }}>
+                                        <span>{r.label}</span>
+                                        <span>{r.label === "Tool Calls" ? r.seconds : `${r.seconds.toFixed(1)}s`}{r.speed ? ` (${r.speed})` : ""}</span>
+                                    </div>
+                                ))}
                             </div>
                         )}
                         {item.recallNotes && <RecallNotes raw={item.recallNotes} />}
@@ -252,6 +271,20 @@ function AriResponse({ item, isInternal, agentName, msgIndex }: { item: ThreadIt
         }
     }
 
+    // Phase: prefer server-reported status, fall back to content heuristic.
+    let streamPhase: "reading" | "thinking" | "typing" = "reading"
+    if (streaming) {
+        if (threadStatus === "thinking")        streamPhase = "thinking"
+        else if (threadStatus === "typing")     streamPhase = "typing"
+        else if (threadStatus === "prefilling") streamPhase = "reading"
+        else {
+            // Heuristic fallback when no server status available.
+            const hasThinkingBlock = item.blocks?.some(b => b.type === "thinking" && b.state === 0)
+            const hasTextContent   = !!(item.content?.trim())
+            if (hasTextContent)        streamPhase = "typing"
+            else if (hasThinkingBlock) streamPhase = "thinking"
+        }
+    }
     return (
         <div className="msg-row assistant">
             <div className="sender">{senderLabel}</div>
@@ -259,7 +292,8 @@ function AriResponse({ item, isInternal, agentName, msgIndex }: { item: ThreadIt
                 <MdBubble content={item.content} blocks={item.blocks} baseClass="bubble" msgIndex={msgIndex} />}
             {streaming && (
                 <div className="typing-indicator">
-                    <span>A·R·I is thinking</span>
+                    <span className="typing-prefix">A·R·I is</span>
+                    <span className="phase-word">{streamPhase === "reading" ? "Reading" : streamPhase === "thinking" ? "Thinking" : "Typing"}</span>
                     <div className="typing-dots"><b /><b /><b /></div>
                 </div>
             )}
@@ -461,7 +495,7 @@ function animateDiffBadges(root: HTMLElement) {
     })
 }
 
-export default function Messages({ items, isRemembering, activeThread, isInternal, agentName, processing }: Props) {
+export default function Messages({ items, isRemembering, activeThread, isInternal, agentName, processing, threadStatus }: Props) {
     const bottomRef  = useRef<HTMLDivElement>(null)
     const messagesEl = useRef<HTMLDivElement>(null)
     // Whether to keep following the tail. True while the user is parked near the bottom; flips off the
@@ -533,6 +567,16 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
                     u.parts.reduce((s, p) => s + ((p[field] as number | undefined) || 0), 0)
                 const thinking = sum("thinkingSeconds"), prefill = sum("prefillSeconds")
                 const typing   = sum("typingSeconds"),   total   = sum("totalSeconds")
+                const recall   = sum("recallSeconds"),   tools   = sum("toolCallCount")
+                const mergedData = u.parts.reduce((acc, p) => {
+                    const d = (p as ThreadItem).data
+                    if (!d) return acc
+                    return {
+                        completionTokens: (acc.completionTokens ?? 0) + (d.completionTokens ?? 0),
+                        promptTokens:     (acc.promptTokens ?? 0) + (d.promptTokens ?? 0),
+                        prefillTokPerSec: d.prefillTokPerSec ?? acc.prefillTokPerSec,
+                    }
+                }, {} as NonNullable<ThreadItem["data"]>)
                 const merged = {
                     ...last,
                     content: u.parts.map(p => (p as { content?: string }).content).filter(Boolean).join("\n\n"),
@@ -541,14 +585,19 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
                     prefillSeconds:  prefill  > 0 ? prefill  : undefined,
                     typingSeconds:   typing   > 0 ? typing   : undefined,
                     totalSeconds:    total    > 0 ? total    : undefined,
+                    recallSeconds:   recall   > 0 ? recall   : undefined,
+                    toolCallCount:   tools    > 0 ? tools    : undefined,
+                    data:            Object.keys(mergedData).length > 0 ? mergedData : undefined,
                 } as ThreadItem
-                return <AriResponse key={u.key} item={merged} isInternal={isInternal} agentName={agentName} msgIndex={u.key} />
+                const isLast = ui === units.length - 1
+                return <AriResponse key={u.key} item={merged} isInternal={isInternal} agentName={agentName} msgIndex={u.key} threadStatus={isLast ? threadStatus : undefined} />
             })}
 
             {isRemembering && (
                 <div className="msg-row assistant" id="typing-indicator">
                     <div className="sender">A·R·I</div>
                     <div className="typing-indicator">
+                        <span className="typing-prefix">A·R·I is</span>
                         <span>Remembering</span>
                         <div className="typing-dots"><b /><b /><b /></div>
                     </div>

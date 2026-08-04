@@ -1063,6 +1063,9 @@ details.tool-card summary::-webkit-details-marker { display: none; }
 .typing-indicator { display: flex; align-items: center; gap: 5px; padding: 2px 0 6px; }
 .typing-indicator span { font-size: 13px; color: #6b7280; font-style: italic; transition: color 0.55s ease; }
 #main.code-mode .typing-indicator span { color: #b0bec5; }
+.typing-prefix { white-space: nowrap; }
+.phase-word { font-size: 13px; color: #6b7280; font-style: italic; white-space: nowrap; transition: opacity 0.3s ease; }
+#main.code-mode .phase-word { color: #b0bec5; }
 .typing-dots { display: flex; gap: 4px; align-items: center; }
 .typing-dots b {
     width: 5px; height: 5px; border-radius: 50%; background: #6b7280; display: block;

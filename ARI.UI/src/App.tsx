@@ -4,8 +4,8 @@ import Main from "./components/Main"
 import ProjectsPage from "./components/ProjectsPage"
 import {
     useThreads, createThread, closeThread, loadHistory, fetchThread, pollThreadWhileStreaming,
-    openEventStream, cancelProcessing, useTypingHeartbeat,
-    type ThreadItem, type ThreadEntry, type AppEvent, type Attachment, type Project,
+    openEventStream, openWatchStream, cancelProcessing, useTypingHeartbeat,
+    type ThreadItem, type ThreadEntry, type AppEvent, type Attachment, type Project, type ThreadStatus, type WatchEvent,
 } from "./hooks/useThreads"
 import { usePipelines } from "./hooks/usePipelines"
 import { startListening, type ListenerHandle } from "./hooks/useListener"
@@ -192,6 +192,8 @@ export default function App() {
     const [items,            setItems]             = useState<ThreadItem[]>([])
     const [isStreaming,      setIsStreaming]        = useState(false)
     const [isRemembering,    setIsRemembering]      = useState(false)
+    const [threadStatus,     setThreadStatus]       = useState<ThreadStatus>("idle")
+    const watchStreamRef = useRef<EventSource | null>(null)
     const [sidebarCollapsed, setSidebarCollapsed]  = useState(isNarrowPortrait)
     const [pendingAttach,    setPendingAttach]      = useState<PendingAttachment[]>([])
     const [threadAttach,     setThreadAttach]       = useState<Attachment[]>([])
@@ -742,8 +744,20 @@ export default function App() {
         setCodeMode(isCode)
         setSpeechMode(false)
         setIsRemembering(false)
+        setThreadStatus("idle")
         activeProjectRef.current = projectId
         setSelectedProject(projectId)
+
+        // Open watch stream for this thread to get live phase updates.
+        watchStreamRef.current?.close()
+        watchStreamRef.current = openWatchStream(key, (e: WatchEvent) => {
+            if (e.deleted) { watchStreamRef.current = null; return }
+            if (e.status) {
+                setThreadStatus(e.status)
+                setIsRemembering(e.status === "remembering")
+            }
+            if (e.isCodeMode !== undefined) setCodeMode(e.isCodeMode)
+        }, () => { /* ignore reconnect errors */ })
 
         // Fetch the thread (state + history) via the new polling endpoint
         const detail = await fetchThread(key).catch(() => null)
@@ -818,8 +832,9 @@ export default function App() {
         abortRef.current?.abort(); abortRef.current = null
         stopPollRef.current?.(); stopPollRef.current = null
         toolSocketRef.current?.close(); toolSocketRef.current = null; toolSocketKeyRef.current = null
+        watchStreamRef.current?.close(); watchStreamRef.current = null
         setActiveThread(null); setIsInternal(false); setAgentName(null)
-        setCodeMode(false); setSpeechMode(false); setIsStreaming(false); setIsRemembering(false)
+        setCodeMode(false); setSpeechMode(false); setIsStreaming(false); setIsRemembering(false); setThreadStatus("idle")
         stopListening()
         setPendingAttach([]); setThreadAttach([])
         // Preserve selectedProject so repeated new chats on the same project
@@ -1151,6 +1166,7 @@ export default function App() {
                         && (items[items.length - 1]?.blocks ?? []).some(b => (b as { type?: string }).type === "plan")}
                     isRemembering={isRemembering}
                     isStreaming={isStreaming}
+                    threadStatus={threadStatus}
                     activeThread={activeThread}
                     isInternal={isInternal}
                     agentName={agentName}

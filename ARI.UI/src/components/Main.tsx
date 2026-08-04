@@ -17,6 +17,7 @@ interface Props {
     items:         ThreadItem[]
     isRemembering: boolean
     isStreaming:   boolean
+    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "remembering"
     activeThread:  string | null
     isInternal:    boolean
     agentName:     string | null
@@ -48,7 +49,7 @@ interface Props {
 }
 
 export default function Main({
-    mode, codeMode, shieldMode, planProposed, items, isRemembering, isStreaming,
+    mode, codeMode, shieldMode, planProposed, items, isRemembering, isStreaming, threadStatus,
     activeThread, isInternal, agentName,
     sidebarCollapsed, onOpenSidebar,
     pendingAttach, threadAttach,
@@ -198,6 +199,7 @@ export default function Main({
                             isInternal={isInternal}
                             agentName={agentName}
                             processing={isStreaming}
+                            threadStatus={threadStatus}
                         />
                     )}
 
