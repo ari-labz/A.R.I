@@ -312,6 +312,7 @@ public class LLMModule : ILLMModule, IDisposable
         {
             agent.OnPhaseChange = (threadKey, phase) =>
             {
+                Shared.Logger.LogDebug("[PhaseChange] {Agent} ({Thread}) → {Phase}", agent.Name, threadKey, phase);
                 if (phase == ThreadPhase.Idle) threadPhases.TryRemove(threadKey, out _);
                 else                           threadPhases[threadKey] = phase;
                 NotifyWatchers(threadKey);
@@ -569,6 +570,7 @@ public class LLMModule : ILLMModule, IDisposable
     {
         bool sweep = engram is not null
                   && thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech
+                  && !thread.Internal
                   && thread.HasUserMessages
                   && !thread.EngramProcessed;
         if (!sweep) { thread.EngramProcessed = true; return; }
@@ -593,7 +595,7 @@ public class LLMModule : ILLMModule, IDisposable
         Broadcast(new AppEvent("threadDeleted", threadKey));
 
         // 2) Guarantee the conversation is saved before deletion (honours the no-delete-before-Engram rule).
-        if (engram is not null && thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech && thread.HasUserMessages)
+        if (engram is not null && thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech && !thread.Internal && thread.HasUserMessages)
         {
             try { await engram.RunEngram(threadKey, "closed", force: true); }
             catch (Exception ex) { _logger.LogWarning("[Close] Engram failed for {Key}: {Err}", threadKey, ex.Message); }

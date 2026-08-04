@@ -78,6 +78,8 @@ public abstract class Agent
         if (lines.Count == 0) return "";
 
         lines.Add("Deliver a COMPLETE answer within these budgets.");
+        if (thinking > 0)
+            lines.Add("Your thinking budget is tight — decide fast. Do not restate your instructions or plan at length; jump straight to the key insight and start writing.");
         return "\n\n# Budgets\n" + string.Join("\n", lines);
     }
 
