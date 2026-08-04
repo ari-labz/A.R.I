@@ -27,6 +27,8 @@ public static class Paths
     public static string Voices         { get; }
     public static string Brain          { get; }
     public static string Logs           { get; }
+    /// <summary>Root of the JSONL session records — one date folder per day. See SessionRecorder.</summary>
+    public static string Sessions       { get; }
     public static string ChatHistory    { get; }
     public static string Keys           { get; }
     public static string Push           { get; }
@@ -63,6 +65,7 @@ public static class Paths
     // Install content — always BuildPath-relative (see the Content-copy items in
     // ARI.Core.csproj). These are read-only from the app's perspective; nothing under here is
     // ever written to at runtime.
+    public static string AppDataDefaults      { get; }
     public static string WwwRoot             { get; }
     public static string StyleTts2Source     { get; }
     public static string ListenerScript      { get; }
@@ -137,6 +140,7 @@ public static class Paths
         Voices         = ServerDir("Voices");
         Brain          = ServerDir("Brain");
         Logs           = ServerDir("Logs");
+        Sessions       = ServerDir("Logs/Sessions");
         ChatHistory    = ServerDir("ChatHistory");
         Keys           = ServerDir("Keys");
         Push           = ServerDir("Push");
@@ -156,6 +160,7 @@ public static class Paths
         ClientData = Path.Combine(AppData, "Client");
         Directory.CreateDirectory(ClientData);
 
+        AppDataDefaults = Path.Combine(BuildPath, "AppDataDefaults");
         WwwRoot         = Path.Combine(BuildPath, "wwwroot");
         StyleTts2Source = Path.Combine(BuildPath, "External", "StyleTTS2");
         ListenerScript       = Path.Combine(BuildPath, "Listener", "whisper_serve.py");

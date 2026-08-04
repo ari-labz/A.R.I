@@ -63,6 +63,9 @@ public class ARI : BackgroundService
         // leftover process from a terminal launch blocks a fresh run from Rider.
         ProcessGuard.KillStaleInstances(_logger);
 
+        // Seed any missing app-data files from the bundled defaults before anything reads them.
+        AppDataSeeder.Seed(Paths.AppDataDefaults, Paths.PersistentData);
+
         config = AriConfig.Load();
 
         Shared.ResolveDevMode(config.DevMode);
@@ -70,6 +73,9 @@ public class ARI : BackgroundService
             _logger.LogWarning("DevMode is ON — Engram is disabled; no memories will be written to the brain this run.");
         else
             _logger.LogInformation("DevMode is off — Engram is active.");
+
+        // Before any module can make an LLM call, so no run goes unrecorded.
+        SessionRecorder.Configure(config.Recording);
 
         // Resolve paths up front so all modules see consistent, absolute paths. An explicit config
         // value always wins (ResolveOverride handles relative-vs-absolute); otherwise everything
@@ -97,17 +103,6 @@ public class ARI : BackgroundService
         PersistentData persistentData = new();
 
         string ariPersistentDir = Paths.PersistentData;
-        // The repo ships a default Agents.json (ARI.Core/Agents.json, copied to the output dir at build).
-        // On first run it is copied into app data; from then on THAT copy is the source of truth and the
-        // shipped one is never consulted again — so prompts and bindings the user tunes here are never
-        // overwritten by an update.
-        persistentData.EnsureAgentsFileFromFallback(Path.Combine(Paths.BuildPath, "Agents.json"));
-        // The demo server and the model it expects, so a fresh install has something to bind to rather
-        // than an empty list. Seeded not-running and not-downloaded — nothing is fetched or launched
-        // until the user asks.
-        persistentData.EnsureServersAndModelsFromFallback(
-            Path.Combine(Paths.BuildPath, "Servers.json"),
-            Path.Combine(Paths.BuildPath, "Models.json"));
         string agentsPath = Path.Combine(ariPersistentDir, "Agents.json");
 
         // ── LLM module ───────────────────────────────────────────────────────────

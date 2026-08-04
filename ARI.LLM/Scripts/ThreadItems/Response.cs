@@ -66,6 +66,8 @@ public class Response : ThreadItem
     public double?          PrefillSeconds  { get; set; }
     public double?          TypingSeconds   { get; set; }
     public double?          TotalSeconds    { get; set; }
+    public double?          RecallSeconds   { get; set; }
+    public int?             ToolCallCount   { get; set; }
     public string?          RecallNotes     { get; set; }
     public string?          ContextSummary  { get; set; }
 

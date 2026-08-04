@@ -266,6 +266,7 @@ html, body {
 .mdl-tag-dense  { background:#f3f4f6; color:#374151; }
 .mdl-tag-vision { background:#fff7ed; color:#c2410c; }
 .mdl-tag-mtp    { background:#fef9c3; color:#854d0e; }
+.mdl-tag-think  { background:#eef2ff; color:#4338ca; }
 .mdl-tag-quant  { background:#f1f5f9; color:#475569; }
 .mdl-tag-perf   { background:#ecfdf5; color:#065f46; }
 .mdl-tag-dim    { background:#f3f4f6; color:#9ca3af; }
@@ -1998,7 +1999,7 @@ let srvNewDraftActive = false;
 function freshServerDraft() {
     return {
         id: null, name: '', port: 8081, contextSize: 32768, unifiedCache: false,
-        kvCacheQuantK: 4, kvCacheQuantV: 4, currentModelName: null, autoStart: true,
+        kvCacheQuantK: 4, kvCacheQuantV: 4, cacheRamMib: 0, currentModelName: null, autoStart: true,
         slots: [{ id: '00000000-0000-0000-0000-000000000000', name: 'Default', contextLimit: 32768 }],
     };
 }
@@ -2512,7 +2513,7 @@ let lastServerList = [];
 function renderServerCardBody(body, draft, server, isNew) {
     // ── Settings ──
     const settingsSummary = agEl('div', 'font-size:12px;color:var(--text-dim);');
-    settingsSummary.textContent = `Port ${draft.port} · Context ${ctxTokensToText(draft.contextSize)}${draft.unifiedCache ? ' (unified)' : ''} · Q${draft.kvCacheQuantK}/Q${draft.kvCacheQuantV} · Model ${draft.currentModelName ?? 'none'} · Auto-start ${draft.autoStart ? 'Yes' : 'No'}`;
+    settingsSummary.textContent = `Port ${draft.port} · Context ${ctxTokensToText(draft.contextSize)}${draft.unifiedCache ? ' (unified)' : ''} · Q${draft.kvCacheQuantK}/Q${draft.kvCacheQuantV} · Cache ${draft.cacheRamMib ?? 0} MiB · Model ${draft.currentModelName ?? 'none'} · Auto-start ${draft.autoStart ? 'Yes' : 'No'}`;
     const settingsSec = agSection('Settings', {});
     settingsSec.card.classList.add('srv-subsection');
     settingsSec.head.insertBefore(settingsSummary, settingsSec.head.lastElementChild);
@@ -2659,6 +2660,11 @@ function buildSettingsFields(body, draft) {
     kvvWrap.querySelector('select').addEventListener('change', e => draft.kvCacheQuantV = parseInt(e.target.value, 10));
     kvRow.append(kvkWrap, kvvWrap);
 
+    const cacheRamRow = agEl('div', '', '');
+    cacheRamRow.className = 'srv-field-row';
+    cacheRamRow.innerHTML = `<span class="srv-field-label">Prompt cache (RAM)</span><div style="display:flex;align-items:center;gap:8px;"><input type="number" class="vs-input" style="width:100px;font-size:13px;text-align:center;" value="${draft.cacheRamMib ?? 0}" min="0" step="256" placeholder="0"><span style="font-size:12px;color:var(--text-dim);">MiB</span></div>`;
+    cacheRamRow.querySelector('input').addEventListener('input', e => draft.cacheRamMib = parseInt(e.target.value, 10) || 0);
+
     const modelRow = agEl('div', '', '');
     modelRow.className = 'srv-field-row';
     modelRow.innerHTML = '<span class="srv-field-label">Startup model</span><select class="vs-input" style="width:100%;font-size:13px;"></select>';
@@ -2672,7 +2678,7 @@ function buildSettingsFields(body, draft) {
     bootRow.innerHTML = `<span style="font-size:13px;color:var(--text);">Auto-start on boot</span>`;
     bootRow.append(buildToggle(!!draft.autoStart, on => draft.autoStart = on));
 
-    body.append(nameRow, portRow, ctxRow, unifiedRow, kvRow, modelRow, bootRow);
+    body.append(nameRow, portRow, ctxRow, unifiedRow, kvRow, cacheRamRow, modelRow, bootRow);
 }
 
 function buildSlotsFields(body, draft, onChange) {
@@ -2888,6 +2894,11 @@ function parseModelTags(m) {
         ? { label: 'MTP',    cls: 'mtp', title: 'Multi-Token Prediction enabled' }
         : { label: 'No MTP', cls: 'dim', title: 'Standard single-token prediction' });
 
+    // Thinking — drives --reasoning-format on the server command line.
+    tags.push(m.supportsThinking
+        ? { label: 'Thinking',    cls: 'think', title: 'Emits a reasoning chain (--reasoning-format deepseek)' }
+        : { label: 'No Thinking', cls: 'dim',   title: 'No reasoning chain — reasoning flags are not passed' });
+
     // Quantization
     const quantM = fname.match(/[._\-](Q\d+(?:[_\-]K)?(?:[_\-][A-Z]+)?)/i);
     const quantLabel = quantM ? quantM[1].toUpperCase().replace(/_/g, '_') : null;
@@ -2955,6 +2966,11 @@ function renderModelCards(data) {
                 : ''}
             ${sizeStr ? `<div class="mdl-card-size">${escHtml(sizeStr)}</div>` : ''}
             <div class="mdl-tags">${tagHtml}</div>
+            <div class="mdl-think-row" style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+                <span style="font-size:12px;color:var(--text-dim);">Supports thinking</span>
+                <span class="mdl-think-slot"></span>
+                <span class="mdl-think-status" style="font-size:12px;color:var(--text-dim);"></span>
+            </div>
             <div class="mdl-card-notes">
                 <label>Notes</label>
                 <textarea placeholder="What is this model good or bad at? Any observations…" data-name="${escHtml(m.name)}">${escHtml(m.notes ?? '')}</textarea>
@@ -2975,6 +2991,20 @@ function renderModelCards(data) {
                 } catch { saveStatus.textContent = 'Save failed.'; }
             }, 800);
         });
+
+        // Thinking toggle — takes effect when the server next starts.
+        const thinkStatus = card.querySelector('.mdl-think-status');
+        card.querySelector('.mdl-think-slot').appendChild(buildToggle(!!m.supportsThinking, async on => {
+            try {
+                const r = await fetch('/models/thinking', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ modelName: m.name, supportsThinking: on }) });
+                if (!r.ok) throw new Error();
+                m.supportsThinking = on;
+                card.querySelector('.mdl-tags').innerHTML = parseModelTags(m)
+                    .map(t => `<span class="mdl-tag mdl-tag-${t.cls}" title="${escHtml(t.title ?? '')}">${escHtml(t.label)}</span>`)
+                    .join('');
+                thinkStatus.textContent = 'Saved — restart server to apply.';
+            } catch { thinkStatus.textContent = 'Save failed.'; }
+        }));
 
         // Load model button
         const switchBtn = card.querySelector('.mdl-switch-btn');

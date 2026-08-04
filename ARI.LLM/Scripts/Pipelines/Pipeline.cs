@@ -53,6 +53,11 @@ internal abstract class Pipeline
             Attachments = messageAttachments is { Count: > 0 } ? messageAttachments : null,
         });
 
+        // Everything this prompt sets off — Memory's recall, Context's summariser, the primary agent,
+        // any sub-thread — records under one exchange id, so the fan-out reassembles from its separate
+        // files later. The scope is async-local, so concurrent threads never share one.
+        using IDisposable? exchange = SessionRecorder.BeginExchange(threadKey, username, prompt);
+
         try
         {
             return await RunAsync(thread, threadKey, effectivePrompt, username, platformContext, onDelta, cts, localPath);

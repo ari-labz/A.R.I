@@ -45,6 +45,9 @@ public class Model
     [JsonPropertyName("mtp")]
     public bool MTP { get; set; }
 
+    [JsonPropertyName("supportsThinking")]
+    public bool SupportsThinking { get; set; }
+
     [JsonIgnore]
     public bool Downloaded { get; set; }
 

@@ -6,6 +6,7 @@ internal sealed class PromptOptions
     public string?             AugmentedPrompt     { get; init; }
     public string?             ModeNudge           { get; init; }
     public string?             RecallNotes         { get; init; }
+    public double?             RecallSeconds       { get; init; }
     public string?             ContextSummary      { get; init; }
     public int                 MaxTokensOverride   { get; init; }
     public int                 ThinkingBudget      { get; init; }
