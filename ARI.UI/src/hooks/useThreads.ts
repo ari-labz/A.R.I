@@ -75,7 +75,14 @@ export interface ThreadItem {
     prefillSeconds?:  number
     typingSeconds?:   number
     totalSeconds?:    number
+    recallSeconds?:  number
+    toolCallCount?:  number
     recallNotes?:    string
+    data?: {
+        completionTokens?: number
+        promptTokens?:     number
+        prefillTokPerSec?: number
+    }
     contextSummary?: string
     input?:          string
     response?:       string
@@ -181,11 +188,12 @@ export function openWatchStream(
     return es
 }
 
+export type ThreadStatus = "idle" | "prefilling" | "thinking" | "typing" | "remembering"
+
 export interface WatchEvent {
-    deleted?:       boolean
-    isProcessing?:  boolean
-    isRemembering?: boolean
-    isCodeMode?:    boolean
+    deleted?:    boolean
+    status?:     ThreadStatus
+    isCodeMode?: boolean
 }
 
 export interface AppEvent {
