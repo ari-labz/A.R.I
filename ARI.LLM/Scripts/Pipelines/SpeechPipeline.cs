@@ -67,8 +67,10 @@ internal sealed class SpeechPipeline : Pipeline
         string? contextSummary = context?.GetContext(threadKey);
 
         string? recallBlock = null;
+        double? recallSeconds = null;
         if (memory is not null)
         {
+            var recallSw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 List<ThreadMessage> chatHistory = thread.GetChatHistory();
@@ -85,6 +87,7 @@ internal sealed class SpeechPipeline : Pipeline
                 if (onDelta is not null) await onDelta(errorMessage);
                 return errorMessage;
             }
+            recallSeconds = recallSw.Elapsed.TotalSeconds;
         }
 
         _pendingSteering.TryRemove(threadKey, out SpeechSteeringContext? steering);
@@ -96,6 +99,7 @@ internal sealed class SpeechPipeline : Pipeline
             {
                 Username            = username,
                 RecallNotes         = recallBlock,
+                RecallSeconds       = recallSeconds,
                 ContextSummary      = contextSummary,
                 Ct                  = cts.Token,
                 UserMessagePreadded = true,

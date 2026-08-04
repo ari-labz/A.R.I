@@ -137,11 +137,13 @@ internal class Engram : MemoryAgent, IDisposable
         else if (!await engramLock.WaitAsync(0)) return;
         sweepingThreads[threadKey] = 0;
 
-        // --- Run-log capture (Logs): every sweep records its full thought process for offline analysis. ---
-        List<(string Title, Thread Thread)> writeThreads = new();
-        List<string>                       runMeta      = new() { $"Trigger: {trigger}", $"Thread: {threadKey}" };
-        string                             outcome      = "incomplete (unexpected exit)";
-        bool                               processed    = false;
+        // --- Session record: the sweep's non-LLM decisions. The placement thread's own LLM traffic is
+        //     recorded by the agent itself; these are the facts around it that explain the run. ---
+        string  placementKey = "";
+        string  transcriptSeen = "";
+        string  outcome        = "incomplete (unexpected exit)";
+        int     committed      = 0;
+        bool    processed      = false;
 
         try
         {
@@ -157,7 +159,7 @@ internal class Engram : MemoryAgent, IDisposable
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] sweep triggered (trigger: {Trigger})", threadKey, trigger);
 
             // --- Classify: is there anything worth remembering? ---
-            runMeta.Add($"Classified transcript: {RunLogger.Trunc(BuildTranscript(recentItems), 600)}");
+            transcriptSeen = BuildTranscript(recentItems);
             if (!await Classify(recentItems, trigger))
             {
                 outcome   = "skipped — classified as task-only (or no new messages)";
@@ -176,7 +178,7 @@ internal class Engram : MemoryAgent, IDisposable
             Thread parent = new(ThreadPipeline.Dialogue, $"engram:{threadKey}:{Guid.NewGuid():N}") { Internal = true };
             RegisterTools(parent, PersistentDir, CancellationToken.None);
             PublishForInspection(parent);   // surface the sweep in the DTI
-            writeThreads.Add(("Engram placement", parent));
+            placementKey = parent.Key;
 
             await Prompt(parent, EngramTask(transcript, contextSummary, speaker), new PromptOptions
             {
@@ -188,14 +190,22 @@ internal class Engram : MemoryAgent, IDisposable
                 .SelectMany(r => r.Trace ?? Enumerable.Empty<TraceStep>())
                 .Count(s => s.Kind == "tool_result" && s.Name == "git_commit"
                             && (s.Text?.StartsWith("Committed", StringComparison.Ordinal) ?? false));
+            committed = commits;
             outcome   = $"{commits} memory change(s) committed";
             processed = true;
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] sweep complete — {Commits} change(s).", threadKey, commits);
         }
         finally
         {
-            runMeta.Add($"Outcome: {outcome}");
-            RunLogger.Write("Engram", threadKey, writeThreads, runMeta);
+            SessionRecorder.StandaloneNote("Engram", placementKey.Length > 0 ? placementKey : $"engram:{threadKey}", "sweep", new Dictionary<string, object?>
+            {
+                ["trigger"]             = trigger,
+                ["swept_thread"]        = threadKey,
+                ["classified_transcript"] = transcriptSeen,
+                ["commits"]             = committed,
+                ["outcome"]             = outcome,
+                ["processed"]           = processed,
+            });
 
             // The invariant latch: a completed sweep (or a "nothing to store") releases the thread for deletion.
             if (processed && threads.TryGetValue(threadKey, out Thread? processedThread))

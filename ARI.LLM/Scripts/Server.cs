@@ -428,8 +428,8 @@ public class Server : IDisposable
             // is budgeted PER-REQUEST via `thinking_budget_tokens` — leave the server budget unset (never pass
             // --reasoning-budget, which would disable per-request overrides). The budget-message is injected
             // before the forced end-of-thinking so a budgeted turn wraps up its thought instead of being chopped.
-            "--reasoning-format deepseek",
-            "--reasoning-budget-message \"I've used most of my thinking budget. Let me finish this thought, state my conclusion in one line, and act on it now.\"",
+            model?.SupportsThinking == true ? "--reasoning-format deepseek" : "",
+            model?.SupportsThinking == true ? "--reasoning-budget-message \"I've used most of my thinking budget. Let me finish this thought, state my conclusion in one line, and act on it now.\"" : "",
             $"-np {ParallelSlots} -ngl 99 --port {Port}",
             "--host 127.0.0.1",
             // Last-resort safety net for a request that overflows its slot's context despite compaction

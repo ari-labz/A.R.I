@@ -51,18 +51,22 @@ internal sealed class DialoguePipeline : Pipeline
     {
         string? contextSummary = context?.GetContext(threadKey);
         string? recallBlock    = null;
+        double? recallSeconds  = null;
         if (memory is not null)
         {
+            var recallSw = System.Diagnostics.Stopwatch.StartNew();
             try   { recallBlock = await memory.GetNotes(new List<ThreadMessage>(), question, contextSummary, cts.Token); }
             catch (OperationCanceledException) when (cts.IsCancellationRequested) { throw; }
             catch (Exception ex) { Shared.Logger.LogWarning(ex, "[Proactive] Memory recall failed — drafting without memories."); }
+            recallSeconds = recallSw.Elapsed.TotalSeconds;
         }
 
         return await textingAgent.Prompt(thread, question, new PromptOptions
         {
-            RecallNotes  = recallBlock,
-            ModeNudge    = instruction,
-            Ct           = cts.Token,
+            RecallNotes    = recallBlock,
+            RecallSeconds  = recallSeconds,
+            ModeNudge      = instruction,
+            Ct             = cts.Token,
         });
     }
 
@@ -87,8 +91,10 @@ internal sealed class DialoguePipeline : Pipeline
         string? contextSummary = context?.GetContext(threadKey);
 
         string? recallBlock = null;
+        double? recallSeconds = null;
         if (memory is not null)
         {
+            var recallSw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 List<ThreadMessage> chatHistory = thread.GetChatHistory();
@@ -96,7 +102,6 @@ internal sealed class DialoguePipeline : Pipeline
             }
             catch (OperationCanceledException) when (cts.IsCancellationRequested)
             {
-                // Superseded by a newer message (common on Discord) — abort quietly, don't surface as an error.
                 throw;
             }
             catch (Exception ex)
@@ -104,12 +109,14 @@ internal sealed class DialoguePipeline : Pipeline
                 Shared.Logger.LogWarning(ex, "[Memory] ({Thread}) Memory recall failed — continuing without memories. {Error}", threadKey, ex.Message);
                 recallBlock = "Memory recall is unavailable right now — the memory server appears to be offline. Tell the user at the start of your response that you cannot access your memories at the moment and that your answer may be inaccurate or incomplete as a result. Then respond as best you can.";
             }
+            recallSeconds = recallSw.Elapsed.TotalSeconds;
         }
 
         return await textingAgent.Prompt(thread, effectivePrompt, new PromptOptions
         {
             Username            = username,
             RecallNotes         = recallBlock,
+            RecallSeconds       = recallSeconds,
             ContextSummary      = contextSummary,
             Ct                  = cts.Token,
             UserMessagePreadded = true,

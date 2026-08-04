@@ -21,6 +21,10 @@ public class AriConfig
     // to false (normal operation / official builds). Automated runs force it on via ARI_DEVMODE.
     public bool DevMode { get; init; }
 
+    // Full JSONL capture of every LLM round-trip — see SessionRecorder. On by default: the records are
+    // what makes an issue found during real work reproducible days later.
+    public RecordingConfig Recording { get; init; } = new();
+
     private static readonly Regex PlaceholderPattern = new(@"\$\{([A-Za-z0-9_]+)\}", RegexOptions.Compiled);
 
     // AriConfig.json is user data (instance identity, whitelists, ports) — it lives in AppData so
@@ -31,13 +35,8 @@ public class AriConfig
     {
         if (!File.Exists(Paths.AriConfig))
         {
-            string bundledDefault = Path.Combine(Paths.BuildPath, "AriConfig.json");
-            if (!File.Exists(bundledDefault))
-            {
-                Shared.Logger.LogCritical($"No AriConfig.json found at {Paths.AriConfig}, and no bundled default at {bundledDefault}.");
-                throw new Exception($"No AriConfig.json found at {Paths.AriConfig}, and no bundled default at {bundledDefault}.");
-            }
-            File.Copy(bundledDefault, Paths.AriConfig);
+            Shared.Logger.LogCritical("No AriConfig.json found at {Path} — run ARI once to seed app data, or copy AppDataDefaults/AriConfig.json manually.", Paths.AriConfig);
+            throw new Exception($"No AriConfig.json found at {Paths.AriConfig}.");
         }
 
         string json = File.ReadAllText(Paths.AriConfig);

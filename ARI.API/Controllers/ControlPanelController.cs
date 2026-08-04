@@ -1006,6 +1006,7 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
                 kvArch             = m.KvArch is { } a ? new { nLayers = a.NLayers, nKvHeads = a.NKvHeads, headDim = a.HeadDim } : null,
                 moe                = m.MoE,
                 mtp                = m.MTP,
+                supportsThinking   = m.SupportsThinking,
                 notes              = notes.TryGetValue(m.Name, out string? n) ? n : "",
                 active             = activeModelNames.Contains(m.Name),
                 isStartup          = startupModelNames.Contains(m.Name),
@@ -1102,6 +1103,24 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
             return BadRequest(new { error = "modelName is required." });
 
         persistentData.SetNote(req.ModelName, req.Notes ?? "");
+        return Ok(new { ok = true });
+    }
+
+    /// <summary>Toggle whether this model emits a reasoning chain. Drives --reasoning-format on the
+    /// llama-server command line: a non-thinking model whose template lacks a think branch fails to
+    /// parse when the flag is passed, so it must be off for those. Takes effect on next server start.</summary>
+    [HttpPut("thinking")]
+    public IActionResult SetThinking([FromBody] ModelThinkingRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.ModelName))
+            return BadRequest(new { error = "modelName is required." });
+
+        Model? model = persistentData.GetModels()
+            .FirstOrDefault(m => m.Name.Equals(req.ModelName, StringComparison.OrdinalIgnoreCase));
+        if (model is null) return NotFound(new { error = "Model not found." });
+
+        model.SupportsThinking = req.SupportsThinking;
+        persistentData.UpdateModel(model);
         return Ok(new { ok = true });
     }
 }
@@ -1223,6 +1242,7 @@ public class ServersApiController(PersistentData persistentData) : ControllerBas
 public record SwitchModelRequest(Guid ServerId, string ModelName);
 public record SetStartupModelRequest(string ModelName);
 public record ModelNotesRequest(string ModelName, string? Notes);
+public record ModelThinkingRequest(string ModelName, bool SupportsThinking);
 
 public record ConventionsRequest(string? Text);
 public record PersonaRequest(string? Text);

@@ -46,20 +46,12 @@
   </Target>
 
   <ItemGroup>
-	<Content Update="Agents.json">
-		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-	</Content>
 	<Content Update="ToolGroups.json">
 		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 	</Content>
-	<Content Update="Servers.json">
+	<Content Include="..\AppDataDefaults\**\*">
 		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-	</Content>
-	<Content Update="Models.json">
-		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-	</Content>
-	<Content Update="AriConfig.json">
-		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		<LinkBase>AppDataDefaults</LinkBase>
 	</Content>
 	<!-- Repo-root manifest: server version + protocol. Shipped so the server can read its own
 	     version (UpdateCheck) and so the release carries it for the installer. -->

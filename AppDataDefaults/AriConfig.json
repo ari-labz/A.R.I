@@ -1,0 +1,60 @@
+{
+  "DevMode": false,
+  "Recording": {
+    "Enabled": true,
+    "IncludeFullRequests": true,
+    "IncludeToolResults": true,
+    "RetentionDays": 30
+  },
+  "Modules": {
+    "API": {
+      "Enabled": true,
+      "Port": 5074
+    },
+    "LLM": {
+      "Enabled": true,
+      "ModelsPath": ""
+    },
+    "VoiceSynthesis": {
+      "Enabled": true,
+      "StyleTtsPath": "",
+      "VoicesPath": ""
+    },
+    "Voice": {
+      "Enabled": true,
+      "ModelName": ""
+    },
+    "Brain": {
+      "Enabled": true,
+      "VaultPath": "",
+      "BackupPath": "./Backups",
+      "MaxBackups": 5
+    },
+    "Discord": {
+      "Enabled": true,
+      "Token": "",
+      "OwnerId": 0,
+      "WhitelistedUserIds": [],
+      "WatchedChannelIds": [],
+      "AllowedGuildIds": []
+    },
+    "Listener": {
+      "Enabled": true,
+      "WhisperPort": 8123,
+      "ScriptPath": "",
+      "Model": "base.en",
+      "CpuThreads": 10,
+      "SilenceMs": 300
+    },
+    "Scheduler": {
+      "Enabled": true,
+      "TickSeconds": 30,
+      "QuietStartHour": 22,
+      "QuietEndHour": 8,
+      "Schedules": {
+        "ProactiveMessage": "0 */2 * * *",
+        "Refactor": "0 */6 * * *"
+      }
+    }
+  }
+}

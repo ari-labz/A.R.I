@@ -105,10 +105,10 @@ internal class Memory : Agent
         if (terms.Count == 0)
         {
             Shared.Logger.LogInformation("[Memory] complete 0.0s — no search terms");
-            RunLogger.Write("Memory", "no-terms", new[] { ("Recall thread", memThread) }, new[]
+            SessionRecorder.StandaloneNote("Memory", memThread.Key, "no-terms", new Dictionary<string, object?>
             {
-                $"Incoming prompt: {RunLogger.Trunc(incomingPrompt)}",
-                "Outcome: no search terms survived tokenisation — nothing to recall",
+                ["incoming_prompt"] = incomingPrompt,
+                ["outcome"]         = "no search terms survived tokenisation — nothing to recall",
             });
             return string.IsNullOrEmpty(pinnedBlock) ? string.Empty : pinnedBlock.TrimEnd();
         }
@@ -122,12 +122,12 @@ internal class Memory : Agent
         if (recall.Candidates.Count == 0)
         {
             Shared.Logger.LogInformation("[Memory] complete 0.0s, 0 tokens, 0.0 t/s — no candidates found");
-            RunLogger.Write("Memory", "no-candidates", new[] { ("Recall thread", memThread) }, new[]
+            SessionRecorder.StandaloneNote("Memory", memThread.Key, "no-candidates", new Dictionary<string, object?>
             {
-                $"Incoming prompt: {RunLogger.Trunc(incomingPrompt)}",
-                $"Context summary: {RunLogger.Trunc(contextSummary)}",
-                $"Search terms: {string.Join(", ", terms)}",
-                "Outcome: no candidate notes found — nothing shown to the model",
+                ["incoming_prompt"] = incomingPrompt,
+                ["context_summary"] = contextSummary,
+                ["search_terms"]    = terms,
+                ["outcome"]         = "no candidate notes found — nothing shown to the model",
             });
             return string.IsNullOrEmpty(pinnedBlock) ? string.Empty : pinnedBlock.TrimEnd();
         }
@@ -170,13 +170,15 @@ internal class Memory : Agent
         {
             Shared.Logger.LogInformation("[Memory] complete {Seconds}s, {Tokens} tokens, {TokPerSec} t/s — model selected nothing",
                 timer.Elapsed.TotalSeconds.ToString("F1"), completionTokens, tokPerSec.ToString("F1"));
-            RunLogger.Write("Memory", "no-recall", new[] { ("Recall thread", memThread) }, new[]
+            SessionRecorder.StandaloneNote("Memory", memThread.Key, "no-recall", new Dictionary<string, object?>
             {
-                $"Incoming prompt: {RunLogger.Trunc(incomingPrompt)}",
-                $"Search terms: {string.Join(", ", terms)}",
-                $"Candidates offered: {recall.Candidates.Count}",
-                $"Total: {timer.Elapsed.TotalSeconds:F1}s, {completionTokens} tokens, {tokPerSec:F1} t/s",
-                "Outcome: model declined to select any candidate — no memories recalled",
+                ["incoming_prompt"]    = incomingPrompt,
+                ["search_terms"]       = terms,
+                ["candidates_offered"] = recall.Candidates.Count,
+                ["elapsed_s"]          = Math.Round(timer.Elapsed.TotalSeconds, 3),
+                ["completion_tokens"]  = completionTokens,
+                ["tok_per_sec"]        = Math.Round(tokPerSec, 2),
+                ["outcome"]            = "model declined to select any candidate — no memories recalled",
             });
             return string.IsNullOrEmpty(pinnedBlock) ? string.Empty : pinnedBlock.TrimEnd();
         }
@@ -210,14 +212,18 @@ internal class Memory : Agent
 
         Shared.Logger.LogInformation("[Memory] complete {Seconds}s, {Tokens} tokens, {TokPerSec} t/s",
             timer.Elapsed.TotalSeconds.ToString("F1"), completionTokens, tokPerSec.ToString("F1"));
-        RunLogger.Write("Memory", "recalled", new[] { ("Recall thread", memThread) }, new[]
+        SessionRecorder.StandaloneNote("Memory", memThread.Key, "recalled", new Dictionary<string, object?>
         {
-            $"Incoming prompt: {RunLogger.Trunc(incomingPrompt)}",
-            $"Search terms: {string.Join(", ", terms)}",
-            $"Candidates offered: {recall.Candidates.Count} · paths found: {recall.Paths.Count}",
-            $"Total: {timer.Elapsed.TotalSeconds:F1}s, {completionTokens} tokens, {tokPerSec:F1} t/s",
-            $"Recalled {fetched.Count} note(s): {string.Join(", ", fetched)}"
-                + (unresolved.Count > 0 ? $" · unresolved: {string.Join(", ", unresolved)}" : string.Empty),
+            ["incoming_prompt"]    = incomingPrompt,
+            ["search_terms"]       = terms,
+            ["candidates_offered"] = recall.Candidates.Count,
+            ["paths_found"]        = recall.Paths.Count,
+            ["elapsed_s"]          = Math.Round(timer.Elapsed.TotalSeconds, 3),
+            ["completion_tokens"]  = completionTokens,
+            ["tok_per_sec"]        = Math.Round(tokPerSec, 2),
+            ["recalled"]           = fetched,
+            ["resolved_by_fuzzy"]  = fuzzy,
+            ["unresolved"]         = unresolved,
         });
         return (pinnedBlock + result.ToString()).TrimEnd();
     }

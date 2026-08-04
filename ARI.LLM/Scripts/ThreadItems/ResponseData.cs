@@ -17,6 +17,7 @@ public sealed class ResponseData
     public bool HadImageAttachments      { get; set; }
     public int EstimatedTextPromptTokens { get; set; }
     public int ImageTokenLimit           { get; set; }
+    public double PrefillTokPerSec       { get; set; }
 
     /// <summary>The full JSON body sent to /v1/chat/completions for the final turn. DTI only — never on the normal wire.</summary>
     [JsonIgnore]
