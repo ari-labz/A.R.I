@@ -1143,6 +1143,27 @@ details.tool-card summary::-webkit-details-marker { display: none; }
 }
 #protocol-mismatch-banner button:hover { opacity: 1; }
 
+/* ── task banner ────────────────────────────────────────── */
+#task-banner {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 7999;
+    background: #92600a; color: #fde8b0;
+    padding: 8px 16px; font-size: 0.82rem;
+    display: flex; align-items: center; justify-content: center; gap: 12px;
+    animation: task-banner-in 0.3s ease;
+}
+#task-banner .task-banner-icon { font-size: 1rem; flex-shrink: 0; }
+#task-banner .task-banner-text { flex: 0 1 auto; }
+#task-banner .task-banner-text strong { font-weight: 600; }
+#task-banner .task-banner-actions { display: flex; gap: 8px; flex-shrink: 0; }
+#task-banner .task-banner-cancel {
+    background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.25);
+    color: inherit; cursor: pointer; font-size: 0.78rem; font-weight: 500;
+    padding: 3px 10px; border-radius: 4px; transition: background 0.15s;
+}
+#task-banner .task-banner-cancel:hover { background: rgba(255,255,255,0.25); }
+#task-banner .task-banner-cancel:disabled { opacity: 0.5; cursor: default; }
+@keyframes task-banner-in { from { opacity: 0; transform: translateY(-100%); } to { opacity: 1; transform: translateY(0); } }
+
 /* ── toast ───────────────────────────────────────────────── */
 .toast {
     position: fixed; bottom: 80px; left: 50%;
