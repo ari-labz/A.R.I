@@ -10,6 +10,7 @@ import {
 import { usePipelines } from "./hooks/usePipelines"
 import { startListening, type ListenerHandle } from "./hooks/useListener"
 import { env } from "./env"
+import TaskBanner from "./components/TaskBanner"
 import { playResponseChime } from "./notify"
 import "./styles/app.css"
 
@@ -232,6 +233,7 @@ export default function App() {
     const [clientVersion,  setClientVersion]  = useState<string | null>(null)
     const [outdated,       setOutdated]       = useState(false)
     const [protocolMismatch, setProtocolMismatch] = useState<number | null>(null)
+    const [runningTasks, setRunningTasks] = useState<Set<string>>(new Set())
     // Assume ready until told otherwise, so a slow/failed check never blocks the composer.
     const [serverReady,    setServerReady]    = useState(true)
 
@@ -324,6 +326,12 @@ export default function App() {
                             setMode("idle"); setCodeMode(false); setSpeechMode(false); setItems([])
                         }
                         break
+                    case "taskStarted":
+                        if (data.text) setRunningTasks(prev => new Set(prev).add(data.text!))
+                        break
+                    case "taskStopped":
+                        if (data.text) setRunningTasks(prev => { const next = new Set(prev); next.delete(data.text!); return next })
+                        break
                 }
             },
             () => {
@@ -350,6 +358,10 @@ export default function App() {
         await Promise.all([loadThreads(), loadProjects()])
         openGlobalStream()
         setConnState("connected")
+        fetch("/admin/scheduler").then(r => r.json()).then(data => {
+            const running = (data.tasks ?? []).filter((t: any) => t.running).map((t: any) => t.name as string)
+            if (running.length > 0) setRunningTasks(new Set(running))
+        }).catch(() => {})
         window.electronBridge?.markReady()
         // Check protocol compatibility — only relevant in the Desktop app where the
         // client has a fixed protocol baked in and the server may be a different build.
@@ -1137,6 +1149,9 @@ export default function App() {
                     <button onClick={() => setProtocolMismatch(null)}>✕</button>
                 </div>
             )}
+            <TaskBanner tasks={runningTasks} onCancel={name => {
+                fetch(`/admin/scheduler/task/${encodeURIComponent(name)}/stop`, { method: "POST" }).catch(() => {})
+            }} />
             <Sidebar
                 threads={threads}
                 activeThread={activeThread}

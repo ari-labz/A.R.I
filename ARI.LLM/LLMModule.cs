@@ -751,6 +751,9 @@ public class LLMModule : ILLMModule, IDisposable
             ch.Writer.TryWrite(evt);
     }
 
+    public void BroadcastTaskState(string taskName, bool running)
+        => Broadcast(new AppEvent(running ? "taskStarted" : "taskStopped", "", taskName));
+
     /// <summary>Subscribe to the global event stream. Dispose the returned handle to unsubscribe.</summary>
     public IDisposable Subscribe(Channel<AppEvent> channel)
     {

@@ -17,6 +17,7 @@ internal class Memory : Agent
     private const int SEED_NEAR_LIMIT   = 25;
     private const int TOP_CANDIDATES    = 25;
     private const int THINKING_BUDGET   = 400;
+    private const int EXTRACT_BUDGET    = 300;
     private const int SNIPPET_LENGTH    = 160;
     private const int MAX_SEARCH_TERMS  = 15;
 
@@ -188,12 +189,12 @@ internal class Memory : Agent
         // actually offered, so a mangled pick can never resolve to a note that wasn't in the list.
         HashSet<string> offered = recall.Candidates.Select(c => c.Note.Name).ToHashSet();
 
-        StringBuilder result = new();
         List<string> fetched = new();
         List<string> fuzzy = new();
         List<string> unresolved = new();
         // Pre-seed seen with the pinned user note so the model-selected pass never emits it again.
         HashSet<string> seen = userNote is not null ? new() { userNote.Name } : new();
+        List<(Note Note, bool ViaFuzzy)> resolved = new();
         foreach (string title in selected)
         {
             Note? note = Resolve(title, offered, out bool viaFuzzy);
@@ -201,8 +202,20 @@ internal class Memory : Agent
             if (!seen.Add(note.Name)) continue;
             if (viaFuzzy) fuzzy.Add(title);
             fetched.Add(note.Title);
+            resolved.Add((note, viaFuzzy));
+        }
+
+        // Extract only the relevant lines from each selected note in parallel.
+        Task<string>[] extractionTasks = resolved.Select(r => ExtractRelevant(r.Note, incomingPrompt, transcript, ct)).ToArray();
+        string[] extractions = await Task.WhenAll(extractionTasks);
+
+        StringBuilder result = new();
+        for (int i = 0; i < resolved.Count; i++)
+        {
+            Note note = resolved[i].Note;
+            string extracted = extractions[i];
             result.AppendLine($"[{note.Title}|{note.Url}]");
-            result.AppendLine(note.ToPrompt());
+            result.AppendLine(string.IsNullOrWhiteSpace(extracted) ? note.ToPrompt() : $"Path: {note.Name}\n\n{extracted}");
             result.AppendLine();
         }
         if (fuzzy.Count > 0)
@@ -254,6 +267,24 @@ internal class Memory : Agent
         string line = content.Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .FirstOrDefault(l => !l.TrimStart().StartsWith('#'))?.Trim() ?? string.Empty;
         return line.Length > SNIPPET_LENGTH ? line[..SNIPPET_LENGTH] + "…" : line;
+    }
+
+    private async Task<string> ExtractRelevant(Note note, string request, string transcript, CancellationToken ct)
+    {
+        try
+        {
+            Thread extractThread = new Thread(ThreadPipeline.Dialogue, $"extract:{Guid.NewGuid()}") { Internal = true };
+            string prompt = ResolveTemplate("ExtractPrompt", "",
+                ("request", request),
+                ("transcript", transcript),
+                ("note_content", note.ToPrompt()));
+            return await Prompt(extractThread, prompt, new PromptOptions { Ct = ct, ThinkingBudget = EXTRACT_BUDGET });
+        }
+        catch (Exception ex)
+        {
+            Shared.Logger.LogWarning(ex, "[Memory] extraction failed for '{Title}', falling back to full content", note.Title);
+            return string.Empty;
+        }
     }
 
     private static List<string> ParseSelection(string raw)

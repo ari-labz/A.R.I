@@ -341,6 +341,7 @@ public class ARI : BackgroundService
                 await llm.RunProactiveMessageAsync(ariPersistentDir, ct);
             });
 
+            schedulerModule.TaskStateChanged += (name, running) => llmModule.BroadcastTaskState(name, running);
             CommonModules.Register(scheduler: schedulerModule);
             schedulerModule.Start();
         }

@@ -39,6 +39,9 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
     private string? _runningTask;
     private CancellationTokenSource? _jobCts;
 
+    /// <summary>Fired when a scheduled task starts or stops. Args: (taskName, running).</summary>
+    public event Action<string, bool>? TaskStateChanged;
+
     public SchedulerModule(SchedulerConfig config, string persistentDataDir, ILogger logger)
     {
         _config = config;
@@ -227,6 +230,7 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
         // Trips on shutdown or a Stop from the control panel — the handler yields on it.
         using CancellationTokenSource jobCts = CancellationTokenSource.CreateLinkedTokenSource(loopCt);
         lock (_runLock) { _runningTask = task.Name; _jobCts = jobCts; }
+        TaskStateChanged?.Invoke(task.Name, true);
 
         try
         {
@@ -247,6 +251,7 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
             // else leaves the task due and, with no idle gate to hold it back, retrying every tick.
             MarkRun(task);
             lock (_runLock) { _runningTask = null; _jobCts = null; }
+            TaskStateChanged?.Invoke(task.Name, false);
         }
     }
 
