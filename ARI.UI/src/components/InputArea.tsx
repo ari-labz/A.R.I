@@ -48,9 +48,10 @@ export default function InputArea({
     const [amending, setAmending]   = useState(false)
     const [cmdMatches, setCmdMatches] = useState<Command[]>([])
     const [cmdIndex, setCmdIndex]   = useState(-1)
-    const textareaRef = useRef<HTMLTextAreaElement>(null)
+    const textareaRef  = useRef<HTMLTextAreaElement>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
-    const wrapRef     = useRef<HTMLDivElement>(null)
+    const wrapRef      = useRef<HTMLDivElement>(null)
+    const submitting   = useRef(false)
 
     // Leaving plan-approval mode (approved or streaming a replan) closes the amend field.
     useEffect(() => { if (!planProposed) setAmending(false) }, [planProposed])
@@ -94,11 +95,14 @@ export default function InputArea({
     }
 
     function submit() {
+        if (submitting.current) return
         const text = input.trim()
         if (!text && pendingAttach.length === 0) return
+        submitting.current = true
         onSend(text)
         setInput("")
         setCmdMatches([]); setCmdIndex(-1)
+        requestAnimationFrame(() => { submitting.current = false })
     }
 
     async function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {

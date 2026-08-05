@@ -61,11 +61,12 @@ internal sealed class DialoguePipeline : Pipeline
             recallSeconds = recallSw.Elapsed.TotalSeconds;
         }
 
-        return await textingAgent.Prompt(thread, question, new PromptOptions
+        return await textingAgent.Prompt(thread, "(proactive opener)", new PromptOptions
         {
             RecallNotes    = recallBlock,
             RecallSeconds  = recallSeconds,
             ModeNudge      = instruction,
+            ChatHidden     = true,
             Ct             = cts.Token,
         });
     }
