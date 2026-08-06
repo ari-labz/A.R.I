@@ -32,7 +32,8 @@ internal sealed class CodePipeline : Pipeline
         string?              platformContext,
         Func<string, Task>?  onDelta,
         CancellationTokenSource cts,
-        string?              localPath)
+        string?              localPath,
+        Func<string, Task>?  onTextDelta = null)
     {
         Shared.Logger.LogInformation("[Code] ({Thread}) prompt\n\"{Prompt}\"", threadKey, effectivePrompt);
 

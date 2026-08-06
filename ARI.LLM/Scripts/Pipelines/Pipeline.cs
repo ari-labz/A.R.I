@@ -31,7 +31,8 @@ internal abstract class Pipeline
         CancellationTokenSource cts,
         List<Attachment>?    messageAttachments = null,
         List<Attachment>?    threadAttachments  = null,
-        string?              localPath          = null)
+        string?              localPath          = null,
+        Func<string, Task>?  onTextDelta        = null)
     {
         if (threadAttachments is { Count: > 0 })
             foreach (Attachment a in threadAttachments)
@@ -60,7 +61,7 @@ internal abstract class Pipeline
 
         try
         {
-            return await RunAsync(thread, threadKey, effectivePrompt, username, platformContext, onDelta, cts, localPath);
+            return await RunAsync(thread, threadKey, effectivePrompt, username, platformContext, onDelta, cts, localPath, onTextDelta);
         }
         catch (OperationCanceledException)
         {
@@ -87,5 +88,6 @@ internal abstract class Pipeline
         string?              platformContext,
         Func<string, Task>?  onDelta,
         CancellationTokenSource cts,
-        string?              localPath);
+        string?              localPath,
+        Func<string, Task>?  onTextDelta = null);
 }

@@ -328,6 +328,8 @@ public abstract class Agent
 
         // ── Streaming callback ────────────────────────────────────────────────
         internal Func<string, Task>? OnDelta;
+        internal Func<string, Task>? OnTextDelta;
+        internal readonly StringBuilder TextOnlyBuilder = new();
 
         // ── Phase tracking ───────────────────────────────────────────────────
         internal ThreadPhase LastPhase = ThreadPhase.Idle;
@@ -348,6 +350,7 @@ public abstract class Agent
             Trace       = trace;
             ToolTurn    = toolTurn;
             OnDelta     = onDelta;
+            OnTextDelta = opts.OnTextDelta;
         }
     }
 
@@ -741,6 +744,7 @@ public abstract class Agent
                 if (!isLeakedToolCall && preText.Length > 0)
                 {
                     turn.ContentBuilder.Append(preText + "\n");
+                    if (turn.OnTextDelta is not null) turn.TextOnlyBuilder.Append(preText + "\n");
                     if (turn.LiveText is not null) { turn.Trace.Remove(turn.LiveText); turn.LiveText = null; }
                     turn.Trace.Add(new TraceStep { Kind = "text", Text = preText });
                     if (!SuppressLog()) Shared.Logger.LogInformation("[{Agent}] ({Thread}) \"{Text}\"", Name, thread.Key, preText);
@@ -861,7 +865,7 @@ public abstract class Agent
             turn.TextToolLeak = true;
             return;
         }
-        if (turn.OnDelta is not null)
+        if (turn.OnDelta is not null || turn.OnTextDelta is not null)
         {
             const string AriPrefix = "ARI: ";
             string accumulated = turn.ResponseBuilder.ToString();
@@ -870,7 +874,9 @@ public abstract class Agent
                 : (accumulated.StartsWith(AriPrefix, StringComparison.OrdinalIgnoreCase) ? accumulated[AriPrefix.Length..] : accumulated);
             if (turn.LiveText is null && visible.Trim().Length > 0) { turn.LiveText = new TraceStep { Kind = "text", Text = "" }; turn.Trace.Add(turn.LiveText); }
             if (turn.LiveText is not null) turn.LiveText.Text = visible;
-            await turn.OnDelta(turn.ContentBuilder.ToString() + visible);
+            if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString() + visible);
+            if (turn.OnTextDelta is not null && visible.Length > 0)
+                await turn.OnTextDelta(turn.TextOnlyBuilder.ToString() + visible);
         }
     }
 
