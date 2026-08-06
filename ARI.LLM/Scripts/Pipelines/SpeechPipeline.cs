@@ -54,7 +54,8 @@ internal sealed class SpeechPipeline : Pipeline
         string?              platformContext,
         Func<string, Task>?  onDelta,
         CancellationTokenSource cts,
-        string?              localPath)
+        string?              localPath,
+        Func<string, Task>?  onTextDelta = null)
     {
         if (engram?.IsSweeping(threadKey) == true)
         {
@@ -65,6 +66,8 @@ internal sealed class SpeechPipeline : Pipeline
         Shared.Logger.LogInformation("[Speech] ({Thread}) prompt\n\"{Prompt}\"", threadKey, effectivePrompt);
 
         string? contextSummary = context?.GetContext(threadKey);
+        PrivacyMode privacyMode = threadKey.StartsWith("guild:", StringComparison.OrdinalIgnoreCase)
+            ? PrivacyMode.Guarded : PrivacyMode.Unrestricted;
 
         string? recallBlock = null;
         double? recallSeconds = null;
@@ -74,7 +77,7 @@ internal sealed class SpeechPipeline : Pipeline
             try
             {
                 List<ThreadMessage> chatHistory = thread.GetChatHistory();
-                recallBlock = await memory.GetNotes(chatHistory, effectivePrompt, contextSummary, cts.Token);
+                recallBlock = await memory.GetNotes(chatHistory, effectivePrompt, contextSummary, cts.Token, privacyMode);
             }
             catch (OperationCanceledException) when (cts.IsCancellationRequested)
             {
@@ -104,6 +107,7 @@ internal sealed class SpeechPipeline : Pipeline
                 Ct                  = cts.Token,
                 UserMessagePreadded = true,
                 OnDelta             = onDelta,
+                OnTextDelta         = onTextDelta,
             });
         }
         finally

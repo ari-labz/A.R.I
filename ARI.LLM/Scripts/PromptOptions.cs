@@ -13,5 +13,6 @@ internal sealed class PromptOptions
     public bool                UserMessagePreadded { get; init; }
     public bool                ChatHidden          { get; init; }
     public Func<string, Task>? OnDelta             { get; init; }
+    public Func<string, Task>? OnTextDelta         { get; init; }
     public CancellationToken   Ct                  { get; init; }
 }

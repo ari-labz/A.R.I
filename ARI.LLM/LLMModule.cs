@@ -628,10 +628,10 @@ public class LLMModule : ILLMModule, IDisposable
     public Task<string> Prompt(string threadKey, string prompt, string username, string? platformContext = null, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null, InferencePriority priority = InferencePriority.Normal)
         => Route(threadKey, prompt, username, platformContext, null, CancellationToken.None, messageAttachments, threadAttachments, priority: priority);
 
-    public Task<string> PromptStreaming(string threadKey, string prompt, string username, string? platformContext, Func<string, Task> onDelta, CancellationToken ct = default, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null, string? localPath = null, InferencePriority priority = InferencePriority.Normal, SpeechSteeringContext? steering = null)
-        => Route(threadKey, prompt, username, platformContext, onDelta, ct, messageAttachments, threadAttachments, localPath, priority, steering);
+    public Task<string> PromptStreaming(string threadKey, string prompt, string username, string? platformContext, Func<string, Task> onDelta, CancellationToken ct = default, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null, string? localPath = null, InferencePriority priority = InferencePriority.Normal, SpeechSteeringContext? steering = null, Func<string, Task>? onTextDelta = null)
+        => Route(threadKey, prompt, username, platformContext, onDelta, ct, messageAttachments, threadAttachments, localPath, priority, steering, onTextDelta);
 
-    private async Task<string> Route(string threadKey, string prompt, string username, string? platformContext, Func<string, Task>? onDelta, CancellationToken externalCt, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null, string? localPath = null, InferencePriority priority = InferencePriority.Normal, SpeechSteeringContext? steering = null)
+    private async Task<string> Route(string threadKey, string prompt, string username, string? platformContext, Func<string, Task>? onDelta, CancellationToken externalCt, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null, string? localPath = null, InferencePriority priority = InferencePriority.Normal, SpeechSteeringContext? steering = null, Func<string, Task>? onTextDelta = null)
     {
         if (textingAgent is null)
             throw new ModelNotFoundException("Dialogue model is not loaded or is not enabled.");
@@ -690,7 +690,7 @@ public class LLMModule : ILLMModule, IDisposable
             {
                 Thread speechThread = Recategorise(ThreadPipeline.Speech, threadKey, platformContext);
                 speechPipeline?.SetSteering(threadKey, steering);
-                return await (speechPipeline ?? (Pipeline)dialoguePipeline!).ExecuteAsync(speechThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments, localPath);
+                return await (speechPipeline ?? (Pipeline)dialoguePipeline!).ExecuteAsync(speechThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments, localPath, onTextDelta);
             }
             default:
             {

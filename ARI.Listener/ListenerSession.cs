@@ -207,9 +207,10 @@ internal sealed class ListenerSession
                 ctx.ThreadKey, userText,
                 username:        ctx.UserId ?? "user",
                 platformContext: SpeechContext,
-                onDelta:         delta => { chunker.Feed(delta); return Task.CompletedTask; },
+                onDelta:         _ => Task.CompletedTask,
                 ct:              ct,
-                steering:        steering);
+                steering:        steering,
+                onTextDelta:     delta => { chunker.Feed(delta); return Task.CompletedTask; });
 
             chunker.Flush();
         }
