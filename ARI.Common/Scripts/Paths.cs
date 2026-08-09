@@ -30,6 +30,9 @@ public static class Paths
     /// <summary>Root of the JSONL session records — one date folder per day. See SessionRecorder.</summary>
     public static string Sessions       { get; }
     public static string ChatHistory    { get; }
+    /// <summary>Upvoted/downvoted responses with the user's note and the turns that led to them —
+    /// the growing liked/disliked dataset. See FeedbackStore.</summary>
+    public static string Feedback       { get; }
     public static string Keys           { get; }
     public static string Push           { get; }
     public static string LLMConfigs     { get; }
@@ -142,6 +145,7 @@ public static class Paths
         Logs           = ServerDir("Logs");
         Sessions       = ServerDir("Logs/Sessions");
         ChatHistory    = ServerDir("ChatHistory");
+        Feedback       = ServerDir("Feedback");
         Keys           = ServerDir("Keys");
         Push           = ServerDir("Push");
         LLMConfigs     = ServerDir("LLMConfigs");
