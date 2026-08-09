@@ -463,6 +463,7 @@ html, body {
         <div class="cp-nav-group">Integrations</div>
         <div class="cp-nav-item" data-tab="discord">Discord</div>
         <div class="cp-nav-group">System</div>
+        <div class="cp-nav-item" data-tab="modules">Modules</div>
         <div class="cp-nav-item" data-tab="scheduler">Scheduler</div>
       </div>
     </div>
@@ -830,6 +831,23 @@ html, body {
       </div>
     </div>
 
+    <!-- Modules tab -->
+    <div id="tab-modules" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div class="vs-section">
+        <div class="vs-section-title">Modules</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 4px;">
+          Each part of Ari can be switched off if you don't need it — a module that is off uses no
+          memory and starts no processes.
+        </p>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 16px;">
+          Changes are saved straight away but only take effect when Ari next starts.
+        </p>
+        <div id="mod-list" style="display:flex;flex-direction:column;gap:12px;">
+          <span style="font-size:12px;color:var(--text-dim);">Loading…</span>
+        </div>
+      </div>
+    </div>
+
     <!-- LLM Configs tab -->
     <div id="tab-llmconfigs" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
@@ -995,8 +1013,8 @@ fetch('/api/cp/username').then(r => r.json()).then(d => { if (d.name) window._ar
 
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), scheduler: document.getElementById('tab-scheduler'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), userprefs: document.getElementById('tab-userprefs') };
-const TAB_TITLES = { voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', scheduler: 'Scheduler', llmconfigs: 'LLM Configs', debug: 'Deep Thread Inspection (DTI)', userprefs: 'User Preferences' };
+const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), scheduler: document.getElementById('tab-scheduler'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), userprefs: document.getElementById('tab-userprefs'), modules: document.getElementById('tab-modules') };
+const TAB_TITLES = { voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', scheduler: 'Scheduler', llmconfigs: 'LLM Configs', debug: 'Deep Thread Inspection (DTI)', userprefs: 'User Preferences', modules: 'Modules' };
 
 let srvPollTimer = null;
 function switchTab(name) {
@@ -1019,9 +1037,93 @@ function switchTab(name) {
     if (name === 'discord') loadDiscord();
     if (name === 'debug') loadDebugThreads();
     if (name === 'userprefs') loadUserPrefs();
+    if (name === 'modules') loadModules();
 }
 navItems.forEach(n => n.addEventListener('click', () => switchTab(n.dataset.tab)));
 switchTab('overview');
+
+// ── modules ───────────────────────────────────────────────
+// Each row is one subsystem: what it does, whether it is live right now, and a
+// switch that writes AriConfig.json. Enabling something only starts it on the
+// next launch, so a row whose saved state no longer matches the running process
+// says so rather than pretending the change already happened.
+const modList = document.getElementById('mod-list');
+
+async function loadModules() {
+    if (!modList) return;
+    modList.innerHTML = '<span style="font-size:12px;color:var(--text-dim);">Loading…</span>';
+    try {
+        const r = await fetch('/modules');
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+        const { modules } = await r.json();
+        renderModules(modules);
+    } catch (e) {
+        modList.innerHTML = `<span style="font-size:13px;color:#b45309;">Could not load modules: ${escHtml(e.message)}</span>`;
+    }
+}
+
+function renderModules(modules) {
+    modList.innerHTML = '';
+    for (const m of modules) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:flex-start;gap:16px;padding:14px 16px;'
+                          + 'border:1px solid var(--border);border-radius:10px;background:var(--user-bubble,#fafafa);';
+
+        const text = document.createElement('div');
+        text.style.cssText = 'flex:1;min-width:0;';
+        text.innerHTML =
+            `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
+               <span style="font-size:14px;font-weight:600;">${escHtml(m.name)}</span>
+               <span class="mdl-badge ${m.running ? 'active' : 'inactive'}">${m.running ? 'Running' : 'Stopped'}</span>
+               ${m.required ? '<span class="mdl-badge startup">Always on</span>' : ''}
+               <span class="mdl-badge notdl" data-role="pending" style="display:none;">Restart to apply</span>
+             </div>
+             <div style="font-size:13px;color:var(--text-dim);line-height:1.45;">${escHtml(m.description)}</div>
+             <div data-role="status" style="font-size:12px;color:var(--text-dim);margin-top:6px;"></div>`;
+
+        const pending = text.querySelector('[data-role="pending"]');
+        const status  = text.querySelector('[data-role="status"]');
+        // Already out of step before anyone touches it (module turned on but not yet restarted).
+        if (m.enabled !== m.running) pending.style.display = '';
+
+        const right = document.createElement('div');
+        right.style.cssText = 'display:flex;align-items:center;padding-top:2px;';
+
+        if (m.required) {
+            const locked = document.createElement('span');
+            locked.className = 'cp-toggle on';
+            locked.style.cssText = 'opacity:.45;cursor:not-allowed;';
+            locked.title = `${m.name} cannot be turned off.`;
+            locked.innerHTML = '<span class="cp-toggle-track"></span><span class="cp-toggle-thumb"></span>';
+            right.appendChild(locked);
+        } else {
+            right.appendChild(buildToggle(m.enabled, async enabled => {
+                status.textContent = 'Saving…';
+                try {
+                    const resp = await fetch(`/modules/${encodeURIComponent(m.key)}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ enabled }),
+                    });
+                    const data = await resp.json().catch(() => ({}));
+                    if (!resp.ok) throw new Error(data.error || resp.statusText);
+                    m.enabled = enabled;
+                    pending.style.display = (m.enabled !== m.running) ? '' : 'none';
+                    status.textContent = enabled === m.running
+                        ? (enabled ? 'On.' : 'Off.')
+                        : `Saved — ${enabled ? 'starts' : 'stops'} when Ari next restarts.`;
+                } catch (err) {
+                    status.textContent = 'Could not save: ' + err.message;
+                    loadModules();   // resync the switch with what is actually on disk
+                }
+            }));
+        }
+
+        row.appendChild(text);
+        row.appendChild(right);
+        modList.appendChild(row);
+    }
+}
 
 // ── scheduler ─────────────────────────────────────────────
 const CRON_PRESETS = [
