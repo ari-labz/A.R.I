@@ -68,7 +68,7 @@ public class PersistentData
 
     private sealed class VoiceFile
     {
-        public string? DefaultModelName { get; set; }
+        public Dictionary<string, string> DefaultModels { get; set; } = new();
     }
 
     // ────────────────────────────────────────────────────────────────────────────
@@ -318,17 +318,24 @@ public class PersistentData
 
     // ── Voice ───────────────────────────────────────────────────────────────────
 
-    public string? GetDefaultVoiceModel()
+    public string? GetDefaultVoiceModel(string engine)
     {
-        lock (_voiceLock) return LoadVoice().DefaultModelName;
+        lock (_voiceLock)
+        {
+            var d = LoadVoice().DefaultModels;
+            return d.TryGetValue(engine, out var m) && !string.IsNullOrWhiteSpace(m) ? m : null;
+        }
     }
 
-    public void SetDefaultVoiceModel(string? modelName)
+    public void SetDefaultVoiceModel(string engine, string? modelName)
     {
         lock (_voiceLock)
         {
             VoiceFile data = LoadVoice();
-            data.DefaultModelName = string.IsNullOrWhiteSpace(modelName) ? null : modelName;
+            if (string.IsNullOrWhiteSpace(modelName))
+                data.DefaultModels.Remove(engine);
+            else
+                data.DefaultModels[engine] = modelName;
             Save(_voicePath, data);
         }
     }

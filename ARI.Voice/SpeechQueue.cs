@@ -7,13 +7,13 @@ public class SpeechQueue : IDisposable
 {
     public event Action<byte[]>? AudioReady;
 
-    private readonly StyleTtsSynthesiser synthesiser;
+    private readonly ITtsSynthesiser synthesiser;
     private readonly Channel<string> queue;
     private readonly CancellationTokenSource cts;
     private readonly ILogger? logger;
     private readonly Task worker;
 
-    public SpeechQueue(StyleTtsSynthesiser synthesiser, ILogger? logger = null)
+    public SpeechQueue(ITtsSynthesiser synthesiser, ILogger? logger = null)
     {
         this.synthesiser = synthesiser;
         this.logger      = logger;
@@ -39,7 +39,7 @@ public class SpeechQueue : IDisposable
         {
             try
             {
-                byte[] audio = await synthesiser.Speak(text, cts.Token);
+                byte[] audio = await synthesiser.Synthesise(text, cts.Token);
                 AudioReady?.Invoke(audio);
             }
             catch (OperationCanceledException ex) when (ex.CancellationToken == cts.Token)

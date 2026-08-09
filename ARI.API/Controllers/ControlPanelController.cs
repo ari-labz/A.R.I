@@ -323,6 +323,50 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
 
     private static string EscapeSse(string s) => s.Replace("\n", "↵").Replace("\r", "");
 
+    // ── llama.cpp management ─────────────────────────────────────────────────
+
+    [HttpGet("llamacpp/status")]
+    public IActionResult GetLlamaCppStatus()
+    {
+        var s = Shared.LlamaCpp;
+        return Ok(new
+        {
+            installPath = s.InstallPath,
+            installedVersion = s.InstalledVersion,
+            latestVersion = s.LatestVersion,
+            managedByAri = s.ManagedByAri,
+            updateAvailable = s.UpdateAvailable,
+            suppressUpdatePrompt = s.SuppressUpdatePrompt,
+            currentServer = Shared.LlamaServer,
+        });
+    }
+
+    [HttpPost("llamacpp/update")]
+    public async Task<IActionResult> UpdateLlamaCpp()
+    {
+        if (Shared.LlamaCppUpdate is null) return StatusCode(503, new { error = "Not available." });
+        string? version = await Shared.LlamaCppUpdate();
+        return Ok(new { version, server = Shared.LlamaServer });
+    }
+
+    [HttpPost("llamacpp/set-path")]
+    public IActionResult SetLlamaCppPath([FromBody] LlamaCppPathRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.Path))
+            return BadRequest(new { error = "Path is required." });
+        Shared.LlamaCppSetPath?.Invoke(req.Path);
+        return Ok(new { path = req.Path });
+    }
+
+    [HttpPost("llamacpp/suppress-updates")]
+    public IActionResult SuppressLlamaCppUpdates()
+    {
+        Shared.LlamaCppSuppressUpdates?.Invoke();
+        return Ok();
+    }
+
+    public sealed class LlamaCppPathRequest { public string Path { get; set; } = ""; }
+
 }
 
 // ── Agents API ────────────────────────────────────────────────────────────────
@@ -483,23 +527,46 @@ public class VoiceController(
             return BadRequest(new { error = "modelName is required." });
         if (string.IsNullOrWhiteSpace(req.StagingPath) || !Directory.Exists(req.StagingPath))
             return BadRequest(new { error = "stagingPath does not exist." });
-        if (string.IsNullOrEmpty(vsConfig.StyleTtsPath) || string.IsNullOrEmpty(vsConfig.VoicesPath))
+        if (string.IsNullOrEmpty(vsConfig.VoicesPath))
             return StatusCode(503, new { error = "VoiceSynthesis module is not configured." });
-        if (voiceTraining?.IsSetupComplete != true)
-            return StatusCode(503, new { error = "StyleTTS2 is still installing. Please wait." });
 
         TrainingJob job;
         try
         {
-            StyleTtsTrainer trainer = new(
-                styleTtsPath:    vsConfig.StyleTtsPath,
-                dataDir:         vsConfig.DataDir,
-                voicesPath:      vsConfig.VoicesPath,
-                audioPath:       req.StagingPath,
-                modelName:       req.ModelName,
-                epochs:          req.Epochs,
-                saveEveryNEpochs: req.SaveEveryNEpochs,
-                logger:          logger);
+            IVoiceTrainer trainer;
+            if (req.Engine.Equals("Orpheus", StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.IsNullOrEmpty(vsConfig.OrpheusSourcePath) || !Directory.Exists(vsConfig.OrpheusSourcePath))
+                    return StatusCode(503, new { error = "Orpheus source path is not configured." });
+
+                trainer = new OrpheusTrainer(
+                    orpheusSourcePath: vsConfig.OrpheusSourcePath,
+                    voicesPath:        vsConfig.VoicesPath,
+                    audioPath:         req.StagingPath,
+                    voiceName:         req.ModelName,
+                    epochs:            req.Epochs,
+                    quantType:         req.QuantType,
+                    transcripts:       req.Transcripts,
+                    logger:            logger);
+            }
+            else
+            {
+                if (string.IsNullOrEmpty(vsConfig.StyleTtsPath))
+                    return StatusCode(503, new { error = "VoiceSynthesis module is not configured." });
+                if (voiceTraining?.IsSetupComplete != true)
+                    return StatusCode(503, new { error = "StyleTTS2 is still installing. Please wait." });
+
+                trainer = new StyleTtsTrainer(
+                    styleTtsPath:    vsConfig.StyleTtsPath,
+                    dataDir:         vsConfig.DataDir,
+                    voicesPath:      Path.Combine(vsConfig.VoicesPath, "StyleTTS2"),
+                    audioPath:       req.StagingPath,
+                    modelName:       req.ModelName,
+                    epochs:          req.Epochs,
+                    saveEveryNEpochs: req.SaveEveryNEpochs,
+                    transcripts:     req.Transcripts,
+                    logger:          logger);
+            }
 
             job = voiceTraining!.Start(trainer, req.ModelName, lifetime.ApplicationStopping);
         }
@@ -509,8 +576,8 @@ public class VoiceController(
         }
 
         logger.LogInformation(
-            "[Voice] Training started — model: {ModelName}, epochs: {Epochs}",
-            req.ModelName, req.Epochs);
+            "[Voice] Training started — engine: {Engine}, model: {ModelName}, epochs: {Epochs}",
+            req.Engine, req.ModelName, req.Epochs);
 
         string stagingPath = req.StagingPath;
         string modelName   = req.ModelName;
@@ -618,19 +685,22 @@ public class VoiceController(
         if (voiceService?.IsReady != true)
             return StatusCode(503, new { error = "Voice module is not running." });
 
-        byte[] wav;
+        var engineParams = new Dictionary<string, object>();
+        engineParams["diffusionSteps"] = req.DiffusionSteps;
+        engineParams["alpha"]          = req.Alpha;
+        engineParams["beta"]           = req.Beta;
+        engineParams["embeddingScale"] = req.EmbeddingScale;
+        engineParams["speed"]          = req.Speed;
+        engineParams["pauseScale"]     = req.PauseScale;
         if (!string.IsNullOrWhiteSpace(req.CheckpointPath))
         {
             if (!System.IO.File.Exists(req.CheckpointPath))
                 return NotFound(new { error = $"Checkpoint not found: {req.CheckpointPath}" });
-            wav = await voiceService.SynthesiseWithCheckpoint(req.Text, req.CheckpointPath, ct, req.DiffusionSteps, req.Alpha, req.Beta, req.EmbeddingScale, req.Speed, req.PauseScale);
-            logger.LogInformation("[Voice/Speak] checkpoint={Checkpoint} '{Text}' → {Bytes} bytes", req.CheckpointPath, req.Text, wav.Length);
+            engineParams["checkpointPath"] = req.CheckpointPath;
         }
-        else
-        {
-            wav = await voiceService.Synthesise(req.Text, ct, req.DiffusionSteps, req.Alpha, req.Beta, req.EmbeddingScale, req.Speed, req.PauseScale);
-            logger.LogInformation("[Voice/Speak] '{Text}' → {Bytes} bytes", req.Text, wav.Length);
-        }
+
+        byte[] wav = await voiceService.Synthesise(req.Text, engineParams.Count > 0 ? engineParams : null, ct);
+        logger.LogInformation("[Voice/Speak] '{Text}' → {Bytes} bytes", req.Text, wav.Length);
         return File(wav, "audio/wav");
     }
 
@@ -661,7 +731,7 @@ public class VoiceController(
         if (string.IsNullOrEmpty(vsConfig.VoicesPath))
             return StatusCode(503, new { error = "VoiceSynthesis not configured." });
 
-        string modelDir = Path.Combine(vsConfig.VoicesPath, modelName);
+        string modelDir = Path.Combine(vsConfig.VoicesPath, "StyleTTS2", modelName);
         if (!Directory.Exists(modelDir))
             return NotFound(new { error = $"Model '{modelName}' not found." });
 
@@ -705,11 +775,50 @@ public class VoiceController(
         Ok(new
         {
             model        = voiceService?.ActiveModel,
+            engine       = voiceService?.ActiveEngine,
             ready        = voiceService?.IsReady ?? false,
-            defaultModel = persistentData.GetDefaultVoiceModel(),
+            defaultModel = voiceService is not null ? persistentData.GetDefaultVoiceModel(voiceService.ActiveEngine) : null,
         });
 
-    /// <summary>Set the voice model loaded at startup. Takes effect on next restart.</summary>
+    [HttpGet("engine-params")]
+    public IActionResult GetEngineParams()
+    {
+        if (voiceService is null)
+            return StatusCode(503, new { error = "Voice module is not running." });
+        var parameters = voiceService.GetEngineParameters().Select(p => new
+        {
+            p.Id, p.Label, p.Min, p.Max, p.Default, p.Step
+        });
+        return Ok(new { engine = voiceService.ActiveEngine, parameters });
+    }
+
+    [HttpPost("switch")]
+    public async Task<IActionResult> SwitchEngineModel([FromBody] SwitchEngineRequest req)
+    {
+        if (voiceService is null)
+            return StatusCode(503, new { error = "Voice module is not running." });
+        if (string.IsNullOrWhiteSpace(req.Engine) || string.IsNullOrWhiteSpace(req.ModelName))
+            return BadRequest(new { error = "engine and modelName are required." });
+        if (string.IsNullOrEmpty(vsConfig.VoicesPath))
+            return StatusCode(503, new { error = "VoiceSynthesis not configured." });
+
+        string modelDir = Path.Combine(vsConfig.VoicesPath, req.Engine, req.ModelName);
+        if (!Directory.Exists(modelDir))
+            return NotFound(new { error = $"Model '{req.ModelName}' not found for engine {req.Engine}." });
+
+        try
+        {
+            await voiceService.SwitchEngine(req.Engine, req.ModelName);
+            persistentData.SetDefaultVoiceModel(req.Engine, req.ModelName);
+            return Ok(new { ok = true, engine = req.Engine, model = req.ModelName });
+        }
+        catch (Exception ex)
+        {
+            logger.LogError("[Voice] Engine switch failed: {Error}", ex.Message);
+            return StatusCode(500, new { error = ex.Message });
+        }
+    }
+
     [HttpPut("default")]
     public IActionResult SetDefaultModel([FromBody] SetDefaultVoiceRequest req)
     {
@@ -717,11 +826,13 @@ public class VoiceController(
             return BadRequest(new { error = "Invalid model name." });
         if (string.IsNullOrEmpty(vsConfig.VoicesPath))
             return StatusCode(503, new { error = "VoiceSynthesis not configured." });
-        if (!Directory.Exists(Path.Combine(vsConfig.VoicesPath, req.ModelName)))
+
+        string engine = req.Engine ?? "StyleTTS2";
+        if (!Directory.Exists(Path.Combine(vsConfig.VoicesPath, engine, req.ModelName)))
             return NotFound(new { error = $"Model '{req.ModelName}' not found." });
 
-        persistentData.SetDefaultVoiceModel(req.ModelName);
-        logger.LogInformation("[Voice] Default startup voice set to {Model}", req.ModelName);
+        persistentData.SetDefaultVoiceModel(engine, req.ModelName);
+        logger.LogInformation("[Voice] Default startup voice set to {Model} ({Engine})", req.ModelName, engine);
         return Ok(new { ok = true, defaultModel = req.ModelName });
     }
 
@@ -731,50 +842,52 @@ public class VoiceController(
         if (string.IsNullOrEmpty(vsConfig.VoicesPath) || !Directory.Exists(vsConfig.VoicesPath))
             return Ok(new { models = Array.Empty<object>() });
 
-        var models = Directory.GetDirectories(vsConfig.VoicesPath)
-            .Select(dir =>
+        var models = new List<object>();
+        foreach (string engineDir in Directory.GetDirectories(vsConfig.VoicesPath))
+        {
+            string engine = Path.GetFileName(engineDir);
+            foreach (string dir in Directory.GetDirectories(engineDir))
             {
                 string? name = Path.GetFileName(dir);
-                if (name is null) return null;
+                if (name is null) continue;
                 string settingsFile = Path.Combine(dir, "training.json");
                 TrainingSettings? settings = null;
                 if (System.IO.File.Exists(settingsFile))
                 {
                     try { settings = JsonSerializer.Deserialize<TrainingSettings>(System.IO.File.ReadAllText(settingsFile)); }
-                    catch { /* ignore corrupt file */ }
+                    catch { }
                 }
-                return (object)new
+                models.Add(new
                 {
                     name,
+                    engine,
                     hasResume    = settings is not null,
                     audioPath    = settings?.AudioPath,
                     epochs       = settings?.Epochs,
                     saveEveryN   = settings?.SaveEveryNEpochs,
                     latestEpoch  = LatestSavedEpoch(dir),
-                };
-            })
-            .Where(m => m is not null)
-            .OrderBy(m => (string)((dynamic)m!).name)
-            .ToArray();
+                });
+            }
+        }
 
-        return Ok(new { models });
+        return Ok(new { models = models.OrderBy(m => ((dynamic)m).engine).ThenBy(m => ((dynamic)m).name).ToArray() });
     }
 
-    [HttpDelete("{modelName}")]
-    public IActionResult DeleteModel(string modelName)
+    [HttpDelete("{engine}/{modelName}")]
+    public IActionResult DeleteModel(string engine, string modelName)
     {
         if (string.IsNullOrWhiteSpace(modelName) || modelName.Contains('/') || modelName.Contains('\\'))
             return BadRequest(new { error = "Invalid model name." });
         if (string.IsNullOrEmpty(vsConfig.VoicesPath))
             return StatusCode(503, new { error = "VoiceSynthesis not configured." });
 
-        string dir = Path.Combine(vsConfig.VoicesPath, modelName);
+        string dir = Path.Combine(vsConfig.VoicesPath, engine, modelName);
         if (!Directory.Exists(dir))
             return NotFound(new { error = $"Model '{modelName}' not found." });
 
         Directory.Delete(dir, recursive: true);
-        logger.LogInformation("[Voice] Deleted model '{ModelName}'", modelName);
-        return Ok(new { deleted = modelName });
+        logger.LogInformation("[Voice] Deleted {Engine} model '{ModelName}'", engine, modelName);
+        return Ok(new { deleted = modelName, engine });
     }
 
     /// <summary>
@@ -788,7 +901,7 @@ public class VoiceController(
         if (string.IsNullOrEmpty(vsConfig.VoicesPath))
             return StatusCode(503, new { error = "VoiceSynthesis not configured." });
 
-        string dir = Path.Combine(vsConfig.VoicesPath, modelName);
+        string dir = Path.Combine(vsConfig.VoicesPath, "StyleTTS2", modelName);
         if (!dir.StartsWith(vsConfig.VoicesPath, StringComparison.OrdinalIgnoreCase))
             return BadRequest(new { error = "Invalid model name." });
         if (!Directory.Exists(dir))
@@ -840,7 +953,7 @@ public class VoiceController(
         if (voiceTraining?.IsSetupComplete != true)
             return StatusCode(503, new { error = "StyleTTS2 is still installing. Please wait." });
 
-        string settingsFile = Path.Combine(vsConfig.VoicesPath, req.ModelName, "training.json");
+        string settingsFile = Path.Combine(vsConfig.VoicesPath, "StyleTTS2", req.ModelName, "training.json");
         if (!System.IO.File.Exists(settingsFile))
             return NotFound(new { error = $"No saved training settings found for '{req.ModelName}'." });
 
@@ -866,7 +979,7 @@ public class VoiceController(
             StyleTtsTrainer trainer = new(
                 styleTtsPath:     vsConfig.StyleTtsPath,
                 dataDir:          vsConfig.DataDir,
-                voicesPath:       vsConfig.VoicesPath,
+                voicesPath:       Path.Combine(vsConfig.VoicesPath, "StyleTTS2"),
                 audioPath:        settings.AudioPath,
                 modelName:        settings.ModelName,
                 epochs:           effectiveEpochs,
@@ -901,6 +1014,66 @@ public class VoiceController(
         });
 
         return Ok(new { jobId = job.JobId, modelName = job.ModelName });
+    }
+
+    // ── Audio Transcription ────────────────────────────────────────────────
+    // Chunks uploaded audio and transcribes with Whisper so users can review/edit
+    // transcripts before training any voice engine.
+
+    [HttpPost("transcribe")]
+    public IActionResult StartTranscription([FromBody] DatasetProcessRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.StageId))
+            return BadRequest(new { error = "stageId is required." });
+
+        string stageDir = Path.Combine(StagingRoot, req.StageId);
+        if (!Directory.Exists(stageDir))
+            return BadRequest(new { error = "Unknown stageId. Call /stage first." });
+        if (voiceTraining?.IsSetupComplete != true)
+            return StatusCode(503, new { error = "StyleTTS2 must be set up first (Whisper is part of its environment)." });
+
+        try
+        {
+            AudioTranscriber.Start(stageDir, vsConfig.DataDir, logger, lifetime.ApplicationStopping);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { error = ex.Message });
+        }
+
+        return Ok(new { started = true });
+    }
+
+    [HttpGet("transcribe/status")]
+    public IActionResult TranscriptionStatus()
+    {
+        var t = AudioTranscriber.Current;
+        if (t is null)
+            return Ok(new { step = "Idle", percent = 0, running = false, clips = Array.Empty<object>() });
+
+        return Ok(new
+        {
+            step    = t.Step,
+            percent = t.Percent,
+            running = t.IsRunning,
+            error   = t.Error,
+            workDir = t.WorkDir,
+            clips   = t.Clips.Select(c => new { c.FileName, c.Transcript, c.Duration }),
+        });
+    }
+
+    [HttpGet("transcribe/audio")]
+    public IActionResult TranscribeAudio([FromQuery] string name)
+    {
+        var t = AudioTranscriber.Current;
+        if (t is null)
+            return NotFound(new { error = "No transcription in progress." });
+
+        string wavPath = Path.Combine(t.WorkDir, "wavs", name);
+        if (!System.IO.File.Exists(wavPath))
+            return NotFound(new { error = $"Clip not found: {name}" });
+
+        return PhysicalFile(wavPath, "audio/wav");
     }
 
     // ── Dataset Builder ───────────────────────────────────────────────────────
@@ -1255,14 +1428,18 @@ public record SchedulerQuietHoursRequest(int QuietStartHour, int QuietEndHour);
 public record TrainRequest(
     string ModelName,
     string StagingPath,
+    string Engine          = "StyleTTS2",
     int    Epochs          = 100,
-    int    SaveEveryNEpochs = 10);
+    int    SaveEveryNEpochs = 10,
+    string QuantType       = "q4_k_m",
+    Dictionary<string, string>? Transcripts = null);
 
 public record SpeakRequest(string Text, string? ModelName = null, string? CheckpointPath = null,
     int DiffusionSteps = 5, float Alpha = 0.3f, float Beta = 0.7f, float EmbeddingScale = 1.0f,
     float Speed = 1.0f, float PauseScale = 1.0f);
 public record VoiceSettingsRequest(float Speed = 1.0f, float PauseScale = 1.0f);
-public record SetDefaultVoiceRequest(string ModelName);
+public record SetDefaultVoiceRequest(string ModelName, string? Engine = null);
+public record SwitchEngineRequest(string Engine, string ModelName);
 public record SplitSentencesRequest(string Text);
 public record ResumeRequest(string ModelName, int? Epochs = null, int? SaveEveryNEpochs = null);
 public record DatasetProcessRequest(string StageId);

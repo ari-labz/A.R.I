@@ -32,6 +32,15 @@ public static class Shared
     // bare command name (found on PATH); becomes a full path when we download a managed build.
     public static string LlamaServer { get; set; } = "llama-server";
 
+    // Current llama.cpp status — written by Core's Dependency at startup, read by the API for the UI.
+    public static LlamaCppStatus LlamaCpp { get; set; } = new();
+
+    // Action delegates for llama.cpp management — set by Core at startup, called by API.
+    public static Func<Task<string?>>? LlamaCppUpdate { get; set; }
+    public static Action<string>? LlamaCppSetPath { get; set; }
+    public static Action? LlamaCppSuppressUpdates { get; set; }
+    public static Action? LlamaCppEnableUpdates { get; set; }
+
     public static void InitialiseLogger(ILoggerFactory factory, string categoryName = "ARI")
     {
         _factory = factory;
@@ -54,4 +63,14 @@ public static class Shared
 
         return process;
     }
+}
+
+public class LlamaCppStatus
+{
+    public string? InstallPath { get; set; }
+    public string? InstalledVersion { get; set; }
+    public string? LatestVersion { get; set; }
+    public bool ManagedByAri { get; set; }
+    public bool UpdateAvailable { get; set; }
+    public bool SuppressUpdatePrompt { get; set; }
 }

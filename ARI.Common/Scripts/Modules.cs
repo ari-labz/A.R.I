@@ -38,14 +38,16 @@ public interface ILLMModule
 
 public interface IVoiceModule
 {
-    bool    IsReady     { get; }
-    string? ActiveModel { get; }
-    Task<byte[]> Synthesise(string text, CancellationToken ct, int diffusionSteps = 5, float alpha = 0.3f, float beta = 0.7f, float embeddingScale = 1.0f, float? speed = null, float? pauseScale = null);
-    Task<byte[]> SynthesiseWithCheckpoint(string text, string checkpointPath, CancellationToken ct, int diffusionSteps = 5, float alpha = 0.3f, float beta = 0.7f, float embeddingScale = 1.0f, float? speed = null, float? pauseScale = null);
+    bool    IsReady      { get; }
+    string? ActiveModel  { get; }
+    string  ActiveEngine { get; }
+    Task<byte[]> Synthesise(string text, CancellationToken ct = default);
+    Task<byte[]> Synthesise(string text, Dictionary<string, object>? engineParams, CancellationToken ct = default);
     (float speed, float pauseScale) GetVoiceSettings();
     void SetVoiceSettings(float speed, float pauseScale);
-    /// <summary>Queue text to be spoken with the currently-selected voice (host playback).</summary>
     void Speak(string text);
+    IReadOnlyList<EngineParameter> GetEngineParameters();
+    Task SwitchEngine(string engine, string modelName, CancellationToken ct = default);
 }
 
 public interface IVoiceSynthesisModule

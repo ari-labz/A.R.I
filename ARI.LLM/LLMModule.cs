@@ -625,6 +625,25 @@ public class LLMModule : ILLMModule, IDisposable
         catch (Exception ex) { _logger.LogWarning(ex, "[Awareness] evaluation failed; assuming addressed."); return true; }
     }
 
+    /// <summary>
+    /// Fast gate for text chat: given recent thread history and a new message, should Ari respond?
+    /// Returns true when no gate is configured or on error.
+    /// </summary>
+    public async Task<bool> EvaluateTextAwareness(string threadKey, string latestMessage, CancellationToken ct = default)
+    {
+        if (awareness is null || string.IsNullOrWhiteSpace(latestMessage)) return true;
+        try
+        {
+            var recent = threads.TryGetValue(threadKey, out Thread? thread)
+                ? thread.GetChatHistory(maxMessages: 10)
+                : [];
+            using IDisposable _ = await scheduler.AcquireAsync(InferencePriority.Normal, ct);
+            return await awareness.ShouldRespond(recent, latestMessage, ct);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { _logger.LogWarning(ex, "[Awareness] text evaluation failed; assuming addressed."); return true; }
+    }
+
     public Task<string> Prompt(string threadKey, string prompt, string username, string? platformContext = null, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null, InferencePriority priority = InferencePriority.Normal)
         => Route(threadKey, prompt, username, platformContext, null, CancellationToken.None, messageAttachments, threadAttachments, priority: priority);
 

@@ -26,7 +26,7 @@ public class Thread
     private const int RESPONSE_WINDOW_FLOOR_MIN  = 5;   // active→inactive floor + no-data default (minutes)
     private const int RESPONSE_WINDOW_BUFFER_MIN = 5;   // safety buffer added to the average response time
     private const int UNREAD_GRACE_HOURS         = 3;   // proactive: wait this long for a first reply
-    private const int INACTIVE_TO_DORMANT_MIN    = 60;  // inactive → dormant
+    private const int INACTIVE_TO_DORMANT_MIN    = 5;   // inactive → dormant
     private const int DORMANT_TO_DELETE_MIN      = 60;  // dormant  → deleted
     private const int DELETE_RETRY_SEC           = 30;  // re-check cadence when Engram hasn't finished at delete time
 

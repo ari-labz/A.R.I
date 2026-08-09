@@ -67,7 +67,7 @@ internal class Memory : Agent
         .Where(t => t.Length >= 3 && !Stopwords.Contains(t))
         .ToList();
 
-    internal async Task<string?> GetNotes(List<ThreadMessage> chatHistory, string incomingPrompt, string? contextSummary = null, CancellationToken ct = default)
+    internal async Task<string?> GetNotes(List<ThreadMessage> chatHistory, string incomingPrompt, string? contextSummary = null, CancellationToken ct = default, PrivacyMode privacyMode = PrivacyMode.Unrestricted)
     {
         if (HopLimit <= 0) return null;
 
@@ -238,8 +238,50 @@ internal class Memory : Agent
             ["resolved_by_fuzzy"]  = fuzzy,
             ["unresolved"]         = unresolved,
         });
-        return (pinnedBlock + result.ToString()).TrimEnd();
+        string combined = (pinnedBlock + result.ToString()).TrimEnd();
+
+        if (privacyMode == PrivacyMode.Guarded && !string.IsNullOrWhiteSpace(combined))
+        {
+            Shared.Logger.LogInformation("[Memory] privacy filter: guarded mode — filtering recalled notes.");
+            combined = await FilterForPrivacy(combined, transcript, ct);
+        }
+
+        return combined;
     }
+
+    private const int PRIVACY_BUDGET = 400;
+
+    private async Task<string> FilterForPrivacy(string recallBlock, string transcript, CancellationToken ct)
+    {
+        try
+        {
+            Thread filterThread = new Thread(ThreadPipeline.Dialogue, $"privacy-filter:{Guid.NewGuid()}") { Internal = true };
+            string prompt = ResolveTemplate("PrivacyFilter", PrivacyFilterFallback,
+                ("memories", recallBlock),
+                ("transcript", transcript));
+            string filtered = await Prompt(filterThread, prompt, new PromptOptions { Ct = ct, ThinkingBudget = PRIVACY_BUDGET });
+            if (string.IsNullOrWhiteSpace(filtered)) return recallBlock;
+            Shared.Logger.LogInformation("[Memory] privacy filter applied.");
+            return filtered.Trim();
+        }
+        catch (Exception ex)
+        {
+            Shared.Logger.LogWarning(ex, "[Memory] privacy filter failed — passing unfiltered (safe: guarded context will still have platform-level instructions).");
+            return recallBlock;
+        }
+    }
+
+    private const string PrivacyFilterFallback =
+        "You are ARI's privacy filter. You are in a GUARDED context — the person you are talking to is NOT your owner.\n\n" +
+        "Below are memories recalled for this conversation. Review each one and decide:\n" +
+        "- KEEP: the memory is safe to share (general knowledge, shared projects, non-sensitive facts)\n" +
+        "- OMIT: the memory contains private, sensitive, or intimate information about the owner\n\n" +
+        "For each memory you keep, reproduce it exactly as-is. For memories you omit, do not include them.\n" +
+        "At the end, add a line: \"[Privacy: N memory/memories omitted — not appropriate to share in this context]\"\n" +
+        "If all memories are safe, reproduce them all with no privacy line.\n\n" +
+        "Use the keywords on each note to guide your judgement. Keywords like intimate, health, legal, financial, mental-health, identity, relationship " +
+        "are strong signals that the memory is private. Keywords like gaming, technology, work (in shared project contexts) are usually safe.\n\n" +
+        "MEMORIES:\n{memories}\n\nCONVERSATION:\n{transcript}\n\nOutput ONLY the filtered memory block.";
 
     // Resolve a model's selection to a note. Fast path: exact title/alias/path via GetNote. Fallback:
     // tokenise the (often decorated) pick and run it through the scored search, keeping the top result

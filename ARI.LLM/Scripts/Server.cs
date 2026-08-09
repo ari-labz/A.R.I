@@ -118,7 +118,7 @@ public class Server : IDisposable
     [JsonPropertyName("dryMultiplier")]    public double DryMultiplier    { get; set; } = 0.00;
     [JsonPropertyName("dryBase")]          public double DryBase          { get; set; } = 1.75;
     [JsonPropertyName("dryAllowedLength")] public int    DryAllowedLength { get; set; } = 2;
-    [JsonPropertyName("dryPenaltyLastN")]  public int    DryPenaltyLastN  { get; set; } = -1;
+    [JsonPropertyName("dryPenaltyLastN")]  public int    DryPenaltyLastN  { get; set; } = 0;
     [JsonPropertyName("drySequenceBreakers")] public string[] DrySequenceBreakers { get; set; } = new[] { "\n", ":", "\"", "*" };
     [JsonPropertyName("mirostat")]         public int    Mirostat         { get; set; } = 0;
     [JsonPropertyName("mirostatLr")]       public double MirostatLr       { get; set; } = 0.10;
@@ -414,7 +414,7 @@ public class Server : IDisposable
             $"--dynatemp-range {DynatempRange:F2} --dynatemp-exp {DynatempExp:F2}",
             $"--repeat-last-n {RepeatLastN} --repeat-penalty {RepeatPenalty:F2}",
             $"--presence-penalty {PresencePenalty:F2} --frequency-penalty {FrequencyPenalty:F2}",
-            $"--dry-multiplier {DryMultiplier:F2} --dry-base {DryBase:F2} --dry-allowed-length {DryAllowedLength} --dry-penalty-last-n {DryPenaltyLastN}",
+            $"--dry-multiplier {DryMultiplier:F2} --dry-base {DryBase:F2} --dry-allowed-length {DryAllowedLength} --dry-penalty-last-n {Math.Max(0, DryPenaltyLastN)}",
             breakers,
             $"--mirostat {Mirostat} --mirostat-lr {MirostatLr:F2} --mirostat-ent {MirostatEnt:F2}",
             $"--seed {Seed}",

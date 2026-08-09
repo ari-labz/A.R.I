@@ -17,7 +17,7 @@ internal sealed class CuriosityAgent : MemoryAgent
 
     // Neighbourhoods explored per run. Curiosities are sparse, so we don't converge on quiet epochs
     // (convergeOnNoChange:false) — we cover a broad spread of the graph each run and stop at this cap.
-    private const int CURIOSITY_EPOCHS = 20;
+    private const int CURIOSITY_EPOCHS = 8;
 
     private readonly SemaphoreSlim runLock = new(1, 1);
 
@@ -35,7 +35,7 @@ internal sealed class CuriosityAgent : MemoryAgent
             Shared.Logger.LogInformation("[Curiosity] Starting curiosity walk (up to {Epochs} neighbourhoods).", CURIOSITY_EPOCHS);
             Thread parent = new(ThreadPipeline.Dialogue, $"curiosity:{Guid.NewGuid():N}") { Internal = true };
             return await RunWalk(parent, parent.Key, ResolveTemplate("Task", ""), PersistentDir, CURIOSITY_EPOCHS, ct, null,
-                                 convergeOnNoChange: false);
+                                 convergeOnNoChange: true);
         }
         catch (Exception ex)
         {

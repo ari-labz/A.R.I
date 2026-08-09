@@ -42,15 +42,23 @@ public class DiscordModule : BackgroundService, IDiscordModule
     
     private const string PassToken = "[PASS]";
 
-    private const string ServerPlatformContext =
-        "You are present in a Discord server. Each message shows who is speaking and in which channel. " +
-        "If the conversation was clearly not directed at you and you don't need to be involved, reply with only: [PASS] — nothing else. " +
-        "Otherwise, reply normally. " +
-        "The 'discord_tools' group gives you full Discord control: joining/leaving voice channels, sending messages, listing channels and members, and more. " +
-        "NEVER state that you cannot do something in Discord without first loading discord_tools and attempting it — your capabilities come from those tools, not from assumptions. " +
-        "IMPORTANT: When calling tools, write NO text whatsoever — not before, not after, not between calls. " +
-        "Do not narrate, explain, or acknowledge what you are doing. Execute silently. " +
-        "Only write a text reply if the user asked a direct question or an action explicitly failed.";
+    private static string BuildServerPlatformContext(ulong ownerId)
+    {
+        string privacyPolicy = PrivacyPolicyStore.Get();
+        string privacyBlock = string.IsNullOrWhiteSpace(privacyPolicy)
+            ? ""
+            : $"\n\n{privacyPolicy}";
+
+        return
+            "You are present in a Discord server. Each message shows who is speaking and in which channel. " +
+            $"Your owner's Discord user ID is {ownerId}. Messages from other users are NOT from your owner — reason carefully about what is appropriate to share. " +
+            "The 'discord_tools' group gives you full Discord control: joining/leaving voice channels, sending messages, listing channels and members, and more. " +
+            "NEVER state that you cannot do something in Discord without first loading discord_tools and attempting it — your capabilities come from those tools, not from assumptions. " +
+            "IMPORTANT: When calling tools, write NO text whatsoever — not before, not after, not between calls. " +
+            "Do not narrate, explain, or acknowledge what you are doing. Execute silently. " +
+            "Only write a text reply if the user asked a direct question or an action explicitly failed." +
+            privacyBlock;
+    }
 
     public DiscordModule(ILoggerFactory loggerFactory, LLMModule llmModule, DiscordConfig config)
     {
@@ -449,15 +457,26 @@ public class DiscordModule : BackgroundService, IDiscordModule
             lastTextChannels[guildChannel.Guild.Id] = textCh;
         string content = message.Content.Replace($"<@{client.CurrentUser.Id}>", "").Trim();
         string timestamp = message.Timestamp.LocalDateTime.ToString("dd/MM/yyyy HH:mm");
-        string prompt = $"[{timestamp}] [{message.Author.Username} in #{guildChannel.Name}]: {content}";
+        bool isOwner = message.Author.Id == config.OwnerId;
+        string prompt = $"[{timestamp}] [{message.Author.Username} (user_id: {message.Author.Id}{(isOwner ? ", OWNER" : "")}) in #{guildChannel.Name}]: {content}";
 
         _logger.LogInformation("Server message from {Username} ({UserId}) in #{ChannelName}: {Content}",
             message.Author.Username, message.Author.Id, guildChannel.Name, message.Content);
 
+        if (!isMentioned && llmModule.AwarenessAvailable)
+        {
+            bool shouldRespond = await llmModule.EvaluateTextAwareness(conversationKey, prompt);
+            if (!shouldRespond)
+            {
+                _logger.LogInformation("Awareness gate: skipping response in [{ConversationKey}]", conversationKey);
+                return;
+            }
+        }
+
         List<LlmAttachment>? attachments = message.Attachments.Count > 0
             ? await UploadDiscordAttachments(message.Attachments)
             : null;
-        await SendLlmReply(message, conversationKey, prompt, message.Author.Username, ServerPlatformContext, attachments);
+        await SendLlmReply(message, conversationKey, prompt, message.Author.Username, BuildServerPlatformContext(config.OwnerId), attachments);
     }
 
     private async Task<List<LlmAttachment>> UploadDiscordAttachments(IReadOnlyCollection<DiscordAttachment> attachments)
@@ -497,7 +516,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
             // Strip internal markers that are only meaningful to the web client.
             response = response.Replace("<!--ari-batch-end-->", "").Trim();
 
-            if (response == PassToken || response.Length == 0)
+            if (response.Equals(PassToken, StringComparison.OrdinalIgnoreCase) || response.Length == 0)
             {
                 _logger.LogInformation("Ari chose not to respond in [{ConversationKey}]", conversationKey);
                 return;
@@ -601,7 +620,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
             string threadKey = $"guild:{vc.Guild.Id}";
             Func<string, Task> sendReply = text => SpeakIntoVoiceAsync(audio, writeLock, text, CancellationToken.None);
 
-            DiscordVoiceReceiver receiver = new(audio, llmModule, threadKey, ServerPlatformContext, sendReply, whisperUrl, _logger);
+            DiscordVoiceReceiver receiver = new(audio, llmModule, threadKey, BuildServerPlatformContext(config.OwnerId), sendReply, whisperUrl, _logger);
             voiceReceivers[vc.Guild.Id] = receiver;
             _logger.LogInformation("[Discord] Voice receive pipeline started for guild {GuildId}.", vc.Guild.Id);
         }

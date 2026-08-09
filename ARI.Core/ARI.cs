@@ -5,6 +5,8 @@ using ARI.Core.Scripts;
 using ARI.Discord;
 using ARI.LLM;
 using ARI.Voice;
+using ARI.Voice.StyleTTS2;
+using ARI.Voice.Orpheus;
 using ARI.VoiceSynthesis;
 using ARI.API;
 using ARI.API.Data;
@@ -32,8 +34,8 @@ public class ARI : BackgroundService
 
     private readonly ILoggerFactory loggerFactory;
     private ILogger _logger = Shared.Logger;
-    private StyleTtsSynthesiser? synthesiser;
-    private SpeechQueue?         speechQueue;
+    private ITtsSynthesiser? synthesiser;
+    private SpeechQueue?    speechQueue;
     private bool startupFailed;
     private static System.Diagnostics.Process? clientProcess;
 
@@ -93,11 +95,16 @@ public class ARI : BackgroundService
         // pretrained checkpoint cache) — always AppData, never inside StyleTtsPath (install content,
         // may be read-only / replaced wholesale on update).
         config.modules.VoiceSynthesis.DataDir = Paths.StyleTts2Data;
+        config.modules.VoiceSynthesis.OrpheusSourcePath = Path.Combine(Paths.BuildPath, "External", "Orpheus");
 
         await Dependency.CheckPython();
         if (OperatingSystem.IsMacOS())
             await Dependency.CheckHomebrew();
         await Dependency.CheckLlamaCpp();
+        Shared.LlamaCppUpdate = Dependency.UpdateLlamaCpp;
+        Shared.LlamaCppSetPath = Dependency.SetLlamaCppPath;
+        Shared.LlamaCppSuppressUpdates = Dependency.SuppressLlamaCppUpdates;
+        Shared.LlamaCppEnableUpdates = Dependency.EnableLlamaCppUpdates;
 
         // ── Shared infrastructure ────────────────────────────────────────────────
         PersistentData persistentData = new();
@@ -158,37 +165,71 @@ public class ARI : BackgroundService
             string sttPath    = config.modules.VoiceSynthesis.StyleTtsPath;
             string sttDataDir = config.modules.VoiceSynthesis.DataDir;
             string voicesPath = config.modules.VoiceSynthesis.VoicesPath;
-            string modelName  = persistentData.GetDefaultVoiceModel() ?? config.modules.Voice.ModelName;
-            if (!Directory.Exists(Path.Combine(voicesPath, modelName)) && modelName != config.modules.Voice.ModelName)
-            {
-                _logger.LogWarning("Default voice '{Model}' no longer exists — falling back to {Fallback}.", modelName, config.modules.Voice.ModelName);
-                modelName = config.modules.Voice.ModelName;
-            }
-            string modelDir   = Path.Combine(voicesPath, modelName);
-            string modelPath  = Path.Combine(modelDir, "model.pth");
-            string configPath = Path.Combine(modelDir, "config.yml");
-            string refAudio   = FindReferenceAudio(modelDir, sttDataDir, modelName);
+            string engine     = config.modules.Voice.DefaultEngine;
 
-            if (!File.Exists(modelPath) || !File.Exists(configPath))
-                _logger.LogWarning("Voice module enabled but no model found at {Path} — skipping.", modelDir);
-            else if (string.IsNullOrEmpty(refAudio))
-                _logger.LogWarning("Voice module enabled but no reference audio found for {Model} — skipping.", modelName);
+            MigrateVoicesDirectory(voicesPath, _logger);
+
+            ILogger voiceLogger = loggerFactory.CreateLogger("ARI.Voice");
+
+            // Resolve the model to boot: persisted default → config default → first found → none
+            string? ResolveModel(string eng)
+            {
+                string engDir = Path.Combine(voicesPath, eng);
+                if (!Directory.Exists(engDir)) return null;
+
+                string? candidate = persistentData.GetDefaultVoiceModel(eng)
+                    ?? (config.modules.Voice.DefaultModels.TryGetValue(eng, out var cfgModel)
+                        && !string.IsNullOrWhiteSpace(cfgModel) ? cfgModel : null);
+
+                if (candidate is not null && Directory.Exists(Path.Combine(engDir, candidate)))
+                    return candidate;
+
+                if (candidate is not null)
+                    _logger.LogWarning("Default voice '{Model}' for {Engine} not found — picking first available.", candidate, eng);
+
+                return Directory.GetDirectories(engDir).Select(Path.GetFileName).FirstOrDefault(n => n is not null);
+            }
+
+            string? modelName = ResolveModel(engine);
+            if (modelName is null)
+            {
+                _logger.LogWarning("Voice module enabled but no voices found for engine '{Engine}' — skipping.", engine);
+            }
             else
             {
-                ILogger voiceLogger = loggerFactory.CreateLogger("ARI.Voice");
-                _logger.LogInformation("Voice loading model: {Model}", modelName);
-                synthesiser = new StyleTtsSynthesiser(sttPath, sttDataDir, modelPath, configPath, refAudio, voiceLogger);
-                await synthesiser.Start(stoppingToken);
-                try { await synthesiser.Warmup(stoppingToken); }
-                catch (Exception ex) { _logger.LogError("Voice warmup failed (model may have corrupt weights): {Error}", ex.Message); }
+                string modelDir = Path.Combine(voicesPath, engine, modelName);
 
-                speechQueue = new SpeechQueue(synthesiser, voiceLogger);
-                string pythonPath = Paths.StyleTts2Python;
-                speechQueue.AudioReady += wav => PlayAudio(wav, pythonPath, voiceLogger);
+                ITtsSynthesiser? SynthFactory(string eng, string model)
+                {
+                    string dir = Path.Combine(voicesPath, eng, model);
+                    return eng switch
+                    {
+                        "StyleTTS2" => CreateStyleTts(sttPath, sttDataDir, dir, model, voiceLogger),
+                        "Orpheus"   => CreateOrpheus(dir, voiceLogger),
+                        _           => null,
+                    };
+                }
 
-                voiceModule = new VoiceModule(synthesiser, speechQueue, modelName);
-                CommonModules.Register(voice: voiceModule);
-                _logger.LogInformation("Voice ready.");
+                ITtsSynthesiser? engineSynthesiser = SynthFactory(engine, modelName);
+                if (engineSynthesiser is null)
+                    _logger.LogWarning("Voice module enabled but engine '{Engine}' could not be initialised for model '{Model}' — skipping.", engine, modelName);
+                else
+                {
+                    _logger.LogInformation("Voice loading model: {Model} (engine: {Engine})", modelName, engine);
+                    synthesiser = engineSynthesiser;
+                    await synthesiser.Start(stoppingToken);
+                    try { await synthesiser.Warmup(stoppingToken); }
+                    catch (Exception ex) { _logger.LogError("Voice warmup failed (model may have corrupt weights): {Error}", ex.Message); }
+
+                    speechQueue = new SpeechQueue(synthesiser, voiceLogger);
+                    string pythonPath = Paths.StyleTts2Python;
+                    void WireAudio(SpeechQueue q) => q.AudioReady += wav => PlayAudio(wav, pythonPath, voiceLogger);
+                    WireAudio(speechQueue);
+
+                    voiceModule = new VoiceModule(synthesiser, speechQueue, modelName, SynthFactory, WireAudio, voiceLogger);
+                    CommonModules.Register(voice: voiceModule);
+                    _logger.LogInformation("Voice ready.");
+                }
             }
         }
 
@@ -357,6 +398,28 @@ public class ARI : BackgroundService
             await Task.Delay(Timeout.Infinite, stoppingToken);
     }
 
+    private static readonly string[] KnownEngines = ["StyleTTS2", "Orpheus"];
+
+    private static void MigrateVoicesDirectory(string voicesPath, ILogger logger)
+    {
+        if (!Directory.Exists(voicesPath)) return;
+
+        foreach (string dir in Directory.GetDirectories(voicesPath))
+        {
+            string name = Path.GetFileName(dir);
+            if (KnownEngines.Contains(name, StringComparer.OrdinalIgnoreCase)) continue;
+
+            if (File.Exists(Path.Combine(dir, "model.pth")) || File.Exists(Path.Combine(dir, "config.yml")))
+            {
+                string dest = Path.Combine(voicesPath, "StyleTTS2", name);
+                if (Directory.Exists(dest)) continue;
+                Directory.CreateDirectory(Path.Combine(voicesPath, "StyleTTS2"));
+                Directory.Move(dir, dest);
+                logger.LogInformation("[Voice] Migrated voice '{Name}' → Voices/StyleTTS2/{Name}", name, name);
+            }
+        }
+    }
+
     private static string FindReferenceAudio(string modelDir, string sttDataDir, string modelName)
     {
         string bundled = Path.Combine(modelDir, "reference.wav");
@@ -366,6 +429,40 @@ public class ARI : BackgroundService
         if (!Directory.Exists(audioDir)) return "";
         string[] wavs = Directory.GetFiles(audioDir, "*.wav");
         return wavs.Length > 0 ? wavs.OrderBy(f => f).First() : "";
+    }
+
+    private ITtsSynthesiser? CreateStyleTts(string sttPath, string sttDataDir, string modelDir, string modelName, ILogger voiceLogger)
+    {
+        string modelPath  = Path.Combine(modelDir, "model.pth");
+        string configPath = Path.Combine(modelDir, "config.yml");
+        string refAudio   = FindReferenceAudio(modelDir, sttDataDir, modelName);
+
+        if (!File.Exists(modelPath) || !File.Exists(configPath))
+        {
+            _logger.LogWarning("StyleTTS2 model not found at {Path} — skipping.", modelDir);
+            return null;
+        }
+        if (string.IsNullOrEmpty(refAudio))
+        {
+            _logger.LogWarning("No reference audio found for StyleTTS2 model {Model} — skipping.", modelName);
+            return null;
+        }
+        return new StyleTtsSynthesiser(sttPath, sttDataDir, modelPath, configPath, refAudio, voiceLogger);
+    }
+
+    private ITtsSynthesiser? CreateOrpheus(string modelDir, ILogger voiceLogger)
+    {
+        string orpheusSource = Path.Combine(Paths.BuildPath, "External", "Orpheus");
+        string[] ggufs = Directory.Exists(modelDir)
+            ? Directory.GetFiles(modelDir, "*.gguf")
+            : [];
+
+        if (ggufs.Length == 0)
+        {
+            _logger.LogWarning("Orpheus model directory {Path} contains no .gguf files — skipping.", modelDir);
+            return null;
+        }
+        return new OrpheusSynthesiser(orpheusSource, ggufs[0], voiceLogger);
     }
 
     // Only one audio-output stream at a time — otherwise back-to-back sentences (Speech pipeline) spawn
