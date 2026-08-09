@@ -534,40 +534,23 @@ public class VoiceController(
         TrainingJob job;
         try
         {
-            IVoiceTrainer trainer;
-            if (req.Engine.Equals("Orpheus", StringComparison.OrdinalIgnoreCase))
-            {
-                if (string.IsNullOrEmpty(vsConfig.OrpheusSourcePath) || !Directory.Exists(vsConfig.OrpheusSourcePath))
-                    return StatusCode(503, new { error = "Orpheus source path is not configured." });
+            // StyleTTS2 is the only engine that trains a voice. IndexTTS clones one
+            // from a single reference clip, so it has nothing to train.
+            if (string.IsNullOrEmpty(vsConfig.StyleTtsPath))
+                return StatusCode(503, new { error = "VoiceSynthesis module is not configured." });
+            if (voiceTraining?.IsSetupComplete != true)
+                return StatusCode(503, new { error = "StyleTTS2 is still installing. Please wait." });
 
-                trainer = new OrpheusTrainer(
-                    orpheusSourcePath: vsConfig.OrpheusSourcePath,
-                    voicesPath:        vsConfig.VoicesPath,
-                    audioPath:         req.StagingPath,
-                    voiceName:         req.ModelName,
-                    epochs:            req.Epochs,
-                    quantType:         req.QuantType,
-                    transcripts:       req.Transcripts,
-                    logger:            logger);
-            }
-            else
-            {
-                if (string.IsNullOrEmpty(vsConfig.StyleTtsPath))
-                    return StatusCode(503, new { error = "VoiceSynthesis module is not configured." });
-                if (voiceTraining?.IsSetupComplete != true)
-                    return StatusCode(503, new { error = "StyleTTS2 is still installing. Please wait." });
-
-                trainer = new StyleTtsTrainer(
-                    styleTtsPath:    vsConfig.StyleTtsPath,
-                    dataDir:         vsConfig.DataDir,
-                    voicesPath:      Path.Combine(vsConfig.VoicesPath, "StyleTTS2"),
-                    audioPath:       req.StagingPath,
-                    modelName:       req.ModelName,
-                    epochs:          req.Epochs,
-                    saveEveryNEpochs: req.SaveEveryNEpochs,
-                    transcripts:     req.Transcripts,
-                    logger:          logger);
-            }
+            IVoiceTrainer trainer = new StyleTtsTrainer(
+                styleTtsPath:    vsConfig.StyleTtsPath,
+                dataDir:         vsConfig.DataDir,
+                voicesPath:      Path.Combine(vsConfig.VoicesPath, "StyleTTS2"),
+                audioPath:       req.StagingPath,
+                modelName:       req.ModelName,
+                epochs:          req.Epochs,
+                saveEveryNEpochs: req.SaveEveryNEpochs,
+                transcripts:     req.Transcripts,
+                logger:          logger);
 
             job = voiceTraining!.Start(trainer, req.ModelName, lifetime.ApplicationStopping);
         }

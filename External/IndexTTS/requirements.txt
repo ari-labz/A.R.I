@@ -1,0 +1,4 @@
+# The index-tts checkout brings its own dependencies via `pip install -e .`;
+# these are what serve.py needs on top of it.
+flask
+numpy
