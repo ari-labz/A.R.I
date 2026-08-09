@@ -30,11 +30,13 @@ SAMPLE_RATE = 24_000
 SNAC_TOKENS_PER_FRAME = 7
 
 # Orpheus special tokens — must match training/prepare_dataset.py exactly.
-START_OF_HUMAN = 128259
-END_OF_TEXT    = 128009
-END_OF_HUMAN   = 128260
-START_OF_AUDIO = 128257
-END_OF_AUDIO   = 128258
+END_OF_TEXT     = 128009
+START_OF_SPEECH = 128257
+END_OF_SPEECH   = 128258
+START_OF_HUMAN  = 128259
+END_OF_HUMAN    = 128260
+START_OF_AI     = 128261
+END_OF_AI       = 128262
 
 # Each of the 7 slots in a SNAC frame lives in its own 4096-wide band.
 AUDIO_OFFSET  = 128266
@@ -59,10 +61,10 @@ def load_snac():
 
 
 def tokenise(text: str) -> list[int]:
-    """Tokenise via llama-server without adding a BOS the training data lacked."""
+    """Tokenise via llama-server, keeping the BOS training put on the transcript."""
     import urllib.request
 
-    payload = json.dumps({"content": text, "add_special": False}).encode()
+    payload = json.dumps({"content": text, "add_special": True}).encode()
     req = urllib.request.Request(f"{llama_url}/tokenize", data=payload,
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=15) as resp:
@@ -73,32 +75,33 @@ def format_prompt(text: str, voice: str | None = None) -> list[int]:
     """Build the prompt as token ids, mirroring training/train.py exactly.
 
     Returned as ids rather than a string so llama-server tokenises nothing on
-    our behalf — a stray BOS here shifts the whole sequence off what the model
-    was trained on.
+    our behalf — an extra BOS here shifts the whole sequence off what the model
+    was trained on.  Ending on <start-of-ai> hands the model a turn it can only
+    continue with speech, rather than leaving it to guess that audio comes next.
     """
     v = voice or voice_name
     return ([START_OF_HUMAN]
             + tokenise(f"{v}: {text}")
-            + [END_OF_TEXT, END_OF_HUMAN])
+            + [END_OF_TEXT, END_OF_HUMAN, START_OF_AI])
 
 
 def tokens_to_audio(token_ids: list[int]) -> np.ndarray:
     """Decode Orpheus SNAC tokens into a float32 PCM waveform."""
     import torch
 
-    # The model emits the audio block between START_OF_AUDIO and END_OF_AUDIO.
-    # Collect strictly inside it so a stray text token can never shift the
-    # 7-token frame boundaries and turn the whole clip into noise.
+    # The model emits the audio block between <start-of-speech> and
+    # <end-of-speech>.  Collect strictly inside it so a stray text token can
+    # never shift the 7-token frame boundaries and turn the clip into noise.
     audio_ids = []
     collecting = False
     for t in token_ids:
-        if t == START_OF_AUDIO:
+        if t == START_OF_SPEECH:
             collecting = True
             audio_ids.clear()   # keep only the last audio block
             continue
         if not collecting:
             continue
-        if t in (END_OF_AUDIO, END_OF_TEXT):
+        if t in (END_OF_SPEECH, END_OF_AI, END_OF_TEXT):
             break
         if t >= AUDIO_OFFSET:
             audio_ids.append(t - AUDIO_OFFSET)
@@ -218,7 +221,7 @@ def call_llama(prompt: list[int], max_tokens: int = 1200, temperature: float = 0
                     token_ids.extend(toks)
                 elif isinstance(toks, int):
                     token_ids.append(toks)
-                if END_OF_AUDIO in token_ids:
+                if END_OF_SPEECH in token_ids or END_OF_AI in token_ids:
                     break
                 if chunk.get("stop"):
                     break

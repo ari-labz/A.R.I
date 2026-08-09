@@ -22,11 +22,13 @@ SAMPLE_RATE = 24_000
 # Orpheus special tokens.  These are the ids the base model was pretrained
 # with, so training data has to use them exactly or the fine-tune fights the
 # representation the base model already has.
-START_OF_HUMAN = 128259
-END_OF_TEXT    = 128009
-END_OF_HUMAN   = 128260
-START_OF_AUDIO = 128257
-END_OF_AUDIO   = 128258
+END_OF_TEXT     = 128009
+START_OF_SPEECH = 128257
+END_OF_SPEECH   = 128258
+START_OF_HUMAN  = 128259
+END_OF_HUMAN    = 128260
+START_OF_AI     = 128261
+END_OF_AI       = 128262
 
 # Audio vocabulary: the 7 slots of a SNAC frame occupy 7 *disjoint* 4096-wide
 # bands, so slot j uses ids [AUDIO_OFFSET + j*4096, AUDIO_OFFSET + (j+1)*4096).
@@ -127,7 +129,10 @@ def main():
         prompt = f"{args.voice}: {transcript}"
         examples.append({
             "prompt": prompt,
-            "audio_tokens": [START_OF_AUDIO] + snac_tokens + [END_OF_AUDIO],
+            # The block the model has to generate: Orpheus marks a spoken turn as
+            # <start-of-ai><start-of-speech> … <end-of-speech><end-of-ai>.
+            "audio_tokens": [START_OF_AI, START_OF_SPEECH] + snac_tokens
+                            + [END_OF_SPEECH, END_OF_AI],
             "file": wav_path.name,
             "duration_tokens": len(snac_tokens),
         })
