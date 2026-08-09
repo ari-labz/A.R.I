@@ -23,8 +23,8 @@ LORA_ALPHA  = 64
 
 # Orpheus wraps the transcript in these before the audio tokens.  Inference has
 # to build the identical prefix (see External/Orpheus/serve.py).
-START_OF_HUMAN = 128259
 END_OF_TEXT    = 128009
+START_OF_HUMAN = 128259
 END_OF_HUMAN   = 128260
 
 HAS_CUDA = torch.cuda.is_available()
@@ -104,14 +104,22 @@ def main():
 
     tokenized_examples = []
     for ex in raw_examples:
+        # <start-of-human> <bos> transcript <end-of-text> <end-of-human>, then the
+        # spoken turn from prepare_dataset.py. add_special_tokens keeps the BOS the
+        # base model expects to see at the front of the transcript.
         prompt_tokens = ([START_OF_HUMAN]
-                         + tokenizer.encode(ex["text"], add_special_tokens=False)
+                         + tokenizer.encode(ex["text"], add_special_tokens=True)
                          + [END_OF_TEXT, END_OF_HUMAN])
         full_ids = prompt_tokens + ex["audio_tokens"]
-        full_ids = full_ids[:args.max_seq_len]
+        if len(full_ids) > args.max_seq_len:
+            # Dropping the tail would teach the model to stop mid-word, and a clip
+            # whose prompt alone overflows has nothing left to learn from.
+            print(f"[train] Skipping over-long example ({len(full_ids)} tokens): {ex['text'][:60]}")
+            continue
         tokenized_examples.append({
             "input_ids": full_ids,
             "attention_mask": [1] * len(full_ids),
+            # Only the spoken turn is learned; the transcript is context.
             "labels": [-100] * len(prompt_tokens) + full_ids[len(prompt_tokens):],
         })
     print(f"[train] Tokenized {len(tokenized_examples)} examples")
