@@ -16,7 +16,7 @@ public class VoiceSynthesisModule : IVoiceSynthesisModule
         get { lock (_lock) return _current; }
     }
 
-    public TrainingJob Start(StyleTtsTrainer trainer, string modelName, CancellationToken appStopping)
+    public TrainingJob Start(IVoiceTrainer trainer, string modelName, CancellationToken appStopping)
     {
         lock (_lock)
         {
@@ -54,7 +54,7 @@ public class TrainingJob
         _cts      = CancellationTokenSource.CreateLinkedTokenSource(appStopping);
     }
 
-    internal void Run(StyleTtsTrainer trainer)
+    internal void Run(IVoiceTrainer trainer)
     {
         Progress<TrainingProgress> progress = new(p =>
         {

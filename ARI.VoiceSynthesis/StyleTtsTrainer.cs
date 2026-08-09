@@ -21,7 +21,8 @@ public class StyleTtsTrainer(
     string   modelName,
     int      epochs           = 500,
     int      saveEveryNEpochs = 5,
-    ILogger? logger           = null)
+    Dictionary<string, string>? transcripts = null,
+    ILogger? logger           = null) : IVoiceTrainer
 {
     private const int    CHUNK_SECS   = 8;
     private const int    MIN_CHUNK_SECS = 2;
@@ -63,6 +64,16 @@ public class StyleTtsTrainer(
             ResetDir(audioDir);
             progress?.Report(new TrainingProgress("Preparing", 15, "Using prepared dataset (skipping split + transcription)"));
             BuildPreparedList(metadataPath, audioDir, trainList);
+            await PhonemiseTrainList(trainList, ct);
+            File.Copy(trainList, savedTrainList, overwrite: true);
+        }
+        else if (transcripts is { Count: > 0 })
+        {
+            ResetDir(audioDir);
+            progress?.Report(new TrainingProgress("Preparing", 5, "Using reviewed transcripts"));
+            foreach (string wav in Directory.GetFiles(audioPath, "*.wav"))
+                File.Copy(wav, Path.Combine(audioDir, Path.GetFileName(wav)), overwrite: true);
+            BuildTrainListFromTranscripts(transcripts, audioDir, trainList);
             await PhonemiseTrainList(trainList, ct);
             File.Copy(trainList, savedTrainList, overwrite: true);
         }
@@ -177,6 +188,21 @@ public class StyleTtsTrainer(
 
         File.WriteAllText(trainList, list.ToString());
         logger?.LogInformation("[StyleTTS2-Train] Prepared dataset: {Count} clip(s)", count);
+    }
+
+    private void BuildTrainListFromTranscripts(Dictionary<string, string> txs, string audioDir, string trainList)
+    {
+        var list = new StringBuilder();
+        int count = 0;
+        foreach (var (fileName, transcript) in txs)
+        {
+            string wav = Path.Combine(audioDir, fileName);
+            if (!File.Exists(wav)) continue;
+            list.AppendLine($"{wav}|{transcript}|0");
+            count++;
+        }
+        File.WriteAllText(trainList, list.ToString());
+        logger?.LogInformation("[StyleTTS2-Train] Built train list from reviewed transcripts: {Count} clip(s)", count);
     }
 
     private async Task<string> Transcribe(string audioDir, string workDir, CancellationToken ct)

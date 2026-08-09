@@ -171,7 +171,9 @@ internal class Engram : MemoryAgent, IDisposable
             if (context is not null) await context.RebuildFromTranscript(threadKey, transcript);
             string contextSummary = context?.GetContext(threadKey) ?? string.Empty;
             string speaker = conversationItems.OfType<Prompt>().Select(p => p.AuthorName)
-                .FirstOrDefault(a => !string.IsNullOrWhiteSpace(a)) ?? "the user";
+                .FirstOrDefault(a => !string.IsNullOrWhiteSpace(a))
+                ?? ReadStoredUserName()
+                ?? "the user";
 
             // --- Tool-driven placement: the agent walks the graph and stores the memories itself. ---
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] placing memories via graph walk...", threadKey);
@@ -292,6 +294,18 @@ internal class Engram : MemoryAgent, IDisposable
             Shared.Logger.LogWarning("[Engram] Classification failed ({Error}), proceeding with extraction.", ex.Message);
             return true;
         }
+    }
+
+    private static string? ReadStoredUserName()
+    {
+        try
+        {
+            string path = Path.Combine(Paths.PersistentData, "username.txt");
+            if (!File.Exists(path)) return null;
+            string name = File.ReadAllText(path).Trim();
+            return string.IsNullOrEmpty(name) ? null : name;
+        }
+        catch { return null; }
     }
 
     private static string BuildTranscript(IEnumerable<ThreadItem> items)

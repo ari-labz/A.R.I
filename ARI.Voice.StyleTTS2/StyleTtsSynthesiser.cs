@@ -2,30 +2,39 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using ARI.Common;
+using ARI.Voice;
 using Microsoft.Extensions.Logging;
 
-namespace ARI.Voice;
+namespace ARI.Voice.StyleTTS2;
 
-// styleTtsPath is install content (StyleTTS2 source, e.g. serve.py); dataDir is AppDataRoot-based
-// mutable state (the venv StyleTtsSetupService provisions).
-public class StyleTtsSynthesiser(string styleTtsPath, string dataDir, string modelPath, string configPath, string refAudioPath, ILogger? logger = null) : IDisposable
+public class StyleTtsSynthesiser(string styleTtsPath, string dataDir, string modelPath, string configPath, string refAudioPath, ILogger? logger = null) : ITtsSynthesiser
 {
     private const string SERVER_SCRIPT        = "serve.py";
-    private const int    SERVER_PORT          = 8020;
+    private const int    SERVER_PORT          = 8021;
     private const int    POLL_INTERVAL_MS     = 2000;
     private const int    STARTUP_TIMEOUT_SECS = 120;
+
+    private static readonly IReadOnlyList<EngineParameter> Parameters =
+    [
+        new("diffusionSteps", "Diffusion Steps", 1, 20, 10, 1),
+        new("alpha",          "Alpha",           0, 1,  0.45f, 0.05f),
+        new("beta",           "Beta",            0, 1,  0.25f, 0.05f),
+        new("embeddingScale", "Embedding Scale",  0, 5,  2.0f,  0.1f),
+    ];
 
     private readonly HttpClient http = new() { Timeout = TimeSpan.FromMinutes(5) };
     private Process? server;
     private string _currentCheckpoint = modelPath;
 
-    // Persisted server-side defaults so the sliders in the Voice tab change Ari's real
-    // conversational voice (SpeechQueue calls Speak with no overrides).
+    public string EngineName => "StyleTTS2";
+
     private string SettingsPath => Path.Combine(Path.GetDirectoryName(modelPath) ?? dataDir, "voice_settings.json");
     public float Speed      { get; private set; } = 1.0f;
-    public float PauseScale { get; private set; } = 1.0f;
+    public float PauseScale { get; private set; } = 2.3f;
 
     private sealed record VoiceSettings(float Speed = 1.0f, float PauseScale = 1.0f);
+
+    public IReadOnlyList<EngineParameter> GetParameters() => Parameters;
 
     public void LoadSettings()
     {
@@ -56,14 +65,12 @@ public class StyleTtsSynthesiser(string styleTtsPath, string dataDir, string mod
 
         KillPortOwner(SERVER_PORT);
 
-        // ARI's phonemization overrides live in the ARI project (copied next to the executable),
-        // NOT in the submodule — pass the path so serve.py loads it in place.
         string subsArg = PhonemeSubstitutions.Path is { } p ? $" --phoneme_subs \"{p}\"" : "";
 
         ProcessStartInfo info = new()
         {
             FileName               = python,
-            Arguments              = $"\"{script}\" --model \"{modelPath}\" --config \"{configPath}\" --ref_audio \"{refAudioPath}\" --port {SERVER_PORT}{subsArg}",
+            Arguments              = $"\"{script}\" --model \"{modelPath}\" --config \"{configPath}\" --ref_audio \"{refAudioPath}\" --port {SERVER_PORT}{subsArg} --cpu",
             RedirectStandardOutput = true,
             RedirectStandardError  = true,
             UseShellExecute        = false,
@@ -78,14 +85,42 @@ public class StyleTtsSynthesiser(string styleTtsPath, string dataDir, string mod
         await WaitUntilReady(ct);
     }
 
-    public async Task Warmup(CancellationToken ct = default)
+    public async Task<bool> CheckHealth()
     {
-        await Speak("Voice synthesis is ready.", ct);
+        try
+        {
+            var r = await http.GetAsync($"http://localhost:{SERVER_PORT}/health");
+            return r.IsSuccessStatusCode;
+        }
+        catch { return false; }
     }
 
-    public async Task<byte[]> Speak(string text, CancellationToken ct = default, int diffusionSteps = 5, float alpha = 0.3f, float beta = 0.7f, float embeddingScale = 1.0f, float? speed = null, float? pauseScale = null)
+    public async Task Warmup(CancellationToken ct = default)
     {
-        // C# can't default a parameter to an instance field, so resolve the persisted defaults here.
+        await Synthesise("Voice synthesis is ready.", ct);
+    }
+
+    public Task<byte[]> Synthesise(string text, CancellationToken ct = default)
+        => Synthesise(text, null, ct);
+
+    public async Task<byte[]> Synthesise(string text, Dictionary<string, object>? engineParams, CancellationToken ct = default)
+    {
+        int   diffusionSteps = GetParam<int>(engineParams, "diffusionSteps", 10);
+        float alpha          = GetParam<float>(engineParams, "alpha", 0.45f);
+        float beta           = GetParam<float>(engineParams, "beta", 0.25f);
+        float embeddingScale = GetParam<float>(engineParams, "embeddingScale", 2.0f);
+        float? speed         = GetParamNullable<float>(engineParams, "speed");
+        float? pauseScale    = GetParamNullable<float>(engineParams, "pauseScale");
+        string? checkpoint   = GetParam<string?>(engineParams, "checkpointPath", null);
+
+        if (!string.IsNullOrEmpty(checkpoint))
+            return await SpeakWithCheckpoint(text, checkpoint, ct, diffusionSteps, alpha, beta, embeddingScale, speed, pauseScale);
+
+        return await Speak(text, ct, diffusionSteps, alpha, beta, embeddingScale, speed, pauseScale);
+    }
+
+    public async Task<byte[]> Speak(string text, CancellationToken ct, int diffusionSteps = 10, float alpha = 0.45f, float beta = 0.25f, float embeddingScale = 2.0f, float? speed = null, float? pauseScale = null)
+    {
         float resolvedSpeed = speed      ?? Speed;
         float resolvedPause = pauseScale ?? PauseScale;
 
@@ -99,7 +134,7 @@ public class StyleTtsSynthesiser(string styleTtsPath, string dataDir, string mod
         return await response.Content.ReadAsByteArrayAsync(ct);
     }
 
-    public async Task<byte[]> SpeakWithCheckpoint(string text, string checkpointPath, CancellationToken ct = default, int diffusionSteps = 5, float alpha = 0.3f, float beta = 0.7f, float embeddingScale = 1.0f, float? speed = null, float? pauseScale = null)
+    public async Task<byte[]> SpeakWithCheckpoint(string text, string checkpointPath, CancellationToken ct = default, int diffusionSteps = 10, float alpha = 0.45f, float beta = 0.25f, float embeddingScale = 2.0f, float? speed = null, float? pauseScale = null)
     {
         if (_currentCheckpoint != checkpointPath)
         {
@@ -119,6 +154,20 @@ public class StyleTtsSynthesiser(string styleTtsPath, string dataDir, string mod
         http.Dispose();
         try { server?.Kill(entireProcessTree: true); } catch { }
         server?.Dispose();
+    }
+
+    private static T GetParam<T>(Dictionary<string, object>? p, string key, T fallback)
+    {
+        if (p is null || !p.TryGetValue(key, out object? val)) return fallback;
+        try { return (T)Convert.ChangeType(val, typeof(T)); }
+        catch { return fallback; }
+    }
+
+    private static T? GetParamNullable<T>(Dictionary<string, object>? p, string key) where T : struct
+    {
+        if (p is null || !p.TryGetValue(key, out object? val)) return null;
+        try { return (T)Convert.ChangeType(val, typeof(T)); }
+        catch { return null; }
     }
 
     private static void KillPortOwner(int port)
@@ -153,7 +202,7 @@ public class StyleTtsSynthesiser(string styleTtsPath, string dataDir, string mod
                 HttpResponseMessage resp = await http.GetAsync(healthUrl, ct);
                 if (resp.IsSuccessStatusCode) return;
             }
-            catch { /* not ready yet */ }
+            catch { }
 
             if (server?.HasExited == true)
                 throw new InvalidOperationException($"StyleTTS2 server exited unexpectedly (code {server.ExitCode}).");
@@ -162,9 +211,6 @@ public class StyleTtsSynthesiser(string styleTtsPath, string dataDir, string mod
         throw new TimeoutException($"StyleTTS2 server did not become ready within {STARTUP_TIMEOUT_SECS}s.");
     }
 
-    // Python uses stderr for anything that isn't the payload — deprecation notices, request logs, our
-    // own per-call diagnostics — so a blanket LogWarning here labelled all of it a recoverable problem.
-    // Only lines that actually describe a failure stay at WARN/ERROR.
     private async Task StreamErrors(StreamReader reader)
     {
         string? line;
@@ -172,14 +218,9 @@ public class StyleTtsSynthesiser(string styleTtsPath, string dataDir, string mod
         {
             if (string.IsNullOrWhiteSpace(line)) continue;
             if (line.Contains("HTTP/1.1")) continue;
-
-            // A Python warning is two lines: the "…UserWarning: …" header, then an indented echo of the
-            // offending source line (WeightNorm.apply(...), super().__init__(...)). The header was already
-            // dropped; the echo has to go with it or it is logged on its own with no context.
             if (line.Contains("WARNING", StringComparison.OrdinalIgnoreCase)) continue;
             if (line.StartsWith(" ", StringComparison.Ordinal)) continue;
 
-            // serve.py's synthesis diagnostics: worth having when chasing NaN output, noise otherwise.
             if (line.StartsWith("[synthesise]", StringComparison.Ordinal))
             {
                 if (line.Contains("ERROR", StringComparison.Ordinal)) logger?.LogError("[StyleTTS2] {Line}", line);

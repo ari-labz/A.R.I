@@ -55,7 +55,7 @@ internal sealed class DialoguePipeline : Pipeline
         if (memory is not null)
         {
             var recallSw = System.Diagnostics.Stopwatch.StartNew();
-            try   { recallBlock = await memory.GetNotes(new List<ThreadMessage>(), question, contextSummary, cts.Token); }
+            try   { recallBlock = await memory.GetNotes(new List<ThreadMessage>(), question, contextSummary, cts.Token, PrivacyMode.Guarded); }
             catch (OperationCanceledException) when (cts.IsCancellationRequested) { throw; }
             catch (Exception ex) { Shared.Logger.LogWarning(ex, "[Proactive] Memory recall failed — drafting without memories."); }
             recallSeconds = recallSw.Elapsed.TotalSeconds;
@@ -69,6 +69,15 @@ internal sealed class DialoguePipeline : Pipeline
             ChatHidden     = true,
             Ct             = cts.Token,
         });
+    }
+
+    private static PrivacyMode ResolvePrivacyMode(string threadKey, string? platformContext)
+    {
+        if (threadKey.StartsWith("guild:", StringComparison.OrdinalIgnoreCase))
+            return PrivacyMode.Guarded;
+        if (threadKey.StartsWith("dm:", StringComparison.OrdinalIgnoreCase) && platformContext is null)
+            return PrivacyMode.Unrestricted;
+        return PrivacyMode.Unrestricted;
     }
 
     protected override async Task<string> RunAsync(
@@ -91,6 +100,7 @@ internal sealed class DialoguePipeline : Pipeline
         Shared.Logger.LogInformation("[Dialogue] ({Thread}) prompt\n\"{Prompt}\"", threadKey, effectivePrompt);
 
         string? contextSummary = context?.GetContext(threadKey);
+        PrivacyMode privacyMode = ResolvePrivacyMode(threadKey, platformContext);
 
         string? recallBlock = null;
         double? recallSeconds = null;
@@ -100,7 +110,7 @@ internal sealed class DialoguePipeline : Pipeline
             try
             {
                 List<ThreadMessage> chatHistory = thread.GetChatHistory();
-                recallBlock = await memory.GetNotes(chatHistory, effectivePrompt, contextSummary, cts.Token);
+                recallBlock = await memory.GetNotes(chatHistory, effectivePrompt, contextSummary, cts.Token, privacyMode);
             }
             catch (OperationCanceledException) when (cts.IsCancellationRequested)
             {

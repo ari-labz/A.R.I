@@ -77,6 +77,11 @@
   	  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
   	  <LinkBase>External\StyleTTS2</LinkBase>
   	</Content>
+  	<Content Include="..\External\Orpheus\**\*"
+  	         Exclude="..\External\Orpheus\venv\**;..\External\Orpheus\__pycache__\**">
+  	  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+  	  <LinkBase>External\Orpheus</LinkBase>
+  	</Content>
   	<!-- Listener's whisper-server script; its venv is gitignored/generated and never copied. -->
   	<Content Include="..\ARI.Listener\python\whisper_serve.py;..\ARI.Listener\python\requirements.txt">
   	  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -99,6 +104,8 @@
     <ProjectReference Include="..\ARI.API\ARI.API.csproj" />
     <ProjectReference Include="..\ARI.VoiceSynthesis\ARI.VoiceSynthesis.csproj" />
     <ProjectReference Include="..\ARI.Voice\ARI.Voice.csproj" />
+    <ProjectReference Include="..\ARI.Voice.StyleTTS2\ARI.Voice.StyleTTS2.csproj" />
+    <ProjectReference Include="..\ARI.Voice.Orpheus\ARI.Voice.Orpheus.csproj" />
     <ProjectReference Include="..\ARI.Common\ARI.Common.csproj" />
     <ProjectReference Include="..\ARI.Listener\ARI.Listener.csproj" />
     <ProjectReference Include="..\ARI.Scheduler\ARI.Scheduler.csproj" />

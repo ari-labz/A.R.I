@@ -21,8 +21,8 @@ internal abstract class MemoryAgent : Agent
 {
     // ── Walk knobs (const so they're easy to tune; raise as the vault grows) ──────────────
     protected const int SEED_COUNT           = 50;   // how many top-degree nodes are candidate seeds
-    protected const int WALK_DEPTH            = 4;    // BFS hops out from a seed
-    protected const int WALK_CAP              = 1000; // max nodes in a neighbourhood skeleton
+    protected const int WALK_DEPTH            = 2;    // BFS hops out from a seed
+    protected const int WALK_CAP              = 100;  // max nodes in a neighbourhood skeleton
     protected const int DEFAULT_MAX_EPOCHS    = 100;  // hard cap on epochs (one commit each)
     protected const int CONVERGED_AFTER       = 3;    // consecutive "no change needed" epochs ⇒ converged, stop early
     protected const int STALL_LIMIT           = 5;    // consecutive stalled epochs (no act, no "no change") ⇒ bail

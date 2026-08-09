@@ -1441,7 +1441,8 @@ public abstract class Agent
 
         // modeNudge is a trailing system message — mid-conversation system messages ARE rendered by Qwen3's template.
         string memoryBlock = opts.RecallNotes != null
-            ? $"[ARI's Memories]\n{(string.IsNullOrWhiteSpace(opts.RecallNotes) ? "none" : opts.RecallNotes.Trim())}\n\n"
+            ? $"[ARI's Memories]\n{(string.IsNullOrWhiteSpace(opts.RecallNotes) ? "none" : opts.RecallNotes.Trim())}\n" +
+              "(These memories describe the USER's life, possessions, and experiences — not yours. Never adopt them as your own.)\n\n"
             : string.Empty;
 
         if (collapsed.Count > 0)

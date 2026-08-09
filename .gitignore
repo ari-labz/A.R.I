@@ -444,6 +444,8 @@ FodyWeavers.xsd
 
 # StyleTTS2 submodule runtime dirs
 External/StyleTTS2/venv/
+External/Orpheus/venv/
+External/Orpheus/training/venv/
 External/StyleTTS2/Data/
 External/StyleTTS2/Models/
 

@@ -1,0 +1,11 @@
+numpy
+soundfile
+peft
+snac
+torch
+torchaudio
+torchcodec
+transformers
+gguf
+sentencepiece
+protobuf

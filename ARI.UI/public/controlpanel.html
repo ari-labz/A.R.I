@@ -188,6 +188,20 @@ html, body {
 .vs-form-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin-bottom: 18px; }
 @media (max-width: 900px) { .vs-form-grid { grid-template-columns: 1fr 1fr; } }
 
+/* ── orpheus transcript review ────────────────────────── */
+.tr-clip { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.tr-clip:last-child { border-bottom: none; }
+.tr-play { flex-shrink: 0; width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--border); background: none; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text); }
+.tr-play:hover { border-color: #518c9a; color: #518c9a; }
+.tr-play.playing { background: #518c9a; color: #fff; border-color: #518c9a; }
+.tr-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.tr-name { font-size: 11px; color: var(--text-dim); }
+.tr-text { font-family: inherit; font-size: 13px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; width: 100%; resize: none; min-height: 36px; line-height: 1.4; overflow: hidden; }
+.tr-text:focus { border-color: #518c9a; outline: none; }
+.tr-duration { font-size: 11px; color: var(--text-dim); flex-shrink: 0; padding-top: 10px; }
+.tr-remove { background: none; border: none; color: var(--text-dim); font-size: 18px; cursor: pointer; padding: 2px 6px; line-height: 1; opacity: 0.5; transition: opacity .15s, color .15s; flex-shrink: 0; }
+.tr-remove:hover { opacity: 1; color: #dc2626; }
+
 /* ── dataset builder A/B grid ─────────────────────────── */
 .ds-compare-head { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--text-dim); padding: 0 4px 8px; }
 .ds-part { margin-bottom: 14px; }
@@ -432,6 +446,7 @@ html, body {
       <div id="cp-sidebar-nav">
         <div class="cp-nav-item top-level active" data-tab="overview">Overview</div>
         <div class="cp-nav-item top-level" data-tab="debug">Deep Thread Inspection (DTI)</div>
+        <div class="cp-nav-item top-level" data-tab="userprefs">User Preferences</div>
         <div class="cp-nav-group">LLM</div>
         <div class="cp-nav-item" data-tab="servers">Servers</div>
         <div class="cp-nav-item" data-tab="models">Models</div>
@@ -537,43 +552,35 @@ html, body {
         </div>
       </div>
       <div class="vs-section">
+        <div class="vs-section-title">Voice Module</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:4px;">
+          <div class="vs-module-card" data-engine="StyleTTS2" id="vs-mod-styletts2" style="border:2px solid var(--accent,#223742);border-radius:8px;padding:14px 16px;cursor:pointer;background:var(--accent,#223742)22;transition:all .15s;">
+            <div style="font-weight:600;font-size:14px;margin-bottom:4px;">StyleTTS2</div>
+            <div style="font-size:12px;color:var(--text-dim);line-height:1.4;">High-quality diffusion-based synthesis. Fine-tunable to custom voices with phoneme-level training. Best for natural, expressive speech.</div>
+          </div>
+          <div class="vs-module-card" data-engine="Orpheus" id="vs-mod-orpheus" style="border:2px solid transparent;border-radius:8px;padding:14px 16px;cursor:pointer;background:transparent;transition:all .15s;">
+            <div style="font-weight:600;font-size:14px;margin-bottom:4px;">Orpheus</div>
+            <div style="font-size:12px;color:var(--text-dim);line-height:1.4;">LLM-based voice synthesis with SNAC audio tokens. Produces highly natural conversational speech with emotion and prosody control.</div>
+          </div>
+        </div>
+      </div>
+      <div class="vs-section">
         <div class="vs-section-title">Test Voice</div>
         <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
           <label class="vs-label" style="flex:1;min-width:180px;">Text<input type="text" id="vs-tv-text" class="vs-input" placeholder="Type something to say…" autocomplete="off"></label>
           <label class="vs-label" style="min-width:140px;">Voice model<select id="vs-tv-model" class="vs-input"></select></label>
-          <label class="vs-label" style="min-width:140px;">Checkpoint<select id="vs-tv-epoch" class="vs-input"><option value="">latest</option></select></label>
+          <label class="vs-label" id="vs-tv-epoch-label" style="min-width:140px;">Checkpoint<select id="vs-tv-epoch" class="vs-input"><option value="">latest</option></select></label>
           <button class="vs-btn-primary" id="vs-tv-speak-btn" type="button">Speak</button>
           <button class="vs-btn-primary" id="vs-tv-default-btn" type="button" title="Use this model as Ari's voice on startup">Set as default</button>
+          <span id="vs-switch-status" style="display:none;font-size:12px;color:var(--text-dim);align-self:center;"></span>
         </div>
         <span id="vs-tv-status" style="font-size:12px;color:var(--text-dim);margin-top:6px;display:block;"></span>
       </div>
-      <div class="vs-section">
-        <div class="vs-section-title">Synthesis Parameters</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px 28px;margin-top:8px;">
-          <label class="vs-label">Diffusion steps <span style="color:var(--text-dim);font-size:11px;">noise vs quality</span>
-            <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
-              <input type="range" id="sp-diffusion-steps" min="1" max="30" step="1" value="5" style="flex:1;accent-color:var(--accent,#223742);">
-              <span id="sp-diffusion-steps-val" style="min-width:24px;text-align:right;font-size:13px;">5</span>
-            </div>
-          </label>
-          <label class="vs-label">Embedding scale <span style="color:var(--text-dim);font-size:11px;">expressiveness</span>
-            <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
-              <input type="range" id="sp-embedding-scale" min="0.5" max="2.5" step="0.05" value="1.0" style="flex:1;accent-color:var(--accent,#223742);">
-              <span id="sp-embedding-scale-val" style="min-width:32px;text-align:right;font-size:13px;">1.00</span>
-            </div>
-          </label>
-          <label class="vs-label">Alpha <span style="color:var(--text-dim);font-size:11px;">ref timbre influence</span>
-            <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
-              <input type="range" id="sp-alpha" min="0" max="1" step="0.05" value="0.3" style="flex:1;accent-color:var(--accent,#223742);">
-              <span id="sp-alpha-val" style="min-width:32px;text-align:right;font-size:13px;">0.30</span>
-            </div>
-          </label>
-          <label class="vs-label">Beta <span style="color:var(--text-dim);font-size:11px;">ref prosody influence</span>
-            <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
-              <input type="range" id="sp-beta" min="0" max="1" step="0.05" value="0.7" style="flex:1;accent-color:var(--accent,#223742);">
-              <span id="sp-beta-val" style="min-width:32px;text-align:right;font-size:13px;">0.70</span>
-            </div>
-          </label>
+      <div class="vs-section" id="sp-section">
+        <div class="vs-section-title">Synthesis Parameters <span id="sp-engine-label" style="color:var(--text-dim);font-size:11px;"></span></div>
+        <div id="sp-engine-params" style="display:grid;grid-template-columns:1fr 1fr;gap:16px 28px;margin-top:8px;">
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px 28px;margin-top:16px;">
           <label class="vs-label">Speed <span style="color:var(--text-dim);font-size:11px;">saved as Ari's live voice</span>
             <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
               <input type="range" id="sp-speed" min="0.5" max="2" step="0.05" value="1.0" style="flex:1;accent-color:var(--accent,#223742);">
@@ -592,18 +599,34 @@ html, body {
 
     <!-- Voice Synthesis tab -->
     <div id="tab-voice" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div class="vs-section">
+        <div class="vs-section-title">Train for</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:4px;">
+          <div class="vs-train-engine-card" data-engine="StyleTTS2" id="vs-te-styletts2" style="border:2px solid var(--accent,#223742);border-radius:8px;padding:14px 16px;cursor:pointer;background:var(--accent,#223742)22;transition:all .15s;">
+            <div style="font-weight:600;font-size:14px;margin-bottom:4px;">StyleTTS2</div>
+            <div style="font-size:12px;color:var(--text-dim);line-height:1.4;">Diffusion-based synthesis with phoneme-level training. Long training runs with checkpoint saves.</div>
+          </div>
+          <div class="vs-train-engine-card" data-engine="Orpheus" id="vs-te-orpheus" style="border:2px solid transparent;border-radius:8px;padding:14px 16px;cursor:pointer;background:transparent;transition:all .15s;">
+            <div style="font-weight:600;font-size:14px;margin-bottom:4px;">Orpheus</div>
+            <div style="font-size:12px;color:var(--text-dim);line-height:1.4;">LLM-based LoRA fine-tune with SNAC audio tokens. Fast training, typically completes in minutes.</div>
+          </div>
+        </div>
+      </div>
       <div id="vs-resume-section" class="vs-section" style="display:none">
         <div class="vs-section-title">Saved Runs</div>
-        <div style="margin-bottom:8px;padding:8px 12px;background:#7c5a0022;border:1px solid #c8960088;border-radius:6px;color:#c89600;font-size:12px;">Recommended: turn off LLM servers before training</div>
+        <div class="vs-server-warn" style="display:none;margin-bottom:8px;padding:8px 12px;background:#7c5a0022;border:1px solid #c8960088;border-radius:6px;color:#c89600;font-size:12px;align-items:center;justify-content:space-between;gap:8px;">
+          <span>Recommended: turn off LLM servers before training</span>
+          <button class="vs-stop-servers-btn" type="button" style="background:#c89600;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;white-space:nowrap;">Stop servers</button>
+        </div>
         <div id="vs-resume-list"></div>
       </div>
-      <div class="vs-section">
+      <div class="vs-section" id="vs-upload-section">
         <div class="vs-section-title">Train a Voice Model</div>
         <div id="vs-dropzone" class="vs-dropzone">
           <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:.4"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          <p>Drag &amp; drop audio files here<br><span style="font-size:12px;color:var(--text-dim)">.wav, .mp3, .flac, .ogg — or a Dataset Builder .zip</span></p>
+          <p id="vs-dropzone-text">Drag &amp; drop audio files here<br><span style="font-size:12px;color:var(--text-dim)">.wav, .mp3, .flac, .ogg — or a Dataset Builder .zip</span></p>
           <button class="vs-btn-outline" id="vs-browse-btn" type="button">Browse files</button>
-          <input type="file" id="vs-file-input" multiple accept=".wav,.mp3,.flac,.ogg,.zip,.csv" style="display:none" />
+          <input type="file" id="vs-file-input" multiple accept=".wav,.mp3,.flac,.ogg,.zip,.csv,.txt" style="display:none" />
         </div>
         <div id="vs-file-list" style="display:none">
           <div class="vs-file-list-header">
@@ -613,15 +636,48 @@ html, body {
           <div id="vs-file-items"></div>
         </div>
       </div>
-      <div class="vs-section">
+      <div class="vs-section" id="vs-settings-section">
         <div class="vs-section-title">Training settings</div>
         <div class="vs-form-grid">
-          <label class="vs-label">Model name<input type="text" id="vs-model-name" class="vs-input" placeholder="e.g. MyVoice" autocomplete="off" /></label>
+          <label class="vs-label">Engine
+            <select id="vs-engine" class="vs-input">
+              <option value="StyleTTS2">StyleTTS2</option>
+              <option value="Orpheus">Orpheus</option>
+            </select>
+          </label>
+          <label class="vs-label">Voice name<input type="text" id="vs-model-name" class="vs-input" placeholder="e.g. MyVoice" autocomplete="off" /></label>
           <label class="vs-label">Epochs<input type="number" id="vs-epochs" class="vs-input" value="100" min="1" max="1000" /></label>
-          <label class="vs-label">Save every N epochs<input type="number" id="vs-save-freq" class="vs-input" value="10" min="1" max="100" /></label>
+          <label class="vs-label" id="vs-save-freq-label">Save every N epochs<input type="number" id="vs-save-freq" class="vs-input" value="10" min="1" max="100" /></label>
+          <label class="vs-label" id="vs-quant-label" style="display:none">Quantization
+            <select id="vs-quant" class="vs-input">
+              <option value="q4_k_m">Q4_K_M (recommended)</option>
+              <option value="q8_0">Q8_0</option>
+              <option value="f16">F16 (no quantization)</option>
+            </select>
+          </label>
         </div>
-        <div style="margin-bottom:8px;padding:8px 12px;background:#7c5a0022;border:1px solid #c8960088;border-radius:6px;color:#c89600;font-size:12px;">Recommended: turn off LLM servers before training</div>
-        <button class="vs-btn-primary" id="vs-train-btn" type="button">Train</button>
+        <div id="vs-orpheus-info" style="margin-bottom:8px;padding:8px 12px;background:#0a5a7c22;border:1px solid #0a8ac888;border-radius:6px;color:#0ac8e0;font-size:12px;">
+          Audio will be chunked and transcribed automatically. You can review and edit transcripts before training.
+        </div>
+        <div class="vs-server-warn" style="display:none;margin-bottom:8px;padding:8px 12px;background:#7c5a0022;border:1px solid #c8960088;border-radius:6px;color:#c89600;font-size:12px;align-items:center;justify-content:space-between;gap:8px;">
+          <span>Recommended: turn off LLM servers before training</span>
+          <button class="vs-stop-servers-btn" type="button" style="background:#c89600;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;white-space:nowrap;">Stop servers</button>
+        </div>
+        <button class="vs-btn-primary" id="vs-train-btn" type="button">Transcribe & Review</button>
+      </div>
+
+      <!-- Orpheus transcript review section -->
+      <div id="vs-transcript-section" class="vs-section" style="display:none">
+        <div class="vs-section-title">Review Transcripts</div>
+        <div id="vs-transcript-progress" style="margin-bottom:12px">
+          <div class="vs-progress-header"><span id="vs-tr-step">—</span><span id="vs-tr-pct" style="color:var(--text-dim);font-size:12px">0%</span></div>
+          <div class="vs-progress-track"><div class="vs-progress-fill" id="vs-tr-fill" style="width:0%"></div></div>
+        </div>
+        <div id="vs-transcript-list"></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
+          <span id="vs-tr-count" style="font-size:13px;color:var(--text-dim)">0 clips</span>
+          <button class="vs-btn-primary" id="vs-confirm-train-btn" type="button" disabled>Train with these transcripts</button>
+        </div>
       </div>
       <div class="vs-separator"></div>
       <div id="vs-progress-section" class="vs-section" style="display:none">
@@ -703,7 +759,7 @@ html, body {
       </div>
     </div>
 
-    <div id="tab-persona" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+    <div id="tab-userprefs" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section" style="margin-bottom:24px;">
         <div class="vs-section-title">Your name</div>
         <p style="color:var(--text-dim);font-size:13px;margin:0 0 10px;">
@@ -715,6 +771,9 @@ html, body {
           <span id="username-status" style="font-size:12px;color:var(--text-dim);"></span>
         </div>
       </div>
+    </div>
+
+    <div id="tab-persona" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
         <div class="vs-section-title">Persona</div>
         <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
@@ -936,8 +995,8 @@ fetch('/api/cp/username').then(r => r.json()).then(d => { if (d.name) window._ar
 
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), scheduler: document.getElementById('tab-scheduler'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug') };
-const TAB_TITLES = { voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', scheduler: 'Scheduler', llmconfigs: 'LLM Configs', debug: 'Deep Thread Inspection (DTI)' };
+const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), scheduler: document.getElementById('tab-scheduler'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), userprefs: document.getElementById('tab-userprefs') };
+const TAB_TITLES = { voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', scheduler: 'Scheduler', llmconfigs: 'LLM Configs', debug: 'Deep Thread Inspection (DTI)', userprefs: 'User Preferences' };
 
 let srvPollTimer = null;
 function switchTab(name) {
@@ -959,6 +1018,7 @@ function switchTab(name) {
     if (name === 'scheduler') loadScheduler();
     if (name === 'discord') loadDiscord();
     if (name === 'debug') loadDebugThreads();
+    if (name === 'userprefs') loadUserPrefs();
 }
 navItems.forEach(n => n.addEventListener('click', () => switchTab(n.dataset.tab)));
 switchTab('overview');
@@ -1426,20 +1486,15 @@ document.getElementById('safemode-save-btn').addEventListener('click', async () 
     } catch { status.textContent = 'Save failed.'; }
 });
 
-// ── Persona ───────────────────────────────────────────────
-let personaLoaded = false;
-async function loadPersona() {
-    if (personaLoaded) return;
+// ── User Preferences ──────────────────────────────────────
+let userPrefsLoaded = false;
+async function loadUserPrefs() {
+    if (userPrefsLoaded) return;
     try {
-        const r = await fetch('/admin/persona');
+        const r = await fetch('/api/cp/username');
         const d = await r.json();
-        document.getElementById('persona-text').value = d.text || '';
-        personaLoaded = true;
-    } catch { document.getElementById('persona-status').textContent = 'Failed to load.'; }
-    try {
-        const r2 = await fetch('/api/cp/username');
-        const d2 = await r2.json();
-        document.getElementById('username-input').value = d2.name || '';
+        document.getElementById('username-input').value = d.name || '';
+        userPrefsLoaded = true;
     } catch {}
 }
 document.getElementById('username-save-btn').addEventListener('click', async () => {
@@ -1457,6 +1512,18 @@ document.getElementById('username-save-btn').addEventListener('click', async () 
         setTimeout(() => { status.textContent = ''; }, 3000);
     } catch { status.textContent = 'Save failed.'; }
 });
+
+// ── Persona ───────────────────────────────────────────────
+let personaLoaded = false;
+async function loadPersona() {
+    if (personaLoaded) return;
+    try {
+        const r = await fetch('/admin/persona');
+        const d = await r.json();
+        document.getElementById('persona-text').value = d.text || '';
+        personaLoaded = true;
+    } catch { document.getElementById('persona-status').textContent = 'Failed to load.'; }
+}
 document.getElementById('persona-save-btn').addEventListener('click', async () => {
     const status = document.getElementById('persona-status');
     const text   = document.getElementById('persona-text').value;
@@ -3128,7 +3195,158 @@ const vsModelName = document.getElementById('vs-model-name');
 const vsEpochs = document.getElementById('vs-epochs');
 const vsSaveFreq = document.getElementById('vs-save-freq');
 const vsTrainBtn = document.getElementById('vs-train-btn');
+const vsEngine = document.getElementById('vs-engine');
+const vsQuantLabel = document.getElementById('vs-quant-label');
+const vsQuant = document.getElementById('vs-quant');
+const vsSaveFreqLabel = document.getElementById('vs-save-freq-label');
+const vsOrpheusInfo = document.getElementById('vs-orpheus-info');
+
+// Hide the old engine dropdown — cards replace it
+vsEngine.closest('label').style.display = 'none';
+
+// Shared helper: update card styles for a set of engine cards
+function vsSetActiveCard(cards, activeEngine) {
+    cards.forEach(c => {
+        const active = c.dataset.engine === activeEngine;
+        c.style.border = active ? '2px solid var(--accent,#223742)' : '2px solid transparent';
+        c.style.background = active ? 'var(--accent,#223742)22' : 'transparent';
+    });
+}
+
+// Wire up Voice Settings module cards (active engine for playback)
+let vsSelectedEngine = 'StyleTTS2';
+let vsAllModels = [];
+document.querySelectorAll('.vs-module-card').forEach(card => {
+    card.addEventListener('click', () => {
+        vsSelectedEngine = card.dataset.engine;
+        vsSetActiveCard(document.querySelectorAll('.vs-module-card'), vsSelectedEngine);
+        vsFilterModelDropdown();
+        vsUpdateEngineUI();
+        if (vsTvModel.value) vsSwitchEngineModel(vsSelectedEngine, vsTvModel.value);
+    });
+});
+function vsFilterModelDropdown() {
+    const filtered = vsAllModels.filter(m => m.engine === vsSelectedEngine);
+    const activeModel = vsTvModel.value;
+    vsTvModel.innerHTML = filtered.length
+        ? filtered.map(m => `<option value="${escHtml(m.name)}"${m.name === activeModel ? ' selected' : ''}>${escHtml(m.name)}${m.isActive ? ' ✓' : ''}${m.isDefault ? ' (default)' : ''}</option>`).join('')
+        : `<option value="">No ${vsSelectedEngine} voices</option>`;
+    loadCheckpoints(vsTvModel.value);
+}
+function vsUpdateEngineUI() {
+    const isOrpheus = vsSelectedEngine === 'Orpheus';
+    document.getElementById('vs-tv-epoch-label').style.display = isOrpheus ? 'none' : '';
+    document.getElementById('sp-section').style.display = isOrpheus ? 'none' : '';
+}
+async function vsSwitchEngineModel(engine, modelName) {
+    if (!modelName) return;
+    const statusEl = document.getElementById('vs-switch-status');
+    if (statusEl) { statusEl.textContent = 'Switching…'; statusEl.style.display = ''; }
+    try {
+        const r = await fetch('/voice/switch', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ engine, modelName })
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'Switch failed');
+        if (statusEl) statusEl.textContent = `Loaded ${engine} / ${modelName}`;
+        vsAllModels.forEach(m => m.isActive = m.name === modelName && m.engine === engine);
+        vsFilterModelDropdown();
+        vsUpdateEngineUI();
+        // reload engine-specific params
+        try {
+            const pr = await fetch('/voice/engine-params');
+            if (pr.ok) {
+                const pd = await pr.json();
+                if (typeof renderEngineParams === 'function') renderEngineParams(pd);
+            }
+        } catch {}
+    } catch (e) {
+        if (statusEl) statusEl.textContent = 'Switch failed: ' + e.message;
+    }
+    if (statusEl) setTimeout(() => statusEl.style.display = 'none', 4000);
+}
+
+// Wire up Voice Synthesis "Train for" engine cards
+const vsTrainCards = document.querySelectorAll('.vs-train-engine-card');
+vsTrainCards.forEach(card => {
+    card.addEventListener('click', () => {
+        vsEngine.value = card.dataset.engine;
+        vsEngine.dispatchEvent(new Event('change'));
+        vsSetActiveCard(vsTrainCards, card.dataset.engine);
+    });
+});
+
+vsEngine.addEventListener('change', () => {
+    const isOrpheus = vsEngine.value === 'Orpheus';
+    vsQuantLabel.style.display = isOrpheus ? '' : 'none';
+    vsSaveFreqLabel.style.display = isOrpheus ? 'none' : '';
+    vsEpochs.value = isOrpheus ? '3' : '100';
+    vsTrainBtn.textContent = 'Transcribe & Review';
+    document.getElementById('vs-dropzone-text').innerHTML =
+        'Drag &amp; drop audio files here<br><span style="font-size:12px;color:var(--text-dim)">.wav, .mp3, .flac, .ogg — audio will be chunked and transcribed automatically</span>';
+    vsTranscriptSec.style.display = 'none';
+    vsSetActiveCard(vsTrainCards, vsEngine.value);
+    vsFilterSavedRuns();
+});
+
+// Filter saved runs by selected training engine
+function vsFilterSavedRuns() {
+    const engine = vsEngine.value;
+    const resumeSec = document.getElementById('vs-resume-section');
+    const items = resumeSec.querySelectorAll('[data-model][data-engine]');
+    let visible = 0;
+    items.forEach(el => {
+        const show = el.dataset.engine === engine;
+        el.style.display = show ? '' : 'none';
+        if (show) visible++;
+    });
+    resumeSec.style.display = visible ? '' : 'none';
+}
+
+// Server warning banners — hide when all servers offline, stop button kills them
+const vsServerWarns = document.querySelectorAll('.vs-server-warn');
+async function vsCheckServers() {
+    try {
+        const r = await fetch('/models');
+        if (!r.ok) return;
+        const data = await r.json();
+        const anyOnline = (data.servers ?? []).some(s => s.status !== 'Offline');
+        vsServerWarns.forEach(el => el.style.display = anyOnline ? 'flex' : 'none');
+    } catch {}
+}
+vsCheckServers();
+setInterval(vsCheckServers, 5000);
+document.querySelectorAll('.vs-stop-servers-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+        btn.disabled = true; btn.textContent = 'Stopping…';
+        try {
+            const r = await fetch('/models');
+            if (!r.ok) return;
+            const data = await r.json();
+            await Promise.all((data.servers ?? []).filter(s => s.status !== 'Offline').map(s => fetch(`/servers/${s.id}/stop`, { method: 'POST' })));
+        } catch {}
+        setTimeout(vsCheckServers, 2000);
+        btn.disabled = false; btn.textContent = 'Stop servers';
+    });
+});
+
+const vsTranscriptSec   = document.getElementById('vs-transcript-section');
+const vsTranscriptList  = document.getElementById('vs-transcript-list');
+const vsTrStep          = document.getElementById('vs-tr-step');
+const vsTrPct           = document.getElementById('vs-tr-pct');
+const vsTrFill          = document.getElementById('vs-tr-fill');
+const vsTrCount         = document.getElementById('vs-tr-count');
+const vsConfirmTrainBtn = document.getElementById('vs-confirm-train-btn');
+const vsTrProgress      = document.getElementById('vs-transcript-progress');
+let   vsTrStageId = null, vsTrStagingPath = null, vsTrWorkDir = null;
+const trAudio = new Audio();
+
 const vsProgSec = document.getElementById('vs-progress-section');
+const vsUploadSec = document.getElementById('vs-upload-section');
+const vsSettingsSec = document.getElementById('vs-settings-section');
+const vsResumeSec = document.getElementById('vs-resume-section');
+function vsShowSetup(show) { const d = show ? '' : 'none'; [vsUploadSec, vsSettingsSec, vsResumeSec].forEach(el => { if (el) el.style.display = d; }); }
 const vsStepLabel = document.getElementById('vs-step-label');
 const vsPctLabel = document.getElementById('vs-pct-label');
 const vsProgFill = document.getElementById('vs-progress-fill');
@@ -3219,55 +3437,199 @@ function vsSetProgress(step, pct, detail, state) {
     if (pct > 0) vsLastPct = pct;
 }
 
+// Shared upload helper — uploads vsFiles to a new staging dir, returns { stageId, stagingPath }
+async function vsUploadFiles() {
+    const stageResp = await fetch('/voice/stage', { method: 'POST' });
+    if (!stageResp.ok) throw new Error('Stage failed: ' + (await stageResp.text()));
+    const { stageId, stagingPath } = await stageResp.json();
+    const CHUNK = 5 * 1024 * 1024, CONCURRENCY = 4;
+    for (let fi = 0; fi < vsFiles.length; fi++) {
+        const f = vsFiles[fi], totalChunks = Math.max(1, Math.ceil(f.size / CHUNK));
+        vsAppendLog(`Uploading ${f.name} (${fmtBytes(f.size)}, ${totalChunks} chunk${totalChunks>1?'s':''})…`);
+        let done = 0;
+        const uploadChunk = async (ci) => {
+            const slice = f.slice(ci * CHUNK, Math.min((ci + 1) * CHUNK, f.size));
+            const url = `/voice/upload?stageId=${encodeURIComponent(stageId)}&name=${encodeURIComponent(f.name)}&chunk=${ci}&totalChunks=${totalChunks}`;
+            const up = await fetch(url, { method: 'POST', body: slice, headers: { 'Content-Type': 'application/octet-stream' } });
+            if (!up.ok) throw new Error(`Upload of ${f.name} chunk ${ci} failed: ` + (await up.text()));
+            done++;
+            vsSetProgress(`Uploading file ${fi+1} of ${vsFiles.length}`, Math.round((done / totalChunks) * 100), `${f.name} — ${done} / ${totalChunks} chunks`, '');
+        };
+        for (let ci = 0; ci < totalChunks; ci += CONCURRENCY) { await Promise.all(Array.from({ length: Math.min(CONCURRENCY, totalChunks - ci) }, (_, i) => uploadChunk(ci + i))); }
+        vsAppendLog(`✓ ${f.name} uploaded`);
+    }
+    vsAppendLog(`All ${vsFiles.length} file(s) uploaded.`);
+    return { stageId, stagingPath };
+}
+
+// Shared training kickoff — sends the train request + connects SSE progress
+function vsStartTrainingJob(trainBody, modelName) {
+    vsLogBadge.textContent = 'training…'; vsLogBadge.classList.add('live');
+    vsShowSetup(false); vsProgSec.style.display = ''; vsLogLines.innerHTML = '';
+    vsActiveModelName = modelName; vsPauseBtn.style.display = ''; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training';
+    vsStartTimer();
+    (async () => {
+        try {
+            const trainResp = await fetch('/voice/train', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(trainBody) });
+            if (!trainResp.ok) throw new Error('Start failed: ' + (await trainResp.text()));
+            let vsDone = false;
+            function connectProgressSse() {
+                if (vsDone) return;
+                if (vsProgressEs) vsProgressEs.close();
+                vsProgressEs = new EventSource('/voice/progress');
+                vsLogBadge.textContent = 'live'; vsLogBadge.classList.add('live');
+                vsProgressEs.onmessage = e => {
+                    try {
+                        const d = JSON.parse(e.data);
+                        vsSetProgress(d.step, d.percent, d.detail, d.done ? (d.success ? 'done' : 'error') : '');
+                        if (d.detail) vsAppendLog(d.detail, d.step === 'Error' ? 'log-error' : '');
+                        if (d.done) { vsDone = true; vsProgressEs.close(); vsStopTimer(); vsShowSetup(true); vsLogBadge.textContent = d.success ? 'done ✓' : 'failed'; vsLogBadge.classList.remove('live'); vsTrainBtn.disabled = false; vsPauseBtn.style.display = 'none'; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training'; vsActiveModelName = null; if (d.success) vsAppendLog(`✓ Training complete! Model: ${modelName}`); if (d.error) vsAppendLog(`Error: ${d.error}`, 'log-error'); }
+                    } catch { /* ignore */ }
+                };
+                vsProgressEs.onerror = () => { if (vsDone) return; vsLogBadge.textContent = 'reconnecting…'; vsLogBadge.classList.remove('live'); vsProgressEs.close(); setTimeout(connectProgressSse, 3000); };
+            }
+            connectProgressSse();
+        } catch (err) { vsStopTimer(); vsShowSetup(true); vsAppendLog('Error: ' + err.message, 'log-error'); vsLogBadge.textContent = 'failed'; vsLogBadge.classList.remove('live'); vsTrainBtn.disabled = false; }
+    })();
+}
+
+// Play a transcript clip
+function trPlay(btn, fileName) {
+    const src = `/voice/transcribe/audio?name=${encodeURIComponent(fileName)}`;
+    const wasPlaying = btn.classList.contains('playing');
+    document.querySelectorAll('.tr-play.playing').forEach(b => b.classList.remove('playing'));
+    trAudio.pause();
+    if (wasPlaying) return;
+    trAudio.src = src; trAudio.play();
+    btn.classList.add('playing');
+    trAudio.onended = () => btn.classList.remove('playing');
+}
+
+// Render transcript clips for review
+function trRenderClips(clips) {
+    vsTranscriptList.innerHTML = '';
+    clips.forEach(clip => {
+        const row = document.createElement('div');
+        row.className = 'tr-clip';
+        row.dataset.file = clip.fileName;
+        row.innerHTML =
+            `<button class="tr-play" type="button" title="Play"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>` +
+            `<div class="tr-meta"><span class="tr-name">${escHtml(clip.fileName)}</span><textarea class="tr-text" rows="1">${escHtml(clip.transcript)}</textarea></div>` +
+            `<span class="tr-duration">${clip.duration.toFixed(1)}s</span>` +
+            `<button class="tr-remove" type="button" title="Remove clip">&times;</button>`;
+        row.querySelector('.tr-play').addEventListener('click', e => trPlay(e.currentTarget, clip.fileName));
+        row.querySelector('.tr-remove').addEventListener('click', () => { row.remove(); trUpdateCount(); });
+        const ta = row.querySelector('.tr-text');
+        const autoGrow = () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; };
+        ta.addEventListener('input', autoGrow);
+        vsTranscriptList.appendChild(row);
+        requestAnimationFrame(autoGrow);
+    });
+    trUpdateCount();
+}
+
+function trUpdateCount() {
+    const n = vsTranscriptList.querySelectorAll('.tr-clip').length;
+    vsTrCount.textContent = `${n} clip${n !== 1 ? 's' : ''}`;
+    vsConfirmTrainBtn.disabled = n === 0;
+}
+
+// Collect edited transcripts from the review UI
+function trCollectTranscripts() {
+    const transcripts = {};
+    vsTranscriptList.querySelectorAll('.tr-clip').forEach(row => {
+        const fileName = row.dataset.file;
+        const text = row.querySelector('.tr-text').value.trim();
+        if (text) transcripts[fileName] = text;
+    });
+    return transcripts;
+}
+
 vsTrainBtn.addEventListener('click', async () => {
     if (!vsFiles.length) { alert('Please select at least one audio file.'); return; }
     const modelName = vsModelName.value.trim();
-    if (!modelName) { alert('Please enter a model name.'); return; }
-    vsTrainBtn.disabled = true; vsProgSec.style.display = ''; vsLogLines.innerHTML = '';
-    vsActiveModelName = modelName; vsPauseBtn.style.display = ''; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training';
-    vsLogBadge.textContent = 'uploading…'; vsSetProgress('Uploading files', 0, null, ''); vsStartTimer();
+    if (!modelName) { alert('Please enter a voice name.'); return; }
+    const engine = vsEngine.value;
+    vsTrainBtn.disabled = true;
+
+    // All engines: upload → transcribe → review → train
+    vsTranscriptSec.style.display = '';
+    vsTrProgress.style.display = '';
+    vsTrStep.textContent = 'Uploading'; vsTrPct.textContent = '0%'; vsTrFill.style.width = '0%';
+    vsTranscriptList.innerHTML = '';
+    vsConfirmTrainBtn.disabled = true;
+    vsShowSetup(false); vsProgSec.style.display = ''; vsLogLines.innerHTML = '';
+    vsLogBadge.textContent = 'uploading…';
+    vsSetProgress('Uploading files', 0, null, '');
     try {
-        const stageResp = await fetch('/voice/stage', { method: 'POST' });
-        if (!stageResp.ok) throw new Error('Stage failed: ' + (await stageResp.text()));
-        const { stageId, stagingPath } = await stageResp.json();
-        const CHUNK = 5 * 1024 * 1024, CONCURRENCY = 4;
-        for (let fi = 0; fi < vsFiles.length; fi++) {
-            const f = vsFiles[fi], totalChunks = Math.max(1, Math.ceil(f.size / CHUNK));
-            vsAppendLog(`Uploading ${f.name} (${fmtBytes(f.size)}, ${totalChunks} chunk${totalChunks>1?'s':''})…`);
-            let done = 0;
-            const uploadChunk = async (ci) => {
-                const slice = f.slice(ci * CHUNK, Math.min((ci + 1) * CHUNK, f.size));
-                const url = `/voice/upload?stageId=${encodeURIComponent(stageId)}&name=${encodeURIComponent(f.name)}&chunk=${ci}&totalChunks=${totalChunks}`;
-                const up = await fetch(url, { method: 'POST', body: slice, headers: { 'Content-Type': 'application/octet-stream' } });
-                if (!up.ok) throw new Error(`Upload of ${f.name} chunk ${ci} failed: ` + (await up.text()));
-                done++;
-                vsSetProgress(`Uploading file ${fi+1} of ${vsFiles.length}`, Math.round((done / totalChunks) * 100), `${f.name} — ${done} / ${totalChunks} chunks`, '');
-            };
-            for (let ci = 0; ci < totalChunks; ci += CONCURRENCY) { await Promise.all(Array.from({ length: Math.min(CONCURRENCY, totalChunks - ci) }, (_, i) => uploadChunk(ci + i))); }
-            vsAppendLog(`✓ ${f.name} uploaded`);
-        }
-        vsAppendLog(`All ${vsFiles.length} file(s) uploaded.`);
-        vsLogBadge.textContent = 'training…'; vsLogBadge.classList.add('live');
-        const trainResp = await fetch('/voice/train', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName, stagingPath, epochs: +vsEpochs.value, saveEveryNEpochs: +vsSaveFreq.value }) });
-        if (!trainResp.ok) throw new Error('Start failed: ' + (await trainResp.text()));
-        let vsDone = false;
-        function connectProgressSse() {
-            if (vsDone) return;
-            if (vsProgressEs) vsProgressEs.close();
-            vsProgressEs = new EventSource('/voice/progress');
-            vsLogBadge.textContent = 'live'; vsLogBadge.classList.add('live');
-            vsProgressEs.onmessage = e => {
-                try {
-                    const d = JSON.parse(e.data);
-                    vsSetProgress(d.step, d.percent, d.detail, d.done ? (d.success ? 'done' : 'error') : '');
-                    if (d.detail) vsAppendLog(d.detail, d.step === 'Error' ? 'log-error' : '');
-                    if (d.done) { vsDone = true; vsProgressEs.close(); vsStopTimer(); vsLogBadge.textContent = d.success ? 'done ✓' : 'failed'; vsLogBadge.classList.remove('live'); vsTrainBtn.disabled = false; vsPauseBtn.style.display = 'none'; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training'; vsActiveModelName = null; if (d.success) vsAppendLog(`✓ Training complete! Model: ${modelName}.pth`); if (d.error) vsAppendLog(`Error: ${d.error}`, 'log-error'); }
-                } catch { /* ignore */ }
-            };
-            vsProgressEs.onerror = () => { if (vsDone) return; vsLogBadge.textContent = 'reconnecting…'; vsLogBadge.classList.remove('live'); vsProgressEs.close(); setTimeout(connectProgressSse, 3000); };
-        }
-        connectProgressSse();
-    } catch (err) { vsStopTimer(); vsAppendLog('Error: ' + err.message, 'log-error'); vsLogBadge.textContent = 'failed'; vsLogBadge.classList.remove('live'); vsTrainBtn.disabled = false; }
+        const { stageId, stagingPath } = await vsUploadFiles();
+        vsTrStageId = stageId; vsTrStagingPath = stagingPath;
+
+        // Start transcription
+        vsTrStep.textContent = 'Transcribing'; vsTrPct.textContent = '5%'; vsTrFill.style.width = '5%';
+        vsLogBadge.textContent = 'transcribing…';
+        vsSetProgress('Transcribing audio with Whisper', 5, null, '');
+        vsAppendLog('Loading Whisper model…');
+        const trResp = await fetch('/voice/transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stageId }) });
+        if (!trResp.ok) throw new Error('Transcription failed: ' + (await trResp.text()));
+
+        // Poll for transcription completion
+        let trLoggedCount = 0;
+        const trPoll = setInterval(async () => {
+            try {
+                const d = await fetch('/voice/transcribe/status').then(r => r.json());
+                vsTrStep.textContent = d.step;
+                vsTrPct.textContent = d.percent + '%';
+                vsTrFill.style.width = d.percent + '%';
+                vsSetProgress(d.step, d.percent, `${d.clips?.length ?? 0} clips transcribed`, '');
+                if (d.workDir) vsTrWorkDir = d.workDir;
+                if (d.clips?.length) {
+                    trRenderClips(d.clips);
+                    for (let i = trLoggedCount; i < d.clips.length; i++) {
+                        const c = d.clips[i];
+                        if (trLoggedCount === 0) vsAppendLog('Whisper loaded');
+                        vsAppendLog(`Transcribing clip ${i + 1}/${d.clips.length}: ${c.fileName}`);
+                        vsAppendLog(`  → "${c.transcript}"`);
+                    }
+                    trLoggedCount = d.clips.length;
+                }
+                if (!d.running) {
+                    clearInterval(trPoll);
+                    if (d.error) {
+                        vsTrStep.textContent = 'Error'; vsTrFill.className = 'vs-progress-fill error';
+                        vsAppendLog('Transcription error: ' + d.error, 'log-error');
+                        vsLogBadge.textContent = 'failed'; vsTrainBtn.disabled = false;
+                        return;
+                    }
+                    vsAppendLog(`✓ ${trLoggedCount} clips transcribed — review below, then click Train`);
+                    vsTrFill.className = 'vs-progress-fill done';
+                    vsTrProgress.style.display = 'none';
+                    vsLogBadge.textContent = 'review'; vsLogBadge.classList.remove('live');
+                    vsSetProgress('Review transcripts below, then click Train', 100, null, 'done');
+                    vsTrainBtn.disabled = false;
+                }
+            } catch { /* keep polling */ }
+        }, 1500);
+    } catch (err) {
+        vsAppendLog('Error: ' + err.message, 'log-error');
+        vsLogBadge.textContent = 'failed'; vsTrainBtn.disabled = false;
+    }
+});
+
+// Confirm training with edited transcripts (all engines)
+vsConfirmTrainBtn.addEventListener('click', () => {
+    const modelName = vsModelName.value.trim();
+    const engine = vsEngine.value;
+    if (!modelName || !vsTrWorkDir) return;
+    const transcripts = trCollectTranscripts();
+    if (Object.keys(transcripts).length === 0) { alert('No transcripts to train with.'); return; }
+    vsConfirmTrainBtn.disabled = true;
+    vsTranscriptSec.style.display = 'none';
+    const audioPath = vsTrWorkDir + '/wavs';
+    const trainBody = { modelName, stagingPath: audioPath, engine, epochs: +vsEpochs.value, transcripts };
+    if (engine === 'Orpheus') trainBody.quantType = vsQuant.value;
+    if (engine === 'StyleTTS2') trainBody.saveEveryNEpochs = +vsSaveFreq.value;
+    vsStartTrainingJob(trainBody, modelName);
 });
 
 // ── Dataset Builder ───────────────────────────────────────
@@ -3510,17 +3872,23 @@ async function loadCheckpoints(modelName) {
     } catch { /* ignore */ }
 }
 
-vsTvModel.addEventListener('change', () => loadCheckpoints(vsTvModel.value));
+vsTvModel.addEventListener('change', () => {
+    loadCheckpoints(vsTvModel.value);
+    vsSwitchEngineModel(vsSelectedEngine, vsTvModel.value);
+});
 
 async function loadVoiceModels() {
     try {
         const [mr, ar] = await Promise.all([fetch('/voice/models'), fetch('/voice/active')]);
-        const { models } = await mr.json(), { model: activeModel, ready, defaultModel } = await ar.json();
-        // Voice settings dropdown
-        vsTvModel.innerHTML = models.length
-            ? models.map(m => `<option value="${escHtml(m.name)}"${m.name===activeModel?' selected':''}>${escHtml(m.name)}${m.name===activeModel?' ✓':''}${m.name===defaultModel?' (default)':''}</option>`).join('')
-            : '<option value="">No models found</option>';
-        vsTvStatus.textContent = ready ? `Active: ${activeModel}` : 'Voice module not running';
+        const { models } = await mr.json(), { model: activeModel, engine: activeEngine, ready, defaultModel } = await ar.json();
+        vsAllModels = models.map(m => ({ ...m, isActive: m.name === activeModel, isDefault: m.name === defaultModel }));
+        if (activeEngine) {
+            vsSelectedEngine = activeEngine;
+            vsSetActiveCard(document.querySelectorAll('.vs-module-card'), vsSelectedEngine);
+            vsUpdateEngineUI();
+        }
+        vsFilterModelDropdown();
+        vsTvStatus.textContent = ready ? `Active: ${activeModel} (${activeEngine ?? 'unknown'})` : 'Voice module not running';
         // Resume section
         const resumable = models.filter(m => m.hasResume);
         const vsResumeSec = document.getElementById('vs-resume-section');
@@ -3531,7 +3899,7 @@ async function loadVoiceModels() {
                     ? `up to epoch ${m.latestEpoch} · target ${m.epochs} · save every ${m.saveEveryN}`
                     : `${m.epochs} epochs · save every ${m.saveEveryN}`;
                 return `
-              <div style="padding:10px 0;border-bottom:1px solid var(--border);" data-model="${escHtml(m.name)}">
+              <div style="padding:10px 0;border-bottom:1px solid var(--border);" data-model="${escHtml(m.name)}" data-engine="${escHtml(m.engine ?? 'StyleTTS2')}">
                 <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
                   <div style="flex:1;min-width:0">
                     <div style="font-size:13px;font-weight:600;color:var(--text)">${escHtml(m.name)}</div>
@@ -3540,20 +3908,18 @@ async function loadVoiceModels() {
                   </div>
                   <label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:6px;">Epochs<input type="number" class="vs-input vs-resume-epochs" data-model="${escHtml(m.name)}" value="${m.epochs ?? 365}" min="1" max="9999" style="width:70px;font-size:12px;padding:4px 8px;"></label>
                   <button class="vs-btn-primary vs-resume-btn" style="font-size:12px;padding:6px 18px;flex-shrink:0" data-model="${escHtml(m.name)}">Resume</button>
-                  <button class="vs-delete-btn" style="font-size:12px;padding:6px 12px;flex-shrink:0;background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-dim);cursor:pointer;" data-model="${escHtml(m.name)}" title="Delete this saved run">✕</button>
+                  <button class="vs-delete-btn" style="font-size:12px;padding:6px 12px;flex-shrink:0;background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-dim);cursor:pointer;" data-model="${escHtml(m.name)}" data-engine="${escHtml(m.engine ?? 'StyleTTS2')}" title="Delete this saved run">✕</button>
                 </div>
               </div>`;
             }).join('');
-            vsResumeSec.style.display = '';
             vsResumeList.querySelectorAll('.vs-resume-btn').forEach(btn => {
                 btn.addEventListener('click', () => vsStartResume(btn.dataset.model));
             });
             vsResumeList.querySelectorAll('.vs-delete-btn').forEach(btn => {
-                btn.addEventListener('click', () => vsDeleteModel(btn.dataset.model));
+                btn.addEventListener('click', () => vsDeleteModel(btn.dataset.model, btn.dataset.engine));
             });
-        } else {
-            vsResumeSec.style.display = 'none';
         }
+        vsFilterSavedRuns();
     } catch { vsTvModel.innerHTML = '<option value="">Failed to load</option>'; }
     await loadCheckpoints(vsTvModel.value);
 }
@@ -3564,7 +3930,7 @@ async function vsStartResume(modelName) {
     const epochInput = document.querySelector(`.vs-resume-epochs[data-model="${CSS.escape(modelName)}"]`);
     const epochs = epochInput ? parseInt(epochInput.value, 10) || null : null;
     if (btn) btn.disabled = true;
-    vsProgSec.style.display = ''; vsLogLines.innerHTML = '';
+    vsShowSetup(false); vsProgSec.style.display = ''; vsLogLines.innerHTML = '';
     vsActiveModelName = modelName; vsPauseBtn.style.display = ''; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training';
     vsLogBadge.textContent = 'training…'; vsLogBadge.classList.add('live');
     vsSetProgress('Resuming', 0, `Resuming ${modelName}…`, ''); vsStartTimer();
@@ -3582,7 +3948,7 @@ async function vsStartResume(modelName) {
                     const d = JSON.parse(e.data);
                     vsSetProgress(d.step, d.percent, d.detail, d.done ? (d.success ? 'done' : 'error') : '');
                     if (d.detail) vsAppendLog(d.detail, d.step === 'Error' ? 'log-error' : '');
-                    if (d.done) { vsDone = true; vsProgressEs.close(); vsStopTimer(); vsLogBadge.textContent = d.success ? 'done ✓' : 'failed'; vsLogBadge.classList.remove('live'); if (btn) btn.disabled = false; vsPauseBtn.style.display = 'none'; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training'; vsActiveModelName = null; if (d.success) vsAppendLog(`✓ Training complete! Model: ${modelName}`); if (d.error) vsAppendLog(`Error: ${d.error}`, 'log-error'); }
+                    if (d.done) { vsDone = true; vsProgressEs.close(); vsStopTimer(); vsShowSetup(true); vsLogBadge.textContent = d.success ? 'done ✓' : 'failed'; vsLogBadge.classList.remove('live'); if (btn) btn.disabled = false; vsPauseBtn.style.display = 'none'; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training'; vsActiveModelName = null; if (d.success) vsAppendLog(`✓ Training complete! Model: ${modelName}`); if (d.error) vsAppendLog(`Error: ${d.error}`, 'log-error'); }
                 } catch { /* ignore */ }
             };
             vsProgressEs.onerror = () => { if (vsDone) return; vsLogBadge.textContent = 'reconnecting…'; vsLogBadge.classList.remove('live'); vsProgressEs.close(); setTimeout(connectResumeProgressSse, 3000); };
@@ -3591,10 +3957,11 @@ async function vsStartResume(modelName) {
     } catch(err) { vsStopTimer(); vsAppendLog('Error: ' + err.message, 'log-error'); vsLogBadge.textContent = 'failed'; vsLogBadge.classList.remove('live'); if (btn) btn.disabled = false; }
 }
 
-async function vsDeleteModel(modelName) {
+async function vsDeleteModel(modelName, engine) {
     if (!confirm(`Delete "${modelName}" and all its checkpoints? This cannot be undone.`)) return;
+    const eng = engine || vsAllModels.find(m => m.name === modelName)?.engine || 'StyleTTS2';
     try {
-        const resp = await fetch(`/voice/${encodeURIComponent(modelName)}`, { method: 'DELETE' });
+        const resp = await fetch(`/voice/${encodeURIComponent(eng)}/${encodeURIComponent(modelName)}`, { method: 'DELETE' });
         if (!resp.ok) { const e = await resp.json().catch(()=>({error:resp.statusText})); alert('Delete failed: ' + (e.error ?? resp.statusText)); return; }
         await loadVoiceModels();
     } catch(err) { alert('Delete failed: ' + err.message); }
@@ -3607,22 +3974,45 @@ function bindSlider(id, valId, decimals = 0) {
     val.textContent = fmt(slider.value);
     slider.addEventListener('input', () => { val.textContent = fmt(slider.value); });
 }
-bindSlider('sp-diffusion-steps', 'sp-diffusion-steps-val', 0);
-bindSlider('sp-embedding-scale', 'sp-embedding-scale-val', 2);
-bindSlider('sp-alpha',           'sp-alpha-val',           2);
-bindSlider('sp-beta',            'sp-beta-val',            2);
-bindSlider('sp-speed',           'sp-speed-val',           2);
-bindSlider('sp-pause',           'sp-pause-val',           2);
+bindSlider('sp-speed', 'sp-speed-val', 2);
+bindSlider('sp-pause', 'sp-pause-val', 2);
+
+let engineParamDefs = [];
+async function loadEngineParams() {
+    try {
+        const r = await fetch('/voice/engine-params');
+        if (!r.ok) return;
+        const data = await r.json();
+        document.getElementById('sp-engine-label').textContent = data.engine ?? '';
+        engineParamDefs = data.parameters ?? [];
+        const container = document.getElementById('sp-engine-params');
+        container.innerHTML = '';
+        for (const p of engineParamDefs) {
+            const decimals = p.step % 1 === 0 ? 0 : (p.step < 0.1 ? 2 : 2);
+            const label = document.createElement('label');
+            label.className = 'vs-label';
+            label.innerHTML = `${p.label}
+                <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
+                    <input type="range" id="sp-ep-${p.id}" min="${p.min}" max="${p.max}" step="${p.step}" value="${p.default}" style="flex:1;accent-color:var(--accent,#223742);">
+                    <span id="sp-ep-${p.id}-val" style="min-width:32px;text-align:right;font-size:13px;">${decimals > 0 ? p.default.toFixed(decimals) : p.default}</span>
+                </div>`;
+            container.appendChild(label);
+            bindSlider(`sp-ep-${p.id}`, `sp-ep-${p.id}-val`, decimals);
+        }
+    } catch { }
+}
+loadEngineParams();
 
 function getSynthParams() {
-    return {
-        diffusionSteps:   parseInt(document.getElementById('sp-diffusion-steps').value, 10),
-        embeddingScale:   parseFloat(document.getElementById('sp-embedding-scale').value),
-        alpha:            parseFloat(document.getElementById('sp-alpha').value),
-        beta:             parseFloat(document.getElementById('sp-beta').value),
-        speed:            parseFloat(document.getElementById('sp-speed').value),
-        pauseScale:       parseFloat(document.getElementById('sp-pause').value),
+    const params = {
+        speed:      parseFloat(document.getElementById('sp-speed').value),
+        pauseScale: parseFloat(document.getElementById('sp-pause').value),
     };
+    for (const p of engineParamDefs) {
+        const el = document.getElementById(`sp-ep-${p.id}`);
+        if (el) params[p.id] = p.step % 1 === 0 ? parseInt(el.value, 10) : parseFloat(el.value);
+    }
+    return params;
 }
 
 // Speed & Pause are a persisted server-side default — they change Ari's real conversational
@@ -3662,6 +4052,7 @@ vsTvSpeakBtn.addEventListener('click', async () => {
         if (!resp.ok) { const err = await resp.json().catch(() => ({ error: resp.statusText })); vsTvStatus.textContent = 'Error: ' + (err.error ?? resp.statusText); }
         else {
             const audioCtx = new AudioContext();
+            if (audioCtx.state === 'suspended') await audioCtx.resume();
             const buf = await audioCtx.decodeAudioData(await resp.arrayBuffer());
             const gain = audioCtx.createGain();
             gain.gain.value = getVolumePct() / 100;

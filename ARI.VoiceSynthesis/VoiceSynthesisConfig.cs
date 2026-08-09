@@ -10,4 +10,5 @@ public class VoiceSynthesisConfig
     // checkpoint cache) — never lives under StyleTtsPath, which is install content and may be
     // read-only / replaced wholesale on update. AppDataRoot-based; see ARI.cs.
     public string DataDir { get; set; } = "";
+    public string OrpheusSourcePath { get; set; } = "";
 }

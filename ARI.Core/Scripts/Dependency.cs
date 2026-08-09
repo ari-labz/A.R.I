@@ -3,12 +3,14 @@ using System.Diagnostics;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace ARI.Core.Scripts;
 
 public class Dependency
 {
     private static readonly string[] BrewPaths = ["/opt/homebrew/bin", "/usr/local/bin"];
+    private static string ConfigPath => Path.Combine(Paths.PersistentData, "llamacpp.json");
 
     public static async Task CheckPython()
     {
@@ -24,14 +26,11 @@ public class Dependency
         }
     }
 
-    // Homebrew is OPTIONAL: it's only used to install llama.cpp (which now falls back to a prebuilt
-    // download when brew is absent) and espeak-ng for voice (which degrades on its own). So this only
-    // detects brew and puts it on PATH — it never installs it (the official installer needs an
-    // interactive sudo/TTY that a GUI-launched app can't provide) and never aborts startup.
     public static Task CheckHomebrew()
     {
         EnsureBrewInPath();
-        if (FindBrew() is not null)
+        bool found = File.Exists("/opt/homebrew/bin/brew") || File.Exists("/usr/local/bin/brew");
+        if (found)
             Shared.Logger.LogInformation("Homebrew is installed.");
         else
             Shared.Logger.LogWarning(
@@ -40,11 +39,150 @@ public class Dependency
         return Task.CompletedTask;
     }
 
-    private static string? FindBrew() => FindInBrewBins("brew");
+    // ── llama.cpp ────────────────────────────────────────────────────────────
 
-    // Locates a binary in the Homebrew bin dirs (Apple Silicon → /opt/homebrew/bin, Intel →
-    // /usr/local/bin) by absolute path, which is reliable even for a Finder-launched app that
-    // doesn't inherit a login PATH.
+    /// <summary>
+    /// Ensures a usable llama-server is available. Checks saved config, then detects existing
+    /// installs, then downloads a prebuilt release. Updates Shared.LlamaServer and Shared.LlamaCpp.
+    /// </summary>
+    public static async Task CheckLlamaCpp()
+    {
+        EnsureBrewInPath();
+        LlamaCppStatus cfg = LoadConfig();
+
+        // 1. Saved path from previous run
+        if (!string.IsNullOrEmpty(cfg.InstallPath))
+        {
+            string? saved = FindLlamaServerIn(cfg.InstallPath);
+            if (saved is not null)
+            {
+                Shared.LlamaServer = saved;
+                Shared.LlamaCpp = cfg;
+                Shared.Logger.LogInformation("Using configured llama-server: {Path}", saved);
+                _ = CheckForUpdate(cfg);
+                return;
+            }
+            Shared.Logger.LogWarning("Saved llama.cpp path no longer valid: {Path}", cfg.InstallPath);
+        }
+
+        // 2. Detect existing installations
+        string? existing = await DetectExisting();
+        if (existing is not null)
+        {
+            string dir = ResolveInstallDir(existing);
+            Shared.LlamaServer = existing;
+            cfg.InstallPath = dir;
+            cfg.InstalledVersion = await GetVersion(existing);
+            cfg.ManagedByAri = false;
+            SaveConfig(cfg);
+            Shared.LlamaCpp = cfg;
+            Shared.Logger.LogInformation("Found existing llama-server: {Path} (v{Version})", existing, cfg.InstalledVersion ?? "unknown");
+            _ = CheckForUpdate(cfg);
+            return;
+        }
+
+        // 3. Download prebuilt release
+        Shared.Logger.LogInformation("llama-server not found. Downloading...");
+        string installDir = cfg.InstallPath is { Length: > 0 } ? cfg.InstallPath : DefaultInstallPath();
+        string server = await DownloadPrebuilt(installDir);
+        Shared.LlamaServer = server;
+        cfg.InstallPath = installDir;
+        cfg.InstalledVersion = await GetVersion(server);
+        cfg.ManagedByAri = true;
+        SaveConfig(cfg);
+        Shared.LlamaCpp = cfg;
+    }
+
+    /// <summary>Updates llama.cpp to the latest release.</summary>
+    public static async Task<string?> UpdateLlamaCpp()
+    {
+        LlamaCppStatus cfg = LoadConfig();
+        string installDir = cfg.InstallPath is { Length: > 0 } ? cfg.InstallPath : DefaultInstallPath();
+
+        Shared.Logger.LogInformation("Updating llama.cpp...");
+        string server = await DownloadPrebuilt(installDir);
+        Shared.LlamaServer = server;
+        cfg.InstallPath = installDir;
+        cfg.InstalledVersion = await GetVersion(server);
+        cfg.LatestVersion = cfg.InstalledVersion;
+        cfg.ManagedByAri = true;
+        cfg.UpdateAvailable = false;
+        SaveConfig(cfg);
+        Shared.LlamaCpp = cfg;
+        Shared.Logger.LogInformation("llama.cpp updated to {Version}", cfg.InstalledVersion);
+        return cfg.InstalledVersion;
+    }
+
+    /// <summary>Sets a custom install directory.</summary>
+    public static void SetLlamaCppPath(string path)
+    {
+        LlamaCppStatus cfg = LoadConfig();
+        cfg.InstallPath = path;
+        SaveConfig(cfg);
+        Shared.LlamaCpp = cfg;
+    }
+
+    /// <summary>Suppresses future update prompts.</summary>
+    public static void SuppressLlamaCppUpdates()
+    {
+        LlamaCppStatus cfg = LoadConfig();
+        cfg.SuppressUpdatePrompt = true;
+        SaveConfig(cfg);
+        Shared.LlamaCpp = cfg;
+    }
+
+    /// <summary>Re-enables update prompts.</summary>
+    public static void EnableLlamaCppUpdates()
+    {
+        LlamaCppStatus cfg = LoadConfig();
+        cfg.SuppressUpdatePrompt = false;
+        SaveConfig(cfg);
+        Shared.LlamaCpp = cfg;
+    }
+
+    /// <summary>OS-appropriate default install path where other tools can also find it.</summary>
+    public static string DefaultInstallPath()
+    {
+        if (OperatingSystem.IsWindows())
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "llama.cpp");
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "llama.cpp");
+    }
+
+    // ── Detection ────────────────────────────────────────────────────────────
+
+    private static async Task<string?> DetectExisting()
+    {
+        // Homebrew bins (Finder-launched apps miss these on PATH)
+        string? brew = FindInBrewBins("llama-server");
+        if (brew is not null) return brew;
+
+        // PATH
+        string? onPath = await ResolveCommandPath("llama-server");
+        if (onPath is not null) return onPath;
+
+        // Common locations
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        string[] common = OperatingSystem.IsWindows()
+            ? [
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "llama.cpp"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "llama.cpp"),
+              ]
+            : [
+                Path.Combine(home, "llama.cpp"),
+                "/usr/local/bin",
+                "/opt/llama.cpp",
+              ];
+
+        foreach (string dir in common)
+        {
+            string? found = FindLlamaServerIn(dir);
+            if (found is not null) return found;
+        }
+
+        // ARI's old managed location
+        return FindLlamaServerIn(Paths.ServerDir(Path.Combine("tools", "llama.cpp")));
+    }
+
     private static string? FindInBrewBins(string name)
     {
         foreach (string dir in BrewPaths)
@@ -55,98 +193,71 @@ public class Dependency
         return null;
     }
 
-    /// <summary>
-    /// Ensures a usable llama-server and records its path in <see cref="Shared.LlamaServer"/>.
-    /// Resolution order: any llama-server already on PATH (a user's own GPU build always wins) →
-    /// a build we downloaded on a previous run → a fresh install. macOS installs via Homebrew;
-    /// Windows/Linux download a prebuilt binary from llama.cpp's GitHub releases.
-    /// </summary>
-    public static async Task CheckLlamaCpp()
+    private static string? FindLlamaServerIn(string dir)
     {
-        // A Finder-launched app gets a stripped PATH without /opt/homebrew/bin, so `which` misses a
-        // brew-installed llama-server that a dev shell finds fine. Check the brew bins directly first,
-        // then fall back to a PATH lookup (resolved to an absolute path, since we can't spawn a bare
-        // command name off a login PATH we never inherited).
-        string? existing = FindInBrewBins("llama-server") ?? await ResolveCommandPath("llama-server");
-        if (existing is not null)
-        {
-            Shared.LlamaServer = existing;
-            Shared.Logger.LogInformation("Using existing llama-server: {Path}", existing);
-            return;
-        }
-
-        string? managed = FindManagedLlamaServer();
-        if (managed is not null)
-        {
-            Shared.LlamaServer = managed;
-            Shared.Logger.LogInformation("Using managed llama-server: {Path}", managed);
-            return;
-        }
-
-        Shared.Logger.LogInformation("llama-server not found. Installing...");
-
-        switch (0)
-        {
-            case 0 when OperatingSystem.IsMacOS():
-                // Prefer brew when it's available; otherwise fall back to a prebuilt download so the
-                // server still runs on machines without Homebrew (e.g. non-admin accounts).
-                string? brew = FindBrew();
-                string? viaBrew = brew is not null ? await TryInstallLlamaViaBrew(brew) : null;
-                if (viaBrew is null && brew is null)
-                    Shared.Logger.LogInformation("Homebrew not available — downloading a prebuilt llama.cpp instead.");
-                Shared.LlamaServer = viaBrew ?? await DownloadLlamaPrebuilt();
-                break;
-            case 0 when OperatingSystem.IsWindows():
-            case 0 when OperatingSystem.IsLinux():
-            default:
-                Shared.LlamaServer = await DownloadLlamaPrebuilt();
-                break;
-        }
+        if (!Directory.Exists(dir)) return null;
+        string name = OperatingSystem.IsWindows() ? "llama-server.exe" : "llama-server";
+        return Directory.EnumerateFiles(dir, name, SearchOption.AllDirectories).FirstOrDefault();
     }
 
-    // Installs llama.cpp with Homebrew and returns the absolute path to the installed llama-server,
-    // or null if the install fails (caller falls back to a prebuilt download). Uses brew's absolute
-    // path — a Finder-launched app can't resolve the bare "brew" name off a login PATH it never got.
-    private static async Task<string?> TryInstallLlamaViaBrew(string brewPath)
+    private static string ResolveInstallDir(string serverPath)
     {
-        Shared.Logger.LogInformation("Installing llama.cpp via Homebrew...");
+        string dir = Path.GetDirectoryName(serverPath)!;
+        if (Path.GetFileName(dir).Equals("bin", StringComparison.OrdinalIgnoreCase))
+            dir = Path.GetDirectoryName(dir)!;
+        return dir;
+    }
+
+    // ── Version ──────────────────────────────────────────────────────────────
+
+    private static async Task<string?> GetVersion(string serverPath)
+    {
         try
         {
-            Process process = Process.Start(new ProcessStartInfo(brewPath, "install llama.cpp")
+            Process p = Process.Start(new ProcessStartInfo(serverPath, "--version")
             {
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
-            }) ?? throw new Exception("Failed to start brew.");
+            })!;
+            string output = (await p.StandardOutput.ReadToEndAsync()).Trim();
+            await p.WaitForExitAsync();
+            return output.Length > 0 ? output.Split('\n')[0].Trim() : null;
+        }
+        catch { return null; }
+    }
 
-            process.OutputDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) Shared.Logger.LogInformation("[brew] {Line}", e.Data); };
-            process.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) Shared.Logger.LogInformation("[brew] {Line}", e.Data); };
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
-            await process.WaitForExitAsync();
+    private static async Task CheckForUpdate(LlamaCppStatus cfg)
+    {
+        if (cfg.SuppressUpdatePrompt) return;
+        try
+        {
+            using HttpClient hc = new() { Timeout = TimeSpan.FromSeconds(10) };
+            hc.DefaultRequestHeaders.UserAgent.ParseAdd("ARI-Server/1.0");
+            string json = await hc.GetStringAsync("https://api.github.com/repos/ggml-org/llama.cpp/releases/latest");
+            using JsonDocument doc = JsonDocument.Parse(json);
+            string latestTag = doc.RootElement.GetProperty("tag_name").GetString() ?? "";
 
-            // brew installs into its own bin dir (same dir as the brew binary).
-            string llamaServer = Path.Combine(Path.GetDirectoryName(brewPath)!, "llama-server");
-            if (process.ExitCode == 0 && File.Exists(llamaServer))
-                return llamaServer;
+            cfg.LatestVersion = latestTag;
+            cfg.UpdateAvailable = !string.IsNullOrEmpty(cfg.InstalledVersion)
+                && !cfg.InstalledVersion.Contains(latestTag);
+            SaveConfig(cfg);
+            Shared.LlamaCpp = cfg;
 
-            Shared.Logger.LogWarning("Homebrew install of llama.cpp did not succeed — falling back to a prebuilt download.");
+            if (cfg.UpdateAvailable)
+                Shared.Logger.LogInformation("llama.cpp update available: {Latest} (installed: {Current})", latestTag, cfg.InstalledVersion);
         }
         catch (Exception ex)
         {
-            Shared.Logger.LogWarning("Homebrew install of llama.cpp failed ({Error}) — falling back to a prebuilt download.", ex.Message);
+            Shared.Logger.LogDebug("Failed to check for llama.cpp updates: {Error}", ex.Message);
         }
-        return null;
     }
 
-    // Downloads a prebuilt llama.cpp release into the managed tools dir and returns the full path
-    // to llama-server. Prefers a Vulkan (broad cross-vendor GPU) build, falling back to CPU. A user
-    // wanting CUDA/ROCm/Metal should install llama.cpp themselves — a llama-server on PATH always
-    // takes precedence over this download.
-    private static async Task<string> DownloadLlamaPrebuilt()
+    // ── Download ─────────────────────────────────────────────────────────────
+
+    private static async Task<string> DownloadPrebuilt(string installDir)
     {
-        string toolsDir = Paths.ServerDir(Path.Combine("tools", "llama.cpp"));
-        Directory.CreateDirectory(toolsDir);
+        Directory.CreateDirectory(installDir);
 
         using HttpClient hc = new();
         hc.DefaultRequestHeaders.UserAgent.ParseAdd("ARI-Server/1.0");
@@ -155,38 +266,69 @@ public class Dependency
         string json = await hc.GetStringAsync("https://api.github.com/repos/ggml-org/llama.cpp/releases/latest");
         using JsonDocument doc = JsonDocument.Parse(json);
 
-        string? url = SelectAsset(doc.RootElement.GetProperty("assets"));
+        var (url, isTarGz) = SelectAsset(doc.RootElement.GetProperty("assets"));
         if (url is null)
             throw new Exception(
                 "No prebuilt llama.cpp binary matched this platform. " +
                 "Please install llama.cpp manually and ensure 'llama-server' is on your PATH.");
 
-        string zipPath = Path.Combine(toolsDir, "llama.zip");
+        string archivePath = Path.Combine(installDir, isTarGz ? "llama.tar.gz" : "llama.zip");
         Shared.Logger.LogInformation("Downloading llama.cpp: {Url}", url);
         await using (Stream s = await hc.GetStreamAsync(url))
-        await using (FileStream fs = File.Create(zipPath))
+        await using (FileStream fs = File.Create(archivePath))
             await s.CopyToAsync(fs);
 
-        Shared.Logger.LogInformation("Extracting llama.cpp...");
-        ZipFile.ExtractToDirectory(zipPath, toolsDir, overwriteFiles: true);
-        File.Delete(zipPath);
+        Shared.Logger.LogInformation("Extracting llama.cpp to {Dir}...", installDir);
 
-        string exe = FindManagedLlamaServer()
+        if (isTarGz)
+        {
+            Process tar = Process.Start(new ProcessStartInfo("tar", $"xzf \"{archivePath}\" -C \"{installDir}\" --strip-components=1")
+            {
+                UseShellExecute = false,
+                RedirectStandardError = true,
+            })!;
+            await tar.WaitForExitAsync();
+        }
+        else
+        {
+            ZipFile.ExtractToDirectory(archivePath, installDir, overwriteFiles: true);
+            string[] nested = Directory.GetDirectories(installDir, "llama-*");
+            if (nested.Length == 1)
+            {
+                foreach (string file in Directory.GetFiles(nested[0], "*", SearchOption.AllDirectories))
+                {
+                    string rel = Path.GetRelativePath(nested[0], file);
+                    string dest = Path.Combine(installDir, rel);
+                    Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                    File.Move(file, dest, overwrite: true);
+                }
+                Directory.Delete(nested[0], recursive: true);
+            }
+        }
+
+        File.Delete(archivePath);
+
+        string exe = FindLlamaServerIn(installDir)
             ?? throw new Exception("llama-server not found inside the downloaded llama.cpp archive.");
 
         if (!OperatingSystem.IsWindows())
         {
-            Process chmod = Process.Start(new ProcessStartInfo("chmod", $"+x \"{exe}\"") { UseShellExecute = false })!;
-            await chmod.WaitForExitAsync();
+            foreach (string bin in Directory.EnumerateFiles(Path.GetDirectoryName(exe)!, "llama-*"))
+            {
+                Process chmod = Process.Start(new ProcessStartInfo("chmod", $"+x \"{bin}\"") { UseShellExecute = false })!;
+                await chmod.WaitForExitAsync();
+            }
         }
 
         Shared.Logger.LogInformation("llama-server ready: {Path}", exe);
         return exe;
     }
 
-    // Picks the best-matching release asset for this OS/arch. Naming follows llama.cpp's convention,
-    // e.g. llama-b<build>-bin-win-vulkan-x64.zip / llama-b<build>-bin-ubuntu-vulkan-x64.zip.
-    private static string? SelectAsset(JsonElement assets)
+    /// <summary>
+    /// Selects the right prebuilt binary for this platform.
+    /// macOS → Metal (built-in), Windows/Linux → Vulkan (works on Nvidia + AMD).
+    /// </summary>
+    private static (string? Url, bool IsTarGz) SelectAsset(JsonElement assets)
     {
         string os   = OperatingSystem.IsWindows() ? "win" : OperatingSystem.IsMacOS() ? "macos" : "ubuntu";
         string arch = RuntimeInformation.OSArchitecture == Architecture.Arm64 ? "arm64" : "x64";
@@ -196,38 +338,65 @@ public class Dependency
         {
             string name = (a.GetProperty("name").GetString() ?? "").ToLowerInvariant();
             string url  = a.GetProperty("browser_download_url").GetString() ?? "";
-            if (name.EndsWith(".zip") && name.Contains($"-{os}-") && name.Contains(arch))
+            if ((name.EndsWith(".zip") || name.EndsWith(".tar.gz"))
+                && name.Contains($"-{os}-") && name.Contains(arch)
+                && !name.Contains("xcframework") && !name.Contains("cudart"))
                 candidates.Add((name, url));
         }
 
-        // Prefer a GPU (Vulkan) build, then CPU, then anything matching the platform.
-        foreach (string backend in new[] { "vulkan", "cpu", "" })
+        if (OperatingSystem.IsMacOS())
         {
-            (string Name, string Url) match = candidates.FirstOrDefault(c => backend.Length == 0 || c.Name.Contains(backend));
-            if (!string.IsNullOrEmpty(match.Url)) return match.Url;
+            var match = candidates.FirstOrDefault();
+            return match.Url is not null ? (match.Url, match.Name.EndsWith(".tar.gz")) : (null, false);
         }
-        return null;
+
+        // Windows + Linux: Vulkan works on both Nvidia and AMD
+        {
+            var match = candidates.FirstOrDefault(c => c.Name.Contains("vulkan"));
+            if (match.Url is not null)
+                return (match.Url, match.Name.EndsWith(".tar.gz"));
+        }
+
+        return (null, false);
     }
 
-    private static string LlamaServerFileName() =>
-        OperatingSystem.IsWindows() ? "llama-server.exe" : "llama-server";
+    // ── Config persistence ───────────────────────────────────────────────────
 
-    private static string? FindManagedLlamaServer()
+    private static LlamaCppStatus LoadConfig()
     {
-        string toolsDir = Paths.ServerDir(Path.Combine("tools", "llama.cpp"));
-        if (!Directory.Exists(toolsDir)) return null;
-        return Directory.EnumerateFiles(toolsDir, LlamaServerFileName(), SearchOption.AllDirectories).FirstOrDefault();
+        try
+        {
+            if (File.Exists(ConfigPath))
+                return JsonSerializer.Deserialize<LlamaCppStatus>(File.ReadAllText(ConfigPath), JsonOpts) ?? new();
+        }
+        catch { }
+        return new();
     }
+
+    private static void SaveConfig(LlamaCppStatus cfg)
+    {
+        try { File.WriteAllText(ConfigPath, JsonSerializer.Serialize(cfg, JsonOpts)); }
+        catch (Exception ex) { Shared.Logger.LogWarning("Failed to save llama.cpp config: {Error}", ex.Message); }
+    }
+
+    private static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    // ── Utilities ────────────────────────────────────────────────────────────
 
     private static void EnsureBrewInPath()
     {
+        if (!OperatingSystem.IsMacOS()) return;
         string current = Environment.GetEnvironmentVariable("PATH") ?? "";
         foreach (string dir in BrewPaths)
             if (!current.Contains(dir))
                 Environment.SetEnvironmentVariable("PATH", $"{dir}:{current}");
     }
 
-    // Returns the absolute path of a command as resolved by which/where, or null if not found.
     private static async Task<string?> ResolveCommandPath(string cmd)
     {
         try
@@ -242,10 +411,9 @@ public class Dependency
             string outp = (await p.StandardOutput.ReadToEndAsync()).Trim();
             await p.WaitForExitAsync();
             if (p.ExitCode == 0 && outp.Length > 0)
-                return outp.Split('\n')[0].Trim();   // `where` can list multiple matches
+                return outp.Split('\n')[0].Trim();
             return null;
         }
         catch { return null; }
     }
-
 }
