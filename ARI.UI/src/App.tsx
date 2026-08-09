@@ -1166,7 +1166,7 @@ export default function App() {
                 outdated={outdated}
             />
             <div id="sidebar-overlay"
-                className={sidebarCollapsed ? "" : ""}
+                className={sidebarCollapsed ? "" : "visible"}
                 onClick={() => setSidebarCollapsed(true)}
             />
             {activeView === "projects" ? (

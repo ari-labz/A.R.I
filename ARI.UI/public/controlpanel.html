@@ -202,6 +202,38 @@ html, body {
 .tr-remove { background: none; border: none; color: var(--text-dim); font-size: 18px; cursor: pointer; padding: 2px 6px; line-height: 1; opacity: 0.5; transition: opacity .15s, color .15s; flex-shrink: 0; }
 .tr-remove:hover { opacity: 1; color: #dc2626; }
 
+/* ── response feedback ────────────────────────────────── */
+.fb-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.fb-filters { display: flex; gap: 6px; }
+.fb-filter { font-size: 12px; padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--text-dim); cursor: pointer; }
+.fb-filter.active { background: #518c9a; border-color: #518c9a; color: #fff; }
+.fb-filter span { opacity: .65; margin-left: 4px; }
+
+.fb-card { border: 1px solid var(--border); border-left-width: 3px; border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; background: var(--card-bg); }
+.fb-card-up   { border-left-color: #16a34a; }
+.fb-card-down { border-left-color: #dc2626; }
+.fb-head { display: flex; align-items: center; gap: 10px; font-size: 11.5px; color: var(--text-dim); margin-bottom: 8px; }
+.fb-vote { font-weight: 700; letter-spacing: .03em; text-transform: uppercase; }
+.fb-card-up .fb-vote   { color: #16a34a; }
+.fb-card-down .fb-vote { color: #dc2626; }
+.fb-thread { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
+.fb-when { margin-left: auto; flex-shrink: 0; }
+.fb-delete { background: none; border: none; color: var(--text-dim); font-size: 17px; line-height: 1; cursor: pointer; padding: 0 2px; opacity: .5; }
+.fb-delete:hover { opacity: 1; color: #dc2626; }
+
+.fb-response { font-size: 13px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow-y: auto; }
+.fb-context { margin-top: 10px; }
+.fb-context summary { font-size: 12px; color: var(--text-dim); cursor: pointer; user-select: none; }
+.fb-turn { font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; margin-top: 8px; padding: 7px 10px; border-radius: 6px; background: rgba(127,127,127,.07); }
+.fb-turn-user { border-left: 2px solid #518c9a; }
+.fb-turn-who { display: block; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); margin-bottom: 3px; }
+
+.fb-note-row { display: flex; align-items: flex-start; gap: 8px; margin-top: 10px; }
+.fb-note { flex: 1; min-height: 38px; resize: vertical; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; background: none; color: inherit; font: inherit; font-size: 12.5px; outline: none; }
+.fb-note:focus { border-color: #518c9a; }
+.fb-note-save { font-size: 11.5px; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--text-dim); cursor: pointer; flex-shrink: 0; }
+.fb-note-save:hover { border-color: #518c9a; color: #518c9a; }
+
 /* ── dataset builder A/B grid ─────────────────────────── */
 .ds-compare-head { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--text-dim); padding: 0 4px 8px; }
 .ds-part { margin-bottom: 14px; }
@@ -453,6 +485,7 @@ html, body {
         <div class="cp-nav-item" data-tab="agents">Agents</div>
         <div class="cp-nav-item" data-tab="conventions">Coding Conventions</div>
         <div class="cp-nav-item" data-tab="persona">Persona</div>
+        <div class="cp-nav-item" data-tab="feedback">Response Feedback</div>
         <div class="cp-nav-item" data-tab="llmconfigs">Configs</div>
         <div class="cp-nav-group">Voice</div>
         <div class="cp-nav-item" data-tab="dataset">Dataset Builder</div>
@@ -789,6 +822,29 @@ html, body {
       </div>
     </div>
 
+    <!-- Response Feedback tab -->
+    <div id="tab-feedback" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div class="vs-section">
+        <div class="vs-section-title">Response Feedback</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 14px;">
+          Every response you rated in chat, with the turns that led up to it and your note on why. This
+          accumulates into a dataset of what Ari should and shouldn't sound like.
+        </p>
+        <div class="fb-toolbar">
+          <div class="fb-filters">
+            <button class="fb-filter active" data-fbfilter="" type="button">All <span id="fb-count-all">0</span></button>
+            <button class="fb-filter" data-fbfilter="up" type="button">Liked <span id="fb-count-up">0</span></button>
+            <button class="fb-filter" data-fbfilter="down" type="button">Disliked <span id="fb-count-down">0</span></button>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <span id="fb-status" style="font-size:12px;color:var(--text-dim);"></span>
+            <a class="vs-btn-outline" id="fb-export" href="/feedback/export" download>Export JSONL</a>
+          </div>
+        </div>
+        <div id="fb-list"></div>
+      </div>
+    </div>
+
     <!-- Scheduler tab -->
     <div id="tab-scheduler" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
@@ -1013,8 +1069,8 @@ fetch('/api/cp/username').then(r => r.json()).then(d => { if (d.name) window._ar
 
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), scheduler: document.getElementById('tab-scheduler'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), userprefs: document.getElementById('tab-userprefs'), modules: document.getElementById('tab-modules') };
-const TAB_TITLES = { voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', scheduler: 'Scheduler', llmconfigs: 'LLM Configs', debug: 'Deep Thread Inspection (DTI)', userprefs: 'User Preferences', modules: 'Modules' };
+const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), scheduler: document.getElementById('tab-scheduler'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), userprefs: document.getElementById('tab-userprefs'), modules: document.getElementById('tab-modules') };
+const TAB_TITLES = { voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', scheduler: 'Scheduler', llmconfigs: 'LLM Configs', debug: 'Deep Thread Inspection (DTI)', userprefs: 'User Preferences', modules: 'Modules' };
 
 let srvPollTimer = null;
 function switchTab(name) {
@@ -1028,6 +1084,7 @@ function switchTab(name) {
     if (name !== 'scheduler') schStopPoll();
     if (name === 'conventions') loadConventions();
     if (name === 'persona') loadPersona();
+    if (name === 'feedback') loadFeedback();
     if (name === 'models') loadModels();
     if (name === 'brain') loadBrain();
     if (name === 'servers') loadServers();
@@ -1639,6 +1696,94 @@ document.getElementById('persona-save-btn').addEventListener('click', async () =
         status.textContent = 'Saved — applies to new threads.';
         setTimeout(() => { status.textContent = ''; }, 4000);
     } catch { status.textContent = 'Save failed.'; }
+});
+
+// ── Response Feedback ─────────────────────────────────────
+// Browses the ratings collected from the thumbs beside each reply in chat. Each row shows the rated
+// response and, folded away, the turns that led to it — the note is editable here because the reason a
+// response was bad is often clearer an hour later than it was at the moment of clicking.
+let fbFilter = '';
+
+async function loadFeedback() {
+    const list   = document.getElementById('fb-list');
+    const status = document.getElementById('fb-status');
+    list.innerHTML = '<span style="color:var(--text-dim);font-size:13px;">Loading…</span>';
+    try {
+        const url  = fbFilter ? `/feedback?vote=${fbFilter}` : '/feedback';
+        const data = await fetch(url).then(r => r.json());
+
+        document.getElementById('fb-count-all').textContent  = data.up + data.down;
+        document.getElementById('fb-count-up').textContent    = data.up;
+        document.getElementById('fb-count-down').textContent  = data.down;
+        status.textContent = '';
+
+        if (!data.items.length) {
+            list.innerHTML = '<span style="color:var(--text-dim);font-size:13px;">'
+                + (fbFilter ? 'Nothing rated that way yet.' : 'No ratings yet — use the thumbs beside a reply in chat.')
+                + '</span>';
+            return;
+        }
+
+        list.innerHTML = '';
+        data.items.forEach(fb => list.appendChild(fbRow(fb)));
+    } catch { list.innerHTML = '<span style="color:var(--text-dim);font-size:13px;">Failed to load.</span>'; }
+}
+
+function fbRow(fb) {
+    const row = document.createElement('div');
+    row.className = 'fb-card fb-card-' + fb.vote;
+
+    const when  = fb.createdAt ? new Date(fb.createdAt).toLocaleString() : '';
+    const title = fb.threadTitle || fb.threadKey;
+    const ctx   = (fb.context || []).map(t =>
+        `<div class="fb-turn fb-turn-${t.role}"><span class="fb-turn-who">${escHtml(t.author)}</span>${escHtml(t.text)}</div>`
+    ).join('');
+
+    row.innerHTML = `
+        <div class="fb-head">
+            <span class="fb-vote">${fb.vote === 'up' ? '&#9650; liked' : '&#9660; disliked'}</span>
+            <span class="fb-thread" title="${escHtml(fb.threadKey)}">${escHtml(title)}</span>
+            <span class="fb-when">${escHtml(when)}</span>
+            <button class="fb-delete" type="button" title="Remove from dataset">&times;</button>
+        </div>
+        <div class="fb-response">${escHtml(fb.response)}</div>
+        ${ctx ? `<details class="fb-context"><summary>What led up to it (${fb.context.length} turns)</summary>${ctx}</details>` : ''}
+        <div class="fb-note-row">
+            <textarea class="fb-note" placeholder="${fb.vote === 'up' ? 'What worked here?' : 'What was wrong with it?'}">${escHtml(fb.note || '')}</textarea>
+            <button class="fb-note-save" type="button">Save note</button>
+        </div>
+    `;
+
+    row.querySelector('.fb-delete').addEventListener('click', async () => {
+        if (!confirm('Remove this rating from the dataset?')) return;
+        await fetch(`/feedback/${fb.id}`, { method: 'DELETE' });
+        loadFeedback();
+    });
+
+    const noteEl = row.querySelector('.fb-note');
+    const saveEl = row.querySelector('.fb-note-save');
+    saveEl.addEventListener('click', async () => {
+        saveEl.textContent = 'Saving…';
+        try {
+            await fetch(`/feedback/${fb.id}`, {
+                method:  'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({ note: noteEl.value }),
+            });
+            saveEl.textContent = 'Saved';
+        } catch { saveEl.textContent = 'Failed'; }
+        setTimeout(() => { saveEl.textContent = 'Save note'; }, 2500);
+    });
+
+    return row;
+}
+
+document.querySelectorAll('[data-fbfilter]').forEach(btn => {
+    btn.addEventListener('click', () => {
+        fbFilter = btn.dataset.fbfilter;
+        document.querySelectorAll('[data-fbfilter]').forEach(b => b.classList.toggle('active', b === btn));
+        loadFeedback();
+    });
 });
 
 // ── LLM Configs ───────────────────────────────────────────

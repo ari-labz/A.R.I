@@ -149,6 +149,162 @@ function SpeakButton({ content }: { content: string }) {
     )
 }
 
+// ── Response feedback ─────────────────────────────────────────────────────────
+// Thumbs up/down beside each finished reply. The vote is what we're really collecting, so it posts on
+// click and the note is an optional follow-up — a modal in front of the vote would cost most of the data.
+
+type Vote = "up" | "down"
+
+interface Feedback {
+    id:   string
+    vote: Vote
+    note: string
+}
+
+/** Ratings for the open thread, keyed by the rated response's timestamp. */
+function useFeedback(threadKey: string | null) {
+    const [byTimestamp, setByTimestamp] = useState<Record<string, Feedback>>({})
+
+    useEffect(() => {
+        setByTimestamp({})
+        if (!threadKey) return
+        let cancelled = false
+        fetch(`/feedback/thread/${encodeURIComponent(threadKey)}`)
+            .then(r => r.ok ? r.json() : [])
+            .then((rows: { id: string; vote: Vote; note: string; responseTimestamp: string }[]) => {
+                if (cancelled) return
+                const map: Record<string, Feedback> = {}
+                for (const r of rows) map[r.responseTimestamp] = { id: r.id, vote: r.vote, note: r.note }
+                setByTimestamp(map)
+            })
+            .catch(() => {})
+        return () => { cancelled = true }
+    }, [threadKey])
+
+    const set = useCallback((timestamp: string, feedback: Feedback | null) => {
+        setByTimestamp(prev => {
+            const next = { ...prev }
+            if (feedback) next[timestamp] = feedback
+            else delete next[timestamp]
+            return next
+        })
+    }, [])
+
+    return { byTimestamp, set }
+}
+
+function ThumbIcon({ down }: { down?: boolean }) {
+    return (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+             strokeLinecap="round" strokeLinejoin="round" style={down ? { transform: "rotate(180deg)" } : undefined}>
+            <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/>
+        </svg>
+    )
+}
+
+function FeedbackButtons({ threadKey, item, msgIndex, feedback, onChange }: {
+    threadKey: string | null
+    item:      ThreadItem
+    msgIndex:  number
+    feedback?: Feedback
+    onChange:  (timestamp: string, feedback: Feedback | null) => void
+}) {
+    const [noteOpen, setNoteOpen] = useState(false)
+    const [note, setNote]         = useState("")
+    const [saving, setSaving]     = useState(false)
+
+    const vote = feedback?.vote
+
+    const rate = useCallback(async (next: Vote) => {
+        if (!threadKey || saving) return
+        setSaving(true)
+        try {
+            // Clicking the lit thumb clears the rating.
+            if (vote === next && feedback) {
+                await fetch(`/feedback/${feedback.id}`, { method: "DELETE" })
+                onChange(item.timestamp, null)
+                setNoteOpen(false)
+                return
+            }
+
+            const res = await fetch("/feedback", {
+                method:  "POST",
+                headers: { "Content-Type": "application/json" },
+                body:    JSON.stringify({
+                    threadKey,
+                    messageIndex: msgIndex,
+                    timestamp:    item.timestamp,
+                    vote:         next,
+                }),
+            })
+            if (!res.ok) return
+            const saved: { id: string; vote: Vote; note: string } = await res.json()
+            onChange(item.timestamp, { id: saved.id, vote: saved.vote, note: saved.note ?? "" })
+            setNote(saved.note ?? "")
+            setNoteOpen(true)
+        } catch { /* ignore — a lost vote is not worth interrupting the conversation for */ }
+        finally { setSaving(false) }
+    }, [threadKey, msgIndex, item.timestamp, vote, feedback, onChange, saving])
+
+    const saveNote = useCallback(async () => {
+        if (!feedback) return
+        setNoteOpen(false)
+        try {
+            await fetch(`/feedback/${feedback.id}`, {
+                method:  "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body:    JSON.stringify({ note }),
+            })
+            onChange(item.timestamp, { ...feedback, note })
+        } catch { /* ignore */ }
+    }, [feedback, note, item.timestamp, onChange])
+
+    const openNote = useCallback(() => {
+        setNote(feedback?.note ?? "")
+        setNoteOpen(true)
+    }, [feedback])
+
+    return (
+        <div className="feedback-wrap">
+            <button
+                className={`btn-feedback${vote === "up" ? " voted-up" : ""}`}
+                title={vote === "up" ? "Liked — click to undo" : "Good response"}
+                onClick={() => rate("up")}
+            ><ThumbIcon /></button>
+            <button
+                className={`btn-feedback${vote === "down" ? " voted-down" : ""}`}
+                title={vote === "down" ? "Disliked — click to undo" : "Bad response"}
+                onClick={() => rate("down")}
+            ><ThumbIcon down /></button>
+
+            {feedback && !noteOpen && (
+                <button className="btn-feedback btn-feedback-note" title={feedback.note || "Add a note"} onClick={openNote}>
+                    {feedback.note ? "note ✓" : "add note"}
+                </button>
+            )}
+
+            {noteOpen && feedback && (
+                <div className="feedback-note">
+                    <textarea
+                        autoFocus
+                        value={note}
+                        onChange={e => setNote(e.target.value)}
+                        placeholder={feedback.vote === "up" ? "What worked here?" : "What was wrong with it?"}
+                        onKeyDown={e => {
+                            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); saveNote() }
+                            if (e.key === "Escape") setNoteOpen(false)
+                        }}
+                    />
+                    <div className="feedback-note-actions">
+                        <button className="feedback-note-skip" onClick={() => setNoteOpen(false)}>Skip</button>
+                        <button className="feedback-note-save" onClick={saveNote}>Save</button>
+                    </div>
+                </div>
+            )}
+        </div>
+    )
+}
+
 interface Props {
     items:         ThreadItem[]
     isRemembering: boolean
@@ -218,7 +374,16 @@ function UserMessage({ item, activeThread }: { item: ThreadItem; activeThread: s
     )
 }
 
-function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus }: { item: ThreadItem; isInternal: boolean; agentName: string | null; msgIndex: number; threadStatus?: string }) {
+function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, activeThread, feedback, onFeedbackChange }: {
+    item: ThreadItem
+    isInternal: boolean
+    agentName: string | null
+    msgIndex: number
+    threadStatus?: string
+    activeThread: string | null
+    feedback?: Feedback
+    onFeedbackChange: (timestamp: string, feedback: Feedback | null) => void
+}) {
     const streaming = item.isStreaming ?? false
     const t = formatTime(item.timestamp)
     const senderLabel = isInternal ? (agentName ?? "Agent") : "A·R·I"
@@ -304,6 +469,15 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus }: { 
                 <div className="msg-footer">
                     <div className="msg-time">{t}</div>
                     {item.content && <SpeakButton content={item.content} />}
+                    {item.content && !isInternal && (
+                        <FeedbackButtons
+                            threadKey={activeThread}
+                            item={item}
+                            msgIndex={msgIndex}
+                            feedback={feedback}
+                            onChange={onFeedbackChange}
+                        />
+                    )}
                 </div>
             )}
         </div>
@@ -507,6 +681,8 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
     // Reset to bottom-follow when switching threads.
     useEffect(() => { stick.current = true }, [activeThread])
 
+    const { byTimestamp: feedback, set: setFeedback } = useFeedback(activeThread)
+
     // Track the user's scroll position: "near bottom" (within 80px) means keep auto-scrolling.
     useEffect(() => {
         const el = messagesEl.current
@@ -592,7 +768,9 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
                     data:            Object.keys(mergedData).length > 0 ? mergedData : undefined,
                 } as ThreadItem
                 const isLast = ui === units.length - 1
-                return <AriResponse key={u.key} item={merged} isInternal={isInternal} agentName={agentName} msgIndex={u.key} threadStatus={isLast ? threadStatus : undefined} />
+                return <AriResponse key={u.key} item={merged} isInternal={isInternal} agentName={agentName} msgIndex={u.key}
+                                    threadStatus={isLast ? threadStatus : undefined} activeThread={activeThread}
+                                    feedback={feedback[merged.timestamp]} onFeedbackChange={setFeedback} />
             })}
 
             {isRemembering && (
