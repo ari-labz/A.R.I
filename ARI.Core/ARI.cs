@@ -6,7 +6,7 @@ using ARI.Discord;
 using ARI.LLM;
 using ARI.Voice;
 using ARI.Voice.StyleTTS2;
-using ARI.Voice.Orpheus;
+using ARI.Voice.IndexTTS;
 using ARI.VoiceSynthesis;
 using ARI.API;
 using ARI.API.Data;
@@ -95,7 +95,6 @@ public class ARI : BackgroundService
         // pretrained checkpoint cache) — always AppData, never inside StyleTtsPath (install content,
         // may be read-only / replaced wholesale on update).
         config.modules.VoiceSynthesis.DataDir = Paths.StyleTts2Data;
-        config.modules.VoiceSynthesis.OrpheusSourcePath = Path.Combine(Paths.BuildPath, "External", "Orpheus");
 
         await Dependency.CheckPython();
         if (OperatingSystem.IsMacOS())
@@ -205,7 +204,7 @@ public class ARI : BackgroundService
                     return eng switch
                     {
                         "StyleTTS2" => CreateStyleTts(sttPath, sttDataDir, dir, model, voiceLogger),
-                        "Orpheus"   => CreateOrpheus(dir, voiceLogger),
+                        "IndexTTS"  => CreateIndexTts(dir, voiceLogger),
                         _           => null,
                     };
                 }
@@ -398,7 +397,7 @@ public class ARI : BackgroundService
             await Task.Delay(Timeout.Infinite, stoppingToken);
     }
 
-    private static readonly string[] KnownEngines = ["StyleTTS2", "Orpheus"];
+    private static readonly string[] KnownEngines = ["StyleTTS2", "IndexTTS"];
 
     private static void MigrateVoicesDirectory(string voicesPath, ILogger logger)
     {
@@ -450,19 +449,19 @@ public class ARI : BackgroundService
         return new StyleTtsSynthesiser(sttPath, sttDataDir, modelPath, configPath, refAudio, voiceLogger);
     }
 
-    private ITtsSynthesiser? CreateOrpheus(string modelDir, ILogger voiceLogger)
+    private ITtsSynthesiser? CreateIndexTts(string modelDir, ILogger voiceLogger)
     {
-        string orpheusSource = Path.Combine(Paths.BuildPath, "External", "Orpheus");
-        string[] ggufs = Directory.Exists(modelDir)
-            ? Directory.GetFiles(modelDir, "*.gguf")
-            : [];
+        string indexSource = Path.Combine(Paths.BuildPath, "External", "IndexTTS");
 
-        if (ggufs.Length == 0)
+        // IndexTTS clones a voice from one clip rather than training on a corpus,
+        // so a voice here is a reference recording, not a checkpoint.
+        string reference = Path.Combine(modelDir, "reference.wav");
+        if (!File.Exists(reference))
         {
-            _logger.LogWarning("Orpheus model directory {Path} contains no .gguf files — skipping.", modelDir);
+            _logger.LogWarning("IndexTTS voice {Path} has no reference.wav — skipping.", modelDir);
             return null;
         }
-        return new OrpheusSynthesiser(orpheusSource, ggufs[0], voiceLogger);
+        return new IndexTtsSynthesiser(indexSource, modelDir, voiceLogger);
     }
 
     // Only one audio-output stream at a time — otherwise back-to-back sentences (Speech pipeline) spawn
