@@ -28,12 +28,24 @@ voice_name: str = "tara"
 
 SAMPLE_RATE = 24_000
 SNAC_TOKENS_PER_FRAME = 7
-START_TOKEN = 128259
-END_TOKEN   = 128009
-AUDIO_OFFSET = 128266
+
+# Orpheus special tokens — must match training/prepare_dataset.py exactly.
+START_OF_HUMAN = 128259
+END_OF_TEXT    = 128009
+END_OF_HUMAN   = 128260
+START_OF_AUDIO = 128257
+END_OF_AUDIO   = 128258
+
+# Each of the 7 slots in a SNAC frame lives in its own 4096-wide band.
+AUDIO_OFFSET  = 128266
+CODEBOOK_SIZE = 4096
 
 SUPPORTED_EMOTIONS = ["<laugh>", "<chuckle>", "<sigh>", "<cough>",
                        "<sniffle>", "<groan>", "<yawn>", "<gasp>"]
+
+
+class LegacyEncodingError(RuntimeError):
+    """Raised when a voice predates the per-slot SNAC token banding."""
 
 
 def load_snac():
@@ -46,55 +58,89 @@ def load_snac():
     print(f"[Orpheus] SNAC decoder loaded on {device}", flush=True)
 
 
-def format_prompt(text: str, voice: str | None = None) -> str:
+def tokenise(text: str) -> list[int]:
+    """Tokenise via llama-server without adding a BOS the training data lacked."""
+    import urllib.request
+
+    payload = json.dumps({"content": text, "add_special": False}).encode()
+    req = urllib.request.Request(f"{llama_url}/tokenize", data=payload,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read())["tokens"]
+
+
+def format_prompt(text: str, voice: str | None = None) -> list[int]:
+    """Build the prompt as token ids, mirroring training/train.py exactly.
+
+    Returned as ids rather than a string so llama-server tokenises nothing on
+    our behalf — a stray BOS here shifts the whole sequence off what the model
+    was trained on.
+    """
     v = voice or voice_name
-    return (
-        "<|start_header_id|>system<|end_header_id|>\n\n"
-        "<|eot_id|>"
-        "<|start_header_id|>user<|end_header_id|>\n\n"
-        f"{v}: {text}"
-        "<|eot_id|>"
-        "<|start_header_id|>assistant<|end_header_id|>\n\n"
-    )
+    return ([START_OF_HUMAN]
+            + tokenise(f"{v}: {text}")
+            + [END_OF_TEXT, END_OF_HUMAN])
 
 
 def tokens_to_audio(token_ids: list[int]) -> np.ndarray:
     """Decode Orpheus SNAC tokens into a float32 PCM waveform."""
     import torch
 
-    # Find first START_TOKEN; only collect audio tokens strictly after it
+    # The model emits the audio block between START_OF_AUDIO and END_OF_AUDIO.
+    # Collect strictly inside it so a stray text token can never shift the
+    # 7-token frame boundaries and turn the whole clip into noise.
     audio_ids = []
     collecting = False
     for t in token_ids:
-        if t == START_TOKEN:
+        if t == START_OF_AUDIO:
             collecting = True
+            audio_ids.clear()   # keep only the last audio block
             continue
         if not collecting:
             continue
-        if t == END_TOKEN:
+        if t in (END_OF_AUDIO, END_OF_TEXT):
             break
         if t >= AUDIO_OFFSET:
             audio_ids.append(t - AUDIO_OFFSET)
 
-    if len(audio_ids) == 0:
-        return np.zeros(0, dtype=np.float32)
-
     # trim to multiple of 7
     n = (len(audio_ids) // SNAC_TOKENS_PER_FRAME) * SNAC_TOKENS_PER_FRAME
-    audio_ids = audio_ids[:n]
     if n == 0:
         return np.zeros(0, dtype=np.float32)
+    audio_ids = audio_ids[:n]
 
-    # redistribute into 3 codebook layers
+    # A model trained by an older prepare_dataset.py wrote every slot into band
+    # 0 instead of its own band, so it can never voice the text it is given.
+    # Say so plainly rather than emitting a clip of noise.
+    if max(audio_ids) < CODEBOOK_SIZE:
+        raise LegacyEncodingError(
+            "This voice was trained with the old flat SNAC token encoding, so it "
+            "cannot follow the text it is given. Regenerate the dataset with "
+            "training/prepare_dataset.py and retrain the voice."
+        )
+
+    # undo the per-slot band offset, then redistribute into 3 codebook layers
     layer1, layer2, layer3 = [], [], []
+    dropped = 0
     for i in range(0, n, SNAC_TOKENS_PER_FRAME):
-        layer1.append(audio_ids[i])
-        layer2.append(audio_ids[i + 1])
-        layer3.append(audio_ids[i + 2])
-        layer3.append(audio_ids[i + 3])
-        layer2.append(audio_ids[i + 4])
-        layer3.append(audio_ids[i + 5])
-        layer3.append(audio_ids[i + 6])
+        frame = [audio_ids[i + slot] - slot * CODEBOOK_SIZE
+                 for slot in range(SNAC_TOKENS_PER_FRAME)]
+        if any(c < 0 or c >= CODEBOOK_SIZE for c in frame):
+            dropped += 1        # slot landed outside its band; skip the frame
+            continue
+        layer1.append(frame[0])
+        layer2.append(frame[1])
+        layer3.append(frame[2])
+        layer3.append(frame[3])
+        layer2.append(frame[4])
+        layer3.append(frame[5])
+        layer3.append(frame[6])
+
+    if dropped:
+        print(f"[Orpheus] dropped {dropped}/{n // SNAC_TOKENS_PER_FRAME} malformed frames",
+              flush=True)
+    if not layer1:
+        return np.zeros(0, dtype=np.float32)
 
     device = next(snac_model.parameters()).device
     codes = [
@@ -127,9 +173,15 @@ def pcm_to_wav(pcm: np.ndarray, sr: int = SAMPLE_RATE) -> bytes:
     return buf.getvalue()
 
 
-def call_llama(prompt: str, max_tokens: int = 1200, temperature: float = 0.6,
+def call_llama(prompt: list[int], max_tokens: int = 1200, temperature: float = 0.6,
                top_p: float = 0.9, repetition_penalty: float = 1.1) -> list[int]:
-    """Call llama-server /completion (streaming) and return generated token IDs."""
+    """Call llama-server /completion (streaming) and return generated token IDs.
+
+    `prompt` is a list of token ids so llama-server does no tokenising of its
+    own.  cache_prompt is off because slot reuse lets a previous request's
+    audio block satisfy the prefix, after which the model emits an immediate
+    end-of-text and the request comes back with no audio at all.
+    """
     import urllib.request, urllib.error
 
     payload = json.dumps({
@@ -138,7 +190,6 @@ def call_llama(prompt: str, max_tokens: int = 1200, temperature: float = 0.6,
         "temperature": temperature,
         "top_p": top_p,
         "repeat_penalty": repetition_penalty,
-        "stop": ["<|eot_id|>"],
         "stream": True,
         "cache_prompt": False,
     }).encode()
@@ -150,7 +201,6 @@ def call_llama(prompt: str, max_tokens: int = 1200, temperature: float = 0.6,
     )
     try:
         token_ids = []
-        first_logged = False
         with urllib.request.urlopen(req, timeout=120) as resp:
             for raw_line in resp:
                 line = raw_line.decode("utf-8").strip()
@@ -161,23 +211,17 @@ def call_llama(prompt: str, max_tokens: int = 1200, temperature: float = 0.6,
                 try:
                     chunk = json.loads(json_str)
                 except json.JSONDecodeError:
-                    if not first_logged:
-                        print(f"[Orpheus] raw line (not JSON): {repr(line[:120])}", flush=True)
-                        first_logged = True
                     continue
-                if not first_logged:
-                    print(f"[Orpheus] first chunk keys: {list(chunk.keys())}, tokens val: {repr(chunk.get('tokens'))[:120]}", flush=True)
-                    first_logged = True
-                # newer llama.cpp uses 'tokens' (list of ints) per chunk
+                # newer llama.cpp reports generated ids as 'tokens' per chunk
                 toks = chunk.get("tokens")
                 if isinstance(toks, list):
                     token_ids.extend(toks)
                 elif isinstance(toks, int):
                     token_ids.append(toks)
+                if END_OF_AUDIO in token_ids:
+                    break
                 if chunk.get("stop"):
                     break
-        audio_count = sum(1 for t in token_ids if t >= AUDIO_OFFSET)
-        print(f"[Orpheus] stream: {len(token_ids)} tokens, {audio_count} audio, first 10: {token_ids[:10]}", flush=True)
         return token_ids
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="replace")
@@ -218,7 +262,11 @@ def synthesise():
     tokens = call_llama(prompt, max_tokens, temperature, top_p, rep_penalty)
     t_llm = time.perf_counter() - t0
 
-    pcm = tokens_to_audio(tokens)
+    try:
+        pcm = tokens_to_audio(tokens)
+    except LegacyEncodingError as e:
+        print(f"[Orpheus] {e}", file=sys.stderr, flush=True)
+        return jsonify({"error": str(e)}), 500
     t_decode = time.perf_counter() - t0 - t_llm
 
     if pcm.size == 0:
@@ -290,13 +338,17 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8021, help="Port for this Flask server")
     parser.add_argument("--llama-port", type=int, default=8024, help="Port for llama-server")
     parser.add_argument("--llama-url", default="", help="URL of already-running llama-server")
-    parser.add_argument("--voice", default="tara", help="Default voice name")
+    parser.add_argument("--voice", default="", help="Default voice name (defaults to the model's own name)")
     parser.add_argument("--gpu-layers", type=int, default=0)
     parser.add_argument("--ctx-size", type=int, default=1024)
     parser.add_argument("--llama-exe", default="llama-server", help="Path to llama-server executable")
     args = parser.parse_args()
 
-    voice_name = args.voice
+    # A fine-tune only answers to the speaker name its dataset was built with,
+    # and prepare_dataset.py uses the model's own name.  Falling back to a stock
+    # voice the fine-tune never saw leaves the model unconditioned.
+    voice_name = args.voice or (Path(args.model).stem if args.model else "tara")
+    print(f"[Orpheus] Voice: {voice_name}", flush=True)
 
     if args.llama_url:
         llama_url = args.llama_url.rstrip("/")

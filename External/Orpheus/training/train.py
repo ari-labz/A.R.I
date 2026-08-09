@@ -21,6 +21,12 @@ MAX_SEQ_LEN = 2048
 LORA_R      = 64
 LORA_ALPHA  = 64
 
+# Orpheus wraps the transcript in these before the audio tokens.  Inference has
+# to build the identical prefix (see External/Orpheus/serve.py).
+START_OF_HUMAN = 128259
+END_OF_TEXT    = 128009
+END_OF_HUMAN   = 128260
+
 HAS_CUDA = torch.cuda.is_available()
 
 try:
@@ -98,7 +104,9 @@ def main():
 
     tokenized_examples = []
     for ex in raw_examples:
-        prompt_tokens = tokenizer.encode(ex["text"], add_special_tokens=False)
+        prompt_tokens = ([START_OF_HUMAN]
+                         + tokenizer.encode(ex["text"], add_special_tokens=False)
+                         + [END_OF_TEXT, END_OF_HUMAN])
         full_ids = prompt_tokens + ex["audio_tokens"]
         full_ids = full_ids[:args.max_seq_len]
         tokenized_examples.append({

@@ -4042,27 +4042,43 @@ document.getElementById('sp-speed').addEventListener('change', saveVoiceSettings
 document.getElementById('sp-pause').addEventListener('change', saveVoiceSettings);
 loadVoiceSettings();
 
+// Safari caps how many AudioContexts a page may create, so share one for the
+// whole panel and just resume it from inside each click handler.
+let vsAudioCtx = null;
+function vsGetAudioContext() {
+    if (!vsAudioCtx) vsAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    return vsAudioCtx;
+}
+
 vsTvSpeakBtn.addEventListener('click', async () => {
     const text = vsTvText.value.trim(), modelName = vsTvModel.value;
     if (!text) return;
     vsTvSpeakBtn.disabled = true; vsTvStatus.textContent = 'Synthesising…';
+    // Resume synchronously inside the gesture so Safari keeps playback unlocked.
+    const audioCtx = vsGetAudioContext();
+    const resumed = audioCtx.state === 'suspended' ? audioCtx.resume() : Promise.resolve();
     try {
         const checkpointPath = vsTvEpoch.value || null;
         const resp = await fetch('/voice/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, modelName, checkpointPath, ...getSynthParams() }) });
-        if (!resp.ok) { const err = await resp.json().catch(() => ({ error: resp.statusText })); vsTvStatus.textContent = 'Error: ' + (err.error ?? resp.statusText); }
-        else {
-            const audioCtx = new AudioContext();
-            if (audioCtx.state === 'suspended') await audioCtx.resume();
-            const buf = await audioCtx.decodeAudioData(await resp.arrayBuffer());
-            const gain = audioCtx.createGain();
-            gain.gain.value = getVolumePct() / 100;
-            const src = audioCtx.createBufferSource();
-            src.buffer = buf;
-            src.connect(gain); gain.connect(audioCtx.destination);
-            src.start();
-            vsTvStatus.textContent = '';
-        }
-    } catch (err) { vsTvStatus.textContent = 'Error: ' + err.message; }
+        if (!resp.ok) { const err = await resp.json().catch(() => ({ error: resp.statusText })); vsTvStatus.textContent = 'Error: ' + (err.error ?? resp.statusText); return; }
+        const bytes = await resp.arrayBuffer();
+        if (bytes.byteLength === 0) { vsTvStatus.textContent = 'Error: server returned no audio'; return; }
+        await resumed;
+        const buf = await audioCtx.decodeAudioData(bytes);
+        const gain = audioCtx.createGain();
+        gain.gain.value = getVolumePct() / 100;
+        const src = audioCtx.createBufferSource();
+        src.buffer = buf;
+        src.connect(gain); gain.connect(audioCtx.destination);
+        src.start();
+        vsTvStatus.textContent = audioCtx.state === 'running'
+            ? `Playing ${buf.duration.toFixed(1)}s…`
+            : `Audio blocked by browser (context ${audioCtx.state})`;
+        src.onended = () => { vsTvStatus.textContent = ''; };
+    } catch (err) {
+        console.error('[voice] speak failed', err);
+        vsTvStatus.textContent = 'Error: ' + err.message;
+    }
     finally { vsTvSpeakBtn.disabled = false; }
 });
 vsTvText.addEventListener('keydown', e => { if (e.key === 'Enter') vsTvSpeakBtn.click(); });
