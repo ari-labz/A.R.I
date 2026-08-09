@@ -18,9 +18,23 @@ from snac import SNAC
 
 
 SAMPLE_RATE = 24_000
-START_TOKEN = 128259
-END_TOKEN   = 128009
-AUDIO_OFFSET = 128266
+
+# Orpheus special tokens.  These are the ids the base model was pretrained
+# with, so training data has to use them exactly or the fine-tune fights the
+# representation the base model already has.
+START_OF_HUMAN = 128259
+END_OF_TEXT    = 128009
+END_OF_HUMAN   = 128260
+START_OF_AUDIO = 128257
+END_OF_AUDIO   = 128258
+
+# Audio vocabulary: the 7 slots of a SNAC frame occupy 7 *disjoint* 4096-wide
+# bands, so slot j uses ids [AUDIO_OFFSET + j*4096, AUDIO_OFFSET + (j+1)*4096).
+# Writing every slot at AUDIO_OFFSET instead collapses all seven onto band 0,
+# which collides with the base model's pretrained audio vocabulary and stops
+# the model ever learning the text-to-speech mapping.
+AUDIO_OFFSET  = 128266
+CODEBOOK_SIZE = 4096
 
 
 def encode_audio(snac_model: SNAC, wav_path: str, device: str) -> list[int]:
@@ -50,14 +64,11 @@ def encode_audio(snac_model: SNAC, wav_path: str, device: str) -> list[int]:
     n_frames = len(l1)
     token_ids = []
     for i in range(n_frames):
-        # 7 tokens per frame: l1[i], l2[2i], l3[4i], l3[4i+1], l2[2i+1], l3[4i+2], l3[4i+3]
-        token_ids.append(l1[i] + AUDIO_OFFSET)
-        token_ids.append(l2[2 * i] + AUDIO_OFFSET)
-        token_ids.append(l3[4 * i] + AUDIO_OFFSET)
-        token_ids.append(l3[4 * i + 1] + AUDIO_OFFSET)
-        token_ids.append(l2[2 * i + 1] + AUDIO_OFFSET)
-        token_ids.append(l3[4 * i + 2] + AUDIO_OFFSET)
-        token_ids.append(l3[4 * i + 3] + AUDIO_OFFSET)
+        # 7 tokens per frame, each shifted into its own codebook band
+        frame = [l1[i], l2[2 * i], l3[4 * i], l3[4 * i + 1],
+                 l2[2 * i + 1], l3[4 * i + 2], l3[4 * i + 3]]
+        for slot, code in enumerate(frame):
+            token_ids.append(code + AUDIO_OFFSET + slot * CODEBOOK_SIZE)
 
     return token_ids
 
@@ -116,7 +127,7 @@ def main():
         prompt = f"{args.voice}: {transcript}"
         examples.append({
             "prompt": prompt,
-            "audio_tokens": [START_TOKEN] + snac_tokens + [END_TOKEN],
+            "audio_tokens": [START_OF_AUDIO] + snac_tokens + [END_OF_AUDIO],
             "file": wav_path.name,
             "duration_tokens": len(snac_tokens),
         })
