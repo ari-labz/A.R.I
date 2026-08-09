@@ -9,6 +9,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Net.Http.Headers;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace ARI.API.Controllers;
 
@@ -1433,6 +1434,147 @@ public record TrainRequest(
     int    SaveEveryNEpochs = 10,
     string QuantType       = "q4_k_m",
     Dictionary<string, string>? Transcripts = null);
+
+/// <summary>One of ARI's optional subsystems, as shown on the control panel's Modules tab.</summary>
+/// <param name="Key">Key under "Modules" in AriConfig.json.</param>
+/// <param name="Name">Human-readable name.</param>
+/// <param name="Description">What the module does, in plain English.</param>
+/// <param name="Running">Whether it is actually live in this process right now.</param>
+/// <param name="Required">Modules that cannot be turned off — switching them off would
+/// take the control panel itself away, leaving no way to turn them back on.</param>
+public record ModuleInfo(string Key, string Name, string Description, bool Enabled, bool Running, bool Required);
+
+[Route("modules")]
+[ApiController]
+public class ModulesApiController(ILogger<ModulesApiController> logger) : ControllerBase
+{
+    // Description and display order for the Modules tab. The keys match AriConfig.json's
+    // "Modules" object, which is the only place a module's on/off state is stored.
+    private static readonly (string Key, string Name, string Description, bool Required)[] Catalogue =
+    [
+        ("LLM", "Language model",
+         "Runs the local model servers behind every reply Ari gives. With this off Ari cannot think or hold a conversation.", true),
+        ("API", "Web control panel",
+         "Serves this control panel and the web chat. Turning it off would leave no way to turn it back on.", true),
+        ("Voice", "Voice",
+         "Speaks Ari's replies out loud using the active speech engine.", false),
+        ("VoiceSynthesis", "Voice training",
+         "Installs the speech engines and trains new voices from your recordings.", false),
+        ("Listener", "Listener",
+         "Transcribes your microphone with Whisper so you can talk to Ari instead of typing.", false),
+        ("Brain", "Brain",
+         "Stores Ari's long-term memory as an Obsidian vault of notes she can search and add to.", false),
+        ("Discord", "Discord",
+         "Connects Ari to Discord so she can read and reply to messages and join voice channels.", false),
+        ("Scheduler", "Scheduler",
+         "Runs background jobs on a cron schedule, such as memory upkeep and periodic checks.", false),
+    ];
+
+    private static bool IsRunning(string key) => key switch
+    {
+        "LLM"            => Modules.Llm            is not null,
+        "Voice"          => Modules.Voice          is not null,
+        "VoiceSynthesis" => Modules.VoiceSynthesis is not null,
+        "Listener"       => Modules.Listener       is not null,
+        "Brain"          => Modules.Brain          is not null,
+        "Discord"        => Modules.Discord        is not null,
+        "Scheduler"      => Modules.Scheduler      is not null,
+        // Answering this request is itself proof the web panel is up.
+        "API"            => true,
+        _                => false,
+    };
+
+    [HttpGet]
+    public IActionResult GetModules()
+    {
+        JsonObject? modules = ReadModulesNode(out string? error);
+        if (modules is null)
+            return StatusCode(500, new { error });
+
+        var result = Catalogue.Select(m => new ModuleInfo(
+            m.Key, m.Name, m.Description,
+            Enabled:  modules[m.Key]?["Enabled"]?.GetValue<bool>() ?? false,
+            Running:  IsRunning(m.Key),
+            Required: m.Required)).ToList();
+
+        return Ok(new { modules = result });
+    }
+
+    [HttpPut("{key}")]
+    public IActionResult SetEnabled(string key, [FromBody] SetModuleEnabledRequest req)
+    {
+        var entry = Catalogue.FirstOrDefault(m => m.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+        if (entry.Key is null)
+            return NotFound(new { error = $"Unknown module '{key}'." });
+
+        if (entry.Required && !req.Enabled)
+            return BadRequest(new { error = $"{entry.Name} cannot be turned off — {entry.Description}" });
+
+        string path = Paths.AriConfig;
+        JsonObject? modules = ReadModulesNode(out string? error, out JsonNode? root);
+        if (modules is null || root is null)
+            return StatusCode(500, new { error });
+
+        if (modules[entry.Key] is not JsonObject moduleNode)
+            return StatusCode(500, new { error = $"AriConfig.json has no '{entry.Key}' module to change." });
+
+        moduleNode["Enabled"] = req.Enabled;
+
+        try
+        {
+            // Rewrite through the parsed tree so every other setting — ports, paths and any
+            // ${SECRET} placeholders — comes back out exactly as it went in.
+            string json = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+            System.IO.File.WriteAllText(path, json);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[Modules] Failed to write {Path}.", path);
+            return StatusCode(500, new { error = $"Could not save AriConfig.json: {ex.Message}" });
+        }
+
+        logger.LogInformation("[Modules] {Module} set to {State} — takes effect on next restart.",
+            entry.Name, req.Enabled ? "enabled" : "disabled");
+
+        return Ok(new { key = entry.Key, enabled = req.Enabled, restartRequired = true });
+    }
+
+    private static JsonObject? ReadModulesNode(out string? error) => ReadModulesNode(out error, out _);
+
+    private static JsonObject? ReadModulesNode(out string? error, out JsonNode? root)
+    {
+        error = null;
+        root  = null;
+        string path = Paths.AriConfig;
+
+        if (!System.IO.File.Exists(path))
+        {
+            error = $"No AriConfig.json found at {path}.";
+            return null;
+        }
+
+        try
+        {
+            root = JsonNode.Parse(System.IO.File.ReadAllText(path),
+                documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
+        }
+        catch (Exception ex)
+        {
+            error = $"Could not read AriConfig.json: {ex.Message}";
+            return null;
+        }
+
+        if (root?["Modules"] is not JsonObject modules)
+        {
+            error = "AriConfig.json has no \"Modules\" section.";
+            return null;
+        }
+
+        return modules;
+    }
+}
+
+public record SetModuleEnabledRequest(bool Enabled);
 
 public record SpeakRequest(string Text, string? ModelName = null, string? CheckpointPath = null,
     int DiffusionSteps = 5, float Alpha = 0.3f, float Beta = 0.7f, float EmbeddingScale = 1.0f,
