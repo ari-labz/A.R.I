@@ -112,6 +112,12 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
     out = out.split("<!--ari-plan-proposed-->").join(
         `\n\n<div class="tool-card tool-card--plan"><span>Ari proposed a plan</span></div>\n\n`)
 
+    // Persona edit: only the typed-block path can render the diff and its buttons (the marker carries just
+    // an id). In the raw-string path — history export, any client rendering content rather than blocks —
+    // leave a plain chip rather than a stray HTML comment.
+    out = out.replace(/<!--ari-persona-edit:[^>]*?-->/g,
+        `\n\n<div class="tool-card tool-card--plan"><span>Ari proposed a persona change</span></div>\n\n`)
+
     // Mode switch (replan): a light-blue info card, NOT an error.
     out = out.replace(TOOL_MODE_RE, (_, _name, rawLabel) => {
         const label = rawLabel.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">")
@@ -195,12 +201,44 @@ type BlockLike = {
     text?: string; fileName?: string; path?: string; pattern?: string; command?: string
     task?: string; project?: string; added?: number; removed?: number; patch?: string
     label?: string; blocks?: BlockLike[]
+    proposalId?: string; reason?: string; oldText?: string; newText?: string; status?: string
 }
 
 function diffBadges(added = 0, removed = 0): string {
     const a = added   > 0 ? `<span class="diff-badge diff-badge--add" data-target="${added}" data-dir="up" data-static="1">+<span class="badge-digits">${added}</span></span>`   : ""
     const d = removed > 0 ? `<span class="diff-badge diff-badge--del" data-target="${removed}" data-dir="down" data-static="1">-<span class="badge-digits">${removed}</span></span>` : ""
     return (a || d) ? `<span class="diff-badges">${a}${d}</span>` : ""
+}
+
+// A proposed persona change: the reason, the before/after, and — while it is still pending — the two
+// buttons that are the only thing standing between the proposal and her actual persona file.
+function personaEditHtml(block: BlockLike): string {
+    const status = block.status ?? "pending"
+    const id     = block.proposalId ?? ""
+
+    const lines = (text: string, sign: "-" | "+") =>
+        text.length === 0 ? "" : text.split("\n").map(l =>
+            `<div class="diff-line diff-line--${sign === "+" ? "add" : "del"}">${escHtml(sign + " " + l)}</div>`).join("")
+
+    const diff = lines(block.oldText ?? "", "-") + lines(block.newText ?? "", "+")
+
+    const decision = status === "pending"
+        ? `<div class="persona-edit-actions">
+               <button class="persona-edit-btn persona-edit-approve" data-persona-approve="${escHtml(id)}">Approve &amp; update persona</button>
+               <button class="persona-edit-btn persona-edit-reject" data-persona-reject="${escHtml(id)}">Reject</button>
+           </div>`
+        : `<div class="persona-edit-status persona-edit-status--${escHtml(status)}">${
+               status === "approved" ? "Applied to her persona — live from her next message."
+             : status === "rejected" ? "Rejected — persona unchanged."
+             : "Out of date: the persona changed since this was proposed."
+           }</div>`
+
+    return `\n\n<div class="persona-edit persona-edit--${escHtml(status)}">
+        <div class="persona-edit-head">Ari wants to change her persona</div>
+        ${block.reason ? `<div class="persona-edit-reason">${escHtml(block.reason)}</div>` : ""}
+        <div class="persona-edit-diff">${diff}</div>
+        ${decision}
+    </div>\n\n`
 }
 
 // Renders ONE typed ContentBlock to HTML. Text blocks become markdown; cards become their tool-card markup
@@ -218,6 +256,10 @@ export function renderBlockHtml(block: BlockLike): string {
         return `\n\n<div class="tool-card tool-card--plan"><span>Ari proposed a plan</span></div>\n\n`
     if (block.type === "mode")
         return `\n\n<div class="tool-card tool-card--mode"><span>${escHtml(block.text ?? "")}</span></div>\n\n`
+
+    // Persona edit: the one card that carries its own decision, because it is a decision about this reply
+    // and belongs beside it — not in the composer, where it would read as a reply to the next message.
+    if (block.type === "personaEdit") return personaEditHtml(block)
 
     // Subthread anchor: a child thread rendered inline. Default-expanded and, when open, styled to look like
     // the blocks simply belong to the parent (no bubble chrome) — collapsing hides them behind the label.

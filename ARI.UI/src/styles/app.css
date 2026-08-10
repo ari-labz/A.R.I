@@ -962,6 +962,40 @@ button, a, input, select, textarea, label, [role="button"] {
 .btn-speak.speaking { opacity: 1; color: var(--accent, #223742); animation: speak-pulse 1.2s ease-in-out infinite; }
 @keyframes speak-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
+/* ── persona edit proposal ──────────────────────────────── */
+.persona-edit {
+    margin: 10px 0; padding: 12px 14px;
+    border: 1px solid #d8c3a5; border-left: 3px solid #b08968; border-radius: 8px;
+    background: #fdfaf5;
+    transition: background-color 0.55s ease, border-color 0.55s ease;
+}
+.persona-edit--approved { border-left-color: #16a34a; }
+.persona-edit--rejected, .persona-edit--stale { opacity: 0.72; border-left-color: #9ca3af; }
+
+.persona-edit-head   { font-size: 13px; font-weight: 700; color: #7c5c3e; margin-bottom: 4px; }
+.persona-edit-reason { font-size: 12.5px; line-height: 1.55; color: #6b5745; margin-bottom: 8px; }
+.persona-edit-diff {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.55;
+    border-radius: 6px; overflow-x: auto; background: rgba(0,0,0,0.03); padding: 6px 8px;
+}
+.persona-edit-actions { display: flex; gap: 8px; margin-top: 10px; }
+.persona-edit-btn {
+    font-size: 12.5px; padding: 6px 14px; border-radius: 6px; cursor: pointer;
+    border: 1px solid #d8c3a5; background: #ffffff; color: #7c5c3e;
+    transition: opacity 0.15s;
+}
+.persona-edit-btn[disabled] { opacity: 0.5; cursor: default; }
+.persona-edit-approve { background: #7c5c3e; border-color: #7c5c3e; color: #ffffff; }
+.persona-edit-status  { font-size: 12px; margin-top: 9px; color: #6b7280; }
+.persona-edit-status--approved { color: #16a34a; }
+
+#main.code-mode .persona-edit          { background: #1a1710; border-color: #3b3226; }
+#main.code-mode .persona-edit-head     { color: #c9a87c; }
+#main.code-mode .persona-edit-reason   { color: #9d8b76; }
+#main.code-mode .persona-edit-diff     { background: rgba(255,255,255,0.04); }
+#main.code-mode .persona-edit-btn      { background: #1a1710; border-color: #3b3226; color: #c9a87c; }
+#main.code-mode .persona-edit-approve  { background: #7c5c3e; border-color: #7c5c3e; color: #ffffff; }
+
 /* ── response feedback (thumbs + note) ──────────────────── */
 .feedback-wrap { display: flex; align-items: center; gap: 2px; position: relative; }
 .btn-feedback {

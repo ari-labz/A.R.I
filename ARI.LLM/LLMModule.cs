@@ -335,9 +335,16 @@ public class LLMModule : ILLMModule, IDisposable
         new ListTools().Register(thread);
         new RequestTools(thread).Register(thread);
         // Discord threads get discord_tools hot — no request_tools round-trip needed.
-        if (threadKey.StartsWith("dm:", StringComparison.OrdinalIgnoreCase) ||
-            threadKey.StartsWith("guild:", StringComparison.OrdinalIgnoreCase))
+        bool isDiscord = threadKey.StartsWith("dm:", StringComparison.OrdinalIgnoreCase) ||
+                         threadKey.StartsWith("guild:", StringComparison.OrdinalIgnoreCase);
+        if (isDiscord)
             ToolFactories.LoadGroup("discord_tools", thread);
+        // propose_persona_edit is hot for the same reason: the moment worth proposing a persona change is a
+        // moment the user is criticising her, and a list_tools → request_tools discovery hop is not something
+        // to rely on mid-apology. Chat clients only — the proposal is approved by clicking a diff, which a
+        // Discord or voice thread has no way to show.
+        if (!isDiscord && type is ThreadPipeline.Dialogue or ThreadPipeline.Code)
+            ToolFactories.LoadGroup("persona_tools", thread);
         thread.Updated          += () => Broadcast(new AppEvent("threadUpdated", threadKey));
         thread.Deleted          += () => { threads.TryRemove(threadKey, out _); Broadcast(new AppEvent("threadDeleted", threadKey)); };
         thread.Streaming        += text => Broadcast(new AppEvent("streaming", threadKey, text));
@@ -853,6 +860,13 @@ public class LLMModule : ILLMModule, IDisposable
     }
 
     public bool IsThreadProcessing(string threadKey) => processingThreads.ContainsKey(threadKey);
+
+    /// <summary>Tells watchers a thread's rendered history changed for a reason outside a turn — currently
+    /// a persona proposal being approved or rejected, which repaints its card without the model running.</summary>
+    public void NotifyThreadUpdated(string threadKey)
+    {
+        if (threads.TryGetValue(threadKey, out Thread? thread)) thread.RaiseUpdated();
+    }
 
     public bool IsEngramSweeping(string threadKey) => engram?.IsSweeping(threadKey) ?? false;
 

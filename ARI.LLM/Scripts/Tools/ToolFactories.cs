@@ -41,6 +41,9 @@ internal static class ToolFactories
         ["rename_project"] = _ => Modules.Projects is not null ? new RenameProject() : null,
         ["bind_project"]   = t => Modules.Projects is not null ? new BindProject(t)  : null,
 
+        // Available on any thread — the persona is global, not project-bound.
+        ["propose_persona_edit"] = t => new ProposePersonaEdit(t),
+
         ["discord_list_voice_channels"] = _ => Modules.Discord is not null ? new DiscordListVoiceChannels() : null,
         ["discord_join_voice_channel"]  = _ => Modules.Discord is not null ? new DiscordJoinVoiceChannel()  : null,
         ["discord_leave_voice_channel"] = _ => Modules.Discord is not null ? new DiscordLeaveVoiceChannel() : null,
