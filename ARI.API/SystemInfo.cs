@@ -171,6 +171,189 @@ public class SystemInfo
         catch { return 0; }
     }
 
+    public record GpuInfo(string Name, long VramBytes);
+
+    public List<GpuInfo> GetGpus()
+    {
+        var gpus = new List<GpuInfo>();
+        try
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                // Apple Silicon shares unified memory — report total physical RAM as "VRAM"
+                var psi = new ProcessStartInfo("/bin/sh", "-c \"system_profiler SPDisplaysDataType -json\"")
+                    { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+                using Process p = Process.Start(psi)!;
+                string json = p.StandardOutput.ReadToEnd();
+                p.WaitForExit();
+
+                using var doc = System.Text.Json.JsonDocument.Parse(json);
+                // Fetch total physical RAM once — Apple Silicon shares it as unified GPU/CPU memory
+                long hwMemsize = 0;
+                var hwPsi = new ProcessStartInfo("/bin/sh", "-c \"sysctl -n hw.memsize\"")
+                    { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+                using (Process hw = Process.Start(hwPsi)!)
+                {
+                    string hwOut = hw.StandardOutput.ReadToEnd().Trim();
+                    hw.WaitForExit();
+                    long.TryParse(hwOut, out hwMemsize);
+                }
+
+                foreach (var display in doc.RootElement.GetProperty("SPDisplaysDataType").EnumerateArray())
+                {
+                    string name = display.TryGetProperty("sppci_model", out var n) ? n.GetString() ?? "Unknown" : "Unknown";
+
+                    long vram = 0;
+                    bool builtin = display.TryGetProperty("sppci_bus", out var bus)
+                                   && bus.GetString()?.Contains("builtin", StringComparison.OrdinalIgnoreCase) == true;
+
+                    if (builtin)
+                    {
+                        // Apple Silicon — unified memory pool shared between CPU and GPU
+                        vram = hwMemsize;
+                    }
+                    else if (display.TryGetProperty("sppci_vram", out var vramStr))
+                    {
+                        string vs = vramStr.GetString() ?? "";
+                        var match = System.Text.RegularExpressions.Regex.Match(vs, @"(\d+)\s*(MB|GB)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        if (match.Success)
+                        {
+                            long val = long.Parse(match.Groups[1].Value);
+                            vram = match.Groups[2].Value.Equals("GB", StringComparison.OrdinalIgnoreCase) ? val * 1073741824 : val * 1048576;
+                        }
+                    }
+                    gpus.Add(new GpuInfo(name, vram));
+                }
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                // Try nvidia-smi first for NVIDIA GPUs (accurate VRAM)
+                try
+                {
+                    var nv = new ProcessStartInfo("nvidia-smi", "--query-gpu=name,memory.total --format=csv,noheader,nounits")
+                        { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+                    using Process nvp = Process.Start(nv)!;
+                    string nvOut = nvp.StandardOutput.ReadToEnd();
+                    nvp.WaitForExit();
+                    if (nvp.ExitCode == 0)
+                    {
+                        foreach (string line in nvOut.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                        {
+                            string[] parts = line.Split(',');
+                            if (parts.Length >= 2)
+                            {
+                                string gpuName = parts[0].Trim();
+                                long vramMb = long.TryParse(parts[1].Trim(), out long mb) ? mb : 0;
+                                gpus.Add(new GpuInfo(gpuName, vramMb * 1048576));
+                            }
+                        }
+                    }
+                }
+                catch { }
+
+                // Fallback to WMI for non-NVIDIA or if nvidia-smi failed
+                if (gpus.Count == 0)
+                {
+                    var wmi = new ProcessStartInfo("cmd.exe", "/c wmic path win32_VideoController get Name,AdapterRAM /format:csv")
+                        { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+                    using Process wp = Process.Start(wmi)!;
+                    string wmiOut = wp.StandardOutput.ReadToEnd();
+                    wp.WaitForExit();
+                    foreach (string line in wmiOut.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        string[] cols = line.Split(',');
+                        if (cols.Length >= 3 && cols[1].Trim() != "AdapterRAM")
+                        {
+                            long adapterRam = long.TryParse(cols[1].Trim(), out long ar) ? ar : 0;
+                            string gpuName = cols[2].Trim();
+                            if (!string.IsNullOrEmpty(gpuName))
+                                gpus.Add(new GpuInfo(gpuName, adapterRam));
+                        }
+                    }
+                }
+            }
+            else // Linux
+            {
+                try
+                {
+                    var nv = new ProcessStartInfo("nvidia-smi", "--query-gpu=name,memory.total --format=csv,noheader,nounits")
+                        { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+                    using Process nvp = Process.Start(nv)!;
+                    string nvOut = nvp.StandardOutput.ReadToEnd();
+                    nvp.WaitForExit();
+                    if (nvp.ExitCode == 0)
+                    {
+                        foreach (string line in nvOut.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                        {
+                            string[] parts = line.Split(',');
+                            if (parts.Length >= 2)
+                            {
+                                string gpuName = parts[0].Trim();
+                                long vramMb = long.TryParse(parts[1].Trim(), out long mb) ? mb : 0;
+                                gpus.Add(new GpuInfo(gpuName, vramMb * 1048576));
+                            }
+                        }
+                    }
+                }
+                catch { }
+            }
+        }
+        catch { }
+        return gpus;
+    }
+
+    public long GetTotalPhysicalRamBytes()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            try
+            {
+                var psi = new ProcessStartInfo("/bin/sh", "-c \"sysctl -n hw.memsize\"")
+                    { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+                using Process p = Process.Start(psi)!;
+                string output = p.StandardOutput.ReadToEnd().Trim();
+                p.WaitForExit();
+                if (long.TryParse(output, out long bytes)) return bytes;
+            }
+            catch { }
+        }
+        else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            try
+            {
+                var psi = new ProcessStartInfo("cmd.exe", "/c wmic ComputerSystem get TotalPhysicalMemory /format:csv")
+                    { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+                using Process p = Process.Start(psi)!;
+                string output = p.StandardOutput.ReadToEnd();
+                p.WaitForExit();
+                foreach (string line in output.Split('\n'))
+                {
+                    string[] cols = line.Split(',');
+                    if (cols.Length >= 2 && long.TryParse(cols[^1].Trim(), out long bytes))
+                        return bytes;
+                }
+            }
+            catch { }
+        }
+        else // Linux
+        {
+            try
+            {
+                string meminfo = System.IO.File.ReadAllText("/proc/meminfo");
+                foreach (string line in meminfo.Split('\n'))
+                {
+                    if (line.StartsWith("MemTotal:"))
+                    {
+                        string val = line["MemTotal:".Length..].Trim().Replace("kB", "").Trim();
+                        if (long.TryParse(val, out long kb)) return kb * 1024;
+                    }
+                }
+            }
+            catch { }
+        }
+        return 0;
+    }
+
     private static long PhysFootprint(int pid)
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX))

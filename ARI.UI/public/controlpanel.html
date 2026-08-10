@@ -313,6 +313,17 @@ html, body {
 .mdl-tag-vision { background:#fff7ed; color:#c2410c; }
 .mdl-tag-mtp    { background:#fef9c3; color:#854d0e; }
 .mdl-tag-think  { background:#eef2ff; color:#4338ca; }
+.wiz-group-hdr { font-size:13px; font-weight:700; color:var(--text-dim); padding:12px 0 6px; border-top:1px solid var(--border); }
+.wiz-group-hdr:first-child { border-top:none; padding-top:0; }
+.wiz-quant-row { display:flex; align-items:center; gap:10px; padding:8px 12px; border-radius:8px; cursor:pointer; transition:background .12s; }
+.wiz-quant-row:hover { background:var(--sidebar-hover,rgba(0,0,0,.04)); }
+.wiz-quant-row.selected { background:var(--accent,#223742)18; border:2px solid var(--accent,#223742); margin:-2px; }
+.wiz-fit-icon { width:20px; height:20px; flex-shrink:0; border-radius:4px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; }
+.wiz-fit-icon.fits  { background:#dcfce7; color:#16a34a; }
+.wiz-fit-icon.tight { background:#fef9c3; color:#854d0e; }
+.wiz-fit-icon.no    { background:#fee2e2; color:#dc2626; }
+.wiz-quant-name { font-size:13px; font-weight:600; min-width:130px; }
+.wiz-quant-size { font-size:12px; color:var(--text-dim); }
 .mdl-tag-quant  { background:#f1f5f9; color:#475569; }
 .mdl-tag-perf   { background:#ecfdf5; color:#065f46; }
 .mdl-tag-dim    { background:#f3f4f6; color:#9ca3af; }
@@ -540,19 +551,25 @@ html, body {
         <button class="vs-btn-primary" id="mdl-toggle-add-btn" type="button">+ Add Model</button>
       </div>
 
-      <!-- Add model form (hidden by default) -->
+      <!-- Add model wizard -->
       <div class="vs-section" id="mdl-add-panel" style="display:none;margin-bottom:20px;">
-        <div class="vs-section-title">Register Model</div>
-        <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">
+        <div class="vs-section-title">Add Model</div>
+        <!-- Step 1: paste URL -->
+        <div id="mdl-wiz-step1" style="margin-top:10px;">
           <div style="display:flex;gap:10px;">
-            <input id="mdl-add-name" class="vs-input" type="text" placeholder="Name (e.g. Qwen3-30B-A3B)" style="flex:1;font-size:13px;">
-            <input id="mdl-add-url" class="vs-input" type="text" placeholder="HuggingFace URL (.gguf)" style="flex:3;font-size:13px;">
+            <input id="mdl-add-url" class="vs-input" type="text" placeholder="Paste a HuggingFace GGUF repo URL" style="flex:1;font-size:13px;">
+            <button class="vs-btn-primary" id="mdl-wiz-fetch-btn" type="button" style="white-space:nowrap;">Fetch</button>
           </div>
-          <div style="display:flex;gap:10px;">
-            <input id="mdl-add-mmproj-url" class="vs-input" type="text" placeholder="mmproj URL (optional, for vision)" style="flex:4;font-size:13px;">
-            <button class="vs-btn-primary" id="mdl-add-btn" type="button" style="white-space:nowrap;">Register</button>
+          <div id="mdl-wiz-status" style="font-size:12px;color:var(--text-dim);margin-top:6px;min-height:16px;"></div>
+        </div>
+        <!-- Step 2: pick quant -->
+        <div id="mdl-wiz-step2" style="display:none;margin-top:14px;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+            <span id="mdl-wiz-repo-name" style="font-weight:600;font-size:15px;"></span>
+            <span id="mdl-wiz-hw-badge" style="font-size:12px;color:var(--text-dim);"></span>
           </div>
-          <div id="mdl-add-status" style="font-size:12px;color:var(--text-dim);min-height:16px;"></div>
+          <div id="mdl-wiz-quants" style="display:flex;flex-direction:column;gap:0;"></div>
+          <div id="mdl-wiz-mmproj-info" style="font-size:12px;color:var(--text-dim);margin-top:10px;"></div>
         </div>
       </div>
 
@@ -3392,40 +3409,188 @@ document.getElementById('mdl-toggle-add-btn').addEventListener('click', () => {
     const open  = panel.style.display === 'none';
     panel.style.display = open ? '' : 'none';
     btn.textContent = open ? '✕ Cancel' : '+ Add Model';
+    if (!open) {
+        document.getElementById('mdl-wiz-step1').style.display = '';
+        document.getElementById('mdl-wiz-step2').style.display = 'none';
+        document.getElementById('mdl-wiz-status').textContent = '';
+    }
 });
 
-document.getElementById('mdl-add-btn').addEventListener('click', async () => {
-    const name   = document.getElementById('mdl-add-name').value.trim();
-    const url    = document.getElementById('mdl-add-url').value.trim();
-    const mmproj = document.getElementById('mdl-add-mmproj-url').value.trim();
-    const status = document.getElementById('mdl-add-status');
+let _wizHw = { ramGb: 0, gpus: [] };
+(async () => {
+    try {
+        const r = await fetch('/admin/hardware');
+        if (!r.ok) return;
+        const d = await r.json();
+        _wizHw.ramGb = (d.totalRamBytes || 0) / 1073741824;
+        _wizHw.gpus = (d.gpus || []).map(g => ({ name: g.name, vramGb: (g.vramBytes || 0) / 1073741824 }));
+    } catch {}
+})();
 
-    if (!name)  { status.style.color = '#dc2626'; status.textContent = 'Name is required.'; return; }
-    if (!url)   { status.style.color = '#dc2626'; status.textContent = 'Download URL is required.'; return; }
+function wizParseHfUrl(raw) {
+    const m = raw.trim().match(/huggingface\.co\/([^/]+\/[^/]+)/);
+    return m ? m[1] : null;
+}
 
-    const filename      = url.split('/').pop().split('?')[0];
-    const mmprojFilename = mmproj ? mmproj.split('/').pop().split('?')[0] : '';
+function wizClassifyQuant(name) {
+    const n = name.toUpperCase();
+    if (/BF16|F16/.test(n)) return { bits: 16, label: '16-bit' };
+    if (/Q8|IQ8/.test(n)) return { bits: 8, label: '8-bit' };
+    if (/Q6/.test(n)) return { bits: 6, label: '6-bit' };
+    if (/Q5/.test(n)) return { bits: 5, label: '5-bit' };
+    if (/Q4|IQ4/.test(n)) return { bits: 4, label: '4-bit' };
+    if (/Q3|IQ3/.test(n)) return { bits: 3, label: '3-bit' };
+    if (/Q2|IQ2/.test(n)) return { bits: 2, label: '2-bit' };
+    if (/Q1|IQ1/.test(n)) return { bits: 1, label: '1-bit' };
+    if (/F32/.test(n)) return { bits: 32, label: '32-bit' };
+    return { bits: 0, label: 'Other' };
+}
 
-    const body = { name, downloadLink: url, path: filename };
-    if (mmproj) { body.mmprojDownloadLink = mmproj; body.mmprojPath = mmprojFilename; }
+function wizExtractQuantName(filename) {
+    const base = filename.replace(/\.gguf$/i, '');
+    const parts = base.split('-');
+    const qIdx = parts.findIndex(p => /^(UD|BF16|F16|F32|Q\d|IQ\d)/i.test(p));
+    if (qIdx < 0) return base;
+    return parts.slice(qIdx).join('-');
+}
+
+function wizGetAvailableMemoryGb() {
+    if (_wizHw.gpus.length > 0) {
+        const maxVram = Math.max(..._wizHw.gpus.map(g => g.vramGb));
+        if (maxVram > 0) return maxVram;
+    }
+    return _wizHw.ramGb;
+}
+
+function wizFitStatus(sizeGb) {
+    const memGb = wizGetAvailableMemoryGb();
+    if (!memGb) return { cls: 'fits', icon: '✓', tip: '' };
+    if (sizeGb <= memGb * 0.75) return { cls: 'fits', icon: '✓', tip: 'Fits comfortably' };
+    if (sizeGb <= memGb * 0.95) return { cls: 'tight', icon: '!', tip: 'Tight fit — may need to reduce context' };
+    const memType = _wizHw.gpus.length > 0 ? 'VRAM' : 'system RAM';
+    return { cls: 'no', icon: '✕', tip: `Too large for ${memType}` };
+}
+
+document.getElementById('mdl-wiz-fetch-btn').addEventListener('click', async () => {
+    const urlInput = document.getElementById('mdl-add-url');
+    const status   = document.getElementById('mdl-wiz-status');
+    const repo     = wizParseHfUrl(urlInput.value);
+
+    if (!repo) { status.style.color = '#dc2626'; status.textContent = 'Paste a HuggingFace repo URL (e.g. huggingface.co/user/Model-GGUF)'; return; }
 
     status.style.color = 'var(--text-dim)';
-    status.textContent = 'Saving…';
+    status.textContent = 'Fetching repo…';
+
     try {
-        const r = await fetch('/models', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
-        if (!r.ok) { const err = await r.json().catch(()=>({})); status.style.color='#dc2626'; status.textContent = err.error ?? 'Failed.'; return; }
-        document.getElementById('mdl-add-name').value = '';
-        document.getElementById('mdl-add-url').value  = '';
-        document.getElementById('mdl-add-mmproj-url').value = '';
-        status.style.color = 'var(--text-dim)';
-        status.textContent = 'Model registered.';
-        setTimeout(() => {
-            status.textContent = '';
-            document.getElementById('mdl-add-panel').style.display = 'none';
-            document.getElementById('mdl-toggle-add-btn').textContent = '+ Add Model';
-        }, 1500);
-        loadModels();
-    } catch { status.style.color = '#dc2626'; status.textContent = 'Request failed.'; }
+        const r = await fetch(`https://huggingface.co/api/models/${repo}/tree/main`);
+        if (!r.ok) throw new Error(r.status === 404 ? 'Repo not found' : `HTTP ${r.status}`);
+        const files = await r.json();
+        const ggufs = files.filter(f => f.path.endsWith('.gguf'));
+        if (!ggufs.length) { status.style.color = '#dc2626'; status.textContent = 'No .gguf files found in this repo.'; return; }
+
+        const modelFiles = ggufs.filter(f => !/mmproj/i.test(f.path));
+        const mmprojFiles = ggufs.filter(f => /mmproj/i.test(f.path));
+
+        const groups = new Map();
+        for (const f of modelFiles) {
+            const sizeGb = (f.lfs?.size || f.size) / 1073741824;
+            const quantName = wizExtractQuantName(f.path);
+            const cat = wizClassifyQuant(quantName);
+            if (!groups.has(cat.label)) groups.set(cat.label, { bits: cat.bits, items: [] });
+            groups.get(cat.label).items.push({ filename: f.path, quantName, sizeGb, downloadUrl: `https://huggingface.co/${repo}/resolve/main/${f.path}` });
+        }
+
+        groups.forEach(g => g.items.sort((a, b) => a.sizeGb - b.sizeGb));
+        const sorted = [...groups.entries()].sort((a, b) => a[1].bits - b[1].bits);
+
+        const repoName = repo.split('/')[1].replace(/-GGUF$/i, '');
+        document.getElementById('mdl-wiz-repo-name').textContent = repoName;
+        {
+            const badge = document.getElementById('mdl-wiz-hw-badge');
+            const parts = [];
+            if (_wizHw.ramGb) parts.push(`RAM: ${_wizHw.ramGb.toFixed(0)} GB`);
+            if (_wizHw.gpus.length) parts.push(_wizHw.gpus.map(g => `${g.name}${g.vramGb ? ` (${g.vramGb.toFixed(0)} GB)` : ''}`).join(', '));
+            badge.textContent = parts.join(' · ');
+        }
+
+        const container = document.getElementById('mdl-wiz-quants');
+        container.innerHTML = '';
+
+        let bestMmproj = mmprojFiles.find(f => /BF16|F16/i.test(f.path)) || mmprojFiles[0];
+        const mmprojInfo = document.getElementById('mdl-wiz-mmproj-info');
+        if (bestMmproj) {
+            const mmprojUrl = `https://huggingface.co/${repo}/resolve/main/${bestMmproj.path}`;
+            mmprojInfo.innerHTML = `<span style="color:#c2410c;">🔭 Vision model detected</span> — <code style="font-size:11px;">${escHtml(bestMmproj.path)}</code> will be included automatically.`;
+            mmprojInfo.dataset.url = mmprojUrl;
+            mmprojInfo.dataset.path = bestMmproj.path;
+        } else {
+            mmprojInfo.innerHTML = '';
+            delete mmprojInfo.dataset.url;
+        }
+
+        for (const [label, group] of sorted) {
+            const hdr = document.createElement('div');
+            hdr.className = 'wiz-group-hdr';
+            hdr.textContent = label;
+            container.appendChild(hdr);
+
+            for (const item of group.items) {
+                const fit = wizFitStatus(item.sizeGb);
+                const row = document.createElement('div');
+                row.className = 'wiz-quant-row';
+                row.title = fit.tip;
+                row.innerHTML =
+                    `<div class="wiz-fit-icon ${fit.cls}">${fit.icon}</div>` +
+                    `<span class="wiz-quant-name">${escHtml(item.quantName)}</span>` +
+                    `<span class="wiz-quant-size">${item.sizeGb < 1 ? (item.sizeGb * 1024).toFixed(0) + ' MB' : item.sizeGb.toFixed(1) + ' GB'}</span>`;
+
+                row.addEventListener('click', async () => {
+                    container.querySelectorAll('.wiz-quant-row').forEach(r => r.classList.remove('selected'));
+                    row.classList.add('selected');
+                    const wizStatus = document.getElementById('mdl-wiz-status');
+                    wizStatus.style.color = 'var(--text-dim)';
+                    wizStatus.textContent = 'Registering…';
+
+                    const modelName = item.filename.replace(/\.gguf$/i, '');
+                    const thinkingKeywords = /qwen3|deepseek-r1|qwq/i;
+                    const body = { name: modelName, downloadLink: item.downloadUrl, path: item.filename, supportsThinking: thinkingKeywords.test(modelName) };
+                    if (bestMmproj && mmprojInfo.dataset.url) {
+                        body.mmprojDownloadLink = mmprojInfo.dataset.url;
+                        body.mmprojPath = mmprojInfo.dataset.path;
+                    }
+
+                    try {
+                        const r = await fetch('/models', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+                        if (!r.ok) { const err = await r.json().catch(()=>({})); wizStatus.style.color='#dc2626'; wizStatus.textContent = err.error ?? 'Failed.'; return; }
+                        wizStatus.style.color = '#16a34a';
+                        wizStatus.textContent = `${modelName} registered.`;
+                        setTimeout(() => {
+                            document.getElementById('mdl-add-panel').style.display = 'none';
+                            document.getElementById('mdl-toggle-add-btn').textContent = '+ Add Model';
+                            document.getElementById('mdl-wiz-step1').style.display = '';
+                            document.getElementById('mdl-wiz-step2').style.display = 'none';
+                            wizStatus.textContent = '';
+                            urlInput.value = '';
+                        }, 1500);
+                        loadModels();
+                    } catch { wizStatus.style.color='#dc2626'; wizStatus.textContent = 'Request failed.'; }
+                });
+
+                container.appendChild(row);
+            }
+        }
+
+        document.getElementById('mdl-wiz-step1').style.display = 'none';
+        document.getElementById('mdl-wiz-step2').style.display = '';
+        status.textContent = '';
+    } catch (e) {
+        status.style.color = '#dc2626';
+        status.textContent = 'Failed: ' + e.message;
+    }
+});
+
+document.getElementById('mdl-add-url').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); document.getElementById('mdl-wiz-fetch-btn').click(); }
 });
 
 function startSwitchProgressSse() {
