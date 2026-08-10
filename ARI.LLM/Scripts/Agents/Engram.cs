@@ -128,6 +128,19 @@ internal class Engram : MemoryAgent, IDisposable
             return;
         }
 
+        // Guild threads never reach the brain. A Discord server is multi-party: anyone whitelisted can
+        // speak into the transcript, and a sweep treats every line as material to store — so a guest's
+        // provocation becomes a durable note about a third party, and guarded mode cannot help because it
+        // filters recall, not writes. Owner-only filtering is not a substitute: the misfiled note that
+        // prompted this gate was built from the OWNER's own messages, misread by pronoun resolution.
+        // Force-proof like the DevMode gate above — a manual close must not be a way around it either.
+        if (threadKey.StartsWith("guild:", StringComparison.Ordinal))
+        {
+            if (threads.TryGetValue(threadKey, out Thread? guildThread)) guildThread.EngramProcessed = true;
+            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] skipped — guild threads are never swept into the brain.", threadKey);
+            return;
+        }
+
         if (!IsEnabled && !force)
         {
             lock (pendingQueue) pendingQueue.Add(threadKey);
