@@ -54,6 +54,11 @@ public static class Paths
     public static string ListenerVenv     { get; }
     public static string ListenerPython   { get; }
 
+    // Managed native tools — ARI-provisioned installs (espeak-ng, etc.) that don't come from a
+    // system package manager.  ~/ARI/tools/<toolname>/...
+    public static string Tools    { get; }
+    public static string EspeakNg { get; }
+
     // Config + secrets — never in BuildPath, which may be wiped/replaced wholesale on update.
     // AriConfig.json is seeded from the bundled default (see AriConfig.Load) the first time it's
     // missing here, then edited in place — so instance customization survives updates. secrets.env
@@ -157,6 +162,9 @@ public static class Paths
         StyleTts2Whisper = Path.Combine(StyleTts2Venv, OperatingSystem.IsWindows() ? @"Scripts\whisper.exe" : "bin/whisper");
         ListenerVenv     = Path.Combine(AppData, "venvs", "listener");
         ListenerPython   = Path.Combine(ListenerVenv, OperatingSystem.IsWindows() ? @"Scripts\python.exe" : "bin/python");
+
+        Tools    = Path.Combine(AppData, "tools");
+        EspeakNg = Path.Combine(Tools, "espeak-ng");
 
         AriConfig = Path.Combine(AppData, "Server", "AriConfig.json");
         Secrets   = Path.Combine(AppData, "Server", "secrets.env");

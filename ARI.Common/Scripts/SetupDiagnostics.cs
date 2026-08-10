@@ -86,8 +86,8 @@ public static class SetupDiagnostics
             return "No compatible PyTorch wheel for this Python version. Install Python 3.11 or 3.12 (python.org) and reinstall.";
 
         if (Has("espeak"))
-            return "Missing: espeak-ng. Install it — macOS: 'brew install espeak-ng'; " +
-                   "Windows: https://github.com/espeak-ng/espeak-ng/releases; Linux: 'apt install espeak-ng'.";
+            return "Missing: espeak-ng. Restart ARI to trigger auto-install, or install manually: " +
+                   "https://github.com/espeak-ng/espeak-ng/releases";
 
         return null;
     }

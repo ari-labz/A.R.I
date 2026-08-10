@@ -479,6 +479,9 @@ html, body {
         <div class="cp-nav-item top-level active" data-tab="overview">Overview</div>
         <div class="cp-nav-item top-level" data-tab="debug">Deep Thread Inspection (DTI)</div>
         <div class="cp-nav-item top-level" data-tab="userprefs">User Preferences</div>
+        <div class="cp-nav-group">System</div>
+        <div class="cp-nav-item" data-tab="modules">Modules</div>
+        <div class="cp-nav-item" data-tab="scheduler">Scheduler</div>
         <div class="cp-nav-group">LLM</div>
         <div class="cp-nav-item" data-tab="servers">Servers</div>
         <div class="cp-nav-item" data-tab="models">Models</div>
@@ -487,17 +490,14 @@ html, body {
         <div class="cp-nav-item" data-tab="persona">Persona</div>
         <div class="cp-nav-item" data-tab="feedback">Response Feedback</div>
         <div class="cp-nav-item" data-tab="llmconfigs">Configs</div>
-        <div class="cp-nav-group">Voice</div>
-        <div class="cp-nav-item" data-tab="dataset">Dataset Builder</div>
-        <div class="cp-nav-item" data-tab="voice">Voice Synthesis</div>
-        <div class="cp-nav-item" data-tab="voicesettings">Voice Settings</div>
+        <div class="cp-nav-group" id="nav-group-voice">Voice</div>
+        <div class="cp-nav-item" data-tab="dataset" id="nav-dataset">Dataset Builder</div>
+        <div class="cp-nav-item" data-tab="voice" id="nav-voice">Voice Synthesis</div>
+        <div class="cp-nav-item" data-tab="voicesettings" id="nav-voicesettings">Voice Settings</div>
         <div class="cp-nav-group">Memory</div>
         <div class="cp-nav-item" data-tab="brain">Brain</div>
-        <div class="cp-nav-group">Integrations</div>
-        <div class="cp-nav-item" data-tab="discord">Discord</div>
-        <div class="cp-nav-group">System</div>
-        <div class="cp-nav-item" data-tab="modules">Modules</div>
-        <div class="cp-nav-item" data-tab="scheduler">Scheduler</div>
+        <div class="cp-nav-group" id="nav-group-integrations">Integrations</div>
+        <div class="cp-nav-item" data-tab="discord" id="nav-discord">Discord</div>
       </div>
     </div>
   </aside>
@@ -587,18 +587,10 @@ html, body {
       </div>
       <div class="vs-section">
         <div class="vs-section-title">Voice Module</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:4px;">
+        <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-top:4px;max-width:400px;">
           <div class="vs-module-card" data-engine="StyleTTS2" id="vs-mod-styletts2" style="border:2px solid var(--accent,#223742);border-radius:8px;padding:14px 16px;cursor:pointer;background:var(--accent,#223742)22;transition:all .15s;">
             <div style="font-weight:600;font-size:14px;margin-bottom:4px;">StyleTTS2</div>
             <div style="font-size:12px;color:var(--text-dim);line-height:1.4;">High-quality diffusion-based synthesis. Fine-tunable to custom voices with phoneme-level training. Best for natural, expressive speech.</div>
-          </div>
-          <div class="vs-module-card" data-engine="Orpheus" id="vs-mod-orpheus" style="border:2px solid transparent;border-radius:8px;padding:14px 16px;cursor:pointer;background:transparent;transition:all .15s;">
-            <div style="font-weight:600;font-size:14px;margin-bottom:4px;">Orpheus</div>
-            <div style="font-size:12px;color:var(--text-dim);line-height:1.4;">LLM-based voice synthesis with SNAC audio tokens. Produces highly natural conversational speech with emotion and prosody control.</div>
-          </div>
-          <div class="vs-module-card" data-engine="IndexTTS" id="vs-mod-indextts" style="border:2px solid transparent;border-radius:8px;padding:14px 16px;cursor:pointer;background:transparent;transition:all .15s;">
-            <div style="font-weight:600;font-size:14px;margin-bottom:4px;">IndexTTS</div>
-            <div style="font-size:12px;color:var(--text-dim);line-height:1.4;">More expressive, one-shot voice cloning from a single reference clip. No training required. Very slow inference.</div>
           </div>
         </div>
       </div>
@@ -639,14 +631,10 @@ html, body {
     <div id="tab-voice" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
         <div class="vs-section-title">Train for</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:4px;">
+        <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-top:4px;max-width:400px;">
           <div class="vs-train-engine-card" data-engine="StyleTTS2" id="vs-te-styletts2" style="border:2px solid var(--accent,#223742);border-radius:8px;padding:14px 16px;cursor:pointer;background:var(--accent,#223742)22;transition:all .15s;">
             <div style="font-weight:600;font-size:14px;margin-bottom:4px;">StyleTTS2</div>
             <div style="font-size:12px;color:var(--text-dim);line-height:1.4;">Diffusion-based synthesis with phoneme-level training. Long training runs with checkpoint saves.</div>
-          </div>
-          <div class="vs-train-engine-card" data-engine="Orpheus" id="vs-te-orpheus" style="border:2px solid transparent;border-radius:8px;padding:14px 16px;cursor:pointer;background:transparent;transition:all .15s;">
-            <div style="font-weight:600;font-size:14px;margin-bottom:4px;">Orpheus</div>
-            <div style="font-size:12px;color:var(--text-dim);line-height:1.4;">LLM-based LoRA fine-tune with SNAC audio tokens. Fast training, typically completes in minutes.</div>
           </div>
         </div>
       </div>
@@ -680,7 +668,6 @@ html, body {
           <label class="vs-label">Engine
             <select id="vs-engine" class="vs-input">
               <option value="StyleTTS2">StyleTTS2</option>
-              <option value="Orpheus">Orpheus</option>
             </select>
           </label>
           <label class="vs-label">Voice name<input type="text" id="vs-model-name" class="vs-input" placeholder="e.g. MyVoice" autocomplete="off" /></label>
@@ -1110,6 +1097,36 @@ switchTab('overview');
 // says so rather than pretending the change already happened.
 const modList = document.getElementById('mod-list');
 
+// Hide sidebar nav items for disabled modules
+async function applyModuleVisibility() {
+    try {
+        const r = await fetch('/modules');
+        if (!r.ok) return;
+        const { modules } = await r.json();
+        const isEnabled = key => modules.find(m => m.key === key)?.enabled ?? false;
+        const voiceOn = isEnabled('Voice');
+        const synthOn = isEnabled('VoiceSynthesis');
+        const discordOn = isEnabled('Discord');
+        const navVoiceGroup = document.getElementById('nav-group-voice');
+        const navDataset = document.getElementById('nav-dataset');
+        const navVoice = document.getElementById('nav-voice');
+        const navVoicesettings = document.getElementById('nav-voicesettings');
+        const navIntegrations = document.getElementById('nav-group-integrations');
+        const navDiscord = document.getElementById('nav-discord');
+        // VoiceSynthesis disabled → hide Dataset Builder & Voice Synthesis tabs
+        if (navDataset) navDataset.style.display = synthOn ? '' : 'none';
+        if (navVoice) navVoice.style.display = synthOn ? '' : 'none';
+        // Voice disabled → hide Voice Settings tab
+        if (navVoicesettings) navVoicesettings.style.display = voiceOn ? '' : 'none';
+        // Both disabled → hide Voice group header
+        if (navVoiceGroup) navVoiceGroup.style.display = (voiceOn || synthOn) ? '' : 'none';
+        // Discord disabled → hide Integrations header + Discord tab
+        if (navDiscord) navDiscord.style.display = discordOn ? '' : 'none';
+        if (navIntegrations) navIntegrations.style.display = discordOn ? '' : 'none';
+    } catch {}
+}
+applyModuleVisibility();
+
 async function loadModules() {
     if (!modList) return;
     modList.innerHTML = '<span style="font-size:12px;color:var(--text-dim);">Loading…</span>';
@@ -1173,9 +1190,10 @@ function renderModules(modules) {
                     status.textContent = enabled === m.running
                         ? (enabled ? 'On.' : 'Off.')
                         : `Saved — ${enabled ? 'starts' : 'stops'} when Ari next restarts.`;
+                    applyModuleVisibility();
                 } catch (err) {
                     status.textContent = 'Could not save: ' + err.message;
-                    loadModules();   // resync the switch with what is actually on disk
+                    loadModules(); applyModuleVisibility();   // resync the switch with what is actually on disk
                 }
             }));
         }

@@ -32,6 +32,10 @@ public static class Shared
     // bare command name (found on PATH); becomes a full path when we download a managed build.
     public static string LlamaServer { get; set; } = "llama-server";
 
+    // Resolved espeak-ng install directory, set by Dependency.CheckEspeakNg at startup.
+    // Contains lib/libespeak-ng.dylib (or .dll/.so) and share/espeak-ng-data/.
+    public static string? EspeakNgPath { get; set; }
+
     // Current llama.cpp status — written by Core's Dependency at startup, read by the API for the UI.
     public static LlamaCppStatus LlamaCpp { get; set; } = new();
 
