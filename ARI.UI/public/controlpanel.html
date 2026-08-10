@@ -1073,7 +1073,7 @@ html, body {
 <script>
 // ── tab switching ─────────────────────────────────────────
 window._ariUserName = 'User';
-fetch('/api/cp/username').then(r => r.json()).then(d => { if (d.name) window._ariUserName = d.name; }).catch(() => {});
+fetch('/admin/username').then(r => r.json()).then(d => { if (d.name) window._ariUserName = d.name; }).catch(() => {});
 
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
@@ -1689,7 +1689,7 @@ let userPrefsLoaded = false;
 async function loadUserPrefs() {
     if (userPrefsLoaded) return;
     try {
-        const r = await fetch('/api/cp/username');
+        const r = await fetch('/admin/username');
         const d = await r.json();
         document.getElementById('username-input').value = d.name || '';
         userPrefsLoaded = true;
@@ -1700,7 +1700,7 @@ document.getElementById('username-save-btn').addEventListener('click', async () 
     const name = document.getElementById('username-input').value.trim();
     status.textContent = 'Saving…';
     try {
-        await fetch('/api/cp/username', {
+        await fetch('/admin/username', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name }),
