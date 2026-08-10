@@ -223,6 +223,63 @@ public class Dependency
 
     // ── llama.cpp ────────────────────────────────────────────────────────────
 
+    // ── libdave (Discord E2EE) ─────────────────────────────────────────────
+
+    private const string LibDaveVersion = "v1.1.1/cpp";
+
+    public static async Task CheckLibDave()
+    {
+        string rid = RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+            ? (RuntimeInformation.OSArchitecture == Architecture.Arm64 ? "osx-arm64" : "osx-x64")
+            : RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "win-x64"
+            : RuntimeInformation.OSArchitecture == Architecture.Arm64 ? "linux-arm64" : "linux-x64";
+
+        string nativeDir = Path.Combine(Paths.BuildPath, "runtimes", rid, "native");
+        string ext = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? ".dll" : RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? ".dylib" : ".so";
+        string libPath = Path.Combine(nativeDir, $"libdave{ext}");
+
+        if (File.Exists(libPath))
+        {
+            Shared.Logger.LogInformation("libdave already present.");
+            return;
+        }
+
+        string assetName = RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+            ? (RuntimeInformation.OSArchitecture == Architecture.Arm64 ? "libdave-macOS-ARM64-boringssl.zip" : "libdave-macOS-X64-boringssl.zip")
+            : RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "libdave-Windows-X64-boringssl.zip"
+            : RuntimeInformation.OSArchitecture == Architecture.Arm64 ? "libdave-Linux-ARM64-boringssl.zip" : "libdave-Linux-X64-boringssl.zip";
+
+        string url = $"https://github.com/discord/libdave/releases/download/{LibDaveVersion}/{assetName}";
+
+        Shared.Logger.LogInformation("Downloading libdave from {Url}...", url);
+        try
+        {
+            using HttpClient hc = new() { Timeout = TimeSpan.FromSeconds(60) };
+            string zipPath = Path.Combine(Path.GetTempPath(), assetName);
+            await using (FileStream fs = File.Create(zipPath))
+            await using (Stream dl = await hc.GetStreamAsync(url))
+                await dl.CopyToAsync(fs);
+
+            Directory.CreateDirectory(nativeDir);
+            using ZipArchive zip = ZipFile.OpenRead(zipPath);
+            string entryName = $"lib/libdave{ext}";
+            ZipArchiveEntry? entry = zip.GetEntry(entryName);
+            if (entry is null)
+                throw new Exception($"libdave archive missing expected entry '{entryName}'");
+
+            await using (Stream src = entry.Open())
+            await using (FileStream dst = File.Create(libPath))
+                await src.CopyToAsync(dst);
+
+            File.Delete(zipPath);
+            Shared.Logger.LogInformation("libdave ready: {Path}", libPath);
+        }
+        catch (Exception ex)
+        {
+            Shared.Logger.LogWarning("Failed to download libdave: {Error}. Discord voice E2EE will not work.", ex.Message);
+        }
+    }
+
     /// <summary>
     /// Ensures a usable llama-server is available. Checks saved config, then detects existing
     /// installs, then downloads a prebuilt release. Updates Shared.LlamaServer and Shared.LlamaCpp.

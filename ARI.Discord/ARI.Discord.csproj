@@ -23,8 +23,5 @@
     <Folder Include="Scripts\" />
   </ItemGroup>
 
-  <!-- libdave (Discord E2EE/DAVE protocol) is the only native dep not available via NuGet. -->
-  <Target Name="CopyVoiceNativeLibs" AfterTargets="Build" Condition="$([MSBuild]::IsOSPlatform('OSX'))">
-    <Copy SourceFiles="$(MSBuildThisFileDirectory)../devbuild/runtimes/osx-arm64/native/libdave.dylib" DestinationFiles="$(OutputPath)runtimes/osx-arm64/native/libdave.dylib" SkipUnchangedFiles="true" />
-  </Target>
+  <!-- libdave is auto-provisioned at runtime by Dependency.cs from discord/libdave GitHub releases. -->
 </Project>
