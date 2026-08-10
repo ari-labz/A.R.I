@@ -386,12 +386,18 @@ internal static class Database
         {
             (string path, string? type) = meta[id];
             sb.Append(path);
-            if (!string.IsNullOrEmpty(type)) sb.Append("  [").Append(type).Append(']');
+            if (!string.IsNullOrEmpty(type)) sb.Append(" [").Append(type).Append(']');
             sb.Append('\n');
-            if (inbound.TryGetValue(id, out List<string>? ins))
-                foreach (string t in ins.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)) sb.Append("   < ").Append(t).Append('\n');
-            if (outbound.TryGetValue(id, out List<string>? outs))
-                foreach (string t in outs.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)) sb.Append("   > ").Append(t).Append('\n');
+            bool hasIn = inbound.TryGetValue(id, out List<string>? ins);
+            bool hasOut = outbound.TryGetValue(id, out List<string>? outs);
+            if (hasIn || hasOut)
+            {
+                sb.Append("  ");
+                if (hasIn) sb.Append("← ").Append(string.Join(", ", ins!.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)));
+                if (hasIn && hasOut) sb.Append(' ');
+                if (hasOut) sb.Append("→ ").Append(string.Join(", ", outs!.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)));
+                sb.Append('\n');
+            }
         }
         return sb.ToString();
     }
