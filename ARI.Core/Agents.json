@@ -33,7 +33,7 @@
       "BudgetResponse": 800,
       "BudgetContext": 20000,
       "PromptTemplates": {
-        "ProactiveOpener": "You have been thinking about asking the following question.\nWrite your next message — one or two sentences, in your own voice. Do not mention that this was scheduled or automatic.\n\nHere is the question:\n{question}"
+        "ProactiveOpener": "Ask the following question in your own voice — one or two sentences. The question itself is the point of this message; do not greet, small-talk, or comment on the user's absence. Just ask.\n\nQuestion:\n{question}"
       },
       "SupportsCompaction": true,
       "CompactHighPct": 80,
