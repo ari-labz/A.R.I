@@ -222,6 +222,18 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
         return Ok(new { ramBytes = bytes, ramMb = bytes / 1024.0 / 1024.0, swapMb, liveCalls, context, breakdown });
     }
 
+    [HttpGet("hardware")]
+    public IActionResult GetHardware()
+    {
+        long totalRam = systemInfo.GetTotalPhysicalRamBytes();
+        var gpus = systemInfo.GetGpus();
+        return Ok(new
+        {
+            totalRamBytes = totalRam,
+            gpus = gpus.Select(g => new { name = g.Name, vramBytes = g.VramBytes }).ToList()
+        });
+    }
+
     [HttpGet("stats")]
     public IActionResult GetStats()
     {
