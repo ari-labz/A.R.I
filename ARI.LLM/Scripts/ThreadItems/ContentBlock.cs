@@ -28,6 +28,7 @@ namespace ARI.LLM;
 [JsonDerivedType(typeof(Writing),   "writing")]
 [JsonDerivedType(typeof(Subthread), "subthread")]
 [JsonDerivedType(typeof(PlanProposed), "plan")]
+[JsonDerivedType(typeof(PersonaEdit),  "personaEdit")]
 [JsonDerivedType(typeof(ModeSwitch),   "mode")]
 public abstract class ContentBlock
 {
@@ -55,6 +56,7 @@ public abstract class ContentBlock
         @"|(?<err><!--ari-tool-error:(?<rname>[^:]+):(?<rlabel>[^>]*?)-->)" +
         @"|(?<sub><!--ari-subthread:(?<subkey>[^|>]+)\|(?<sublabel>[^>]*?)-->)" +
         @"|(?<plan><!--ari-plan-proposed-->)" +
+        @"|(?<persona><!--ari-persona-edit:(?<pid>[^>]*?)-->)" +
         @"|(?<mode><!--ari-tool-mode:(?<mname>[^:]+):(?<mlabel>[^>]*?)-->)" +
         @"|(?<batch><!--ari-batch-end-->)",
         RegexOptions.Singleline | RegexOptions.Compiled);
@@ -155,6 +157,8 @@ public abstract class ContentBlock
             return Build(FromTool(m.Groups["rname"].Value), State.Error, m.Value, m.Groups["rlabel"].Value);
         if (m.Groups["plan"].Success)
             return Build(new PlanProposed(), State.Complete, m.Value, "");
+        if (m.Groups["persona"].Success)
+            return Build(new PersonaEdit(), State.Complete, m.Value, m.Groups["pid"].Value);
         if (m.Groups["mode"].Success)
             return Build(new ModeSwitch(), State.Complete, m.Value, m.Groups["mlabel"].Value);
         return null;
@@ -345,6 +349,32 @@ public sealed class PlanProposed : Card
     protected override (string, string) Verbs => ("Proposing plan", "Plan ready");
     public override string Render() => "<!--ari-plan-proposed-->";
     protected internal override void Fill(string label) { }
+}
+
+/// <summary>
+/// The interactive "Ari wants to change her persona" card — the diff plus Approve/Reject, rendered inline
+/// in the reply that proposed it. The card holds only the proposal id; everything shown is read live from
+/// <see cref="PersonaProposalStore"/>, so the moment the user decides, the card in the transcript reflects
+/// it without anyone having to mutate the stored response.
+/// </summary>
+public sealed class PersonaEdit : Card
+{
+    public string ProposalId { get; set; } = "";
+
+    public string Reason  => Proposal?.Reason  ?? "";
+    public string OldText => Proposal?.OldText ?? "";
+    public string NewText => Proposal?.NewText ?? "";
+
+    /// <summary>"pending", "approved", "rejected", or "stale". Missing proposal reads as rejected — a card
+    /// with nothing behind it must never render an live Approve button.</summary>
+    public string Status => Proposal?.Status ?? "rejected";
+
+    private PersonaProposal? Proposal => PersonaProposalStore.Find(ProposalId);
+
+    protected override string ToolName => "propose_persona_edit";
+    protected override (string, string) Verbs => ("Proposing a persona change", "Persona change proposed");
+    public override string Render() => $"<!--ari-persona-edit:{ProposalId}-->";
+    protected internal override void Fill(string label) => ProposalId = label;
 }
 
 /// <summary>A light-blue mode-switch info card (e.g. "Returning to planning").</summary>

@@ -696,6 +696,34 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
         if (stick.current) bottomRef.current?.scrollIntoView({ behavior: "smooth" })
     }, [items, isRemembering])
 
+    // Persona-edit cards are rendered as plain HTML inside the bubble, so their buttons are picked up by
+    // delegation rather than React. Approving posts and stops there: the server raises threadUpdated, which
+    // reloads history and repaints the card as decided.
+    useEffect(() => {
+        const el = messagesEl.current
+        if (!el) return
+        const onClick = (e: MouseEvent) => {
+            const btn = (e.target as HTMLElement).closest<HTMLElement>("[data-persona-approve],[data-persona-reject]")
+            if (!btn) return
+            const approve = btn.dataset.personaApprove
+            const reject  = btn.dataset.personaReject
+            const id      = approve ?? reject
+            if (!id) return
+
+            btn.setAttribute("disabled", "true")
+            fetch(`/persona/proposals/${encodeURIComponent(id)}/${approve ? "approve" : "reject"}`, { method: "POST" })
+                .then(async r => {
+                    if (r.ok) return
+                    const body = await r.json().catch(() => ({ message: "" }))
+                    btn.removeAttribute("disabled")
+                    if (body.message) alert(body.message)
+                })
+                .catch(() => btn.removeAttribute("disabled"))
+        }
+        el.addEventListener("click", onClick)
+        return () => el.removeEventListener("click", onClick)
+    }, [])
+
     useEffect(() => {
         const el = messagesEl.current
         if (!el) return
