@@ -78,8 +78,10 @@ public abstract class Agent
         if (lines.Count == 0) return "";
 
         lines.Add("Deliver a COMPLETE answer within these budgets.");
+        if (thinking > 0 && reply > 0)
+            lines.Add("These two budgets are separate pools, not one shared allowance — thinking cannot borrow from the reply, and spending the whole thinking budget still leaves the reply its full amount.");
         if (thinking > 0)
-            lines.Add("Your thinking budget is tight — decide fast. Do not restate your instructions or plan at length; jump straight to the key insight and start writing.");
+            lines.Add("Your thinking budget is tight — decide fast. Do not restate your instructions or plan at length, and never draft your reply inside your thinking; work out the key insight, then write the reply itself once, for real, in the reply.");
         return "\n\n# Budgets\n" + string.Join("\n", lines);
     }
 
@@ -251,7 +253,9 @@ public abstract class Agent
         // ── Budgets ───────────────────────────────────────────────────────────
         internal int ThinkBudget;
         internal int RespBudget;
-        internal int MaxTokens;       // ThinkBudget + RespBudget — the server's hard ceiling
+        internal int MaxTokens;       // == RespBudget — the reply's own ceiling, never a think+reply sum
+        internal int ContentTokens;   // running estimate of reply tokens only (reasoning excluded)
+        internal bool ReplyBudgetHit; // reply reached RespBudget — stop the step, keep what was written
 
         // ── System block ─────────────────────────────────────────────────────
         internal string BaseSystem   = "";
@@ -425,7 +429,12 @@ public abstract class Agent
         // ── Token budgets ─────────────────────────────────────────────────────
         turn.ThinkBudget = Think ? (opts.ThinkingBudget > 0 ? opts.ThinkingBudget : BudgetThinking) : 0;
         turn.RespBudget  = opts.MaxTokensOverride != 0 ? opts.MaxTokensOverride : BudgetResponse;
-        turn.MaxTokens   = turn.RespBudget + turn.ThinkBudget;
+        // The two budgets are deliberately NOT summed into a single wire limit. Thinking is capped
+        // server-side by thinking_budget_tokens; the reply then gets its own full RespBudget, counted
+        // from the first content token and enforced in the stream loop. Summing them made max_tokens a
+        // shared pool, so a think that ran long — which it does by design, since it is allowed to finish
+        // its sentence past the budget — silently ate the reply's allowance.
+        turn.MaxTokens   = turn.RespBudget;
 
         // ── Session record ────────────────────────────────────────────────────
         // Opened here rather than in a pipeline so it covers every agent unconditionally — the
@@ -473,6 +482,7 @@ public abstract class Agent
                 {
                     await ProcessDelta(turn, step);
                     if (turn.ContentRunaway)           break;
+                    if (turn.ReplyBudgetHit)           break;
                     if (turn.SteeringRedirect)         break;
                     if (turn.ThinkingRedirect)         break;
                     if (turn.EarlyAbort is not null)   break;
@@ -560,9 +570,9 @@ public abstract class Agent
 
         string json = JsonSerializer.Serialize(body);
         if (!SuppressLog())
-            Shared.Logger.LogInformation("[{Agent}] ({Thread}) → request (step {Step}): max_tokens={MT}, tools={N}, msgs={Msgs}, think={Think} (et={ET}/budget={B})",
+            Shared.Logger.LogInformation("[{Agent}] ({Thread}) → request (step {Step}): reply_budget={MT}, tools={N}, msgs={Msgs}, think={Think} (et={ET}/budget={B})",
                 Name, thread.Key, turn.ToolCallCount,
-                body.TryGetValue("max_tokens", out object? mtv) ? mtv : "?",
+                turn.MaxTokens,
                 turn.ToolSchemas?.Length ?? 0, turn.Messages.Count,
                 Think, body.TryGetValue("enable_thinking", out object? etv) ? etv : "unset",
                 body.TryGetValue("thinking_budget_tokens", out object? bv) ? bv : "none");
@@ -628,6 +638,7 @@ public abstract class Agent
         turn.EarlyAbort       = null;
         turn.RunawayCall      = null;
         turn.ContentRunaway   = false;
+        turn.ReplyBudgetHit   = false;
         turn.SteeringRedirect = false;
         turn.ThinkingRedirect = false;
         turn.TextToolLeak     = false;
@@ -861,6 +872,19 @@ public abstract class Agent
 
         turn.ResponseBuilder.Append(deltaText);
         if (thread.LiveCall is { } lc) lc.EstimatedOutputTokens = turn.ResponseBuilder.Length / CHARS_PER_TOKEN;
+
+        // Reply budget, counted over content only — reasoning never draws from it. Replaces the old
+        // summed max_tokens, which let a long think starve the answer.
+        if (turn.RespBudget > 0)
+        {
+            turn.ContentTokens = (turn.ContentBuilder.Length + turn.ResponseBuilder.Length) / CHARS_PER_TOKEN;
+            if (turn.ContentTokens >= turn.RespBudget)
+            {
+                Shared.Logger.LogWarning("[{Agent}] ({Thread}) reply budget reached ({N}/{B} tokens) — ending generation.",
+                    Name, thread.Key, turn.ContentTokens, turn.RespBudget);
+                turn.ReplyBudgetHit = true;
+            }
+        }
         if (!turn.TextToolLeak && turn.PendingCalls.Count == 0 && turn.TextToolLeakRetries < 3
             && turn.ResponseBuilder.Length >= 3
             && ToolCallParser.IsTextToolCall(turn.ResponseBuilder.ToString(), thread.tools.Keys))
@@ -969,6 +993,15 @@ public abstract class Agent
             turn.ContentBuilder.Append("\n\n_Stopped — the model's output ran away repeating characters._");
             if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
             turn.IsStreaming = false;
+            return;
+        }
+
+        // The reply spent its whole budget. Unlike a runaway this is a legitimate answer that simply ran
+        // long, so everything written is kept and the turn ends here — no tool round-trip, no retry.
+        if (turn.ReplyBudgetHit)
+        {
+            turn.FinishReason = "length";
+            turn.IsStreaming  = false;
             return;
         }
 
@@ -1544,7 +1577,10 @@ public abstract class Agent
             ["messages"]       = messages,
             ["stream"]         = true,
             ["stream_options"] = new { include_usage = true },
-            ["max_tokens"]     = maxTokens,
+            // No max_tokens: llama.cpp counts reasoning and content against the same n_predict, so any
+            // value here would re-merge the two budgets. The reply cap (maxTokens == RespBudget) is
+            // enforced in ProcessDelta once content starts; thinking is capped by thinking_budget_tokens.
+            // The server runs with --n-predict -1, and Runaway/reply-cap checks bound generation.
             ["temperature"]           = s.Temperature         ?? SamplerSettings?.Temperature         ?? srv.Temperature,
             ["top_p"]                 = s.TopP                ?? SamplerSettings?.TopP                ?? srv.TopP,
             ["top_k"]                 = s.TopK                ?? SamplerSettings?.TopK                ?? srv.TopK,
@@ -1686,9 +1722,12 @@ public abstract class Agent
                     Name, thread.Key, prefilledTokens, promptTokens, reusedPct, prefillTokPerSec.ToString("F1"));
             }
 
-            if (maxTokens > 0 && completionTokens >= maxTokens * TOKEN_WARNING_RATIO)
-                Shared.Logger.LogWarning("[{Agent}] ({Thread}) token usage at {Pct}% of limit ({Used}/{Max})",
-                    Name, thread.Key, (int)(completionTokens * 100.0 / maxTokens), completionTokens, maxTokens);
+            // maxTokens is the reply budget, so this must weigh the reply alone — completionTokens counts
+            // reasoning too and would make every thinking turn look near its limit.
+            int replyTokens = responseText.Length / CHARS_PER_TOKEN;
+            if (maxTokens > 0 && replyTokens >= maxTokens * TOKEN_WARNING_RATIO)
+                Shared.Logger.LogWarning("[{Agent}] ({Thread}) reply at {Pct}% of budget ({Used}/{Max} tokens)",
+                    Name, thread.Key, (int)(replyTokens * 100.0 / maxTokens), replyTokens, maxTokens);
 
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) response\n\"{Response}\"",
                 Name, thread.Key, ExtractLogText(responseText));
