@@ -22,7 +22,7 @@ internal abstract class MemoryAgent : Agent
     // ── Walk knobs (const so they're easy to tune; raise as the vault grows) ──────────────
     protected const int SEED_COUNT           = 50;   // how many top-degree nodes are candidate seeds
     protected const int WALK_DEPTH            = 2;    // BFS hops out from a seed
-    protected const int WALK_CAP              = 100;  // max nodes in a neighbourhood skeleton
+    protected const int WALK_CAP              = 50;   // max nodes in a neighbourhood skeleton
     protected const int DEFAULT_MAX_EPOCHS    = 100;  // hard cap on epochs (one commit each)
     protected const int CONVERGED_AFTER       = 3;    // consecutive "no change needed" epochs ⇒ converged, stop early
     protected const int STALL_LIMIT           = 5;    // consecutive stalled epochs (no act, no "no change") ⇒ bail
@@ -41,7 +41,7 @@ internal abstract class MemoryAgent : Agent
     // Distinct notes the model may read in one epoch before it's pushed to act. The model fills its whole
     // thinking budget on EVERY step, so each extra read is another full-budget think — reads are the main
     // time sink. Bounding them (and blocking re-reads) is what actually shortens an epoch.
-    protected const int READ_CEILING = 4;
+    internal virtual int ReadCeiling => 3;
     // Hard cap on WORK tool calls per epoch (reads + mutations + search/neighbours). The git ritual
     // (status/diff/log/commit) is excluded so the commit at the end of a clean epoch always lands. Anything
     // past this many work calls is a spiral, so we END the turn gracefully (ShouldBreak breaks the
@@ -154,7 +154,7 @@ internal abstract class MemoryAgent : Agent
                 Shared.Logger.LogInformation("[{Agent}] read guard: blocked RE-READ of {Path}.", Name, path);
                 return $"[System: you already read {path} this epoch — its content is above in the conversation. Do not re-read it; use what you have.]";
             }
-            if (m.ReadPaths.Count >= READ_CEILING)
+            if (m.ReadPaths.Count >= ReadCeiling)
             {
                 Shared.Logger.LogInformation("[{Agent}] read guard: ceiling hit ({N} reads) — forcing action.", Name, m.ReadPaths.Count);
                 return $"[System: you have read {m.ReadPaths.Count} notes — enough context. Make the ONE change now (edit_file/write_file/move_file/delete_file/merge_notes), then git_diff and git_commit; or reply 'no change'. Do not read more.]";
