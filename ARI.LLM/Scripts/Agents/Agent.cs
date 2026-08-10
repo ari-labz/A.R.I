@@ -488,7 +488,6 @@ public abstract class Agent
 
             if (FlushPrefillFlips(turn) && turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
 
-            OnPhaseChange?.Invoke(turn.Thread.Key, ThreadPhase.Idle);
             turn.Stopwatch.Stop();
             responseText = CleanResponse(turn.ContentBuilder, turn.ResponseBuilder);
 
@@ -507,6 +506,10 @@ public abstract class Agent
             // with the reason rather than leaving a run that just stops mid-file.
             SessionRecorder.EndRun(turn.Rec, null, ex);
             throw;
+        }
+        finally
+        {
+            OnPhaseChange?.Invoke(turn.Thread.Key, ThreadPhase.Idle);
         }
 
         SessionRecorder.EndRun(turn.Rec, responseText);
