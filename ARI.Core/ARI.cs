@@ -97,8 +97,7 @@ public class ARI : BackgroundService
         config.modules.VoiceSynthesis.DataDir = Paths.StyleTts2Data;
 
         await Dependency.CheckPython();
-        if (OperatingSystem.IsMacOS())
-            await Dependency.CheckHomebrew();
+        await Dependency.CheckEspeakNg();
         await Dependency.CheckLlamaCpp();
         Shared.LlamaCppUpdate = Dependency.UpdateLlamaCpp;
         Shared.LlamaCppSetPath = Dependency.SetLlamaCppPath;

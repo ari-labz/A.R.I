@@ -14,7 +14,7 @@ public class StyleTtsSetupService(string styleTtsPath, string dataDir, ILogger? 
     // Bump when the inline package list in Install() changes. The stamp already covers
     // requirements.txt and the torch variant on its own — this only tracks the list below.
     private const int     DEPS_VERSION = 1;
-    private static string Python     => OperatingSystem.IsWindows() ? "python" : "/opt/homebrew/bin/python3.11";
+    private static string Python     => OperatingSystem.IsWindows() ? "python" : "python3";
     private static string PythonArgs => "";
 
     // Written only once a full install succeeds, so an interrupted run repairs itself next launch
@@ -108,16 +108,12 @@ public class StyleTtsSetupService(string styleTtsPath, string dataDir, ILogger? 
         catch { return false; }
     }
 
-    private async Task EnsureEspeakNg()
+    private Task EnsureEspeakNg()
     {
-        if (OperatingSystem.IsWindows()) return; // phonemize.py only searches macOS/Linux dylib paths today.
-        if (await CommandExistsAsync("espeak-ng")) return;
-
-        logger?.LogInformation("espeak-ng not found. Installing via Homebrew...");
-        await RunExe("brew", "install espeak-ng", dataDir);
-
-        if (!await CommandExistsAsync("espeak-ng"))
-            throw new Exception("Failed to install espeak-ng. Please run: brew install espeak-ng");
+        if (Shared.EspeakNgPath is null)
+            logger?.LogWarning("espeak-ng not provisioned — phonemizer may fail. " +
+                               "Restart ARI to trigger auto-install, or install espeak-ng manually.");
+        return Task.CompletedTask;
     }
 
     private static async Task<bool> CommandExistsAsync(string cmd)

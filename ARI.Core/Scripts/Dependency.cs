@@ -26,17 +26,199 @@ public class Dependency
         }
     }
 
-    public static Task CheckHomebrew()
+    // ── espeak-ng ─────────────────────────────────────────────────────────────
+
+    public static async Task CheckEspeakNg()
     {
-        EnsureBrewInPath();
-        bool found = File.Exists("/opt/homebrew/bin/brew") || File.Exists("/usr/local/bin/brew");
-        if (found)
-            Shared.Logger.LogInformation("Homebrew is installed.");
-        else
+        string installDir = Paths.EspeakNg;
+        string markerPath = Path.Combine(installDir, ".installed");
+
+        if (File.Exists(markerPath))
+        {
+            Shared.Logger.LogInformation("espeak-ng already provisioned.");
+            Shared.EspeakNgPath = installDir;
+            return;
+        }
+
+        string? existing = await FindExistingEspeakNg();
+        if (existing is not null)
+        {
+            Shared.Logger.LogInformation("Found system espeak-ng: {Path}", existing);
+            Shared.EspeakNgPath = Path.GetDirectoryName(Path.GetDirectoryName(existing))!;
+            return;
+        }
+
+        Shared.Logger.LogInformation("espeak-ng not found. Installing...");
+
+        try
+        {
+            if (OperatingSystem.IsMacOS())
+                await InstallEspeakNgMac(installDir);
+            else if (OperatingSystem.IsLinux())
+                await InstallEspeakNgLinux(installDir);
+            else if (OperatingSystem.IsWindows())
+                await InstallEspeakNgWindows(installDir);
+
+            File.WriteAllText(markerPath, "1.52.0");
+            Shared.EspeakNgPath = installDir;
+            Shared.Logger.LogInformation("espeak-ng ready: {Path}", installDir);
+        }
+        catch (Exception ex)
+        {
             Shared.Logger.LogWarning(
-                "Homebrew not found — it's optional (only needed for espeak-ng voice). " +
-                "Install it from https://brew.sh if you want voice. Continuing without it.");
-        return Task.CompletedTask;
+                "Failed to install espeak-ng: {Error}. StyleTTS2 voice will not work. " +
+                "See https://github.com/espeak-ng/espeak-ng for manual install instructions.", ex.Message);
+        }
+    }
+
+    private static async Task<string?> FindExistingEspeakNg()
+    {
+        string[] candidates = OperatingSystem.IsWindows()
+            ? [Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "eSpeak NG", "libespeak-ng.dll")]
+            : OperatingSystem.IsMacOS()
+                ? ["/opt/homebrew/lib/libespeak-ng.dylib", "/usr/local/lib/libespeak-ng.dylib"]
+                : ["/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1", "/usr/lib/aarch64-linux-gnu/libespeak-ng.so.1",
+                   "/usr/lib/libespeak-ng.so.1"];
+
+        foreach (string c in candidates)
+            if (File.Exists(c)) return c;
+
+        string? onPath = await ResolveCommandPath("espeak-ng");
+        if (onPath is not null)
+        {
+            string dir = Path.GetDirectoryName(onPath)!;
+            string libDir = Path.Combine(Path.GetDirectoryName(dir)!, "lib");
+            string ext = OperatingSystem.IsWindows() ? ".dll" : OperatingSystem.IsMacOS() ? ".dylib" : ".so.1";
+            string lib = Path.Combine(libDir, $"libespeak-ng{ext}");
+            if (File.Exists(lib)) return lib;
+        }
+
+        return null;
+    }
+
+    private static async Task InstallEspeakNgMac(string installDir)
+    {
+        Directory.CreateDirectory(installDir);
+        using HttpClient hc = new() { Timeout = TimeSpan.FromSeconds(60) };
+
+        string tokenJson = await hc.GetStringAsync(
+            "https://ghcr.io/token?scope=repository:homebrew/core/espeak-ng:pull");
+        string token = JsonDocument.Parse(tokenJson).RootElement.GetProperty("token").GetString()!;
+
+        string archPrefix = RuntimeInformation.OSArchitecture == Architecture.Arm64 ? "arm64_" : "";
+
+        string infoJson = await hc.GetStringAsync("https://formulae.brew.sh/api/formula/espeak-ng.json");
+        using JsonDocument info = JsonDocument.Parse(infoJson);
+        string sha = "";
+        foreach (JsonProperty file in info.RootElement.GetProperty("bottle")
+                     .GetProperty("stable").GetProperty("files").EnumerateObject())
+        {
+            if (file.Name.StartsWith(archPrefix) && !file.Name.Contains("linux"))
+            {
+                sha = file.Value.GetProperty("sha256").GetString() ?? "";
+                break;
+            }
+        }
+
+        if (string.IsNullOrEmpty(sha))
+            throw new Exception("Could not determine espeak-ng bottle hash from Homebrew API.");
+
+        string blobUrl = $"https://ghcr.io/v2/homebrew/core/espeak-ng/blobs/sha256:{sha}";
+
+        using HttpRequestMessage req = new(HttpMethod.Get, blobUrl);
+        req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        using HttpResponseMessage resp = await hc.SendAsync(req);
+        resp.EnsureSuccessStatusCode();
+
+        string tarPath = Path.Combine(installDir, "espeak-ng.tar.gz");
+        await using (FileStream fs = File.Create(tarPath))
+            await resp.Content.CopyToAsync(fs);
+
+        Process tar = Process.Start(new ProcessStartInfo("tar",
+            $"xzf \"{tarPath}\" -C \"{installDir}\" --strip-components=2")
+        {
+            UseShellExecute = false,
+            RedirectStandardError = true,
+        })!;
+        await tar.WaitForExitAsync();
+        File.Delete(tarPath);
+    }
+
+    private static async Task InstallEspeakNgLinux(string installDir)
+    {
+        string? apt = await ResolveCommandPath("apt-get");
+        if (apt is not null)
+        {
+            Process p = Process.Start(new ProcessStartInfo("sudo", "apt-get install -y espeak-ng")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            })!;
+            await p.WaitForExitAsync();
+            if (p.ExitCode == 0) return;
+        }
+
+        string? dnf = await ResolveCommandPath("dnf");
+        if (dnf is not null)
+        {
+            Process p = Process.Start(new ProcessStartInfo("sudo", "dnf install -y espeak-ng")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            })!;
+            await p.WaitForExitAsync();
+            if (p.ExitCode == 0) return;
+        }
+
+        throw new Exception(
+            "Could not install espeak-ng. Please install it manually: " +
+            "Debian/Ubuntu: 'sudo apt install espeak-ng', Fedora: 'sudo dnf install espeak-ng'");
+    }
+
+    private static async Task InstallEspeakNgWindows(string installDir)
+    {
+        Directory.CreateDirectory(installDir);
+        using HttpClient hc = new() { Timeout = TimeSpan.FromSeconds(60) };
+        hc.DefaultRequestHeaders.UserAgent.ParseAdd("ARI-Server/1.0");
+
+        string json = await hc.GetStringAsync(
+            "https://api.github.com/repos/espeak-ng/espeak-ng/releases/latest");
+        using JsonDocument doc = JsonDocument.Parse(json);
+
+        string? msiUrl = null;
+        foreach (JsonElement asset in doc.RootElement.GetProperty("assets").EnumerateArray())
+        {
+            string name = asset.GetProperty("name").GetString() ?? "";
+            if (name.EndsWith(".msi", StringComparison.OrdinalIgnoreCase))
+            {
+                msiUrl = asset.GetProperty("browser_download_url").GetString();
+                break;
+            }
+        }
+
+        if (msiUrl is null)
+            throw new Exception("No MSI found in espeak-ng GitHub releases.");
+
+        string msiPath = Path.Combine(installDir, "espeak-ng.msi");
+        Shared.Logger.LogInformation("Downloading espeak-ng MSI...");
+        await using (Stream s = await hc.GetStreamAsync(msiUrl))
+        await using (FileStream fs = File.Create(msiPath))
+            await s.CopyToAsync(fs);
+
+        Process p = Process.Start(new ProcessStartInfo("msiexec",
+            $"/i \"{msiPath}\" /qn INSTALLDIR=\"{installDir}\"")
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        })!;
+        await p.WaitForExitAsync();
+        File.Delete(msiPath);
+
+        if (p.ExitCode != 0)
+            throw new Exception($"espeak-ng MSI install failed (exit {p.ExitCode}).");
     }
 
     // ── llama.cpp ────────────────────────────────────────────────────────────
