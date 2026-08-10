@@ -38,7 +38,7 @@ internal sealed class Neighbours : Tool
         function = new
         {
             name        = "neighbours",
-            description = "Walk the memory graph from a seed note and return its neighbourhood as an adjacency skeleton: one block per node showing its full path, [type], inbound connections ('<') and outbound connections ('>'). Use this to see how a region is wired before deciding what to change.",
+            description = "Return the neighbourhood around a seed note as an adjacency skeleton (path [type], ← inbound, → outbound).",
             parameters  = new
             {
                 type       = "object",
@@ -59,7 +59,7 @@ internal sealed class Neighbours : Tool
         string seed = a.Str("seed");
         if (seed.Length == 0) return Task.FromResult("Error: 'seed' is required.");
         BrainModule.Index();
-        string? skeleton = BrainModule.Skeleton(seed, a.Int("depth", 6), a.Int("cap", 1000));
+        string? skeleton = BrainModule.Skeleton(seed, a.Int("depth", 2), a.Int("cap", 50));
         return Task.FromResult(skeleton is null ? $"No note found for seed '{seed}'." :
             skeleton.Length == 0 ? $"'{seed}' has no connections." : skeleton);
     }
@@ -82,7 +82,7 @@ internal sealed class SearchBrain : Tool
         function = new
         {
             name        = "search_brain",
-            description = "Search the memory graph for a note by title, alias, or content. Give it plain words — a name or short phrase, one entity at a time (NOT a regex or glob). This is how you check whether an entity already has a note before creating one: it finds the note even when the entity is referred to by an alias. Returns matching notes ranked by relevance (title match, then alias, then content), one 'title — path' per line.",
+            description = "Search notes by title, alias, or content. Plain words only (not regex). Returns 'title — path' ranked by relevance.",
             parameters  = new
             {
                 type       = "object",
@@ -130,7 +130,7 @@ internal sealed class MergeNotesTool : Tool
         function = new
         {
             name        = "merge_notes",
-            description = "Merge two notes that are the same entity. The 'from' note is folded into 'into': its title and aliases become searchable aliases on 'into', all references are repointed, and 'from' is deleted. Use when you learn (or are told) that two notes are the same person/place/thing.",
+            description = "Merge duplicate notes. 'from' is folded into 'into': aliases transferred, references repointed, 'from' deleted.",
             parameters  = new
             {
                 type       = "object",
@@ -175,7 +175,7 @@ internal sealed class AddCuriosity : Tool
         function = new
         {
             name        = "add_curiosity",
-            description = "Record something Ari is curious about and would like to ask the user later. Use for genuine open questions surfaced while tidying the graph — not for facts (those go in notes).",
+            description = "Record an open question to ask the user later. For genuine curiosities, not facts.",
             parameters  = new
             {
                 type       = "object",
@@ -224,7 +224,7 @@ internal sealed class RemoveCuriosity : Tool
         function = new
         {
             name        = "remove_curiosity",
-            description = "Remove a curiosity from the ask-later queue by its id (e.g. one that's no longer interesting or has been resolved). Use list_curiosities to see ids.",
+            description = "Remove a curiosity by id.",
             parameters  = new
             {
                 type       = "object",
@@ -254,7 +254,7 @@ internal sealed class ListCuriosities : Tool
         function = new
         {
             name        = "list_curiosities",
-            description = "List the curiosities currently queued (id, priority, topic, question) so you can decide whether to add a new one or remove a stale one.",
+            description = "List queued curiosities (id, priority, topic, question).",
             parameters  = new { type = "object", properties = new { } }
         }
     };
