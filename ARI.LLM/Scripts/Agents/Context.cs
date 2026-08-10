@@ -81,7 +81,7 @@ internal class Context : Agent
                 {
                     new { role = "system", content = $"{resolvedPrompt}\n<|think_off|>" },
                     new { role = "user",   content =
-                        $"TODAY: {DateTime.Now:dddd, d MMMM yyyy}\n\n" +
+                        $"TODAY: {DateTime.Now:dddd, d MMMM yyyy}, {DateTime.Now:h:mm tt}\n\n" +
                         userProfile +
                         $"CURRENT CONTEXT:\n{contextBlock}\n\n" +
                         $"NEW EXCHANGE:\n{username}: {userMessage}\nARI: {assistantResponse}\n\n" +
@@ -153,7 +153,7 @@ internal class Context : Agent
                 {
                     new { role = "system", content = $"{resolvedPrompt}\n<|think_off|>" },
                     new { role = "user",   content =
-                        $"TODAY: {DateTime.Now:dddd, d MMMM yyyy}\n\n" +
+                        $"TODAY: {DateTime.Now:dddd, d MMMM yyyy}, {DateTime.Now:h:mm tt}\n\n" +
                         $"CURRENT CONTEXT:\n{contextBlock}\n\n" +
                         $"FULL CONVERSATION:\n{transcript}\n\n" +
                         "Produce an updated context summary covering this full conversation." }
