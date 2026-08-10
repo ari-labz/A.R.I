@@ -23,6 +23,9 @@ internal sealed class Refactor : MemoryAgent
     // Refactor is tidy-only — curiosity-recording is the Curiosity agent's job now.
     protected override bool IncludeCuriosityTools => false;
 
+    // Refactor acts on the skeleton — it rarely needs more than the seed + one neighbour.
+    internal override int ReadCeiling => 2;
+
     // Refactor rotates through the whole vault least-recently-refactored first (see RefactorLog); the
     // other memory walks keep the plain top-degree seed order.
     internal override bool TrackLastRefactored => true;
