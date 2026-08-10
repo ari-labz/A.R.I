@@ -272,20 +272,6 @@ public class DiscordModule : BackgroundService, IDiscordModule
                 .AddOption(new SlashCommandOptionBuilder().WithName("notes").WithDescription("Delete every note in the brain").WithType(ApplicationCommandOptionType.SubCommand))
                 .Build(),
 
-            new SlashCommandBuilder()
-                .WithName("whitelist")
-                .WithDescription("Manage which users A·R·I responds to in servers")
-                .AddOption(new SlashCommandOptionBuilder()
-                    .WithName("add")
-                    .WithDescription("Allow a user")
-                    .WithType(ApplicationCommandOptionType.SubCommand)
-                    .AddOption("user", ApplicationCommandOptionType.User, "The user to allow", isRequired: true))
-                .AddOption(new SlashCommandOptionBuilder()
-                    .WithName("remove")
-                    .WithDescription("Remove a user")
-                    .WithType(ApplicationCommandOptionType.SubCommand)
-                    .AddOption("user", ApplicationCommandOptionType.User, "The user to remove", isRequired: true))
-                .Build(),
         ];
 
         try
@@ -320,13 +306,6 @@ public class DiscordModule : BackgroundService, IDiscordModule
 
         string sub = cmd.Data.Options.FirstOrDefault()?.Name ?? string.Empty;
 
-        // whitelist is Discord-specific — it manages Discord user IDs directly.
-        if (cmd.CommandName == "whitelist")
-        {
-            await HandleWhitelistSlash(cmd, sub);
-            return;
-        }
-
         // All other commands: reconstruct the text form and route through CommandService.
         string commandText = string.IsNullOrEmpty(sub)
             ? $"/{cmd.CommandName}"
@@ -336,43 +315,6 @@ public class DiscordModule : BackgroundService, IDiscordModule
         await cmd.DeferAsync(ephemeral: true);
         string result = await llmModule.HandleCommand(null, commandText) ?? $"Unknown command: {commandText}";
         await cmd.FollowupAsync(AsBlockQuote(result), ephemeral: true);
-    }
-
-    private async Task HandleWhitelistSlash(SocketSlashCommand cmd, string sub)
-    {
-        SocketSlashCommandDataOption? subCmd = cmd.Data.Options.FirstOrDefault();
-        IUser? target = subCmd?.Options.FirstOrDefault()?.Value as IUser;
-
-        if (target is null)
-        {
-            await cmd.RespondAsync("Could not resolve user.", ephemeral: true);
-            return;
-        }
-
-        ulong userId = target.Id;
-
-        if (sub == "add")
-        {
-            if (config.WhitelistedUserIds.Contains(userId))
-            {
-                await cmd.RespondAsync($"`{target.Username}` is already whitelisted.", ephemeral: true);
-                return;
-            }
-            config.WhitelistedUserIds.Add(userId);
-            _logger.LogInformation("Owner added {UserId} to whitelist", userId);
-            await cmd.RespondAsync($"`{target.Username}` added to whitelist.", ephemeral: true);
-        }
-        else
-        {
-            if (!config.WhitelistedUserIds.Contains(userId))
-            {
-                await cmd.RespondAsync($"`{target.Username}` is not on the whitelist.", ephemeral: true);
-                return;
-            }
-            config.WhitelistedUserIds.Remove(userId);
-            _logger.LogInformation("Owner removed {UserId} from whitelist", userId);
-            await cmd.RespondAsync($"`{target.Username}` removed from whitelist.", ephemeral: true);
-        }
     }
 
     private async Task OnMessageReceived(SocketMessage message)
@@ -430,19 +372,13 @@ public class DiscordModule : BackgroundService, IDiscordModule
 
     private async Task HandleServerMessage(SocketMessage message, SocketGuildChannel guildChannel)
     {
-        if (!config.WhitelistedUserIds.Contains(message.Author.Id))
-        {
-            _logger.LogDebug("Ignored server message from non-whitelisted user {UserId}", message.Author.Id);
-            return;
-        }
-
         if (config.AllowedGuildIds.Count > 0 && !config.AllowedGuildIds.Contains(guildChannel.Guild.Id))
         {
             _logger.LogDebug("Ignored message from non-allowed guild {GuildId}", guildChannel.Guild.Id);
             return;
         }
 
-        bool isMentioned = message.MentionedUsers.Any(u => u.Id == client.CurrentUser.Id);
+        bool isMentioned      = message.MentionedUsers.Any(u => u.Id == client.CurrentUser.Id);
         bool isWatchedChannel = config.WatchedChannelIds.Contains(message.Channel.Id);
 
         if (!isMentioned && !isWatchedChannel)
@@ -455,13 +391,19 @@ public class DiscordModule : BackgroundService, IDiscordModule
         // Track the most recent text channel per guild so voice replies have a destination.
         if (message.Channel is ISocketMessageChannel textCh)
             lastTextChannels[guildChannel.Guild.Id] = textCh;
-        string content = message.Content.Replace($"<@{client.CurrentUser.Id}>", "").Trim();
-        string timestamp = message.Timestamp.LocalDateTime.ToString("dd/MM/yyyy HH:mm");
-        bool isOwner = message.Author.Id == config.OwnerId;
-        string prompt = $"[{timestamp}] [{message.Author.Username} (user_id: {message.Author.Id}{(isOwner ? ", OWNER" : "")}) in #{guildChannel.Name}]: {content}";
 
-        _logger.LogInformation("Server message from {Username} ({UserId}) in #{ChannelName}: {Content}",
-            message.Author.Username, message.Author.Id, guildChannel.Name, message.Content);
+        string content     = message.Content.Replace($"<@{client.CurrentUser.Id}>", "").Trim();
+        string timestamp   = message.Timestamp.LocalDateTime.ToString("dd/MM/yyyy HH:mm");
+        bool   isOwner     = message.Author.Id == config.OwnerId;
+        // Prefer server nickname → display name → username so Ari sees the name people actually go by.
+        string displayName = message.Author is SocketGuildUser guildUser
+            ? guildUser.Nickname ?? guildUser.DisplayName ?? guildUser.Username
+            : message.Author.Username;
+        string ownerTag    = isOwner ? " [OWNER]" : "";
+        string prompt      = $"[{timestamp}] [{displayName}{ownerTag} in #{guildChannel.Name}]: {content}";
+
+        _logger.LogInformation("Server message from {DisplayName} ({UserId}) in #{ChannelName}: {Content}",
+            displayName, message.Author.Id, guildChannel.Name, message.Content);
 
         if (!isMentioned && llmModule.AwarenessAvailable)
         {
@@ -476,7 +418,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
         List<LlmAttachment>? attachments = message.Attachments.Count > 0
             ? await UploadDiscordAttachments(message.Attachments)
             : null;
-        await SendLlmReply(message, conversationKey, prompt, message.Author.Username, BuildServerPlatformContext(config.OwnerId), attachments);
+        await SendLlmReply(message, conversationKey, prompt, displayName, BuildServerPlatformContext(config.OwnerId), attachments);
     }
 
     private async Task<List<LlmAttachment>> UploadDiscordAttachments(IReadOnlyCollection<DiscordAttachment> attachments)
