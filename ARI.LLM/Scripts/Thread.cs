@@ -445,7 +445,7 @@ public class Thread
     {
         if (State == ThreadState.Deleted) return;
 
-        if (!EngramProcessed && HasUserMessages)
+        if (!EngramProcessed && HasUserMessages && !Internal)
         {
             if (State != ThreadState.Dormant) State = ThreadState.Dormant;
             Shared.Logger.LogInformation("[Thread] ({ThreadKey}) delete gated — running Engram first; retrying in {Sec}s.", threadKey, DELETE_RETRY_SEC);
