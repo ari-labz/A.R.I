@@ -98,6 +98,7 @@ public class ARI : BackgroundService
 
         await Dependency.CheckPython();
         await Dependency.CheckEspeakNg();
+        await Dependency.CheckLibDave();
         await Dependency.CheckLlamaCpp();
         Shared.LlamaCppUpdate = Dependency.UpdateLlamaCpp;
         Shared.LlamaCppSetPath = Dependency.SetLlamaCppPath;
