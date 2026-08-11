@@ -249,6 +249,158 @@ internal class Engram : MemoryAgent, IDisposable
             ("date",       DateTime.Now.ToString("yyyy-MM-dd")));
     }
 
+    // ── Lightweight code-thread summary ────────────────────────────────────────────────
+
+    /// <summary>Summarises a coding thread into 1-2 paragraphs and appends it to today's conversation log.
+    /// No memory extraction, no graph walk — just a record of what was worked on.</summary>
+    internal async Task RunCodeSummary(string threadKey, string trigger)
+    {
+        if (Shared.DevMode)
+        {
+            if (threads.TryGetValue(threadKey, out Thread? devThread)) devThread.EngramProcessed = true;
+            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] code summary skipped — DevMode is on.", threadKey);
+            return;
+        }
+
+        if (!IsEnabled)
+        {
+            lock (pendingQueue) pendingQueue.Add(threadKey);
+            return;
+        }
+        if (!await engramLock.WaitAsync(0)) return;
+        sweepingThreads[threadKey] = 0;
+
+        string outcome = "incomplete (unexpected exit)";
+        bool processed = false;
+
+        try
+        {
+            if (!threads.TryGetValue(threadKey, out Thread? codeThread)) { processed = true; return; }
+            List<ThreadItem> items = codeThread.History.Where(i => i is LLM.Prompt or Response).ToList();
+            if (items.Count == 0) { outcome = "skipped — no messages"; processed = true; return; }
+
+            string transcript = BuildTranscript(items);
+            string speaker = items.OfType<Prompt>().Select(p => p.AuthorName)
+                .FirstOrDefault(a => !string.IsNullOrWhiteSpace(a))
+                ?? ReadStoredUserName() ?? "the user";
+
+            string summary = await GenerateCodeSummary(transcript, speaker);
+            if (string.IsNullOrWhiteSpace(summary)) { outcome = "skipped — empty summary"; processed = true; return; }
+
+            string date = DateTime.Now.ToString("yyyy-MM-dd");
+            AppendToConversationLog(date, summary);
+
+            outcome   = "code summary saved";
+            processed = true;
+            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] code summary saved to Conversations/{Date}.", threadKey, date);
+        }
+        finally
+        {
+            SessionRecorder.StandaloneNote("Engram", $"engram-code:{threadKey}", "code-summary", new Dictionary<string, object?>
+            {
+                ["trigger"]   = trigger,
+                ["thread"]    = threadKey,
+                ["outcome"]   = outcome,
+                ["processed"] = processed,
+            });
+            if (processed && threads.TryGetValue(threadKey, out Thread? pt)) pt.EngramProcessed = true;
+            sweepingThreads.TryRemove(threadKey, out _);
+            engramLock.Release();
+            SweepCompleted?.Invoke(threadKey);
+        }
+    }
+
+    private async Task<string> GenerateCodeSummary(string transcript, string speaker)
+    {
+        object requestBody = new
+        {
+            model    = "local",
+            messages = new[]
+            {
+                new { role = "system", content = "You summarise coding sessions. Write 1-2 short paragraphs describing what was worked on: the project, features implemented, bugs fixed, and any notable decisions. Write in past tense, third person (refer to the user by name). No bullet points, no code snippets. Be concise.\n\nWrap every named entity (person, project, tool, service, library, feature) in [[wikilinks]] so the memory graph can link them. Examples: [[Xywren]], [[ARI.UI]], [[PureBill]], [[Engram]], [[pipeline selector]]. If unsure whether something deserves a link, link it.\n<|think_off|>" },
+                new { role = "user",   content = $"Summarise this coding session by {speaker}:\n\n{transcript}" }
+            },
+            stream      = false,
+            max_tokens  = 300,
+            temperature = 0.3,
+            thinking             = false,
+            enable_thinking      = false,
+            chat_template_kwargs = new { enable_thinking = false }
+        };
+
+        try
+        {
+            HttpRequestMessage request = new(HttpMethod.Post, $"{Endpoint}/v1/chat/completions")
+            {
+                Content = new StringContent(JsonSerializer.Serialize(requestBody), Encoding.UTF8, "application/json")
+            };
+            HttpResponseMessage response = await httpClient.SendAsync(request);
+            response.EnsureSuccessStatusCode();
+
+            string json = await response.Content.ReadAsStringAsync();
+            using JsonDocument doc = JsonDocument.Parse(json);
+            return doc.RootElement
+                .GetProperty("choices")[0]
+                .GetProperty("message")
+                .GetProperty("content")
+                .GetString()?.Trim() ?? "";
+        }
+        catch (Exception ex)
+        {
+            Shared.Logger.LogWarning("[Engram] Code summary generation failed: {Err}", ex.Message);
+            return "";
+        }
+    }
+
+    private static void AppendToConversationLog(string date, string summary)
+    {
+        string noteName = $"Conversations/{date}";
+        string path = Path.Combine(BrainModule.VaultRoot, "Conversations", $"{date}.md");
+        string existing = File.Exists(path) ? File.ReadAllText(path) : "";
+
+        string entry = $"\n\n---\n**Coding session**\n{summary}";
+        if (existing.Length > 0)
+        {
+            File.AppendAllText(path, entry);
+        }
+        else
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, $"# {date}{entry}");
+        }
+        BrainModule.Index();
+        GitCommitBrain($"Conversation log: coding session {date}");
+    }
+
+    private static void GitCommitBrain(string message)
+    {
+        try
+        {
+            string vault = BrainModule.VaultRoot;
+            RunGit(vault, "add", "-A");
+            RunGit(vault, "commit", "-m", message);
+        }
+        catch (Exception ex)
+        {
+            Shared.Logger.LogWarning("[Engram] Git commit for code summary failed: {Err}", ex.Message);
+        }
+    }
+
+    private static void RunGit(string workDir, params string[] args)
+    {
+        System.Diagnostics.ProcessStartInfo psi = new()
+        {
+            FileName               = "git",
+            WorkingDirectory       = workDir,
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+            UseShellExecute        = false,
+        };
+        foreach (string arg in args) psi.ArgumentList.Add(arg);
+        using System.Diagnostics.Process process = System.Diagnostics.Process.Start(psi)!;
+        process.WaitForExit();
+    }
+
     // ── Classify (unchanged) ─────────────────────────────────────────────────────────
 
     private async Task<bool> Classify(IReadOnlyList<ThreadItem> recentItems, string trigger)
