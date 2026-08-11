@@ -575,18 +575,29 @@ public class LLMModule : ILLMModule, IDisposable
     /// delete-retry poll tries again.</summary>
     private void OnThreadDormant(Thread thread)
     {
-        bool sweep = engram is not null
-                  && thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech
-                  && !thread.Internal
-                  && thread.HasUserMessages
-                  && !thread.EngramProcessed;
-        if (!sweep) { thread.EngramProcessed = true; return; }
+        bool canSweep = engram is not null && !thread.Internal && thread.HasUserMessages && !thread.EngramProcessed;
+        if (!canSweep) { thread.EngramProcessed = true; return; }
 
-        _ = Task.Run(async () =>
+        if (thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech)
         {
-            try { await engram!.RunEngram(thread.Key, "dormant"); }
-            catch (Exception ex) { _logger.LogWarning("[Dormant] Engram failed for {Key}: {Err}", thread.Key, ex.Message); }
-        });
+            _ = Task.Run(async () =>
+            {
+                try { await engram!.RunEngram(thread.Key, "dormant"); }
+                catch (Exception ex) { _logger.LogWarning("[Dormant] Engram failed for {Key}: {Err}", thread.Key, ex.Message); }
+            });
+        }
+        else if (thread.Pipeline is ThreadPipeline.Code)
+        {
+            _ = Task.Run(async () =>
+            {
+                try { await engram!.RunCodeSummary(thread.Key, "dormant"); }
+                catch (Exception ex) { _logger.LogWarning("[Dormant] Code summary failed for {Key}: {Err}", thread.Key, ex.Message); }
+            });
+        }
+        else
+        {
+            thread.EngramProcessed = true;
+        }
     }
 
     /// <summary>Manually close a thread (close-thread button): remove it from the UI immediately, run a real
@@ -602,10 +613,18 @@ public class LLMModule : ILLMModule, IDisposable
         Broadcast(new AppEvent("threadDeleted", threadKey));
 
         // 2) Guarantee the conversation is saved before deletion (honours the no-delete-before-Engram rule).
-        if (engram is not null && thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech && !thread.Internal && thread.HasUserMessages)
+        if (engram is not null && !thread.Internal && thread.HasUserMessages)
         {
-            try { await engram.RunEngram(threadKey, "closed", force: true); }
-            catch (Exception ex) { _logger.LogWarning("[Close] Engram failed for {Key}: {Err}", threadKey, ex.Message); }
+            if (thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech)
+            {
+                try { await engram.RunEngram(threadKey, "closed", force: true); }
+                catch (Exception ex) { _logger.LogWarning("[Close] Engram failed for {Key}: {Err}", threadKey, ex.Message); }
+            }
+            else if (thread.Pipeline is ThreadPipeline.Code)
+            {
+                try { await engram.RunCodeSummary(threadKey, "closed"); }
+                catch (Exception ex) { _logger.LogWarning("[Close] Code summary failed for {Key}: {Err}", threadKey, ex.Message); }
+            }
         }
 
         // 3) Delete for real (fires Deleted → registry removal + a final threadDeleted broadcast).
