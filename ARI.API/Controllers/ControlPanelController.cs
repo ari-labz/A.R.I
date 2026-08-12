@@ -1500,7 +1500,7 @@ public record TrainRequest(
     string ModelName,
     string StagingPath,
     string Engine          = "StyleTTS2",
-    int    Epochs          = 100,
+    int    Epochs          = 365,
     int    SaveEveryNEpochs = 10,
     string QuantType       = "q4_k_m",
     Dictionary<string, string>? Transcripts = null);
