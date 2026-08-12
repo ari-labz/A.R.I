@@ -5,8 +5,6 @@ using ARI.Core.Scripts;
 using ARI.Discord;
 using ARI.LLM;
 using ARI.Voice;
-using ARI.Voice.StyleTTS2;
-using ARI.Voice.IndexTTS;
 using ARI.VoiceSynthesis;
 using ARI.API;
 using ARI.API.Data;
@@ -84,7 +82,7 @@ public class ARI : BackgroundService
         // defaults through Paths — the single source of truth for every on-disk location.
         config.modules.VoiceSynthesis.StyleTtsPath = !string.IsNullOrEmpty(config.modules.VoiceSynthesis.StyleTtsPath)
             ? Paths.ResolveOverride(config.modules.VoiceSynthesis.StyleTtsPath)
-            : Paths.StyleTts2Source;
+            : Path.Combine(Paths.VoiceModules, "StyleTTS2");
 
         // Voices are user data, not install content — default under AppData unless overridden.
         config.modules.VoiceSynthesis.VoicesPath = !string.IsNullOrEmpty(config.modules.VoiceSynthesis.VoicesPath)
@@ -142,10 +140,9 @@ public class ARI : BackgroundService
         {
             try
             {
-                _logger.LogInformation("VoiceSynthesis module is enabled. Installing StyleTTS2...");
-                string sttPath    = config.modules.VoiceSynthesis.StyleTtsPath;
-                string sttDataDir = config.modules.VoiceSynthesis.DataDir;
-                await new StyleTtsSetupService(sttPath, sttDataDir, loggerFactory.CreateLogger("ARI.VoiceSynthesis")).Install();
+                _logger.LogInformation("VoiceSynthesis module is enabled. Installing dependencies...");
+                await new VoiceSynthesisSetupService(loggerFactory.CreateLogger("ARI.VoiceSynthesis")).Install();
+
                 voiceSynthesisModule.MarkSetupComplete();
                 _logger.LogInformation("VoiceSynthesis ready.");
                 voiceSynthReady = true;
@@ -198,18 +195,13 @@ public class ARI : BackgroundService
             {
                 string modelDir = Path.Combine(voicesPath, engine, modelName);
 
-                ITtsSynthesiser? SynthFactory(string eng, string model)
+                async Task<ITtsSynthesiser?> SynthFactory(string eng, string model)
                 {
                     string dir = Path.Combine(voicesPath, eng, model);
-                    return eng switch
-                    {
-                        "StyleTTS2" => CreateStyleTts(sttPath, sttDataDir, dir, model, voiceLogger),
-                        "IndexTTS"  => CreateIndexTts(dir, voiceLogger),
-                        _           => null,
-                    };
+                    return await CreateModuleSynthesiser(eng, dir, sttDataDir, voiceLogger);
                 }
 
-                ITtsSynthesiser? engineSynthesiser = SynthFactory(engine, modelName);
+                ITtsSynthesiser? engineSynthesiser = await SynthFactory(engine, modelName);
                 if (engineSynthesiser is null)
                     _logger.LogWarning("Voice module enabled but engine '{Engine}' could not be initialised for model '{Model}' — skipping.", engine, modelName);
                 else
@@ -221,7 +213,9 @@ public class ARI : BackgroundService
                     catch (Exception ex) { _logger.LogError("Voice warmup failed (model may have corrupt weights): {Error}", ex.Message); }
 
                     speechQueue = new SpeechQueue(synthesiser, voiceLogger);
-                    string pythonPath = Paths.StyleTts2Python;
+                    string modulePy = Path.Combine(Paths.VoiceModules, engine, "venv",
+                        OperatingSystem.IsWindows() ? @"Scripts\python.exe" : "bin/python3");
+                    string pythonPath = File.Exists(modulePy) ? modulePy : "python3";
                     void WireAudio(SpeechQueue q) => q.AudioReady += wav => PlayAudio(wav, pythonPath, voiceLogger);
                     WireAudio(speechQueue);
 
@@ -430,38 +424,48 @@ public class ARI : BackgroundService
         return wavs.Length > 0 ? wavs.OrderBy(f => f).First() : "";
     }
 
-    private ITtsSynthesiser? CreateStyleTts(string sttPath, string sttDataDir, string modelDir, string modelName, ILogger voiceLogger)
+    private static readonly Dictionary<string, int> ModulePorts = new()
     {
-        string modelPath  = Path.Combine(modelDir, "model.pth");
-        string configPath = Path.Combine(modelDir, "config.yml");
-        string refAudio   = FindReferenceAudio(modelDir, sttDataDir, modelName);
+        ["StyleTTS2"] = 8021,
+        ["IndexTTS"] = 8026,
+    };
 
-        if (!File.Exists(modelPath) || !File.Exists(configPath))
-        {
-            _logger.LogWarning("StyleTTS2 model not found at {Path} — skipping.", modelDir);
-            return null;
-        }
-        if (string.IsNullOrEmpty(refAudio))
-        {
-            _logger.LogWarning("No reference audio found for StyleTTS2 model {Model} — skipping.", modelName);
-            return null;
-        }
-        return new StyleTtsSynthesiser(sttPath, sttDataDir, modelPath, configPath, refAudio, voiceLogger);
-    }
-
-    private ITtsSynthesiser? CreateIndexTts(string modelDir, ILogger voiceLogger)
+    private async Task<ITtsSynthesiser?> CreateModuleSynthesiser(string engine, string voiceDir, string dataDir, ILogger voiceLogger)
     {
-        string indexSource = Path.Combine(Paths.BuildPath, "External", "IndexTTS");
-
-        // IndexTTS clones a voice from one clip rather than training on a corpus,
-        // so a voice here is a reference recording, not a checkpoint.
-        string reference = Path.Combine(modelDir, "reference.wav");
-        if (!File.Exists(reference))
+        string modulePath = Path.Combine(Paths.VoiceModules, engine);
+        try
         {
-            _logger.LogWarning("IndexTTS voice {Path} has no reference.wav — skipping.", modelDir);
+            await new VoiceModuleSetupService(engine, _logger).Install();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError("Failed to download/install voice module '{Engine}': {Error}", engine, ex.Message);
             return null;
         }
-        return new IndexTtsSynthesiser(indexSource, modelDir, voiceLogger);
+
+        if (!Directory.Exists(modulePath))
+        {
+            _logger.LogWarning("Voice module '{Engine}' not found at {Path} — skipping.", engine, modulePath);
+            return null;
+        }
+
+        if (!Directory.Exists(voiceDir))
+        {
+            _logger.LogWarning("Voice directory {Path} does not exist — skipping.", voiceDir);
+            return null;
+        }
+
+        int port = ModulePorts.GetValueOrDefault(engine, 8021 + ModulePorts.Count);
+
+        var extraArgs = new List<string>();
+        if (!string.IsNullOrEmpty(dataDir))
+            extraArgs.Add($"--data-dir \"{dataDir}\"");
+        if (PhonemeSubstitutions.Path is { } subsPath)
+            extraArgs.Add($"--phoneme-subs \"{subsPath}\"");
+        extraArgs.Add("--cpu");
+
+        return new VoiceModuleSynthesiser(modulePath, voiceDir, port, voiceLogger,
+            extraArgs: string.Join(" ", extraArgs));
     }
 
     // Only one audio-output stream at a time — otherwise back-to-back sentences (Speech pipeline) spawn

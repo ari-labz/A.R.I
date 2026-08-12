@@ -66,16 +66,6 @@
   	<Content Update="..\ARI.API\wwwroot\images\Black Code .png">
   	  <Link>wwwroot\images\Black Code .png</Link>
   	</Content>
-  	<!-- StyleTTS2 source ships with the install (repo-relative wins during dev — see
-  	     AriPaths.ResolveInstallAsset in ARI.cs). venv/Models/per-model training dirs are AppData-based
-  	     mutable state (StyleTtsTrainer/StyleTtsSetupService — see VoiceSynthesisConfig.DataDir) and
-  	     never live here; Data/Data is a stray leftover nested duplicate, not shipped either.
-  	     What DOES ship from Data/: the shared scaffold (OOD_texts.txt, Dummy/, train_list.txt,
-  	     val_list.txt) that Utils-relative training config paths need at the StyleTTS2 source root. -->
-  	<Content Include="..\External\StyleTTS2\**\*" Exclude="..\External\StyleTTS2\venv\**;..\External\StyleTTS2\Data\Data\**;..\External\StyleTTS2\Models\**;..\External\StyleTTS2\__pycache__\**">
-  	  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-  	  <LinkBase>External\StyleTTS2</LinkBase>
-  	</Content>
   	<Content Include="..\External\Orpheus\**\*" Exclude="..\External\Orpheus\venv\**;..\External\Orpheus\__pycache__\**">
   	  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
   	  <LinkBase>External\Orpheus</LinkBase>
@@ -102,11 +92,9 @@
     <ProjectReference Include="..\ARI.API\ARI.API.csproj" />
     <ProjectReference Include="..\ARI.VoiceSynthesis\ARI.VoiceSynthesis.csproj" />
     <ProjectReference Include="..\ARI.Voice\ARI.Voice.csproj" />
-    <ProjectReference Include="..\ARI.Voice.StyleTTS2\ARI.Voice.StyleTTS2.csproj" />
     <ProjectReference Include="..\ARI.Common\ARI.Common.csproj" />
     <ProjectReference Include="..\ARI.Listener\ARI.Listener.csproj" />
     <ProjectReference Include="..\ARI.Scheduler\ARI.Scheduler.csproj" />
-    <ProjectReference Include="..\ARI.Voice.IndexTTS\ARI.Voice.IndexTTS.csproj" />
   </ItemGroup>
 
 </Project>

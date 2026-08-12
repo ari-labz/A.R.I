@@ -37,6 +37,10 @@ public static class Paths
     public static string Push           { get; }
     public static string LLMConfigs     { get; }
 
+    // Self-contained voice modules — each subdirectory (StyleTTS2, IndexTTS, KokoroRVC) contains
+    // its own setup.py, serve.py, venv, and model weights.
+    public static string VoiceModules { get; }
+
     // StyleTTS2's mutable state (venv, per-model training work dirs, the downloaded pretrained
     // checkpoint cache) — never lives under StyleTts2Source, which is install content.
     public static string StyleTts2Data { get; }
@@ -48,11 +52,10 @@ public static class Paths
     // Python venvs live at a SHORT path (…/ARI/venvs/*), managed and auto-installed by ARI (like
     // llama.cpp's tools dir), rather than buried under the deep StyleTts2Data / ListenerData trees —
     // otherwise nested package paths (e.g. torch's license files) blow past Windows' 260-char limit.
-    public static string StyleTts2Venv    { get; }
-    public static string StyleTts2Python  { get; }
-    public static string StyleTts2Whisper { get; }
-    public static string ListenerVenv     { get; }
-    public static string ListenerPython   { get; }
+    public static string VoiceSynthesisVenv   { get; }
+    public static string VoiceSynthesisPython { get; }
+    public static string ListenerVenv         { get; }
+    public static string ListenerPython       { get; }
 
     // Managed native tools — ARI-provisioned installs (espeak-ng, etc.) that don't come from a
     // system package manager.  ~/ARI/tools/<toolname>/...
@@ -154,14 +157,14 @@ public static class Paths
         Keys           = ServerDir("Keys");
         Push           = ServerDir("Push");
         LLMConfigs     = ServerDir("LLMConfigs");
+        VoiceModules   = ServerDir("VoiceModules");
         StyleTts2Data  = ServerDir("External/StyleTTS2");
         ListenerData   = ServerDir("External/Listener");
 
-        StyleTts2Venv    = Path.Combine(AppData, "venvs", "stt");
-        StyleTts2Python  = Path.Combine(StyleTts2Venv, OperatingSystem.IsWindows() ? @"Scripts\python.exe" : "bin/python");
-        StyleTts2Whisper = Path.Combine(StyleTts2Venv, OperatingSystem.IsWindows() ? @"Scripts\whisper.exe" : "bin/whisper");
-        ListenerVenv     = Path.Combine(AppData, "venvs", "listener");
-        ListenerPython   = Path.Combine(ListenerVenv, OperatingSystem.IsWindows() ? @"Scripts\python.exe" : "bin/python");
+        VoiceSynthesisVenv   = Path.Combine(AppData, "venvs", "voicesynth");
+        VoiceSynthesisPython = Path.Combine(VoiceSynthesisVenv, OperatingSystem.IsWindows() ? @"Scripts\python.exe" : "bin/python");
+        ListenerVenv         = Path.Combine(AppData, "venvs", "listener");
+        ListenerPython       = Path.Combine(ListenerVenv, OperatingSystem.IsWindows() ? @"Scripts\python.exe" : "bin/python");
 
         Tools    = Path.Combine(AppData, "tools");
         EspeakNg = Path.Combine(Tools, "espeak-ng");

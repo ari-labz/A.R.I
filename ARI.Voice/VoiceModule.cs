@@ -3,7 +3,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ARI.Voice;
 
-public delegate ITtsSynthesiser? SynthesiserFactory(string engine, string modelName);
+public delegate Task<ITtsSynthesiser?> SynthesiserFactory(string engine, string modelName);
 
 public class VoiceModule : IVoiceModule, IDisposable
 {
@@ -51,7 +51,7 @@ public class VoiceModule : IVoiceModule, IDisposable
 
     public async Task SwitchEngine(string engine, string modelName, CancellationToken ct = default)
     {
-        var newSynth = factory(engine, modelName)
+        var newSynth = await factory(engine, modelName)
             ?? throw new InvalidOperationException($"Could not create {engine} synthesiser for model '{modelName}'.");
 
         logger?.LogInformation("[Voice] Switching to {Engine} / {Model}...", engine, modelName);

@@ -16,6 +16,9 @@
 
   <ItemGroup>
     <!-- Phonemization overrides copied into the StyleTTS2 submodule at runtime. -->
+    <Content Include="voice-modules.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="PhonemeSubstitutions.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>

@@ -57,11 +57,10 @@ public class AudioTranscriber
     {
         try
         {
-            string python  = Paths.StyleTts2Python;
-            string whisper = Paths.StyleTts2Whisper;
+            string python = Paths.VoiceSynthesisPython;
 
             if (!File.Exists(python))
-                throw new FileNotFoundException("StyleTTS2 Python not found — VoiceSynthesis module must be set up first.");
+                throw new FileNotFoundException("VoiceSynthesis Python not found — run setup first.");
 
             string wavDir = Path.Combine(workDir, "wavs");
             Directory.CreateDirectory(wavDir);
@@ -93,12 +92,12 @@ public class AudioTranscriber
             string[] chunks = Directory.GetFiles(wavDir, "*.wav");
             logger.LogInformation("[Transcriber] Chunked into {Count} clips", chunks.Length);
 
-            // Step 2: transcribe each clip with Whisper
+            // Step 2: transcribe each clip with faster-whisper
             Step = "Transcribing"; Percent = 20;
             for (int i = 0; i < chunks.Length; i++)
             {
                 string wav = chunks[i];
-                string transcript = await RunWhisper(whisper, wav, ct);
+                string transcript = await RunWhisper(python, wav, ct);
                 float duration = await GetDuration(python, wav, ct);
 
                 _clips.Add(new TranscribedClip(
@@ -149,15 +148,36 @@ public class AudioTranscriber
         await RunProcess(python, $"\"{scriptPath}\"", null, ct);
     }
 
-    private async Task<string> RunWhisper(string whisper, string wavFile, CancellationToken ct)
+    private async Task<string> RunWhisper(string python, string wavFile, CancellationToken ct)
     {
-        string outDir = Path.GetDirectoryName(wavFile)!;
-        await RunProcess(whisper,
-            $"\"{wavFile}\" --model base.en --output_format txt --output_dir \"{outDir}\" --fp16 False --condition_on_previous_text False",
-            null, ct);
+        string script =
+            "from faster_whisper import WhisperModel\n" +
+            "import sys\n" +
+            "model = WhisperModel('base.en', device='cpu', compute_type='int8')\n" +
+            $"segments, _ = model.transcribe(r'{wavFile}', beam_size=1, language='en', " +
+            "condition_on_previous_text=False, vad_filter=False)\n" +
+            "print(' '.join(s.text.strip() for s in segments).strip())\n";
 
-        string txtFile = Path.ChangeExtension(wavFile, ".txt");
-        return File.Exists(txtFile) ? await File.ReadAllTextAsync(txtFile, ct) : "";
+        string scriptPath = Path.Combine(workDir, "whisper_transcribe.py");
+        await File.WriteAllTextAsync(scriptPath, script, ct);
+
+        var info = new ProcessStartInfo
+        {
+            FileName = python,
+            Arguments = $"\"{scriptPath}\"",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        using var p = Process.Start(info) ?? throw new InvalidOperationException("Failed to start Python");
+        string output = await p.StandardOutput.ReadToEndAsync(ct);
+        await p.WaitForExitAsync(ct);
+        if (p.ExitCode != 0)
+        {
+            string err = await p.StandardError.ReadToEndAsync(CancellationToken.None);
+            throw new Exception($"Whisper transcription failed: {err}");
+        }
+        return output.Trim();
     }
 
     private async Task<float> GetDuration(string python, string wavFile, CancellationToken ct)

@@ -28,6 +28,7 @@ public class DatasetBuilder
     private readonly string                  dataDir;
     private readonly string                  stageDir;
     private readonly ILogger                 logger;
+    private readonly bool                    skipDemucs;
     private readonly CancellationTokenSource cancellation;
 
     public string  Step      { get; private set; } = "Starting";
@@ -35,8 +36,8 @@ public class DatasetBuilder
     public bool    IsRunning { get; private set; } = true;
     public bool    IsSuccess { get; private set; }
     public string? Error     { get; private set; }
+    public bool    HasDemucs => !skipDemucs;
 
-    // Read live from disk: the script republishes the manifest after every clip.
     public IReadOnlyList<DatasetPart> Parts => ReadManifest();
 
     public static DatasetBuilder? Current
@@ -44,24 +45,23 @@ public class DatasetBuilder
         get { lock (gate) return current; }
     }
 
-    // styleTtsPath is install content (StyleTTS2 source — dataset_process.py); dataDir is
-    // AppDataRoot-based mutable state (the venv StyleTtsSetupService provisions).
-    private DatasetBuilder(string styleTtsPath, string dataDir, string stageDir, ILogger logger, CancellationToken appStopping)
+    private DatasetBuilder(string styleTtsPath, string dataDir, string stageDir, bool skipDemucs, ILogger logger, CancellationToken appStopping)
     {
         this.styleTtsPath = styleTtsPath;
         this.dataDir      = dataDir;
         this.stageDir     = stageDir;
+        this.skipDemucs   = skipDemucs;
         this.logger       = logger;
         cancellation      = CancellationTokenSource.CreateLinkedTokenSource(appStopping);
     }
 
-    public static DatasetBuilder Start(string styleTtsPath, string dataDir, string stageDir, ILogger logger, CancellationToken appStopping)
+    public static DatasetBuilder Start(string styleTtsPath, string dataDir, string stageDir, bool skipDemucs, ILogger logger, CancellationToken appStopping)
     {
         lock (gate)
         {
             if (current?.IsRunning == true)
                 throw new InvalidOperationException("A dataset build is already running.");
-            DatasetBuilder builder = new(styleTtsPath, dataDir, stageDir, logger, appStopping);
+            DatasetBuilder builder = new(styleTtsPath, dataDir, stageDir, skipDemucs, logger, appStopping);
             current = builder;
             builder.Run();
             return builder;
@@ -94,13 +94,14 @@ public class DatasetBuilder
 
     private async Task RunScript()
     {
-        string python = Paths.StyleTts2Python;
+        string python = Paths.VoiceSynthesisPython;
         string script = Path.Combine(styleTtsPath, PROCESS_SCRIPT);
 
+        string demucsFlag = skipDemucs ? " --skip-demucs" : "";
         ProcessStartInfo info = new()
         {
             FileName               = python,
-            Arguments              = $"\"{script}\" \"{stageDir}\"",
+            Arguments              = $"\"{script}\" \"{stageDir}\"{demucsFlag}",
             RedirectStandardOutput = true,
             RedirectStandardError  = true,
             UseShellExecute        = false,
@@ -167,6 +168,60 @@ public class DatasetBuilder
         return JsonSerializer.Deserialize<List<DatasetPart>>(File.ReadAllText(manifestPath), manifestFormat) ?? new();
     }
 
+    public List<DatasetPart> Split(string name)
+    {
+        string python = Paths.VoiceSynthesisPython;
+        string script = Path.Combine(styleTtsPath, PROCESS_SCRIPT);
+        ProcessStartInfo info = new()
+        {
+            FileName               = python,
+            Arguments              = $"\"{script}\" \"{stageDir}\" --split-clip {name}",
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+            UseShellExecute        = false,
+            WorkingDirectory       = styleTtsPath,
+        };
+        using Process process = Process.Start(info)
+            ?? throw new InvalidOperationException("Failed to start split.");
+        string output = process.StandardOutput.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+            throw new Exception("Split failed.");
+
+        // Last line of stdout is the JSON result
+        string json = output.TrimEnd().Split('\n')[^1];
+        var result = JsonSerializer.Deserialize<SplitResult>(json, manifestFormat);
+        return result?.Parts ?? new();
+    }
+
+    public DatasetPart? Unsplit(string name)
+    {
+        string python = Paths.VoiceSynthesisPython;
+        string script = Path.Combine(styleTtsPath, PROCESS_SCRIPT);
+        ProcessStartInfo info = new()
+        {
+            FileName               = python,
+            Arguments              = $"\"{script}\" \"{stageDir}\" --unsplit-clip {name}",
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+            UseShellExecute        = false,
+            WorkingDirectory       = styleTtsPath,
+        };
+        using Process process = Process.Start(info)
+            ?? throw new InvalidOperationException("Failed to start unsplit.");
+        string output = process.StandardOutput.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+            throw new Exception("Unsplit failed.");
+
+        string json = output.TrimEnd().Split('\n')[^1];
+        var result = JsonSerializer.Deserialize<UnsplitResult>(json, manifestFormat);
+        return result?.Part;
+    }
+
+    private record SplitResult(List<DatasetPart> Parts);
+    private record UnsplitResult(DatasetPart? Part);
+
     /// <summary>Absolute path of a part's audio for the chosen variant, or null if missing.</summary>
     public string? VariantPath(string name, string variant)
     {
@@ -175,21 +230,24 @@ public class DatasetBuilder
         return File.Exists(path) ? path : null;
     }
 
-    /// <summary>Zips the selected variants under wavs/ alongside a transcript metadata.csv.</summary>
-    public byte[] BuildZip(IEnumerable<DatasetSelection> selections)
+    public byte[] BuildZip(IEnumerable<DatasetBuildSelection> selections)
     {
         Dictionary<string, DatasetPart> transcripts = ReadManifest().ToDictionary(part => part.Name);
         using MemoryStream memory = new();
         using (ZipArchive zip = new(memory, ZipArchiveMode.Create, leaveOpen: true))
         {
             StringBuilder metadata = new();
-            foreach (DatasetSelection selection in selections)
+            foreach (DatasetBuildSelection selection in selections)
             {
                 string? source = VariantPath(selection.Name, selection.Variant);
                 if (source is null) continue;
                 zip.CreateEntryFromFile(source, $"wavs/{selection.Name}.wav");
-                string transcript = transcripts.TryGetValue(selection.Name, out DatasetPart? part) ? part.Transcript : "";
+                string transcript = selection.Transcript
+                    ?? (transcripts.TryGetValue(selection.Name, out DatasetPart? part) ? part.Transcript : "");
                 metadata.AppendLine($"{selection.Name}.wav|{transcript}");
+
+                using StreamWriter txt = new(zip.CreateEntry($"wavs/{selection.Name}.txt").Open());
+                txt.Write(transcript);
             }
             using StreamWriter writer = new(zip.CreateEntry("metadata.csv").Open());
             writer.Write(metadata.ToString());
@@ -202,4 +260,4 @@ public record DatasetPart(
     string Clip, string Name, int Part, double Duration, string Language,
     string Transcript, double NoSpeech, double BgRatio, string[] Flags);
 
-public record DatasetSelection(string Name, string Variant);
+public record DatasetBuildSelection(string Name, string Variant, string? Transcript = null);
