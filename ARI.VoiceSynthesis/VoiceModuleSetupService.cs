@@ -88,6 +88,26 @@ public class VoiceModuleSetupService(string moduleName, ILogger? logger = null)
 
             Directory.Delete(tempExtract, true);
             logger?.LogInformation("[{Module}] Installed {Tag} to {Path}.", moduleName, tag, ModuleDir);
+
+            // Download release assets (e.g. base model weights) that aren't in the source archive
+            if (release.RootElement.TryGetProperty("assets", out var assets))
+            {
+                foreach (var asset in assets.EnumerateArray())
+                {
+                    string name = asset.GetProperty("name").GetString()!;
+                    string downloadUrl = asset.GetProperty("browser_download_url").GetString()!;
+                    string destPath = Path.Combine(ModuleDir, "Models", "LibriTTS", name);
+
+                    if (File.Exists(destPath)) continue;
+
+                    logger?.LogInformation("[{Module}] Downloading asset {Name}...", moduleName, name);
+                    Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+                    await using var assetStream = await http.GetStreamAsync(downloadUrl);
+                    await using var destFile = File.Create(destPath);
+                    await assetStream.CopyToAsync(destFile);
+                    logger?.LogInformation("[{Module}] Saved {Name} ({Size}).", moduleName, name, new FileInfo(destPath).Length);
+                }
+            }
         }
         finally
         {
