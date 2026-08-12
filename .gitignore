@@ -442,11 +442,9 @@ FodyWeavers.xsd
 *.msp
 /.idea
 
-# StyleTTS2 submodule runtime dirs
+# Voice module submodule runtime dirs
 External/StyleTTS2/venv/
 External/IndexTTS/venv/
-# Cloned at first run by IndexTtsSynthesiser, not vendored.
-External/IndexTTS/index-tts/
 External/StyleTTS2/Data/
 External/StyleTTS2/Models/
 

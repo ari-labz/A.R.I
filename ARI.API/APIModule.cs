@@ -118,7 +118,7 @@ public class APIModule : IAsyncDisposable
             OnPrepareResponse = ctx =>
             {
                 string file = ctx.File.Name;
-                if (file == "index.html" || file == "sw.js")
+                if (file == "index.html" || file == "sw.js" || file == "controlpanel.html")
                 {
                     ctx.Context.Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
                     ctx.Context.Response.Headers["Pragma"]        = "no-cache";

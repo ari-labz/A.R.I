@@ -1,3 +1,9 @@
-[submodule "External/StyleTTS2"]
-	path = External/StyleTTS2
-	url = https://github.com/Xywren/StyleTTS2.git
+[submodule "VoiceModules/IndexTTS"]
+	path = VoiceModules/IndexTTS
+	url = https://github.com/ari-labz/IndexTTS2.git
+[submodule "VoiceModules/StyleTTS2"]
+	path = VoiceModules/StyleTTS2
+	url = https://github.com/ari-labz/StyleTTS2.git
+[submodule "VoiceModules/KokoroRVC"]
+	path = VoiceModules/KokoroRVC
+	url = https://github.com/ari-labz/KokoroRVC.git

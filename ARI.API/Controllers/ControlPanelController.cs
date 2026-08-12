@@ -546,25 +546,38 @@ public class VoiceController(
         TrainingJob job;
         try
         {
-            // StyleTTS2 is the only engine that trains a voice. IndexTTS clones one
-            // from a single reference clip, so it has nothing to train.
-            if (string.IsNullOrEmpty(vsConfig.StyleTtsPath))
-                return StatusCode(503, new { error = "VoiceSynthesis module is not configured." });
             if (voiceTraining?.IsSetupComplete != true)
-                return StatusCode(503, new { error = "StyleTTS2 is still installing. Please wait." });
+                return StatusCode(503, new { error = "Voice module is still installing. Please wait." });
 
-            IVoiceTrainer trainer = new StyleTtsTrainer(
-                styleTtsPath:    vsConfig.StyleTtsPath,
-                dataDir:         vsConfig.DataDir,
-                voicesPath:      Path.Combine(vsConfig.VoicesPath, "StyleTTS2"),
-                audioPath:       req.StagingPath,
-                modelName:       req.ModelName,
-                epochs:          req.Epochs,
-                saveEveryNEpochs: req.SaveEveryNEpochs,
-                transcripts:     req.Transcripts,
-                logger:          logger);
+            string engine = req.Engine ?? "StyleTTS2";
+            int port = engine switch { "IndexTTS" => 8026, _ => 8021 };
+            string baseUrl = $"http://localhost:{port}";
+
+            // Copy staging data into voice dir so it survives for resume
+            string voiceDir = Path.Combine(vsConfig.VoicesPath, engine, req.ModelName);
+            string dataDir = Path.Combine(voiceDir, "Data");
+            Directory.CreateDirectory(dataDir);
+            foreach (string file in Directory.GetFiles(req.StagingPath))
+                System.IO.File.Copy(file, Path.Combine(dataDir, Path.GetFileName(file)), overwrite: true);
+
+            IVoiceTrainer trainer = new VoiceModuleTrainer(
+                baseUrl:      baseUrl,
+                audioPath:    dataDir,
+                voiceDir:     voiceDir,
+                modelName:    req.ModelName,
+                epochs:       req.Epochs,
+                saveEvery:    req.SaveEveryNEpochs,
+                retrain:      false,
+                transcripts:  req.Transcripts,
+                phonemeSubs:  PhonemeSubstitutions.Path,
+                logger:       logger);
 
             job = voiceTraining!.Start(trainer, req.ModelName, lifetime.ApplicationStopping);
+
+            var initialSettings = new TrainingSettings(dataDir, req.ModelName, req.Epochs, req.SaveEveryNEpochs, req.Transcripts);
+            System.IO.File.WriteAllText(
+                Path.Combine(voiceDir, "training.json"),
+                JsonSerializer.Serialize(initialSettings));
         }
         catch (InvalidOperationException ex)
         {
@@ -581,11 +594,11 @@ public class VoiceController(
         {
             while (job.IsRunning)
                 await Task.Delay(2000);
-            try { Directory.Delete(stagingPath, recursive: true); }
-            catch { /* best-effort */ }
 
             if (job.IsSuccess)
             {
+                try { Directory.Delete(stagingPath, recursive: true); }
+                catch { /* best-effort */ }
                 logger.LogInformation("[Voice] Voice Synthesis of {ModelName} complete", modelName);
                 if (Modules.Discord is not null)
                     await Modules.Discord.NotifyOwner($"> Voice Synthesis of {modelName} complete");
@@ -857,6 +870,7 @@ public class VoiceController(
                 {
                     name,
                     engine,
+                    hasModel     = System.IO.File.Exists(Path.Combine(dir, "model.pth")),
                     hasResume    = settings is not null,
                     audioPath    = settings?.AudioPath,
                     epochs       = settings?.Epochs,
@@ -886,26 +900,44 @@ public class VoiceController(
         return Ok(new { deleted = modelName, engine });
     }
 
-    /// <summary>
-    /// Signal a running training job to pause after the current epoch.
-    /// Writes a .stop_training sentinel file that train_finetune.py polls for.
-    /// The process saves a checkpoint then exits cleanly — safe to resume later.
-    /// </summary>
-    [HttpPost("{modelName}/stop")]
-    public IActionResult StopTraining(string modelName)
+    [HttpPost("{engine}/{modelName}/dismiss")]
+    public IActionResult DismissResume(string engine, string modelName)
     {
+        if (string.IsNullOrWhiteSpace(modelName) || modelName.Contains('/') || modelName.Contains('\\'))
+            return BadRequest(new { error = "Invalid model name." });
         if (string.IsNullOrEmpty(vsConfig.VoicesPath))
             return StatusCode(503, new { error = "VoiceSynthesis not configured." });
 
-        string dir = Path.Combine(vsConfig.VoicesPath, "StyleTTS2", modelName);
-        if (!dir.StartsWith(vsConfig.VoicesPath, StringComparison.OrdinalIgnoreCase))
-            return BadRequest(new { error = "Invalid model name." });
+        string dir = Path.Combine(vsConfig.VoicesPath, engine, modelName);
         if (!Directory.Exists(dir))
             return NotFound(new { error = $"Model '{modelName}' not found." });
 
-        System.IO.File.WriteAllText(Path.Combine(dir, ".stop_training"), "");
-        logger.LogInformation("[Voice] Pause requested for model '{ModelName}'", modelName);
-        return Ok(new { stopping = modelName });
+        string settingsFile = Path.Combine(dir, "training.json");
+        if (System.IO.File.Exists(settingsFile))
+            System.IO.File.Delete(settingsFile);
+
+        logger.LogInformation("[Voice] Dismissed resume for {Engine} model '{ModelName}'", engine, modelName);
+        return Ok(new { dismissed = modelName, engine });
+    }
+
+    [HttpPost("{modelName}/stop")]
+    public async Task<IActionResult> StopTraining(string modelName, [FromQuery] string? engine = "StyleTTS2")
+    {
+        engine ??= "StyleTTS2";
+        int port = engine switch { "IndexTTS" => 8026, _ => 8021 };
+        try
+        {
+            using HttpClient http = new();
+            var resp = await http.PostAsync($"http://localhost:{port}/train/pause", null);
+            resp.EnsureSuccessStatusCode();
+            logger.LogInformation("[Voice] Pause requested for model '{ModelName}' on {Engine}", modelName, engine);
+            return Ok(new { stopping = modelName });
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[Voice] Failed to pause training for '{ModelName}'", modelName);
+            return StatusCode(500, new { error = ex.Message });
+        }
     }
 
     // Returns the highest epoch number found in the model's Checkpoints folder,
@@ -944,12 +976,13 @@ public class VoiceController(
     {
         if (string.IsNullOrWhiteSpace(req.ModelName))
             return BadRequest(new { error = "modelName is required." });
-        if (string.IsNullOrEmpty(vsConfig.StyleTtsPath) || string.IsNullOrEmpty(vsConfig.VoicesPath))
+        if (string.IsNullOrEmpty(vsConfig.VoicesPath))
             return StatusCode(503, new { error = "VoiceSynthesis module is not configured." });
         if (voiceTraining?.IsSetupComplete != true)
-            return StatusCode(503, new { error = "StyleTTS2 is still installing. Please wait." });
+            return StatusCode(503, new { error = "Voice module is still installing. Please wait." });
 
-        string settingsFile = Path.Combine(vsConfig.VoicesPath, "StyleTTS2", req.ModelName, "training.json");
+        string engine = req.Engine ?? "StyleTTS2";
+        string settingsFile = Path.Combine(vsConfig.VoicesPath, engine, req.ModelName, "training.json");
         if (!System.IO.File.Exists(settingsFile))
             return NotFound(new { error = $"No saved training settings found for '{req.ModelName}'." });
 
@@ -969,18 +1002,31 @@ public class VoiceController(
             System.IO.File.WriteAllText(settingsFile, JsonSerializer.Serialize(updated));
         }
 
+        if (req.Retrain)
+        {
+            string modelDir = Path.Combine(vsConfig.VoicesPath, engine, req.ModelName);
+            string modelPth = Path.Combine(modelDir, "model.pth");
+            string checkpointsDir = Path.Combine(modelDir, "Checkpoints");
+            if (System.IO.File.Exists(modelPth)) System.IO.File.Delete(modelPth);
+            if (Directory.Exists(checkpointsDir)) Directory.Delete(checkpointsDir, recursive: true);
+            logger.LogInformation("[Voice] Retrain requested — cleared checkpoints for '{ModelName}'", req.ModelName);
+        }
+
         TrainingJob job;
         try
         {
-            StyleTtsTrainer trainer = new(
-                styleTtsPath:     vsConfig.StyleTtsPath,
-                dataDir:          vsConfig.DataDir,
-                voicesPath:       Path.Combine(vsConfig.VoicesPath, "StyleTTS2"),
-                audioPath:        settings.AudioPath,
-                modelName:        settings.ModelName,
-                epochs:           effectiveEpochs,
-                saveEveryNEpochs: effectiveSaveEveryN,
-                logger:           logger);
+            int port = engine switch { "IndexTTS" => 8026, _ => 8021 };
+            VoiceModuleTrainer trainer = new(
+                baseUrl:      $"http://localhost:{port}",
+                audioPath:    settings.AudioPath,
+                voiceDir:     Path.Combine(vsConfig.VoicesPath, engine, settings.ModelName),
+                modelName:    settings.ModelName,
+                epochs:       effectiveEpochs,
+                saveEvery:    effectiveSaveEveryN,
+                retrain:      req.Retrain,
+                transcripts:  settings.Transcripts,
+                phonemeSubs:  PhonemeSubstitutions.Path,
+                logger:       logger);
 
             job = voiceTraining!.Start(trainer, settings.ModelName, lifetime.ApplicationStopping);
         }
@@ -1091,7 +1137,7 @@ public class VoiceController(
             return StatusCode(503, new { error = "StyleTTS2 is still installing. Please wait." });
 
         DatasetBuilder builder;
-        try { builder = DatasetBuilder.Start(vsConfig.StyleTtsPath, vsConfig.DataDir, stageDir, logger, lifetime.ApplicationStopping); }
+        try { builder = DatasetBuilder.Start(vsConfig.StyleTtsPath, vsConfig.DataDir, stageDir, !req.Demucs, logger, lifetime.ApplicationStopping); }
         catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
 
         logger.LogInformation("[Voice] Dataset processing started for stage {StageId}", req.StageId);
@@ -1116,12 +1162,13 @@ public class VoiceController(
 
         return Ok(new
         {
-            step    = builder.Step,
-            percent = builder.Percent,
-            running = builder.IsRunning,
-            success = builder.IsSuccess,
-            error   = builder.Error,
-            parts   = builder.Parts,
+            step      = builder.Step,
+            percent   = builder.Percent,
+            running   = builder.IsRunning,
+            success   = builder.IsSuccess,
+            error     = builder.Error,
+            parts     = builder.Parts,
+            hasDemucs = builder.HasDemucs,
         });
     }
 
@@ -1130,6 +1177,34 @@ public class VoiceController(
     {
         string? path = DatasetBuilder.Current?.VariantPath(name, variant);
         return path is null ? NotFound() : PhysicalFile(path, "audio/wav");
+    }
+
+    [HttpPost("dataset/split")]
+    public IActionResult SplitClip([FromBody] DatasetSplitRequest req)
+    {
+        DatasetBuilder? builder = DatasetBuilder.Current;
+        if (builder is null || builder.IsRunning)
+            return BadRequest(new { error = "No completed dataset." });
+        try
+        {
+            var parts = builder.Split(req.Name);
+            return Ok(new { parts });
+        }
+        catch (Exception ex) { return StatusCode(500, new { error = ex.Message }); }
+    }
+
+    [HttpPost("dataset/unsplit")]
+    public IActionResult UnsplitClip([FromBody] DatasetSplitRequest req)
+    {
+        DatasetBuilder? builder = DatasetBuilder.Current;
+        if (builder is null || builder.IsRunning)
+            return BadRequest(new { error = "No completed dataset." });
+        try
+        {
+            var part = builder.Unsplit(req.Name);
+            return Ok(new { part });
+        }
+        catch (Exception ex) { return StatusCode(500, new { error = ex.Message }); }
     }
 
     [HttpPost("dataset/build")]
@@ -1578,6 +1653,7 @@ public record VoiceSettingsRequest(float Speed = 1.0f, float PauseScale = 1.0f);
 public record SetDefaultVoiceRequest(string ModelName, string? Engine = null);
 public record SwitchEngineRequest(string Engine, string ModelName);
 public record SplitSentencesRequest(string Text);
-public record ResumeRequest(string ModelName, int? Epochs = null, int? SaveEveryNEpochs = null);
-public record DatasetProcessRequest(string StageId);
-public record DatasetBuildRequest(DatasetSelection[] Selections);
+public record ResumeRequest(string ModelName, string? Engine = null, int? Epochs = null, int? SaveEveryNEpochs = null, bool Retrain = false);
+public record DatasetProcessRequest(string StageId, bool Demucs = true);
+public record DatasetBuildRequest(ARI.VoiceSynthesis.DatasetBuildSelection[] Selections);
+public record DatasetSplitRequest(string Name);

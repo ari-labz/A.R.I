@@ -185,6 +185,7 @@ html, body {
 .vs-file-item { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 7px; font-size: 12px; color: var(--text-dim); border: 1px solid var(--border); margin-bottom: 6px; }
 .vs-file-name { flex: 1; font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vs-file-size { flex-shrink: 0; font-size: 11px; }
+.vs-pair-sep { flex-shrink: 0; font-size: 11px; color: var(--text-dim); margin: 0 4px; }
 .vs-form-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin-bottom: 18px; }
 @media (max-width: 900px) { .vs-form-grid { grid-template-columns: 1fr 1fr; } }
 
@@ -234,24 +235,34 @@ html, body {
 .fb-note-save { font-size: 11.5px; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--text-dim); cursor: pointer; flex-shrink: 0; }
 .fb-note-save:hover { border-color: #518c9a; color: #518c9a; }
 
-/* ── dataset builder A/B grid ─────────────────────────── */
-.ds-compare-head { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--text-dim); padding: 0 4px 8px; }
+/* ── dataset builder clip cards ───────────────────────── */
 .ds-part { margin-bottom: 14px; }
-.ds-part.skipped .ds-card { opacity: .4; }
-.ds-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
-.ds-row-label { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--text-dim); margin-bottom: 6px; }
-.ds-row-label .ds-flag { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 4px; background: #fef3c7; color: #b45309; }
-.ds-skip-btn { margin-left: auto; font-size: 11px; padding: 3px 12px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--text-dim); cursor: pointer; }
-.ds-skip-btn.active { background: #6b7280; border-color: #6b7280; color: #fff; }
-.ds-card { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; transition: border-color .12s, background .12s; }
-.ds-card.selected { border-color: #16a34a; background: rgba(22,163,74,.06); }
-.ds-play { flex-shrink: 0; width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--border); background: none; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text); }
+.ds-part.skipped { opacity: .4; }
+.ds-part.split-child { margin-left: 24px; }
+.ds-part.split-child .ds-clip-card { border-left: 2px solid #518c9a; }
+.ds-split-parent { border: 1px solid var(--border); border-radius: 10px; padding: 10px 16px; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-dim); margin-bottom: 14px; opacity: .45; }
+.ds-split-parent span.ds-split-name { font-weight: 600; color: var(--text); }
+.ds-clip-card { border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; }
+.ds-clip-header { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-dim); margin-bottom: 10px; }
+.ds-clip-header .ds-flag { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 4px; background: #fef3c7; color: #b45309; }
+.ds-transcript { width: 100%; box-sizing: border-box; font-family: inherit; font-size: 13px; color: var(--text); background: #f9fafb; border: 1px solid var(--border); border-radius: 7px; padding: 8px 10px; outline: none; resize: none; overflow: hidden; min-height: 34px; margin-bottom: 10px; transition: border-color .12s; line-height: 1.5; }
+.ds-transcript:focus { border-color: #518c9a; background: #fff; }
+.ds-panels { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+.ds-panels.no-demucs { grid-template-columns: 1fr; }
+.ds-panel { border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; display: flex; align-items: center; gap: 10px; transition: all .12s; cursor: pointer; }
+.ds-panel:hover { border-color: #518c9a; }
+.ds-panel.selected { border-color: #16a34a; border-width: 2px; padding: 9px 13px; background: rgba(22,163,74,.06); }
+.ds-play { flex-shrink: 0; width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--border); background: none; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text); }
 .ds-play:hover { border-color: #518c9a; color: #518c9a; }
 .ds-play.playing { background: #518c9a; color: #fff; border-color: #518c9a; }
-.ds-card-meta { flex: 1; min-width: 0; font-size: 12px; color: var(--text-dim); }
-.ds-card-meta .ds-text { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ds-select-btn { flex-shrink: 0; font-size: 12px; padding: 5px 14px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--text-dim); cursor: pointer; }
+.ds-panel-label { flex: 1; font-size: 12px; color: var(--text-dim); }
+.ds-panel.selected .ds-panel-label { color: #16a34a; }
+.ds-select-btn { flex-shrink: 0; font-size: 11px; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--text-dim); cursor: pointer; }
 .ds-select-btn.selected { background: #16a34a; border-color: #16a34a; color: #fff; }
+.ds-actions { display: flex; justify-content: center; gap: 12px; }
+.ds-action-btn { font-size: 12px; padding: 5px 16px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--text-dim); cursor: pointer; font-family: inherit; }
+.ds-action-btn:hover { border-color: #518c9a; color: var(--text); }
+.ds-action-btn.active { background: #223742; border-color: #223742; color: #fff; }
 .ds-build-bar { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); font-size: 13px; }
 .vs-label { font-size: 12px; color: var(--text-dim); display: flex; flex-direction: column; gap: 5px; }
 .vs-input { font-family: inherit; font-size: 13px; color: var(--text); background: #f9fafb; border: 1px solid var(--border); border-radius: 7px; padding: 8px 10px; outline: none; transition: border-color .12s; }
@@ -500,11 +511,12 @@ html, body {
         <div class="cp-nav-item" data-tab="conventions">Coding Conventions</div>
         <div class="cp-nav-item" data-tab="persona">Persona</div>
         <div class="cp-nav-item" data-tab="feedback">Response Feedback</div>
-        <div class="cp-nav-item" data-tab="llmconfigs">Configs</div>
+        <div class="cp-nav-item" data-tab="llmconfigs">Configurations</div>
         <div class="cp-nav-group" id="nav-group-voice">Voice</div>
-        <div class="cp-nav-item" data-tab="dataset" id="nav-dataset">Dataset Builder</div>
-        <div class="cp-nav-item" data-tab="voice" id="nav-voice">Voice Synthesis</div>
+        <div class="cp-nav-item" data-tab="voices" id="nav-voices">Voices</div>
         <div class="cp-nav-item" data-tab="voicesettings" id="nav-voicesettings">Voice Settings</div>
+        <div class="cp-nav-item" data-tab="voice" id="nav-voice">Voice Synthesis</div>
+        <div class="cp-nav-item" data-tab="dataset" id="nav-dataset">Dataset Builder</div>
         <div class="cp-nav-group">Memory</div>
         <div class="cp-nav-item" data-tab="brain">Brain</div>
         <div class="cp-nav-group" id="nav-group-integrations">Integrations</div>
@@ -592,6 +604,14 @@ html, body {
       <div id="mdl-cards" style="display:flex;flex-direction:column;gap:16px;"></div>
     </div>
 
+    <!-- Voices tab -->
+    <div id="tab-voices" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div class="vs-section">
+        <div class="vs-section-title">Trained Voices</div>
+        <div id="voices-list" style="margin-top:8px;"><span style="font-size:12px;color:var(--text-dim)">Loading…</span></div>
+      </div>
+    </div>
+
     <!-- Voice Settings tab -->
     <div id="tab-voicesettings" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
@@ -600,15 +620,6 @@ html, body {
           <input type="range" id="vol-slider" min="0" max="500" step="1" value="100" style="flex:1;accent-color:var(--accent,#223742);">
           <input type="number" id="vol-number" min="0" max="500" step="1" value="100" class="vs-input" style="width:76px;text-align:right;">
           <span style="font-size:13px;color:var(--text-dim)">%</span>
-        </div>
-      </div>
-      <div class="vs-section">
-        <div class="vs-section-title">Voice Module</div>
-        <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-top:4px;max-width:400px;">
-          <div class="vs-module-card" data-engine="StyleTTS2" id="vs-mod-styletts2" style="border:2px solid var(--accent,#223742);border-radius:8px;padding:14px 16px;cursor:pointer;background:var(--accent,#223742)22;transition:all .15s;">
-            <div style="font-weight:600;font-size:14px;margin-bottom:4px;">StyleTTS2</div>
-            <div style="font-size:12px;color:var(--text-dim);line-height:1.4;">High-quality diffusion-based synthesis. Fine-tunable to custom voices with phoneme-level training. Best for natural, expressive speech.</div>
-          </div>
         </div>
       </div>
       <div class="vs-section">
@@ -667,7 +678,7 @@ html, body {
         <div class="vs-section-title">Train a Voice Model</div>
         <div id="vs-dropzone" class="vs-dropzone">
           <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:.4"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          <p id="vs-dropzone-text">Drag &amp; drop audio files here<br><span style="font-size:12px;color:var(--text-dim)">.wav, .mp3, .flac, .ogg — or a Dataset Builder .zip</span></p>
+          <p id="vs-dropzone-text">Drag &amp; drop audio files here<br><span style="font-size:12px;color:var(--text-dim)">.wav, .mp3, .flac, .ogg — or a Dataset Builder .zip<br>Include matching .txt files to skip transcription</span></p>
           <button class="vs-btn-outline" id="vs-browse-btn" type="button">Browse files</button>
           <input type="file" id="vs-file-input" multiple accept=".wav,.mp3,.flac,.ogg,.zip,.csv,.txt" style="display:none" />
         </div>
@@ -753,7 +764,12 @@ html, body {
           </div>
           <div id="ds-file-items"></div>
         </div>
-        <button class="vs-btn-primary" id="ds-process-btn" type="button" style="margin-top:14px">Process clips</button>
+        <div style="display:flex;align-items:center;gap:14px;margin-top:14px">
+          <button class="vs-btn-primary" id="ds-process-btn" type="button">Process clips</button>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim);cursor:pointer;user-select:none">
+            <input type="checkbox" id="ds-demucs-toggle" checked style="accent-color:#518c9a" /> Remove background noise
+          </label>
+        </div>
       </div>
 
       <div id="ds-progress-section" class="vs-section" style="display:none">
@@ -763,11 +779,10 @@ html, body {
       </div>
 
       <div id="ds-compare-section" class="vs-section" style="display:none">
-        <div class="vs-section-title">Pick a variant for every part</div>
-        <div class="ds-compare-head"><span>Original</span><span>Processed (demucs)</span></div>
+        <div class="vs-section-title">Review clips</div>
         <div id="ds-compare-list"></div>
         <div class="ds-build-bar">
-          <span id="ds-select-count">0 / 0 parts selected</span>
+          <span id="ds-select-count">0 clips</span>
           <button class="vs-btn-primary" id="ds-build-btn" type="button" disabled>Build &amp; download dataset</button>
         </div>
       </div>
@@ -915,9 +930,9 @@ html, body {
     <!-- LLM Configs tab -->
     <div id="tab-llmconfigs" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
-        <div class="vs-section-title">LLM Configurations</div>
+        <div class="vs-section-title">Configurations</div>
         <p style="color:var(--text-dim);font-size:13px;margin:0 0 16px;">
-          Save a snapshot of your Servers, Models, Agents and Coding Conventions. Restoring a config stops all running servers, applies the snapshot, then boots any server with Auto-start on.
+          Save a full snapshot of your A·R·I setup — servers, models, agents, persona, voice settings, scheduler, coding conventions and more. Restoring a config stops all running servers, applies the snapshot, then boots any server with Auto-start on. Credentials and voice training data are never included — configs are safe to share.
         </p>
         <div style="display:flex;gap:10px;margin-bottom:24px;">
           <input id="lcfg-name" class="vs-input" type="text" placeholder="Config name" style="flex:1;font-size:13px;">
@@ -1077,8 +1092,8 @@ fetch('/admin/username').then(r => r.json()).then(d => { if (d.name) window._ari
 
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), scheduler: document.getElementById('tab-scheduler'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), userprefs: document.getElementById('tab-userprefs'), modules: document.getElementById('tab-modules') };
-const TAB_TITLES = { voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', scheduler: 'Scheduler', llmconfigs: 'LLM Configs', debug: 'Deep Thread Inspection (DTI)', userprefs: 'User Preferences', modules: 'Modules' };
+const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), scheduler: document.getElementById('tab-scheduler'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), userprefs: document.getElementById('tab-userprefs'), modules: document.getElementById('tab-modules') };
+const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', scheduler: 'Scheduler', llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', userprefs: 'User Preferences', modules: 'Modules' };
 
 let srvPollTimer = null;
 function switchTab(name) {
@@ -1103,6 +1118,7 @@ function switchTab(name) {
     if (name === 'debug') loadDebugThreads();
     if (name === 'userprefs') loadUserPrefs();
     if (name === 'modules') loadModules();
+    if (name === 'voices') loadVoicesList();
 }
 navItems.forEach(n => n.addEventListener('click', () => switchTab(n.dataset.tab)));
 switchTab('overview');
@@ -1125,17 +1141,20 @@ async function applyModuleVisibility() {
         const synthOn = isEnabled('VoiceSynthesis');
         const discordOn = isEnabled('Discord');
         const navVoiceGroup = document.getElementById('nav-group-voice');
+        const navVoices = document.getElementById('nav-voices');
         const navDataset = document.getElementById('nav-dataset');
         const navVoice = document.getElementById('nav-voice');
         const navVoicesettings = document.getElementById('nav-voicesettings');
         const navIntegrations = document.getElementById('nav-group-integrations');
         const navDiscord = document.getElementById('nav-discord');
+        // Voices tab visible when either voice or synthesis is on
+        if (navVoices) navVoices.style.display = (voiceOn || synthOn) ? '' : 'none';
         // VoiceSynthesis disabled → hide Dataset Builder & Voice Synthesis tabs
         if (navDataset) navDataset.style.display = synthOn ? '' : 'none';
         if (navVoice) navVoice.style.display = synthOn ? '' : 'none';
         // Voice disabled → hide Voice Settings tab
         if (navVoicesettings) navVoicesettings.style.display = voiceOn ? '' : 'none';
-        // Both disabled → hide Voice group header
+        // All disabled → hide Voice group header
         if (navVoiceGroup) navVoiceGroup.style.display = (voiceOn || synthOn) ? '' : 'none';
         // Discord disabled → hide Integrations header + Discord tab
         if (navDiscord) navDiscord.style.display = discordOn ? '' : 'none';
@@ -1839,11 +1858,15 @@ async function loadLLMConfigs() {
             row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px;margin-bottom:8px;';
             const savedAt = cfg.savedAt ? new Date(cfg.savedAt).toLocaleString() : '';
             const kb = cfg.sizeBytes ? `${(cfg.sizeBytes/1024).toFixed(1)} KB` : '';
+            const ver = cfg.ariVersion ? `v${cfg.ariVersion.split('+')[0]}` : '';
+            const fileCount = cfg.files ? cfg.files.length : 0;
+            const fileList = cfg.files ? cfg.files.map(f => escHtml(f)).join(', ') : '';
             row.innerHTML = `
                 <div style="flex:1;min-width:0;">
                     <div style="font-weight:600;font-size:14px;color:var(--text);">${escHtml(cfg.name)}</div>
                     ${cfg.description ? `<div style="font-size:12px;color:var(--text-dim);margin-top:2px;">${escHtml(cfg.description)}</div>` : ''}
-                    <div style="font-size:11px;color:var(--text-dim);margin-top:4px;">${savedAt}${kb ? ' · ' + kb : ''}</div>
+                    <div style="font-size:11px;color:var(--text-dim);margin-top:4px;">${savedAt}${kb ? ' · ' + kb : ''}${ver ? ' · ' + ver : ''}</div>
+                    ${fileCount ? `<details style="margin-top:4px;"><summary style="font-size:11px;color:var(--text-dim);cursor:pointer;">${fileCount} files</summary><div style="font-size:11px;color:var(--text-dim);margin-top:4px;word-break:break-all;">${fileList}</div></details>` : ''}
                 </div>
                 <button class="mdl-btn-secondary lcfg-restore" data-file="${escHtml(cfg.fileName)}" style="font-size:12px;color:#d97706;border-color:#d97706;">Restore</button>
                 <button class="mdl-btn-secondary lcfg-delete"  data-file="${escHtml(cfg.fileName)}" style="font-size:12px;color:#dc2626;border-color:#fca5a5;">Delete</button>`;
@@ -3650,21 +3673,13 @@ function vsSetActiveCard(cards, activeEngine) {
 // Wire up Voice Settings module cards (active engine for playback)
 let vsSelectedEngine = 'StyleTTS2';
 let vsAllModels = [];
-document.querySelectorAll('.vs-module-card').forEach(card => {
-    card.addEventListener('click', () => {
-        vsSelectedEngine = card.dataset.engine;
-        vsSetActiveCard(document.querySelectorAll('.vs-module-card'), vsSelectedEngine);
-        vsFilterModelDropdown();
-        vsUpdateEngineUI();
-        if (vsTvModel.value) vsSwitchEngineModel(vsSelectedEngine, vsTvModel.value);
-    });
-});
 function vsFilterModelDropdown() {
-    const filtered = vsAllModels.filter(m => m.engine === vsSelectedEngine);
     const activeModel = vsTvModel.value;
-    vsTvModel.innerHTML = filtered.length
-        ? filtered.map(m => `<option value="${escHtml(m.name)}"${m.name === activeModel ? ' selected' : ''}>${escHtml(m.name)}${m.isActive ? ' ✓' : ''}${m.isDefault ? ' (default)' : ''}</option>`).join('')
-        : `<option value="">No ${vsSelectedEngine} voices</option>`;
+    vsTvModel.innerHTML = vsAllModels.length
+        ? vsAllModels.map(m => `<option value="${escHtml(m.name)}" data-engine="${escHtml(m.engine)}"${m.name === activeModel ? ' selected' : ''}>${escHtml(m.name)}${m.isActive ? ' ✓' : ''}${m.isDefault ? ' (default)' : ''}</option>`).join('')
+        : `<option value="">No voices available</option>`;
+    const sel = vsTvModel.selectedOptions[0];
+    if (sel?.dataset.engine) vsSelectedEngine = sel.dataset.engine;
     loadCheckpoints(vsTvModel.value);
 }
 function vsUpdateEngineUI() {
@@ -3718,7 +3733,7 @@ vsEngine.addEventListener('change', () => {
     vsEpochs.value = isOrpheus ? '3' : '100';
     vsTrainBtn.textContent = 'Transcribe & Review';
     document.getElementById('vs-dropzone-text').innerHTML =
-        'Drag &amp; drop audio files here<br><span style="font-size:12px;color:var(--text-dim)">.wav, .mp3, .flac, .ogg — audio will be chunked and transcribed automatically</span>';
+        'Drag &amp; drop audio files here<br><span style="font-size:12px;color:var(--text-dim)">.wav, .mp3, .flac, .ogg — or a Dataset Builder .zip<br>Include matching .txt files to skip transcription</span>';
     vsTranscriptSec.style.display = 'none';
     vsSetActiveCard(vsTrainCards, vsEngine.value);
     vsFilterSavedRuns();
@@ -3830,13 +3845,44 @@ function fmtBytes(b)    { return b > 1048576 ? (b/1048576).toFixed(1)+' MB' : (b
 
 function renderFiles() {
     vsFileItems.innerHTML = '';
-    vsFiles.forEach(f => { const el = document.createElement('div'); el.className = 'vs-file-item'; el.innerHTML = `<span class="vs-file-name">${escHtml(f.name)}</span><span class="vs-file-size">${fmtBytes(f.size)}</span>`; vsFileItems.appendChild(el); });
+    const stem = n => n.slice(0, n.lastIndexOf('.')).toLowerCase();
+    const ext  = n => n.slice(n.lastIndexOf('.')).toLowerCase();
+    const txtMap = new Map();
+    const audioFiles = [];
+    const otherFiles = [];
+    vsFiles.forEach(f => {
+        if (ext(f.name) === '.txt') txtMap.set(stem(f.name), f);
+        else if (['.wav','.mp3','.flac','.ogg'].includes(ext(f.name))) audioFiles.push(f);
+        else otherFiles.push(f);
+    });
+    audioFiles.forEach(f => {
+        const paired = txtMap.get(stem(f.name));
+        if (paired) {
+            txtMap.delete(stem(f.name));
+            const el = document.createElement('div');
+            el.className = 'vs-file-item vs-file-pair';
+            el.innerHTML = `<span class="vs-file-name" style="flex:1">${escHtml(f.name)}</span><span class="vs-file-size">${fmtBytes(f.size)}</span><span class="vs-pair-sep">+</span><span class="vs-file-name" style="flex:1">${escHtml(paired.name)}</span><span class="vs-file-size">${fmtBytes(paired.size)}</span>`;
+            vsFileItems.appendChild(el);
+        } else {
+            const el = document.createElement('div');
+            el.className = 'vs-file-item';
+            el.innerHTML = `<span class="vs-file-name">${escHtml(f.name)}</span><span class="vs-file-size">${fmtBytes(f.size)}</span>`;
+            vsFileItems.appendChild(el);
+        }
+    });
+    // Unpaired txt files and other files
+    [...txtMap.values(), ...otherFiles].forEach(f => {
+        const el = document.createElement('div');
+        el.className = 'vs-file-item';
+        el.innerHTML = `<span class="vs-file-name">${escHtml(f.name)}</span><span class="vs-file-size">${fmtBytes(f.size)}</span>`;
+        vsFileItems.appendChild(el);
+    });
     vsFileCount.textContent = `${vsFiles.length} file${vsFiles.length !== 1 ? 's' : ''} selected`;
     vsFileList.style.display = vsFiles.length ? '' : 'none';
     vsDropzone.style.display = vsFiles.length ? 'none' : '';
 }
 function addFiles(fileList) {
-    const allowed = new Set(['.wav','.mp3','.flac','.ogg','.zip','.csv']);
+    const allowed = new Set(['.wav','.mp3','.flac','.ogg','.zip','.csv','.txt']);
     vsFiles = [...vsFiles, ...Array.from(fileList).filter(f => allowed.has(f.name.slice(f.name.lastIndexOf('.')).toLowerCase()))];
     renderFiles();
 }
@@ -3949,7 +3995,7 @@ function trRenderClips(clips) {
         row.innerHTML =
             `<button class="tr-play" type="button" title="Play"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>` +
             `<div class="tr-meta"><span class="tr-name">${escHtml(clip.fileName)}</span><textarea class="tr-text" rows="1">${escHtml(clip.transcript)}</textarea></div>` +
-            `<span class="tr-duration">${clip.duration.toFixed(1)}s</span>` +
+            `<span class="tr-duration">${clip.duration != null ? clip.duration.toFixed(1) + 's' : ''}</span>` +
             `<button class="tr-remove" type="button" title="Remove clip">&times;</button>`;
         row.querySelector('.tr-play').addEventListener('click', e => trPlay(e.currentTarget, clip.fileName));
         row.querySelector('.tr-remove').addEventListener('click', () => { row.remove(); trUpdateCount(); });
@@ -3999,51 +4045,76 @@ vsTrainBtn.addEventListener('click', async () => {
         const { stageId, stagingPath } = await vsUploadFiles();
         vsTrStageId = stageId; vsTrStagingPath = stagingPath;
 
-        // Start transcription
-        vsTrStep.textContent = 'Transcribing'; vsTrPct.textContent = '5%'; vsTrFill.style.width = '5%';
-        vsLogBadge.textContent = 'transcribing…';
-        vsSetProgress('Transcribing audio with Whisper', 5, null, '');
-        vsAppendLog('Loading Whisper model…');
-        const trResp = await fetch('/voice/transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stageId }) });
-        if (!trResp.ok) throw new Error('Transcription failed: ' + (await trResp.text()));
+        // Check if all audio files have matching .txt transcriptions
+        const audioExts = new Set(['.wav','.mp3','.flac','.ogg']);
+        const txtExts = '.txt';
+        const stemOf = n => n.slice(0, n.lastIndexOf('.')).toLowerCase();
+        const extOf = n => n.slice(n.lastIndexOf('.')).toLowerCase();
+        const audioNames = vsFiles.filter(f => audioExts.has(extOf(f.name)));
+        const txtFiles = vsFiles.filter(f => extOf(f.name) === txtExts);
+        const txtStems = new Set(txtFiles.map(f => stemOf(f.name)));
+        const allHaveTxt = audioNames.length > 0 && audioNames.every(f => txtStems.has(stemOf(f.name)));
 
-        // Poll for transcription completion
-        let trLoggedCount = 0;
-        const trPoll = setInterval(async () => {
-            try {
-                const d = await fetch('/voice/transcribe/status').then(r => r.json());
-                vsTrStep.textContent = d.step;
-                vsTrPct.textContent = d.percent + '%';
-                vsTrFill.style.width = d.percent + '%';
-                vsSetProgress(d.step, d.percent, `${d.clips?.length ?? 0} clips transcribed`, '');
-                if (d.workDir) vsTrWorkDir = d.workDir;
-                if (d.clips?.length) {
-                    trRenderClips(d.clips);
-                    for (let i = trLoggedCount; i < d.clips.length; i++) {
-                        const c = d.clips[i];
-                        if (trLoggedCount === 0) vsAppendLog('Whisper loaded');
-                        vsAppendLog(`Transcribing clip ${i + 1}/${d.clips.length}: ${c.fileName}`);
-                        vsAppendLog(`  → "${c.transcript}"`);
+        if (allHaveTxt) {
+            // All audio has matching txt — skip Whisper and review, go straight to training
+            vsAppendLog(`All ${audioNames.length} audio files have matching transcriptions — skipping Whisper`);
+            const transcripts = {};
+            for (const af of audioNames) {
+                const tf = txtFiles.find(f => stemOf(f.name) === stemOf(af.name));
+                if (tf) transcripts[af.name] = (await tf.text()).trim();
+            }
+            vsAppendLog(`Starting training with ${Object.keys(transcripts).length} provided transcriptions`);
+            vsTranscriptSec.style.display = 'none';
+            const trainBody = { modelName, stagingPath, engine, epochs: +vsEpochs.value, transcripts };
+            if (engine === 'StyleTTS2') trainBody.saveEveryNEpochs = +vsSaveFreq.value;
+            vsStartTrainingJob(trainBody, modelName);
+        } else {
+            // Start transcription with Whisper
+            vsTrStep.textContent = 'Transcribing'; vsTrPct.textContent = '5%'; vsTrFill.style.width = '5%';
+            vsLogBadge.textContent = 'transcribing…';
+            vsSetProgress('Transcribing audio with Whisper', 5, null, '');
+            vsAppendLog('Loading Whisper model…');
+            const trResp = await fetch('/voice/transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stageId }) });
+            if (!trResp.ok) throw new Error('Transcription failed: ' + (await trResp.text()));
+
+            // Poll for transcription completion
+            let trLoggedCount = 0;
+            const trPoll = setInterval(async () => {
+                try {
+                    const d = await fetch('/voice/transcribe/status').then(r => r.json());
+                    vsTrStep.textContent = d.step;
+                    vsTrPct.textContent = d.percent + '%';
+                    vsTrFill.style.width = d.percent + '%';
+                    vsSetProgress(d.step, d.percent, `${d.clips?.length ?? 0} clips transcribed`, '');
+                    if (d.workDir) vsTrWorkDir = d.workDir;
+                    if (d.clips?.length) {
+                        trRenderClips(d.clips);
+                        for (let i = trLoggedCount; i < d.clips.length; i++) {
+                            const c = d.clips[i];
+                            if (trLoggedCount === 0) vsAppendLog('Whisper loaded');
+                            vsAppendLog(`Transcribing clip ${i + 1}/${d.clips.length}: ${c.fileName}`);
+                            vsAppendLog(`  → "${c.transcript}"`);
+                        }
+                        trLoggedCount = d.clips.length;
                     }
-                    trLoggedCount = d.clips.length;
-                }
-                if (!d.running) {
-                    clearInterval(trPoll);
-                    if (d.error) {
-                        vsTrStep.textContent = 'Error'; vsTrFill.className = 'vs-progress-fill error';
-                        vsAppendLog('Transcription error: ' + d.error, 'log-error');
-                        vsLogBadge.textContent = 'failed'; vsTrainBtn.disabled = false;
-                        return;
+                    if (!d.running) {
+                        clearInterval(trPoll);
+                        if (d.error) {
+                            vsTrStep.textContent = 'Error'; vsTrFill.className = 'vs-progress-fill error';
+                            vsAppendLog('Transcription error: ' + d.error, 'log-error');
+                            vsLogBadge.textContent = 'failed'; vsTrainBtn.disabled = false;
+                            return;
+                        }
+                        vsAppendLog(`✓ ${trLoggedCount} clips transcribed — review below, then click Train`);
+                        vsTrFill.className = 'vs-progress-fill done';
+                        vsTrProgress.style.display = 'none';
+                        vsLogBadge.textContent = 'review'; vsLogBadge.classList.remove('live');
+                        vsSetProgress('Review transcripts below, then click Train', 100, null, 'done');
+                        vsTrainBtn.disabled = false;
                     }
-                    vsAppendLog(`✓ ${trLoggedCount} clips transcribed — review below, then click Train`);
-                    vsTrFill.className = 'vs-progress-fill done';
-                    vsTrProgress.style.display = 'none';
-                    vsLogBadge.textContent = 'review'; vsLogBadge.classList.remove('live');
-                    vsSetProgress('Review transcripts below, then click Train', 100, null, 'done');
-                    vsTrainBtn.disabled = false;
-                }
-            } catch { /* keep polling */ }
-        }, 1500);
+                } catch { /* keep polling */ }
+            }, 1500);
+        }
     } catch (err) {
         vsAppendLog('Error: ' + err.message, 'log-error');
         vsLogBadge.textContent = 'failed'; vsTrainBtn.disabled = false;
@@ -4075,6 +4146,7 @@ const dsFileCount  = document.getElementById('ds-file-count');
 const dsClearBtn   = document.getElementById('ds-clear-files');
 const dsBrowseBtn  = document.getElementById('ds-browse-btn');
 const dsProcessBtn = document.getElementById('ds-process-btn');
+const dsDemucsToggle = document.getElementById('ds-demucs-toggle');
 const dsProgSec    = document.getElementById('ds-progress-section');
 const dsStepLabel  = document.getElementById('ds-step-label');
 const dsPctLabel   = document.getElementById('ds-pct-label');
@@ -4085,8 +4157,10 @@ const dsSelectCount = document.getElementById('ds-select-count');
 const dsBuildBtn   = document.getElementById('ds-build-btn');
 
 let dsFiles = [], dsSelections = new Map(), dsParts = [], dsStatusTimer = null,
-    dsRenderedNames = new Set(), dsDone = false;
+    dsRenderedNames = new Set(), dsDone = false, dsHasDemucs = false,
+    dsTranscripts = new Map();
 const dsAudio = new Audio();
+const playSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
 
 function dsRenderFiles() {
     dsFileItems.innerHTML = '';
@@ -4119,61 +4193,179 @@ function dsPlay(btn, name, variant) {
 }
 
 function dsUpdateCount() {
-    const chosen = [...dsSelections.values()].filter(v => v !== 'skip').length;
-    const decided = dsSelections.size;
+    const active = dsParts.filter(p => !p._hidden);
+    const chosen = active.filter(p => { const s = dsSelections.get(p.name); return s && s !== 'skip'; }).length;
+    const decided = active.filter(p => dsSelections.has(p.name)).length;
     const tail = dsDone ? '' : ' (processing…)';
-    dsSelectCount.textContent = `${chosen} in dataset · ${decided} / ${dsParts.length} parts decided${tail}`;
-    dsBuildBtn.disabled = !dsDone || dsParts.length === 0 || decided !== dsParts.length;
+    dsSelectCount.textContent = `${chosen} in dataset · ${decided} / ${active.length} decided${tail}`;
+    dsBuildBtn.disabled = !dsDone || active.length === 0 || decided !== active.length;
 }
 
-function dsCard(part, variant) {
-    const card = document.createElement('div');
-    card.className = 'ds-card';
-    card.innerHTML =
-        `<button class="ds-play" type="button" title="Play"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>` +
-        `<div class="ds-card-meta"><div class="ds-text" title="${escHtml(part.transcript || '')}">${escHtml(part.transcript || '—')}</div>${part.duration.toFixed(1)}s${variant === 'processed' ? ` · bg ${part.bgRatio}` : ''}</div>` +
-        `<button class="ds-select-btn" type="button">Select</button>`;
-    card.querySelector('.ds-play').addEventListener('click', e => dsPlay(e.currentTarget, part.name, variant));
-    const selectBtn = card.querySelector('.ds-select-btn');
-    selectBtn.addEventListener('click', () => dsSelect(part.name, variant));
-    card.dataset.variant = variant;
-    return card;
-}
-
-function dsSelect(name, variant) {
+function dsSelectVariant(name, variant) {
+    const cur = dsSelections.get(name);
     dsSelections.set(name, variant);
     const wrap = dsCompareList.querySelector(`[data-row="${CSS.escape(name)}"]`);
     wrap.classList.remove('skipped');
-    wrap.querySelector('.ds-skip-btn').classList.remove('active');
-    wrap.querySelectorAll('.ds-card').forEach(card => {
-        const chosen = card.dataset.variant === variant;
-        card.classList.toggle('selected', chosen);
-        const btn = card.querySelector('.ds-select-btn');
-        btn.classList.toggle('selected', chosen);
-        btn.textContent = chosen ? 'Selected' : 'Select';
+    wrap.querySelectorAll('.ds-panel').forEach(p => {
+        const isChosen = p.dataset.variant === variant;
+        p.classList.toggle('selected', isChosen);
+        const btn = p.querySelector('.ds-select-btn');
+        btn.classList.toggle('selected', isChosen);
+        btn.textContent = isChosen ? 'Selected' : 'Use this';
     });
+    const removeBtn = wrap.querySelector('.ds-remove-btn');
+    if (removeBtn) { removeBtn.classList.remove('active'); removeBtn.textContent = 'Remove from dataset'; }
     dsUpdateCount();
 }
 
-function dsSkip(name) {
+function dsRemove(name) {
     const wrap = dsCompareList.querySelector(`[data-row="${CSS.escape(name)}"]`);
-    if (dsSelections.get(name) === 'skip') {   // toggle off → undecided again
+    if (dsSelections.get(name) === 'skip') {
         dsSelections.delete(name);
         wrap.classList.remove('skipped');
-        wrap.querySelector('.ds-skip-btn').classList.remove('active');
+        wrap.querySelector('.ds-remove-btn').classList.remove('active');
+        wrap.querySelector('.ds-remove-btn').textContent = 'Remove from dataset';
+        wrap.querySelectorAll('.ds-panel').forEach(p => p.classList.remove('selected'));
+        wrap.querySelectorAll('.ds-select-btn').forEach(b => { b.classList.remove('selected'); b.textContent = 'Use this'; });
         dsUpdateCount();
         return;
     }
     dsSelections.set(name, 'skip');
     wrap.classList.add('skipped');
-    wrap.querySelector('.ds-skip-btn').classList.add('active');
-    wrap.querySelectorAll('.ds-card').forEach(card => {
-        card.classList.remove('selected');
-        const btn = card.querySelector('.ds-select-btn');
-        btn.classList.remove('selected');
-        btn.textContent = 'Select';
-    });
+    wrap.querySelector('.ds-remove-btn').classList.add('active');
+    wrap.querySelector('.ds-remove-btn').textContent = 'Removed from dataset';
+    wrap.querySelectorAll('.ds-panel').forEach(p => p.classList.remove('selected'));
+    wrap.querySelectorAll('.ds-select-btn').forEach(b => { b.classList.remove('selected'); b.textContent = 'Use this'; });
     dsUpdateCount();
+}
+
+async function dsSplit(name) {
+    const wrap = dsCompareList.querySelector(`[data-row="${CSS.escape(name)}"]`);
+    const splitBtn = wrap.querySelector('.ds-split-btn');
+    splitBtn.disabled = true; splitBtn.textContent = 'Splitting…';
+    try {
+        const r = await fetch('/voice/dataset/split', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name }) });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Split failed');
+        const { parts: newParts } = await r.json();
+        if (!newParts || newParts.length === 0) { alert('No silence boundaries found — cannot split further.'); splitBtn.disabled = false; splitBtn.textContent = 'Split at silences'; return; }
+
+        const part = dsParts.find(p => p.name === name);
+        if (part) part._hidden = true;
+        dsSelections.delete(name);
+        dsTranscripts.delete(name);
+        dsRenderedNames.delete(name);
+
+        const parent = document.createElement('div');
+        parent.className = 'ds-split-parent';
+        parent.innerHTML = `<span class="ds-split-name">${escHtml(name)}</span><span>${part ? part.duration.toFixed(1) + 's' : ''}</span>` +
+            `<span style="margin-left:auto;font-size:12px">Split into ${newParts.length} parts</span>`;
+        const undoBtn = document.createElement('button');
+        undoBtn.className = 'ds-action-btn'; undoBtn.style.cssText = 'font-size:11px;padding:4px 12px';
+        undoBtn.textContent = 'Undo';
+        undoBtn.addEventListener('click', async () => {
+            await fetch('/voice/dataset/unsplit', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name }) });
+            newParts.forEach(np => {
+                const el = dsCompareList.querySelector(`[data-row="${CSS.escape(np.name)}"]`);
+                if (el) el.remove();
+                dsSelections.delete(np.name); dsTranscripts.delete(np.name); dsRenderedNames.delete(np.name);
+                const idx = dsParts.findIndex(p => p.name === np.name);
+                if (idx >= 0) dsParts.splice(idx, 1);
+            });
+            parent.remove();
+            if (part) part._hidden = false;
+            dsRenderedNames.add(name);
+            wrap.style.display = '';
+            dsUpdateCount();
+        });
+        parent.appendChild(undoBtn);
+
+        wrap.style.display = 'none';
+        dsCompareList.insertBefore(parent, wrap.nextSibling);
+
+        let insertAfter = parent;
+        newParts.forEach(np => {
+            dsRenderedNames.add(np.name);
+            dsParts.push(np);
+            dsTranscripts.set(np.name, np.transcript || '');
+            const child = dsRenderClipCard(np, true);
+            if (insertAfter.nextSibling) dsCompareList.insertBefore(child, insertAfter.nextSibling);
+            else dsCompareList.appendChild(child);
+            insertAfter = child;
+        });
+        dsUpdateCount();
+    } catch (err) { alert(err.message); splitBtn.disabled = false; splitBtn.textContent = 'Split at silences'; }
+}
+
+function dsAutoResize(textarea) {
+    textarea.style.height = 'auto';
+    textarea.style.height = textarea.scrollHeight + 'px';
+}
+
+function dsRenderClipCard(part, isSplitChild) {
+    const wrap = document.createElement('div');
+    wrap.className = 'ds-part' + (isSplitChild ? ' split-child' : '');
+    wrap.dataset.row = part.name;
+
+    const card = document.createElement('div');
+    card.className = 'ds-clip-card';
+
+    const header = document.createElement('div');
+    header.className = 'ds-clip-header';
+    header.innerHTML = `<span style="font-weight:600;color:var(--text)">${escHtml(part.name)}</span>` +
+        `<span>${part.duration.toFixed(1)}s</span>` +
+        (part.flags || []).map(f => `<span class="ds-flag">${f}</span>`).join('');
+
+    const textarea = document.createElement('textarea');
+    textarea.className = 'ds-transcript';
+    textarea.value = part.transcript || '';
+    textarea.placeholder = 'Transcript…';
+    textarea.addEventListener('input', () => { dsTranscripts.set(part.name, textarea.value); dsAutoResize(textarea); });
+    setTimeout(() => dsAutoResize(textarea), 0);
+
+    const panels = document.createElement('div');
+    panels.className = 'ds-panels' + (dsHasDemucs ? '' : ' no-demucs');
+
+    function makePanel(variant, label) {
+        const panel = document.createElement('div');
+        panel.className = 'ds-panel';
+        panel.dataset.variant = variant;
+        panel.innerHTML = `<button class="ds-play" type="button" title="Play ${label}">${playSvg}</button>` +
+            `<span class="ds-panel-label">${label}</span>` +
+            `<button class="ds-select-btn" type="button">Use this</button>`;
+        panel.querySelector('.ds-play').addEventListener('click', e => { e.stopPropagation(); dsPlay(e.currentTarget, part.name, variant); });
+        panel.querySelector('.ds-select-btn').addEventListener('click', e => { e.stopPropagation(); dsSelectVariant(part.name, variant); });
+        panel.addEventListener('click', () => dsSelectVariant(part.name, variant));
+        return panel;
+    }
+
+    panels.appendChild(makePanel('original', 'Original'));
+    if (dsHasDemucs) panels.appendChild(makePanel('processed', 'Demucs'));
+
+    const actions = document.createElement('div');
+    actions.className = 'ds-actions';
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'ds-action-btn ds-remove-btn';
+    removeBtn.textContent = 'Remove from dataset';
+    removeBtn.addEventListener('click', () => dsRemove(part.name));
+    actions.appendChild(removeBtn);
+
+    if (!isSplitChild) {
+        const splitBtn = document.createElement('button');
+        splitBtn.className = 'ds-action-btn ds-split-btn';
+        splitBtn.textContent = 'Split at silences';
+        splitBtn.addEventListener('click', () => dsSplit(part.name));
+        actions.appendChild(splitBtn);
+    }
+
+    card.appendChild(header);
+    card.appendChild(textarea);
+    card.appendChild(panels);
+    card.appendChild(actions);
+    wrap.appendChild(card);
+    return wrap;
 }
 
 function dsAppendParts(parts) {
@@ -4181,22 +4373,8 @@ function dsAppendParts(parts) {
         if (dsRenderedNames.has(part.name)) return;
         dsRenderedNames.add(part.name);
         dsParts.push(part);
-        const wrap = document.createElement('div');
-        wrap.className = 'ds-part';
-        wrap.dataset.row = part.name;
-        const label = document.createElement('div');
-        label.className = 'ds-row-label';
-        label.innerHTML = `<span>${escHtml(part.name)} <span style="color:var(--text-dim);font-weight:400">(${part.language})</span>` +
-            (part.flags || []).map(f => `<span class="ds-flag">${f}</span>`).join('') + `</span>` +
-            `<button class="ds-skip-btn" type="button">Skip both</button>`;
-        label.querySelector('.ds-skip-btn').addEventListener('click', () => dsSkip(part.name));
-        const row = document.createElement('div');
-        row.className = 'ds-row';
-        row.appendChild(dsCard(part, 'original'));
-        row.appendChild(dsCard(part, 'processed'));
-        wrap.appendChild(label);
-        wrap.appendChild(row);
-        dsCompareList.appendChild(wrap);
+        dsTranscripts.set(part.name, part.transcript || '');
+        dsCompareList.appendChild(dsRenderClipCard(part, false));
     });
     dsUpdateCount();
 }
@@ -4208,6 +4386,7 @@ function dsPollStatus() {
             dsStepLabel.textContent = d.step;
             dsPctLabel.textContent  = d.percent + '%';
             dsProgFill.style.width  = d.percent + '%';
+            if (d.hasDemucs !== undefined) dsHasDemucs = d.hasDemucs;
             if (d.parts && d.parts.length) { dsCompareSec.style.display = ''; dsAppendParts(d.parts); }
             if (!d.running) {
                 clearInterval(dsStatusTimer); dsStatusTimer = null;
@@ -4223,9 +4402,10 @@ function dsPollStatus() {
 dsProcessBtn.addEventListener('click', async () => {
     if (!dsFiles.length) { alert('Please add at least one audio clip.'); return; }
     dsProcessBtn.disabled = true; dsCompareSec.style.display = 'none';
-    dsParts = []; dsSelections.clear(); dsRenderedNames.clear(); dsDone = false; dsCompareList.innerHTML = '';
+    dsParts = []; dsSelections.clear(); dsTranscripts.clear(); dsRenderedNames.clear(); dsDone = false; dsHasDemucs = false; dsCompareList.innerHTML = '';
     dsProgSec.style.display = ''; dsProgFill.className = 'vs-progress-fill';
     dsStepLabel.textContent = 'Uploading'; dsPctLabel.textContent = '0%'; dsProgFill.style.width = '0%';
+    const demucs = dsDemucsToggle.checked;
     try {
         const { stageId } = await fetch('/voice/stage', { method: 'POST' }).then(r => r.json());
         const CHUNK = 5 * 1024 * 1024, CONCURRENCY = 4;
@@ -4240,7 +4420,7 @@ dsProcessBtn.addEventListener('click', async () => {
             for (let ci = 0; ci < totalChunks; ci += CONCURRENCY) { await Promise.all(Array.from({ length: Math.min(CONCURRENCY, totalChunks - ci) }, (_, i) => uploadChunk(ci + i))); }
             dsStepLabel.textContent = `Uploaded ${fi + 1} / ${dsFiles.length}`;
         }
-        const r = await fetch('/voice/dataset/process', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stageId }) });
+        const r = await fetch('/voice/dataset/process', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stageId, demucs }) });
         if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Process failed');
         dsStepLabel.textContent = 'Processing'; dsPollStatus();
     } catch (err) { dsStepLabel.textContent = 'Error: ' + err.message; dsProgFill.className = 'vs-progress-fill error'; dsProcessBtn.disabled = false; }
@@ -4249,7 +4429,7 @@ dsProcessBtn.addEventListener('click', async () => {
 dsBuildBtn.addEventListener('click', async () => {
     dsBuildBtn.disabled = true; dsBuildBtn.textContent = 'Building…';
     try {
-        const selections = [...dsSelections].filter(([, variant]) => variant !== 'skip').map(([name, variant]) => ({ name, variant }));
+        const selections = [...dsSelections].filter(([, v]) => v !== 'skip').map(([name, variant]) => ({ name, variant, transcript: dsTranscripts.get(name) || '' }));
         const r = await fetch('/voice/dataset/build', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selections }) });
         if (!r.ok) throw new Error('Build failed');
         const blob = await r.blob();
@@ -4307,8 +4487,12 @@ async function loadCheckpoints(modelName) {
 }
 
 vsTvModel.addEventListener('change', () => {
+    const sel = vsTvModel.selectedOptions[0];
+    const engine = sel?.dataset.engine ?? vsSelectedEngine;
+    vsSelectedEngine = engine;
+    vsUpdateEngineUI();
     loadCheckpoints(vsTvModel.value);
-    vsSwitchEngineModel(vsSelectedEngine, vsTvModel.value);
+    vsSwitchEngineModel(engine, vsTvModel.value);
 });
 
 async function loadVoiceModels() {
@@ -4318,7 +4502,6 @@ async function loadVoiceModels() {
         vsAllModels = models.map(m => ({ ...m, isActive: m.name === activeModel, isDefault: m.name === defaultModel }));
         if (activeEngine) {
             vsSelectedEngine = activeEngine;
-            vsSetActiveCard(document.querySelectorAll('.vs-module-card'), vsSelectedEngine);
             vsUpdateEngineUI();
         }
         vsFilterModelDropdown();
@@ -4342,15 +4525,15 @@ async function loadVoiceModels() {
                   </div>
                   <label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:6px;">Epochs<input type="number" class="vs-input vs-resume-epochs" data-model="${escHtml(m.name)}" value="${m.epochs ?? 365}" min="1" max="9999" style="width:70px;font-size:12px;padding:4px 8px;"></label>
                   <button class="vs-btn-primary vs-resume-btn" style="font-size:12px;padding:6px 18px;flex-shrink:0" data-model="${escHtml(m.name)}">Resume</button>
-                  <button class="vs-delete-btn" style="font-size:12px;padding:6px 12px;flex-shrink:0;background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-dim);cursor:pointer;" data-model="${escHtml(m.name)}" data-engine="${escHtml(m.engine ?? 'StyleTTS2')}" title="Delete this saved run">✕</button>
+                  <button class="vs-dismiss-btn" style="font-size:12px;padding:6px 12px;flex-shrink:0;background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-dim);cursor:pointer;" data-model="${escHtml(m.name)}" data-engine="${escHtml(m.engine ?? 'StyleTTS2')}" title="Remove from this list (voice is kept)">✕</button>
                 </div>
               </div>`;
             }).join('');
             vsResumeList.querySelectorAll('.vs-resume-btn').forEach(btn => {
                 btn.addEventListener('click', () => vsStartResume(btn.dataset.model));
             });
-            vsResumeList.querySelectorAll('.vs-delete-btn').forEach(btn => {
-                btn.addEventListener('click', () => vsDeleteModel(btn.dataset.model, btn.dataset.engine));
+            vsResumeList.querySelectorAll('.vs-dismiss-btn').forEach(btn => {
+                btn.addEventListener('click', () => vsDismissResume(btn.dataset.model, btn.dataset.engine));
             });
         }
         vsFilterSavedRuns();
@@ -4359,7 +4542,7 @@ async function loadVoiceModels() {
 }
 loadVoiceModels();
 
-async function vsStartResume(modelName) {
+async function vsStartResume(modelName, retrain = false) {
     const btn = document.querySelector(`.vs-resume-btn[data-model="${CSS.escape(modelName)}"]`);
     const epochInput = document.querySelector(`.vs-resume-epochs[data-model="${CSS.escape(modelName)}"]`);
     const epochs = epochInput ? parseInt(epochInput.value, 10) || null : null;
@@ -4367,9 +4550,10 @@ async function vsStartResume(modelName) {
     vsShowSetup(false); vsProgSec.style.display = ''; vsLogLines.innerHTML = '';
     vsActiveModelName = modelName; vsPauseBtn.style.display = ''; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training';
     vsLogBadge.textContent = 'training…'; vsLogBadge.classList.add('live');
-    vsSetProgress('Resuming', 0, `Resuming ${modelName}…`, ''); vsStartTimer();
+    const label = retrain ? 'Retraining' : 'Resuming';
+    vsSetProgress(label, 0, `${label} ${modelName}…`, ''); vsStartTimer();
     try {
-        const resp = await fetch('/voice/resume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName, epochs }) });
+        const resp = await fetch('/voice/resume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName, epochs, retrain }) });
         if (!resp.ok) throw new Error((await resp.json().catch(()=>({error:resp.statusText}))).error ?? resp.statusText);
         let vsDone = false;
         function connectResumeProgressSse() {
@@ -4391,14 +4575,79 @@ async function vsStartResume(modelName) {
     } catch(err) { vsStopTimer(); vsAppendLog('Error: ' + err.message, 'log-error'); vsLogBadge.textContent = 'failed'; vsLogBadge.classList.remove('live'); if (btn) btn.disabled = false; }
 }
 
-async function vsDeleteModel(modelName, engine) {
-    if (!confirm(`Delete "${modelName}" and all its checkpoints? This cannot be undone.`)) return;
-    const eng = engine || vsAllModels.find(m => m.name === modelName)?.engine || 'StyleTTS2';
+async function vsDismissResume(modelName, engine) {
+    if (!confirm(`Remove "${modelName}" from the resume list? The voice itself will be kept.`)) return;
+    const eng = engine || 'StyleTTS2';
     try {
-        const resp = await fetch(`/voice/${encodeURIComponent(eng)}/${encodeURIComponent(modelName)}`, { method: 'DELETE' });
+        const resp = await fetch(`/voice/${encodeURIComponent(eng)}/${encodeURIComponent(modelName)}/dismiss`, { method: 'POST' });
+        if (!resp.ok) { const e = await resp.json().catch(()=>({error:resp.statusText})); alert('Dismiss failed: ' + (e.error ?? resp.statusText)); return; }
+        await loadVoiceModels();
+    } catch(err) { alert('Dismiss failed: ' + err.message); }
+}
+
+// ── Voices tab ───────────────────────────────────────────
+async function loadVoicesList() {
+    const container = document.getElementById('voices-list');
+    if (!container) return;
+    try {
+        const [mr, ar] = await Promise.all([fetch('/voice/models'), fetch('/voice/active')]);
+        const { models } = await mr.json();
+        const { model: activeModel, engine: activeEngine, defaultModel } = await ar.json();
+        const trained = models.filter(m => m.hasModel);
+        if (!trained.length) {
+            container.innerHTML = '<div style="font-size:13px;color:var(--text-dim);padding:12px 0;">No trained voices yet. Use Voice Synthesis to train one.</div>';
+            return;
+        }
+        container.innerHTML = trained.map(m => {
+            const isActive = m.name === activeModel && m.engine === activeEngine;
+            const isDefault = m.name === defaultModel;
+            const epochInfo = m.latestEpoch != null ? `${m.latestEpoch} epochs` : '';
+            const badges = [
+                isActive ? '<span style="background:var(--accent,#223742);color:#fff;font-size:10px;padding:2px 8px;border-radius:10px;">active</span>' : '',
+                isDefault ? '<span style="background:var(--accent,#223742)44;color:var(--text);font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--accent,#223742)">default</span>' : '',
+            ].filter(Boolean).join(' ');
+            return `
+            <div style="padding:12px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+              <div style="flex:1;min-width:0">
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span style="font-size:14px;font-weight:600;color:var(--text)">${escHtml(m.name)}</span>
+                  ${badges}
+                </div>
+                <div style="font-size:11px;color:var(--text-dim);margin-top:3px;">${escHtml(m.engine)}${epochInfo ? ' · ' + epochInfo : ''}</div>
+              </div>
+              <div style="display:flex;gap:8px;flex-shrink:0;">
+                ${m.hasResume ? `<button class="vs-btn-outline voices-resume-btn" data-model="${escHtml(m.name)}" data-engine="${escHtml(m.engine)}" style="font-size:12px;padding:5px 14px;">Resume</button>` : ''}
+                ${m.hasResume ? `<button class="vs-btn-outline voices-retrain-btn" data-model="${escHtml(m.name)}" data-engine="${escHtml(m.engine)}" style="font-size:12px;padding:5px 14px;">Retrain</button>` : ''}
+                <button class="voices-delete-btn" style="font-size:12px;padding:5px 12px;background:none;border:1px solid var(--border);border-radius:6px;color:#c05050;cursor:pointer;" data-model="${escHtml(m.name)}" data-engine="${escHtml(m.engine)}">Delete</button>
+              </div>
+            </div>`;
+        }).join('');
+        container.querySelectorAll('.voices-resume-btn').forEach(btn => {
+            btn.addEventListener('click', () => { switchTab('voice'); vsStartResume(btn.dataset.model); });
+        });
+        container.querySelectorAll('.voices-retrain-btn').forEach(btn => {
+            btn.addEventListener('click', () => voicesRetrain(btn.dataset.model, btn.dataset.engine));
+        });
+        container.querySelectorAll('.voices-delete-btn').forEach(btn => {
+            btn.addEventListener('click', () => voicesDeleteModel(btn.dataset.model, btn.dataset.engine));
+        });
+    } catch(err) { container.innerHTML = `<div style="color:#c05050;font-size:13px;">Failed to load voices: ${escHtml(err.message)}</div>`; }
+}
+
+async function voicesDeleteModel(modelName, engine) {
+    if (!confirm(`Delete "${modelName}" and all its checkpoints? This cannot be undone.`)) return;
+    try {
+        const resp = await fetch(`/voice/${encodeURIComponent(engine)}/${encodeURIComponent(modelName)}`, { method: 'DELETE' });
         if (!resp.ok) { const e = await resp.json().catch(()=>({error:resp.statusText})); alert('Delete failed: ' + (e.error ?? resp.statusText)); return; }
+        await loadVoicesList();
         await loadVoiceModels();
     } catch(err) { alert('Delete failed: ' + err.message); }
+}
+
+async function voicesRetrain(modelName, engine) {
+    if (!confirm(`Retrain "${modelName}" from scratch using the same audio and transcripts? The existing checkpoint will be replaced.`)) return;
+    switchTab('voice');
+    vsStartResume(modelName, true);
 }
 
 // ── Synthesis parameter sliders ───────────────────────────
@@ -4498,13 +4747,17 @@ vsTvSpeakBtn.addEventListener('click', async () => {
         const bytes = await resp.arrayBuffer();
         if (bytes.byteLength === 0) { vsTvStatus.textContent = 'Error: server returned no audio'; return; }
         await resumed;
+        if (audioCtx.state === 'suspended') await audioCtx.resume();
         const buf = await audioCtx.decodeAudioData(bytes);
+        console.log('[voice] decoded', buf.duration.toFixed(2) + 's', buf.sampleRate + 'Hz', buf.numberOfChannels + 'ch');
         const gain = audioCtx.createGain();
         gain.gain.value = getVolumePct() / 100;
         const src = audioCtx.createBufferSource();
         src.buffer = buf;
         src.connect(gain); gain.connect(audioCtx.destination);
+        if (audioCtx.state === 'suspended') await audioCtx.resume();
         src.start();
+        console.log('[voice] started, ctx state:', audioCtx.state, 'gain:', gain.gain.value, 'sampleRate:', audioCtx.sampleRate);
         vsTvStatus.textContent = audioCtx.state === 'running'
             ? `Playing ${buf.duration.toFixed(1)}s…`
             : `Audio blocked by browser (context ${audioCtx.state})`;
