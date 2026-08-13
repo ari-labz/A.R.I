@@ -232,7 +232,7 @@ function trimLink(url: string, max = 46): string {
     return s.length > max ? `${s.slice(0, max - 1)}…` : s
 }
 
-export function webSearchCardHtml(query: string, done: boolean, results: number, down: number, none: boolean, err = false): string {
+export function webSearchCardHtml(query: string, done: boolean, down: number, none: boolean, err = false): string {
     const q    = escHtml(query)
     const dots = `<div class="typing-dots"><b></b><b></b><b></b></div>`
     if (err)   return `\n\n<div class="tool-card tool-card--error tool-card--web">${SEARCH_ICON}<span>Search failed ${q}</span></div>\n\n`
@@ -275,7 +275,7 @@ function webCardFromMarker(name: string, rawLabel: string, done: boolean, err = 
     if (name !== "search_web" && name !== "fetch_page") return null
     const p = parseWebLabel(rawLabel)
     return name === "search_web"
-        ? webSearchCardHtml(p.head, done, p.results, p.down, p.none, err)
+        ? webSearchCardHtml(p.head, done, p.down, p.none, err)
         : browsingCardHtml(p.head, p.title, done, err)
 }
 
@@ -348,7 +348,7 @@ export function renderBlockHtml(block: BlockLike): string {
     // Web cards: same builders as the streaming marker path above, so a card cannot change shape the
     // moment a reply finishes and its blocks arrive.
     if (block.type === "webSearching")
-        return webSearchCardHtml(block.query ?? "", done, block.results ?? 0, block.enginesDown ?? 0,
+        return webSearchCardHtml(block.query ?? "", done, block.enginesDown ?? 0,
                                  block.nothingRelevant ?? false, err)
     if (block.type === "browsing")
         return browsingCardHtml(block.url ?? "", block.title ?? "", done, err)
