@@ -1374,10 +1374,7 @@ public abstract class Agent
                         }
                         catch (Exception ex) { Shared.Logger.LogDebug("[{Agent}] Could not parse search_web args for web source: {Error}", Name, ex.Message); }
 
-                        // Only a search that actually told her something counts against the search budget.
-                        // A search whose results were all filtered as irrelevant, or that hit a degraded
-                        // engine, has given her nothing — charging her for it would exhaust the budget and
-                        // then block her from searching, leaving her with neither answers nor a way to find any.
+                        // Only count searches that returned something — empty or irrelevant results don't burn the budget.
                         if (!result.StartsWith(SearchWeb.NoRelevantPrefix, StringComparison.Ordinal)
                             && !result.StartsWith("Search unavailable", StringComparison.Ordinal)
                             && !result.StartsWith("No results", StringComparison.Ordinal))
