@@ -214,28 +214,48 @@ public abstract class Agent
     private sealed class TurnClock
     {
         public double Prefill, Thinking, Typing;
-        public ThreadPhase CurrentPhase { get; private set; } = ThreadPhase.Prefilling;
         private DateTime  sent;
         private DateTime? lastDelta;
 
-        public void RequestSent() { sent = DateTime.UtcNow; lastDelta = null; CurrentPhase = ThreadPhase.Prefilling; }
+        public void RequestSent() { sent = DateTime.UtcNow; lastDelta = null; }
 
-        public void Mark(bool reasoning)
+        // Timing only. The user-facing phase indicator is NOT derived from here — it is driven by
+        // semantic events (see AdvancePhase), because a content delta can carry stripped special
+        // tokens or leaked tool-call text that never reaches the user and must not read as Typing.
+        public void Mark(bool reasoning, bool isContent)
         {
             DateTime now = DateTime.UtcNow;
             if (lastDelta is null)
             {
                 Prefill += (now - sent).TotalSeconds;
-                CurrentPhase = reasoning ? ThreadPhase.Thinking : ThreadPhase.Typing;
             }
             else
             {
                 double gap = (now - lastDelta.Value).TotalSeconds;
-                if (gap <= 2) { if (reasoning) Thinking += gap; else Typing += gap; }
-                CurrentPhase = reasoning ? ThreadPhase.Thinking : ThreadPhase.Typing;
+                if (gap <= 2) { if (reasoning) Thinking += gap; else if (isContent) Typing += gap; }
             }
             lastDelta = now;
         }
+    }
+
+    /// <summary>Advances the user-facing status indicator. The machine is strictly one-way:
+    /// Reading → Thinking → Researching → Typing. A lower-ranked phase is ignored, so a late
+    /// reasoning delta can never drag the label back from Researching, a second request after a
+    /// tool call can never return to Reading, and tool-call JSON can never look like Typing.</summary>
+    private static int PhaseRank(ThreadPhase p) => p switch
+    {
+        ThreadPhase.Prefilling  => 0,   // "Reading"
+        ThreadPhase.Thinking    => 1,
+        ThreadPhase.Researching => 2,
+        ThreadPhase.Typing      => 3,
+        _                       => -1,  // Idle — turn not started
+    };
+
+    private void AdvancePhase(Turn turn, ThreadPhase phase)
+    {
+        if (PhaseRank(phase) <= PhaseRank(turn.LastPhase)) return;
+        turn.LastPhase = phase;
+        OnPhaseChange?.Invoke(turn.Thread.Key, phase);
     }
 
     // ── Per-turn state ────────────────────────────────────────────────────────
@@ -289,11 +309,18 @@ public abstract class Agent
 
         // ── Counters ─────────────────────────────────────────────────────────
         internal int ToolCallCount;
+        internal int WebToolCallsThisTurn;  // search_web + fetch_page calls accumulated this turn
         internal int ParseFailures;
         internal int ConsecutiveFallbacks;
         internal int TextToolLeakRetries;
         internal int ContinueNudges;
         internal int DegradeEvents;
+
+        // ── Research gate ─────────────────────────────────────────────────────
+        // Set when the hard gate fires — web tools are filtered from ToolSchemas until the turn ends.
+        internal bool WebToolsBlocked;
+        // Pending think-redirect: buffered until a sentence boundary is observed.
+        internal string? PendingThinkRedirect;
 
         // ── Output builders ──────────────────────────────────────────────────
         internal readonly StringBuilder ResponseBuilder  = new();
@@ -541,7 +568,12 @@ public abstract class Agent
         if (!toolsExhausted && thread.tools.Count > 0)
         {
             List<object> schemas = new();
-            foreach (var tool in thread.tools.Values) schemas.Add(tool.Schema);
+            foreach (var (name, tool) in thread.tools)
+            {
+                // Hard research gate: strip web tools so the model cannot call them.
+                if (turn.WebToolsBlocked && name is "search_web" or "fetch_page") continue;
+                schemas.Add(tool.Schema);
+            }
             turn.ToolSchemas = schemas.ToArray();
         }
 
@@ -598,11 +630,7 @@ public abstract class Agent
         };
 
         turn.Clock.RequestSent();
-        if (ThreadPhase.Prefilling != turn.LastPhase)
-        {
-            turn.LastPhase = ThreadPhase.Prefilling;
-            OnPhaseChange?.Invoke(turn.Thread.Key, ThreadPhase.Prefilling);
-        }
+        AdvancePhase(turn, ThreadPhase.Prefilling);  // "Reading" — only lands on the turn's first request
         Server?.BeginRequest(Name);
         HttpResponseMessage response;
         try   { response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, turn.Ct); }
@@ -684,14 +712,12 @@ public abstract class Agent
         // that each delta ticks the thinking or typing clock (stalls tick neither — see TurnClock).
         bool reasoningDelta = delta.TryGetProperty("reasoning_content", out JsonElement rcProbe)
             && rcProbe.ValueKind == JsonValueKind.String && (rcProbe.GetString()?.Length ?? 0) > 0;
-        turn.Clock.Mark(reasoningDelta);
+        bool contentDelta = delta.TryGetProperty("content", out JsonElement cpProbe)
+            && cpProbe.ValueKind == JsonValueKind.String && (cpProbe.GetString()?.Length ?? 0) > 0;
+        turn.Clock.Mark(reasoningDelta, contentDelta);
 
-        ThreadPhase phase = turn.Clock.CurrentPhase;
-        if (phase != turn.LastPhase)
-        {
-            turn.LastPhase = phase;
-            OnPhaseChange?.Invoke(turn.Thread.Key, phase);
-        }
+        // Any reasoning token means she is Thinking, immediately.
+        if (reasoningDelta) AdvancePhase(turn, ThreadPhase.Thinking);
 
         if (!SuppressLog())
         {
@@ -736,13 +762,24 @@ public abstract class Agent
 
             if (!string.IsNullOrEmpty(thinkDelta))
             {
-                string? agentThinkRedirect = OnThinkingDelta(thread, thinkDelta);
-                string? finalThinkRedirect = OnThinkingDeltaPipeline?.Invoke(thread, agentThinkRedirect ?? thinkDelta) ?? agentThinkRedirect;
-                if (finalThinkRedirect is not null)
+                // Check for a pending redirect: fire it once we hit a sentence boundary.
+                if (turn.PendingThinkRedirect is not null)
                 {
-                    turn.Messages.Add(new { role = "assistant", content = "" });
-                    turn.Messages.Add(new { role = "user", content = finalThinkRedirect });
-                    turn.ThinkingRedirect = true;
+                    bool atBoundary = thinkDelta.Contains('.') || thinkDelta.Contains('!') || thinkDelta.Contains('?') || thinkDelta.Contains('\n');
+                    if (atBoundary)
+                    {
+                        turn.Messages.Add(new { role = "assistant", content = "" });
+                        turn.Messages.Add(new { role = "user", content = turn.PendingThinkRedirect });
+                        turn.PendingThinkRedirect = null;
+                        turn.ThinkingRedirect = true;
+                    }
+                }
+                else
+                {
+                    string? agentThinkRedirect = OnThinkingDelta(thread, thinkDelta);
+                    string? finalThinkRedirect = OnThinkingDeltaPipeline?.Invoke(thread, agentThinkRedirect ?? thinkDelta) ?? agentThinkRedirect;
+                    if (finalThinkRedirect is not null)
+                        turn.PendingThinkRedirect = finalThinkRedirect;  // buffer until sentence boundary
                 }
             }
             return;
@@ -767,6 +804,9 @@ public abstract class Agent
                 if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
             }
 
+            // Emitting a tool call is thinking, not typing — the JSON never reaches the user.
+            AdvancePhase(turn, ThreadPhase.Thinking);
+
             foreach (JsonElement tc in toolCallsEl.EnumerateArray())
             {
                 int index = tc.GetProperty("index").GetInt32();
@@ -778,6 +818,22 @@ public abstract class Agent
                         ? nameEl.GetString() ?? string.Empty : string.Empty;
                     turn.PendingCalls[index] = (id, name, new StringBuilder());
                     turn.ConsecutiveFallbacks = 0;
+                }
+
+                // The tool name can arrive on the id chunk or on a later function-name chunk
+                // (server-dependent), so resolve it from whichever we have and re-check every time.
+                if (turn.PendingCalls.TryGetValue(index, out (string Id, string Name, StringBuilder Args) named))
+                {
+                    if (string.IsNullOrEmpty(named.Name)
+                        && tc.TryGetProperty("function", out JsonElement lateFn)
+                        && lateFn.TryGetProperty("name", out JsonElement lateName))
+                    {
+                        string resolved = lateName.GetString() ?? string.Empty;
+                        if (resolved.Length > 0) turn.PendingCalls[index] = (named.Id, resolved, named.Args);
+                        named = turn.PendingCalls[index];
+                    }
+                    if (named.Name is "search_web" or "fetch_page")
+                        AdvancePhase(turn, ThreadPhase.Researching);
                 }
 
                 if (tc.TryGetProperty("function", out JsonElement funcEl) &&
@@ -901,6 +957,8 @@ public abstract class Agent
                 : (accumulated.StartsWith(AriPrefix, StringComparison.OrdinalIgnoreCase) ? accumulated[AriPrefix.Length..] : accumulated);
             if (turn.LiveText is null && visible.Trim().Length > 0) { turn.LiveText = new TraceStep { Kind = "text", Text = "" }; turn.Trace.Add(turn.LiveText); }
             if (turn.LiveText is not null) turn.LiveText.Text = visible;
+            // Typing fires only here: the moment real response text is actually sent to the user.
+            if (visible.Trim().Length > 0) AdvancePhase(turn, ThreadPhase.Typing);
             if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString() + visible);
             if (turn.OnTextDelta is not null && visible.Length > 0)
                 await turn.OnTextDelta(turn.TextOnlyBuilder.ToString() + visible);
@@ -1009,6 +1067,15 @@ public abstract class Agent
         {
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) streaming delta hook: redirected to continue thinking.", Name, thread.Key);
             return;
+        }
+
+        // Flush a buffered think-redirect that never hit a sentence boundary (e.g. stream ended mid-thought).
+        if (turn.PendingThinkRedirect is not null)
+        {
+            turn.Messages.Add(new { role = "assistant", content = "" });
+            turn.Messages.Add(new { role = "user", content = turn.PendingThinkRedirect });
+            turn.PendingThinkRedirect = null;
+            turn.ThinkingRedirect = true;
         }
 
         if (turn.ThinkingRedirect)
@@ -1215,13 +1282,54 @@ public abstract class Agent
                     turn.ContentBuilder.Append(chunk);
                     if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
                 };
+
+                bool isWebTool = call.Name is "search_web" or "fetch_page";
+                if (isWebTool) AdvancePhase(turn, ThreadPhase.Researching);
                 try
                 {
                     result = prelaunched.TryGetValue(callIndex, out Task<string>? pre)
                         ? await pre
                         : await tool.Execute(argsJson);
                 }
-                finally { thread.ToolDisplaySink = null; }
+                finally
+                {
+                    thread.ToolDisplaySink = null;
+                    // Leave Researching in threadPhases — Prefilling on the next request will overwrite it.
+                    // Resetting to Idle here causes the indicator to flash off before the model resumes.
+                }
+
+                // Collect web sources for DTI display.
+                if (isWebTool)
+                {
+                    string? sourceUrl = null;
+                    string? sourceContent = null;
+                    if (call.Name == "fetch_page")
+                    {
+                        try
+                        {
+                            var doc = System.Text.Json.JsonDocument.Parse(argsJson.Length > 0 ? argsJson : "{}");
+                            sourceUrl = doc.RootElement.TryGetProperty("url", out var u) ? u.GetString() : null;
+                            sourceContent = result;
+                        }
+                        catch { }
+                    }
+                    else if (call.Name == "search_web")
+                    {
+                        try
+                        {
+                            var doc = System.Text.Json.JsonDocument.Parse(argsJson.Length > 0 ? argsJson : "{}");
+                            string? q = doc.RootElement.TryGetProperty("query", out var qp) ? qp.GetString() : null;
+                            if (q is not null) sourceUrl = $"search: {q}";
+                        }
+                        catch { }
+                    }
+                    if (sourceUrl is not null)
+                    {
+                        turn.AriResponse.WebSources ??= new();
+                        if (!turn.AriResponse.WebSources.Any(s => s.Url == sourceUrl))
+                            turn.AriResponse.WebSources.Add(new WebSource { Url = sourceUrl, Content = sourceContent });
+                    }
+                }
 
                 result = OnToolResult(thread, turn.ToolTurn, call.Name, argsJson, result);
                 if (OnToolResultPipeline is not null)
@@ -1341,6 +1449,35 @@ public abstract class Agent
 
         turn.ContentBuilder.Append("<!--ari-batch-end-->");
         if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
+
+        // ── Research confidence gate ─────────────────────────────────────────────
+        // After each batch that included web tools, check if the model has searched enough.
+        // Soft gate (3+): ask the model to self-assess confidence before searching again.
+        // Hard gate (6+): block web tools entirely and require an answer.
+        int webCallsThisBatch = turn.PendingCalls.Values.Count(c => c.Name is "search_web" or "fetch_page");
+        if (webCallsThisBatch > 0 && !turn.WebToolsBlocked)
+        {
+            turn.WebToolCallsThisTurn += webCallsThisBatch;
+            int n = turn.WebToolCallsThisTurn;
+            const int SoftThreshold = 3;
+            const int HardThreshold = 6;
+
+            if (n >= HardThreshold)
+            {
+                turn.WebToolsBlocked = true;
+                turn.Messages.Add(new { role = "user", content =
+                    $"[Research gate — {n} web searches completed] You have gathered enough. Web search is now unavailable. " +
+                    "Write your best answer using what you have found. Do not apologise for incomplete information — synthesise what you know and answer directly." });
+                Shared.Logger.LogInformation("[{Agent}] ({Thread}) Research hard gate fired ({N} web calls) — web tools blocked for this turn.", Name, thread.Key, n);
+            }
+            else if (n >= SoftThreshold)
+            {
+                turn.Messages.Add(new { role = "user", content =
+                    $"[Research gate — {n} web searches completed] Before searching further, assess: do you have enough information to answer the original question with confidence? " +
+                    "If yes, write your answer now. If you genuinely still lack one specific thing, name it in one sentence, then you may search once more." });
+                Shared.Logger.LogInformation("[{Agent}] ({Thread}) Research soft gate fired ({N} web calls).", Name, thread.Key, n);
+            }
+        }
 
         if (thread.EndTurnNow)
         {

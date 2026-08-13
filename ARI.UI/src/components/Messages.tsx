@@ -312,7 +312,7 @@ interface Props {
     isInternal:    boolean
     agentName:     string | null
     processing?:   boolean
-    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "remembering"
+    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching"
 }
 
 function fileExtLabel(name: string) {
@@ -429,6 +429,7 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
                             </div>
                         )}
                         {item.recallNotes && <RecallNotes raw={item.recallNotes} />}
+                        {item.webSources && item.webSources.length > 0 && <WebSources sources={item.webSources} />}
                         {item.contextSummary && <><h4>Context summary</h4>{item.contextSummary}</>}
                     </div>
                 </details>
@@ -439,11 +440,12 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
     }
 
     // Phase: prefer server-reported status, fall back to content heuristic.
-    let streamPhase: "reading" | "thinking" | "typing" = "reading"
+    let streamPhase: "reading" | "thinking" | "typing" | "researching" = "reading"
     if (streaming) {
         if (threadStatus === "thinking")        streamPhase = "thinking"
         else if (threadStatus === "typing")     streamPhase = "typing"
         else if (threadStatus === "prefilling") streamPhase = "reading"
+        else if (threadStatus === "researching") streamPhase = "researching"
         else {
             // Heuristic fallback when no server status available.
             const hasThinkingBlock = item.blocks?.some(b => b.type === "thinking" && b.state === 0)
@@ -460,7 +462,7 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
             {streaming && (
                 <div className="typing-indicator">
                     <span className="typing-prefix">A·R·I is</span>
-                    <span className="phase-word">{streamPhase === "reading" ? "Reading" : streamPhase === "thinking" ? "Thinking" : "Typing"}</span>
+                    <span className="phase-word">{streamPhase === "reading" ? "Reading" : streamPhase === "thinking" ? "Thinking" : streamPhase === "researching" ? "Researching" : "Typing"}</span>
                     <div className="typing-dots"><b /><b /><b /></div>
                 </div>
             )}
@@ -503,6 +505,61 @@ function RecallNotes({ raw }: { raw: string }) {
                     <div className="recall-note-content">{n.content}</div>
                 </details>
             ))}
+        </div>
+    )
+}
+
+function sourceLabel(url: string): string {
+    try {
+        const u = new URL(url)
+        const host = u.hostname.replace(/^www\./, "")
+        if (host === "reddit.com" || host.endsWith(".reddit.com") || u.hostname.includes("old.reddit.com")) {
+            const m = u.pathname.match(/^\/r\/([^/]+)/)
+            return m ? `r/${m[1]}` : "reddit.com"
+        }
+        return host
+    } catch {
+        return url
+    }
+}
+
+function faviconUrl(url: string): string {
+    try {
+        const u = new URL(url)
+        return `${u.protocol}//${u.hostname}/favicon.ico`
+    } catch {
+        return ""
+    }
+}
+
+function WebSources({ sources }: { sources: { url: string; content?: string }[] }) {
+    return (
+        <div className="recall-notes-section">
+            <span className="recall-label">Sources</span>
+            {sources.map((s, i) => {
+                const isSearch = s.url.startsWith("search: ")
+                if (isSearch) {
+                    return <div key={i} className="web-source-row web-source-search">🔍 {s.url.slice(8)}</div>
+                }
+                const label   = sourceLabel(s.url)
+                const favicon = faviconUrl(s.url)
+                return (
+                    <details key={i} className="recall-note">
+                        <summary>
+                            {favicon && (
+                                <img
+                                    src={favicon}
+                                    className="web-source-favicon"
+                                    alt=""
+                                    onError={e => { (e.currentTarget as HTMLImageElement).style.display = "none" }}
+                                />
+                            )}
+                            <a href={s.url} target="_blank" rel="noopener" className="recall-note-link">{label}</a>
+                        </summary>
+                        {s.content && <div className="recall-note-content web-source-content">{s.content}</div>}
+                    </details>
+                )
+            })}
         </div>
     )
 }
