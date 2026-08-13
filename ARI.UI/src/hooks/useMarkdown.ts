@@ -249,7 +249,9 @@ export function browsingCardHtml(url: string, _title: string, done: boolean, err
     const host = hostOf(url)
     // The site's own favicon, matching the Sources block — no third-party favicon service is called.
     const icon = host.length > 0
-        ? `<img class="tool-card-favicon" src="https://${escHtml(host)}/favicon.ico" alt="" onerror="this.style.visibility='hidden'" />`
+        // Removed rather than hidden on failure: a hidden image still occupies its box, leaving a hole
+        // where the icon would be and knocking the label out of line with the cards around it.
+        ? `<img class="tool-card-favicon" src="https://${escHtml(host)}/favicon.ico" alt="" onerror="this.remove()" />`
         : ""
     const link = escHtml(trimLink(url))
     const dots = `<div class="typing-dots"><b></b><b></b><b></b></div>`

@@ -742,6 +742,22 @@ export default function App() {
         return ready
     }, [])
 
+    // Live phase updates (Reading / Thinking / Researching / Typing) arrive on this stream. It must be
+    // opened for EVERY thread we start watching, including one created by sending the first message —
+    // without it threadStatus never leaves "idle" and the indicator falls back to guessing from content,
+    // which cannot tell thinking apart from an empty reply.
+    const attachWatch = useCallback((key: string) => {
+        watchStreamRef.current?.close()
+        watchStreamRef.current = openWatchStream(key, (e: WatchEvent) => {
+            if (e.deleted) { watchStreamRef.current = null; return }
+            if (e.status) {
+                setThreadStatus(e.status)
+                setIsRemembering(e.status === "remembering")
+            }
+            if (e.isCodeMode !== undefined) setCodeMode(e.isCodeMode)
+        }, () => { /* ignore reconnect errors */ })
+    }, [])
+
     const openThread = useCallback(async (
         key: string, internal = false, agName: string | null = null, isCode = false,
         projectId: string | null = null,
@@ -760,17 +776,7 @@ export default function App() {
         activeProjectRef.current = projectId
         setSelectedProject(projectId)
 
-        // Open watch stream for this thread to get live phase updates.
-        watchStreamRef.current?.close()
-        watchStreamRef.current = openWatchStream(key, (e: WatchEvent) => {
-            if (e.deleted) { watchStreamRef.current = null; return }
-            if (e.status) {
-                console.log("[WatchSSE] received status:", e.status)
-                setThreadStatus(e.status)
-                setIsRemembering(e.status === "remembering")
-            }
-            if (e.isCodeMode !== undefined) setCodeMode(e.isCodeMode)
-        }, () => { /* ignore reconnect errors */ })
+        attachWatch(key)
 
         // Fetch the thread (state + history) via the new polling endpoint
         const detail = await fetchThread(key).catch(() => null)
@@ -803,7 +809,7 @@ export default function App() {
                 await openToolSocket(key, projectId)
             }
         }
-    }, [refreshThreadAttach, injectFileTree, openToolSocket, loadThreads])
+    }, [refreshThreadAttach, injectFileTree, openToolSocket, loadThreads, attachWatch])
 
     // Deep-link from a push notification: /?thread=KEY opens that thread once the app is connected.
     const deepLinkedRef = useRef(false)
@@ -898,6 +904,7 @@ export default function App() {
         if (needsNew) {
             key = await createThread(selectedProject, selectedPipeline)
             setActiveThread(key)
+            attachWatch(key)   // a thread created by sending is watched too, not only one opened from the list
             activeProjectRef.current = selectedProject
             loadThreads()
             if (selectedProject) {
@@ -1055,7 +1062,7 @@ export default function App() {
     // ── upload thread attachment ──────────────────────────
     const uploadThreadFiles = useCallback(async (files: File[]) => {
         let key = activeThreadRef.current
-        if (!key) { key = await createThread(); setActiveThread(key); activate() }
+        if (!key) { key = await createThread(); setActiveThread(key); attachWatch(key); activate() }
 
         const succeeded: string[] = []
         for (const file of files) {
@@ -1077,7 +1084,7 @@ export default function App() {
     // ── upload message attachment ─────────────────────────
     const uploadMessageFiles = useCallback(async (files: File[]) => {
         let key = activeThreadRef.current
-        if (!key) { key = await createThread(); setActiveThread(key) }
+        if (!key) { key = await createThread(); setActiveThread(key); attachWatch(key) }
 
         const uploading = files.map(f => ({
             name: f.name, isImage: false, mimeType: null, content: null, uploading: true,
