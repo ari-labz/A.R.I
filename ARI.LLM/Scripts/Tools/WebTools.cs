@@ -237,8 +237,6 @@ internal sealed class FetchPage : Tool
         AllowAutoRedirect      = true,
     }) { Timeout = TimeSpan.FromSeconds(20) };
 
-    private const string JINA_PREFIX = "https://r.jina.ai/";
-
     internal override string Name => "fetch_page";
     internal override object Schema => new
     {
@@ -290,7 +288,7 @@ internal sealed class FetchPage : Tool
 
         return IsRedditUrl(url)
             ? await FetchReddit(url)
-            : await FetchViaJina(url);
+            : await FetchPageContent(url);
     }
 
     private static async Task<string> FetchReddit(string url)
@@ -324,28 +322,30 @@ internal sealed class FetchPage : Tool
         }
     }
 
-    private static async Task<string> FetchViaJina(string url)
+    private static async Task<string> FetchPageContent(string url)
     {
-        string fetchUrl = JINA_PREFIX + url;
-
         try
         {
-            using HttpRequestMessage req = new(HttpMethod.Get, fetchUrl);
-            req.Headers.Add("Accept", "text/plain");
-            req.Headers.Add("User-Agent", "ARI/1.0");
-            req.Headers.Add("X-Return-Format", "text");
+            using HttpRequestMessage req = new(HttpMethod.Get, url);
+            req.Headers.Add("Accept", "text/html,application/xhtml+xml,*/*;q=0.8");
+            req.Headers.Add("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+            req.Headers.Add("Accept-Language", "en-US,en;q=0.9");
 
             using HttpResponseMessage resp = await Http.SendAsync(req);
-            string content = await resp.Content.ReadAsStringAsync();
-
             if (!resp.IsSuccessStatusCode)
                 return $"Failed to fetch page (HTTP {(int)resp.StatusCode}).";
 
-            const int maxChars = 12000;
-            if (content.Length > maxChars)
-                content = content[..maxChars] + "\n\n[content truncated]";
+            string html    = await resp.Content.ReadAsStringAsync();
+            string content = PageReader.Extract(html, url);
 
-            return content.Trim();
+            if (content.Length < PageReader.MIN_MEANINGFUL_CHARS)
+                return $"Page returned very little text ({content.Length} chars) — it may require JavaScript to render.";
+
+            const int MAX_CHARS = 12000;
+            if (content.Length > MAX_CHARS)
+                content = content[..MAX_CHARS] + "\n\n[content truncated]";
+
+            return content;
         }
         catch (Exception ex)
         {
