@@ -102,8 +102,13 @@ public static class Dependency
             else if (OperatingSystem.IsWindows())
                 Process.Start(new ProcessStartInfo("cmd", "/c start \"\" \"C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe\"") { UseShellExecute = false });
             else
-                // Linux: daemon is typically managed by systemd, not a desktop app
-                Process.Start(new ProcessStartInfo("sudo", "systemctl start docker") { UseShellExecute = false });
+            {
+                // Linux: cannot start the daemon here without a password prompt; user must start it
+                Shared.Logger.LogWarning(
+                    "[LLM] Docker daemon is not running. Start it with: sudo systemctl start docker  " +
+                    "Then restart ARI.");
+                return false;
+            }
         }
         catch { return false; }
 
