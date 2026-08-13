@@ -65,7 +65,8 @@ public abstract class Agent
     private const string BudgetSteerMessage =
         "[Thinking budget spent] Stop reasoning now and act on what you have. If you need a tool, call it — " +
         "tool calls do not draw on the thinking budget. If you already have what you need, write the reply " +
-        "itself; it has its own separate budget. Do not draft or rehearse the reply inside your thinking.";
+        "itself; it has its own separate budget. Do not draft or rehearse the reply inside your thinking, and " +
+        "do not stall: writing to the user ends the turn, so a holding message throws away everything you found.";
 
     private readonly HttpClient httpClient = new() { Timeout = Timeout.InfiniteTimeSpan };
 
@@ -1531,7 +1532,8 @@ public abstract class Agent
             turn.Messages.Add(new { role = "user", content =
                 $"[Research gate — {turn.ProductiveSearches} searches done] Searching is now unavailable for the rest of this turn. " +
                 "You may still read pages you have already found. Answer from what you have gathered; say plainly which parts " +
-                "you could not confirm rather than apologising or padding." });
+                "you could not confirm rather than apologising or padding. Writing to the user ends the turn, so give the " +
+                "whole answer now — do not stall for time or promise to finish later, because there is no later." });
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) search hard gate fired ({N} productive searches) — search_web withdrawn.",
                 Name, thread.Key, turn.ProductiveSearches);
         }
@@ -1549,7 +1551,8 @@ public abstract class Agent
         {
             turn.ReadBlocked = true;
             turn.Messages.Add(new { role = "user", content =
-                $"[Research gate — {turn.PagesRead} pages read] You have read enough. Write your answer from what you have." });
+                $"[Research gate — {turn.PagesRead} pages read] You have read enough. Write your full answer from what you have — " +
+                "writing to the user ends the turn, so a holding message loses everything you just gathered." });
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) read gate fired ({N} pages) — fetch_page withdrawn.", Name, thread.Key, turn.PagesRead);
         }
 
