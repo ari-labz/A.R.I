@@ -221,29 +221,41 @@ function hostOf(url: string): string {
 // Both render paths build these: the typed-block path once a response is parsed into blocks, and the
 // raw-marker path used while a reply is still streaming. Keeping one builder per card means a streaming
 // card and a finished card cannot drift apart.
+const SEARCH_ICON =
+    `<svg class="tool-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ` +
+    `stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/>` +
+    `<path d="m21 21-4.35-4.35"/></svg>`
+
+// The link as you would read it aloud: no scheme, no www, no trailing slash, cut to fit one line.
+function trimLink(url: string, max = 46): string {
+    const s = url.replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/+$/, "")
+    return s.length > max ? `${s.slice(0, max - 1)}…` : s
+}
+
 export function webSearchCardHtml(query: string, done: boolean, results: number, down: number, none: boolean, err = false): string {
     const q    = escHtml(query)
     const dots = `<div class="typing-dots"><b></b><b></b><b></b></div>`
-    if (err)   return `\n\n<div class="tool-card tool-card--error tool-card--web"><span>Search failed · "${q}"</span></div>\n\n`
-    if (!done) return `\n\n<div class="tool-card tool-card--active tool-card--web"><span>Searching the web · "${q}"</span>${dots}</div>\n\n`
-    if (none)  return `\n\n<div class="tool-card tool-card--done tool-card--web tool-card--empty"><span>Searched "${q}" · nothing relevant</span></div>\n\n`
+    if (err)   return `\n\n<div class="tool-card tool-card--error tool-card--web">${SEARCH_ICON}<span>Search failed ${q}</span></div>\n\n`
+    if (!done) return `\n\n<div class="tool-card tool-card--active tool-card--web">${SEARCH_ICON}<span>Searching ${q}</span>${dots}</div>\n\n`
+    // The two exceptional outcomes still say so — a search that found nothing and a rate limited one are
+    // the whole reason the gate exists, and silently showing "Searched X" would hide both.
+    if (none)  return `\n\n<div class="tool-card tool-card--done tool-card--web tool-card--empty">${SEARCH_ICON}<span>Searched ${q} · nothing relevant</span></div>\n\n`
     const cls  = down > 0 ? "tool-card--done tool-card--web tool-card--degraded" : "tool-card--done tool-card--web"
     const tail = down > 0 ? ` · ${down} engine${down === 1 ? "" : "s"} rate limited` : ""
-    return `\n\n<div class="tool-card ${cls}"><span>Searched "${q}" · ${results} result${results === 1 ? "" : "s"}${tail}</span></div>\n\n`
+    return `\n\n<div class="tool-card ${cls}">${SEARCH_ICON}<span>Searched ${q}${tail}</span></div>\n\n`
 }
 
-export function browsingCardHtml(url: string, title: string, done: boolean, err = false): string {
+export function browsingCardHtml(url: string, _title: string, done: boolean, err = false): string {
     const host = hostOf(url)
     // The site's own favicon, matching the Sources block — no third-party favicon service is called.
     const icon = host.length > 0
         ? `<img class="tool-card-favicon" src="https://${escHtml(host)}/favicon.ico" alt="" onerror="this.style.visibility='hidden'" />`
         : ""
-    const site = escHtml(siteLabel(url))
+    const link = escHtml(trimLink(url))
     const dots = `<div class="typing-dots"><b></b><b></b><b></b></div>`
-    if (err)   return `\n\n<div class="tool-card tool-card--error tool-card--web"><span>Couldn't read ${site}</span></div>\n\n`
-    if (!done) return `\n\n<div class="tool-card tool-card--active tool-card--web">${icon}<span>Reading ${site}…</span>${dots}</div>\n\n`
-    const shown = title.trim().length > 0 ? `${escHtml(title.trim())} · ${site}` : site
-    return `\n\n<div class="tool-card tool-card--done tool-card--web">${icon}<span>Read ${shown}</span></div>\n\n`
+    if (err)   return `\n\n<div class="tool-card tool-card--error tool-card--web"><span>Couldn't read</span>${icon}<span>${link}</span></div>\n\n`
+    if (!done) return `\n\n<div class="tool-card tool-card--active tool-card--web"><span>Reading</span>${icon}<span>${link}</span>${dots}</div>\n\n`
+    return `\n\n<div class="tool-card tool-card--done tool-card--web"><span>Read</span>${icon}<span>${link}</span></div>\n\n`
 }
 
 // Labels carry their extras pipe-encoded: "query|n=7|down=3|none" and "url|t=Title".
@@ -267,15 +279,6 @@ function webCardFromMarker(name: string, rawLabel: string, done: boolean, err = 
         : browsingCardHtml(p.head, p.title, done, err)
 }
 
-// Reddit reads as its subreddit — "r/LocalLLM" says far more than "reddit.com" about what she opened.
-function siteLabel(url: string): string {
-    const host = hostOf(url)
-    if (host.endsWith("reddit.com")) {
-        const sub = url.match(/\/r\/([A-Za-z0-9_]+)/)
-        if (sub) return `r/${sub[1]}`
-    }
-    return host.length > 0 ? host : url
-}
 
 function diffBadges(added = 0, removed = 0): string {
     const a = added   > 0 ? `<span class="diff-badge diff-badge--add" data-target="${added}" data-dir="up" data-static="1">+<span class="badge-digits">${added}</span></span>`   : ""

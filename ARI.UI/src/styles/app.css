@@ -1057,6 +1057,7 @@ button, a, input, select, textarea, label, [role="button"] {
 .tool-card--web { font-style: normal; }
 .tool-card--web span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46ch; }
 .tool-card-favicon { width: 13px; height: 13px; border-radius: 3px; object-fit: contain; flex-shrink: 0; }
+.tool-card-icon { width: 13px; height: 13px; flex-shrink: 0; }
 /* a search that found nothing is not an error — she did her job, the index had nothing */
 .tool-card--empty    { color: #d1d5db; border-color: rgba(255,255,255,0.28); background: rgba(60,60,70,0.7); }
 .tool-card--degraded { color: #fcd34d; border-color: #92400e; background: rgba(120,53,15,0.75); }
