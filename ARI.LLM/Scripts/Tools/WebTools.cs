@@ -60,9 +60,9 @@ internal sealed class SearchWeb : Tool
     {
         try
         {
-            using JsonDocument doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(args) ? "{}" : args);
-            string q = doc.RootElement.TryGetProperty("query", out JsonElement qe) ? qe.GetString() ?? "" : "";
-            return new WebSearching { Query = q }.Render();
+            using JsonDocument displayDoc = JsonDocument.Parse(string.IsNullOrWhiteSpace(args) ? "{}" : args);
+            string searchQuery = displayDoc.RootElement.TryGetProperty("query", out JsonElement queryEl) ? queryEl.GetString() ?? "" : "";
+            return new WebSearching { Query = searchQuery }.Render();
         }
         catch { return new WebSearching().Render(); }
     };
@@ -77,7 +77,7 @@ internal sealed class SearchWeb : Tool
         }
         catch { return "Error: could not parse arguments."; }
 
-        string query = args.TryGetProperty("query", out JsonElement q) ? q.GetString() ?? "" : "";
+        string query = args.TryGetProperty("query", out JsonElement queryEl) ? queryEl.GetString() ?? "" : "";
         if (query.Length == 0) return "Error: 'query' is required.";
 
         int numResults = args.TryGetProperty("num_results", out JsonElement nr) && nr.ValueKind == JsonValueKind.Number
@@ -100,25 +100,25 @@ internal sealed class SearchWeb : Tool
             return $"Search unavailable: {ex.Message}.";
         }
 
-        using JsonDocument doc = JsonDocument.Parse(json);
-        if (!doc.RootElement.TryGetProperty("results", out JsonElement results))
+        using JsonDocument responseDoc = JsonDocument.Parse(json);
+        if (!responseDoc.RootElement.TryGetProperty("results", out JsonElement results))
             return "No results returned.";
 
-        string engineHealth = ReportEngineHealth(doc.RootElement, results);
+        string engineHealth = ReportEngineHealth(responseDoc.RootElement, results);
 
         // Relevance gate. When an upstream engine has no match for a query it does not return an empty
         // set — it serves a page of unrelated filler, which SearXNG scrapes as if it were results (a
         // search for a real model returned Hotmail help and Swedish salary listings). Anything sharing
         // no word at all with the query is that filler, so it is dropped rather than shown as evidence.
         List<string> queryTerms = DistinctiveTerms(query);
-        var kept    = new List<(string Title, string Url, string Snippet)>();
+        List<(string Title, string Url, string Snippet)> kept = new List<(string Title, string Url, string Snippet)>();
         int dropped = 0;
 
         foreach (JsonElement result in results.EnumerateArray())
         {
-            string title     = result.TryGetProperty("title",   out JsonElement t) ? t.GetString() ?? "" : "";
-            string resultUrl = result.TryGetProperty("url",     out JsonElement u) ? u.GetString() ?? "" : "";
-            string snippet   = result.TryGetProperty("content", out JsonElement c) ? c.GetString() ?? "" : "";
+            string title     = result.TryGetProperty("title",   out JsonElement titleEl)   ? titleEl.GetString()   ?? "" : "";
+            string resultUrl = result.TryGetProperty("url",     out JsonElement urlEl)     ? urlEl.GetString()     ?? "" : "";
+            string snippet   = result.TryGetProperty("content", out JsonElement contentEl) ? contentEl.GetString() ?? "" : "";
 
             if (queryTerms.Count > 0 && !IsRelevant(queryTerms, title, resultUrl, snippet)) { dropped++; continue; }
             if (kept.Count < numResults) kept.Add((title, resultUrl, snippet));
@@ -126,7 +126,7 @@ internal sealed class SearchWeb : Tool
 
         if (kept.Count == 0)
         {
-            var none = new StringBuilder();
+            StringBuilder none = new StringBuilder();
             none.AppendLine($"{NoRelevantPrefix} \"{query}\".");
             if (dropped > 0)
                 none.AppendLine($"{dropped} result(s) came back but none mentioned the search terms at all — that is the " +
@@ -141,19 +141,19 @@ internal sealed class SearchWeb : Tool
             return none.ToString().TrimEnd();
         }
 
-        var sb = new StringBuilder();
+        StringBuilder resultsBuilder = new StringBuilder();
         for (int i = 0; i < kept.Count; i++)
         {
-            sb.AppendLine($"[{i + 1}] {kept[i].Title}");
-            sb.AppendLine($"    URL: {kept[i].Url}");
-            if (kept[i].Snippet.Length > 0) sb.AppendLine($"    {kept[i].Snippet}");
-            sb.AppendLine();
+            resultsBuilder.AppendLine($"[{i + 1}] {kept[i].Title}");
+            resultsBuilder.AppendLine($"    URL: {kept[i].Url}");
+            if (kept[i].Snippet.Length > 0) resultsBuilder.AppendLine($"    {kept[i].Snippet}");
+            resultsBuilder.AppendLine();
         }
         if (dropped > 0)
-            sb.AppendLine($"({dropped} unrelated result(s) hidden — they matched none of the search terms.)");
-        if (engineHealth.Length > 0) sb.Append(engineHealth);
+            resultsBuilder.AppendLine($"({dropped} unrelated result(s) hidden — they matched none of the search terms.)");
+        if (engineHealth.Length > 0) resultsBuilder.Append(engineHealth);
 
-        return sb.ToString().TrimEnd();
+        return resultsBuilder.ToString().TrimEnd();
     }
 
     // Words carrying no identifying power. A query is judged on what is left after these are removed,
@@ -170,7 +170,7 @@ internal sealed class SearchWeb : Tool
     /// <summary>Query words that actually identify the subject — operators, punctuation and filler removed.</summary>
     private static List<string> DistinctiveTerms(string query)
     {
-        var terms = new List<string>();
+        List<string> terms = new List<string>();
         foreach (string raw in query.Split(' ', StringSplitOptions.RemoveEmptyEntries))
         {
             string term = raw.Trim('"', '\'', '(', ')', ',', '.', '?', '!', ':', ';');
@@ -211,7 +211,7 @@ internal sealed class SearchWeb : Tool
         if (!root.TryGetProperty("unresponsive_engines", out JsonElement down) || down.ValueKind != JsonValueKind.Array)
             return "";
 
-        var blocked = new List<string>();
+        List<string> blocked = new List<string>();
         foreach (JsonElement entry in down.EnumerateArray())
         {
             if (entry.ValueKind != JsonValueKind.Array || entry.GetArrayLength() == 0) continue;
@@ -221,12 +221,12 @@ internal sealed class SearchWeb : Tool
         }
         if (blocked.Count == 0) return "";
 
-        var working = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (JsonElement r in results.EnumerateArray())
-            if (r.TryGetProperty("engine", out JsonElement e) && e.GetString() is { Length: > 0 } name)
-                working.Add(name);
+        HashSet<string> workingEngines = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (JsonElement resultEntry in results.EnumerateArray())
+            if (resultEntry.TryGetProperty("engine", out JsonElement engineEl) && engineEl.GetString() is { Length: > 0 } engineName)
+                workingEngines.Add(engineName);
 
-        int total = working.Count + blocked.Count;
+        int total = workingEngines.Count + blocked.Count;
 
         string state = string.Join(",", blocked);
         bool shouldLog;
@@ -289,9 +289,9 @@ internal sealed class FetchPage : Tool
     {
         try
         {
-            using JsonDocument doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(args) ? "{}" : args);
-            string u = doc.RootElement.TryGetProperty("url", out JsonElement ue) ? ue.GetString() ?? "" : "";
-            return new Browsing { Url = u }.Render();
+            using JsonDocument displayDoc = JsonDocument.Parse(string.IsNullOrWhiteSpace(args) ? "{}" : args);
+            string pageUrl = displayDoc.RootElement.TryGetProperty("url", out JsonElement urlEl) ? urlEl.GetString() ?? "" : "";
+            return new Browsing { Url = pageUrl }.Render();
         }
         catch { return new Browsing().Render(); }
     };

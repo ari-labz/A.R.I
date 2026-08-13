@@ -5,7 +5,6 @@ using ARI.Core.Scripts;
 using ARI.Discord;
 using Dependency    = ARI.Core.Scripts.Dependency;
 using LLMDependency = ARI.LLM.Dependency;
-using ARI.LLM;
 using ARI.Voice;
 using ARI.VoiceSynthesis;
 using ARI.API;
