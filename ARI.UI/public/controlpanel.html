@@ -3809,7 +3809,7 @@ const vsLogBadge = document.getElementById('vs-log-badge');
 
 let vsFiles = [], vsProgressEs = null, vsStartTime = null, vsLastPct = 0, vsTimerHandle = null,
     vsCompletedEpochs = 0, vsTotalEpochs = 0, vsActiveModelName = null,
-    vsStartEpoch = 0, vsSessionEpochs = 0;
+    vsStartEpoch = 0, vsSessionEpochs = 0, vsPrevCompletedEpochs = 0;
 
 const vsPauseBtn = document.getElementById('vs-pause-btn');
 
@@ -3839,7 +3839,7 @@ function vsTickTimer() {
         vsEtaLabel.textContent = 'ETA: —';
     }
 }
-function vsStartTimer() { vsStartTime = Date.now(); vsLastPct = 0; vsCompletedEpochs = 0; vsTotalEpochs = 0; vsStartEpoch = 0; vsSessionEpochs = 0; vsElapsedLabel.textContent = 'Elapsed: 0s'; vsAvgLabel.textContent = 'Avg/epoch: —'; vsEtaLabel.textContent = 'ETA: —'; if (vsTimerHandle) clearInterval(vsTimerHandle); vsTimerHandle = setInterval(vsTickTimer, 1000); }
+function vsStartTimer() { vsStartTime = Date.now(); vsLastPct = 0; vsCompletedEpochs = 0; vsTotalEpochs = 0; vsStartEpoch = 0; vsSessionEpochs = 0; vsPrevCompletedEpochs = 0; vsElapsedLabel.textContent = 'Elapsed: 0s'; vsAvgLabel.textContent = 'Avg/epoch: —'; vsEtaLabel.textContent = 'ETA: —'; if (vsTimerHandle) clearInterval(vsTimerHandle); vsTimerHandle = setInterval(vsTickTimer, 1000); }
 function vsStopTimer()  { if (vsTimerHandle) { clearInterval(vsTimerHandle); vsTimerHandle = null; } vsTickTimer(); vsEtaLabel.textContent = 'ETA: done'; }
 function fmtBytes(b)    { return b > 1048576 ? (b/1048576).toFixed(1)+' MB' : (b/1024).toFixed(0)+' KB'; }
 
@@ -3896,13 +3896,19 @@ vsDropzone.addEventListener('drop', e => { e.preventDefault(); vsDropzone.classL
 function vsAppendLog(text, cls = '') { const el = document.createElement('div'); el.className = 'log-line ' + (cls || classifyLog(text)); el.textContent = text; vsLogLines.appendChild(el); while (vsLogLines.children.length > 500) vsLogLines.removeChild(vsLogLines.firstChild); vsLogLines.scrollTop = vsLogLines.scrollHeight; }
 function vsSetProgress(step, pct, detail, state) {
     vsStepLabel.textContent = step;
-    // Parse "Epoch X/Y" from detail to get accurate float percentage
-    const epochMatch = detail && detail.match(/^Epoch\s+(\d+)\/(\d+)$/i);
+    // Parse "Epoch X/Y" from the step field (detail is the full raw log line)
+    const epochMatch = step && step.match(/^Epoch\s+(\d+)\/(\d+)$/i);
     if (epochMatch) {
         vsCompletedEpochs = parseInt(epochMatch[1], 10);
         vsTotalEpochs     = parseInt(epochMatch[2], 10);
-        if (vsStartEpoch === 0) vsStartEpoch = vsCompletedEpochs - 1;
-        vsSessionEpochs = vsCompletedEpochs - vsStartEpoch;
+        if (vsStartEpoch === 0) {
+            // First sync — anchor here without counting this epoch as elapsed
+            vsStartEpoch = vsCompletedEpochs;
+            vsPrevCompletedEpochs = vsCompletedEpochs;
+        } else if (vsCompletedEpochs > vsPrevCompletedEpochs) {
+            vsSessionEpochs++;
+            vsPrevCompletedEpochs = vsCompletedEpochs;
+        }
         const floatPct = (vsCompletedEpochs / vsTotalEpochs * 100).toFixed(2);
         vsPctLabel.textContent  = floatPct + '%';
         vsProgFill.style.width  = floatPct + '%';
