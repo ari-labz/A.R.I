@@ -70,7 +70,11 @@ internal sealed class SearchWeb : Tool
     internal override async Task<string> Execute(string argsJson)
     {
         JsonElement args;
-        try { args = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson).RootElement; }
+        try
+        {
+            using JsonDocument argsDoc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson);
+            args = argsDoc.RootElement.Clone();
+        }
         catch { return "Error: could not parse arguments."; }
 
         string query = args.TryGetProperty("query", out JsonElement q) ? q.GetString() ?? "" : "";
@@ -289,10 +293,14 @@ internal sealed class FetchPage : Tool
     internal override async Task<string> Execute(string argsJson)
     {
         JsonElement args;
-        try { args = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson).RootElement; }
+        try
+        {
+            using JsonDocument argsDoc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson);
+            args = argsDoc.RootElement.Clone();
+        }
         catch { return "Error: could not parse arguments."; }
 
-        string url = args.TryGetProperty("url", out JsonElement u) ? u.GetString() ?? "" : "";
+        string url = args.TryGetProperty("url", out JsonElement urlElement) ? urlElement.GetString() ?? "" : "";
         if (url.Length == 0) return "Error: 'url' is required.";
 
         return IsRedditUrl(url)
