@@ -1347,8 +1347,6 @@ public abstract class Agent
                 finally
                 {
                     thread.ToolDisplaySink = null;
-                    // Leave Researching in threadPhases — Prefilling on the next request will overwrite it.
-                    // Resetting to Idle here causes the indicator to flash off before the model resumes.
                 }
 
                 // Collect web sources for DTI display.
