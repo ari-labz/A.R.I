@@ -1512,17 +1512,12 @@ public abstract class Agent
         if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
 
         // ── Research confidence gate ─────────────────────────────────────────────
-        // Searching and reading are budgeted separately and deliberately unevenly. Searching is what
-        // gets rate limited upstream and what she spirals on, so it is kept tight; reading a page is
-        // how an answer actually gets built, so it is left generous. Fewer searches, more reading.
-        const int SearchSoftLimit = 2;   // pause and self-assess
-        const int SearchHardLimit = 3;   // search_web withdrawn for the rest of the turn
-        const int ReadLimit       = 8;   // fetch_page withdrawn for the rest of the turn
-
+        // Searching is kept tight because that is what gets rate limited and what she spirals on.
+        // Reading is left generous because that is how answers actually get built.
         int readsThisBatch = turn.PendingCalls.Values.Count(c => c.Name == "fetch_page");
         turn.PagesRead += readsThisBatch;
 
-        if (!turn.SearchBlocked && turn.ProductiveSearches >= SearchHardLimit)
+        if (!turn.SearchBlocked && turn.ProductiveSearches >= ResearchGate.SEARCH_HARD_LIMIT)
         {
             turn.SearchBlocked = true;
             turn.Messages.Add(new { role = "user", content =
@@ -1533,7 +1528,7 @@ public abstract class Agent
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) search hard gate fired ({N} productive searches) — search_web withdrawn.",
                 Name, thread.Key, turn.ProductiveSearches);
         }
-        else if (!turn.SearchBlocked && turn.ProductiveSearches >= SearchSoftLimit && !turn.SearchSoftGateFired)
+        else if (!turn.SearchBlocked && turn.ProductiveSearches >= ResearchGate.SEARCH_SOFT_LIMIT && !turn.SearchSoftGateFired)
         {
             turn.SearchSoftGateFired = true;
             turn.Messages.Add(new { role = "user", content =
@@ -1543,7 +1538,7 @@ public abstract class Agent
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) search soft gate fired ({N} productive searches).", Name, thread.Key, turn.ProductiveSearches);
         }
 
-        if (!turn.ReadBlocked && turn.PagesRead >= ReadLimit)
+        if (!turn.ReadBlocked && turn.PagesRead >= ResearchGate.READ_LIMIT)
         {
             turn.ReadBlocked = true;
             turn.Messages.Add(new { role = "user", content =
