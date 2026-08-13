@@ -77,6 +77,7 @@ export interface ThreadItem {
     totalSeconds?:    number
     recallSeconds?:  number
     toolCallCount?:  number
+    webSources?:     { url: string; content?: string }[]
     recallNotes?:    string
     data?: {
         completionTokens?: number
@@ -188,7 +189,7 @@ export function openWatchStream(
     return es
 }
 
-export type ThreadStatus = "idle" | "prefilling" | "thinking" | "typing" | "remembering"
+export type ThreadStatus = "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching"
 
 export interface WatchEvent {
     deleted?:    boolean
