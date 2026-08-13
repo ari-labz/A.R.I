@@ -104,6 +104,8 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
     out = out.replace(TOOL_END_RE, "")
     // Self-contained done markers (one marker = one finished card; no start/end pairing needed).
     out = out.replace(TOOL_DONE_RE, (_, name, rawLabel) => {
+        const web = webCardFromMarker(name, rawLabel, true)
+        if (web) return web
         const verbs = TOOL_VERBS[name] ?? { active: name, done: name }
         const label = rawLabel.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">")
         return `\n\n<div class="tool-card tool-card--done"><span>${verbs.done} ${escHtml(label)}</span></div>\n\n`
@@ -124,6 +126,8 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
         return `\n\n<div class="tool-card tool-card--mode"><span>${escHtml(label)}</span></div>\n\n`
     })
     out = out.replace(TOOL_ERROR_RE, (_, name, rawFile, rawMsg) => {
+        const web = webCardFromMarker(name, rawFile, true, true)
+        if (web) return web
         const verbs = TOOL_VERBS[name] ?? { active: name, done: name }
         const file  = rawFile.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">")
         const msg   = rawMsg.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">")
@@ -132,6 +136,10 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
     out = out.replace(TOOL_START_RE, (_, name, label) => {
         const file      = label.replace(/&#45;&#45;/g, "--")
         const cleanFile = file.replace(/\|\+\d+(?:\|-\d+)?$/, "")
+        // Web cards need no start/done reconciliation: the server replaces the start marker with the done
+        // marker in place, so only one of the two is ever present. A start marker means still running.
+        if (name === "search_web" || name === "fetch_page")
+            return webCardFromMarker(name, label, false)!
         const verbs = TOOL_VERBS[name] ?? { active: name, done: name }
         const key   = `${name}:${cleanFile}`
         const occ   = occurrence.get(key) ?? 0
@@ -202,7 +210,77 @@ type BlockLike = {
     task?: string; project?: string; added?: number; removed?: number; patch?: string
     label?: string; blocks?: BlockLike[]
     proposalId?: string; reason?: string; oldText?: string; newText?: string; status?: string
+    query?: string; results?: number; enginesDown?: number; nothingRelevant?: boolean
+    url?: string; title?: string
 }
+
+function hostOf(url: string): string {
+    try { return new URL(url).hostname.replace(/^www\./, "") } catch { return "" }
+}
+
+// Both render paths build these: the typed-block path once a response is parsed into blocks, and the
+// raw-marker path used while a reply is still streaming. Keeping one builder per card means a streaming
+// card and a finished card cannot drift apart.
+const SEARCH_ICON =
+    `<svg class="tool-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ` +
+    `stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/>` +
+    `<path d="m21 21-4.35-4.35"/></svg>`
+
+// The link as you would read it aloud: no scheme, no www, no trailing slash, cut to fit one line.
+function trimLink(url: string, max = 46): string {
+    const s = url.replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/+$/, "")
+    return s.length > max ? `${s.slice(0, max - 1)}…` : s
+}
+
+export function webSearchCardHtml(query: string, done: boolean, down: number, none: boolean, err = false): string {
+    const q    = escHtml(query)
+    const dots = `<div class="typing-dots"><b></b><b></b><b></b></div>`
+    if (err)   return `\n\n<div class="tool-card tool-card--error tool-card--web">${SEARCH_ICON}<span>Search failed ${q}</span></div>\n\n`
+    if (!done) return `\n\n<div class="tool-card tool-card--active tool-card--web">${SEARCH_ICON}<span>Searching ${q}</span>${dots}</div>\n\n`
+    // The two exceptional outcomes still say so — a search that found nothing and a rate limited one are
+    // the whole reason the gate exists, and silently showing "Searched X" would hide both.
+    if (none)  return `\n\n<div class="tool-card tool-card--done tool-card--web tool-card--empty">${SEARCH_ICON}<span>Searched ${q} · nothing relevant</span></div>\n\n`
+    const cls  = down > 0 ? "tool-card--done tool-card--web tool-card--degraded" : "tool-card--done tool-card--web"
+    const tail = down > 0 ? ` · ${down} engine${down === 1 ? "" : "s"} rate limited` : ""
+    return `\n\n<div class="tool-card ${cls}">${SEARCH_ICON}<span>Searched ${q}${tail}</span></div>\n\n`
+}
+
+export function browsingCardHtml(url: string, _title: string, done: boolean, err = false): string {
+    const host = hostOf(url)
+    // The site's own favicon, matching the Sources block — no third-party favicon service is called.
+    const icon = host.length > 0
+        // Removed rather than hidden on failure: a hidden image still occupies its box, leaving a hole
+        // where the icon would be and knocking the label out of line with the cards around it.
+        ? `<img class="tool-card-favicon" src="https://${escHtml(host)}/favicon.ico" alt="" onerror="this.remove()" />`
+        : ""
+    const link = escHtml(trimLink(url))
+    const dots = `<div class="typing-dots"><b></b><b></b><b></b></div>`
+    if (err)   return `\n\n<div class="tool-card tool-card--error tool-card--web"><span>Couldn't read</span>${icon}<span>${link}</span></div>\n\n`
+    if (!done) return `\n\n<div class="tool-card tool-card--active tool-card--web"><span>Reading</span>${icon}<span>${link}</span>${dots}</div>\n\n`
+    return `\n\n<div class="tool-card tool-card--done tool-card--web"><span>Read</span>${icon}<span>${link}</span></div>\n\n`
+}
+
+// Labels carry their extras pipe-encoded: "query|n=7|down=3|none" and "url|t=Title".
+export function parseWebLabel(raw: string): { head: string; results: number; down: number; none: boolean; title: string } {
+    const parts = raw.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">").split("|")
+    const out = { head: parts[0] ?? "", results: 0, down: 0, none: false, title: "" }
+    for (const p of parts.slice(1)) {
+        if      (p.startsWith("n="))    out.results = parseInt(p.slice(2)) || 0
+        else if (p.startsWith("down=")) out.down    = parseInt(p.slice(5)) || 0
+        else if (p.startsWith("t="))    out.title   = p.slice(2)
+        else if (p === "none")          out.none    = true
+    }
+    return out
+}
+
+function webCardFromMarker(name: string, rawLabel: string, done: boolean, err = false): string | null {
+    if (name !== "search_web" && name !== "fetch_page") return null
+    const p = parseWebLabel(rawLabel)
+    return name === "search_web"
+        ? webSearchCardHtml(p.head, done, p.down, p.none, err)
+        : browsingCardHtml(p.head, p.title, done, err)
+}
+
 
 function diffBadges(added = 0, removed = 0): string {
     const a = added   > 0 ? `<span class="diff-badge diff-badge--add" data-target="${added}" data-dir="up" data-static="1">+<span class="badge-digits">${added}</span></span>`   : ""
@@ -268,6 +346,14 @@ export function renderBlockHtml(block: BlockLike): string {
             .map(h => `<div class="block-seg">${h}</div>`).join("")
         return `<details class="subthread" open><summary class="subthread-head">${escHtml(block.label ?? "")}</summary><div class="subthread-body">${inner}</div></details>`
     }
+
+    // Web cards: same builders as the streaming marker path above, so a card cannot change shape the
+    // moment a reply finishes and its blocks arrive.
+    if (block.type === "webSearching")
+        return webSearchCardHtml(block.query ?? "", done, block.enginesDown ?? 0,
+                                 block.nothingRelevant ?? false, err)
+    if (block.type === "browsing")
+        return browsingCardHtml(block.url ?? "", block.title ?? "", done, err)
 
     const verbs = CARD_VERBS[block.type] ?? { active: block.type, done: block.type }
     const label = block.fileName ?? block.path ?? block.pattern ?? block.command ?? block.task ?? block.project ?? ""

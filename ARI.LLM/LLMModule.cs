@@ -14,7 +14,7 @@ namespace ARI.LLM;
 public record AppEvent(string Type, string ThreadKey, string? Text = null);
 
 /// <summary>The current processing phase of a thread, sent to watching clients via the watch SSE stream.</summary>
-public enum ThreadPhase { Idle, Prefilling, Thinking, Typing }
+public enum ThreadPhase { Idle, Prefilling, Thinking, Typing, Researching }
 
 public class LLMModule : ILLMModule, IDisposable
 {

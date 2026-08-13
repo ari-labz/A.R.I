@@ -59,6 +59,15 @@ public abstract class Agent
     private const int    AVERAGE_RESPONSE_WINDOW = 25;
     private const string ATTACHMENT_DIVIDER  = "-------------------";
 
+    // Sent as a user message when the thinking budget runs out, at the end of the sentence in progress.
+    // It must leave acting on the table: the old server-side wording demanded a finished reply, so a turn
+    // that still needed a tool answered "..." instead of calling it.
+    private const string BUDGET_STEER_MESSAGE =
+        "[Thinking budget spent] Stop reasoning now and act on what you have. If you need a tool, call it — " +
+        "tool calls do not draw on the thinking budget. If you already have what you need, write the reply " +
+        "itself; it has its own separate budget. Do not draft or rehearse the reply inside your thinking, and " +
+        "do not stall: writing to the user ends the turn, so a holding message throws away everything you found.";
+
     private readonly HttpClient httpClient = new() { Timeout = Timeout.InfiniteTimeSpan };
 
     // ── Context-building hooks ───────────────────────────────────────────────
@@ -214,28 +223,48 @@ public abstract class Agent
     private sealed class TurnClock
     {
         public double Prefill, Thinking, Typing;
-        public ThreadPhase CurrentPhase { get; private set; } = ThreadPhase.Prefilling;
         private DateTime  sent;
         private DateTime? lastDelta;
 
-        public void RequestSent() { sent = DateTime.UtcNow; lastDelta = null; CurrentPhase = ThreadPhase.Prefilling; }
+        public void RequestSent() { sent = DateTime.UtcNow; lastDelta = null; }
 
-        public void Mark(bool reasoning)
+        // Timing only. The user-facing phase indicator is NOT derived from here — it is driven by
+        // semantic events (see AdvancePhase), because a content delta can carry stripped special
+        // tokens or leaked tool-call text that never reaches the user and must not read as Typing.
+        public void Mark(bool reasoning, bool isContent)
         {
             DateTime now = DateTime.UtcNow;
             if (lastDelta is null)
             {
                 Prefill += (now - sent).TotalSeconds;
-                CurrentPhase = reasoning ? ThreadPhase.Thinking : ThreadPhase.Typing;
             }
             else
             {
                 double gap = (now - lastDelta.Value).TotalSeconds;
-                if (gap <= 2) { if (reasoning) Thinking += gap; else Typing += gap; }
-                CurrentPhase = reasoning ? ThreadPhase.Thinking : ThreadPhase.Typing;
+                if (gap <= 2) { if (reasoning) Thinking += gap; else if (isContent) Typing += gap; }
             }
             lastDelta = now;
         }
+    }
+
+    /// <summary>Advances the user-facing status indicator. The machine is strictly one-way:
+    /// Reading → Thinking → Researching → Typing. A lower-ranked phase is ignored, so a late
+    /// reasoning delta can never drag the label back from Researching, a second request after a
+    /// tool call can never return to Reading, and tool-call JSON can never look like Typing.</summary>
+    private static int PhaseRank(ThreadPhase p) => p switch
+    {
+        ThreadPhase.Prefilling  => 0,   // "Reading"
+        ThreadPhase.Thinking    => 1,
+        ThreadPhase.Researching => 2,
+        ThreadPhase.Typing      => 3,
+        _                       => -1,  // Idle — turn not started
+    };
+
+    private void AdvancePhase(Turn turn, ThreadPhase phase)
+    {
+        if (PhaseRank(phase) <= PhaseRank(turn.LastPhase)) return;
+        turn.LastPhase = phase;
+        OnPhaseChange?.Invoke(turn.Thread.Key, phase);
     }
 
     // ── Per-turn state ────────────────────────────────────────────────────────
@@ -268,7 +297,6 @@ public abstract class Agent
         // ── Tool state ───────────────────────────────────────────────────────
         internal readonly ToolTurnState                                          ToolTurn;
         internal readonly List<(int Index, string CallId, string Name, string? Path)> ToolResultSlots = new();
-        internal readonly List<string>                                           ToolResults = new();
         internal object[]? ToolSchemas;   // rebuilt each step by PrepareStep()
 
         // ── Step flags (reset each StreamStep) ───────────────────────────────
@@ -289,11 +317,26 @@ public abstract class Agent
 
         // ── Counters ─────────────────────────────────────────────────────────
         internal int ToolCallCount;
+        // Searching and reading are budgeted apart — see the research gate in ExecuteTools.
+        internal int  ProductiveSearches;    // searches that actually returned something usable
+        internal int  PagesRead;             // fetch_page calls this turn
+        internal bool SearchSoftGateFired;
+        internal bool SearchBlocked;         // search_web withdrawn from the schema
+        internal bool ReadBlocked;           // fetch_page withdrawn from the schema
         internal int ParseFailures;
         internal int ConsecutiveFallbacks;
         internal int TextToolLeakRetries;
         internal int ContinueNudges;
         internal int DegradeEvents;
+
+        // Pending think-redirect: buffered until a sentence boundary is observed.
+        internal string? PendingThinkRedirect;
+
+        // ── Thinking budget (enforced here, not by llama-server) ─────────────
+        // Reasoning chars for the CURRENT step only — the budget is per generation, not per turn.
+        internal int  StepReasoningChars;
+        internal bool BudgetSteerQueued;   // soft limit hit; wrap-up steer waiting on a sentence boundary
+        internal bool BudgetHardCut;       // 1.5x the budget spent — steer forced without waiting
 
         // ── Output builders ──────────────────────────────────────────────────
         internal readonly StringBuilder ResponseBuilder  = new();
@@ -505,7 +548,7 @@ public abstract class Agent
             if (OnResponsePipeline is not null) responseText = OnResponsePipeline(thread, responseText);
 
             FinalizeResponse(thread, prompt, opts, responseText, ariResponse, turn.ReasoningBuilder,
-                turn.ToolResults, turn.Clock, turn.Stopwatch.Elapsed.TotalSeconds,
+                turn.Clock, turn.Stopwatch.Elapsed.TotalSeconds,
                 turn.CompletionTokens, turn.PromptTokens, turn.PrefilledTokens, turn.PrefillTokPerSec,
                 turn.MaxTokens, turn.EstimatedTextTokens, turn.HadImages, trace, turn.ResponseBuilder,
                 turn.ToolCallCount);
@@ -541,7 +584,14 @@ public abstract class Agent
         if (!toolsExhausted && thread.tools.Count > 0)
         {
             List<object> schemas = new();
-            foreach (var tool in thread.tools.Values) schemas.Add(tool.Schema);
+            foreach (var (name, tool) in thread.tools)
+            {
+                // Hard research gate: withdraw whichever half of the web tools is spent, so reading
+                // survives a search block and she can still finish the job from what she already found.
+                if (turn.SearchBlocked && name == "search_web") continue;
+                if (turn.ReadBlocked   && name == "fetch_page") continue;
+                schemas.Add(tool.Schema);
+            }
             turn.ToolSchemas = schemas.ToArray();
         }
 
@@ -598,11 +648,7 @@ public abstract class Agent
         };
 
         turn.Clock.RequestSent();
-        if (ThreadPhase.Prefilling != turn.LastPhase)
-        {
-            turn.LastPhase = ThreadPhase.Prefilling;
-            OnPhaseChange?.Invoke(turn.Thread.Key, ThreadPhase.Prefilling);
-        }
+        AdvancePhase(turn, ThreadPhase.Prefilling);  // "Reading" — only lands on the turn's first request
         Server?.BeginRequest(Name);
         HttpResponseMessage response;
         try   { response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, turn.Ct); }
@@ -643,6 +689,10 @@ public abstract class Agent
         turn.ThinkingRedirect = false;
         turn.TextToolLeak     = false;
         turn.ResponseContentStarted = false;
+        // The thinking budget is per generation, so its counters reset with each new request.
+        turn.StepReasoningChars     = 0;
+        turn.BudgetSteerQueued      = false;
+        turn.BudgetHardCut          = false;
         turn.ReasoningStartLen      = turn.ReasoningBuilder.Length;
         turn.LiveReasoning          = null;
         turn.LiveText               = null;
@@ -684,14 +734,12 @@ public abstract class Agent
         // that each delta ticks the thinking or typing clock (stalls tick neither — see TurnClock).
         bool reasoningDelta = delta.TryGetProperty("reasoning_content", out JsonElement rcProbe)
             && rcProbe.ValueKind == JsonValueKind.String && (rcProbe.GetString()?.Length ?? 0) > 0;
-        turn.Clock.Mark(reasoningDelta);
+        bool contentDelta = delta.TryGetProperty("content", out JsonElement cpProbe)
+            && cpProbe.ValueKind == JsonValueKind.String && (cpProbe.GetString()?.Length ?? 0) > 0;
+        turn.Clock.Mark(reasoningDelta, contentDelta);
 
-        ThreadPhase phase = turn.Clock.CurrentPhase;
-        if (phase != turn.LastPhase)
-        {
-            turn.LastPhase = phase;
-            OnPhaseChange?.Invoke(turn.Thread.Key, phase);
-        }
+        // Any reasoning token means she is Thinking, immediately.
+        if (reasoningDelta) AdvancePhase(turn, ThreadPhase.Thinking);
 
         if (!SuppressLog())
         {
@@ -729,20 +777,62 @@ public abstract class Agent
                 else        Shared.Logger.LogInformation("[{Agent}] ({Thread}) reasoning engaged (thinking on).", Name, thread.Key);
                 turn.WasThinking = true;
             }
-            if (!string.IsNullOrEmpty(thinkDelta)) { turn.ReasoningChars += thinkDelta.Length; turn.ReasoningBuilder.Append(thinkDelta); }
+            if (!string.IsNullOrEmpty(thinkDelta))
+            {
+                turn.ReasoningChars     += thinkDelta.Length;
+                turn.StepReasoningChars += thinkDelta.Length;
+                turn.ReasoningBuilder.Append(thinkDelta);
+            }
             if (turn.LiveReasoning is null) { turn.LiveReasoning = new TraceStep { Kind = "reasoning", Text = "" }; turn.Trace.Add(turn.LiveReasoning); }
             turn.LiveReasoning.Text = turn.ReasoningBuilder.ToString(turn.ReasoningStartLen, turn.ReasoningBuilder.Length - turn.ReasoningStartLen);
             if (!turn.ChatHidden) thread.RaiseStreaming(thread.streamedText);
 
             if (!string.IsNullOrEmpty(thinkDelta))
             {
-                string? agentThinkRedirect = OnThinkingDelta(thread, thinkDelta);
-                string? finalThinkRedirect = OnThinkingDeltaPipeline?.Invoke(thread, agentThinkRedirect ?? thinkDelta) ?? agentThinkRedirect;
-                if (finalThinkRedirect is not null)
+                // Thinking budget. The soft limit queues a wrap-up steer that waits for the end of the
+                // sentence she is mid-way through, so she is never cut off mid-thought. Only if she keeps
+                // going and burns half the budget again on top does the steer get forced through.
+                if (turn.ThinkBudget > 0 && !turn.BudgetHardCut)
                 {
-                    turn.Messages.Add(new { role = "assistant", content = "" });
-                    turn.Messages.Add(new { role = "user", content = finalThinkRedirect });
-                    turn.ThinkingRedirect = true;
+                    int thoughtTokens = turn.StepReasoningChars / CHARS_PER_TOKEN;
+                    if (!turn.BudgetSteerQueued && thoughtTokens >= turn.ThinkBudget)
+                    {
+                        turn.BudgetSteerQueued    = true;
+                        turn.PendingThinkRedirect = BUDGET_STEER_MESSAGE;
+                        Shared.Logger.LogInformation("[{Agent}] ({Thread}) thinking budget reached ({N}/{B} tokens) — wrapping up at the end of this sentence.",
+                            Name, thread.Key, thoughtTokens, turn.ThinkBudget);
+                    }
+                    else if (turn.BudgetSteerQueued && thoughtTokens >= turn.ThinkBudget + turn.ThinkBudget / 2)
+                    {
+                        turn.BudgetHardCut = true;
+                        Shared.Logger.LogWarning("[{Agent}] ({Thread}) thinking budget overrun ({N} tokens, limit {B}) — no sentence boundary reached, forcing the wrap-up.",
+                            Name, thread.Key, thoughtTokens, turn.ThinkBudget);
+                        turn.Messages.Add(new { role = "assistant", content = "" });
+                        turn.Messages.Add(new { role = "user", content = turn.PendingThinkRedirect ?? BUDGET_STEER_MESSAGE });
+                        turn.PendingThinkRedirect = null;
+                        turn.ThinkingRedirect     = true;
+                        return;
+                    }
+                }
+
+                // Check for a pending redirect: fire it once we hit a sentence boundary.
+                if (turn.PendingThinkRedirect is not null)
+                {
+                    bool atBoundary = thinkDelta.Contains('.') || thinkDelta.Contains('!') || thinkDelta.Contains('?') || thinkDelta.Contains('\n');
+                    if (atBoundary)
+                    {
+                        turn.Messages.Add(new { role = "assistant", content = "" });
+                        turn.Messages.Add(new { role = "user", content = turn.PendingThinkRedirect });
+                        turn.PendingThinkRedirect = null;
+                        turn.ThinkingRedirect = true;
+                    }
+                }
+                else
+                {
+                    string? agentThinkRedirect = OnThinkingDelta(thread, thinkDelta);
+                    string? finalThinkRedirect = OnThinkingDeltaPipeline?.Invoke(thread, agentThinkRedirect ?? thinkDelta) ?? agentThinkRedirect;
+                    if (finalThinkRedirect is not null)
+                        turn.PendingThinkRedirect = finalThinkRedirect;  // buffer until sentence boundary
                 }
             }
             return;
@@ -767,6 +857,9 @@ public abstract class Agent
                 if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
             }
 
+            // Emitting a tool call is thinking, not typing — the JSON never reaches the user.
+            AdvancePhase(turn, ThreadPhase.Thinking);
+
             foreach (JsonElement tc in toolCallsEl.EnumerateArray())
             {
                 int index = tc.GetProperty("index").GetInt32();
@@ -778,6 +871,22 @@ public abstract class Agent
                         ? nameEl.GetString() ?? string.Empty : string.Empty;
                     turn.PendingCalls[index] = (id, name, new StringBuilder());
                     turn.ConsecutiveFallbacks = 0;
+                }
+
+                // The tool name can arrive on the id chunk or on a later function-name chunk
+                // (server-dependent), so resolve it from whichever we have and re-check every time.
+                if (turn.PendingCalls.TryGetValue(index, out (string Id, string Name, StringBuilder Args) named))
+                {
+                    if (string.IsNullOrEmpty(named.Name)
+                        && tc.TryGetProperty("function", out JsonElement lateFn)
+                        && lateFn.TryGetProperty("name", out JsonElement lateName))
+                    {
+                        string resolved = lateName.GetString() ?? string.Empty;
+                        if (resolved.Length > 0) turn.PendingCalls[index] = (named.Id, resolved, named.Args);
+                        named = turn.PendingCalls[index];
+                    }
+                    if (named.Name is "search_web" or "fetch_page")
+                        AdvancePhase(turn, ThreadPhase.Researching);
                 }
 
                 if (tc.TryGetProperty("function", out JsonElement funcEl) &&
@@ -901,6 +1010,8 @@ public abstract class Agent
                 : (accumulated.StartsWith(AriPrefix, StringComparison.OrdinalIgnoreCase) ? accumulated[AriPrefix.Length..] : accumulated);
             if (turn.LiveText is null && visible.Trim().Length > 0) { turn.LiveText = new TraceStep { Kind = "text", Text = "" }; turn.Trace.Add(turn.LiveText); }
             if (turn.LiveText is not null) turn.LiveText.Text = visible;
+            // Typing fires only here: the moment real response text is actually sent to the user.
+            if (visible.Trim().Length > 0) AdvancePhase(turn, ThreadPhase.Typing);
             if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString() + visible);
             if (turn.OnTextDelta is not null && visible.Length > 0)
                 await turn.OnTextDelta(turn.TextOnlyBuilder.ToString() + visible);
@@ -1009,6 +1120,15 @@ public abstract class Agent
         {
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) streaming delta hook: redirected to continue thinking.", Name, thread.Key);
             return;
+        }
+
+        // Flush a buffered think-redirect that never hit a sentence boundary (e.g. stream ended mid-thought).
+        if (turn.PendingThinkRedirect is not null)
+        {
+            turn.Messages.Add(new { role = "assistant", content = "" });
+            turn.Messages.Add(new { role = "user", content = turn.PendingThinkRedirect });
+            turn.PendingThinkRedirect = null;
+            turn.ThinkingRedirect = true;
         }
 
         if (turn.ThinkingRedirect)
@@ -1215,13 +1335,60 @@ public abstract class Agent
                     turn.ContentBuilder.Append(chunk);
                     if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
                 };
+
+                bool isWebTool = call.Name is "search_web" or "fetch_page";
+                if (isWebTool) AdvancePhase(turn, ThreadPhase.Researching);
                 try
                 {
                     result = prelaunched.TryGetValue(callIndex, out Task<string>? pre)
                         ? await pre
                         : await tool.Execute(argsJson);
                 }
-                finally { thread.ToolDisplaySink = null; }
+                finally
+                {
+                    thread.ToolDisplaySink = null;
+                }
+
+                // Collect web sources for DTI display.
+                if (isWebTool)
+                {
+                    string? sourceUrl = null;
+                    string? sourceContent = null;
+                    if (call.Name == "fetch_page")
+                    {
+                        try
+                        {
+                            using JsonDocument fetchArgsDoc = JsonDocument.Parse(argsJson.Length > 0 ? argsJson : "{}");
+                            sourceUrl = fetchArgsDoc.RootElement.TryGetProperty("url", out JsonElement urlProp) ? urlProp.GetString() : null;
+                            sourceContent = result;
+                        }
+                        catch (Exception ex) { Shared.Logger.LogDebug("[{Agent}] Could not parse fetch_page args for web source: {Error}", Name, ex.Message); }
+                    }
+                    else if (call.Name == "search_web")
+                    {
+                        try
+                        {
+                            using JsonDocument searchArgsDoc = JsonDocument.Parse(argsJson.Length > 0 ? argsJson : "{}");
+                            string? searchQuery = searchArgsDoc.RootElement.TryGetProperty("query", out JsonElement queryProp) ? queryProp.GetString() : null;
+                            if (searchQuery is not null) sourceUrl = $"search: {searchQuery}";
+                        }
+                        catch (Exception ex) { Shared.Logger.LogDebug("[{Agent}] Could not parse search_web args for web source: {Error}", Name, ex.Message); }
+
+                        // Only count searches that returned something — empty or irrelevant results don't burn the budget.
+                        if (!result.StartsWith(SearchWeb.NoRelevantPrefix, StringComparison.Ordinal)
+                            && !result.StartsWith("Search unavailable", StringComparison.Ordinal)
+                            && !result.StartsWith("No results", StringComparison.Ordinal))
+                            turn.ProductiveSearches++;
+                        else
+                            Shared.Logger.LogInformation("[{Agent}] ({Thread}) search returned nothing usable — not counted against the search budget.", Name, thread.Key);
+                    }
+                    if (sourceUrl is not null)
+                    {
+                        turn.AriResponse.WebSources ??= new();
+                        if (!turn.AriResponse.WebSources.Any(s => s.Url == sourceUrl))
+                            turn.AriResponse.WebSources.Add(new WebSource { Url = sourceUrl, Content = sourceContent });
+                    }
+                }
 
                 result = OnToolResult(thread, turn.ToolTurn, call.Name, argsJson, result);
                 if (OnToolResultPipeline is not null)
@@ -1252,7 +1419,7 @@ public abstract class Agent
                     }
                     if (doneCard is not null)
                     {
-                        doneCard.Flip();
+                        doneCard.Flip(result);
                         string done = doneCard.Render();
                         if (!string.Equals(done, activeMarker, StringComparison.Ordinal))
                         {
@@ -1313,7 +1480,6 @@ public abstract class Agent
                 if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
             }
 
-            turn.ToolResults.Add(result);
             turn.Trace.Add(new TraceStep { Kind = "tool_result", Name = call.Name, Text = result });
             SessionRecorder.ToolResult(turn.Rec, turn.RecStep, call.Id, call.Name, result);
             // Guard nags and errors don't count as progress — only real content/mutations do.
@@ -1341,6 +1507,42 @@ public abstract class Agent
 
         turn.ContentBuilder.Append("<!--ari-batch-end-->");
         if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
+
+        // ── Research confidence gate ─────────────────────────────────────────────
+        // Searching is kept tight because that is what gets rate limited and what she spirals on.
+        // Reading is left generous because that is how answers actually get built.
+        int readsThisBatch = turn.PendingCalls.Values.Count(c => c.Name == "fetch_page");
+        turn.PagesRead += readsThisBatch;
+
+        if (!turn.SearchBlocked && turn.ProductiveSearches >= ResearchGate.SEARCH_HARD_LIMIT)
+        {
+            turn.SearchBlocked = true;
+            turn.Messages.Add(new { role = "user", content =
+                $"[Research gate — {turn.ProductiveSearches} searches done] Searching is now unavailable for the rest of this turn. " +
+                "You may still read pages you have already found. Answer from what you have gathered; say plainly which parts " +
+                "you could not confirm rather than apologising or padding. Writing to the user ends the turn, so give the " +
+                "whole answer now — do not stall for time or promise to finish later, because there is no later." });
+            Shared.Logger.LogInformation("[{Agent}] ({Thread}) search hard gate fired ({N} productive searches) — search_web withdrawn.",
+                Name, thread.Key, turn.ProductiveSearches);
+        }
+        else if (!turn.SearchBlocked && turn.ProductiveSearches >= ResearchGate.SEARCH_SOFT_LIMIT && !turn.SearchSoftGateFired)
+        {
+            turn.SearchSoftGateFired = true;
+            turn.Messages.Add(new { role = "user", content =
+                $"[Research gate — {turn.ProductiveSearches} searches done] Stop searching and start reading. If a result looks " +
+                "right, open it with fetch_page rather than searching again — you have plenty of reads left and only one search. " +
+                "If you already have enough to answer, answer now." });
+            Shared.Logger.LogInformation("[{Agent}] ({Thread}) search soft gate fired ({N} productive searches).", Name, thread.Key, turn.ProductiveSearches);
+        }
+
+        if (!turn.ReadBlocked && turn.PagesRead >= ResearchGate.READ_LIMIT)
+        {
+            turn.ReadBlocked = true;
+            turn.Messages.Add(new { role = "user", content =
+                $"[Research gate — {turn.PagesRead} pages read] You have read enough. Write your full answer from what you have — " +
+                "writing to the user ends the turn, so a holding message loses everything you just gathered." });
+            Shared.Logger.LogInformation("[{Agent}] ({Thread}) read gate fired ({N} pages) — fetch_page withdrawn.", Name, thread.Key, turn.PagesRead);
+        }
 
         if (thread.EndTurnNow)
         {
@@ -1692,7 +1894,7 @@ public abstract class Agent
 
     private void FinalizeResponse(Thread thread, string prompt, PromptOptions opts,
         string responseText, Response ariResponse, StringBuilder reasoningBuilder,
-        List<string> toolResults, TurnClock clock, double elapsed,
+        TurnClock clock, double elapsed,
         int completionTokens, int promptTokens, int prefilledTokens, double prefillTokPerSec,
         int maxTokens, int estimatedTextTokens, bool hadImages,
         List<TraceStep> trace, StringBuilder responseBuilder, int toolCallCount = 0)
@@ -1733,10 +1935,11 @@ public abstract class Agent
                 Name, thread.Key, ExtractLogText(responseText));
         }
 
-        List<string> noteParts = new();
-        if (!string.IsNullOrEmpty(opts.RecallNotes)) noteParts.Add(opts.RecallNotes.Trim());
-        if (toolResults.Count > 0)                   noteParts.Add(string.Join("\n\n", toolResults).TrimEnd());
-        string? combinedNotes = noteParts.Count > 0 ? string.Join("\n\n", noteParts) : null;
+        // Notes Read holds the memory recall block and nothing else. Tool output used to be appended here,
+        // which buried a single real note under 35KB of fetched page text — and because search results are
+        // numbered "[1]", "[2]", the client's note parser (which splits on a line starting "[") turned them
+        // into phantom notes called 1, 2, 3. Pages she read have their own Sources section.
+        string? combinedNotes = string.IsNullOrWhiteSpace(opts.RecallNotes) ? null : opts.RecallNotes.Trim();
 
         thread.liveCallInfo = null;
 
