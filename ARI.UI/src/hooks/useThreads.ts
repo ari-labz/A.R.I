@@ -60,6 +60,13 @@ export interface ContentBlock {
     added?:     number
     removed?:   number
     patch?:     string
+    // web cards: search_web carries its query and what the relevance gate kept; fetch_page its page
+    query?:           string
+    results?:         number
+    enginesDown?:     number
+    nothingRelevant?: boolean
+    url?:             string
+    title?:           string
     // subthread anchor: a labelled, inline child thread whose blocks render nested here
     label?:     string
     blocks?:    ContentBlock[]

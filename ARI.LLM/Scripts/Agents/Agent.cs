@@ -1424,7 +1424,7 @@ public abstract class Agent
                     }
                     if (doneCard is not null)
                     {
-                        doneCard.Flip();
+                        doneCard.Flip(result);
                         string done = doneCard.Render();
                         if (!string.Equals(done, activeMarker, StringComparison.Ordinal))
                         {

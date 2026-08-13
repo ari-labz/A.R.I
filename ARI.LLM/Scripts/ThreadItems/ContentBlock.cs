@@ -20,6 +20,8 @@ namespace ARI.LLM;
 [JsonDerivedType(typeof(Moving),    "moving")]
 [JsonDerivedType(typeof(Listing),   "listing")]
 [JsonDerivedType(typeof(Searching), "searching")]
+[JsonDerivedType(typeof(WebSearching), "webSearching")]
+[JsonDerivedType(typeof(Browsing),     "browsing")]
 [JsonDerivedType(typeof(Finding),   "finding")]
 [JsonDerivedType(typeof(Running),    "running")]
 [JsonDerivedType(typeof(Delegating), "delegating")]
@@ -179,6 +181,8 @@ public abstract class ContentBlock
         "preview_file"   => new Previewing(),
         "list_directory" => new Listing(),
         "search_files"   => new Searching(),
+        "search_web"     => new WebSearching(),
+        "fetch_page"     => new Browsing(),
         "edit_file"      => new Editing(),
         "write_file"     => new Writing(),
         "run_command"    => new Running(),
@@ -197,6 +201,8 @@ public abstract class ContentBlock
         "Previewing" => new Previewing(),
         "Listing"    => new Listing(),
         "Searching"  => new Searching(),
+        "Searching the web" => new WebSearching(),
+        "Browsing"   => new Browsing(),
         "Editing"    => new Editing(),
         "Writing"    => new Writing(),
         "Running"    => new Running(),
@@ -263,6 +269,11 @@ public abstract class Card : ContentBlock
     /// calling base.Flip() first.</summary>
     public virtual void Flip() { if (State != State.Error) State = State.Complete; }
 
+    /// <summary>Flips using the tool's own output, for cards whose done form reports something only the
+    /// result knows — how many results a search kept, what a fetched page turned out to be called.
+    /// Defaults to the plain flip, so cards that need nothing from the result are unaffected.</summary>
+    public virtual void Flip(string result) => Flip();
+
     protected static string Esc(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
 
     /// <summary>Escapes a label for embedding inside an HTML-comment marker ("--" would close the comment).</summary>
@@ -311,6 +322,103 @@ public sealed class Finding : Card
     protected override string ToolName => "find_files";
     protected override (string, string) Verbs => ("Finding", "Found");
     protected internal override void Fill(string label) => Pattern = label;
+}
+
+/// <summary>A web search (search_web). Shows the query as typed so a bad query is visible in the thread,
+/// and on completion reports how many results survived the relevance gate — or that none did, or that
+/// engines were rate limited. Label encodes the extras as "query|n=7|down=3|none".</summary>
+public sealed class WebSearching : Card
+{
+    public string Query           { get; set; } = "";
+    public int    Results         { get; set; } = -1;   // -1 = not known yet (still streaming)
+    public int    EnginesDown     { get; set; }
+    public bool   NothingRelevant { get; set; }
+
+    protected override string ToolName => "search_web";
+    protected override (string, string) Verbs => ("Searching the web", "Searched");
+    protected override string Label => Query;
+
+    protected internal override void Fill(string label)
+    {
+        string[] parts = label.Split('|');
+        Query = parts[0];
+        for (int i = 1; i < parts.Length; i++)
+        {
+            string p = parts[i];
+            if      (p.StartsWith("n=",    StringComparison.Ordinal) && int.TryParse(p[2..], out int n)) Results     = n;
+            else if (p.StartsWith("down=", StringComparison.Ordinal) && int.TryParse(p[5..], out int d)) EnginesDown = d;
+            else if (p == "none") NothingRelevant = true;
+        }
+    }
+
+    public override void Flip(string result)
+    {
+        NothingRelevant = result.StartsWith(SearchWeb.NoRelevantPrefix, StringComparison.Ordinal);
+
+        // Results are numbered "[1] Title" — count the markers rather than re-parsing the whole payload.
+        int count = 0;
+        foreach (string line in result.Split('\n'))
+            if (line.StartsWith('[') && line.Length > 2 && char.IsDigit(line[1])) count++;
+        Results = NothingRelevant ? 0 : count;
+
+        Match down = Regex.Match(result, @"\[Search degraded: (\d+) of");
+        if (down.Success) EnginesDown = int.Parse(down.Groups[1].Value);
+
+        base.Flip();
+    }
+
+    public override string Render()
+    {
+        if (State != State.Complete) return $"<!--ari-tool-start:{ToolName}:{MarkerEsc(Query)}-->";
+        string extra = NothingRelevant ? "|none" : $"|n={Results}";
+        if (EnginesDown > 0) extra += $"|down={EnginesDown}";
+        return $"<!--ari-tool-done:{ToolName}:{MarkerEsc(Query)}{extra}-->";
+    }
+}
+
+/// <summary>A page read (fetch_page). Streams as the bare host, then flips to the page's actual title so
+/// the thread reads "Read Qwen/Qwen3.6-35B-A3B · huggingface.co" rather than a raw URL. Label encodes
+/// the title as "url|t=Title".</summary>
+public sealed class Browsing : Card
+{
+    public string Url   { get; set; } = "";
+    public string Title { get; set; } = "";
+
+    protected override string ToolName => "fetch_page";
+    protected override (string, string) Verbs => ("Browsing", "Read");
+    protected override string Label => Url;
+
+    protected internal override void Fill(string label)
+    {
+        string[] parts = label.Split('|');
+        Url = parts[0];
+        for (int i = 1; i < parts.Length; i++)
+            if (parts[i].StartsWith("t=", StringComparison.Ordinal)) Title = parts[i][2..];
+    }
+
+    public override void Flip(string result)
+    {
+        // Jina Reader leads with "Title: …"; the Reddit summariser leads with "**title**".
+        foreach (string raw in result.Split('\n'))
+        {
+            string line = raw.Trim();
+            if (line.Length == 0) continue;
+            if (line.StartsWith("Title:", StringComparison.OrdinalIgnoreCase)) Title = line[6..].Trim();
+            else if (line.StartsWith("**", StringComparison.Ordinal) && line.EndsWith("**", StringComparison.Ordinal) && line.Length > 4)
+                Title = line[2..^2].Trim();
+            break;
+        }
+        if (Title.Length > 90) Title = Title[..90].TrimEnd() + "…";
+        Title = Title.Replace('|', '-');
+        base.Flip();
+    }
+
+    public override string Render()
+    {
+        if (State != State.Complete) return $"<!--ari-tool-start:{ToolName}:{MarkerEsc(Url)}-->";
+        string extra = Title.Length > 0 ? $"|t={MarkerEsc(Title)}" : "";
+        return $"<!--ari-tool-done:{ToolName}:{MarkerEsc(Url)}{extra}-->";
+    }
 }
 
 public sealed class Running : Card
