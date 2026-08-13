@@ -447,11 +447,17 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
         else if (threadStatus === "prefilling") streamPhase = "reading"
         else if (threadStatus === "researching") streamPhase = "researching"
         else {
-            // Heuristic fallback when no server status available.
-            const hasThinkingBlock = item.blocks?.some(b => b.type === "thinking" && b.state === 0)
-            const hasTextContent   = !!(item.content?.trim())
-            if (hasTextContent)        streamPhase = "typing"
-            else if (hasThinkingBlock) streamPhase = "thinking"
+            // Heuristic fallback when no server status has arrived yet. Tool markers are NOT prose: a turn
+            // that has only called tools has written nothing to the user, and counting markers as text is
+            // what used to show "Typing" through an entire run of searches.
+            const bare = (item.content ?? "").replace(/<!--ari-[^>]*?-->/g, "").trim()
+            const cards = item.blocks ?? []
+            const searching = cards.some(b => (b.type === "webSearching" || b.type === "browsing"))
+                || /<!--ari-tool-(start|done):(search_web|fetch_page):/.test(item.content ?? "")
+            const thinkingNow = cards.some(b => b.type === "thinking" && b.state === 0)
+            if (bare.length > 0)   streamPhase = "typing"
+            else if (searching)    streamPhase = "researching"
+            else if (thinkingNow || cards.length > 0) streamPhase = "thinking"
         }
     }
     return (
