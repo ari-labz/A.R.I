@@ -7,3 +7,6 @@
 [submodule "VoiceModules/KokoroRVC"]
 	path = VoiceModules/KokoroRVC
 	url = https://github.com/ari-labz/KokoroRVC.git
+[submodule "Submodules/SmartReader"]
+	path = Submodules/SmartReader
+	url = https://github.com/Strumenta/SmartReader.git
