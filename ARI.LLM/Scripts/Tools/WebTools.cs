@@ -163,7 +163,7 @@ internal sealed class FetchPage : Tool
                 return $"Failed to fetch Reddit page (HTTP {(int)resp.StatusCode}).";
 
             string html = await resp.Content.ReadAsStringAsync();
-            string text = StripHtml(html);
+            string text = RedditSummariser.Parse(html);
 
             const int maxChars = 12000;
             if (text.Length > maxChars)
@@ -219,15 +219,4 @@ internal sealed class FetchPage : Tool
         return url;
     }
 
-    // Minimal HTML stripper — pulls readable text out of old.reddit's plain HTML.
-    private static string StripHtml(string html)
-    {
-        // Remove script/style blocks entirely.
-        html = System.Text.RegularExpressions.Regex.Replace(html, @"<(script|style)[^>]*>.*?</(script|style)>", "", System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        // Strip remaining tags.
-        html = System.Text.RegularExpressions.Regex.Replace(html, @"<[^>]+>", " ");
-        // Collapse whitespace.
-        html = System.Text.RegularExpressions.Regex.Replace(html, @"\s{2,}", "\n");
-        return System.Net.WebUtility.HtmlDecode(html);
-    }
 }
