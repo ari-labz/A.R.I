@@ -193,10 +193,6 @@ public static class Dependency
         return (p.ExitCode, output, error);
     }
 
-    /// <summary>
-    /// Writes a minimal settings.yml that enables JSON output and sensible engine defaults.
-    /// Only written once — if the file already exists it is left alone so the user can customise it.
-    /// </summary>
     private const string PLACEHOLDER_SECRET = "ari-searxng-change-me";
 
     private static void WriteSearXngSettings(string dir)

@@ -6,9 +6,6 @@ using System.Text.Json;
 
 namespace ARI.LLM;
 
-/// <summary>
-/// Searches the web via the local SearXNG instance and returns ranked results.
-/// </summary>
 internal sealed class SearchWeb : Tool
 {
     private static readonly HttpClient Http = new(new HttpClientHandler
@@ -16,9 +13,7 @@ internal sealed class SearchWeb : Tool
         AutomaticDecompression = DecompressionMethods.All,
     }) { Timeout = TimeSpan.FromSeconds(15) };
 
-    // Results whose text overlaps the query in no way at all are dropped, and a search that keeps
-    // nothing says so in these words. Agent matches on this prefix so a search that told the model
-    // nothing does not burn its search budget.
+    // Agent matches on this prefix to detect a search that returned nothing useful and not charge the budget.
     internal const string NoRelevantPrefix = "No relevant results for";
 
     internal override string Name => "search_web";
@@ -106,10 +101,7 @@ internal sealed class SearchWeb : Tool
 
         string engineHealth = ReportEngineHealth(responseDoc.RootElement, results);
 
-        // Relevance gate. When an upstream engine has no match for a query it does not return an empty
-        // set — it serves a page of unrelated filler, which SearXNG scrapes as if it were results (a
-        // search for a real model returned Hotmail help and Swedish salary listings). Anything sharing
-        // no word at all with the query is that filler, so it is dropped rather than shown as evidence.
+        // Upstream engines return unrelated filler (not empty sets) when they have no match — drop anything with no query overlap.
         List<string> queryTerms = DistinctiveTerms(query);
         List<(string Title, string Url, string Snippet)> kept = new List<(string Title, string Url, string Snippet)>();
         int dropped = 0;
@@ -156,8 +148,7 @@ internal sealed class SearchWeb : Tool
         return resultsBuilder.ToString().TrimEnd();
     }
 
-    // Words carrying no identifying power. A query is judged on what is left after these are removed,
-    // so "Qwen3.6 model" is judged on "qwen3.6" alone and a page about Qwen still counts as relevant.
+    // Words with no identifying power — removing them means "Qwen3.6 model" is judged on "qwen3.6" alone.
     private static readonly HashSet<string> Filler = new(StringComparer.OrdinalIgnoreCase)
     {
         "a","an","and","are","about","at","best","between","by","can","community","compare","comparison",
@@ -167,7 +158,6 @@ internal sealed class SearchWeb : Tool
         "release","released","version","reddit","com","org","net","www","http","https",
     };
 
-    /// <summary>Query words that actually identify the subject — operators, punctuation and filler removed.</summary>
     private static List<string> DistinctiveTerms(string query)
     {
         List<string> terms = new List<string>();
@@ -179,9 +169,7 @@ internal sealed class SearchWeb : Tool
             if (!term.Any(char.IsLetterOrDigit)) continue;
             terms.Add(term);
 
-            // A canonical identifier is one token but several ideas ("Qwen3.6-35B-A3B"). Accept its parts
-            // too, so a page writing the same thing with spaces still counts as a match. Matching is
-            // any-of, so this only ever keeps more — it cannot cause a relevant result to be dropped.
+            // Split "Qwen3.6-35B-A3B" into parts so pages writing the parts with spaces still match.
             if (term.Contains('-') || term.Contains('/'))
                 foreach (string part in term.Split('-', '/', StringSplitOptions.RemoveEmptyEntries))
                     if (part.Length >= 2 && !Filler.Contains(part)) terms.Add(part);
@@ -189,23 +177,18 @@ internal sealed class SearchWeb : Tool
         return terms;
     }
 
-    /// <summary>True if the result mentions any identifying query term. Deliberately lenient — one hit is
-    /// enough — so only results with nothing whatsoever in common with the query are removed.</summary>
     private static bool IsRelevant(List<string> terms, string title, string url, string snippet)
     {
         string haystack = $"{title} {url} {snippet}";
         return terms.Any(term => haystack.Contains(term, StringComparison.OrdinalIgnoreCase));
     }
 
-    // Engine suspensions last hours (rate limit) to a day (CAPTCHA), and a search runs every few minutes,
-    // so logging per call would write the same line hundreds of times. Log on change, or twice an hour.
+    // Log on state change or twice an hour — not per call, since suspensions can last hours.
     private static readonly object     DegradeLock = new();
     private static          string     lastDegradeState = "";
     private static          DateTime   lastDegradeLog   = DateTime.MinValue;
     private static readonly TimeSpan   DegradeLogCooldown = TimeSpan.FromMinutes(30);
 
-    /// <summary>Reads SearXNG's unresponsive_engines, warns in the log when engines are blocked, and
-    /// returns a note for the model so a thin result set reads as a broken tool rather than an empty world.</summary>
     private static string ReportEngineHealth(JsonElement root, JsonElement results)
     {
         if (!root.TryGetProperty("unresponsive_engines", out JsonElement down) || down.ValueKind != JsonValueKind.Array)
@@ -246,10 +229,6 @@ internal sealed class SearchWeb : Tool
     }
 }
 
-/// <summary>
-/// Fetches a web page and returns its content as clean text via Jina Reader.
-/// Automatically rewrites reddit.com URLs to old.reddit.com for reliable access.
-/// </summary>
 internal sealed class FetchPage : Tool
 {
     private static readonly HttpClient Http = new(new HttpClientHandler
