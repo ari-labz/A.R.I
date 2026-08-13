@@ -144,7 +144,10 @@ public static class Dependency
                 await p.WaitForExitAsync();
                 if (p.ExitCode == 0) return candidate;
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Shared.Logger.LogDebug("[LLM] Docker candidate {Path} not usable: {Error}", candidate, ex.Message);
+            }
         }
         return null;
     }
