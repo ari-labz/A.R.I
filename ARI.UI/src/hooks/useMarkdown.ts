@@ -104,6 +104,8 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
     out = out.replace(TOOL_END_RE, "")
     // Self-contained done markers (one marker = one finished card; no start/end pairing needed).
     out = out.replace(TOOL_DONE_RE, (_, name, rawLabel) => {
+        const web = webCardFromMarker(name, rawLabel, true)
+        if (web) return web
         const verbs = TOOL_VERBS[name] ?? { active: name, done: name }
         const label = rawLabel.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">")
         return `\n\n<div class="tool-card tool-card--done"><span>${verbs.done} ${escHtml(label)}</span></div>\n\n`
@@ -124,6 +126,8 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
         return `\n\n<div class="tool-card tool-card--mode"><span>${escHtml(label)}</span></div>\n\n`
     })
     out = out.replace(TOOL_ERROR_RE, (_, name, rawFile, rawMsg) => {
+        const web = webCardFromMarker(name, rawFile, true, true)
+        if (web) return web
         const verbs = TOOL_VERBS[name] ?? { active: name, done: name }
         const file  = rawFile.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">")
         const msg   = rawMsg.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">")
@@ -132,6 +136,10 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
     out = out.replace(TOOL_START_RE, (_, name, label) => {
         const file      = label.replace(/&#45;&#45;/g, "--")
         const cleanFile = file.replace(/\|\+\d+(?:\|-\d+)?$/, "")
+        // Web cards need no start/done reconciliation: the server replaces the start marker with the done
+        // marker in place, so only one of the two is ever present. A start marker means still running.
+        if (name === "search_web" || name === "fetch_page")
+            return webCardFromMarker(name, label, false)!
         const verbs = TOOL_VERBS[name] ?? { active: name, done: name }
         const key   = `${name}:${cleanFile}`
         const occ   = occurrence.get(key) ?? 0
@@ -210,6 +218,55 @@ function hostOf(url: string): string {
     try { return new URL(url).hostname.replace(/^www\./, "") } catch { return "" }
 }
 
+// Both render paths build these: the typed-block path once a response is parsed into blocks, and the
+// raw-marker path used while a reply is still streaming. Keeping one builder per card means a streaming
+// card and a finished card cannot drift apart.
+export function webSearchCardHtml(query: string, done: boolean, results: number, down: number, none: boolean, err = false): string {
+    const q    = escHtml(query)
+    const dots = `<div class="typing-dots"><b></b><b></b><b></b></div>`
+    if (err)   return `\n\n<div class="tool-card tool-card--error tool-card--web"><span>Search failed · "${q}"</span></div>\n\n`
+    if (!done) return `\n\n<div class="tool-card tool-card--active tool-card--web"><span>Searching the web · "${q}"</span>${dots}</div>\n\n`
+    if (none)  return `\n\n<div class="tool-card tool-card--done tool-card--web tool-card--empty"><span>Searched "${q}" · nothing relevant</span></div>\n\n`
+    const cls  = down > 0 ? "tool-card--done tool-card--web tool-card--degraded" : "tool-card--done tool-card--web"
+    const tail = down > 0 ? ` · ${down} engine${down === 1 ? "" : "s"} rate limited` : ""
+    return `\n\n<div class="tool-card ${cls}"><span>Searched "${q}" · ${results} result${results === 1 ? "" : "s"}${tail}</span></div>\n\n`
+}
+
+export function browsingCardHtml(url: string, title: string, done: boolean, err = false): string {
+    const host = hostOf(url)
+    // The site's own favicon, matching the Sources block — no third-party favicon service is called.
+    const icon = host.length > 0
+        ? `<img class="tool-card-favicon" src="https://${escHtml(host)}/favicon.ico" alt="" onerror="this.style.visibility='hidden'" />`
+        : ""
+    const site = escHtml(siteLabel(url))
+    const dots = `<div class="typing-dots"><b></b><b></b><b></b></div>`
+    if (err)   return `\n\n<div class="tool-card tool-card--error tool-card--web"><span>Couldn't read ${site}</span></div>\n\n`
+    if (!done) return `\n\n<div class="tool-card tool-card--active tool-card--web">${icon}<span>Reading ${site}…</span>${dots}</div>\n\n`
+    const shown = title.trim().length > 0 ? `${escHtml(title.trim())} · ${site}` : site
+    return `\n\n<div class="tool-card tool-card--done tool-card--web">${icon}<span>Read ${shown}</span></div>\n\n`
+}
+
+// Labels carry their extras pipe-encoded: "query|n=7|down=3|none" and "url|t=Title".
+export function parseWebLabel(raw: string): { head: string; results: number; down: number; none: boolean; title: string } {
+    const parts = raw.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">").split("|")
+    const out = { head: parts[0] ?? "", results: 0, down: 0, none: false, title: "" }
+    for (const p of parts.slice(1)) {
+        if      (p.startsWith("n="))    out.results = parseInt(p.slice(2)) || 0
+        else if (p.startsWith("down=")) out.down    = parseInt(p.slice(5)) || 0
+        else if (p.startsWith("t="))    out.title   = p.slice(2)
+        else if (p === "none")          out.none    = true
+    }
+    return out
+}
+
+function webCardFromMarker(name: string, rawLabel: string, done: boolean, err = false): string | null {
+    if (name !== "search_web" && name !== "fetch_page") return null
+    const p = parseWebLabel(rawLabel)
+    return name === "search_web"
+        ? webSearchCardHtml(p.head, done, p.results, p.down, p.none, err)
+        : browsingCardHtml(p.head, p.title, done, err)
+}
+
 // Reddit reads as its subreddit — "r/LocalLLM" says far more than "reddit.com" about what she opened.
 function siteLabel(url: string): string {
     const host = hostOf(url)
@@ -285,39 +342,13 @@ export function renderBlockHtml(block: BlockLike): string {
         return `<details class="subthread" open><summary class="subthread-head">${escHtml(block.label ?? "")}</summary><div class="subthread-body">${inner}</div></details>`
     }
 
-    // Web search: the query is shown verbatim so a query that went wrong is visible in the thread rather
-    // than only in the logs, and the done state reports what actually survived the relevance gate.
-    if (block.type === "webSearching") {
-        const q = escHtml(block.query ?? "")
-        if (!done && !err)
-            return `\n\n<div class="tool-card tool-card--active tool-card--web"><span>Searching the web · "${q}"</span><div class="typing-dots"><b></b><b></b><b></b></div></div>\n\n`
-        if (err)
-            return `\n\n<div class="tool-card tool-card--error tool-card--web"><span>Search failed · "${q}"</span></div>\n\n`
-        if (block.nothingRelevant)
-            return `\n\n<div class="tool-card tool-card--done tool-card--web tool-card--empty"><span>Searched "${q}" · nothing relevant</span></div>\n\n`
-        const n    = block.results ?? 0
-        const down = block.enginesDown ?? 0
-        const cls  = down > 0 ? "tool-card--done tool-card--web tool-card--degraded" : "tool-card--done tool-card--web"
-        const tail = down > 0 ? ` · ${down} engine${down === 1 ? "" : "s"} rate limited` : ""
-        return `\n\n<div class="tool-card ${cls}"><span>Searched "${q}" · ${n} result${n === 1 ? "" : "s"}${tail}</span></div>\n\n`
-    }
-
-    // Page read: favicon plus the page's own title, falling back to the host while it is still loading.
-    if (block.type === "browsing") {
-        const url  = block.url ?? ""
-        const host = hostOf(url)
-        // The site's own favicon, matching the Sources block — no third-party favicon service is called.
-        const icon = host.length > 0
-            ? `<img class="tool-card-favicon" src="https://${escHtml(host)}/favicon.ico" alt="" onerror="this.style.visibility='hidden'" />`
-            : ""
-        if (!done && !err)
-            return `\n\n<div class="tool-card tool-card--active tool-card--web">${icon}<span>Reading ${escHtml(siteLabel(url))}…</span><div class="typing-dots"><b></b><b></b><b></b></div></div>\n\n`
-        if (err)
-            return `\n\n<div class="tool-card tool-card--error tool-card--web"><span>Couldn't read ${escHtml(siteLabel(url))}</span></div>\n\n`
-        const title = (block.title ?? "").trim()
-        const shown = title.length > 0 ? `${escHtml(title)} · ${escHtml(siteLabel(url))}` : escHtml(siteLabel(url))
-        return `\n\n<div class="tool-card tool-card--done tool-card--web">${icon}<span>Read ${shown}</span></div>\n\n`
-    }
+    // Web cards: same builders as the streaming marker path above, so a card cannot change shape the
+    // moment a reply finishes and its blocks arrive.
+    if (block.type === "webSearching")
+        return webSearchCardHtml(block.query ?? "", done, block.results ?? 0, block.enginesDown ?? 0,
+                                 block.nothingRelevant ?? false, err)
+    if (block.type === "browsing")
+        return browsingCardHtml(block.url ?? "", block.title ?? "", done, err)
 
     const verbs = CARD_VERBS[block.type] ?? { active: block.type, done: block.type }
     const label = block.fileName ?? block.path ?? block.pattern ?? block.command ?? block.task ?? block.project ?? ""
