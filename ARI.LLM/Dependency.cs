@@ -11,74 +11,77 @@ namespace ARI.LLM;
 /// </summary>
 public static class Dependency
 {
-    private const string SearXngImage     = "searxng/searxng";
-    private const string SearXngContainer = "ari-searxng";
-    internal const int   SearXngPort      = 8085;
+    private const string SEARXNG_IMAGE     = "searxng/searxng";
+    private const string SEARXNG_CONTAINER = "ari-searxng";
+    internal const int   SEARXNG_PORT      = 8085;
+
+    // null = check still in progress, "" = ready, non-empty = unavailable with reason
+    internal static string? SearXngStatus { get; private set; } = null;
 
     // ── SearXNG ───────────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Ensures SearXNG is running in Docker. Pulls the image and starts the container if needed.
-    /// Logs a warning and returns cleanly if Docker isn't available — web tools will still register
-    /// but will return a clear error when called.
-    /// </summary>
-    public static async Task CheckSearXng()
+    public static void StartSearXng() => _ = CheckSearXngAsync();
+
+    private static async Task CheckSearXngAsync()
     {
         string? docker = await FindDocker();
         if (docker is null)
         {
-            Shared.Logger.LogWarning(
-                "[LLM] Docker not found — SearXNG will not be available. " +
-                "Install Docker Desktop to enable web search: https://www.docker.com/products/docker-desktop/");
+            string reason = "Docker is not installed. Install Docker Desktop to enable web search: https://www.docker.com/products/docker-desktop/";
+            Shared.Logger.LogWarning("[LLM] Docker not found — SearXNG will not be available. {Reason}", reason);
+            SearXngStatus = reason;
             return;
         }
 
-        // Ensure the Docker daemon is up — launch Docker Desktop if not.
         if (!await IsDaemonRunning(docker))
         {
             Shared.Logger.LogInformation("[LLM] Docker daemon not running — starting Docker Desktop...");
             bool started = await StartDockerDaemon();
             if (!started)
             {
-                Shared.Logger.LogWarning("[LLM] Docker daemon did not start in time — SearXNG will not be available.");
+                string reason = OperatingSystem.IsLinux()
+                    ? "Docker daemon is not running. Start it with: sudo systemctl start docker  Then restart ARI."
+                    : "Docker daemon did not start in time. Please start Docker Desktop and restart ARI.";
+                Shared.Logger.LogWarning("[LLM] Docker daemon did not start — SearXNG will not be available.");
+                SearXngStatus = reason;
                 return;
             }
             Shared.Logger.LogInformation("[LLM] Docker daemon ready.");
         }
 
-        // Already running?
         if (await IsContainerRunning(docker))
         {
-            Shared.Logger.LogInformation("[LLM] SearXNG already running on port {Port}.", SearXngPort);
+            Shared.Logger.LogInformation("[LLM] SearXNG already running on port {Port}.", SEARXNG_PORT);
+            SearXngStatus = "";
             return;
         }
 
-        // Container exists but is stopped — start it.
         if (await ContainerExists(docker))
         {
             Shared.Logger.LogInformation("[LLM] Starting existing SearXNG container...");
-            await RunDocker(docker, $"start {SearXngContainer}");
-            Shared.Logger.LogInformation("[LLM] SearXNG started on port {Port}.", SearXngPort);
+            await RunDocker(docker, $"start {SEARXNG_CONTAINER}");
+            Shared.Logger.LogInformation("[LLM] SearXNG started on port {Port}.", SEARXNG_PORT);
+            SearXngStatus = "";
             return;
         }
 
-        // First run — pull image and create container.
         Shared.Logger.LogInformation("[LLM] Pulling SearXNG image (one-time download)...");
-        await RunDocker(docker, $"pull {SearXngImage}");
+        await RunDocker(docker, $"pull {SEARXNG_IMAGE}");
 
         string settingsDir = Path.Combine(Paths.PersistentData, "searxng");
         Directory.CreateDirectory(settingsDir);
         WriteSearXngSettings(settingsDir);
 
-        Shared.Logger.LogInformation("[LLM] Creating SearXNG container on port {Port}...", SearXngPort);
+        Shared.Logger.LogInformation("[LLM] Creating SearXNG container on port {Port}...", SEARXNG_PORT);
         await RunDocker(docker,
-            $"run -d --name {SearXngContainer} " +
-            $"-p {SearXngPort}:8080 " +
+            $"run -d --name {SEARXNG_CONTAINER} " +
+            $"-p {SEARXNG_PORT}:8080 " +
             $"-v \"{settingsDir}:/etc/searxng\" " +
             $"--restart unless-stopped " +
-            $"{SearXngImage}");
+            $"{SEARXNG_IMAGE}");
 
-        Shared.Logger.LogInformation("[LLM] SearXNG ready on port {Port}.", SearXngPort);
+        Shared.Logger.LogInformation("[LLM] SearXNG ready on port {Port}.", SEARXNG_PORT);
+        SearXngStatus = "";
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -153,14 +156,14 @@ public static class Dependency
     private static async Task<bool> IsContainerRunning(string docker)
     {
         (int code, string output, _) = await RunDockerCaptured(docker,
-            $"inspect -f {{{{.State.Running}}}} {SearXngContainer}");
+            $"inspect -f {{{{.State.Running}}}} {SEARXNG_CONTAINER}");
         return code == 0 && output.Trim() == "true";
     }
 
     private static async Task<bool> ContainerExists(string docker)
     {
         (int code, _, _) = await RunDockerCaptured(docker,
-            $"inspect --type container {SearXngContainer}");
+            $"inspect --type container {SEARXNG_CONTAINER}");
         return code == 0;
     }
 
