@@ -413,6 +413,7 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
             rows.push({ label: "Tool Calls", seconds: item.toolCallCount!, speed: null })
 
         const hasDetails = rows.length > 0 || !!(item.recallNotes || item.contextSummary)
+            || !!item.webSources?.some(s => !s.url.startsWith("search: "))
         if (hasDetails) {
             thoughtEl = (
                 <details className="thought-block">
@@ -539,14 +540,14 @@ function faviconUrl(url: string): string {
 }
 
 function WebSources({ sources }: { sources: { url: string; content?: string }[] }) {
+    // Sources are the pages she actually read. The queries she ran are already on the search cards in
+    // the reply itself, so listing them here again would pad the section with things that aren't links.
+    const pages = sources.filter(s => !s.url.startsWith("search: "))
+    if (pages.length === 0) return null
     return (
         <div className="recall-notes-section">
             <span className="recall-label">Sources</span>
-            {sources.map((s, i) => {
-                const isSearch = s.url.startsWith("search: ")
-                if (isSearch) {
-                    return <div key={i} className="web-source-row web-source-search">🔍 {s.url.slice(8)}</div>
-                }
+            {pages.map((s, i) => {
                 const label   = sourceLabel(s.url)
                 const favicon = faviconUrl(s.url)
                 return (

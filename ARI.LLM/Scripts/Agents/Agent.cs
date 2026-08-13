@@ -297,7 +297,6 @@ public abstract class Agent
         // ── Tool state ───────────────────────────────────────────────────────
         internal readonly ToolTurnState                                          ToolTurn;
         internal readonly List<(int Index, string CallId, string Name, string? Path)> ToolResultSlots = new();
-        internal readonly List<string>                                           ToolResults = new();
         internal object[]? ToolSchemas;   // rebuilt each step by PrepareStep()
 
         // ── Step flags (reset each StreamStep) ───────────────────────────────
@@ -549,7 +548,7 @@ public abstract class Agent
             if (OnResponsePipeline is not null) responseText = OnResponsePipeline(thread, responseText);
 
             FinalizeResponse(thread, prompt, opts, responseText, ariResponse, turn.ReasoningBuilder,
-                turn.ToolResults, turn.Clock, turn.Stopwatch.Elapsed.TotalSeconds,
+                turn.Clock, turn.Stopwatch.Elapsed.TotalSeconds,
                 turn.CompletionTokens, turn.PromptTokens, turn.PrefilledTokens, turn.PrefillTokPerSec,
                 turn.MaxTokens, turn.EstimatedTextTokens, turn.HadImages, trace, turn.ResponseBuilder,
                 turn.ToolCallCount);
@@ -1486,7 +1485,6 @@ public abstract class Agent
                 if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
             }
 
-            turn.ToolResults.Add(result);
             turn.Trace.Add(new TraceStep { Kind = "tool_result", Name = call.Name, Text = result });
             SessionRecorder.ToolResult(turn.Rec, turn.RecStep, call.Id, call.Name, result);
             // Guard nags and errors don't count as progress — only real content/mutations do.
@@ -1906,7 +1904,7 @@ public abstract class Agent
 
     private void FinalizeResponse(Thread thread, string prompt, PromptOptions opts,
         string responseText, Response ariResponse, StringBuilder reasoningBuilder,
-        List<string> toolResults, TurnClock clock, double elapsed,
+        TurnClock clock, double elapsed,
         int completionTokens, int promptTokens, int prefilledTokens, double prefillTokPerSec,
         int maxTokens, int estimatedTextTokens, bool hadImages,
         List<TraceStep> trace, StringBuilder responseBuilder, int toolCallCount = 0)
@@ -1947,10 +1945,11 @@ public abstract class Agent
                 Name, thread.Key, ExtractLogText(responseText));
         }
 
-        List<string> noteParts = new();
-        if (!string.IsNullOrEmpty(opts.RecallNotes)) noteParts.Add(opts.RecallNotes.Trim());
-        if (toolResults.Count > 0)                   noteParts.Add(string.Join("\n\n", toolResults).TrimEnd());
-        string? combinedNotes = noteParts.Count > 0 ? string.Join("\n\n", noteParts) : null;
+        // Notes Read holds the memory recall block and nothing else. Tool output used to be appended here,
+        // which buried a single real note under 35KB of fetched page text — and because search results are
+        // numbered "[1]", "[2]", the client's note parser (which splits on a line starting "[") turned them
+        // into phantom notes called 1, 2, 3. Pages she read have their own Sources section.
+        string? combinedNotes = string.IsNullOrWhiteSpace(opts.RecallNotes) ? null : opts.RecallNotes.Trim();
 
         thread.liveCallInfo = null;
 
