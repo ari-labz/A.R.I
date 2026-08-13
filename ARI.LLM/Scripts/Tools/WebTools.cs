@@ -84,14 +84,20 @@ internal sealed class SearchWeb : Tool
             ? Math.Clamp(nr.GetInt32(), 1, 10)
             : 5;
 
-        string url = $"http://localhost:{Dependency.SearXngPort}/search" +
-                     $"?q={Uri.EscapeDataString(query)}&format=json&pageno=1";
+        string? searXngStatus = Dependency.SearXngStatus;
+        if (searXngStatus is null)
+            return "Web search is not available yet — SearXNG is still starting. Try again in a moment.";
+        if (searXngStatus.Length > 0)
+            return $"Web search is not available: {searXngStatus}";
+
+        string searchUrl = $"http://localhost:{Dependency.SEARXNG_PORT}/search" +
+                           $"?q={Uri.EscapeDataString(query)}&format=json&pageno=1";
 
         string json;
-        try { json = await Http.GetStringAsync(url); }
+        try { json = await Http.GetStringAsync(searchUrl); }
         catch (Exception ex)
         {
-            return $"Search unavailable: {ex.Message}. SearXNG may still be starting — try again in a moment.";
+            return $"Search unavailable: {ex.Message}.";
         }
 
         using JsonDocument doc = JsonDocument.Parse(json);

@@ -120,7 +120,7 @@ public class ARI : BackgroundService
 
         if (config.modules.LLM.Enabled)
         {
-            await LLMDependency.CheckSearXng();
+            LLMDependency.StartSearXng();
 
             BrainConfig? brainConfig = config.modules.Brain?.Enabled == true ? config.modules.Brain : null;
 
