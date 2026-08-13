@@ -62,7 +62,7 @@ public abstract class Agent
     // Sent as a user message when the thinking budget runs out, at the end of the sentence in progress.
     // It must leave acting on the table: the old server-side wording demanded a finished reply, so a turn
     // that still needed a tool answered "..." instead of calling it.
-    private const string BudgetSteerMessage =
+    private const string BUDGET_STEER_MESSAGE =
         "[Thinking budget spent] Stop reasoning now and act on what you have. If you need a tool, call it — " +
         "tool calls do not draw on the thinking budget. If you already have what you need, write the reply " +
         "itself; it has its own separate budget. Do not draft or rehearse the reply inside your thinking, and " +
@@ -798,7 +798,7 @@ public abstract class Agent
                     if (!turn.BudgetSteerQueued && thoughtTokens >= turn.ThinkBudget)
                     {
                         turn.BudgetSteerQueued    = true;
-                        turn.PendingThinkRedirect = BudgetSteerMessage;
+                        turn.PendingThinkRedirect = BUDGET_STEER_MESSAGE;
                         Shared.Logger.LogInformation("[{Agent}] ({Thread}) thinking budget reached ({N}/{B} tokens) — wrapping up at the end of this sentence.",
                             Name, thread.Key, thoughtTokens, turn.ThinkBudget);
                     }
@@ -808,7 +808,7 @@ public abstract class Agent
                         Shared.Logger.LogWarning("[{Agent}] ({Thread}) thinking budget overrun ({N} tokens, limit {B}) — no sentence boundary reached, forcing the wrap-up.",
                             Name, thread.Key, thoughtTokens, turn.ThinkBudget);
                         turn.Messages.Add(new { role = "assistant", content = "" });
-                        turn.Messages.Add(new { role = "user", content = turn.PendingThinkRedirect ?? BudgetSteerMessage });
+                        turn.Messages.Add(new { role = "user", content = turn.PendingThinkRedirect ?? BUDGET_STEER_MESSAGE });
                         turn.PendingThinkRedirect = null;
                         turn.ThinkingRedirect     = true;
                         return;
