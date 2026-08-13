@@ -258,7 +258,7 @@ internal sealed class FetchPage : Tool
         AllowAutoRedirect      = true,
     }) { Timeout = TimeSpan.FromSeconds(20) };
 
-    private const string JinaPrefix = "https://r.jina.ai/";
+    private const string JINA_PREFIX = "https://r.jina.ai/";
 
     internal override string Name => "fetch_page";
     internal override object Schema => new
@@ -347,7 +347,7 @@ internal sealed class FetchPage : Tool
 
     private static async Task<string> FetchViaJina(string url)
     {
-        string fetchUrl = JinaPrefix + url;
+        string fetchUrl = JINA_PREFIX + url;
 
         try
         {
