@@ -202,6 +202,22 @@ type BlockLike = {
     task?: string; project?: string; added?: number; removed?: number; patch?: string
     label?: string; blocks?: BlockLike[]
     proposalId?: string; reason?: string; oldText?: string; newText?: string; status?: string
+    query?: string; results?: number; enginesDown?: number; nothingRelevant?: boolean
+    url?: string; title?: string
+}
+
+function hostOf(url: string): string {
+    try { return new URL(url).hostname.replace(/^www\./, "") } catch { return "" }
+}
+
+// Reddit reads as its subreddit — "r/LocalLLM" says far more than "reddit.com" about what she opened.
+function siteLabel(url: string): string {
+    const host = hostOf(url)
+    if (host.endsWith("reddit.com")) {
+        const sub = url.match(/\/r\/([A-Za-z0-9_]+)/)
+        if (sub) return `r/${sub[1]}`
+    }
+    return host.length > 0 ? host : url
 }
 
 function diffBadges(added = 0, removed = 0): string {
@@ -267,6 +283,40 @@ export function renderBlockHtml(block: BlockLike): string {
         const inner = (block.blocks ?? []).map(renderBlockHtml).filter(h => h.trim().length > 0)
             .map(h => `<div class="block-seg">${h}</div>`).join("")
         return `<details class="subthread" open><summary class="subthread-head">${escHtml(block.label ?? "")}</summary><div class="subthread-body">${inner}</div></details>`
+    }
+
+    // Web search: the query is shown verbatim so a query that went wrong is visible in the thread rather
+    // than only in the logs, and the done state reports what actually survived the relevance gate.
+    if (block.type === "webSearching") {
+        const q = escHtml(block.query ?? "")
+        if (!done && !err)
+            return `\n\n<div class="tool-card tool-card--active tool-card--web"><span>Searching the web · "${q}"</span><div class="typing-dots"><b></b><b></b><b></b></div></div>\n\n`
+        if (err)
+            return `\n\n<div class="tool-card tool-card--error tool-card--web"><span>Search failed · "${q}"</span></div>\n\n`
+        if (block.nothingRelevant)
+            return `\n\n<div class="tool-card tool-card--done tool-card--web tool-card--empty"><span>Searched "${q}" · nothing relevant</span></div>\n\n`
+        const n    = block.results ?? 0
+        const down = block.enginesDown ?? 0
+        const cls  = down > 0 ? "tool-card--done tool-card--web tool-card--degraded" : "tool-card--done tool-card--web"
+        const tail = down > 0 ? ` · ${down} engine${down === 1 ? "" : "s"} rate limited` : ""
+        return `\n\n<div class="tool-card ${cls}"><span>Searched "${q}" · ${n} result${n === 1 ? "" : "s"}${tail}</span></div>\n\n`
+    }
+
+    // Page read: favicon plus the page's own title, falling back to the host while it is still loading.
+    if (block.type === "browsing") {
+        const url  = block.url ?? ""
+        const host = hostOf(url)
+        // The site's own favicon, matching the Sources block — no third-party favicon service is called.
+        const icon = host.length > 0
+            ? `<img class="tool-card-favicon" src="https://${escHtml(host)}/favicon.ico" alt="" onerror="this.style.visibility='hidden'" />`
+            : ""
+        if (!done && !err)
+            return `\n\n<div class="tool-card tool-card--active tool-card--web">${icon}<span>Reading ${escHtml(siteLabel(url))}…</span><div class="typing-dots"><b></b><b></b><b></b></div></div>\n\n`
+        if (err)
+            return `\n\n<div class="tool-card tool-card--error tool-card--web"><span>Couldn't read ${escHtml(siteLabel(url))}</span></div>\n\n`
+        const title = (block.title ?? "").trim()
+        const shown = title.length > 0 ? `${escHtml(title)} · ${escHtml(siteLabel(url))}` : escHtml(siteLabel(url))
+        return `\n\n<div class="tool-card tool-card--done tool-card--web">${icon}<span>Read ${shown}</span></div>\n\n`
     }
 
     const verbs = CARD_VERBS[block.type] ?? { active: block.type, done: block.type }

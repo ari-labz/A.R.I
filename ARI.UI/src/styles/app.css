@@ -1053,6 +1053,13 @@ button, a, input, select, textarea, label, [role="button"] {
 .tool-card--active { color: #e5e7eb; }
 .tool-card--error { color: #fca5a5; border-color: #7f1d1d; background: rgba(127,29,29,0.85); }
 .tool-card--mode  { color: #93c5fd; border-color: #1e40af; background: rgba(30,64,175,0.55); }
+/* web cards: not italic — a query is a literal string and reads wrong when slanted */
+.tool-card--web { font-style: normal; }
+.tool-card--web span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46ch; }
+.tool-card-favicon { width: 13px; height: 13px; border-radius: 3px; object-fit: contain; flex-shrink: 0; }
+/* a search that found nothing is not an error — she did her job, the index had nothing */
+.tool-card--empty    { color: #d1d5db; border-color: rgba(255,255,255,0.28); background: rgba(60,60,70,0.7); }
+.tool-card--degraded { color: #fcd34d; border-color: #92400e; background: rgba(120,53,15,0.75); }
 .tool-card--plan  { color: #bfdbfe; border-color: #1e40af; background: rgba(30,64,175,0.35); }
 .plan-approve-btn { margin-left: auto; padding: 4px 12px; border-radius: 6px; border: 1px solid #2563eb;
                     background: #2563eb; color: #fff; font-size: 12px; font-weight: 600; cursor: pointer; }

@@ -56,6 +56,17 @@ internal sealed class SearchWeb : Tool
         }
     };
 
+    internal override Func<string, string>? Display => args =>
+    {
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(args) ? "{}" : args);
+            string q = doc.RootElement.TryGetProperty("query", out JsonElement qe) ? qe.GetString() ?? "" : "";
+            return new WebSearching { Query = q }.Render();
+        }
+        catch { return new WebSearching().Render(); }
+    };
+
     internal override async Task<string> Execute(string argsJson)
     {
         JsonElement args;
@@ -262,6 +273,17 @@ internal sealed class FetchPage : Tool
                 required = new[] { "url" }
             }
         }
+    };
+
+    internal override Func<string, string>? Display => args =>
+    {
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(args) ? "{}" : args);
+            string u = doc.RootElement.TryGetProperty("url", out JsonElement ue) ? ue.GetString() ?? "" : "";
+            return new Browsing { Url = u }.Render();
+        }
+        catch { return new Browsing().Render(); }
     };
 
     internal override async Task<string> Execute(string argsJson)
