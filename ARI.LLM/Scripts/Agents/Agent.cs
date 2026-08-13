@@ -59,6 +59,14 @@ public abstract class Agent
     private const int    AVERAGE_RESPONSE_WINDOW = 25;
     private const string ATTACHMENT_DIVIDER  = "-------------------";
 
+    // Sent as a user message when the thinking budget runs out, at the end of the sentence in progress.
+    // It must leave acting on the table: the old server-side wording demanded a finished reply, so a turn
+    // that still needed a tool answered "..." instead of calling it.
+    private const string BudgetSteerMessage =
+        "[Thinking budget spent] Stop reasoning now and act on what you have. If you need a tool, call it — " +
+        "tool calls do not draw on the thinking budget. If you already have what you need, write the reply " +
+        "itself; it has its own separate budget. Do not draft or rehearse the reply inside your thinking.";
+
     private readonly HttpClient httpClient = new() { Timeout = Timeout.InfiniteTimeSpan };
 
     // ── Context-building hooks ───────────────────────────────────────────────
@@ -309,18 +317,26 @@ public abstract class Agent
 
         // ── Counters ─────────────────────────────────────────────────────────
         internal int ToolCallCount;
-        internal int WebToolCallsThisTurn;  // search_web + fetch_page calls accumulated this turn
+        // Searching and reading are budgeted apart — see the research gate in ExecuteTools.
+        internal int  ProductiveSearches;    // searches that actually returned something usable
+        internal int  PagesRead;             // fetch_page calls this turn
+        internal bool SearchSoftGateFired;
+        internal bool SearchBlocked;         // search_web withdrawn from the schema
+        internal bool ReadBlocked;           // fetch_page withdrawn from the schema
         internal int ParseFailures;
         internal int ConsecutiveFallbacks;
         internal int TextToolLeakRetries;
         internal int ContinueNudges;
         internal int DegradeEvents;
 
-        // ── Research gate ─────────────────────────────────────────────────────
-        // Set when the hard gate fires — web tools are filtered from ToolSchemas until the turn ends.
-        internal bool WebToolsBlocked;
         // Pending think-redirect: buffered until a sentence boundary is observed.
         internal string? PendingThinkRedirect;
+
+        // ── Thinking budget (enforced here, not by llama-server) ─────────────
+        // Reasoning chars for the CURRENT step only — the budget is per generation, not per turn.
+        internal int  StepReasoningChars;
+        internal bool BudgetSteerQueued;   // soft limit hit; wrap-up steer waiting on a sentence boundary
+        internal bool BudgetHardCut;       // 1.5x the budget spent — steer forced without waiting
 
         // ── Output builders ──────────────────────────────────────────────────
         internal readonly StringBuilder ResponseBuilder  = new();
@@ -570,8 +586,10 @@ public abstract class Agent
             List<object> schemas = new();
             foreach (var (name, tool) in thread.tools)
             {
-                // Hard research gate: strip web tools so the model cannot call them.
-                if (turn.WebToolsBlocked && name is "search_web" or "fetch_page") continue;
+                // Hard research gate: withdraw whichever half of the web tools is spent, so reading
+                // survives a search block and she can still finish the job from what she already found.
+                if (turn.SearchBlocked && name == "search_web") continue;
+                if (turn.ReadBlocked   && name == "fetch_page") continue;
                 schemas.Add(tool.Schema);
             }
             turn.ToolSchemas = schemas.ToArray();
@@ -671,6 +689,10 @@ public abstract class Agent
         turn.ThinkingRedirect = false;
         turn.TextToolLeak     = false;
         turn.ResponseContentStarted = false;
+        // The thinking budget is per generation, so its counters reset with each new request.
+        turn.StepReasoningChars     = 0;
+        turn.BudgetSteerQueued      = false;
+        turn.BudgetHardCut          = false;
         turn.ReasoningStartLen      = turn.ReasoningBuilder.Length;
         turn.LiveReasoning          = null;
         turn.LiveText               = null;
@@ -755,13 +777,44 @@ public abstract class Agent
                 else        Shared.Logger.LogInformation("[{Agent}] ({Thread}) reasoning engaged (thinking on).", Name, thread.Key);
                 turn.WasThinking = true;
             }
-            if (!string.IsNullOrEmpty(thinkDelta)) { turn.ReasoningChars += thinkDelta.Length; turn.ReasoningBuilder.Append(thinkDelta); }
+            if (!string.IsNullOrEmpty(thinkDelta))
+            {
+                turn.ReasoningChars     += thinkDelta.Length;
+                turn.StepReasoningChars += thinkDelta.Length;
+                turn.ReasoningBuilder.Append(thinkDelta);
+            }
             if (turn.LiveReasoning is null) { turn.LiveReasoning = new TraceStep { Kind = "reasoning", Text = "" }; turn.Trace.Add(turn.LiveReasoning); }
             turn.LiveReasoning.Text = turn.ReasoningBuilder.ToString(turn.ReasoningStartLen, turn.ReasoningBuilder.Length - turn.ReasoningStartLen);
             if (!turn.ChatHidden) thread.RaiseStreaming(thread.streamedText);
 
             if (!string.IsNullOrEmpty(thinkDelta))
             {
+                // Thinking budget. The soft limit queues a wrap-up steer that waits for the end of the
+                // sentence she is mid-way through, so she is never cut off mid-thought. Only if she keeps
+                // going and burns half the budget again on top does the steer get forced through.
+                if (turn.ThinkBudget > 0 && !turn.BudgetHardCut)
+                {
+                    int thoughtTokens = turn.StepReasoningChars / CHARS_PER_TOKEN;
+                    if (!turn.BudgetSteerQueued && thoughtTokens >= turn.ThinkBudget)
+                    {
+                        turn.BudgetSteerQueued    = true;
+                        turn.PendingThinkRedirect = BudgetSteerMessage;
+                        Shared.Logger.LogInformation("[{Agent}] ({Thread}) thinking budget reached ({N}/{B} tokens) — wrapping up at the end of this sentence.",
+                            Name, thread.Key, thoughtTokens, turn.ThinkBudget);
+                    }
+                    else if (turn.BudgetSteerQueued && thoughtTokens >= turn.ThinkBudget + turn.ThinkBudget / 2)
+                    {
+                        turn.BudgetHardCut = true;
+                        Shared.Logger.LogWarning("[{Agent}] ({Thread}) thinking budget overrun ({N} tokens, limit {B}) — no sentence boundary reached, forcing the wrap-up.",
+                            Name, thread.Key, thoughtTokens, turn.ThinkBudget);
+                        turn.Messages.Add(new { role = "assistant", content = "" });
+                        turn.Messages.Add(new { role = "user", content = turn.PendingThinkRedirect ?? BudgetSteerMessage });
+                        turn.PendingThinkRedirect = null;
+                        turn.ThinkingRedirect     = true;
+                        return;
+                    }
+                }
+
                 // Check for a pending redirect: fire it once we hit a sentence boundary.
                 if (turn.PendingThinkRedirect is not null)
                 {
@@ -1322,6 +1375,17 @@ public abstract class Agent
                             if (q is not null) sourceUrl = $"search: {q}";
                         }
                         catch { }
+
+                        // Only a search that actually told her something counts against the search budget.
+                        // A search whose results were all filtered as irrelevant, or that hit a degraded
+                        // engine, has given her nothing — charging her for it would exhaust the budget and
+                        // then block her from searching, leaving her with neither answers nor a way to find any.
+                        if (!result.StartsWith(SearchWeb.NoRelevantPrefix, StringComparison.Ordinal)
+                            && !result.StartsWith("Search unavailable", StringComparison.Ordinal)
+                            && !result.StartsWith("No results", StringComparison.Ordinal))
+                            turn.ProductiveSearches++;
+                        else
+                            Shared.Logger.LogInformation("[{Agent}] ({Thread}) search returned nothing usable — not counted against the search budget.", Name, thread.Key);
                     }
                     if (sourceUrl is not null)
                     {
@@ -1451,32 +1515,42 @@ public abstract class Agent
         if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
 
         // ── Research confidence gate ─────────────────────────────────────────────
-        // After each batch that included web tools, check if the model has searched enough.
-        // Soft gate (3+): ask the model to self-assess confidence before searching again.
-        // Hard gate (6+): block web tools entirely and require an answer.
-        int webCallsThisBatch = turn.PendingCalls.Values.Count(c => c.Name is "search_web" or "fetch_page");
-        if (webCallsThisBatch > 0 && !turn.WebToolsBlocked)
-        {
-            turn.WebToolCallsThisTurn += webCallsThisBatch;
-            int n = turn.WebToolCallsThisTurn;
-            const int SoftThreshold = 3;
-            const int HardThreshold = 6;
+        // Searching and reading are budgeted separately and deliberately unevenly. Searching is what
+        // gets rate limited upstream and what she spirals on, so it is kept tight; reading a page is
+        // how an answer actually gets built, so it is left generous. Fewer searches, more reading.
+        const int SearchSoftLimit = 2;   // pause and self-assess
+        const int SearchHardLimit = 3;   // search_web withdrawn for the rest of the turn
+        const int ReadLimit       = 8;   // fetch_page withdrawn for the rest of the turn
 
-            if (n >= HardThreshold)
-            {
-                turn.WebToolsBlocked = true;
-                turn.Messages.Add(new { role = "user", content =
-                    $"[Research gate — {n} web searches completed] You have gathered enough. Web search is now unavailable. " +
-                    "Write your best answer using what you have found. Do not apologise for incomplete information — synthesise what you know and answer directly." });
-                Shared.Logger.LogInformation("[{Agent}] ({Thread}) Research hard gate fired ({N} web calls) — web tools blocked for this turn.", Name, thread.Key, n);
-            }
-            else if (n >= SoftThreshold)
-            {
-                turn.Messages.Add(new { role = "user", content =
-                    $"[Research gate — {n} web searches completed] Before searching further, assess: do you have enough information to answer the original question with confidence? " +
-                    "If yes, write your answer now. If you genuinely still lack one specific thing, name it in one sentence, then you may search once more." });
-                Shared.Logger.LogInformation("[{Agent}] ({Thread}) Research soft gate fired ({N} web calls).", Name, thread.Key, n);
-            }
+        int readsThisBatch = turn.PendingCalls.Values.Count(c => c.Name == "fetch_page");
+        turn.PagesRead += readsThisBatch;
+
+        if (!turn.SearchBlocked && turn.ProductiveSearches >= SearchHardLimit)
+        {
+            turn.SearchBlocked = true;
+            turn.Messages.Add(new { role = "user", content =
+                $"[Research gate — {turn.ProductiveSearches} searches done] Searching is now unavailable for the rest of this turn. " +
+                "You may still read pages you have already found. Answer from what you have gathered; say plainly which parts " +
+                "you could not confirm rather than apologising or padding." });
+            Shared.Logger.LogInformation("[{Agent}] ({Thread}) search hard gate fired ({N} productive searches) — search_web withdrawn.",
+                Name, thread.Key, turn.ProductiveSearches);
+        }
+        else if (!turn.SearchBlocked && turn.ProductiveSearches >= SearchSoftLimit && !turn.SearchSoftGateFired)
+        {
+            turn.SearchSoftGateFired = true;
+            turn.Messages.Add(new { role = "user", content =
+                $"[Research gate — {turn.ProductiveSearches} searches done] Stop searching and start reading. If a result looks " +
+                "right, open it with fetch_page rather than searching again — you have plenty of reads left and only one search. " +
+                "If you already have enough to answer, answer now." });
+            Shared.Logger.LogInformation("[{Agent}] ({Thread}) search soft gate fired ({N} productive searches).", Name, thread.Key, turn.ProductiveSearches);
+        }
+
+        if (!turn.ReadBlocked && turn.PagesRead >= ReadLimit)
+        {
+            turn.ReadBlocked = true;
+            turn.Messages.Add(new { role = "user", content =
+                $"[Research gate — {turn.PagesRead} pages read] You have read enough. Write your answer from what you have." });
+            Shared.Logger.LogInformation("[{Agent}] ({Thread}) read gate fired ({N} pages) — fetch_page withdrawn.", Name, thread.Key, turn.PagesRead);
         }
 
         if (thread.EndTurnNow)
