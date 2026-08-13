@@ -429,10 +429,9 @@ public class Server : IDisposable
             // --reasoning-budget, which would disable per-request overrides). The budget-message is injected
             // before the forced end-of-thinking so a budgeted turn wraps up its thought instead of being chopped.
             model?.SupportsThinking == true ? "--reasoning-format deepseek" : "",
-            // Wording matters: this lands mid-thought, and whatever it asks for is what the model does next.
-            // "State my conclusion in one line" was being satisfied by a bare speaker label, ending the turn
-            // with no answer. The reply has its own budget, so this now sends the model straight into writing it.
-            model?.SupportsThinking == true ? "--reasoning-budget-message \"I've used most of my thinking budget. Let me finish this sentence, stop thinking, and write my full reply now — the reply has its own separate budget, so it must be complete, not a summary.\"" : "",
+            // No --reasoning-budget-message: the server splices it at whatever token trips the budget,
+            // which lands mid-word and mid-decision ("Maybe" + message, while still choosing a search).
+            // ARI now enforces the budget itself and steers at a sentence boundary — see Agent.ProcessDelta.
             $"-np {ParallelSlots} -ngl 99 --port {Port}",
             "--host 127.0.0.1",
             // Last-resort safety net for a request that overflows its slot's context despite compaction
