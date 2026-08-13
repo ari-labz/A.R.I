@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Logging;
@@ -111,24 +112,28 @@ public class APIModule : IAsyncDisposable
                 "</body></html>");
         }));
 
+        // Asset filenames are content-hashed, so they can be cached forever; the documents that POINT at
+        // them must never be, or a rebuild is invisible until the browser is manually cleared.
+        Action<StaticFileResponseContext> cacheHeaders = ctx =>
+        {
+            string file = ctx.File.Name;
+            if (file == "index.html" || file == "sw.js" || file == "controlpanel.html")
+            {
+                ctx.Context.Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
+                ctx.Context.Response.Headers["Pragma"]        = "no-cache";
+                ctx.Context.Response.Headers["Expires"]       = "0";
+            }
+            else
+            {
+                ctx.Context.Response.Headers["Cache-Control"] = "public, max-age=31536000, immutable";
+            }
+        };
+
         app.UseStaticFiles(new StaticFileOptions
         {
-            FileProvider = new PhysicalFileProvider(Paths.WwwRoot),
-            RequestPath  = "",
-            OnPrepareResponse = ctx =>
-            {
-                string file = ctx.File.Name;
-                if (file == "index.html" || file == "sw.js" || file == "controlpanel.html")
-                {
-                    ctx.Context.Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
-                    ctx.Context.Response.Headers["Pragma"]        = "no-cache";
-                    ctx.Context.Response.Headers["Expires"]       = "0";
-                }
-                else
-                {
-                    ctx.Context.Response.Headers["Cache-Control"] = "public, max-age=31536000, immutable";
-                }
-            },
+            FileProvider      = new PhysicalFileProvider(Paths.WwwRoot),
+            RequestPath       = "",
+            OnPrepareResponse = cacheHeaders,
         });
 
         // Desktop client WebSocket — MUST be before UseRouting. Aggressive keepalive: the desktop client's
@@ -171,7 +176,14 @@ public class APIModule : IAsyncDisposable
         app.UseRouting();
 
         app.MapControllers();
-        app.MapFallbackToFile("index.html");
+        // The fallback runs its OWN static-file middleware and ignores the options set above, so browsing
+        // to "/" served index.html with default caching. That is why a rebuilt UI kept loading the old
+        // bundle: the page was fresh on disk and a month old in the browser.
+        app.MapFallbackToFile("index.html", new StaticFileOptions
+        {
+            FileProvider      = new PhysicalFileProvider(Paths.WwwRoot),
+            OnPrepareResponse = cacheHeaders,
+        });
 
         await app.StartAsync(cancellationToken);
 

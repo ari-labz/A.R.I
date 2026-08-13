@@ -3,7 +3,9 @@ using ARI.Scheduler;
 using CommonModules = ARI.Common.Modules;
 using ARI.Core.Scripts;
 using ARI.Discord;
+using Dependency    = ARI.Core.Scripts.Dependency;
 using ARI.LLM;
+using LLMDependency = ARI.LLM.Dependency;
 using ARI.Voice;
 using ARI.VoiceSynthesis;
 using ARI.API;
@@ -118,6 +120,8 @@ public class ARI : BackgroundService
 
         if (config.modules.LLM.Enabled)
         {
+            LLMDependency.StartSearXng();
+
             BrainConfig? brainConfig = config.modules.Brain?.Enabled == true ? config.modules.Brain : null;
 
             _logger.LogInformation("Loading agents...");

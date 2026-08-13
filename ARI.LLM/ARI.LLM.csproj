@@ -16,5 +16,9 @@
   <ItemGroup>
     <InternalsVisibleTo Include="ARI.API" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="HtmlAgilityPack" Version="1.11.71" />
+    <ProjectReference Include="..\Submodules\SmartReader\src\SmartReader\SmartReader.csproj" />
+  </ItemGroup>
 
 </Project>
