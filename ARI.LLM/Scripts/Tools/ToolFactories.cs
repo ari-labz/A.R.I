@@ -44,6 +44,10 @@ internal static class ToolFactories
         // Available on any thread — the persona is global, not project-bound.
         ["propose_persona_edit"] = t => new ProposePersonaEdit(t),
 
+        // Web tools — always available regardless of project/vault context.
+        ["search_web"]  = _ => new SearchWeb(),
+        ["fetch_page"]  = _ => new FetchPage(),
+
         ["discord_list_voice_channels"] = _ => Modules.Discord is not null ? new DiscordListVoiceChannels() : null,
         ["discord_join_voice_channel"]  = _ => Modules.Discord is not null ? new DiscordJoinVoiceChannel()  : null,
         ["discord_leave_voice_channel"] = _ => Modules.Discord is not null ? new DiscordLeaveVoiceChannel() : null,

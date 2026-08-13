@@ -27,6 +27,10 @@
     "discord_tools": {
       "Description": "Discord voice-channel control: find which VC a user is in, join a voice channel, or leave one.",
       "Tools": ["discord_list_voice_channels", "discord_join_voice_channel", "discord_leave_voice_channel"]
+    },
+    "web_tools": {
+      "Description": "Search the web and read web pages. Use for current events, factual lookups, or anything time-sensitive.",
+      "Tools": ["search_web", "fetch_page"]
     }
   }
 }
