@@ -198,16 +198,22 @@ public static class Dependency
     /// Writes a minimal settings.yml that enables JSON output and sensible engine defaults.
     /// Only written once — if the file already exists it is left alone so the user can customise it.
     /// </summary>
+    private const string PLACEHOLDER_SECRET = "ari-searxng-change-me";
+
     private static void WriteSearXngSettings(string dir)
     {
         string path = Path.Combine(dir, "settings.yml");
-        if (File.Exists(path)) return;
+        bool needsWrite = !File.Exists(path)
+            || File.ReadAllText(path).Contains(PLACEHOLDER_SECRET);
 
-        File.WriteAllText(path, """
+        if (!needsWrite) return;
+
+        string secret = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+        File.WriteAllText(path, $"""
             use_default_settings: true
 
             server:
-              secret_key: "ari-searxng-change-me"
+              secret_key: "{secret}"
               limiter: false
               image_proxy: false
 
