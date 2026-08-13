@@ -1358,21 +1358,21 @@ public abstract class Agent
                     {
                         try
                         {
-                            var doc = System.Text.Json.JsonDocument.Parse(argsJson.Length > 0 ? argsJson : "{}");
-                            sourceUrl = doc.RootElement.TryGetProperty("url", out var u) ? u.GetString() : null;
+                            using JsonDocument fetchArgsDoc = JsonDocument.Parse(argsJson.Length > 0 ? argsJson : "{}");
+                            sourceUrl = fetchArgsDoc.RootElement.TryGetProperty("url", out JsonElement urlProp) ? urlProp.GetString() : null;
                             sourceContent = result;
                         }
-                        catch { }
+                        catch (Exception ex) { Shared.Logger.LogDebug("[{Agent}] Could not parse fetch_page args for web source: {Error}", Name, ex.Message); }
                     }
                     else if (call.Name == "search_web")
                     {
                         try
                         {
-                            var doc = System.Text.Json.JsonDocument.Parse(argsJson.Length > 0 ? argsJson : "{}");
-                            string? q = doc.RootElement.TryGetProperty("query", out var qp) ? qp.GetString() : null;
-                            if (q is not null) sourceUrl = $"search: {q}";
+                            using JsonDocument searchArgsDoc = JsonDocument.Parse(argsJson.Length > 0 ? argsJson : "{}");
+                            string? searchQuery = searchArgsDoc.RootElement.TryGetProperty("query", out JsonElement queryProp) ? queryProp.GetString() : null;
+                            if (searchQuery is not null) sourceUrl = $"search: {searchQuery}";
                         }
-                        catch { }
+                        catch (Exception ex) { Shared.Logger.LogDebug("[{Agent}] Could not parse search_web args for web source: {Error}", Name, ex.Message); }
 
                         // Only a search that actually told her something counts against the search budget.
                         // A search whose results were all filtered as irrelevant, or that hit a degraded

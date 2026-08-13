@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 using HtmlAgilityPack;
@@ -8,23 +9,20 @@ internal static class RedditSummariser
 {
     internal static string Parse(string html)
     {
-        var doc = new HtmlDocument();
-        doc.LoadHtml(html);
+        HtmlDocument htmlDoc = new HtmlDocument();
+        htmlDoc.LoadHtml(html);
 
-        var sb = new StringBuilder();
+        StringBuilder output = new StringBuilder();
 
-        // ── Title ─────────────────────────────────────────────────────────────
-        var titleNode = doc.DocumentNode.SelectSingleNode("//a[contains(@class,'title') and contains(@class,'may-blank')]")
-                     ?? doc.DocumentNode.SelectSingleNode("//p[@class='title']//a[@class='title ']");
+        HtmlNode? titleNode = htmlDoc.DocumentNode.SelectSingleNode("//a[contains(@class,'title') and contains(@class,'may-blank')]")
+                           ?? htmlDoc.DocumentNode.SelectSingleNode("//p[@class='title']//a[@class='title ']");
         string title = titleNode is not null ? CleanText(titleNode.InnerText) : "Untitled";
-        sb.AppendLine($"**{title}**");
+        output.AppendLine($"**{title}**");
 
-        // ── Post image (link posts with a preview thumbnail) ──────────────────
-        var linkThing = doc.DocumentNode.SelectSingleNode("//div[contains(@class,'thing') and contains(@class,'link')]");
+        HtmlNode? linkThing = htmlDoc.DocumentNode.SelectSingleNode("//div[contains(@class,'thing') and contains(@class,'link')]");
         if (linkThing is not null)
         {
-            // Full-size preview image embedded in the page
-            var previewImg = linkThing.SelectSingleNode(".//a[contains(@class,'thumbnail')]//img");
+            HtmlNode? previewImg = linkThing.SelectSingleNode(".//a[contains(@class,'thumbnail')]//img");
             if (previewImg is not null)
             {
                 string src = previewImg.GetAttributeValue("src", "")
@@ -32,37 +30,38 @@ internal static class RedditSummariser
                 if (!string.IsNullOrWhiteSpace(src))
                 {
                     if (src.StartsWith("//")) src = "https:" + src;
-                    sb.AppendLine($"[image: {src}]");
+                    output.AppendLine($"[image: {src}]");
                 }
             }
         }
 
         // ── Post body (self-post text) ─────────────────────────────────────────
-        var selftext = doc.DocumentNode
+        HtmlNode? selftext = htmlDoc.DocumentNode
             .SelectSingleNode("//div[contains(@class,'thing') and contains(@class,'link')]//div[contains(@class,'usertext-body')]//div[@class='md']");
         if (selftext is not null)
         {
             string body = CleanText(selftext.InnerText);
             if (!string.IsNullOrWhiteSpace(body))
-                sb.AppendLine().AppendLine(body);
+                output.AppendLine().AppendLine(body);
         }
 
-        // ── Comments ──────────────────────────────────────────────────────────
-        var commentArea = doc.DocumentNode
+        HtmlNode? commentArea = htmlDoc.DocumentNode
             .SelectSingleNode("//div[contains(@class,'commentarea')]//div[contains(@class,'sitetable') and contains(@class,'nestedlisting')]");
 
         if (commentArea is not null)
         {
-            sb.AppendLine().AppendLine("--- comments ---");
-            RenderComments(commentArea, sb, depth: 0);
+            output.AppendLine().AppendLine("--- comments ---");
+            RenderComments(commentArea, output, depth: 0);
         }
 
-        return sb.ToString().Trim();
+        return output.ToString().Trim();
     }
 
-    private static void RenderComments(HtmlNode container, StringBuilder sb, int depth)
+    private static void RenderComments(HtmlNode container, StringBuilder builder, int depth)
     {
-        string prefix = string.Concat(Enumerable.Repeat("| ", depth));
+        StringBuilder prefixBuilder = new StringBuilder();
+        for (int level = 0; level < depth; level++) prefixBuilder.Append("| ");
+        string prefix = prefixBuilder.ToString();
 
         foreach (HtmlNode thing in container.ChildNodes)
         {
@@ -71,31 +70,27 @@ internal static class RedditSummariser
 
             string author = thing.GetAttributeValue("data-author", "[deleted]");
 
-            // Comment body is inside .entry .usertext-body .md
-            var mdNode = thing.SelectSingleNode(".//div[contains(@class,'entry')]//div[contains(@class,'usertext-body')]//div[@class='md']");
+            HtmlNode? mdNode = thing.SelectSingleNode(".//div[contains(@class,'entry')]//div[contains(@class,'usertext-body')]//div[@class='md']");
             string body = mdNode is not null ? CleanText(mdNode.InnerText) : "[removed]";
 
-            // Truncate very long comments — the LLM doesn't need the full essay
             if (body.Length > 600)
                 body = body[..600] + "…";
 
-            sb.AppendLine();
-            sb.AppendLine($"{prefix}{author}:");
+            builder.AppendLine();
+            builder.AppendLine($"{prefix}{author}:");
             foreach (string line in body.Split('\n'))
-                sb.AppendLine($"{prefix}{line}");
+                builder.AppendLine($"{prefix}{line}");
 
-            // Recurse into replies
-            var childDiv  = thing.SelectSingleNode(".//div[@class='child']");
-            var sitetable = childDiv?.SelectSingleNode(".//div[contains(@class,'sitetable')]");
+            HtmlNode? childDiv  = thing.SelectSingleNode(".//div[@class='child']");
+            HtmlNode? sitetable = childDiv?.SelectSingleNode(".//div[contains(@class,'sitetable')]");
             if (sitetable is not null)
-                RenderComments(sitetable, sb, depth + 1);
+                RenderComments(sitetable, builder, depth + 1);
         }
     }
 
     private static string CleanText(string raw)
     {
-        // Decode HTML entities, collapse whitespace
-        string decoded = System.Net.WebUtility.HtmlDecode(raw);
+        string decoded = WebUtility.HtmlDecode(raw);
         decoded = Regex.Replace(decoded, @"[ \t]+", " ");
         decoded = Regex.Replace(decoded, @"\n{3,}", "\n\n");
         return decoded.Trim();

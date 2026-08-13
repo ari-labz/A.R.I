@@ -5,10 +5,6 @@ using System.Text.Json;
 
 namespace ARI.LLM;
 
-/// <summary>
-/// Provisions dependencies that are only needed when the LLM module is active.
-/// Follows the same pattern as ARI.Core's Dependency.cs — check, detect, install.
-/// </summary>
 public static class Dependency
 {
     private const string SEARXNG_IMAGE     = "searxng/searxng";
