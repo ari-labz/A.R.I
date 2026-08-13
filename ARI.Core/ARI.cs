@@ -4,6 +4,7 @@ using CommonModules = ARI.Common.Modules;
 using ARI.Core.Scripts;
 using ARI.Discord;
 using Dependency    = ARI.Core.Scripts.Dependency;
+using ARI.LLM;
 using LLMDependency = ARI.LLM.Dependency;
 using ARI.Voice;
 using ARI.VoiceSynthesis;
