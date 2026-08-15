@@ -36,6 +36,7 @@ public static class Paths
     public static string Keys           { get; }
     public static string Push           { get; }
     public static string LLMConfigs     { get; }
+    public static string UsersDb        { get; }
 
     // Self-contained voice modules — each subdirectory (StyleTTS2, IndexTTS, KokoroRVC) contains
     // its own setup.py, serve.py, venv, and model weights.
@@ -157,6 +158,7 @@ public static class Paths
         Keys           = ServerDir("Keys");
         Push           = ServerDir("Push");
         LLMConfigs     = ServerDir("LLMConfigs");
+        UsersDb        = Path.Combine(PersistentData, "users.db");
         VoiceModules   = ServerDir("VoiceModules");
         StyleTts2Data  = ServerDir("External/StyleTTS2");
         ListenerData   = ServerDir("External/Listener");

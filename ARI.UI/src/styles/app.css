@@ -175,6 +175,23 @@ html, body {
     border-top: 1px solid rgba(255,255,255,.07);
     flex-shrink: 0;
 }
+#btn-user-prefs {
+    display: flex; align-items: center; gap: 9px;
+    padding: 7px 10px; border-radius: 7px; width: 100%;
+    background: none; border: none; cursor: pointer;
+    transition: background .1s; margin-bottom: 2px;
+}
+#btn-user-prefs:hover { background: var(--sidebar-hover); }
+#btn-user-avatar {
+    width: 26px; height: 26px; border-radius: 50%;
+    background: rgba(255,255,255,.15); color: var(--sidebar-text);
+    font-size: 12px; font-weight: 700; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+}
+#btn-user-name {
+    font-size: 13px; color: var(--sidebar-dim);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 #btn-control-panel {
     display: flex; align-items: center; gap: 9px;
     padding: 8px 12px; border-radius: 7px;

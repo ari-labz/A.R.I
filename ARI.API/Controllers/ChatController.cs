@@ -47,9 +47,12 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
             string raw = at > 0 ? email[..at] : email;
             return raw.Length > 0 ? char.ToUpper(raw[0]) + raw[1..] : raw;
         }
-        // User-configured display name is the fallback on a fresh local install.
-        string stored = UserNameStore.Get();
-        return string.IsNullOrEmpty(stored) ? "User" : stored;
+        // JWT display name claim (set at login from the user's preferences).
+        string? displayName = User.FindFirstValue("displayName");
+        if (!string.IsNullOrEmpty(displayName)) return displayName;
+        // Username claim as last resort.
+        string? username = User.FindFirstValue(ClaimTypes.Name);
+        return string.IsNullOrEmpty(username) ? "User" : username;
     }
 
     // ── Thread navigation helpers ───────────────────────────────────────────────
@@ -75,7 +78,10 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     {
         bool isCode = Llm!.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? existing)
                       && existing.Pipeline == ARI.LLM.ThreadPipeline.Code;
-        return isCode ? Llm.GetOrCreateCodeThread(threadKey) : Llm.GetOrCreateDialogueThread(threadKey);
+        ARI.LLM.Thread thread = isCode ? Llm.GetOrCreateCodeThread(threadKey) : Llm.GetOrCreateDialogueThread(threadKey);
+        // Guests never touch the owner's Engram or Brain memory.
+        thread.IsOwnerThread = User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
+        return thread;
     }
 
     // ── Thread endpoints ────────────────────────────────────────────────────────

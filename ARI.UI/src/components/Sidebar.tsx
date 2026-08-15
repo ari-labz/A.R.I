@@ -1,20 +1,24 @@
 import type { ThreadEntry } from "../hooks/useThreads"
+import { tokenUrl } from "../auth"
 
 interface Props {
-    threads:          ThreadEntry[]
-    activeThread:     string | null
-    activeView:       "chat" | "projects"
-    onNewChat:        () => void
-    onOpenProjects:   () => void
-    onSelectThread:   (t: ThreadEntry) => void
-    onCloseThread:    (t: ThreadEntry) => void
-    collapsed:        boolean
-    onToggleCollapse: () => void
-    clientVersion:    string | null
-    outdated:         boolean
+    threads:             ThreadEntry[]
+    activeThread:        string | null
+    activeView:          "chat" | "projects"
+    onNewChat:           () => void
+    onOpenProjects:      () => void
+    onSelectThread:      (t: ThreadEntry) => void
+    onCloseThread:       (t: ThreadEntry) => void
+    collapsed:           boolean
+    onToggleCollapse:    () => void
+    clientVersion:       string | null
+    outdated:            boolean
+    userDisplayName?:    string
+    onOpenPreferences?:  () => void
+    isAdmin?:            boolean
 }
 
-export default function Sidebar({ threads, activeThread, activeView, onNewChat, onOpenProjects, onSelectThread, onCloseThread, collapsed, onToggleCollapse, clientVersion, outdated }: Props) {
+export default function Sidebar({ threads, activeThread, activeView, onNewChat, onOpenProjects, onSelectThread, onCloseThread, collapsed, onToggleCollapse, clientVersion, outdated, userDisplayName, onOpenPreferences, isAdmin }: Props) {
     return (
         <aside id="sidebar" className={collapsed ? "collapsed" : ""}>
             <div id="sidebar-inner">
@@ -96,13 +100,19 @@ export default function Sidebar({ threads, activeThread, activeView, onNewChat, 
                 </ul>
 
                 <div id="sidebar-footer">
-                    <a id="btn-control-panel" href="/controlpanel.html">
+                    {userDisplayName && (
+                        <button id="btn-user-prefs" onClick={onOpenPreferences}>
+                            <span id="btn-user-avatar">{userDisplayName[0].toUpperCase()}</span>
+                            <span id="btn-user-name">{userDisplayName}</span>
+                        </button>
+                    )}
+                    {isAdmin && <a id="btn-control-panel" href={tokenUrl("/controlpanel.html")}>
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <circle cx="12" cy="12" r="3"/>
                             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
                         </svg>
                         Control Panel
-                    </a>
+                    </a>}
                     {outdated && (
                         <div id="sidebar-update-banner">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">

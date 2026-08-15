@@ -1,3 +1,4 @@
+using ARI.API.Auth;
 using ARI.API.Controllers;
 using ARI.API.Data;
 using ARI.Common;
@@ -70,6 +71,8 @@ public class APIModule : IAsyncDisposable
         WebPushModule webPush = new(loggerFactory.CreateLogger<WebPushModule>(), pushDir, "mailto:owner@localhost");
         Modules.Register(webPush: webPush);
 
+        builder.Services.AddSingleton<UserStore>();
+        builder.Services.AddSingleton<AuthService>();
         builder.Services.AddSingleton(config);
         builder.Services.AddSingleton(voiceSynthesisConfig);
         builder.Services.AddSingleton(persistentData);
@@ -129,6 +132,14 @@ public class APIModule : IAsyncDisposable
             }
         };
 
+        // Rewrite bare "/" to "/index.html" before the auth middleware runs, so the browser can
+        // fetch the SPA shell without a token (the JS inside handles auth state itself).
+        app.UseDefaultFiles(new DefaultFilesOptions
+        {
+            FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(Paths.WwwRoot),
+            RequestPath  = "",
+        });
+
         app.UseStaticFiles(new StaticFileOptions
         {
             FileProvider      = new PhysicalFileProvider(Paths.WwwRoot),
@@ -173,6 +184,7 @@ public class APIModule : IAsyncDisposable
             await next();
         });
 
+        app.UseMiddleware<AuthMiddleware>();
         app.UseRouting();
 
         app.MapControllers();

@@ -104,7 +104,7 @@ internal sealed class DialoguePipeline : Pipeline
 
         string? recallBlock = null;
         double? recallSeconds = null;
-        if (memory is not null)
+        if (memory is not null && thread.IsOwnerThread)
         {
             var recallSw = System.Diagnostics.Stopwatch.StartNew();
             try
