@@ -1,5 +1,7 @@
+using System.Security.Claims;
 using System.Text.Json.Serialization;
 using ARI.API;
+using ARI.API.Auth;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
@@ -7,10 +9,27 @@ namespace ARI.API.Controllers;
 
 [Route("projects")]
 [ApiController]
-public class ProjectsController(ProjectStore store, ProjectServiceAdapter projects) : ControllerBase
+public class ProjectsController(ProjectStore store, ProjectServiceAdapter projects, UserStore users) : ControllerBase
 {
     [HttpGet]
-    public IActionResult GetAll() => Ok(store.GetAll());
+    public IActionResult GetAll()
+    {
+        if (IsAdmin())
+        {
+            // Admins see everything — join owner username so the control panel can display it.
+            var allUsers = users.GetAll().ToDictionary(u => u.Id, u => u.Username);
+            return Ok(store.GetAll().Select(p => new
+            {
+                p.Id, p.Name, p.Description, p.Instructions, p.CreatedAt,
+                p.Type, p.Category, p.Backend, p.RootPath, p.Attachments, p.OwnerId,
+                OwnerUsername = p.OwnerId == 0 ? "admin" : (allUsers.TryGetValue(p.OwnerId, out string? n) ? n : "unknown"),
+            }));
+        }
+
+        // Guests see only their own projects.
+        int callerId = CallerId();
+        return Ok(store.GetByOwner(callerId));
+    }
 
     [HttpPost]
     public IActionResult Create([FromBody] CreateProjectRequest req)
@@ -18,19 +37,18 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest(new { error = "Name is required." });
 
-        // The adapter takes name/type/category/backend — the shape a tool call also needs. Description/
-        // Instructions aren't part of that shared contract, so they're applied here, after creation,
-        // REST-only.
         var summary = projects.Create(req.Name, (req.Type ?? ProjectType.Repository).ToString(), req.Category, req.Backend?.ToString());
         if (summary is null) return BadRequest(new { error = "Failed to create project." });
 
         Project? created = store.Get(summary.Id);
         if (created is null) return StatusCode(500);
 
+        int ownerId = IsAdmin() ? 0 : CallerId();
         created = created with
         {
             Description  = req.Description?.Trim() ?? created.Description,
             Instructions = req.Instructions?.Trim() ?? created.Instructions,
+            OwnerId      = ownerId,
         };
         store.Update(created);
 
@@ -42,11 +60,10 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
     {
         Project? existing = store.Get(id);
         if (existing is null) return NotFound();
+        if (!CanAccess(existing)) return Forbid();
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest(new { error = "Name is required." });
 
-        // Rename (if any) goes through the adapter so the brain note stays in sync; other fields are
-        // plain REST-only updates.
         if (req.Name.Trim() != existing.Name) projects.Rename(id, req.Name.Trim());
 
         Project current = store.Get(id) ?? existing;
@@ -75,9 +92,9 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
     [HttpDelete("{id}")]
     public IActionResult Delete(string id)
     {
-        if (store.Get(id) is null) return NotFound();
-        // The brain note is deliberately left alone — a project you delete may still be worth
-        // remembering happened. Nothing here ever deletes or archives it.
+        Project? project = store.Get(id);
+        if (project is null) return NotFound();
+        if (!CanAccess(project)) return Forbid();
         store.Delete(id);
         return Ok();
     }
@@ -87,7 +104,9 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
     [HttpGet("{id}/attachments")]
     public IActionResult GetAttachments(string id)
     {
-        if (store.Get(id) is null) return NotFound();
+        Project? project = store.Get(id);
+        if (project is null) return NotFound();
+        if (!CanAccess(project)) return Forbid();
         return Ok(store.GetAttachmentNames(id).Select(n => new { name = n }));
     }
 
@@ -95,7 +114,9 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
     [DisableRequestSizeLimit]
     public async Task<IActionResult> AddAttachment(string id, IFormFile file)
     {
-        if (store.Get(id) is null) return NotFound();
+        Project? project = store.Get(id);
+        if (project is null) return NotFound();
+        if (!CanAccess(project)) return Forbid();
         if (file is null || file.Length == 0) return BadRequest("No file provided.");
 
         using MemoryStream ms = new();
@@ -107,10 +128,25 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
     [HttpDelete("{id}/attachments/{name}")]
     public IActionResult DeleteAttachment(string id, string name)
     {
-        if (store.Get(id) is null) return NotFound();
+        Project? project = store.Get(id);
+        if (project is null) return NotFound();
+        if (!CanAccess(project)) return Forbid();
         store.DeleteAttachment(id, name);
         return Ok();
     }
+
+    // ── Helpers ──────────────────────────────────────────────────────────────────
+
+    private bool IsAdmin() => User.FindFirstValue(ClaimTypes.Role) == Roles.Admin;
+
+    private int CallerId()
+    {
+        string? sub = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        return int.TryParse(sub, out int id) ? id : 0;
+    }
+
+    // Admins can access any project; guests can only access their own.
+    private bool CanAccess(Project p) => IsAdmin() || p.OwnerId == CallerId();
 }
 
 public record CreateProjectRequest(

@@ -56,6 +56,10 @@ declare global {
       getLocalPath(projectId: string): Promise<string | null>
       setLocalPath(projectId: string, path: string | null): Promise<void>
       getVersion(): Promise<string>
+      // Auth token persistence — Desktop stores a long-lived JWT across restarts.
+      getToken?(): string | null
+      setToken?(token: string): void
+      clearToken?(): void
     }
   }
 }

@@ -575,7 +575,7 @@ public class LLMModule : ILLMModule, IDisposable
     /// delete-retry poll tries again.</summary>
     private void OnThreadDormant(Thread thread)
     {
-        bool canSweep = engram is not null && !thread.Internal && thread.HasUserMessages && !thread.EngramProcessed;
+        bool canSweep = engram is not null && !thread.Internal && thread.HasUserMessages && !thread.EngramProcessed && thread.IsOwnerThread;
         if (!canSweep) { thread.EngramProcessed = true; return; }
 
         if (thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech)
