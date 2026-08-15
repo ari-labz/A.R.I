@@ -9,10 +9,6 @@ const { execFile, spawn } = require("child_process")
 const OWNER = "ari-labz"
 const REPO  = "A.R.I"
 
-// The GitHub API needs a token only while the repo is private. Set this to false when the
-// repo goes public — the installer then fetches releases anonymously and never asks for a token.
-const REPO_PRIVATE = true
-
 // App releases are tagged ARI_Server_v<ver> (pre-releases). The installer's own releases are
 // ARI_Server_Installer_v<ver>, excluded because they don't start with this prefix.
 const APP_PREFIX = "ARI_Server_v"
@@ -66,7 +62,16 @@ app.on("window-all-closed", () => app.quit())
 
 ipcMain.handle("get-platform", () => process.platform)
 
-ipcMain.handle("needs-token", () => REPO_PRIVATE)
+// Probe the releases endpoint anonymously. If GitHub returns 401/404 the repo
+// is private and a token is required; otherwise it's public and we skip the token screen.
+ipcMain.handle("needs-token", async () => {
+    try {
+        const data = await ghJson(null, `/repos/${OWNER}/${REPO}/releases?per_page=1`)
+        return !Array.isArray(data)   // array = accessible; anything else (error obj) = need token
+    } catch {
+        return true
+    }
+})
 
 ipcMain.handle("get-token", () => {
     // A token the user saved here wins over an ambient GITHUB_TOKEN env var, so re-entering a

@@ -30,7 +30,9 @@ public record Project(
     // relying on the desktop app's own per-device local-path store (see ProjectsPage.tsx) this whole time.
     [property: JsonConverter(typeof(JsonStringEnumConverter))] StorageBackend Backend = StorageBackend.RemoteFs,
     string?        RootPath    = null,
-    List<string>?  Attachments = null);
+    List<string>?  Attachments = null,
+    // 0 = admin-owned (legacy rows that predate multi-user support).
+    int            OwnerId     = 0);
 
 public class ProjectStore
 {
@@ -67,6 +69,8 @@ public class ProjectStore
     }
 
     public Project? Get(string id) => GetAll().FirstOrDefault(p => p.Id == id);
+
+    public List<Project> GetByOwner(int ownerId) => GetAll().Where(p => p.OwnerId == ownerId).ToList();
 
     public void Add(Project project)
     {
