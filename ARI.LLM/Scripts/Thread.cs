@@ -169,6 +169,11 @@ public class Thread
     /// A thread may only advance from Dormant to Deleted while this is true.</summary>
     public bool EngramProcessed { get; internal set; }
 
+    /// <summary>False for Guest-role threads — blocks Engram sweeps and Brain memory recall so guest
+    /// conversations never touch the owner's personal memory. Defaults to true for all other sources
+    /// (Discord, proactive, internal) so existing behaviour is preserved.</summary>
+    public bool IsOwnerThread { get; set; } = true;
+
     /// <summary>True once the user has said anything in this thread — the gate for whether a dormant
     /// sweep has anything to learn. An unanswered proactive thread has none.</summary>
     internal bool HasUserMessages => History.OfType<Prompt>().Any();

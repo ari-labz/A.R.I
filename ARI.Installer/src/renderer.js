@@ -194,9 +194,8 @@ async function start() {
         $("toggle-dock-row").classList.add("hidden")
     }
 
-    // A token is only needed while the repo is private (REPO_PRIVATE in main.js).
     const needsToken = await window.installer.needsToken()
-    token = await window.installer.getToken()
+    token = needsToken ? await window.installer.getToken() : null
     if (needsToken && !token) { show("token"); return }
     await loadMain()
 }

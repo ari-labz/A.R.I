@@ -500,7 +500,9 @@ html, body {
       <div id="cp-sidebar-nav">
         <div class="cp-nav-item top-level active" data-tab="overview">Overview</div>
         <div class="cp-nav-item top-level" data-tab="debug">Deep Thread Inspection (DTI)</div>
-        <div class="cp-nav-item top-level" data-tab="userprefs">User Preferences</div>
+        <div class="cp-nav-group">Users</div>
+        <div class="cp-nav-item" data-tab="users-new">New User</div>
+        <div class="cp-nav-item" data-tab="users-manage">User Management</div>
         <div class="cp-nav-group">System</div>
         <div class="cp-nav-item" data-tab="modules">Modules</div>
         <div class="cp-nav-item" data-tab="scheduler">Scheduler</div>
@@ -816,16 +818,55 @@ html, body {
       </div>
     </div>
 
-    <div id="tab-userprefs" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
-      <div class="vs-section" style="margin-bottom:24px;">
-        <div class="vs-section-title">Your name</div>
-        <p style="color:var(--text-dim);font-size:13px;margin:0 0 10px;">
-          How Ari addresses you. Shown in the DTI and sent to the LLM so she always knows who she's talking to.
+    <!-- New User tab -->
+    <div id="tab-users-new" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div class="vs-section" style="max-width:480px;">
+        <div class="vs-section-title">Create user</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 18px;">
+          The new account starts with <em>must-change-password</em> set. The user will be prompted to set their own password on first sign-in.
         </p>
-        <div style="display:flex;align-items:center;gap:10px;">
-          <input id="username-input" class="vs-input" type="text" style="width:220px;font-size:14px;" placeholder="e.g. Xywren">
-          <button class="vs-btn-primary" id="username-save-btn" type="button">Save</button>
-          <span id="username-status" style="font-size:12px;color:var(--text-dim);"></span>
+        <div style="display:flex;flex-direction:column;gap:12px;">
+          <div>
+            <label style="font-size:12px;font-weight:600;color:var(--text-dim);display:block;margin-bottom:4px;">Username</label>
+            <input id="nu-username" class="vs-input" type="text" placeholder="e.g. alice" style="width:100%;">
+          </div>
+          <div>
+            <label style="font-size:12px;font-weight:600;color:var(--text-dim);display:block;margin-bottom:4px;">Temporary password</label>
+            <input id="nu-password" class="vs-input" type="text" placeholder="min. 6 characters" style="width:100%;">
+          </div>
+          <div>
+            <label style="font-size:12px;font-weight:600;color:var(--text-dim);display:block;margin-bottom:4px;">Role</label>
+            <select id="nu-role" class="vs-input" style="width:100%;">
+              <option value="Guest">Guest</option>
+              <option value="Admin">Admin</option>
+            </select>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;margin-top:4px;">
+            <button class="vs-btn-primary" id="nu-create-btn" type="button">Create user</button>
+            <span id="nu-status" style="font-size:12px;color:var(--text-dim);"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- User Management tab -->
+    <div id="tab-users-manage" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div class="vs-section">
+        <div class="vs-section-title" style="display:flex;align-items:center;justify-content:space-between;">
+          <span>Users</span>
+          <button class="vs-btn-outline" id="um-refresh-btn" type="button" style="font-size:12px;padding:5px 12px;">Refresh</button>
+        </div>
+        <div id="um-user-list" style="margin-top:14px;display:flex;flex-direction:column;gap:10px;"></div>
+
+        <!-- Reset password inline form (hidden until a row's Reset button is clicked) -->
+        <div id="um-reset-panel" style="display:none;margin-top:24px;padding:16px 18px;border:1px solid var(--border);border-radius:10px;background:var(--user-bubble);">
+          <div style="font-size:13px;font-weight:600;margin-bottom:10px;">Reset password for <span id="um-reset-name"></span></div>
+          <div style="display:flex;gap:10px;align-items:center;">
+            <input id="um-reset-pw" class="vs-input" type="text" placeholder="New temporary password (min. 6 chars)" style="flex:1;">
+            <button class="vs-btn-primary" id="um-reset-save" type="button">Set password</button>
+            <button class="vs-btn-outline" id="um-reset-cancel" type="button">Cancel</button>
+          </div>
+          <span id="um-reset-status" style="font-size:12px;color:var(--text-dim);display:block;margin-top:6px;"></span>
         </div>
       </div>
     </div>
@@ -1086,14 +1127,33 @@ html, body {
 </div>
 
 <script>
+// ── auth token ────────────────────────────────────────────
+// Token is passed as ?token=... when the control panel link is opened from the main app.
+// Stored in sessionStorage so refreshes within the same tab work without re-passing it.
+(function() {
+    const urlToken = new URLSearchParams(location.search).get('token');
+    if (urlToken) {
+        sessionStorage.setItem('ari_cp_token', urlToken);
+        // Clean the token from the URL bar so it isn't visible / logged
+        history.replaceState(null, '', location.pathname);
+    }
+})();
+function cpFetch(url, opts) {
+    const token = sessionStorage.getItem('ari_cp_token');
+    if (!token) return fetch(url, opts);
+    const headers = new Headers((opts && opts.headers) || {});
+    headers.set('Authorization', 'Bearer ' + token);
+    return fetch(url, Object.assign({}, opts, { headers }));
+}
+
 // ── tab switching ─────────────────────────────────────────
 window._ariUserName = 'User';
-fetch('/admin/username').then(r => r.json()).then(d => { if (d.name) window._ariUserName = d.name; }).catch(() => {});
+cpFetch('/admin/username').then(r => r.json()).then(d => { if (d.name) window._ariUserName = d.name; }).catch(() => {});
 
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), scheduler: document.getElementById('tab-scheduler'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), userprefs: document.getElementById('tab-userprefs'), modules: document.getElementById('tab-modules') };
-const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', scheduler: 'Scheduler', llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', userprefs: 'User Preferences', modules: 'Modules' };
+const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), scheduler: document.getElementById('tab-scheduler'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), 'users-new': document.getElementById('tab-users-new'), 'users-manage': document.getElementById('tab-users-manage'), modules: document.getElementById('tab-modules') };
+const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', scheduler: 'Scheduler', llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', 'users-new': 'New User', 'users-manage': 'User Management', modules: 'Modules' };
 
 let srvPollTimer = null;
 function switchTab(name) {
@@ -1116,7 +1176,7 @@ function switchTab(name) {
     if (name === 'scheduler') loadScheduler();
     if (name === 'discord') loadDiscord();
     if (name === 'debug') loadDebugThreads();
-    if (name === 'userprefs') loadUserPrefs();
+    if (name === 'users-manage') loadUserManagement();
     if (name === 'modules') loadModules();
     if (name === 'voices') loadVoicesList();
 }
@@ -1133,7 +1193,7 @@ const modList = document.getElementById('mod-list');
 // Hide sidebar nav items for disabled modules
 async function applyModuleVisibility() {
     try {
-        const r = await fetch('/modules');
+        const r = await cpFetch('/modules');
         if (!r.ok) return;
         const { modules } = await r.json();
         const isEnabled = key => modules.find(m => m.key === key)?.enabled ?? false;
@@ -1167,7 +1227,7 @@ async function loadModules() {
     if (!modList) return;
     modList.innerHTML = '<span style="font-size:12px;color:var(--text-dim);">Loading…</span>';
     try {
-        const r = await fetch('/modules');
+        const r = await cpFetch('/modules');
         if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
         const { modules } = await r.json();
         renderModules(modules);
@@ -1214,7 +1274,7 @@ function renderModules(modules) {
             right.appendChild(buildToggle(m.enabled, async enabled => {
                 status.textContent = 'Saving…';
                 try {
-                    const resp = await fetch(`/modules/${encodeURIComponent(m.key)}`, {
+                    const resp = await cpFetch(`/modules/${encodeURIComponent(m.key)}`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ enabled }),
@@ -1292,7 +1352,7 @@ function schSetRunningState(card, t) {
 // Updates the existing rows in place — a full rebuild would wipe whatever cron edit is mid-flight.
 async function schRefreshRunning() {
     try {
-        const r = await fetch('/admin/scheduler');
+        const r = await cpFetch('/admin/scheduler');
         if (!r.ok) return;
         const d = await r.json();
         (d.tasks || []).forEach(t => {
@@ -1314,7 +1374,7 @@ async function loadScheduler() {
     }
     listEl.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Loading…</span>';
     try {
-        const r = await fetch('/admin/scheduler');
+        const r = await cpFetch('/admin/scheduler');
         if (!r.ok) throw new Error();
         const d = await r.json();
         document.getElementById('sch-proactive').checked = !!d.proactiveEnabled;
@@ -1366,7 +1426,7 @@ function buildTaskRow(t) {
     stop.addEventListener('click', async () => {
         stop.disabled = true;
         // The slot is consumed server-side, so a stopped job waits for its next scheduled time.
-        try { await fetch(`/admin/scheduler/task/${encodeURIComponent(t.name)}/stop`, { method: 'POST' }); } catch {}
+        try { await cpFetch(`/admin/scheduler/task/${encodeURIComponent(t.name)}/stop`, { method: 'POST' }); } catch {}
         setTimeout(() => { stop.disabled = false; schRefreshRunning(); }, 400);
     });
     right.append(next, stop);
@@ -1412,7 +1472,7 @@ function buildTaskRow(t) {
     save.addEventListener('click', async () => {
         status.textContent = 'Saving…';
         try {
-            const r = await fetch('/admin/scheduler/task', {
+            const r = await cpFetch('/admin/scheduler/task', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: t.name, cron: input.value.trim() }),
             });
@@ -1429,7 +1489,7 @@ function buildTaskRow(t) {
 async function saveProactive() {
     const enabled = document.getElementById('sch-proactive').checked;
     try {
-        await fetch('/admin/scheduler/proactive', {
+        await cpFetch('/admin/scheduler/proactive', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ enabled }),
         });
@@ -1442,7 +1502,7 @@ async function saveQuietHours() {
     const activeEnd   = +schActiveEndEl.value;
     status.textContent = 'Saving…';
     try {
-        const r = await fetch('/admin/scheduler/quiet-hours', {
+        const r = await cpFetch('/admin/scheduler/quiet-hours', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ quietStartHour: activeEnd, quietEndHour: activeStart }),
         });
@@ -1460,7 +1520,7 @@ async function loadBrain() {
     const list = document.getElementById('brain-backup-list');
     list.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Loading…</span>';
     try {
-        const r = await fetch('/admin/brain/backups');
+        const r = await cpFetch('/admin/brain/backups');
         const backups = await r.json();
         if (!Array.isArray(backups) || backups.length === 0) { list.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">No backups yet.</span>'; return; }
         list.innerHTML = '';
@@ -1484,7 +1544,7 @@ async function loadBrain() {
 document.getElementById('brain-backup-btn').addEventListener('click', async () => {
     const s = brainStatus(); s.textContent = 'Creating backup…';
     try {
-        const r = await fetch('/admin/brain/backup', { method: 'POST' });
+        const r = await cpFetch('/admin/brain/backup', { method: 'POST' });
         const d = await r.json();
         s.textContent = d.message || 'Backup created.';
         loadBrain();
@@ -1499,7 +1559,7 @@ document.getElementById('discord-delete-btn').addEventListener('click', async (e
     const s = document.getElementById('discord-status');
     btn.disabled = true; s.textContent = 'Deleting…';
     try {
-        const r = await fetch('/admin/discord/delete-recent', { method: 'POST' });
+        const r = await cpFetch('/admin/discord/delete-recent', { method: 'POST' });
         const d = await r.json();
         s.textContent = d.message || (r.ok ? 'Done.' : 'Failed.');
     } catch { s.textContent = 'Delete failed.'; }
@@ -1518,7 +1578,7 @@ var dcState = null;
 async function loadDiscord() {
     const host = document.getElementById('dc-lists');
     try {
-        const r = await fetch('/admin/discord/config');
+        const r = await cpFetch('/admin/discord/config');
         if (!r.ok) throw new Error();
         dcState = await r.json();
     } catch {
@@ -1631,7 +1691,7 @@ document.getElementById('dc-save').addEventListener('click', async e => {
 
     btn.disabled = true; s.textContent = 'Saving…';
     try {
-        const r = await fetch('/admin/discord/config', {
+        const r = await cpFetch('/admin/discord/config', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
@@ -1651,7 +1711,7 @@ async function restoreBackup(file, count) {
     if (!confirm(`Restore ${count} note(s) from\n${file}?\n\nThis recreates missing notes and overwrites present ones to the snapshot. It does not delete anything.`)) return;
     const s = brainStatus(); s.textContent = 'Restoring…';
     try {
-        const r = await fetch('/admin/brain/restore', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ file }) });
+        const r = await cpFetch('/admin/brain/restore', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ file }) });
         const d = await r.json();
         s.textContent = d.message || 'Restored.';
         loadBrain();
@@ -1663,13 +1723,13 @@ let conventionsLoaded = false;
 async function loadConventions() {
     if (conventionsLoaded) return;
     try {
-        const r = await fetch('/admin/conventions');
+        const r = await cpFetch('/admin/conventions');
         const d = await r.json();
         document.getElementById('cv-text').value = d.text || '';
         conventionsLoaded = true;
     } catch { document.getElementById('cv-status').textContent = 'Failed to load.'; }
     try {
-        const r2 = await fetch('/api/cp/safemode-prompt');
+        const r2 = await cpFetch('/api/cp/safemode-prompt');
         const d2 = await r2.json();
         document.getElementById('safemode-text').value = d2.text || '';
     } catch {}
@@ -1679,7 +1739,7 @@ document.getElementById('cv-save-btn').addEventListener('click', async () => {
     const text   = document.getElementById('cv-text').value;
     status.textContent = 'Saving…';
     try {
-        await fetch('/admin/conventions', {
+        await cpFetch('/admin/conventions', {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
             body:    JSON.stringify({ text }),
@@ -1693,7 +1753,7 @@ document.getElementById('safemode-save-btn').addEventListener('click', async () 
     const text   = document.getElementById('safemode-text').value.trim();
     status.textContent = 'Saving…';
     try {
-        await fetch('/api/cp/safemode-prompt', {
+        await cpFetch('/api/cp/safemode-prompt', {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
             body:    JSON.stringify({ text }),
@@ -1703,31 +1763,99 @@ document.getElementById('safemode-save-btn').addEventListener('click', async () 
     } catch { status.textContent = 'Save failed.'; }
 });
 
-// ── User Preferences ──────────────────────────────────────
-let userPrefsLoaded = false;
-async function loadUserPrefs() {
-    if (userPrefsLoaded) return;
+// ── New User ──────────────────────────────────────────────
+document.getElementById('nu-create-btn').addEventListener('click', async () => {
+    const status   = document.getElementById('nu-status');
+    const username = document.getElementById('nu-username').value.trim();
+    const password = document.getElementById('nu-password').value;
+    const role     = document.getElementById('nu-role').value;
+    if (!username) { status.textContent = 'Username is required.'; return; }
+    if (password.length < 6) { status.textContent = 'Password must be at least 6 characters.'; return; }
+    status.textContent = 'Creating…';
     try {
-        const r = await fetch('/admin/username');
-        const d = await r.json();
-        document.getElementById('username-input').value = d.name || '';
-        userPrefsLoaded = true;
-    } catch {}
-}
-document.getElementById('username-save-btn').addEventListener('click', async () => {
-    const status = document.getElementById('username-status');
-    const name = document.getElementById('username-input').value.trim();
-    status.textContent = 'Saving…';
-    try {
-        await fetch('/admin/username', {
+        const r = await cpFetch('/admin/users', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name }),
+            body: JSON.stringify({ username, password, role }),
         });
-        window._ariUserName = name || 'User';
-        status.textContent = 'Saved.';
-        setTimeout(() => { status.textContent = ''; }, 3000);
-    } catch { status.textContent = 'Save failed.'; }
+        const d = await r.json();
+        if (!r.ok) { status.textContent = d.error || 'Failed.'; return; }
+        status.textContent = `Created "${d.username}" (${d.role}).`;
+        document.getElementById('nu-username').value = '';
+        document.getElementById('nu-password').value = '';
+        document.getElementById('nu-role').value = 'Guest';
+        setTimeout(() => { status.textContent = ''; }, 4000);
+    } catch { status.textContent = 'Request failed.'; }
+});
+
+// ── User Management ───────────────────────────────────────
+let umResetUserId = null;
+
+async function loadUserManagement() {
+    const list = document.getElementById('um-user-list');
+    list.innerHTML = '<span style="color:var(--text-dim);font-size:13px;">Loading…</span>';
+    document.getElementById('um-reset-panel').style.display = 'none';
+    umResetUserId = null;
+    try {
+        const users = await cpFetch('/admin/users').then(r => r.json());
+        if (!users.length) { list.innerHTML = '<span style="color:var(--text-dim);font-size:13px;">No users found.</span>'; return; }
+        list.innerHTML = '';
+        users.forEach(u => {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--border);border-radius:8px;background:#fafafa;';
+            const lastActive = u.lastActiveAt ? new Date(u.lastActiveAt).toLocaleString() : 'Never';
+            row.innerHTML = `
+                <div style="flex:1;min-width:0;">
+                    <div style="font-size:13.5px;font-weight:600;color:var(--text);">${u.username}${u.displayName && u.displayName !== u.username ? ` <span style="font-weight:400;color:var(--text-dim);">(${u.displayName})</span>` : ''}</div>
+                    <div style="font-size:12px;color:var(--text-dim);margin-top:2px;">${u.role} · Last active: ${lastActive}</div>
+                </div>
+                <button class="vs-btn-outline um-reset-btn" data-id="${u.id}" data-name="${u.username}" type="button" style="font-size:12px;padding:5px 11px;">Reset password</button>
+                <button class="vs-btn-outline um-delete-btn" data-id="${u.id}" data-name="${u.username}" type="button" style="font-size:12px;padding:5px 11px;color:#b91c1c;border-color:#fecaca;">Delete</button>
+            `;
+            list.appendChild(row);
+        });
+
+        list.querySelectorAll('.um-reset-btn').forEach(btn => btn.addEventListener('click', () => {
+            umResetUserId = parseInt(btn.dataset.id);
+            document.getElementById('um-reset-name').textContent = btn.dataset.name;
+            document.getElementById('um-reset-pw').value = '';
+            document.getElementById('um-reset-status').textContent = '';
+            document.getElementById('um-reset-panel').style.display = '';
+        }));
+
+        list.querySelectorAll('.um-delete-btn').forEach(btn => btn.addEventListener('click', async () => {
+            if (!confirm(`Delete user "${btn.dataset.name}"? This cannot be undone.`)) return;
+            try {
+                const r = await cpFetch(`/admin/users/${btn.dataset.id}`, { method: 'DELETE' });
+                if (!r.ok) { const d = await r.json(); alert(d.error || 'Delete failed.'); return; }
+                loadUserManagement();
+            } catch { alert('Request failed.'); }
+        }));
+    } catch { list.innerHTML = '<span style="color:#b91c1c;font-size:13px;">Failed to load users.</span>'; }
+}
+
+document.getElementById('um-refresh-btn').addEventListener('click', loadUserManagement);
+
+document.getElementById('um-reset-save').addEventListener('click', async () => {
+    const status = document.getElementById('um-reset-status');
+    const pw = document.getElementById('um-reset-pw').value;
+    if (pw.length < 6) { status.textContent = 'Password must be at least 6 characters.'; return; }
+    status.textContent = 'Saving…';
+    try {
+        const r = await cpFetch(`/admin/users/${umResetUserId}/reset-password`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ newPassword: pw }),
+        });
+        if (!r.ok) { const d = await r.json(); status.textContent = d.error || 'Failed.'; return; }
+        status.textContent = 'Password reset. User will be prompted on next sign-in.';
+        setTimeout(() => { document.getElementById('um-reset-panel').style.display = 'none'; }, 2500);
+    } catch { status.textContent = 'Request failed.'; }
+});
+
+document.getElementById('um-reset-cancel').addEventListener('click', () => {
+    document.getElementById('um-reset-panel').style.display = 'none';
+    umResetUserId = null;
 });
 
 // ── Persona ───────────────────────────────────────────────
@@ -1735,7 +1863,7 @@ let personaLoaded = false;
 async function loadPersona() {
     if (personaLoaded) return;
     try {
-        const r = await fetch('/admin/persona');
+        const r = await cpFetch('/admin/persona');
         const d = await r.json();
         document.getElementById('persona-text').value = d.text || '';
         personaLoaded = true;
@@ -1746,7 +1874,7 @@ document.getElementById('persona-save-btn').addEventListener('click', async () =
     const text   = document.getElementById('persona-text').value;
     status.textContent = 'Saving…';
     try {
-        await fetch('/admin/persona', {
+        await cpFetch('/admin/persona', {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
             body:    JSON.stringify({ text }),
@@ -1768,7 +1896,7 @@ async function loadFeedback() {
     list.innerHTML = '<span style="color:var(--text-dim);font-size:13px;">Loading…</span>';
     try {
         const url  = fbFilter ? `/feedback?vote=${fbFilter}` : '/feedback';
-        const data = await fetch(url).then(r => r.json());
+        const data = await cpFetch(url).then(r => r.json());
 
         document.getElementById('fb-count-all').textContent  = data.up + data.down;
         document.getElementById('fb-count-up').textContent    = data.up;
@@ -1814,7 +1942,7 @@ function fbRow(fb) {
 
     row.querySelector('.fb-delete').addEventListener('click', async () => {
         if (!confirm('Remove this rating from the dataset?')) return;
-        await fetch(`/feedback/${fb.id}`, { method: 'DELETE' });
+        await cpFetch(`/feedback/${fb.id}`, { method: 'DELETE' });
         loadFeedback();
     });
 
@@ -1823,7 +1951,7 @@ function fbRow(fb) {
     saveEl.addEventListener('click', async () => {
         saveEl.textContent = 'Saving…';
         try {
-            await fetch(`/feedback/${fb.id}`, {
+            await cpFetch(`/feedback/${fb.id}`, {
                 method:  'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body:    JSON.stringify({ note: noteEl.value }),
@@ -1850,7 +1978,7 @@ async function loadLLMConfigs() {
     const status = document.getElementById('lcfg-status');
     list.innerHTML = '<span style="color:var(--text-dim);font-size:13px;">Loading…</span>';
     try {
-        const configs = await fetch('/admin/llmconfigs').then(r => r.json());
+        const configs = await cpFetch('/admin/llmconfigs').then(r => r.json());
         if (!configs.length) { list.innerHTML = '<span style="color:var(--text-dim);font-size:13px;">No saved configs yet.</span>'; return; }
         list.innerHTML = '';
         configs.forEach(cfg => {
@@ -1874,7 +2002,7 @@ async function loadLLMConfigs() {
                 if (!confirm(`Restore "${cfg.name}"?\n\nAll running servers will stop, the config will be applied, then servers with Auto-start will boot.`)) return;
                 status.textContent = 'Restoring…';
                 try {
-                    const r = await fetch(`/admin/llmconfigs/${encodeURIComponent(cfg.fileName)}/restore`, { method: 'POST' });
+                    const r = await cpFetch(`/admin/llmconfigs/${encodeURIComponent(cfg.fileName)}/restore`, { method: 'POST' });
                     if (!r.ok) { const e = await r.json().catch(()=>{}); status.textContent = e?.error ?? 'Restore failed.'; return; }
                     status.textContent = 'Restored. Servers booting…';
                     setTimeout(() => { status.textContent = ''; }, 5000);
@@ -1882,7 +2010,7 @@ async function loadLLMConfigs() {
             });
             row.querySelector('.lcfg-delete').addEventListener('click', async () => {
                 if (!confirm(`Delete config "${cfg.name}"? This cannot be undone.`)) return;
-                await fetch(`/admin/llmconfigs/${encodeURIComponent(cfg.fileName)}`, { method: 'DELETE' });
+                await cpFetch(`/admin/llmconfigs/${encodeURIComponent(cfg.fileName)}`, { method: 'DELETE' });
                 loadLLMConfigs();
             });
             list.appendChild(row);
@@ -1897,7 +2025,7 @@ document.getElementById('lcfg-save-btn').addEventListener('click', async () => {
     if (!name) { status.textContent = 'Enter a name first.'; return; }
     status.textContent = 'Saving…';
     try {
-        const r = await fetch('/admin/llmconfigs/save', {
+        const r = await cpFetch('/admin/llmconfigs/save', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, description: desc }),
         });
@@ -2258,7 +2386,7 @@ function fmtMbShort(mb) { return mb >= 1024 ? (mb / 1024).toFixed(1) + 'G'  : mb
 let prevLiveKeys = '';
 async function pollRam() {
     try {
-        const res = await fetch('/admin/ram');
+        const res = await cpFetch('/admin/ram');
         const data = await res.json();
         const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         ramLabels.push(now); ramData.push(data.ramMb); swapData.push(data.swapMb ?? 0);
@@ -2277,7 +2405,7 @@ async function pollRam() {
 }
 async function pollStats() {
     try {
-        const res = await fetch('/admin/stats');
+        const res = await cpFetch('/admin/stats');
         const data = await res.json();
         renderTokens(data.calls);
     } catch { /* ignore */ }
@@ -2677,7 +2805,7 @@ async function loadAgents() {
     const shared = document.getElementById('agent-shared');
     host.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Loading…</span>';
     try {
-        const r = await fetch('/agents');
+        const r = await cpFetch('/agents');
         if (!r.ok) throw new Error();
         agData = await r.json();
     } catch {
@@ -2736,12 +2864,12 @@ async function agSave() {
     status.textContent = 'Saving…';
     try {
         for (const a of agData.agents || []) {
-            const r = await fetch(`/agents/${encodeURIComponent(a.name)}`, {
+            const r = await cpFetch(`/agents/${encodeURIComponent(a.name)}`, {
                 method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(a),
             });
             if (!r.ok) throw new Error(a.name);
         }
-        const r2 = await fetch('/agents/shared', {
+        const r2 = await cpFetch('/agents/shared', {
             method: 'PUT', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ memoryAgent: agData.shared.memoryAgent, budgets: agData.shared.budgets }),
         });
@@ -2756,7 +2884,7 @@ async function agSave() {
 async function loadServers() {
     let data;
     try {
-        const r = await fetch('/models');
+        const r = await cpFetch('/models');
         if (!r.ok) { console.error('[loadServers] HTTP', r.status, await r.text()); renderServerCards([]); return; }
         data = await r.json();
     } catch(e) { console.error('[loadServers] fetch/parse error:', e); renderServerCards([]); return; }
@@ -2768,7 +2896,7 @@ async function loadServers() {
 }
 
 async function srvAction(id, action) {
-    await fetch(`/servers/${id}/${action}`, { method:'POST' });
+    await cpFetch(`/servers/${id}/${action}`, { method:'POST' });
 }
 
 // Cards that are currently EXPANDED are never torn down by a background poll — only their header
@@ -2932,7 +3060,7 @@ function renderServerCardBody(body, draft, server, isNew) {
         if (delBtn.disabled) delBtn.style.opacity = '.5';
         delBtn.addEventListener('click', async () => {
             if (!confirm(`Delete server "${server.name}"? This cannot be undone.`)) return;
-            await fetch(`/servers/${server.id}`, { method:'DELETE' });
+            await cpFetch(`/servers/${server.id}`, { method:'DELETE' });
             srvExpandedIds.delete(server.id); delete srvDrafts[server.id];
             loadServers();
         });
@@ -2959,7 +3087,7 @@ function renderServerCardBody(body, draft, server, isNew) {
         try {
             const url    = isNew ? '/servers' : `/servers/${server.id}`;
             const method = isNew ? 'POST' : 'PUT';
-            const r = await fetch(url, { method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+            const r = await cpFetch(url, { method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
             if (!r.ok) { const e = await r.json().catch(()=>{}); err.textContent = e?.error ?? 'Save failed.'; return; }
             if (isNew) { srvNewDraftActive = false; delete srvDrafts.__new__; }
             else { srvExpandedIds.delete(server.id); delete srvDrafts[server.id]; }
@@ -3220,7 +3348,7 @@ function sortModels(models) {
 
 async function loadModels() {
     let data;
-    try { const r = await fetch('/models'); data = await r.json(); }
+    try { const r = await cpFetch('/models'); data = await r.json(); }
     catch { return; }
     mdlLastData = data;
     renderModelCards({ ...data, models: sortModels(data.models ?? []) });
@@ -3361,7 +3489,7 @@ function renderModelCards(data) {
             clearTimeout(mdlNoteTimers[name]);
             mdlNoteTimers[name] = setTimeout(async () => {
                 try {
-                    await fetch('/models/notes', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ modelName: name, notes: ta.value }) });
+                    await cpFetch('/models/notes', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ modelName: name, notes: ta.value }) });
                     saveStatus.textContent = 'Saved.';
                     setTimeout(() => { saveStatus.textContent = ''; }, 2000);
                 } catch { saveStatus.textContent = 'Save failed.'; }
@@ -3372,7 +3500,7 @@ function renderModelCards(data) {
         const thinkStatus = card.querySelector('.mdl-think-status');
         card.querySelector('.mdl-think-slot').appendChild(buildToggle(!!m.supportsThinking, async on => {
             try {
-                const r = await fetch('/models/thinking', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ modelName: m.name, supportsThinking: on }) });
+                const r = await cpFetch('/models/thinking', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ modelName: m.name, supportsThinking: on }) });
                 if (!r.ok) throw new Error();
                 m.supportsThinking = on;
                 card.querySelector('.mdl-tags').innerHTML = parseModelTags(m)
@@ -3388,7 +3516,7 @@ function renderModelCards(data) {
             switchBtn.addEventListener('click', async () => {
                 switchBtn.disabled = true;
                 try {
-                    const r = await fetch('/servers/switch', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ file: switchBtn.dataset.file }) });
+                    const r = await cpFetch('/servers/switch', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ file: switchBtn.dataset.file }) });
                     if (!r.ok) { const err = await r.json().catch(()=>({})); alert(err.error ?? 'Switch failed.'); switchBtn.disabled = false; return; }
                     startSwitchProgressSse();
                     loadModels();
@@ -3402,7 +3530,7 @@ function renderModelCards(data) {
             startupBtn.addEventListener('click', async () => {
                 startupBtn.disabled = true;
                 try {
-                    await fetch('/models/startup', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ file: startupBtn.dataset.file }) });
+                    await cpFetch('/models/startup', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ file: startupBtn.dataset.file }) });
                     loadModels();
                 } catch { startupBtn.disabled = false; }
             });
@@ -3415,7 +3543,7 @@ function renderModelCards(data) {
                 if (!confirm(`Remove "${m.name}" from the registry?`)) return;
                 deleteBtn.disabled = true;
                 try {
-                    const r = await fetch(`/models/${encodeURIComponent(m.name)}`, { method: 'DELETE' });
+                    const r = await cpFetch(`/models/${encodeURIComponent(m.name)}`, { method: 'DELETE' });
                     if (!r.ok) { const err = await r.json().catch(()=>({})); alert(err.error ?? 'Delete failed.'); deleteBtn.disabled = false; return; }
                     loadModels();
                 } catch { deleteBtn.disabled = false; }
@@ -3442,7 +3570,7 @@ document.getElementById('mdl-toggle-add-btn').addEventListener('click', () => {
 let _wizHw = { ramGb: 0, gpus: [] };
 (async () => {
     try {
-        const r = await fetch('/admin/hardware');
+        const r = await cpFetch('/admin/hardware');
         if (!r.ok) return;
         const d = await r.json();
         _wizHw.ramGb = (d.totalRamBytes || 0) / 1073741824;
@@ -3505,7 +3633,7 @@ document.getElementById('mdl-wiz-fetch-btn').addEventListener('click', async () 
     status.textContent = 'Fetching repo…';
 
     try {
-        const r = await fetch(`https://huggingface.co/api/models/${repo}/tree/main`);
+        const r = await cpFetch(`https://huggingface.co/api/models/${repo}/tree/main`);
         if (!r.ok) throw new Error(r.status === 404 ? 'Repo not found' : `HTTP ${r.status}`);
         const files = await r.json();
         const ggufs = files.filter(f => f.path.endsWith('.gguf'));
@@ -3583,7 +3711,7 @@ document.getElementById('mdl-wiz-fetch-btn').addEventListener('click', async () 
                     }
 
                     try {
-                        const r = await fetch('/models', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+                        const r = await cpFetch('/models', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
                         if (!r.ok) { const err = await r.json().catch(()=>({})); wizStatus.style.color='#dc2626'; wizStatus.textContent = err.error ?? 'Failed.'; return; }
                         wizStatus.style.color = '#16a34a';
                         wizStatus.textContent = `${modelName} registered.`;
@@ -3692,7 +3820,7 @@ async function vsSwitchEngineModel(engine, modelName) {
     const statusEl = document.getElementById('vs-switch-status');
     if (statusEl) { statusEl.textContent = 'Switching…'; statusEl.style.display = ''; }
     try {
-        const r = await fetch('/voice/switch', {
+        const r = await cpFetch('/voice/switch', {
             method: 'POST', headers: {'Content-Type':'application/json'},
             body: JSON.stringify({ engine, modelName })
         });
@@ -3704,7 +3832,7 @@ async function vsSwitchEngineModel(engine, modelName) {
         vsUpdateEngineUI();
         // reload engine-specific params
         try {
-            const pr = await fetch('/voice/engine-params');
+            const pr = await cpFetch('/voice/engine-params');
             if (pr.ok) {
                 const pd = await pr.json();
                 if (typeof renderEngineParams === 'function') renderEngineParams(pd);
@@ -3757,7 +3885,7 @@ function vsFilterSavedRuns() {
 const vsServerWarns = document.querySelectorAll('.vs-server-warn');
 async function vsCheckServers() {
     try {
-        const r = await fetch('/models');
+        const r = await cpFetch('/models');
         if (!r.ok) return;
         const data = await r.json();
         const anyOnline = (data.servers ?? []).some(s => s.status !== 'Offline');
@@ -3770,7 +3898,7 @@ document.querySelectorAll('.vs-stop-servers-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
         btn.disabled = true; btn.textContent = 'Stopping…';
         try {
-            const r = await fetch('/models');
+            const r = await cpFetch('/models');
             if (!r.ok) return;
             const data = await r.json();
             await Promise.all((data.servers ?? []).filter(s => s.status !== 'Offline').map(s => fetch(`/servers/${s.id}/stop`, { method: 'POST' })));
@@ -3818,7 +3946,7 @@ async function vsPauseTraining() {
     vsPauseBtn.disabled = true;
     vsPauseBtn.textContent = 'Pausing… (finishes current epoch)';
     try {
-        const r = await fetch(`/voice/${encodeURIComponent(vsActiveModelName)}/stop`, { method: 'POST' });
+        const r = await cpFetch(`/voice/${encodeURIComponent(vsActiveModelName)}/stop`, { method: 'POST' });
         if (!r.ok) { const e = await r.json().catch(() => ({})); vsPauseBtn.textContent = 'Pause failed: ' + (e.error ?? r.statusText); vsPauseBtn.disabled = false; }
     } catch (err) { vsPauseBtn.textContent = 'Pause failed: ' + err.message; vsPauseBtn.disabled = false; }
 }
@@ -3925,7 +4053,7 @@ function vsSetProgress(step, pct, detail, state) {
 
 // Shared upload helper — uploads vsFiles to a new staging dir, returns { stageId, stagingPath }
 async function vsUploadFiles() {
-    const stageResp = await fetch('/voice/stage', { method: 'POST' });
+    const stageResp = await cpFetch('/voice/stage', { method: 'POST' });
     if (!stageResp.ok) throw new Error('Stage failed: ' + (await stageResp.text()));
     const { stageId, stagingPath } = await stageResp.json();
     const CHUNK = 5 * 1024 * 1024, CONCURRENCY = 4;
@@ -3936,7 +4064,7 @@ async function vsUploadFiles() {
         const uploadChunk = async (ci) => {
             const slice = f.slice(ci * CHUNK, Math.min((ci + 1) * CHUNK, f.size));
             const url = `/voice/upload?stageId=${encodeURIComponent(stageId)}&name=${encodeURIComponent(f.name)}&chunk=${ci}&totalChunks=${totalChunks}`;
-            const up = await fetch(url, { method: 'POST', body: slice, headers: { 'Content-Type': 'application/octet-stream' } });
+            const up = await cpFetch(url, { method: 'POST', body: slice, headers: { 'Content-Type': 'application/octet-stream' } });
             if (!up.ok) throw new Error(`Upload of ${f.name} chunk ${ci} failed: ` + (await up.text()));
             done++;
             vsSetProgress(`Uploading file ${fi+1} of ${vsFiles.length}`, Math.round((done / totalChunks) * 100), `${f.name} — ${done} / ${totalChunks} chunks`, '');
@@ -3956,7 +4084,7 @@ function vsStartTrainingJob(trainBody, modelName) {
     vsStartTimer();
     (async () => {
         try {
-            const trainResp = await fetch('/voice/train', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(trainBody) });
+            const trainResp = await cpFetch('/voice/train', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(trainBody) });
             if (!trainResp.ok) throw new Error('Start failed: ' + (await trainResp.text()));
             let vsDone = false;
             function connectProgressSse() {
@@ -4080,14 +4208,14 @@ vsTrainBtn.addEventListener('click', async () => {
             vsLogBadge.textContent = 'transcribing…';
             vsSetProgress('Transcribing audio with Whisper', 5, null, '');
             vsAppendLog('Loading Whisper model…');
-            const trResp = await fetch('/voice/transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stageId }) });
+            const trResp = await cpFetch('/voice/transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stageId }) });
             if (!trResp.ok) throw new Error('Transcription failed: ' + (await trResp.text()));
 
             // Poll for transcription completion
             let trLoggedCount = 0;
             const trPoll = setInterval(async () => {
                 try {
-                    const d = await fetch('/voice/transcribe/status').then(r => r.json());
+                    const d = await cpFetch('/voice/transcribe/status').then(r => r.json());
                     vsTrStep.textContent = d.step;
                     vsTrPct.textContent = d.percent + '%';
                     vsTrFill.style.width = d.percent + '%';
@@ -4250,7 +4378,7 @@ async function dsSplit(name) {
     const splitBtn = wrap.querySelector('.ds-split-btn');
     splitBtn.disabled = true; splitBtn.textContent = 'Splitting…';
     try {
-        const r = await fetch('/voice/dataset/split', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        const r = await cpFetch('/voice/dataset/split', { method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name }) });
         if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Split failed');
         const { parts: newParts } = await r.json();
@@ -4270,7 +4398,7 @@ async function dsSplit(name) {
         undoBtn.className = 'ds-action-btn'; undoBtn.style.cssText = 'font-size:11px;padding:4px 12px';
         undoBtn.textContent = 'Undo';
         undoBtn.addEventListener('click', async () => {
-            await fetch('/voice/dataset/unsplit', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            await cpFetch('/voice/dataset/unsplit', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name }) });
             newParts.forEach(np => {
                 const el = dsCompareList.querySelector(`[data-row="${CSS.escape(np.name)}"]`);
@@ -4388,7 +4516,7 @@ function dsAppendParts(parts) {
 function dsPollStatus() {
     dsStatusTimer = setInterval(async () => {
         try {
-            const d = await fetch('/voice/dataset/status').then(r => r.json());
+            const d = await cpFetch('/voice/dataset/status').then(r => r.json());
             dsStepLabel.textContent = d.step;
             dsPctLabel.textContent  = d.percent + '%';
             dsProgFill.style.width  = d.percent + '%';
@@ -4413,20 +4541,20 @@ dsProcessBtn.addEventListener('click', async () => {
     dsStepLabel.textContent = 'Uploading'; dsPctLabel.textContent = '0%'; dsProgFill.style.width = '0%';
     const demucs = dsDemucsToggle.checked;
     try {
-        const { stageId } = await fetch('/voice/stage', { method: 'POST' }).then(r => r.json());
+        const { stageId } = await cpFetch('/voice/stage', { method: 'POST' }).then(r => r.json());
         const CHUNK = 5 * 1024 * 1024, CONCURRENCY = 4;
         for (let fi = 0; fi < dsFiles.length; fi++) {
             const f = dsFiles[fi], totalChunks = Math.max(1, Math.ceil(f.size / CHUNK));
             const uploadChunk = async (ci) => {
                 const slice = f.slice(ci * CHUNK, Math.min((ci + 1) * CHUNK, f.size));
                 const url = `/voice/upload?stageId=${encodeURIComponent(stageId)}&name=${encodeURIComponent(f.name)}&chunk=${ci}&totalChunks=${totalChunks}`;
-                const up = await fetch(url, { method: 'POST', body: slice, headers: { 'Content-Type': 'application/octet-stream' } });
+                const up = await cpFetch(url, { method: 'POST', body: slice, headers: { 'Content-Type': 'application/octet-stream' } });
                 if (!up.ok) throw new Error(`Upload of ${f.name} failed`);
             };
             for (let ci = 0; ci < totalChunks; ci += CONCURRENCY) { await Promise.all(Array.from({ length: Math.min(CONCURRENCY, totalChunks - ci) }, (_, i) => uploadChunk(ci + i))); }
             dsStepLabel.textContent = `Uploaded ${fi + 1} / ${dsFiles.length}`;
         }
-        const r = await fetch('/voice/dataset/process', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stageId, demucs }) });
+        const r = await cpFetch('/voice/dataset/process', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stageId, demucs }) });
         if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Process failed');
         dsStepLabel.textContent = 'Processing'; dsPollStatus();
     } catch (err) { dsStepLabel.textContent = 'Error: ' + err.message; dsProgFill.className = 'vs-progress-fill error'; dsProcessBtn.disabled = false; }
@@ -4436,7 +4564,7 @@ dsBuildBtn.addEventListener('click', async () => {
     dsBuildBtn.disabled = true; dsBuildBtn.textContent = 'Building…';
     try {
         const selections = [...dsSelections].filter(([, v]) => v !== 'skip').map(([name, variant]) => ({ name, variant, transcript: dsTranscripts.get(name) || '' }));
-        const r = await fetch('/voice/dataset/build', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selections }) });
+        const r = await cpFetch('/voice/dataset/build', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selections }) });
         if (!r.ok) throw new Error('Build failed');
         const blob = await r.blob();
         const a = document.createElement('a');
@@ -4478,7 +4606,7 @@ async function loadCheckpoints(modelName) {
     vsTvEpoch.innerHTML = '<option value="">latest</option>';
     if (!modelName) return;
     try {
-        const r = await fetch(`/voice/${encodeURIComponent(modelName)}/checkpoints`);
+        const r = await cpFetch(`/voice/${encodeURIComponent(modelName)}/checkpoints`);
         if (!r.ok) return;
         const { checkpoints } = await r.json();
         // skip the first entry (latest/model.pth) since we already have it as default
@@ -4559,7 +4687,7 @@ async function vsStartResume(modelName, retrain = false) {
     const label = retrain ? 'Retraining' : 'Resuming';
     vsSetProgress(label, 0, `${label} ${modelName}…`, ''); vsStartTimer();
     try {
-        const resp = await fetch('/voice/resume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName, epochs, retrain }) });
+        const resp = await cpFetch('/voice/resume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName, epochs, retrain }) });
         if (!resp.ok) throw new Error((await resp.json().catch(()=>({error:resp.statusText}))).error ?? resp.statusText);
         let vsDone = false;
         function connectResumeProgressSse() {
@@ -4585,7 +4713,7 @@ async function vsDismissResume(modelName, engine) {
     if (!confirm(`Remove "${modelName}" from the resume list? The voice itself will be kept.`)) return;
     const eng = engine || 'StyleTTS2';
     try {
-        const resp = await fetch(`/voice/${encodeURIComponent(eng)}/${encodeURIComponent(modelName)}/dismiss`, { method: 'POST' });
+        const resp = await cpFetch(`/voice/${encodeURIComponent(eng)}/${encodeURIComponent(modelName)}/dismiss`, { method: 'POST' });
         if (!resp.ok) { const e = await resp.json().catch(()=>({error:resp.statusText})); alert('Dismiss failed: ' + (e.error ?? resp.statusText)); return; }
         await loadVoiceModels();
     } catch(err) { alert('Dismiss failed: ' + err.message); }
@@ -4643,7 +4771,7 @@ async function loadVoicesList() {
 async function voicesDeleteModel(modelName, engine) {
     if (!confirm(`Delete "${modelName}" and all its checkpoints? This cannot be undone.`)) return;
     try {
-        const resp = await fetch(`/voice/${encodeURIComponent(engine)}/${encodeURIComponent(modelName)}`, { method: 'DELETE' });
+        const resp = await cpFetch(`/voice/${encodeURIComponent(engine)}/${encodeURIComponent(modelName)}`, { method: 'DELETE' });
         if (!resp.ok) { const e = await resp.json().catch(()=>({error:resp.statusText})); alert('Delete failed: ' + (e.error ?? resp.statusText)); return; }
         await loadVoicesList();
         await loadVoiceModels();
@@ -4669,7 +4797,7 @@ bindSlider('sp-pause', 'sp-pause-val', 2);
 let engineParamDefs = [];
 async function loadEngineParams() {
     try {
-        const r = await fetch('/voice/engine-params');
+        const r = await cpFetch('/voice/engine-params');
         if (!r.ok) return;
         const data = await r.json();
         document.getElementById('sp-engine-label').textContent = data.engine ?? '';
@@ -4708,7 +4836,7 @@ function getSynthParams() {
 // voice, not just Test Voice. Load the saved values on start and save on change.
 async function loadVoiceSettings() {
     try {
-        const r = await fetch('/voice/settings');
+        const r = await cpFetch('/voice/settings');
         if (!r.ok) return;
         const s = await r.json();
         const speed = document.getElementById('sp-speed'), pause = document.getElementById('sp-pause');
@@ -4718,7 +4846,7 @@ async function loadVoiceSettings() {
 }
 async function saveVoiceSettings() {
     try {
-        await fetch('/voice/settings', {
+        await cpFetch('/voice/settings', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 speed:      parseFloat(document.getElementById('sp-speed').value),
@@ -4748,7 +4876,7 @@ vsTvSpeakBtn.addEventListener('click', async () => {
     const resumed = audioCtx.state === 'suspended' ? audioCtx.resume() : Promise.resolve();
     try {
         const checkpointPath = vsTvEpoch.value || null;
-        const resp = await fetch('/voice/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, modelName, checkpointPath, ...getSynthParams() }) });
+        const resp = await cpFetch('/voice/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, modelName, checkpointPath, ...getSynthParams() }) });
         if (!resp.ok) { const err = await resp.json().catch(() => ({ error: resp.statusText })); vsTvStatus.textContent = 'Error: ' + (err.error ?? resp.statusText); return; }
         const bytes = await resp.arrayBuffer();
         if (bytes.byteLength === 0) { vsTvStatus.textContent = 'Error: server returned no audio'; return; }
@@ -4782,7 +4910,7 @@ vsTvDefaultBtn.addEventListener('click', async () => {
     if (!modelName) return;
     vsTvDefaultBtn.disabled = true;
     try {
-        const resp = await fetch('/voice/default', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName }) });
+        const resp = await cpFetch('/voice/default', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName }) });
         if (!resp.ok) { const err = await resp.json().catch(() => ({ error: resp.statusText })); vsTvStatus.textContent = 'Error: ' + (err.error ?? resp.statusText); }
         else {
             await loadVoiceModels();
@@ -4840,7 +4968,7 @@ async function loadDebugThreads() {
     const list = document.getElementById('dbg-thread-list');
     list.innerHTML = '<div class="cp-placeholder" style="padding:10px 12px;">Loading…</div>';
     try {
-        const r = await fetch('/threads?includeInternal=true');
+        const r = await cpFetch('/threads?includeInternal=true');
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const threads = await r.json();
         dbgRenderThreadList(threads);
@@ -4888,7 +5016,7 @@ async function dbgLoadThread(key) {
     keyEl.textContent = key;
     if (!body.dataset.loaded) body.innerHTML = '<div class="dbg-empty">Loading…</div>';
     try {
-        const r = await fetch(`/threads/${encodeURIComponent(key)}/debug`);
+        const r = await cpFetch(`/threads/${encodeURIComponent(key)}/debug`);
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const thread = await r.json();
         // /debug now returns a thread tree: { key, label, state, history:[...], children:[...] }.
@@ -5364,7 +5492,7 @@ function dbgThreadToText(thread, depth) {
 async function dbgDownloadThread() {
     if (!dbgSelectedThread) return;
     try {
-        const r = await fetch('/threads/' + encodeURIComponent(dbgSelectedThread) + '/debug');
+        const r = await cpFetch('/threads/' + encodeURIComponent(dbgSelectedThread) + '/debug');
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const thread = await r.json();
         const text = 'DEBUG THREAD EXPORT\nthread: ' + dbgSelectedThread + '\ngenerated: ' + new Date().toISOString()

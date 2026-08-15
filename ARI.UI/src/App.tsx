@@ -12,6 +12,9 @@ import { startListening, type ListenerHandle } from "./hooks/useListener"
 import { env } from "./env"
 import TaskBanner from "./components/TaskBanner"
 import { playResponseChime } from "./notify"
+import LoginScreen from "./components/LoginScreen"
+import UserPreferences from "./components/UserPreferences"
+import { apiFetch, fetchMe, setToken, type AuthUser } from "./auth"
 import "./styles/app.css"
 
 export type AppMode = "idle" | "active"
@@ -210,6 +213,31 @@ export default function App() {
     const [connState, setConnState] = useState<"connecting" | "connected" | "failed">("connecting")
     const pipelines = usePipelines()
 
+    // ── Auth ──────────────────────────────────────────────────────────────────────
+    const [authState,       setAuthState]       = useState<"loading" | "needsLogin" | "authed">("loading")
+    const [authUser,        setAuthUser]        = useState<AuthUser | null>(null)
+    const [showPreferences, setShowPreferences] = useState(false)
+
+    useEffect(() => {
+        fetchMe().then(user => {
+            if (user) { setAuthUser(user); setAuthState("authed") }
+            else       setAuthState("needsLogin")
+        })
+    }, [])
+
+    function handleLoginSuccess(user: AuthUser, token: string) {
+        setToken(token)
+        setAuthUser(user)
+        setAuthState("authed")
+    }
+
+    function handleLogout() {
+        setAuthState("needsLogin")
+        setAuthUser(null)
+        setShowPreferences(false)
+        globalEsRef.current?.close()
+    }
+
     const stopListening = () => {
         listenerRef.current?.stop()
         listenerRef.current = null
@@ -279,7 +307,7 @@ export default function App() {
 
     const loadProjects = useCallback(async () => {
         try {
-            const res = await fetch("/projects")
+            const res = await apiFetch("/projects")
             if (res.ok) setProjects(await res.json())
         } catch { /* ignore */ }
     }, [])
@@ -349,7 +377,8 @@ export default function App() {
         setConnState("connecting")
         let failures = 0
         while (true) {
-            const res = await fetch("/threads").catch(() => null)
+            const res = await apiFetch("/threads").catch(() => null)
+            if (res?.status === 401) { setAuthState("needsLogin"); return }  // token expired/invalid
             if (res && res.status !== 503) break                              // server ready
             if (res === null && ++failures >= 5) { setConnState("failed"); return }
             if (res !== null) failures = 0                                    // 503: booting — keep waiting
@@ -358,7 +387,7 @@ export default function App() {
         await Promise.all([loadThreads(), loadProjects()])
         openGlobalStream()
         setConnState("connected")
-        fetch("/admin/scheduler").then(r => r.json()).then(data => {
+        apiFetch("/admin/scheduler").then(r => r.json()).then(data => {
             const running = (data.tasks ?? []).filter((t: any) => t.running).map((t: any) => t.name as string)
             if (running.length > 0) setRunningTasks(new Set(running))
         }).catch(() => {})
@@ -367,7 +396,7 @@ export default function App() {
         // client has a fixed protocol baked in and the server may be a different build.
         if (window.electronBridge) {
             const CLIENT_PROTOCOL = 2
-            const infoRes = await fetch("/api/info/ready").catch(() => null)
+            const infoRes = await apiFetch("/api/info/ready").catch(() => null)
             if (infoRes?.ok) {
                 const { protocol: serverProtocol } = await infoRes.json()
                 // Servers older than protocol 2 don't return this field — treat as v1.
@@ -379,6 +408,7 @@ export default function App() {
     }, [loadThreads, loadProjects])
 
     useEffect(() => {
+        if (authState !== "authed") return
         connectAndInit()
         // Long fallback poll — events drive updates; this is only a safety net.
         const pollId = setInterval(loadThreads, 60_000)
@@ -386,7 +416,7 @@ export default function App() {
         // Shows the outdated banner when a newer stable server release exists on GitHub.
         // The server does the GitHub comparison and caches it; we just read the flag.
         async function checkVersion() {
-            const res = await fetch("/api/info/version").catch(() => null)
+            const res = await apiFetch("/api/info/version").catch(() => null)
             if (!res?.ok) return
             const { serverOutdated } = await res.json()
             setOutdated(!!serverOutdated)
@@ -396,7 +426,7 @@ export default function App() {
         // says so rather than accepting a message nothing can answer. Polled often enough that the
         // warning clears shortly after the user starts a server.
         async function checkReady() {
-            const res = await fetch("/api/info/ready").catch(() => null)
+            const res = await apiFetch("/api/info/ready").catch(() => null)
             if (!res?.ok) return
             const { ready } = await res.json()
             setServerReady(!!ready)
@@ -409,7 +439,7 @@ export default function App() {
         const versionPollId = setInterval(checkVersion, 60 * 1000)
 
         return () => { clearInterval(pollId); clearInterval(versionPollId); clearInterval(readyPollId); globalEsRef.current?.close() }
-    }, [connectAndInit, loadThreads, loadProjects])
+    }, [authState, connectAndInit, loadThreads, loadProjects])
 
     // ── toast ─────────────────────────────────────────────
     const showToast = useCallback((msg: string) => {
@@ -435,7 +465,7 @@ export default function App() {
     // ── load thread attachments ───────────────────────────
     const refreshThreadAttach = useCallback(async (key: string) => {
         try {
-            const res = await fetch(`/threads/${key}/attachments`)
+            const res = await apiFetch(`/threads/${key}/attachments`)
             if (res.ok) setThreadAttach(await res.json())
             else setThreadAttach([])
         } catch { setThreadAttach([]) }
@@ -459,7 +489,7 @@ export default function App() {
             // Inject as _fs_skeleton — a system-context hint, NOT a user-turn attachment.
             // The server reads this name specially and places it in the system prompt rather
             // than prepending it to every user message.
-            const res = await fetch(`/threads/${threadKey}/system-context`, {
+            const res = await apiFetch(`/threads/${threadKey}/system-context`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ name: "_fs_skeleton", content }),
@@ -929,7 +959,7 @@ export default function App() {
 
         if (prompt.startsWith("/")) {
             try {
-                const res = await fetch("/commands", {
+                const res = await apiFetch("/commands", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ threadKey: key, input: prompt }),
@@ -976,7 +1006,7 @@ export default function App() {
 
         async function runStream() {
             try {
-                const resp = await fetch(`/threads/${keyForStream}/stream`, {
+                const resp = await apiFetch(`/threads/${keyForStream}/stream`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ prompt, ...(localPath ? { localPath } : {}), ...(safetyMode ? { safeMode: true } : {}) }),
@@ -1067,7 +1097,7 @@ export default function App() {
         const succeeded: string[] = []
         for (const file of files) {
             const fd = new FormData(); fd.append("file", file)
-            const res = await fetch(`/threads/${key}/attachments`, { method: "POST", body: fd })
+            const res = await apiFetch(`/threads/${key}/attachments`, { method: "POST", body: fd })
             if (res.ok) succeeded.push(file.name)
             else { const err = await res.json().catch(() => null); showToast(err?.error ?? `Could not attach ${file.name}.`) }
         }
@@ -1077,7 +1107,7 @@ export default function App() {
 
     const removeThreadAttachment = useCallback(async (name: string) => {
         if (!activeThreadRef.current) return
-        await fetch(`/threads/${activeThreadRef.current}/attachments/${encodeURIComponent(name)}`, { method: "DELETE" })
+        await apiFetch(`/threads/${activeThreadRef.current}/attachments/${encodeURIComponent(name)}`, { method: "DELETE" })
         await refreshThreadAttach(activeThreadRef.current)
     }, [refreshThreadAttach])
 
@@ -1096,7 +1126,7 @@ export default function App() {
 
         for (const file of files) {
             const fd = new FormData(); fd.append("file", file)
-            const res = await fetch(`/threads/${key}/message-attachments`, { method: "POST", body: fd })
+            const res = await apiFetch(`/threads/${key}/message-attachments`, { method: "POST", body: fd })
             if (res.ok) {
                 const data = await res.json()
                 setPendingAttach(prev => [
@@ -1113,11 +1143,17 @@ export default function App() {
 
     const removeMessageAttachment = useCallback(async (name: string) => {
         if (!activeThreadRef.current) return
-        await fetch(`/threads/${activeThreadRef.current}/message-attachments/${encodeURIComponent(name)}`, { method: "DELETE" })
+        await apiFetch(`/threads/${activeThreadRef.current}/message-attachments/${encodeURIComponent(name)}`, { method: "DELETE" })
         setPendingAttach(prev => prev.filter(a => a.name !== name))
     }, [])
 
     const isWin32 = window.electronBridge?.platform === "win32"
+
+    if (authState === "loading") return <div id="shell" />
+
+    if (authState === "needsLogin") return (
+        <LoginScreen onLoginSuccess={handleLoginSuccess} />
+    )
 
     return (
         <div id="shell">
@@ -1157,7 +1193,7 @@ export default function App() {
                 </div>
             )}
             <TaskBanner tasks={runningTasks} onCancel={name => {
-                fetch(`/admin/scheduler/task/${encodeURIComponent(name)}/stop`, { method: "POST" }).catch(() => {})
+                apiFetch(`/admin/scheduler/task/${encodeURIComponent(name)}/stop`, { method: "POST" }).catch(() => {})
             }} />
             <Sidebar
                 threads={threads}
@@ -1171,6 +1207,9 @@ export default function App() {
                 onToggleCollapse={() => setSidebarCollapsed(c => !c)}
                 clientVersion={clientVersion}
                 outdated={outdated}
+                userDisplayName={authUser?.displayName || authUser?.username}
+                onOpenPreferences={() => setShowPreferences(true)}
+                isAdmin={authUser?.role === "Admin"}
             />
             <div id="sidebar-overlay"
                 className={sidebarCollapsed ? "" : "visible"}
@@ -1222,6 +1261,14 @@ export default function App() {
             {toasts.map(t => (
                 <div key={t.id} className="toast toast-visible">{t.msg}</div>
             ))}
+            {showPreferences && authUser && (
+                <UserPreferences
+                    user={authUser}
+                    onClose={() => setShowPreferences(false)}
+                    onLogout={handleLogout}
+                    onUserUpdated={updated => setAuthUser(updated)}
+                />
+            )}
             {pendingCommand && (
                 <div style={cmdOverlayStyle}
                      onClick={() => { pendingCommand.resolve("deny"); setPendingCommand(null) }}>
