@@ -78,7 +78,7 @@ export default function LoginScreen({ onLoginSuccess }: Props) {
         <div style={overlay}>
             <div style={card}>
                 <div style={logoRow}>
-                    <img src="/images/logo-white.png" alt="A·R·I" style={logoImg} />
+                    <img src="/images/logo-black.png" alt="A·R·I" style={logoImg} />
                 </div>
 
                 {screen === "login" ? (
@@ -173,7 +173,7 @@ const logoRow: React.CSSProperties = {
     justifyContent:  "center",
     alignItems:      "center",
     marginBottom:    28,
-    background:      "#223742",
+    background:      "#ffffff",
     borderRadius:    10,
     padding:         "18px 24px",
 }
