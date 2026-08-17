@@ -462,6 +462,14 @@ public class Thread
 
         State = ThreadState.Deleted;
         DisposeTimers();
+
+        // If ProjectRoot is a scratchpad dir (not a registered project), delete it.
+        if (ProjectRoot is { } root && root.StartsWith(ARI.Common.Paths.ServerDir("Scratchpad"), StringComparison.OrdinalIgnoreCase))
+        {
+            try { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+            catch (Exception ex) { Shared.Logger.LogWarning("[Thread] ({ThreadKey}) scratchpad delete failed: {Err}", threadKey, ex.Message); }
+        }
+
         Shared.Logger.LogInformation("[Thread] ({ThreadKey}) deleted.", threadKey);
         Deleted?.Invoke();
     }
