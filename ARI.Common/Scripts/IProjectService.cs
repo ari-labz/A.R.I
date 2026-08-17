@@ -2,7 +2,7 @@ namespace ARI.Common;
 
 /// <summary>Read-only view of a project, safe to hand across the ARI.LLM/ARI.API boundary without
 /// either side depending on the other's concrete types.</summary>
-public record ProjectSummary(string Id, string Name, string Type, string Category, string Backend);
+public record ProjectSummary(string Id, string Name, string Category, string Backend);
 
 /// <summary>
 /// The contract ARI.LLM's project_tools use to create/find/bind projects, without ARI.LLM taking a
@@ -14,10 +14,10 @@ public interface IProjectService
 {
     IReadOnlyList<ProjectSummary> List();
 
-    /// <summary>type must be "Repository" or "ObsidianGraph" (case-insensitive); an unrecognised value
-    /// falls back to Repository. category is free text. backend must be "ServerFs" or "RemoteFs"
-    /// (case-insensitive); null/unrecognised defaults per type, same as the REST API.</summary>
-    ProjectSummary? Create(string name, string type, string? category, string? backend = null);
+    /// <summary>category is free text. backend must be "ServerFs" or "RemoteFs" (case-insensitive);
+    /// null defaults to ServerFs. Project capabilities (git, vault, etc.) are detected from directory
+    /// contents at bind time — no type declaration needed.</summary>
+    ProjectSummary? Create(string name, string? category, string? backend = null);
 
     bool Rename(string id, string newName);
 

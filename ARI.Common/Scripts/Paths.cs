@@ -199,6 +199,14 @@ public static class Paths
         return null;
     }
 
+    /// <summary>Per-thread scratchpad directory — created on demand, deleted when the thread dies.
+    /// Thread keys may contain characters illegal in paths (e.g. ':') so they are sanitised first.</summary>
+    public static string ScratchpadDir(string threadKey)
+    {
+        string safe = string.Concat(threadKey.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
+        return ServerDir($"Scratchpad/{safe}");
+    }
+
     /// <summary>Server-side persistent data subfolder not already exposed above (creates it if missing).</summary>
     public static string ServerDir(string sub)
     {

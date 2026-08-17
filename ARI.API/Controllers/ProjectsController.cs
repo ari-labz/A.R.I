@@ -21,7 +21,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
             return Ok(store.GetAll().Select(p => new
             {
                 p.Id, p.Name, p.Description, p.Instructions, p.CreatedAt,
-                p.Type, p.Category, p.Backend, p.RootPath, p.Attachments, p.OwnerId,
+                p.Category, p.Backend, p.RootPath, p.Attachments, p.OwnerId,
                 OwnerUsername = p.OwnerId == 0 ? "admin" : (allUsers.TryGetValue(p.OwnerId, out string? n) ? n : "unknown"),
             }));
         }
@@ -37,7 +37,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest(new { error = "Name is required." });
 
-        var summary = projects.Create(req.Name, (req.Type ?? ProjectType.Repository).ToString(), req.Category, req.Backend?.ToString());
+        var summary = projects.Create(req.Name, req.Category, req.Backend?.ToString());
         if (summary is null) return BadRequest(new { error = "Failed to create project." });
 
         Project? created = store.Get(summary.Id);
@@ -80,7 +80,6 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
         {
             Description  = req.Description?.Trim() ?? "",
             Instructions = req.Instructions?.Trim() ?? "",
-            Type         = req.Type ?? current.Type,
             Category     = req.Category?.Trim() ?? current.Category,
             Backend      = newBackend,
             RootPath     = newRootPath,
@@ -151,6 +150,5 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
 
 public record CreateProjectRequest(
     string Name, string? Description, string? Instructions,
-    [property: JsonConverter(typeof(JsonStringEnumConverter))] ProjectType? Type,
     string? Category,
     [property: JsonConverter(typeof(JsonStringEnumConverter))] StorageBackend? Backend);

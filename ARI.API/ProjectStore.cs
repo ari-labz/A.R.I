@@ -5,10 +5,6 @@ using ARI.Common;
 
 namespace ARI.API;
 
-// Closed set — drives mechanics (toolset, pipeline routing). New types are a deliberate code change,
-// never something minted at runtime; that's what Category is for.
-public enum ProjectType { Repository, ObsidianGraph }
-
 // ServerFs: the project's files live under Paths.ServerDir("Projects") on this server, and RootPath is
 // server-managed (derived + created at project creation, never user-typed). RemoteFs: the files live on
 // whichever machine the desktop app attaches from — RootPath stays null server-side; the existing
@@ -21,7 +17,6 @@ public record Project(
     string         Description,
     string         Instructions,
     DateTime       CreatedAt,
-    [property: JsonConverter(typeof(JsonStringEnumConverter))] ProjectType Type,
     // Open vocabulary, purely descriptive (search/sort/LLM context) — never mechanically significant.
     string         Category    = "",
     // Default only matters for a row missing this field (every project created before Backend existed) —
