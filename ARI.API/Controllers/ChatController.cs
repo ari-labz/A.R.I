@@ -138,7 +138,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         // An explicit pipeline selection wins; otherwise a Repository project opens in code-mode.
         if (Enum.TryParse(req?.Pipeline, ignoreCase: true, out ARI.LLM.ThreadPipeline selected))
             Llm.ForcePipeline(key, selected);
-        else if (project?.Type == ProjectType.Repository)
+        else if (project?.RootPath is { } pr && Directory.Exists(Path.Combine(pr, ".git")))
             Llm.ForceCodeThread(key);
         else
             Llm.GetOrCreateDialogueThread(key);
@@ -419,37 +419,36 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         bool isZip  = mime is "application/zip" or "application/x-zip-compressed"
                    || file.FileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
 
-        // ── Zip: extract and add each text file as a separate attachment ──────────
+        // Resolve the target directory — project dir if already bound, otherwise the thread's scratchpad.
+        string targetDir = FindThread(threadKey)?.ProjectRoot is { } root
+                        && !root.StartsWith(Paths.ServerDir("Scratchpad"), StringComparison.OrdinalIgnoreCase)
+            ? root
+            : Paths.ScratchpadDir(threadKey);
+
+        // ── Zip: extract each text file into the target directory ─────────────────
         if (isZip)
         {
             using MemoryStream zipStream = new();
             await file.CopyToAsync(zipStream);
             zipStream.Position = 0;
 
-            List<string> extracted  = new();
-            List<string> skipped    = new();
+            List<string> extracted = new();
+            List<string> skipped   = new();
 
             using ZipArchive archive = new(zipStream, ZipArchiveMode.Read);
             foreach (ZipArchiveEntry entry in archive.Entries)
             {
-                // Skip directories, hidden files, and binary/build artefacts.
                 if (string.IsNullOrEmpty(entry.Name)) continue;
                 if (entry.Name.StartsWith('.'))        continue;
                 if (IsSkippedZipPath(entry.FullName))  continue;
 
                 string ext = Path.GetExtension(entry.Name).ToLowerInvariant();
-                if (!IsTextExtension(ext))
-                {
-                    skipped.Add(entry.FullName);
-                    continue;
-                }
+                if (!IsTextExtension(ext)) { skipped.Add(entry.FullName); continue; }
 
-                using StreamReader reader  = new(entry.Open());
-                string             content = await reader.ReadToEndAsync();
-
-                Attachment att = new() { Name = entry.FullName, Content = content, IsImage = false, MimeType = "text/plain" };
-                pendingAttachments.GetOrAdd(threadKey, _ => new()).RemoveAll(a => a.Name == att.Name);
-                pendingAttachments[threadKey].Add(att);
+                string destPath = Path.Combine(targetDir, entry.FullName.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+                using FileStream fs = System.IO.File.Create(destPath);
+                await entry.Open().CopyToAsync(fs);
                 extracted.Add(entry.FullName);
             }
 
@@ -462,23 +461,25 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         if (!isImage && BinaryMimes.Contains(mime))
             return StatusCode(415, new { error = $"{Path.GetExtension(file.FileName).TrimStart('.').ToUpper()} files cannot be attached as thread context — only images and text files are supported." });
 
-        string fileContent;
         if (isImage)
         {
+            // Images stay in memory — vision models need them inline.
             using MemoryStream ms = new();
             await file.CopyToAsync(ms);
-            fileContent = Convert.ToBase64String(ms.ToArray());
+            string b64 = Convert.ToBase64String(ms.ToArray());
+            Attachment att = new() { Name = file.FileName, Content = b64, IsImage = true, MimeType = mime };
+            List<Attachment> list = pendingAttachments.GetOrAdd(threadKey, _ => new());
+            list.RemoveAll(a => a.Name == att.Name);
+            list.Add(att);
         }
         else
         {
-            using System.IO.StreamReader reader = new(file.OpenReadStream());
-            fileContent = await reader.ReadToEndAsync();
+            // Text files go to the scratchpad / project directory.
+            string destPath = Path.Combine(targetDir, file.FileName);
+            await using FileStream fs = System.IO.File.Create(destPath);
+            await file.CopyToAsync(fs);
         }
 
-        Attachment attachment = new() { Name = file.FileName, Content = fileContent, IsImage = isImage, MimeType = mime };
-        List<Attachment> list = pendingAttachments.GetOrAdd(threadKey, _ => new());
-        list.RemoveAll(a => a.Name == attachment.Name);
-        list.Add(attachment);
         return Ok(new { name = file.FileName, isImage });
     }
 
@@ -502,19 +503,80 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     [HttpDelete("{threadKey}/attachments/{name}")]
     public IActionResult RemoveAttachment(string threadKey, string name)
     {
+        // Remove from in-memory images if present.
         if (pendingAttachments.TryGetValue(threadKey, out List<Attachment>? list))
             list.RemoveAll(a => a.Name == name);
         FindThread(threadKey)?.RemoveAttachment(name);
+
+        // Remove from disk if present.
+        string fileRoot = FindThread(threadKey)?.ProjectRoot ?? Paths.ScratchpadDir(threadKey);
+        string path     = Path.Combine(fileRoot, name);
+        if (System.IO.File.Exists(path)) System.IO.File.Delete(path);
+
         return Ok();
     }
 
     [HttpGet("{threadKey}/attachments")]
     public IActionResult GetAttachments(string threadKey)
     {
-        List<Attachment> staged  = pendingAttachments.TryGetValue(threadKey, out List<Attachment>? list) ? list : new();
-        List<Attachment> onThread = FindThread(threadKey)?.GetAttachments().ToList() ?? new();
-        IEnumerable<Attachment> all = staged.Concat(onThread.Where(a => staged.All(s => s.Name != a.Name)));
-        return Ok(all.Select(a => new { a.Name, a.IsImage, a.MimeType }));
+        // In-memory images (pending or on-thread).
+        List<Attachment> images = pendingAttachments.TryGetValue(threadKey, out List<Attachment>? list) ? list : new();
+        images = images.Concat(FindThread(threadKey)?.GetAttachments() ?? Array.Empty<Attachment>())
+                       .GroupBy(a => a.Name).Select(g => g.First()).ToList();
+
+        // Text files on disk (scratchpad or project dir).
+        string scratchpad = Paths.ScratchpadDir(threadKey);
+        string fileRoot   = FindThread(threadKey)?.ProjectRoot ?? scratchpad;
+        IEnumerable<object> diskFiles = Directory.Exists(fileRoot)
+            ? Directory.GetFiles(fileRoot, "*", SearchOption.AllDirectories)
+                       .Select(p => new { Name = Path.GetRelativePath(fileRoot, p), IsImage = false, MimeType = "text/plain" })
+            : Enumerable.Empty<object>();
+
+        return Ok(images.Select(a => new { a.Name, a.IsImage, a.MimeType }).Cast<object>().Concat(diskFiles));
+    }
+
+    // ── Promote scratchpad to project ──────────────────────────────────────────
+
+    [HttpPost("{threadKey}/promote-to-project")]
+    public IActionResult PromoteToProject(string threadKey, [FromBody] PromoteToProjectRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req?.Name))
+            return BadRequest(new { error = "Name is required." });
+
+        string scratchpadDir = Paths.ScratchpadDir(threadKey);
+        ARI.LLM.Thread? thread = FindThread(threadKey);
+        string? currentRoot = thread?.ProjectRoot;
+
+        // Only scratchpad-rooted threads can be promoted (not already-bound projects).
+        if (currentRoot is null || !currentRoot.StartsWith(scratchpadDir.TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
+        {
+            if (!Directory.Exists(scratchpadDir))
+                return BadRequest(new { error = "No scratchpad to promote." });
+        }
+
+        if (Modules.Projects is not { } svc)
+            return StatusCode(503, new { error = "Project service not available." });
+
+        // Create the project record (ServerFs — destination is on this server).
+        ProjectSummary? summary = svc.Create(req.Name.Trim(), req.Category, "ServerFs");
+        if (summary is null) return StatusCode(500, new { error = "Failed to create project record." });
+
+        Project? project = projectStore.Get(summary.Id);
+        if (project?.RootPath is not { } destDir)
+            return StatusCode(500, new { error = "Project has no server root." });
+
+        // Move files from scratchpad into the new project dir.
+        if (Directory.Exists(scratchpadDir))
+        {
+            // If CreateServerFolder already created the destination, remove it so Move can replace it.
+            if (Directory.Exists(destDir)) Directory.Delete(destDir, recursive: true);
+            Directory.Move(scratchpadDir, destDir);
+        }
+
+        // Bind the thread to the new project so file tools continue working.
+        svc.BindThread(threadKey, summary.Id);
+
+        return Ok(new { projectId = summary.Id, name = summary.Name, rootPath = destDir });
     }
 
     // ── Message Attachments (ephemeral — cleared after send) ────────────────────
@@ -545,11 +607,19 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
             content = await reader.ReadToEndAsync();
         }
 
+        // Large text files are promoted to the thread scratchpad instead of being inlined.
+        if (!isImage && content.Length > 10_000)
+        {
+            string destPath = Path.Combine(Paths.ScratchpadDir(threadKey), file.FileName);
+            await System.IO.File.WriteAllTextAsync(destPath, content);
+            return Ok(new { name = file.FileName, isImage = false, mimeType = mime, promoted = true });
+        }
+
         Attachment attachment = new Attachment { Name = file.FileName, Content = content, IsImage = isImage, MimeType = mime };
         List<Attachment> msgList = pendingMessageAttachments.GetOrAdd(threadKey, _ => new());
         msgList.RemoveAll(a => a.Name == attachment.Name);
         msgList.Add(attachment);
-        return Ok(new { name = file.FileName, isImage, mimeType = mime, content });
+        return Ok(new { name = file.FileName, isImage, mimeType = mime, promoted = false });
     }
 
     [HttpDelete("{threadKey}/message-attachments/{name}")]
@@ -728,7 +798,33 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         pendingAttachments.TryRemove(threadKey, out List<Attachment>? threadAtts);
         pendingSystemContext.TryRemove(threadKey, out string? systemContextBlock);
 
+        // ── Scratchpad wiring ─────────────────────────────────────────────────────
+        // If files have been written to this thread's scratchpad, bind it as the
+        // ProjectRoot (if no project is already bound) and inject a file listing so
+        // ARI knows to use her file tools.
         string? platformContext = null;
+        {
+            string scratchpadDir = Paths.ScratchpadDir(threadKey);
+            ARI.LLM.Thread? scratchThread = FindThread(threadKey);
+            bool hasScratchpad = Directory.Exists(scratchpadDir) && Directory.GetFiles(scratchpadDir, "*", SearchOption.AllDirectories).Length > 0;
+            bool noProjectBound = !ThreadProjects.ContainsKey(threadKey);
+
+            if (hasScratchpad && noProjectBound && scratchThread is not null && scratchThread.ProjectRoot is null)
+            {
+                scratchThread.ProjectRoot = scratchpadDir;
+                scratchThread.IsBrainVault = false;
+                scratchThread.Ct = CancellationToken.None;
+
+                string[] files = Directory.GetFiles(scratchpadDir, "*", SearchOption.AllDirectories);
+                var listing = new System.Text.StringBuilder();
+                listing.AppendLine("[Workspace files]");
+                foreach (string f in files)
+                    listing.AppendLine(Path.GetRelativePath(scratchpadDir, f));
+                listing.AppendLine("Use list_directory and read_file to inspect these files.");
+                platformContext = listing.ToString().TrimEnd();
+            }
+        }
+
         if (ThreadProjects.TryGetValue(threadKey, out string? pid))
         {
             Project? project = projectStore.Get(pid);
@@ -752,7 +848,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 
                 // Force code pipeline before the classifier runs (first message only)
                 bool isFirstMessage = boundThread?.History.Count is null or 0;
-                if (isFirstMessage && project.Type == ProjectType.Repository)
+                if (isFirstMessage && project.RootPath is { } gitRoot && Directory.Exists(Path.Combine(gitRoot, ".git")))
                     Llm.ForceCodeThread(threadKey);
 
                 // ServerFs projects: bind ProjectRoot on the thread every message (idempotent) so that
@@ -866,6 +962,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 }
 
 public record StreamRequest(string Prompt, string? LocalPath = null, bool SafeMode = false);
+public record PromoteToProjectRequest(string Name, string? Category = null);
 public record CommandRequest(string? ThreadKey, string Input);
 public record NewThreadRequest(string? ProjectId, bool Desktop = false, string? Pipeline = null);
 public record InjectContextRequest(string Name, string Content);

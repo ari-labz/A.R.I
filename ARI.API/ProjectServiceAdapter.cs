@@ -15,17 +15,11 @@ public class ProjectServiceAdapter(ProjectStore store) : IProjectService
 {
     public IReadOnlyList<ProjectSummary> List() => store.GetAll().Select(ToSummary).ToList();
 
-    public ProjectSummary? Create(string name, string type, string? category, string? backend = null)
+    public ProjectSummary? Create(string name, string? category, string? backend = null)
     {
         if (string.IsNullOrWhiteSpace(name)) return null;
-        if (!Enum.TryParse(type, ignoreCase: true, out ProjectType parsedType)) parsedType = ProjectType.Repository;
 
         string id = Guid.NewGuid().ToString("N");
-        // An explicit backend wins; otherwise both types default to ServerFs — the server manages the
-        // project folder so web-panel threads can use filesystem tools without a local Electron bridge.
-        // Desktop app (Electron) threads that need a local disk path will pass LocalPath explicitly,
-        // which overrides effectiveLocalPath regardless of backend. RemoteFs is still selectable via
-        // the explicit backend param when the caller needs it (legacy desktop-only repos).
         StorageBackend resolvedBackend = Enum.TryParse(backend, ignoreCase: true, out StorageBackend explicitBackend)
             ? explicitBackend
             : StorageBackend.ServerFs;
@@ -38,7 +32,6 @@ public class ProjectServiceAdapter(ProjectStore store) : IProjectService
             Description:  "",
             Instructions: "",
             CreatedAt:    DateTime.UtcNow,
-            Type:         parsedType,
             Category:     category?.Trim() ?? "",
             Backend:      resolvedBackend,
             RootPath:     rootPath);
@@ -68,13 +61,13 @@ public class ProjectServiceAdapter(ProjectStore store) : IProjectService
         store.BindThread(threadKey, projectId);
         if (Modules.Llm is LLMModule llm)
         {
-            bool isServerFsVault = project is { Type: ProjectType.ObsidianGraph, Backend: StorageBackend.ServerFs };
-            llm.BindProjectContext(threadKey, project.RootPath, isServerFsVault);
+            bool isVault = project.RootPath is { } rp && Directory.Exists(Path.Combine(rp, ".obsidian"));
+            llm.BindProjectContext(threadKey, project.RootPath, isVault);
         }
         return true;
     }
 
-    private static ProjectSummary ToSummary(Project p) => new(p.Id, p.Name, p.Type.ToString(), p.Category, p.Backend.ToString());
+    private static ProjectSummary ToSummary(Project p) => new(p.Id, p.Name, p.Category, p.Backend.ToString());
 
     // ── Brain note (Projects/[Name]) ────────────────────────────────────────────────
     // Deterministic, structural fields only (type/category/backend) — the descriptive summary is
@@ -131,7 +124,6 @@ public class ProjectServiceAdapter(ProjectStore store) : IProjectService
     }
 
     private static string ProjectNoteBody(Project project) =>
-        $"Type: {project.Type}\n" +
         $"Category: {(project.Category.Length > 0 ? project.Category : "none")}\n" +
         $"Storage: {project.Backend}\n\n" +
         "(No summary yet — Ari will fill this in as we discuss the project.)\n\n" +

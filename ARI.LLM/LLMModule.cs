@@ -554,16 +554,14 @@ public class LLMModule : ILLMModule, IDisposable
     /// <summary>Pre-marks a thread to run through the Code pipeline. Thin wrapper over <see cref="ForcePipeline"/>.</summary>
     public void ForceCodeThread(string threadKey) => ForcePipeline(threadKey, ThreadPipeline.Code);
 
-    /// <summary>Binds a project's vault context onto a thread immediately — same fields ChatController
-    /// sets for an ObsidianGraph+ServerFs project on the next message, but called synchronously by
-    /// bind_project (project_tools) so the model can use filesystem_tools/obsidian_tools THIS turn
-    /// instead of waiting for the next one. No-op (root stays unbound) for anything else — a RemoteFs
-    /// project's files aren't on this server's disk, same reasoning as Coder.RunLoop's remote branch.</summary>
-    public void BindProjectContext(string threadKey, string? rootPath, bool isServerFsVault)
+    /// <summary>Binds a ServerFs project onto a thread immediately — called synchronously by bind_project
+    /// so the model can use filesystem_tools THIS turn instead of waiting for the next message. No-op for
+    /// RemoteFs projects — their files aren't on this server's disk.</summary>
+    public void BindProjectContext(string threadKey, string? rootPath, bool isVault)
     {
-        if (!Threads.TryGetValue(threadKey, out Thread? thread) || !isServerFsVault || rootPath is null) return;
+        if (!Threads.TryGetValue(threadKey, out Thread? thread) || rootPath is null) return;
         thread.ProjectRoot  = rootPath;
-        thread.IsBrainVault = false;
+        thread.IsBrainVault = isVault;
         thread.Ct           = CancellationToken.None;
     }
 

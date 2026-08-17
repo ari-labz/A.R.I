@@ -15,7 +15,6 @@ export interface ThreadEntry {
     title?:       string | null
 }
 
-export type ProjectType    = "Repository" | "ObsidianGraph"
 export type StorageBackend = "ServerFs" | "RemoteFs"
 
 export interface Project {
@@ -23,7 +22,6 @@ export interface Project {
     name:         string
     description:  string
     instructions: string
-    type:         ProjectType
     category:     string
     backend:      StorageBackend
     rootPath:     string | null
