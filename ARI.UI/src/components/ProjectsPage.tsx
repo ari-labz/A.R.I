@@ -171,12 +171,55 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
         if (selected && e.dataTransfer.files.length) await uploadFiles(selected.id, e.dataTransfer.files)
     }
 
-    // ── File icon ─────────────────────────────────────────────────────────────────
+    // ── File icon (large, Finder-style) ──────────────────────────────────────────
 
-    function FileIcon() {
+    function FileIcon({ name }: { name: string }) {
+        const ext = name.split(".").pop()?.toLowerCase() ?? ""
+        const isImage = ["png","jpg","jpeg","gif","webp","svg","ico","bmp"].includes(ext)
+        const isCode  = ["ts","tsx","js","jsx","cs","py","json","yaml","yml","xml","html","css","sh","md"].includes(ext)
+        const isPdf   = ext === "pdf"
+
+        if (isImage) return (
+            <svg width="52" height="52" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="6" y="4" width="40" height="44" rx="4" fill="#e8f4fb" stroke="#b3d4e8" strokeWidth="1.5"/>
+                <rect x="10" y="10" width="32" height="22" rx="2" fill="#c5e3f5"/>
+                <circle cx="16" cy="16" r="3" fill="#f0c060"/>
+                <path d="M10 28l10-8 8 6 6-4 8 6v6a2 2 0 0 1-2 2H12a2 2 0 0 1-2-2v-6z" fill="#6ab8e0"/>
+                <rect x="10" y="36" width="20" height="2" rx="1" fill="#b3d4e8"/>
+                <rect x="10" y="40" width="14" height="2" rx="1" fill="#b3d4e8"/>
+            </svg>
+        )
+        if (isPdf) return (
+            <svg width="52" height="52" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="6" y="4" width="40" height="44" rx="4" fill="#fff0f0" stroke="#f5b3b3" strokeWidth="1.5"/>
+                <path d="M30 4v12h12" fill="none" stroke="#f5b3b3" strokeWidth="1.5"/>
+                <path d="M30 4l12 12H30V4z" fill="#fde0e0"/>
+                <rect x="10" y="22" width="32" height="14" rx="2" fill="#e55"/>
+                <text x="26" y="33" textAnchor="middle" fill="white" fontSize="9" fontWeight="bold" fontFamily="sans-serif">PDF</text>
+                <rect x="10" y="40" width="20" height="2" rx="1" fill="#f5b3b3"/>
+                <rect x="10" y="44" width="14" height="2" rx="1" fill="#f5b3b3"/>
+            </svg>
+        )
+        if (isCode) return (
+            <svg width="52" height="52" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="6" y="4" width="40" height="44" rx="4" fill="#f0f4ff" stroke="#b3c4f5" strokeWidth="1.5"/>
+                <path d="M30 4v12h12" fill="none" stroke="#b3c4f5" strokeWidth="1.5"/>
+                <path d="M30 4l12 12H30V4z" fill="#dce6ff"/>
+                <text x="14" y="32" fill="#6080d0" fontSize="8" fontFamily="monospace" fontWeight="bold">{"</ >"}</text>
+                <rect x="10" y="38" width="22" height="2" rx="1" fill="#b3c4f5"/>
+                <rect x="10" y="42" width="16" height="2" rx="1" fill="#b3c4f5"/>
+            </svg>
+        )
         return (
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
+            <svg width="52" height="52" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="6" y="4" width="40" height="44" rx="4" fill="#f5f7fa" stroke="#cdd5e0" strokeWidth="1.5"/>
+                <path d="M30 4v12h12" fill="none" stroke="#cdd5e0" strokeWidth="1.5"/>
+                <path d="M30 4l12 12H30V4z" fill="#e4e9f0"/>
+                <rect x="12" y="22" width="28" height="2" rx="1" fill="#c8d0dc"/>
+                <rect x="12" y="27" width="28" height="2" rx="1" fill="#c8d0dc"/>
+                <rect x="12" y="32" width="20" height="2" rx="1" fill="#c8d0dc"/>
+                <rect x="12" y="37" width="24" height="2" rx="1" fill="#c8d0dc"/>
+                <rect x="12" y="42" width="16" height="2" rx="1" fill="#c8d0dc"/>
             </svg>
         )
     }
@@ -245,7 +288,15 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                 <div className="project-section">
                     <div className="project-section-header">
                         <h2>Files</h2>
-                        <span className="field-optional">Attached to every new thread in this project</span>
+                        <button
+                            type="button"
+                            className="btn-secondary btn-add-att"
+                            disabled={uploading}
+                            onClick={() => fileInputRef.current?.click()}
+                        >
+                            {uploading ? "Uploading…" : "+ Add file"}
+                        </button>
+                        <input ref={fileInputRef} type="file" multiple style={{ display: "none" }} onChange={handleFileInput} />
                     </div>
                     <div
                         className={`file-explorer${dragging ? " file-explorer--drag" : ""}`}
@@ -255,40 +306,33 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                     >
                         {files.length === 0 ? (
                             <div className="file-explorer-empty">
-                                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.35 }}>
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.25 }}>
                                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
                                 </svg>
                                 <span>Drop files here or click Add file</span>
                             </div>
                         ) : (
-                            <ul className="file-explorer-list">
+                            <div className="file-grid">
                                 {files.map(f => (
-                                    <li key={f.name} className="file-explorer-row" draggable={false}>
-                                        <FileIcon />
-                                        <span className="file-explorer-name">{f.name}</span>
-                                        <button
-                                            type="button"
-                                            className="file-explorer-remove"
-                                            title="Remove"
-                                            onClick={() => handleRemoveFile(f.name)}
-                                        >×</button>
-                                    </li>
+                                    <div key={f.name} className="file-grid-item" title={f.name}>
+                                        <div className="file-grid-icon">
+                                            <FileIcon name={f.name} />
+                                            <button
+                                                type="button"
+                                                className="file-grid-remove"
+                                                title="Remove"
+                                                onClick={() => handleRemoveFile(f.name)}
+                                            >×</button>
+                                        </div>
+                                        <span className="file-grid-name">{f.name}</span>
+                                    </div>
                                 ))}
-                            </ul>
+                            </div>
                         )}
                         <div className={`file-explorer-drop-overlay${dragging ? " visible" : ""}`}>
                             Drop to upload
                         </div>
                     </div>
-                    <button
-                        type="button"
-                        className="btn-secondary btn-add-att"
-                        disabled={uploading}
-                        onClick={() => fileInputRef.current?.click()}
-                    >
-                        {uploading ? "Uploading…" : "+ Add file"}
-                    </button>
-                    <input ref={fileInputRef} type="file" multiple style={{ display: "none" }} onChange={handleFileInput} />
                 </div>
 
                 {/* ── App settings (Electron / RemoteFs only) ── */}
