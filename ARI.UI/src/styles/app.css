@@ -727,8 +727,8 @@ button, a, input, select, textarea, label, [role="button"] {
 .project-section {
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 20px 24px 24px;
-    margin-bottom: 16px;
+    padding: 24px 32px 28px;
+    margin-bottom: 20px;
 }
 .project-section-header {
     display: flex; align-items: baseline; gap: 10px;
@@ -768,29 +768,72 @@ button, a, input, select, textarea, label, [role="button"] {
 }
 .btn-danger:hover { background: #fef2f2; }
 
-#project-attachments { margin-top: 8px; max-width: 560px; }
-.project-attachments-header {
-    display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px;
+/* ── file explorer ───────────────────────────────────────── */
+.file-explorer {
+    position: relative;
+    border: 1px solid var(--border); border-radius: 8px;
+    overflow: hidden; margin-bottom: 10px;
+    min-height: 80px;
+    transition: border-color .15s;
 }
-.project-attachments-header h2 { font-size: 15px; font-weight: 600; }
-.project-att-list { list-style: none; display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
-.project-att-item {
-    display: flex; align-items: center; gap: 8px;
-    padding: 8px 12px; border: 1px solid var(--border); border-radius: 7px;
+.file-explorer--drag { border-color: var(--accent, #518c9a); }
+.file-explorer-empty {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 8px; padding: 28px 16px;
+    font-size: 13px; color: var(--text-dim);
+}
+.file-explorer-list {
+    list-style: none; display: flex; flex-direction: column;
+}
+.file-explorer-row {
+    display: flex; align-items: center; gap: 9px;
+    padding: 9px 14px;
     font-size: 13px; color: var(--text);
+    border-bottom: 1px solid var(--border);
+    transition: background .1s;
 }
-.project-att-item span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.att-remove {
+.file-explorer-row:last-child { border-bottom: none; }
+.file-explorer-row:hover { background: rgba(0,0,0,.025); }
+.file-explorer-row svg { flex-shrink: 0; color: var(--text-dim); }
+.file-explorer-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-explorer-remove {
     background: none; border: none; cursor: pointer;
     color: var(--text-dim); font-size: 16px; line-height: 1;
-    padding: 0 2px; transition: color .1s;
+    padding: 0 2px; opacity: 0; transition: opacity .1s, color .1s;
 }
-.att-remove:hover { color: #dc2626; }
+.file-explorer-row:hover .file-explorer-remove { opacity: 1; }
+.file-explorer-remove:hover { color: #dc2626; }
+.file-explorer-drop-overlay {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(81,140,154,.12);
+    border: 2px dashed var(--accent, #518c9a);
+    border-radius: 8px;
+    font-size: 14px; font-weight: 500; color: var(--accent, #518c9a);
+    pointer-events: none; opacity: 0; transition: opacity .15s;
+}
+.file-explorer-drop-overlay.visible { opacity: 1; }
 .btn-add-att { font-size: 13px; }
+
+/* ── project meta (storage badge) ───────────────────────── */
+.project-meta-row {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 4px; font-size: 12px; color: var(--text-dim);
+}
+.project-meta-badge {
+    padding: 2px 8px; border-radius: 4px;
+    background: var(--border); color: var(--text-dim);
+    font-size: 11px; font-weight: 500; letter-spacing: .03em;
+}
+.project-meta-path {
+    font-family: ui-monospace, monospace; font-size: 11px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 .project-card-chevron { color: var(--text-dim); flex-shrink: 0; margin-left: auto; }
 
 /* ── project create form ─────────────────────────────────── */
+/* create form — constrained width card */
 #project-form {
     background: #fff; border: 1px solid var(--border);
     border-radius: 12px; padding: 24px 28px;
@@ -798,13 +841,25 @@ button, a, input, select, textarea, label, [role="button"] {
     max-width: 560px; margin-bottom: 24px;
 }
 #project-form h2 { font-size: 16px; font-weight: 600; color: var(--text); }
+
+/* detail view — full-width layout, no card wrapper on the form itself */
+.project-detail-form {
+    display: flex; flex-direction: column; gap: 0;
+}
+.project-detail-form label {
+    display: flex; flex-direction: column; gap: 6px;
+    font-size: 13px; font-weight: 500; color: var(--text);
+}
+
 #project-form label {
     display: flex; flex-direction: column; gap: 6px;
     font-size: 13px; font-weight: 500; color: var(--text);
 }
 .field-optional { font-weight: 400; color: var(--text-dim); }
 #project-form input[type="text"],
-#project-form textarea {
+#project-form textarea,
+.project-detail-form input[type="text"],
+.project-detail-form textarea {
     padding: 8px 12px; border: 1px solid var(--input-border);
     border-radius: 8px; font-family: inherit; font-size: 14px;
     color: var(--text); background: #fff; outline: none;
@@ -812,8 +867,11 @@ button, a, input, select, textarea, label, [role="button"] {
     resize: vertical;
 }
 #project-form input[type="text"]:focus,
-#project-form textarea:focus { border-color: var(--input-focus); }
-#project-form textarea { line-height: 1.5; }
+#project-form textarea:focus,
+.project-detail-form input[type="text"]:focus,
+.project-detail-form textarea:focus { border-color: var(--input-focus); }
+#project-form textarea,
+.project-detail-form textarea { line-height: 1.5; }
 .folder-picker-row {
     display: flex; align-items: center; gap: 8px;
     padding: 7px 12px; border: 1px solid var(--input-border); border-radius: 8px;
