@@ -26,7 +26,7 @@ internal sealed class ListProjects : Tool
         IReadOnlyList<ProjectSummary> list = svc.List();
         if (list.Count == 0) return Task.FromResult("No projects exist yet.");
         return Task.FromResult(string.Join("\n", list.Select(p =>
-            $"- {p.Name} [{p.Id}] — {p.Type}, category: {(p.Category.Length > 0 ? p.Category : "none")}, storage: {p.Backend}")));
+            $"- {p.Name} [{p.Id}] — category: {(p.Category.Length > 0 ? p.Category : "none")}, storage: {p.Backend}")));
     }
 }
 
@@ -45,12 +45,11 @@ internal sealed class CreateProject : Tool
                 type       = "object",
                 properties = new
                 {
-                    name     = new { type = "string", description = "The project's name. If the user hasn't decided on one yet (e.g. \"not sure\", \"I'll think of one\"), don't stall creation waiting for it — pick a short, sensible name from what they've told you about the project so far (or \"Untitled Project\" if there's nothing to go on). They can rename_project later once they know what they want it called." },
-                    type     = new { type = "string", @enum = new[] { "Repository", "ObsidianGraph" }, description = "Repository = an actual source-code codebase, always opens in the Code agent. ObsidianGraph = everything else that isn't code — notes, worldbuilding, game design, stories, brainstorming, campaigns — gets its own searchable vault. Default to ObsidianGraph unless the user is explicitly working with source code." },
-                    backend  = new { type = "string", @enum = new[] { "ServerFs", "RemoteFs" }, description = "Where the files live. ServerFs = stored centrally on this server. RemoteFs = stored on the user's own device, via the desktop app. If the user hasn't said which, ask — don't guess; each type has a sensible default (ObsidianGraph -> ServerFs, Repository -> RemoteFs) that only applies when omitted." },
+                    name     = new { type = "string", description = "The project's name. If the user hasn't decided on one yet, pick a short sensible name from context (or \"Untitled Project\"). They can rename_project later." },
+                    backend  = new { type = "string", @enum = new[] { "ServerFs", "RemoteFs" }, description = "Where the files live. ServerFs = stored on this server (default). RemoteFs = stored on the user's device via the desktop app." },
                     category = new { type = "string", description = "Optional free-text label for search/sort (e.g. 'Book', 'Game', 'DND Campaign') — purely descriptive, no effect on behavior." }
                 },
-                required = new[] { "name", "type" }
+                required = new[] { "name" }
             }
         }
     };
@@ -60,14 +59,13 @@ internal sealed class CreateProject : Tool
         if (Modules.Projects is not { } svc) return Task.FromResult("Project management isn't available right now.");
         JsonElement root = Parse(argsJson);
         string  name     = Str(root, "name");
-        string  type     = Str(root, "type", "Repository");
         string? category = root.TryGetProperty("category", out JsonElement c) ? c.GetString() : null;
         string? backend  = root.TryGetProperty("backend", out JsonElement b) ? b.GetString() : null;
         if (name.Length == 0) return Task.FromResult("Error: 'name' is required.");
 
-        ProjectSummary? created = svc.Create(name, type, category, backend);
+        ProjectSummary? created = svc.Create(name, category, backend);
         if (created is null) return Task.FromResult("Failed to create the project.");
-        return Task.FromResult($"Created '{created.Name}' [{created.Id}] — {created.Type}, storage: {created.Backend}. Call bind_project with this id to start using it in this conversation.");
+        return Task.FromResult($"Created '{created.Name}' [{created.Id}] — storage: {created.Backend}. Call bind_project with this id to start using it in this conversation.");
     }
 
     private static JsonElement Parse(string argsJson)

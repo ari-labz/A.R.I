@@ -1,16 +1,9 @@
 import { useState, useRef, useEffect } from "react"
-import type { Project, ProjectType, StorageBackend } from "../hooks/useThreads"
+import type { Project, StorageBackend } from "../hooks/useThreads"
+import { apiFetch } from "../auth"
 import { env } from "../env"
 import SegmentedControl from "./SegmentedControl"
 
-const TYPE_OPTIONS: { value: ProjectType; label: string }[] = [
-    { value: "Repository",    label: "Repository" },
-    { value: "ObsidianGraph", label: "Obsidian Graph" },
-]
-const TYPE_HELP: Record<ProjectType, string> = {
-    Repository:    "Code — always routes to the Code agent.",
-    ObsidianGraph: "Notes — gets its own searchable knowledge vault.",
-}
 const BACKEND_OPTIONS: { value: StorageBackend; label: string }[] = [
     { value: "ServerFs", label: "This server" },
     { value: "RemoteFs", label: "Attached device" },
@@ -21,43 +14,36 @@ interface Props {
     onProjectCreated: () => void
 }
 
-interface AttachmentEntry { name: string }
-
-// Type implies a default backend (overridable at creation) — a repo is usually worked on locally via
-// the desktop app; a note graph is small enough to live centrally on the server.
-const defaultBackendFor = (_t: ProjectType): StorageBackend => "ServerFs"
+interface FileEntry { name: string; isImage?: boolean; mimeType?: string }
 
 export default function ProjectsPage({ projects, onProjectCreated }: Props) {
-    const [showForm,          setShowForm]          = useState(false)
-    const [name,              setName]              = useState("")
-    const [description,       setDescription]       = useState("")
-    const [instructions,      setInstructions]      = useState("")
-    const [type,              setType]              = useState<ProjectType>("Repository")
-    const [category,          setCategory]          = useState("")
-    const [backend,           setBackend]           = useState<StorageBackend>(defaultBackendFor("Repository"))
-    const [saving,            setSaving]            = useState(false)
-    const [error,             setError]             = useState<string | null>(null)
+    const [showForm,         setShowForm]         = useState(false)
+    const [name,             setName]             = useState("")
+    const [description,      setDescription]      = useState("")
+    const [instructions,     setInstructions]     = useState("")
+    const [category,         setCategory]         = useState("")
+    const [backend,          setBackend]          = useState<StorageBackend>("ServerFs")
+    const [saving,           setSaving]           = useState(false)
+    const [error,            setError]            = useState<string | null>(null)
 
-    const [selected,          setSelected]          = useState<Project | null>(null)
-    const [editName,          setEditName]          = useState("")
-    const [editDescription,   setEditDescription]   = useState("")
-    const [editInstructions,  setEditInstructions]  = useState("")
-    const [editType,          setEditType]          = useState<ProjectType>("Repository")
-    const [editBackend,       setEditBackend]       = useState<StorageBackend>("ServerFs")
-    const [editCategory,      setEditCategory]      = useState("")
-    const [editSaving,        setEditSaving]        = useState(false)
-    const [editError,         setEditError]         = useState<string | null>(null)
-    const [attachments,       setAttachments]       = useState<AttachmentEntry[]>([])
-    const [attUploading,      setAttUploading]      = useState(false)
+    const [selected,         setSelected]         = useState<Project | null>(null)
+    const [editName,         setEditName]         = useState("")
+    const [editDescription,  setEditDescription]  = useState("")
+    const [editInstructions, setEditInstructions] = useState("")
+    const [editCategory,     setEditCategory]     = useState("")
+    const [editSaving,       setEditSaving]       = useState(false)
+    const [editError,        setEditError]        = useState<string | null>(null)
 
-    // Local paths are stored per-machine in Electron, never on the server
-    const [localPaths,        setLocalPaths]        = useState<Record<string, string | null>>({})
-    const [editPath,          setEditPath]          = useState<string | null>(null)
+    const [files,            setFiles]            = useState<FileEntry[]>([])
+    const [uploading,        setUploading]        = useState(false)
+    const [dragging,         setDragging]         = useState(false)
+
+    const [localPaths,       setLocalPaths]       = useState<Record<string, string | null>>({})
+    const [editPath,         setEditPath]         = useState<string | null>(null)
 
     const fileInputRef = useRef<HTMLInputElement>(null)
     const isElectron   = !!window.electronBridge
 
-    // Load local paths for all projects from this machine's electron-store
     useEffect(() => {
         if (!isElectron) return
         Promise.all(projects.map(p => env.getLocalPath(p.id).then(path => ({ id: p.id, path }))))
@@ -68,23 +54,20 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
             })
     }, [projects, isElectron])
 
-    // ── Create form ───────────────────────────────────────────────────────────────
+    // ── Create ────────────────────────────────────────────────────────────────────
 
     async function handleCreate(e: React.FormEvent) {
         e.preventDefault()
         if (!name.trim()) return
         setSaving(true); setError(null)
         try {
-            const res = await fetch("/projects", {
+            const res = await apiFetch("/projects", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    name: name.trim(), description: description.trim(), instructions: instructions.trim(),
-                    type, category: category.trim(), backend,
-                }),
+                body: JSON.stringify({ name: name.trim(), description: description.trim(), instructions: instructions.trim(), category: category.trim(), backend }),
             })
             if (!res.ok) { setError((await res.json().catch(() => null))?.error ?? "Failed to create project."); return }
-            setName(""); setDescription(""); setInstructions(""); setType("Repository"); setCategory(""); setBackend(defaultBackendFor("Repository"))
+            setName(""); setDescription(""); setInstructions(""); setCategory(""); setBackend("ServerFs")
             setShowForm(false)
             onProjectCreated()
         } catch { setError("Could not reach ARI.") }
@@ -93,37 +76,29 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
 
     function handleCancelCreate() {
         setShowForm(false)
-        setName(""); setDescription(""); setInstructions(""); setType("Repository"); setCategory(""); setBackend(defaultBackendFor("Repository")); setError(null)
+        setName(""); setDescription(""); setInstructions(""); setCategory(""); setBackend("ServerFs"); setError(null)
     }
 
-    function handleTypeChange(t: ProjectType) {
-        setType(t)
-        setBackend(defaultBackendFor(t))
-    }
-
-    // ── Project detail ────────────────────────────────────────────────────────────
+    // ── Detail ────────────────────────────────────────────────────────────────────
 
     async function openProject(p: Project) {
         setSelected(p)
         setEditName(p.name)
         setEditDescription(p.description)
         setEditInstructions(p.instructions)
-        setEditPath(localPaths[p.id] ?? null)
-        setEditType(p.type)
-        setEditBackend(p.backend)
         setEditCategory(p.category)
+        setEditPath(localPaths[p.id] ?? null)
         setEditError(null)
-        await loadAttachments(p.id)
+        await loadFiles(p.id)
     }
 
-    async function loadAttachments(projectId: string) {
+    async function loadFiles(projectId: string) {
         try {
-            const res = await fetch(`/projects/${projectId}/attachments`)
-            if (res.ok) setAttachments(await res.json())
+            const res = await apiFetch(`/projects/${projectId}/attachments`)
+            if (res.ok) setFiles(await res.json())
         } catch { /* ignore */ }
     }
 
-    // Local path saves immediately — independent of the server Save button
     async function pickEditFolder() {
         if (!selected) return
         const path = await env.pickFolder()
@@ -145,13 +120,10 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
         if (!selected || !editName.trim()) return
         setEditSaving(true); setEditError(null)
         try {
-            const res = await fetch(`/projects/${selected.id}`, {
+            const res = await apiFetch(`/projects/${selected.id}`, {
                 method: "PUT",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    name: editName.trim(), description: editDescription.trim(), instructions: editInstructions.trim(),
-                    type: editType, category: editCategory.trim(), backend: editBackend,
-                }),
+                body: JSON.stringify({ name: editName.trim(), description: editDescription.trim(), instructions: editInstructions.trim(), category: editCategory.trim(), backend: selected.backend }),
             })
             if (!res.ok) { setEditError((await res.json().catch(() => null))?.error ?? "Failed to save."); return }
             setSelected(await res.json())
@@ -163,30 +135,96 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
     async function handleDelete() {
         if (!selected) return
         if (!confirm(`Delete "${selected.name}"? This cannot be undone.`)) return
-        await fetch(`/projects/${selected.id}`, { method: "DELETE" })
+        await apiFetch(`/projects/${selected.id}`, { method: "DELETE" })
         setSelected(null)
         onProjectCreated()
     }
 
-    async function handleAttachFile(e: React.ChangeEvent<HTMLInputElement>) {
-        if (!selected || !e.target.files?.length) return
-        setAttUploading(true)
-        for (const file of [...e.target.files]) {
+    // ── File upload ───────────────────────────────────────────────────────────────
+
+    async function uploadFiles(projectId: string, fileList: FileList | File[]) {
+        setUploading(true)
+        for (const file of [...fileList]) {
             const fd = new FormData(); fd.append("file", file)
-            await fetch(`/projects/${selected.id}/attachments`, { method: "POST", body: fd })
+            await apiFetch(`/projects/${projectId}/attachments`, { method: "POST", body: fd })
         }
+        await loadFiles(projectId)
+        setUploading(false)
+    }
+
+    async function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
+        if (!selected || !e.target.files?.length) return
+        await uploadFiles(selected.id, e.target.files)
         e.target.value = ""
-        await loadAttachments(selected.id)
-        setAttUploading(false)
     }
 
-    async function handleRemoveAttachment(name: string) {
+    async function handleRemoveFile(name: string) {
         if (!selected) return
-        await fetch(`/projects/${selected.id}/attachments/${encodeURIComponent(name)}`, { method: "DELETE" })
-        await loadAttachments(selected.id)
+        await apiFetch(`/projects/${selected.id}/attachments/${encodeURIComponent(name)}`, { method: "DELETE" })
+        await loadFiles(selected.id)
     }
 
-    // ── Render ────────────────────────────────────────────────────────────────────
+    function onDragOver(e: React.DragEvent) { e.preventDefault(); setDragging(true) }
+    function onDragLeave()                   { setDragging(false) }
+    async function onDrop(e: React.DragEvent) {
+        e.preventDefault(); setDragging(false)
+        if (selected && e.dataTransfer.files.length) await uploadFiles(selected.id, e.dataTransfer.files)
+    }
+
+    // ── File icon (large, Finder-style) ──────────────────────────────────────────
+
+    function FileIcon({ name }: { name: string }) {
+        const ext = name.split(".").pop()?.toLowerCase() ?? ""
+        const isImage = ["png","jpg","jpeg","gif","webp","svg","ico","bmp"].includes(ext)
+        const isCode  = ["ts","tsx","js","jsx","cs","py","json","yaml","yml","xml","html","css","sh","md"].includes(ext)
+        const isPdf   = ext === "pdf"
+
+        if (isImage) return (
+            <svg width="52" height="52" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="6" y="4" width="40" height="44" rx="4" fill="#e8f4fb" stroke="#b3d4e8" strokeWidth="1.5"/>
+                <rect x="10" y="10" width="32" height="22" rx="2" fill="#c5e3f5"/>
+                <circle cx="16" cy="16" r="3" fill="#f0c060"/>
+                <path d="M10 28l10-8 8 6 6-4 8 6v6a2 2 0 0 1-2 2H12a2 2 0 0 1-2-2v-6z" fill="#6ab8e0"/>
+                <rect x="10" y="36" width="20" height="2" rx="1" fill="#b3d4e8"/>
+                <rect x="10" y="40" width="14" height="2" rx="1" fill="#b3d4e8"/>
+            </svg>
+        )
+        if (isPdf) return (
+            <svg width="52" height="52" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="6" y="4" width="40" height="44" rx="4" fill="#fff0f0" stroke="#f5b3b3" strokeWidth="1.5"/>
+                <path d="M30 4v12h12" fill="none" stroke="#f5b3b3" strokeWidth="1.5"/>
+                <path d="M30 4l12 12H30V4z" fill="#fde0e0"/>
+                <rect x="10" y="22" width="32" height="14" rx="2" fill="#e55"/>
+                <text x="26" y="33" textAnchor="middle" fill="white" fontSize="9" fontWeight="bold" fontFamily="sans-serif">PDF</text>
+                <rect x="10" y="40" width="20" height="2" rx="1" fill="#f5b3b3"/>
+                <rect x="10" y="44" width="14" height="2" rx="1" fill="#f5b3b3"/>
+            </svg>
+        )
+        if (isCode) return (
+            <svg width="52" height="52" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="6" y="4" width="40" height="44" rx="4" fill="#f0f4ff" stroke="#b3c4f5" strokeWidth="1.5"/>
+                <path d="M30 4v12h12" fill="none" stroke="#b3c4f5" strokeWidth="1.5"/>
+                <path d="M30 4l12 12H30V4z" fill="#dce6ff"/>
+                <text x="14" y="32" fill="#6080d0" fontSize="8" fontFamily="monospace" fontWeight="bold">{"</ >"}</text>
+                <rect x="10" y="38" width="22" height="2" rx="1" fill="#b3c4f5"/>
+                <rect x="10" y="42" width="16" height="2" rx="1" fill="#b3c4f5"/>
+            </svg>
+        )
+        return (
+            <svg width="52" height="52" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="6" y="4" width="40" height="44" rx="4" fill="#f5f7fa" stroke="#cdd5e0" strokeWidth="1.5"/>
+                <path d="M30 4v12h12" fill="none" stroke="#cdd5e0" strokeWidth="1.5"/>
+                <path d="M30 4l12 12H30V4z" fill="#e4e9f0"/>
+                <rect x="12" y="22" width="28" height="2" rx="1" fill="#c8d0dc"/>
+                <rect x="12" y="27" width="28" height="2" rx="1" fill="#c8d0dc"/>
+                <rect x="12" y="32" width="20" height="2" rx="1" fill="#c8d0dc"/>
+                <rect x="12" y="37" width="24" height="2" rx="1" fill="#c8d0dc"/>
+                <rect x="12" y="42" width="16" height="2" rx="1" fill="#c8d0dc"/>
+            </svg>
+        )
+    }
+
+    // ── Project detail view ───────────────────────────────────────────────────────
 
     if (selected) {
         return (
@@ -205,71 +243,38 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                     <button className="btn-danger" onClick={handleDelete}>Delete project</button>
                 </div>
 
-                {/* ── Project settings (server) ── */}
+                {/* ── Project settings ── */}
                 <div className="project-section">
                     <div className="project-section-header">
                         <h2>Project settings</h2>
                         <span className="field-optional">Stored on the server — shared across all devices</span>
                     </div>
-                    <form id="project-form" onSubmit={handleSave}>
-                        <label>
+                    <form className="project-detail-form" onSubmit={handleSave}>
+                        <label style={{ marginBottom: 12 }}>
                             Name
                             <input type="text" value={editName} onChange={e => setEditName(e.target.value)} required />
                         </label>
-                        <label>
+                        <label style={{ marginBottom: 12 }}>
                             Description <span className="field-optional">(optional)</span>
                             <input type="text" value={editDescription} onChange={e => setEditDescription(e.target.value)} placeholder="Short description for your own reference" />
                         </label>
-                        <label>
+                        <label style={{ marginBottom: 12 }}>
                             Instructions <span className="field-optional">(injected into every conversation)</span>
-                            <textarea value={editInstructions} onChange={e => setEditInstructions(e.target.value)} rows={5}
-                                placeholder={"Coding standards or preferences injected into every conversation."} />
+                            <textarea value={editInstructions} onChange={e => setEditInstructions(e.target.value)} rows={4}
+                                placeholder="Coding standards or preferences injected into every conversation." />
                         </label>
-                        <label>
-                            Type
-                            <SegmentedControl options={TYPE_OPTIONS} value={editType} onChange={setEditType} />
-                            <span className="field-optional">{TYPE_HELP[editType]}</span>
-                        </label>
-                        <label>
-                            Storage
-                            <SegmentedControl options={BACKEND_OPTIONS} value={editBackend} onChange={setEditBackend} />
-                        </label>
-                        <label>
-                            Category <span className="field-optional">(optional — for your own search/sort, no effect on behavior)</span>
+                        <label style={{ marginBottom: 16 }}>
+                            Category <span className="field-optional">(optional — for your own search/sort)</span>
                             <input type="text" value={editCategory} onChange={e => setEditCategory(e.target.value)} placeholder="e.g. Book, Game, DND Campaign" />
                         </label>
-                        <div className="field-optional" style={{ marginTop: "4px" }}>
-                            Storage: {selected.backend === "ServerFs" ? "On this server" : "On the attached device"} — set at creation, not editable here.
-                            {selected.backend === "ServerFs" && selected.rootPath && <> ({selected.rootPath})</>}
+                        <div className="project-meta-row" style={{ marginBottom: 16 }}>
+                            <span className="project-meta-badge">
+                                {selected.backend === "ServerFs" ? "Server" : "Device"}
+                            </span>
+                            {selected.backend === "ServerFs" && selected.rootPath && (
+                                <span className="project-meta-path">{selected.rootPath}</span>
+                            )}
                         </div>
-
-                        <div className="project-section-header" style={{ marginTop: "20px" }}>
-                            <h2>Attachments</h2>
-                            <span className="field-optional">Attached to every new thread in this project</span>
-                        </div>
-                        {attachments.length > 0 && (
-                            <ul className="project-att-list">
-                                {attachments.map(a => (
-                                    <li key={a.name} className="project-att-item">
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
-                                        </svg>
-                                        <span>{a.name}</span>
-                                        <button className="att-remove" onClick={() => handleRemoveAttachment(a.name)}>×</button>
-                                    </li>
-                                ))}
-                            </ul>
-                        )}
-                        <button
-                            type="button"
-                            className="btn-secondary btn-add-att"
-                            disabled={attUploading}
-                            onClick={() => fileInputRef.current?.click()}
-                        >
-                            {attUploading ? "Uploading…" : "+ Add file"}
-                        </button>
-                        <input ref={fileInputRef} type="file" multiple style={{ display: "none" }} onChange={handleAttachFile} />
-
                         {editError && <p className="form-error">{editError}</p>}
                         <div className="form-actions">
                             <button type="submit" className="btn-primary" disabled={editSaving || !editName.trim()}>
@@ -279,7 +284,58 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                     </form>
                 </div>
 
-                {/* ── App settings (local, Electron only) — RemoteFs projects only; ServerFs has no local path ── */}
+                {/* ── File explorer ── */}
+                <div className="project-section">
+                    <div className="project-section-header">
+                        <h2>Files</h2>
+                        <button
+                            type="button"
+                            className="btn-secondary btn-add-att"
+                            disabled={uploading}
+                            onClick={() => fileInputRef.current?.click()}
+                        >
+                            {uploading ? "Uploading…" : "+ Add file"}
+                        </button>
+                        <input ref={fileInputRef} type="file" multiple style={{ display: "none" }} onChange={handleFileInput} />
+                    </div>
+                    <div
+                        className={`file-explorer${dragging ? " file-explorer--drag" : ""}`}
+                        onDragOver={onDragOver}
+                        onDragLeave={onDragLeave}
+                        onDrop={onDrop}
+                    >
+                        {files.length === 0 ? (
+                            <div className="file-explorer-empty">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.25 }}>
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+                                </svg>
+                                <span>Drop files here or click Add file</span>
+                            </div>
+                        ) : (
+                            <div className="file-grid">
+                                {files.map(f => (
+                                    <div key={f.name} className="file-grid-item" title={f.name}>
+                                        <div className="file-grid-icon">
+                                            <FileIcon name={f.name} />
+                                            <button
+                                                type="button"
+                                                className="file-grid-remove"
+                                                title="Remove"
+                                                onClick={() => handleRemoveFile(f.name)}
+                                            >×</button>
+                                        </div>
+                                        <span className="file-grid-name">{f.name}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        <div className={`file-explorer-drop-overlay${dragging ? " visible" : ""}`}>
+                            Drop to upload
+                        </div>
+                    </div>
+                </div>
+
+                {/* ── App settings (Electron / RemoteFs only) ── */}
                 {isElectron && selected.backend === "RemoteFs" && (
                     <div className="project-section">
                         <div className="project-section-header">
@@ -301,6 +357,8 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
             </div>
         )
     }
+
+    // ── Project list ──────────────────────────────────────────────────────────────
 
     return (
         <div id="projects-page">
@@ -334,16 +392,11 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                             rows={5} />
                     </label>
                     <label>
-                        Type
-                        <SegmentedControl options={TYPE_OPTIONS} value={type} onChange={handleTypeChange} />
-                        <span className="field-optional">{TYPE_HELP[type]}</span>
-                    </label>
-                    <label>
-                        Category <span className="field-optional">(optional — for your own search/sort, no effect on behavior)</span>
+                        Category <span className="field-optional">(optional — for your own search/sort)</span>
                         <input type="text" value={category} onChange={e => setCategory(e.target.value)} placeholder="e.g. Book, Game, DND Campaign" />
                     </label>
                     <label>
-                        Storage <span className="field-optional">(where the files live — can't be changed after creation)</span>
+                        Storage <span className="field-optional">(can't be changed after creation)</span>
                         <SegmentedControl options={BACKEND_OPTIONS} value={backend} onChange={setBackend} />
                     </label>
                     {error && <p className="form-error">{error}</p>}
@@ -362,7 +415,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                         <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
                     </svg>
                     <p>No projects yet</p>
-                    <span>Projects let you attach instructions to your conversations.</span>
+                    <span>Projects let you attach instructions and files to your conversations.</span>
                 </div>
             ) : (
                 <ul id="projects-list">
@@ -390,7 +443,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                                           </span>
                                 ) : (
                                     <span className="project-card-path" style={{ opacity: 0.55 }}>
-                                        Remote · {p.rootPath ?? "server"}
+                                        Server · {p.rootPath ?? "managed"}
                                     </span>
                                 )}
                             </div>

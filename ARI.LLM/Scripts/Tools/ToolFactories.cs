@@ -54,7 +54,11 @@ internal static class ToolFactories
     };
 
     private static ServerFileSystem? Fs(Thread t)
-        => t.ProjectRoot is { } r ? new ServerFileSystem(r, t.Ct, t.Snapshots, t.IsBrainVault) : null;
+    {
+        if (t.ProjectRoot is not { } r) return null;
+        bool isVault = t.IsBrainVault || Directory.Exists(Path.Combine(r, ".obsidian"));
+        return new ServerFileSystem(r, t.Ct, t.Snapshots, isVault);
+    }
 
     internal static bool TryBuild(string toolName, Thread thread, out Tool tool)
     {
