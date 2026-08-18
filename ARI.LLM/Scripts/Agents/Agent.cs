@@ -470,7 +470,15 @@ public abstract class Agent
         Turn turn = new(thread, opts, ariResponse, trace, NewTurnState(), onDelta);
 
         // ── Token budgets ─────────────────────────────────────────────────────
-        turn.ThinkBudget = Think ? (opts.ThinkingBudget > 0 ? opts.ThinkingBudget : BudgetThinking) : 0;
+        // The global reasoning-effort dial scales the thinking cap universally: low ×1 (anchor), medium ×2.5,
+        // high ×5. Applied to the resolved base budget so an agent's own tuning is preserved. This single
+        // scaled value flows on to BuildRequest as thinking_budget_tokens, so the server cap and ARI's own
+        // steer/cut stay in lockstep. See Documentation/Server/ARI.LLM/Reasoning-Effort.
+        int baseThinkBudget = opts.ThinkingBudget > 0 ? opts.ThinkingBudget : BudgetThinking;
+        // The whole dial — multiplier and wire field — only touches models that support reasoning_effort,
+        // so a stale "High" can't inflate a non-supporting model's cap with no steering to match it.
+        double effortMult = Server?.ActiveModel?.SupportsReasoningEffort == true ? ReasoningEffortStore.Multiplier : 1.0;
+        turn.ThinkBudget = Think ? (int)Math.Round(baseThinkBudget * effortMult) : 0;
         turn.RespBudget  = opts.MaxTokensOverride != 0 ? opts.MaxTokensOverride : BudgetResponse;
         // The two budgets are deliberately NOT summed into a single wire limit. Thinking is capped
         // server-side by thinking_budget_tokens; the reply then gets its own full RespBudget, counted
@@ -482,7 +490,8 @@ public abstract class Agent
         // ── Session record ────────────────────────────────────────────────────
         // Opened here rather than in a pipeline so it covers every agent unconditionally — the
         // dialogue agent, Memory's recall, Context's summariser, Engram's sweep, a Coder sub-thread.
-        turn.Rec = SessionRecorder.BeginRun(Name, thread, prompt, turn.MaxTokens, turn.ThinkBudget);
+        turn.Rec = SessionRecorder.BeginRun(Name, thread, prompt, turn.MaxTokens, turn.ThinkBudget,
+            Think && Server?.ActiveModel?.SupportsReasoningEffort == true ? ReasoningEffortStore.Level : null);
 
         // ── System block & messages ───────────────────────────────────────────
         int maxChars = BudgetContext > 0 ? (int)(BudgetContext * 3.5) : 0;
@@ -1809,27 +1818,40 @@ public abstract class Agent
         };
 
         // Thinking is fixed per turn — flipping enable_thinking changes the chat template and busts the KV cache.
+        bool enableThinking;
         if (!Think)
         {
-            body["thinking"]             = false;
-            body["enable_thinking"]      = false;
-            body["chat_template_kwargs"] = new { enable_thinking = false };
+            body["thinking"]        = false;
+            enableThinking          = false;
         }
         else if (BudgetThinking > 0 || thinkingBudgetOverride > 0)
         {
-            int budget = thinkingBudgetOverride > 0 ? thinkingBudgetOverride : BudgetThinking;
+            // thinkBudget is already scaled by the reasoning-effort multiplier (see StartTurn); use it so the
+            // server cap matches ARI's own steer/cut. Fall back to raw budgets only if it wasn't threaded.
+            int budget = thinkBudget > 0 ? thinkBudget : (thinkingBudgetOverride > 0 ? thinkingBudgetOverride : BudgetThinking);
             // thinking_budget_tokens is the field llama.cpp actually reads; thinking_budget is silently ignored.
             // Requires server started WITHOUT --reasoning-budget so per-request overrides stay active.
             body["thinking_budget_tokens"] = budget;
-            body["enable_thinking"]        = true;
-            body["chat_template_kwargs"]   = new { enable_thinking = true };
+            enableThinking                 = true;
         }
         else
         {
-            body["thinking"]             = true;
-            body["enable_thinking"]      = true;
-            body["chat_template_kwargs"] = new { enable_thinking = true };
+            body["thinking"]        = true;
+            enableThinking          = true;
         }
+        body["enable_thinking"] = enableThinking;
+
+        // chat_template_kwargs is what the Jinja template actually reads. The froggeric/official Qwen 3.8
+        // template reads reasoning_effort as a template variable — the top-level request field alone does NOT
+        // reach the template, so it must ride in here. Only sent for models whose template branches on it,
+        // and only when thinking is on. The top-level field is kept too for engines that read it directly.
+        Dictionary<string, object?> chatTemplateKwargs = new() { ["enable_thinking"] = enableThinking };
+        if (Think && srv.ActiveModel?.SupportsReasoningEffort == true)
+        {
+            chatTemplateKwargs["reasoning_effort"] = ReasoningEffortStore.Level;
+            body["reasoning_effort"]               = ReasoningEffortStore.Level;
+        }
+        body["chat_template_kwargs"] = chatTemplateKwargs;
 
         if (toolSchemas is not null) body["tools"] = toolSchemas;
         if (Slot is not null)

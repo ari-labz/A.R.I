@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using ARI.Common;
 
 namespace ARI.LLM;
 
@@ -48,6 +49,12 @@ public class Model
     [JsonPropertyName("supportsThinking")]
     public bool SupportsThinking { get; set; }
 
+    /// <summary>Auto-detected at refresh from the chat template, not user-set: true when the model accepts
+    /// the reasoning_effort request field. Gates the reasoning-effort dial in the UI and on the wire.
+    /// See Documentation/Server/ARI.LLM/Reasoning-Effort.</summary>
+    [JsonIgnore]
+    public bool SupportsReasoningEffort { get; set; }
+
     [JsonIgnore]
     public bool Downloaded { get; set; }
 
@@ -65,11 +72,14 @@ public class Model
         {
             FileSizeBytes = new FileInfo(fullPath).Length;
             KvArch = GgufReader.TryRead(fullPath);
+            var tmplPath = ChatTemplatePath is { Length: > 0 } t ? System.IO.Path.Combine(Paths.PersistentData, t) : null;
+            SupportsReasoningEffort = GgufReader.SupportsReasoningEffort(fullPath, tmplPath);
         }
         else
         {
             FileSizeBytes = 0;
             KvArch = null;
+            SupportsReasoningEffort = false;
         }
     }
 }

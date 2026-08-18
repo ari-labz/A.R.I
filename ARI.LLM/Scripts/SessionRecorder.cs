@@ -151,7 +151,7 @@ public static class SessionRecorder
 
     /// <summary>Starts recording one agent run. An agent invoked outside any exchange (Engram sweeping a
     /// dormant thread, the scheduler) opens an exchange of its own so it still lands in the index.</summary>
-    internal static Run? BeginRun(string agent, Thread thread, string prompt, int maxTokens, int thinkBudget)
+    internal static Run? BeginRun(string agent, Thread thread, string prompt, int maxTokens, int thinkBudget, string? reasoningEffort = null)
     {
         if (Off) return null;
 
@@ -199,6 +199,7 @@ public static class SessionRecorder
                 ["prompt"]       = prompt,
                 ["max_tokens"]   = maxTokens,
                 ["think_budget"] = thinkBudget,
+                ["reasoning_effort"] = reasoningEffort,
             });
 
             Remember(run);

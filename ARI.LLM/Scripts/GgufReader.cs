@@ -57,6 +57,52 @@ public static class GgufReader
         return null;
     }
 
+    /// <summary>Reads the embedded <c>tokenizer.chat_template</c> string, or null if absent/unreadable.
+    /// Used to detect features the template branches on (e.g. reasoning_effort).</summary>
+    public static string? TryReadChatTemplate(string path)
+    {
+        try
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var br = new BinaryReader(fs, Encoding.UTF8, leaveOpen: true);
+
+            if (br.ReadUInt32() != MagicGGUF) return null;
+            var version = br.ReadUInt32();
+            if (version is < 1 or > 3) return null;
+
+            _ = version >= 2 ? (long)br.ReadUInt64() : br.ReadUInt32(); // tensor count
+            var metaKvCount = version >= 2 ? (long)br.ReadUInt64() : br.ReadUInt32();
+
+            for (long i = 0; i < metaKvCount; i++)
+            {
+                var key   = ReadString(br);
+                var vtype = (GgufValueType)br.ReadUInt32();
+                var value = ReadValue(br, vtype);
+
+                var bare = key.Contains('.') ? key[(key.IndexOf('.') + 1)..] : key;
+                if (bare == "chat_template" && value is string tmpl) return tmpl;
+            }
+        }
+        catch { /* corrupt / truncated file */ }
+
+        return null;
+    }
+
+    /// <summary>True when the model's chat template branches on <c>reasoning_effort</c> — the honest,
+    /// offline signal that the model accepts the reasoning_effort request field. A custom template file
+    /// (when the model overrides the built-in one) is checked in preference to the embedded template.</summary>
+    public static bool SupportsReasoningEffort(string ggufPath, string? customTemplatePath = null)
+    {
+        try
+        {
+            if (customTemplatePath is { Length: > 0 } && File.Exists(customTemplatePath))
+                return File.ReadAllText(customTemplatePath).Contains("reasoning_effort", StringComparison.Ordinal);
+        }
+        catch { /* fall back to embedded template */ }
+
+        return TryReadChatTemplate(ggufPath)?.Contains("reasoning_effort", StringComparison.Ordinal) ?? false;
+    }
+
     // ── private helpers ──────────────────────────────────────────────
 
     private enum GgufValueType : uint
