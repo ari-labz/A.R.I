@@ -4,7 +4,7 @@ namespace ARI.API;
 
 public static class SafeModePromptStore
 {
-    private const string Default = "I don't want you to make any changes to the files yet. Just help me design this without making any changes.";
+    private const string Default = "Please help me plan this change, but do not edit any files — use read-only operations only, then present a plan.";
     private static readonly string FilePath = Path.Combine(Paths.PersistentData, "safemode_prompt.txt");
     private static readonly object Lock = new();
 

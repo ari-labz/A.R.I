@@ -221,10 +221,6 @@ export function openEventStream(
     return es
 }
 
-export async function cancelProcessing(key: string) {
-    await apiFetch(`/threads/${key}/processing`, { method: "DELETE" })
-}
-
 export function useTypingHeartbeat(getThreadKey: () => string | null) {
     const timer = useRef<ReturnType<typeof setInterval> | null>(null)
 

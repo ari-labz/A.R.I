@@ -186,8 +186,9 @@ public abstract class Agent
             }
             else if (thread.streamingResponse is not null)
             {
-                thread.streamingResponse.Content = ContentBlock.Parse(thread.streamedText);
-                thread.streamingResponse.State   = State.Cancelled;
+                thread.streamingResponse.Content   = ContentBlock.Parse(thread.streamedText);
+                thread.streamingResponse.Reasoning = string.IsNullOrEmpty(thread.streamedReasoning) ? null : thread.streamedReasoning;
+                thread.streamingResponse.State     = State.Cancelled;
             }
             thread.preserveOnCancel  = false;
             thread.streamingResponse = null;
@@ -459,6 +460,7 @@ public abstract class Agent
         thread.RaiseUpdated();
         thread.streamingResponse = ariResponse;
         thread.streamedText      = "";
+        thread.streamedReasoning = "";
 
         Func<string, Task>? userDelta = opts.OnDelta;
         Func<string, Task>? onDelta   = async text => {
@@ -578,9 +580,31 @@ public abstract class Agent
         return responseText;
     }
 
+    // ── User interjections ("stop and read this, then continue") ──────────────
+    // Framing wrapped around a mid-turn message so the model folds it into what it was already doing rather
+    // than treating it as a brand-new request. Reused by both drain points (step boundary + mid-stream).
+    private static string? FormatInterjections(Thread thread)
+    {
+        if (thread.Interjections.IsEmpty) return null;
+        var parts = new List<string>();
+        while (thread.Interjections.TryDequeue(out var m))
+            parts.Add(string.IsNullOrWhiteSpace(m.User) ? m.Text : $"{m.User}: {m.Text}");
+        if (parts.Count == 0) return null;
+        return "[The user jumped in mid-response — read this, then continue what you were doing, "
+             + "folding in the new information. Do not restart from scratch.]\n" + string.Join("\n", parts);
+    }
+
     private void PrepareStep(Turn turn)
     {
         Thread thread = turn.Thread;
+
+        // Between tool rounds: fold in anything the user typed while the previous step was running, as a
+        // user message before the next request. Mid-think interjections are handled in ProcessDelta instead.
+        if (FormatInterjections(thread) is { } interjection)
+        {
+            turn.Messages.Add(new { role = "user", content = interjection });
+            Shared.Logger.LogInformation("[{Agent}] ({Thread}) folded in a user interjection at step boundary.", Name, thread.Key);
+        }
 
         // Refresh system message so per-turn budget numbers are current.
         turn.Messages[0] = new { role = "system", content = turn.BaseSystem + turn.BudgetsBlock + turn.ThinkSuffix };
@@ -791,6 +815,7 @@ public abstract class Agent
                 turn.ReasoningChars     += thinkDelta.Length;
                 turn.StepReasoningChars += thinkDelta.Length;
                 turn.ReasoningBuilder.Append(thinkDelta);
+                thread.streamedReasoning = turn.ReasoningBuilder.ToString();
             }
             if (turn.LiveReasoning is null) { turn.LiveReasoning = new TraceStep { Kind = "reasoning", Text = "" }; turn.Trace.Add(turn.LiveReasoning); }
             turn.LiveReasoning.Text = turn.ReasoningBuilder.ToString(turn.ReasoningStartLen, turn.ReasoningBuilder.Length - turn.ReasoningStartLen);
@@ -798,6 +823,25 @@ public abstract class Agent
 
             if (!string.IsNullOrEmpty(thinkDelta))
             {
+                // User interjection arriving mid-think ("she's spiralling — let me narrow the search"): wait
+                // for the end of the current sentence (peek without draining), then capture the reasoning as
+                // <think>, fold the message in, and restart the step so she continues the same chain of
+                // thought with the new information.
+                bool thinkBoundary = thinkDelta.Contains('.') || thinkDelta.Contains('!') || thinkDelta.Contains('?') || thinkDelta.Contains('\n');
+                if (turn.PendingThinkRedirect is null && thinkBoundary && thread.HasInterjections
+                    && FormatInterjections(thread) is { } midThink)
+                {
+                    string capturedThink = turn.ReasoningBuilder.Length > turn.ReasoningStartLen
+                        ? "<think>\n" + turn.ReasoningBuilder.ToString(turn.ReasoningStartLen, turn.ReasoningBuilder.Length - turn.ReasoningStartLen).TrimEnd() + "\n</think>\n"
+                        : "";
+                    turn.Messages.Add(new { role = "assistant", content = capturedThink });
+                    turn.Messages.Add(new { role = "user", content = midThink });
+                    turn.ReasoningStartLen = turn.ReasoningBuilder.Length;
+                    turn.ThinkingRedirect  = true;
+                    Shared.Logger.LogInformation("[{Agent}] ({Thread}) folded in a user interjection mid-think.", Name, thread.Key);
+                    return;
+                }
+
                 // Thinking budget. The soft limit queues a wrap-up steer that waits for the end of the
                 // sentence she is mid-way through, so she is never cut off mid-thought. Only if she keeps
                 // going and burns half the budget again on top does the steer get forced through.
@@ -963,6 +1007,22 @@ public abstract class Agent
 
         if (!turn.ResponseContentStarted)
         {
+            // A user interjection ("stop and read this, then continue") takes priority over speech steering:
+            // capture the reasoning so far as <think>, inject the message, and restart the step so Ari folds
+            // it into the same chain of thought she was mid-way through.
+            if (FormatInterjections(thread) is { } interjection)
+            {
+                string capturedThink = turn.ReasoningBuilder.Length > turn.ReasoningStartLen
+                    ? "<think>\n" + turn.ReasoningBuilder.ToString(turn.ReasoningStartLen, turn.ReasoningBuilder.Length - turn.ReasoningStartLen).TrimEnd() + "\n</think>\n"
+                    : "";
+                turn.Messages.Add(new { role = "assistant", content = capturedThink });
+                turn.Messages.Add(new { role = "user", content = interjection });
+                turn.ReasoningStartLen = turn.ReasoningBuilder.Length;
+                turn.SteeringRedirect  = true;
+                Shared.Logger.LogInformation("[{Agent}] ({Thread}) folded in a user interjection mid-stream.", Name, thread.Key);
+                return;
+            }
+
             string? agentRedirect = OnStreamingDelta(thread, deltaText);
             string? finalRedirect = OnStreamingDeltaPipeline?.Invoke(thread, agentRedirect ?? deltaText) ?? agentRedirect;
             if (finalRedirect is not null)

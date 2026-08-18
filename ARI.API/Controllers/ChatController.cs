@@ -722,6 +722,26 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         return Ok();
     }
 
+    /// <summary>Esc = stop. Cancels the in-flight turn but PRESERVES the partial work (thinking + partial
+    /// reply/tools) so nothing is lost — the user's next message is a fresh turn.</summary>
+    [HttpPost("{threadKey}/interrupt")]
+    public IActionResult InterruptProcessing(string threadKey)
+    {
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        Llm.Interrupt(threadKey);
+        return Ok();
+    }
+
+    /// <summary>Mid-turn message = "stop and read this, then continue". The turn keeps running; the message is
+    /// folded into Ari's current chain of thought. Returns 409 if the thread isn't streaming (send normally).</summary>
+    [HttpPost("{threadKey}/interject")]
+    public IActionResult Interject(string threadKey, [FromBody] InterjectRequest body)
+    {
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        bool folded = Llm.Interject(threadKey, GetUsername(), body?.Text ?? "");
+        return folded ? Ok() : Conflict("Thread is not streaming.");
+    }
+
     /// <summary>Close a thread: runs Engram to save it to memory, then deletes it. Fires a threadDeleted event.</summary>
     [HttpDelete("{threadKey}")]
     public async Task<IActionResult> CloseThread(string threadKey)
@@ -735,6 +755,10 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     public async Task Stream(string threadKey, [FromBody] StreamRequest body, CancellationToken cancellationToken)
     {
         string prompt = body?.Prompt ?? string.Empty;
+        // Safe mode has two halves: the persistent thread flag (enforced as a hard edit-block in the Coder's
+        // tool layer) and the prompt injection that steers her toward read-only planning. Set both. The flag
+        // mirrors the toggle each send; CodePipeline clears it when the user approves a plan.
+        Llm?.SetSafeMode(threadKey, body?.SafeMode == true);
         if (body?.SafeMode == true)
             prompt = string.IsNullOrWhiteSpace(prompt)
                 ? SafeModePromptStore.Get()
@@ -962,6 +986,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 }
 
 public record StreamRequest(string Prompt, string? LocalPath = null, bool SafeMode = false);
+public record InterjectRequest(string? Text);
 public record PromoteToProjectRequest(string Name, string? Category = null);
 public record CommandRequest(string? ThreadKey, string Input);
 public record NewThreadRequest(string? ProjectId, bool Desktop = false, string? Pipeline = null);

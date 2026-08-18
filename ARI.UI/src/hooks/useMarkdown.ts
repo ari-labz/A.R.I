@@ -17,6 +17,24 @@ function escHtml(s: string): string {
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
 }
 
+// Reverses the marker-grammar escaping applied server-side (RunCommandMarker & friends), which neutralise
+// the delimiter chars ':' '>' '|' '--' so they don't break the <!--ari-tool-…--> grammar. Without this a
+// reloaded command chip shows "git diff &#45;&#45;stat" / "grep ¦ sed" instead of "git diff --stat".
+function decodeMarkerLabel(s: string): string {
+    return s
+        .replace(/&#45;&#45;/g, "--")
+        .replace(/∶/g, ":")
+        .replace(/¦/g, "|")
+        .replace(/&gt;/g, ">")
+}
+
+// Decodes a base64 diff patch (server encodes it so it survives the marker/JSON transport). Returns "" on
+// bad input so callers fall back to the "too large" placeholder rather than rendering garbage.
+function decodePatch(encoded: string): string {
+    if (!encoded) return ""
+    try { return atob(encoded) } catch { return "" }
+}
+
 const TOOL_VERBS: Record<string, { active: string; done: string }> = {
     read_file:      { active: "Reading",    done: "Read" },
     preview_file:   { active: "Previewing", done: "Previewed" },
@@ -107,7 +125,7 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
         const web = webCardFromMarker(name, rawLabel, true)
         if (web) return web
         const verbs = TOOL_VERBS[name] ?? { active: name, done: name }
-        const label = rawLabel.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">")
+        const label = decodeMarkerLabel(rawLabel)
         return `\n\n<div class="tool-card tool-card--done"><span>${verbs.done} ${escHtml(label)}</span></div>\n\n`
     })
     // Plan proposed: a subtle chip in the transcript; the Accept/Amend actions live in the composer.
@@ -122,19 +140,19 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
 
     // Mode switch (replan): a light-blue info card, NOT an error.
     out = out.replace(TOOL_MODE_RE, (_, _name, rawLabel) => {
-        const label = rawLabel.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">")
+        const label = decodeMarkerLabel(rawLabel)
         return `\n\n<div class="tool-card tool-card--mode"><span>${escHtml(label)}</span></div>\n\n`
     })
     out = out.replace(TOOL_ERROR_RE, (_, name, rawFile, rawMsg) => {
         const web = webCardFromMarker(name, rawFile, true, true)
         if (web) return web
         const verbs = TOOL_VERBS[name] ?? { active: name, done: name }
-        const file  = rawFile.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">")
-        const msg   = rawMsg.replace(/&#45;&#45;/g, "--").replace(/&gt;/g, ">")
+        const file  = decodeMarkerLabel(rawFile)
+        const msg   = decodeMarkerLabel(rawMsg)
         return `\n\n<div class="tool-card tool-card--error"><span>${verbs.active} ${escHtml(file)}</span><span class="tool-card-error-msg">${escHtml(msg)}</span></div>\n\n`
     })
     out = out.replace(TOOL_START_RE, (_, name, label) => {
-        const file      = label.replace(/&#45;&#45;/g, "--")
+        const file      = decodeMarkerLabel(label)
         const cleanFile = file.replace(/\|\+\d+(?:\|-\d+)?$/, "")
         // Web cards need no start/done reconciliation: the server replaces the start marker with the done
         // marker in place, so only one of the two is ever present. A start marker means still running.
@@ -356,17 +374,20 @@ export function renderBlockHtml(block: BlockLike): string {
         return browsingCardHtml(block.url ?? "", block.title ?? "", done, err)
 
     const verbs = CARD_VERBS[block.type] ?? { active: block.type, done: block.type }
-    const label = block.fileName ?? block.path ?? block.pattern ?? block.command ?? block.task ?? block.project ?? ""
+    const label = decodeMarkerLabel(block.fileName ?? block.path ?? block.pattern ?? block.command ?? block.task ?? block.project ?? "")
 
     if (block.type === "editing" || block.type === "writing") {
         const badges = diffBadges(block.added, block.removed)
         const cls = err ? "tool-card--error" : done ? "tool-card--done tool-card--diff" : "tool-card--active"
-        if (done && block.patch) {
-            const lines = block.patch.split("\n").map(l =>
-                l.startsWith("+") ? `<div class="diff-line diff-line--add">${escHtml(l)}</div>`
-                : l.startsWith("-") ? `<div class="diff-line diff-line--del">${escHtml(l)}</div>`
-                : `<div class="diff-line">${escHtml(l)}</div>`).join("")
-            return `<details class="tool-card ${cls}"><summary><span>${verbs.done} ${escHtml(label)}</span>${badges}</summary><div class="tool-card-diff">${lines}</div></details>`
+        if (done && block.added != null && (block.added > 0 || (block.removed ?? 0) > 0)) {
+            const patch = decodePatch(block.patch ?? "")
+            const body = patch
+                ? patch.split("\n").map(l =>
+                    l.startsWith("+") ? `<div class="diff-line diff-line--add">${escHtml(l)}</div>`
+                    : l.startsWith("-") ? `<div class="diff-line diff-line--del">${escHtml(l)}</div>`
+                    : `<div class="diff-line">${escHtml(l)}</div>`).join("")
+                : `<div class="tool-card-diff--too-large">Diff is too large to display</div>`
+            return `<details class="tool-card ${cls}"><summary><span>${verbs.done} ${escHtml(label)}</span>${badges}</summary><div class="tool-card-diff">${body}</div></details>`
         }
         const verb = err ? verbs.active : done ? verbs.done : verbs.active
         return `<div class="tool-card ${cls}"><span>${verb} ${escHtml(label)}</span>${badges}</div>`

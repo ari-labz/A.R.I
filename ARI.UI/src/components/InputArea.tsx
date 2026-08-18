@@ -268,9 +268,9 @@ export default function InputArea({
                         />
                         <button
                             className="btn-send"
-                            disabled={!serverReady || isStreaming || (!input.trim() && pendingAttach.length === 0)}
+                            disabled={!serverReady || (!input.trim() && pendingAttach.length === 0)}
                             onClick={submit}
-                            title="Send"
+                            title={isStreaming ? "Send — she'll read it and continue" : "Send"}
                         >
                             <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
                                 <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>

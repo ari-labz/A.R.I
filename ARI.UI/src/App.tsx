@@ -4,7 +4,7 @@ import Main from "./components/Main"
 import ProjectsPage from "./components/ProjectsPage"
 import {
     useThreads, createThread, closeThread, loadHistory, fetchThread, pollThreadWhileStreaming,
-    openEventStream, openWatchStream, cancelProcessing, useTypingHeartbeat,
+    openEventStream, openWatchStream, useTypingHeartbeat,
     type ThreadItem, type ThreadEntry, type AppEvent, type Attachment, type Project, type ThreadStatus, type WatchEvent,
 } from "./hooks/useThreads"
 import { usePipelines } from "./hooks/usePipelines"
@@ -898,10 +898,35 @@ export default function App() {
     const send = useCallback(async (prompt: string) => {
         if (!prompt && pendingAttach.length === 0) return
 
+        // Approving a plan lifts safe mode (the server clears it too) — so the toggle doesn't silently
+        // re-arm the edit-block on the very next message, and this approval send carries safeMode off.
+        const isApprove = prompt.trim() === "[approve-plan]"
+        if (isApprove && safetyModeRef.current) setSafetyMode(false)
+
         const STOP_WORDS = ["stop", "wait", "escape"]
         if (isStreaming && STOP_WORDS.includes(prompt.toLowerCase().trim())) {
-            if (activeThreadRef.current) await cancelProcessing(activeThreadRef.current)
+            // "stop" = Esc: cancel but preserve the partial work (not the throwaway cancel).
+            if (activeThreadRef.current) await apiFetch(`/threads/${activeThreadRef.current}/interrupt`, { method: "POST" }).catch(() => {})
             return
+        }
+        // A real message sent while she's still working = "stop and read this, then continue". Fold it into
+        // the running turn instead of aborting — she keeps her chain of thought and incorporates the new info.
+        if (isStreaming && activeThreadRef.current && prompt && !prompt.startsWith("/")) {
+            const key = activeThreadRef.current
+            const optimisticAttach = pendingAttach.length ? [...pendingAttach] : undefined
+            setPendingAttach([])
+            setItems(prev => {
+                // Insert the interjection just before the trailing streaming response bubble.
+                const idx = prev.length && prev[prev.length - 1].type === "ariResponse" ? prev.length - 1 : prev.length
+                const msg: ThreadItem = { type: "userMessage", content: prompt, timestamp: new Date().toISOString(), attachments: optimisticAttach as Attachment[] | undefined }
+                return [...prev.slice(0, idx), msg, ...prev.slice(idx)]
+            })
+            const res = await apiFetch(`/threads/${key}/interject`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ text: prompt }),
+            }).catch(() => null)
+            // 409 = the turn finished between keypress and send; fall through to a normal new message.
+            if (res && res.ok) return
         }
         if (isStreaming) {
             abortRef.current?.abort(); abortRef.current = null
@@ -1009,7 +1034,7 @@ export default function App() {
                 const resp = await apiFetch(`/threads/${keyForStream}/stream`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ prompt, ...(localPath ? { localPath } : {}), ...(safetyMode ? { safeMode: true } : {}) }),
+                    body: JSON.stringify({ prompt, ...(localPath ? { localPath } : {}), ...(safetyMode && !isApprove ? { safeMode: true } : {}) }),
                     signal: ctrl.signal,
                 })
 
@@ -1034,9 +1059,16 @@ export default function App() {
                         return
                     }
                     if (data === "[CANCELLED]") {
+                        // Esc = stop: the server preserved the partial work, so keep it on screen (don't
+                        // truncate) — just finalize the streaming bubble. The next message is a fresh turn.
                         abortRef.current = null
                         setIsStreaming(false)
-                        setItems(prev => prev.slice(0, preSendCountRef.current))
+                        setItems(prev => {
+                            const last = prev[prev.length - 1]
+                            if (last?.type === "ariResponse" && last.isStreaming)
+                                return [...prev.slice(0, -1), { ...last, isStreaming: false }]
+                            return prev
+                        })
                         return
                     }
                     if (data.startsWith("[ERROR]")) {

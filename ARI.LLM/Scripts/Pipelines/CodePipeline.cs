@@ -62,6 +62,9 @@ internal sealed class CodePipeline : Pipeline
             thread.Phase        = approve ? CodePhase.Development : CodePhase.Planning;
             thread.PlanProposed = false;
             if (approve) effectivePrompt = "Approved — build the plan from your payload now.";
+            // Approving a plan is the user saying "go" — safe mode has served its purpose, so lift the
+            // edit block now that the build is authorised. (The client mirrors this off its next status read.)
+            if (approve) thread.SafeMode = false;
         }
         else thread.Phase = CodePhase.Planning;
 
