@@ -32,7 +32,41 @@ internal sealed class SearchFiles : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson) => fs.Search(argsJson);
+    private const int MAX_RESULTS = 50;
+
+    internal override async Task<string> Execute(string argsJson)
+    {
+        string result = await fs.Search(argsJson);
+        return Cap(result);
+    }
+
+    private static string Cap(string result)
+    {
+        string[] lines = result.Split('\n');
+        int count = 0;
+        foreach (string line in lines)
+            if (!string.IsNullOrWhiteSpace(line))
+                count++;
+        if (count <= MAX_RESULTS)
+            return result;
+        int kept = 0;
+        List<string> keptLines = new();
+        foreach (string line in lines)
+        {
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                keptLines.Add(line);
+                continue;
+            }
+            if (kept >= MAX_RESULTS)
+                break;
+            keptLines.Add(line);
+            kept++;
+        }
+        int hidden = count - MAX_RESULTS;
+        keptLines.Add($"[truncated — {hidden} more results hidden]");
+        return string.Join('\n', keptLines);
+    }
 
     internal override Func<string, string>? Display => args =>
     {
