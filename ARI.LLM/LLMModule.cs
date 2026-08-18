@@ -1081,6 +1081,36 @@ public class LLMModule : ILLMModule, IDisposable
         Cancel(threadKey);
     }
 
+    /// <summary>Mirror the user's safety toggle onto the thread so the Coder's tool layer can enforce it.
+    /// Persistent per thread; CodePipeline clears it when a plan is approved. No-op if the thread doesn't
+    /// exist yet (the injected prompt still steers that first turn).</summary>
+    public void SetSafeMode(string threadKey, bool on)
+    {
+        if (threads.TryGetValue(threadKey, out Thread? thread)) thread.SafeMode = on;
+    }
+
+    /// <summary>The user jumped in mid-turn ("stop and read this, then continue"). Unlike Interrupt, the turn
+    /// is NOT cancelled — the message is queued and the running agent loop folds it into its current chain of
+    /// thought (mid-think, or at the next tool-round boundary). The message is added to history immediately so
+    /// it shows in the transcript and survives a reload; returns false if the thread isn't currently streaming
+    /// (nothing to interject into — the caller should send a normal message instead).</summary>
+    public bool Interject(string threadKey, string username, string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        if (!threads.TryGetValue(threadKey, out Thread? thread)) return false;
+        if (thread.State != ThreadState.Streaming) return false;
+
+        // Insert the visible message just before the in-flight response so the transcript reads in order:
+        // prior prompt → this interjection → the response that continues after it.
+        int at = thread.streamingResponse is { } sr ? thread.History.IndexOf(sr) : -1;
+        var msg = new Prompt { AuthorName = username, Text = text, Timestamp = DateTime.Now, IsVisible = true };
+        if (at >= 0) thread.History.Insert(at, msg); else thread.History.Add(msg);
+
+        thread.Interject(username, text);
+        thread.RaiseUpdated();
+        return true;
+    }
+
     // ── Data types ───────────────────────────────────────────────────────────────
 
     public record InternalThreadInfo(string Key, string AgentName, DateTime LastMessageAt, int MessageCount);

@@ -6,6 +6,7 @@ import DropOverlay from "./DropOverlay"
 import Orb from "./Orb"
 import type { AppMode, PendingAttachment } from "../App"
 import type { ThreadItem, Attachment, Project } from "../hooks/useThreads"
+import { apiFetch } from "../auth"
 
 interface Command { cmd: string; desc: string }
 
@@ -106,11 +107,12 @@ export default function Main({
         }
     }, [handleDragEnter, handleDragLeave, handleDragOver, handleDrop])
 
-    // Escape to cancel
+    // Escape = stop. Cancels the in-flight turn but preserves the partial work (thinking + partial reply);
+    // it is not thrown away, so the transcript keeps what she had so far and the next message is a fresh turn.
     useEffect(() => {
         function onKey(e: KeyboardEvent) {
             if (e.key !== "Escape" || !isStreaming || !activeThread) return
-            fetch(`/threads/${activeThread}/processing`, { method: "DELETE" }).catch(() => {})
+            apiFetch(`/threads/${activeThread}/interrupt`, { method: "POST" }).catch(() => {})
         }
         document.addEventListener("keydown", onKey)
         return () => document.removeEventListener("keydown", onKey)

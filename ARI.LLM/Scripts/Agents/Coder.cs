@@ -137,14 +137,25 @@ internal sealed class Coder : Agent
     // client's forwarded edit/write tools), so "no building in Planning" holds on both paths uniformly.
     internal override string? OnToolCall(Thread thread, ToolTurnState state, string toolName, string callId, string argsJson)
     {
+        // Safe mode: a pure edit-block overlay, independent of the plan/build phase. She may reason, explore,
+        // and even call start_build, but any file-mutating tool bounces until the user disables safe mode
+        // (which clears automatically when they approve a plan). This is NOT planning mode.
+        if (thread.SafeMode
+            && toolName is "edit_file" or "write_file" or "delete_file" or "move_file" or "build_project")
+            return "[System: you are in safemode, editing files is not permitted. if you think this is an error, " +
+                   "report back to the user to disable safemode, otherwise keep planning.]";
+
         if (thread.Phase == CodePhase.Planning
             && toolName is "edit_file" or "write_file" or "delete_file" or "move_file" or "build_project")
-            return "[System: you are in planning mode — finish your plan and call plan_proposed. Editing and building " +
-                   "are disabled until the user approves the plan.]";
+            return "[System: you are in planning mode — either call start_build to implement this directly (for a " +
+                   "simple, well-understood change) or finish your plan and call plan_proposed. Editing and building " +
+                   "are disabled until you do one of those.]";
         if (thread.Phase == CodePhase.Development && toolName == "plan_proposed")
             return "[System: the plan is already approved — you are building. Use replan only if the plan is wrong.]";
         if (thread.Phase == CodePhase.Planning && toolName == "replan")
             return "[System: you are already in planning — just revise your plan and call plan_proposed.]";
+        if (thread.Phase == CodePhase.Development && toolName == "start_build")
+            return "[System: you are already building. Use replan if the plan turns out to be wrong.]";
         return null;
     }
 
@@ -239,6 +250,15 @@ internal sealed class Coder : Agent
             parent.EndTurnNow   = true;   // clean boundary — nothing else runs this turn
             return Task.FromResult("[System: plan proposed and captured. STOP now — the user will approve it (then you build) or ask for changes (then you revise). Do not build yet.]");
         });
+        // start_build(): the model judged the task simple enough to implement directly — flip to Development
+        // NOW, within this same turn, so its edit tools unlock and it just does it (no plan, no approval).
+        // Unlike plan_proposed it does NOT end the turn. Safe mode still blocks the actual edits (orthogonal).
+        parent.RegisterTool("start_build", StartBuildSchema, _ =>
+        {
+            parent.Phase = CodePhase.Development;
+            return Task.FromResult("[System: building now — implement the change directly, then build to verify. " +
+                                   "If it turns out bigger than expected, call replan and propose a plan instead.]");
+        });
         // replan(reason): from Development, hand back to Planning when the plan turns out wrong/blocked.
         parent.RegisterTool("replan", ReplanSchema, argsJson =>
         {
@@ -258,7 +278,7 @@ internal sealed class Coder : Agent
                     // The model's failure mode is writing the revised plan as a PROSE section and never calling
                     // plan_proposed — so forbid prose outright and demand the tool call be the ONLY output.
                     ? "PLANNING — REVISION. The user did not approve your last plan; [Task] is the change they want. Proceed EXACTLY:\n1. Reuse what you already know (read a file ONLY if the change needs a detail you genuinely lack).\n2. Do NOT write the plan, or any part of it, as prose in your message.\n3. Emit ONE plan_proposed tool call whose payload is the FULL revised plan — and output NOTHING ELSE this turn. No lead-in sentence, no prose, no explanation: the tool call is your entire reply. Do NOT build."
-                    : "PLANNING. If the request is genuinely vague, ask ONE clarifying question and stop. Otherwise: explore with read tools until you can plan — then PROPOSE, and a proposal is ONE plan_proposed call and NOTHING ELSE (no prose, no lead-in sentence): the full plan is its payload. NEVER write the plan, or any step of it, as prose in your message — prose is not a proposal and leaves the user nothing to approve. Either you're still exploring (call read tools) or you're proposing (call plan_proposed) — never describe the plan in text. Don't over-read.")
+                    : "PLANNING. If the request is genuinely vague, ask ONE clarifying question and stop. Otherwise JUDGE the task: if it's small, well-understood and low-risk — a direct instruction, a fix, a tidy — call start_build and just implement it directly (no plan, no approval). Only if it's substantial, risky, or a design worth agreeing on first, explore with read tools then PROPOSE — and a proposal is ONE plan_proposed call and NOTHING ELSE (no prose, no lead-in sentence): the full plan is its payload. NEVER write the plan, or any step of it, as prose in your message — prose is not a proposal and leaves the user nothing to approve. At any moment you are doing exactly one of: exploring (read tools), building directly (start_build), or proposing (plan_proposed). Don't over-read.")
             : "DEVELOPMENT. Build the plan from the [Handoff] payload above — edit one file at a time, then build to verify. If the plan is genuinely wrong, call replan.";
         if (editsForbidden)
             nudge += " [The user has forbidden edits this turn — do not build; plan only.]";
@@ -336,6 +356,19 @@ internal sealed class Coder : Agent
         }
     };
 
+    private static readonly object StartBuildSchema = new
+    {
+        type = "function",
+        function = new
+        {
+            name = "start_build",
+            description = "Call this when the task is simple enough to implement directly — a small, well-understood, " +
+                          "low-risk change (a clear instruction, a fix, a tidy) that doesn't need a plan or the user's " +
+                          "approval first. It unlocks your edit tools immediately and you build it in this same turn. " +
+                          "For anything substantial, risky, or worth agreeing on first, use plan_proposed instead.",
+            parameters = new { type = "object", properties = new { } }
+        }
+    };
     private static readonly object ReplanSchema = new
     {
         type = "function",

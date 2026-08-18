@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using ARI.Common;
 using Microsoft.Extensions.Logging;
 
@@ -104,6 +105,13 @@ public class Thread
     /// with a fresh plan_proposed.</summary>
     public bool RevisingPlan;
 
+    /// <summary>Safe mode: a persistent, edit-blocking overlay driven by the user's safety toggle — ORTHOGONAL
+    /// to <see cref="Phase"/> (it is NOT planning mode). While set, every file-mutating tool bounces at the
+    /// tool layer regardless of phase, so Ari can reason, explore, and even decide to build, but cannot touch
+    /// files. Mirrors the toggle on each send and clears automatically when the user approves a plan (the point
+    /// at which they've said "go"). See Coder.OnToolCall and CodePipeline.Run.</summary>
+    public bool SafeMode;
+
     /// <summary>Set by plan_proposed / replan to force the current turn to end after this tool batch (a clean
     /// phase boundary), read by CodeArchitect.ShouldBreak.</summary>
     public bool EndTurnNow;
@@ -203,6 +211,23 @@ public class Thread
 
     internal Response? streamingResponse;
     internal string       streamedText = "";
+
+    /// <summary>Mirror of the turn's reasoning-so-far, updated as thinking streams. Lets a preserved cancel
+    /// (Esc = stop) keep the chain of thought on the partial response — the local ReasoningBuilder lives
+    /// inside Send and isn't reachable from the cancel handler.</summary>
+    internal string streamedReasoning = "";
+
+    /// <summary>Messages the user jumped in with WHILE a turn is streaming ("stop and read this, then
+    /// continue"). Drained by the agent loop — mid-think via the steering redirect, or at the top of the
+    /// next step (between tool rounds) — and fed back into the model with the reasoning preserved, so Ari
+    /// folds the new information into her existing chain of thought rather than starting over.</summary>
+    internal readonly ConcurrentQueue<(string User, string Text)> Interjections = new();
+
+    /// <summary>True while a turn is streaming and at least one interjection is waiting to be folded in.</summary>
+    internal bool HasInterjections => !Interjections.IsEmpty;
+
+    /// <summary>Queue a mid-turn user message for the agent loop to fold into the current response.</summary>
+    internal void Interject(string user, string text) => Interjections.Enqueue((user, text));
 
     /// <summary>Set by the agent loop only while a tool is executing: lets a long-running tool (e.g. spawn_coder)
     /// append rendered display content into the agent's in-progress response, so a sub-agent's work shows inline
@@ -386,10 +411,13 @@ public class Thread
     }
 
     /// <summary>The user is composing (typing indicator): keep the thread alive and re-arm the response
-    /// window so it does not drift to inactive/deletion mid-compose.</summary>
+    /// window so it does not drift to inactive/deletion mid-compose. A turn already in flight
+    /// (<see cref="ThreadState.Streaming"/>) is left untouched — Streaming carries no timeout, and demoting
+    /// it to Active here would arm the response window mid-turn, letting the thread fade to inactive/dormant
+    /// (and run Engram) while Ari is still generating.</summary>
     internal void OnUserTyping()
     {
-        if (State == ThreadState.Deleted) return;
+        if (State is ThreadState.Deleted or ThreadState.Streaming) return;
         DisposeTimers();
         State = ThreadState.Active;
         ArmResponseWindow();
