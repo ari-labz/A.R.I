@@ -961,6 +961,55 @@ button, a, input, select, textarea, label, [role="button"] {
 }
 #main.code-mode #input-hint { color: #4a5568; }
 
+/* ── thinking-effort dial (hint row, right-aligned to the composer border) ── */
+#input-hint-row {
+    position: relative;
+    max-width: var(--col-max);
+    margin: 0 auto;
+}
+#input-hint-row #input-hint { margin-top: 6px; }
+#thinking-effort {
+    /* right offset ≈ send button (32px) + gap (4px) + half the paperclip, so the brain sits under the paperclip */
+    position: absolute; right: 44px; top: 50%; transform: translateY(-50%);
+    /* Lift the whole control above the pipeline selector (.pipeline-option is position:relative z-index:2).
+       Without a z-index here, the popup's own z-index only competes inside this box, which sits at auto(0)
+       in the shared context — so "Talk"/"Code" would paint over the popup. */
+    z-index: 60;
+}
+#btn-thinking-effort {
+    display: flex; align-items: center; justify-content: center;
+    background: none; border: none; cursor: pointer;
+    color: #9ca3af; padding: 5px; border-radius: 7px;
+    transition: color 0.15s ease, background 0.15s ease;
+}
+#btn-thinking-effort:hover { color: var(--text); background: rgba(0,0,0,.05); }
+#btn-thinking-effort.active { color: var(--accent); background: rgba(34,55,66,.1); }
+#main.code-mode #btn-thinking-effort { color: rgba(255,255,255,.35); }
+#main.code-mode #btn-thinking-effort:hover { color: rgba(255,255,255,.75); background: rgba(255,255,255,.06); }
+
+#thinking-effort-popup {
+    position: absolute; bottom: calc(100% + 8px); right: 0;
+    width: 240px; padding: 12px 14px 14px;
+    background: var(--bg, #fff); border: 1px solid var(--border);
+    border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.12);
+    z-index: 20;
+}
+#thinking-effort-popup .te-head {
+    display: flex; align-items: baseline; gap: 6px; margin-bottom: 10px;
+}
+#thinking-effort-popup .te-head-label { font-size: 13px; color: var(--text-dim); }
+#thinking-effort-popup .te-head-value { font-size: 13px; font-weight: 600; color: var(--text); }
+#thinking-effort-popup .te-ends {
+    display: flex; justify-content: space-between;
+    font-size: 11px; color: var(--text-dim); margin-bottom: 4px;
+}
+#thinking-effort-popup .te-slider {
+    width: 100%; accent-color: var(--accent); cursor: pointer;
+}
+#thinking-effort-popup .te-blurb {
+    margin: 8px 0 0; font-size: 11px; line-height: 1.4; color: var(--text-dim);
+}
+
 /* ── thought block ──────────────────────────────────────── */
 .thought-block { margin-bottom: 6px; width: 100%; }
 .thought-block summary {

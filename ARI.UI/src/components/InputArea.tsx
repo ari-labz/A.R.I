@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, type KeyboardEvent } from "react"
 import type { PendingAttachment } from "../App"
 import type { Project } from "../hooks/useThreads"
 import PipelineSelector from "./PipelineSelector"
+import ThinkingEffort from "./ThinkingEffort"
 
 interface Command { cmd: string; desc: string }
 
@@ -279,7 +280,12 @@ export default function InputArea({
                 </div>
             </div>
             )}
-            {!speechCompose && <p id="input-hint">Enter to send &nbsp;·&nbsp; Shift+Enter for new line</p>}
+            {!speechCompose && (
+                <div id="input-hint-row">
+                    <p id="input-hint">Enter to send &nbsp;·&nbsp; Shift+Enter for new line</p>
+                    <ThinkingEffort serverReady={serverReady} codeMode={codeMode} />
+                </div>
+            )}
         </div>
     )
 }

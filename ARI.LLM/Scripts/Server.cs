@@ -176,7 +176,12 @@ public class Server : IDisposable
         Log.LogInformation("[{Server}] Preparing to start...", Name);
 
         if (model is not null)
+        {
             await EnsureModelFilesAsync(model);
+            // Detect KvArch + SupportsReasoningEffort now the file is on disk, so the active model carries
+            // the reasoning-effort flag read at request time in Agent.BuildRequest.
+            model.RefreshDownloadedState(modelsPath);
+        }
 
         // V-cache quantization step-up ladder. A quantized V cache requires Flash Attention, which
         // some models/backends can't use (e.g. hybrid linear-attention models on Metal). Start at the

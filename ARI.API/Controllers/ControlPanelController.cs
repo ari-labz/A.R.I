@@ -1251,6 +1251,7 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
                 moe                = m.MoE,
                 mtp                = m.MTP,
                 supportsThinking   = m.SupportsThinking,
+                supportsReasoningEffort = m.SupportsReasoningEffort,
                 notes              = notes.TryGetValue(m.Name, out string? n) ? n : "",
                 active             = activeModelNames.Contains(m.Name),
                 isStartup          = startupModelNames.Contains(m.Name),
@@ -1366,6 +1367,40 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
         model.SupportsThinking = req.SupportsThinking;
         persistentData.UpdateModel(model);
         return Ok(new { ok = true });
+    }
+
+    /// <summary>The one global reasoning-effort dial (0/1/2 = low/medium/xhigh). Universal across all agents;
+    /// scales each agent's thinking budget and drives the reasoning_effort wire field on supporting models.
+    /// See Documentation/Server/ARI.LLM/Reasoning-Effort.</summary>
+    [HttpGet("reasoning-effort")]
+    public IActionResult GetReasoningEffort() => Ok(new
+    {
+        step        = ReasoningEffortStore.Step,
+        level       = ReasoningEffortStore.Level,
+        levels      = ReasoningEffortStore.Levels,
+        multipliers = ReasoningEffortStore.Multipliers,
+        // Per-pipeline support: the composer shows the dial only when the model that will actually answer
+        // supports reasoning_effort — Dialogue's model in Default mode, Coder's in Code mode.
+        support     = new
+        {
+            dialogue = AgentModelSupportsEffort("Dialogue"),
+            coder    = AgentModelSupportsEffort("Coder"),
+        },
+    });
+
+    /// <summary>Whether the model bound to the named agent's server is online and supports reasoning_effort.</summary>
+    private bool AgentModelSupportsEffort(string agentName)
+    {
+        if (llm is null || !llm.Agents.TryGetValue(agentName, out Agent? agent)) return false;
+        Server? srv = llm.Servers.FirstOrDefault(s => s.Name == agent.ServerName);
+        return srv?.ActiveModel?.SupportsReasoningEffort == true;
+    }
+
+    [HttpPut("reasoning-effort")]
+    public IActionResult SetReasoningEffort([FromBody] ReasoningEffortRequest req)
+    {
+        ReasoningEffortStore.Step = req.Step;
+        return Ok(new { ok = true, step = ReasoningEffortStore.Step, level = ReasoningEffortStore.Level });
     }
 }
 
@@ -1487,6 +1522,7 @@ public record SwitchModelRequest(Guid ServerId, string ModelName);
 public record SetStartupModelRequest(string ModelName);
 public record ModelNotesRequest(string ModelName, string? Notes);
 public record ModelThinkingRequest(string ModelName, bool SupportsThinking);
+public record ReasoningEffortRequest(int Step);
 
 public record ConventionsRequest(string? Text);
 public record PersonaRequest(string? Text);

@@ -42,6 +42,11 @@
       <UiDistFiles Include="$(UiDir)\dist\**\*" />
     </ItemGroup>
     <Copy SourceFiles="@(UiDistFiles)" DestinationFiles="@(UiDistFiles->'$(WwwrootDir)\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <!-- Also sync straight into the output wwwroot. The Content glob that copies ARI.API\wwwroot to the
+         output is evaluated at project-load, BEFORE this target generates the content-hashed bundle, so
+         a freshly-built asset only reaches the served devbuild on the NEXT build — the UI would forever
+         lag one build behind. Copying dist directly into $(AppInstallRoot)\wwwroot here closes that gap. -->
+    <Copy SourceFiles="@(UiDistFiles)" DestinationFiles="@(UiDistFiles->'$(AppInstallRoot)\wwwroot\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
     <Message Text="UI built and synced to wwwroot" Importance="high" />
   </Target>
 
