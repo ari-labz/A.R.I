@@ -241,7 +241,6 @@ public class Thread
     internal void ClearLiveCall()                    => liveCallInfo = null;
 
     // ── Attachments ────────────────────────────────────────────────────────────
-    private readonly List<Attachment> attachments        = new();
     private readonly List<Attachment> pendingMessageAtts = new();
 
     internal string? PlatformContext { get; init; }
@@ -532,21 +531,6 @@ public class Thread
 
     // ── Attachments ────────────────────────────────────────────────────────────
 
-    public void AddAttachment(Attachment attachment)
-    {
-        lock (attachments) { attachments.RemoveAll(a => a.Name == attachment.Name); attachments.Add(attachment); }
-    }
-
-    public bool RemoveAttachment(string name)
-    {
-        lock (attachments) { return attachments.RemoveAll(a => a.Name == name) > 0; }
-    }
-
-    public IReadOnlyList<Attachment> GetAttachments()
-    {
-        lock (attachments) { return attachments.ToList().AsReadOnly(); }
-    }
-
     public void AddMessageAttachment(Attachment attachment)
     {
         lock (pendingMessageAtts) { pendingMessageAtts.RemoveAll(a => a.Name == attachment.Name); pendingMessageAtts.Add(attachment); }
@@ -565,11 +549,6 @@ public class Thread
     internal void ClearMessageAttachments()
     {
         lock (pendingMessageAtts) { pendingMessageAtts.Clear(); }
-    }
-
-    internal List<Attachment> SnapshotThreadAttachments()
-    {
-        lock (attachments) { return attachments.ToList(); }
     }
 
     internal List<Attachment> SnapshotMessageAttachments(bool fromHistory)

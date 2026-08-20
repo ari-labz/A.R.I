@@ -445,7 +445,7 @@ public abstract class Agent
 
     private async Task<string> Send(Thread thread, string prompt, PromptOptions opts)
     {
-        (List<Attachment> threadAtts, List<Attachment> msgAtts) = PrepareUserTurn(thread, prompt, opts);
+        List<Attachment> msgAtts = PrepareUserTurn(thread, prompt, opts);
 
         prompt = OnPrompt(thread, prompt, opts);
         if (OnPromptPipeline is not null) prompt = OnPromptPipeline(thread, prompt, opts);
@@ -498,12 +498,12 @@ public abstract class Agent
         // ── System block & messages ───────────────────────────────────────────
         int maxChars = BudgetContext > 0 ? (int)(BudgetContext * 3.5) : 0;
         (turn.BaseSystem, turn.BudgetsBlock, turn.ThinkSuffix) = BuildSystemBlock(thread, turn.ThinkBudget, turn.RespBudget, Think);
-        turn.Messages.AddRange(BuildMessages(thread, prompt, opts, threadAtts, msgAtts, maxChars, turn.BaseSystem, turn.BudgetsBlock, turn.ThinkSuffix));
+        turn.Messages.AddRange(BuildMessages(thread, prompt, opts, msgAtts, maxChars, turn.BaseSystem, turn.BudgetsBlock, turn.ThinkSuffix));
 
         // ── Telemetry bootstrap ───────────────────────────────────────────────
         foreach (object m in turn.Messages)
             turn.EstimatedTextTokens += (ContentOf(m)?.Length ?? 0) / CHARS_PER_TOKEN;
-        turn.HadImages = msgAtts.Any(a => a.IsImage) || threadAtts.Any(a => a.IsImage);
+        turn.HadImages = msgAtts.Any(a => a.IsImage);
         if (thread.liveCallInfo is { } existing)
         {
             existing.EstimatedInputTokens = turn.EstimatedTextTokens;
@@ -1652,7 +1652,7 @@ public abstract class Agent
 
     // ── Extracted send phases ─────────────────────────────────────────────────
 
-    private (List<Attachment> threadAtts, List<Attachment> msgAtts) PrepareUserTurn(
+    private List<Attachment> PrepareUserTurn(
         Thread thread, string prompt, PromptOptions opts)
     {
         thread.LastMessageAt = DateTime.UtcNow;
@@ -1667,7 +1667,6 @@ public abstract class Agent
             thread.ariRepliedAt = DateTime.MinValue;
         }
 
-        List<Attachment> threadAtts = thread.SnapshotThreadAttachments();
         List<Attachment> msgAtts;
         if (opts.UserMessagePreadded)
         {
@@ -1696,7 +1695,7 @@ public abstract class Agent
             thread.RaiseUpdated();
         }
 
-        return (threadAtts, msgAtts);
+        return msgAtts;
     }
 
     private (string baseSystem, string budgetsBlock, string thinkSuffix) BuildSystemBlock(
@@ -1721,7 +1720,7 @@ public abstract class Agent
     }
 
     private List<object> BuildMessages(Thread thread, string prompt, PromptOptions opts,
-        List<Attachment> threadAtts, List<Attachment> msgAtts,
+        List<Attachment> msgAtts,
         int maxChars, string baseSystem, string budgetsBlock, string thinkSuffix)
     {
         List<ThreadMessage> chatHistory = thread.GetChatHistory(MemoryLimit, maxChars);
@@ -1757,13 +1756,6 @@ public abstract class Agent
             ThreadMessage current   = collapsed[^1];
             string        promptText = $"{memoryBlock}{current.Username}: {current.Content}";
 
-            var threadImages = new List<Attachment>();
-            var threadTexts  = new List<Attachment>();
-            foreach (Attachment a in threadAtts)
-            {
-                if (a.IsImage) threadImages.Add(a);
-                else           threadTexts.Add(a);
-            }
             var msgImages = new List<Attachment>();
             var msgTexts  = new List<Attachment>();
             foreach (Attachment a in msgAtts)
@@ -1772,10 +1764,9 @@ public abstract class Agent
                 else           msgTexts.Add(a);
             }
 
-            bool hasThreadContent = threadImages.Count > 0 || threadTexts.Count > 0;
-            bool hasMsgContent    = msgImages.Count > 0    || msgTexts.Count > 0;
+            bool hasMsgContent = msgImages.Count > 0 || msgTexts.Count > 0;
 
-            if (!hasThreadContent && !hasMsgContent)
+            if (!hasMsgContent)
             {
                 messages.Add(new { role = "user", content = promptText });
                 if (opts.ModeNudge is not null) messages.Add(new { role = "system", content = opts.ModeNudge });
@@ -1784,26 +1775,6 @@ public abstract class Agent
             {
                 List<object> contentParts = new();
                 bool hasTools = thread.tools.Count > 0;
-
-                if (hasThreadContent)
-                {
-                    StringBuilder sb = new();
-                    sb.AppendLine("[Files attached to this thread]");
-                    foreach (Attachment a in threadTexts)
-                    {
-                        sb.AppendLine($"--- {a.Name} ---");
-                        sb.AppendLine(a.Content);
-                        sb.AppendLine("---");
-                    }
-                    if (threadTexts.Count > 0)
-                    {
-                        if (hasTools) sb.AppendLine("(The above files are already provided inline — do not call read_file for them.)");
-                        sb.AppendLine(ATTACHMENT_DIVIDER);
-                    }
-                    contentParts.Add(new { type = "text", text = sb.ToString().TrimEnd() });
-                    foreach (Attachment a in threadImages)
-                        contentParts.Add(new { type = "image_url", image_url = new { url = $"data:{a.MimeType ?? "image/jpeg"};base64,{a.Content}" } });
-                }
 
                 if (hasMsgContent)
                 {

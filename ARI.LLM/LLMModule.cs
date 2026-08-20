@@ -394,8 +394,6 @@ public class LLMModule : ILLMModule, IDisposable
         threads.TryRemove(threadKey, out _);
         Thread converted = GetOrCreateThread(type, threadKey, platformContext);
         converted.History.AddRange(existing.History);
-        foreach (Attachment attachment in existing.GetAttachments())
-            converted.AddAttachment(attachment);
         return converted;
     }
 
@@ -668,13 +666,13 @@ public class LLMModule : ILLMModule, IDisposable
         catch (Exception ex) { _logger.LogWarning(ex, "[Awareness] text evaluation failed; assuming addressed."); return true; }
     }
 
-    public Task<string> Prompt(string threadKey, string prompt, string username, string? platformContext = null, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null, InferencePriority priority = InferencePriority.Normal)
-        => Route(threadKey, prompt, username, platformContext, null, CancellationToken.None, messageAttachments, threadAttachments, priority: priority);
+    public Task<string> Prompt(string threadKey, string prompt, string username, string? platformContext = null, List<Attachment>? messageAttachments = null, InferencePriority priority = InferencePriority.Normal)
+        => Route(threadKey, prompt, username, platformContext, null, CancellationToken.None, messageAttachments, priority: priority);
 
-    public Task<string> PromptStreaming(string threadKey, string prompt, string username, string? platformContext, Func<string, Task> onDelta, CancellationToken ct = default, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null, string? localPath = null, InferencePriority priority = InferencePriority.Normal, SpeechSteeringContext? steering = null, Func<string, Task>? onTextDelta = null)
-        => Route(threadKey, prompt, username, platformContext, onDelta, ct, messageAttachments, threadAttachments, localPath, priority, steering, onTextDelta);
+    public Task<string> PromptStreaming(string threadKey, string prompt, string username, string? platformContext, Func<string, Task> onDelta, CancellationToken ct = default, List<Attachment>? messageAttachments = null, string? localPath = null, InferencePriority priority = InferencePriority.Normal, SpeechSteeringContext? steering = null, Func<string, Task>? onTextDelta = null)
+        => Route(threadKey, prompt, username, platformContext, onDelta, ct, messageAttachments, localPath, priority, steering, onTextDelta);
 
-    private async Task<string> Route(string threadKey, string prompt, string username, string? platformContext, Func<string, Task>? onDelta, CancellationToken externalCt, List<Attachment>? messageAttachments = null, List<Attachment>? threadAttachments = null, string? localPath = null, InferencePriority priority = InferencePriority.Normal, SpeechSteeringContext? steering = null, Func<string, Task>? onTextDelta = null)
+    private async Task<string> Route(string threadKey, string prompt, string username, string? platformContext, Func<string, Task>? onDelta, CancellationToken externalCt, List<Attachment>? messageAttachments = null, string? localPath = null, InferencePriority priority = InferencePriority.Normal, SpeechSteeringContext? steering = null, Func<string, Task>? onTextDelta = null)
     {
         if (textingAgent is null)
             throw new ModelNotFoundException("Dialogue model is not loaded or is not enabled.");
@@ -700,7 +698,7 @@ public class LLMModule : ILLMModule, IDisposable
         if (isDiscordThread)
         {
             Thread dlgThread = GetOrCreateThread(ThreadPipeline.Dialogue, threadKey, platformContext);
-            return await dialoguePipeline!.ExecuteAsync(dlgThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments);
+            return await dialoguePipeline!.ExecuteAsync(dlgThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments);
         }
 
         // No more classifier. Routing is deterministic: an explicit pin (UI selection, or a bound
@@ -727,18 +725,18 @@ public class LLMModule : ILLMModule, IDisposable
             case "Code":
             {
                 Thread codeThread = Recategorise(ThreadPipeline.Code, threadKey, platformContext);
-                return await (codePipeline ?? (Pipeline)dialoguePipeline!).ExecuteAsync(codeThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments, localPath);
+                return await (codePipeline ?? (Pipeline)dialoguePipeline!).ExecuteAsync(codeThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, localPath);
             }
             case "Speech":
             {
                 Thread speechThread = Recategorise(ThreadPipeline.Speech, threadKey, platformContext);
                 speechPipeline?.SetSteering(threadKey, steering);
-                return await (speechPipeline ?? (Pipeline)dialoguePipeline!).ExecuteAsync(speechThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments, localPath, onTextDelta);
+                return await (speechPipeline ?? (Pipeline)dialoguePipeline!).ExecuteAsync(speechThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, localPath, onTextDelta);
             }
             default:
             {
                 Thread dlgThread = Recategorise(ThreadPipeline.Dialogue, threadKey, platformContext);
-                return await dialoguePipeline!.ExecuteAsync(dlgThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, threadAttachments);
+                return await dialoguePipeline!.ExecuteAsync(dlgThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments);
             }
         }
     }
