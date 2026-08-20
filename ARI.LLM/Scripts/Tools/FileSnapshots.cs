@@ -66,6 +66,12 @@ internal sealed class FileSnapshots
         return null;
     }
 
+    // Paths (relative, as the model sees them) that have been successfully read or previewed this session.
+    // Stored here rather than on FileSystem so it survives across tool calls (FileSystem is recreated each call).
+    private readonly HashSet<string> readLedger = new(StringComparer.OrdinalIgnoreCase);
+    internal void MarkRead(string path)  => readLedger.Add(path);
+    internal bool WasRead(string path)   => readLedger.Contains(path);
+
     /// <summary>Saves <paramref name="content"/> as the pre-edit snapshot for <paramref name="absPath"/>.
     /// Always overwrites so revert_file always targets the most recent edit.</summary>
     internal void TakeSnapshot(string absPath, string content)
