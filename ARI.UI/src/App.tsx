@@ -321,6 +321,9 @@ export default function App() {
                     case "newThread":
                         loadThreads()
                         break
+                    case "projectsChanged":
+                        loadProjects()
+                        break
                     case "threadUpdated":
                         loadThreads()
                         // Refresh active thread content when it changes (new message, etc.)
