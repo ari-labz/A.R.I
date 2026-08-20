@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react"
 import type { ThreadItem, Attachment } from "../hooks/useThreads"
 import { setBubbleMd, setBubbleBlocks } from "../hooks/useMarkdown"
 import type { ContentBlock } from "../hooks/useThreads"
+import { apiFetch } from "../auth"
 
 // ── Speak response ────────────────────────────────────────────────────────────
 let globalSpeakAbort: AbortController | null = null
@@ -221,13 +222,13 @@ function FeedbackButtons({ threadKey, item, msgIndex, feedback, onChange }: {
         try {
             // Clicking the lit thumb clears the rating.
             if (vote === next && feedback) {
-                await fetch(`/feedback/${feedback.id}`, { method: "DELETE" })
+                await apiFetch(`/feedback/${feedback.id}`, { method: "DELETE" })
                 onChange(item.timestamp, null)
                 setNoteOpen(false)
                 return
             }
 
-            const res = await fetch("/feedback", {
+            const res = await apiFetch("/feedback", {
                 method:  "POST",
                 headers: { "Content-Type": "application/json" },
                 body:    JSON.stringify({
@@ -250,7 +251,7 @@ function FeedbackButtons({ threadKey, item, msgIndex, feedback, onChange }: {
         if (!feedback) return
         setNoteOpen(false)
         try {
-            await fetch(`/feedback/${feedback.id}`, {
+            await apiFetch(`/feedback/${feedback.id}`, {
                 method:  "PATCH",
                 headers: { "Content-Type": "application/json" },
                 body:    JSON.stringify({ note }),
