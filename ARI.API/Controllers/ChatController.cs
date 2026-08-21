@@ -858,6 +858,17 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                     ctx.AppendLine().AppendLine(systemContextBlock);
                     ctx.AppendLine("Use list_directory to explore subdirectories and read_file to read files.");
                 }
+
+                // If the project folder contains inner git repos, tell ARI to pull before working.
+                if (project.RootPath is { } root && Directory.Exists(root))
+                {
+                    bool hasInnerRepos = Directory.EnumerateDirectories(root)
+                        .Any(d => Directory.Exists(Path.Combine(d, ".git")));
+                    if (hasInnerRepos)
+                        ctx.AppendLine()
+                           .AppendLine("This project contains git repositories. Before working in any repository, use git_status and git_pull to check for upstream changes and pull the latest version. Always work on up-to-date code.");
+                }
+
                 platformContext = ctx.ToString().TrimEnd();
 
                 ARI.LLM.Thread? boundThread = FindThread(threadKey);

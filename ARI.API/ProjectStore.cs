@@ -103,7 +103,8 @@ public class ProjectStore
     // ── Server-side project folder (ServerFs backend only) ──────────────────────────
 
     /// <summary>Derives and creates this project's folder under Paths.ServerDir("Projects") — never
-    /// user-typed. Disambiguates a name collision by appending a short suffix of the project's Id.</summary>
+    /// user-typed. Disambiguates a name collision by appending a short suffix of the project's Id.
+    /// Also initialises an .ariproject hidden git repo and .ariignore for ARI Project Sync.</summary>
     public static string CreateServerFolder(string projectId, string projectName)
     {
         string root = Paths.ServerDir("Projects");
@@ -112,7 +113,63 @@ public class ProjectStore
         if (Directory.Exists(path))
             path = Path.Combine(root, $"{safeName}-{projectId[..Math.Min(8, projectId.Length)]}");
         Directory.CreateDirectory(path);
+        InitAriProject(path);
         return path;
+    }
+
+    /// <summary>Initialises a .ariproject hidden git repo (ARI Project Sync) in the given folder.
+    /// Uses --git-dir=.ariproject so standard git tools never detect this as a repository.
+    /// Safe to call on an already-initialised folder.</summary>
+    public static void InitAriProject(string folderPath)
+    {
+        string ariDir = Path.Combine(folderPath, ".ariproject");
+        if (Directory.Exists(ariDir)) return;
+
+        WriteAriIgnore(folderPath);
+        RunGit(folderPath, "init");
+        RunGit(folderPath, "commit --allow-empty -m \"Init\"");
+    }
+
+    private static void WriteAriIgnore(string folderPath)
+    {
+        string path = Path.Combine(folderPath, ".ariignore");
+        if (File.Exists(path)) return;
+        File.WriteAllText(path, """
+            # Inner git repos — tracked by their own remotes, not ARI Project Sync
+            **/.git
+            # Build outputs
+            node_modules/
+            bin/
+            obj/
+            dist/
+            devbuild/
+            *.user
+            .ariproject/
+            """);
+    }
+
+    /// <summary>Runs a git command against the .ariproject git dir in the given folder.</summary>
+    public static (int ExitCode, string Output) RunGit(string workTree, string arguments)
+    {
+        string ariDir = Path.Combine(workTree, ".ariproject");
+        string fullArgs = $"--git-dir=\"{ariDir}\" --work-tree=\"{workTree}\" {arguments}";
+        using var proc = new System.Diagnostics.Process
+        {
+            StartInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName               = "git",
+                Arguments              = fullArgs,
+                WorkingDirectory       = workTree,
+                RedirectStandardOutput = true,
+                RedirectStandardError  = true,
+                UseShellExecute        = false,
+                CreateNoWindow         = true,
+            }
+        };
+        proc.Start();
+        string output = proc.StandardOutput.ReadToEnd() + proc.StandardError.ReadToEnd();
+        proc.WaitForExit();
+        return (proc.ExitCode, output.Trim());
     }
 
     private static string SanitizeFolderName(string name)
@@ -136,6 +193,7 @@ public class ProjectStore
                 Project p = all[i];
                 if (p.Backend == StorageBackend.ServerFs && p.RootPath is not null) continue;
                 string root = p.RootPath ?? CreateServerFolder(p.Id, p.Name);
+                InitAriProject(root);
                 all[i]  = p with { Backend = StorageBackend.ServerFs, RootPath = root };
                 changed = true;
             }
