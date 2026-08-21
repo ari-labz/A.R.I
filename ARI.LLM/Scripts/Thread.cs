@@ -182,6 +182,10 @@ public class Thread
     /// (Discord, proactive, internal) so existing behaviour is preserved.</summary>
     public bool IsOwnerThread { get; set; } = true;
 
+    /// <summary>The user ID (from the JWT NameIdentifier claim) that created this thread.
+    /// Null for system-created threads (proactive, Discord, internal).</summary>
+    public string? OwnerId { get; set; }
+
     /// <summary>True once the user has said anything in this thread — the gate for whether a dormant
     /// sweep has anything to learn. An unanswered proactive thread has none.</summary>
     internal bool HasUserMessages => History.OfType<Prompt>().Any();

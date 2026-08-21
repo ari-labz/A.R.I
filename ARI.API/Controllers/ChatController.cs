@@ -58,6 +58,14 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 
     // ── Thread navigation helpers ───────────────────────────────────────────────
 
+    /// <summary>True if the current caller may read/write this thread.</summary>
+    private bool CanAccessThread(ARI.LLM.Thread thread)
+    {
+        if (User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin) return true;
+        string? callerId = User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
+        return thread.OwnerId == callerId;
+    }
+
     /// <summary>Finds an existing user-facing thread (Dialogue or Code) by key.</summary>
     private ARI.LLM.Thread? FindThread(string threadKey)
     {
@@ -80,8 +88,10 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         bool isCode = Llm!.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? existing)
                       && existing.Pipeline == ARI.LLM.ThreadPipeline.Code;
         ARI.LLM.Thread thread = isCode ? Llm.GetOrCreateCodeThread(threadKey) : Llm.GetOrCreateDialogueThread(threadKey);
-        // Guests never touch the owner's Engram or Brain memory.
-        thread.IsOwnerThread = User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
+        bool isAdmin = User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
+        thread.IsOwnerThread = isAdmin;
+        // Track who created the thread so guests only see their own.
+        thread.OwnerId ??= User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
         return thread;
     }
 
@@ -94,9 +104,13 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 
         var allThreads = Llm.Threads;
 
+        bool   callerIsAdmin = User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
+        string? callerId     = callerIsAdmin ? null : User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
+
         List<ThreadEntry> threads = allThreads
             .Where(kvp => kvp.Value.Pipeline is ARI.LLM.ThreadPipeline.Dialogue or ARI.LLM.ThreadPipeline.Code or ARI.LLM.ThreadPipeline.Speech
-                          && !kvp.Value.Internal)
+                          && !kvp.Value.Internal
+                          && (callerIsAdmin || kvp.Value.OwnerId == callerId))
             .Select(kvp =>
             {
                 string? projectId   = ThreadProjects.TryGetValue(kvp.Key, out string? pid) ? pid : null;
@@ -168,6 +182,8 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         if (!Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? thread))
             return NotFound();
 
+        if (!CanAccessThread(thread)) return Forbid();
+
         List<ThreadItem> history = thread.History
             .Where(i => i.IsVisible && i is not Response { State: State.Cancelled })
             .ToList();
@@ -197,6 +213,8 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 
         if (!Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? thread))
             return NotFound();
+
+        if (!CanAccessThread(thread)) return Forbid();
 
         return Ok(SerializeDebugThread(thread));
     }
@@ -249,9 +267,11 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 
         // Cancelled responses are hidden from normal view; streaming responses are included so
         // watching clients can render the in-progress reply. Raw view keeps everything.
+        ARI.LLM.Thread? histThread = raw ? FindAnyThread(threadKey) : FindThread(threadKey);
+        if (histThread is not null && !CanAccessThread(histThread)) return Forbid();
         List<ThreadItem> items = raw
-            ? FindAnyThread(threadKey)?.History ?? new()
-            : (FindThread(threadKey)?.History ?? new())
+            ? (histThread?.History ?? new())
+            : (histThread?.History ?? new())
                 .Where(i => i.IsVisible && i is not Response { State: State.Cancelled })
                 .ToList();
 
@@ -262,7 +282,9 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     public IActionResult ExportLog(string threadKey)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
-        List<ThreadItem> items = FindThread(threadKey)?.History ?? new();
+        ARI.LLM.Thread? exportThread = FindThread(threadKey);
+        if (exportThread is not null && !CanAccessThread(exportThread)) return Forbid();
+        List<ThreadItem> items = exportThread?.History ?? new();
         string log = string.Join("\n\n", items.Select(i => i.ToString()));
         var bytes = System.Text.Encoding.UTF8.GetBytes(log);
         return File(bytes, "text/plain", $"ari-{threadKey}-{DateTime.Now:yyyyMMdd-HHmm}.txt");
@@ -292,6 +314,9 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
             return;
         }
 
+        bool   evtCallerIsAdmin = User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
+        string? evtCallerId     = evtCallerIsAdmin ? null : User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
+
         Channel<AppEvent> channel = Channel.CreateUnbounded<AppEvent>(new UnboundedChannelOptions { SingleReader = true });
         using IDisposable sub = Llm.Subscribe(channel);
 
@@ -307,6 +332,13 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                 await Response.WriteAsync(": ping\n\n", cancellationToken);
                 await Response.Body.FlushAsync(cancellationToken);
                 continue;
+            }
+
+            // Guests only receive events for threads they own.
+            if (!evtCallerIsAdmin)
+            {
+                Llm.Threads.TryGetValue(evt.ThreadKey, out ARI.LLM.Thread? evtThread);
+                if (evtThread is null || evtThread.OwnerId != evtCallerId) continue;
             }
 
             string payload = JsonSerializer.Serialize(evt, SseJson);
@@ -328,6 +360,12 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         if (Llm is null)
         {
             await Response.WriteAsync("data: {\"error\":\"not ready\"}\n\n", cancellationToken);
+            return;
+        }
+
+        if (Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? watchThread) && !CanAccessThread(watchThread))
+        {
+            Response.StatusCode = 403;
             return;
         }
 
