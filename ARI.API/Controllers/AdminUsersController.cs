@@ -43,8 +43,8 @@ public class AdminUsersController(UserStore users) : ControllerBase
 
         if (string.IsNullOrWhiteSpace(req.Username))
             return BadRequest(new { error = "Username is required." });
-        if (req.Password.Length < 6)
-            return BadRequest(new { error = "Password must be at least 6 characters." });
+        if (req.Password.Length < 5)
+            return BadRequest(new { error = "Password must be at least 5 characters." });
         if (users.GetByUsername(req.Username) is not null)
             return Conflict(new { error = "A user with that username already exists." });
 
@@ -65,8 +65,8 @@ public class AdminUsersController(UserStore users) : ControllerBase
         User? user = users.GetById(id);
         if (user is null) return NotFound();
 
-        if (req.NewPassword.Length < 6)
-            return BadRequest(new { error = "Password must be at least 6 characters." });
+        if (req.NewPassword.Length < 5)
+            return BadRequest(new { error = "Password must be at least 5 characters." });
 
         string hash = AuthService.HashPassword(req.NewPassword);
         users.SetPassword(id, hash, mustChange: true);

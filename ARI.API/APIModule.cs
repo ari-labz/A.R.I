@@ -98,6 +98,9 @@ public class APIModule : IAsyncDisposable
         // a direct reference to ProjectStore/ProjectServiceAdapter (the wrong dependency direction).
         Modules.Register(projects: app.Services.GetRequiredService<ProjectServiceAdapter>());
 
+        // Ensure every project has a server-managed folder — migrates legacy RemoteFs projects.
+        app.Services.GetRequiredService<ProjectStore>().MigrateToServerFs();
+
         app.UseExceptionHandler(errorApp => errorApp.Run(async ctx =>
         {
             var ex  = ctx.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;

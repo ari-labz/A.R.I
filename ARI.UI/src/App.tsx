@@ -321,6 +321,9 @@ export default function App() {
                     case "newThread":
                         loadThreads()
                         break
+                    case "projectsChanged":
+                        loadProjects()
+                        break
                     case "threadUpdated":
                         loadThreads()
                         // Refresh active thread content when it changes (new message, etc.)
@@ -1219,12 +1222,12 @@ export default function App() {
                 </div>
             )}
             {protocolMismatch !== null && (
-                <div id="protocol-mismatch-banner">
+                <div id="protocol-mismatch-banner" style={{ left: sidebarCollapsed ? 0 : "var(--sidebar-w)" }}>
                     ⚠ This app may not function correctly — the server is running protocol v{protocolMismatch}.
                     <button onClick={() => setProtocolMismatch(null)}>✕</button>
                 </div>
             )}
-            <TaskBanner tasks={runningTasks} onCancel={name => {
+            <TaskBanner tasks={runningTasks} sidebarCollapsed={sidebarCollapsed} onCancel={name => {
                 apiFetch(`/admin/scheduler/task/${encodeURIComponent(name)}/stop`, { method: "POST" }).catch(() => {})
             }} />
             <Sidebar

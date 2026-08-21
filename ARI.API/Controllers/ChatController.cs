@@ -28,9 +28,10 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     // ProjectServiceAdapter — the REST path and the tool-call path — share the exact same state.
     private ConcurrentDictionary<string, string> ThreadProjects => projectStore.ThreadProjects;
 
-    // Pending attachments staged before a thread exists — flushed at send time.
-    private static readonly ConcurrentDictionary<string, List<Attachment>> pendingAttachments        = new();
+    // Pending per-message attachments (ephemeral — cleared after send).
     private static readonly ConcurrentDictionary<string, List<Attachment>> pendingMessageAttachments = new();
+    // Filenames of text files written to disk since the last send — injected as a note into platformContext.
+    private static readonly ConcurrentDictionary<string, List<string>>     pendingFileNotes          = new();
 
     // System-context blocks injected by the client (e.g. filesystem skeleton). Merged into the
     // system prompt at send time — never exposed as user-visible thread attachments.
@@ -57,6 +58,14 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 
     // ── Thread navigation helpers ───────────────────────────────────────────────
 
+    /// <summary>True if the current caller may read/write this thread.</summary>
+    private bool CanAccessThread(ARI.LLM.Thread thread)
+    {
+        if (User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin) return true;
+        string? callerId = User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
+        return thread.OwnerId == callerId;
+    }
+
     /// <summary>Finds an existing user-facing thread (Dialogue or Code) by key.</summary>
     private ARI.LLM.Thread? FindThread(string threadKey)
     {
@@ -79,8 +88,10 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         bool isCode = Llm!.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? existing)
                       && existing.Pipeline == ARI.LLM.ThreadPipeline.Code;
         ARI.LLM.Thread thread = isCode ? Llm.GetOrCreateCodeThread(threadKey) : Llm.GetOrCreateDialogueThread(threadKey);
-        // Guests never touch the owner's Engram or Brain memory.
-        thread.IsOwnerThread = User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
+        bool isAdmin = User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
+        thread.IsOwnerThread = isAdmin;
+        // Track who created the thread so guests only see their own.
+        thread.OwnerId ??= User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
         return thread;
     }
 
@@ -93,9 +104,13 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 
         var allThreads = Llm.Threads;
 
+        bool   callerIsAdmin = User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
+        string? callerId     = callerIsAdmin ? null : User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
+
         List<ThreadEntry> threads = allThreads
             .Where(kvp => kvp.Value.Pipeline is ARI.LLM.ThreadPipeline.Dialogue or ARI.LLM.ThreadPipeline.Code or ARI.LLM.ThreadPipeline.Speech
-                          && !kvp.Value.Internal)
+                          && !kvp.Value.Internal
+                          && (callerIsAdmin || kvp.Value.OwnerId == callerId))
             .Select(kvp =>
             {
                 string? projectId   = ThreadProjects.TryGetValue(kvp.Key, out string? pid) ? pid : null;
@@ -167,6 +182,8 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         if (!Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? thread))
             return NotFound();
 
+        if (!CanAccessThread(thread)) return Forbid();
+
         List<ThreadItem> history = thread.History
             .Where(i => i.IsVisible && i is not Response { State: State.Cancelled })
             .ToList();
@@ -196,6 +213,8 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 
         if (!Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? thread))
             return NotFound();
+
+        if (!CanAccessThread(thread)) return Forbid();
 
         return Ok(SerializeDebugThread(thread));
     }
@@ -248,9 +267,11 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 
         // Cancelled responses are hidden from normal view; streaming responses are included so
         // watching clients can render the in-progress reply. Raw view keeps everything.
+        ARI.LLM.Thread? histThread = raw ? FindAnyThread(threadKey) : FindThread(threadKey);
+        if (histThread is not null && !CanAccessThread(histThread)) return Forbid();
         List<ThreadItem> items = raw
-            ? FindAnyThread(threadKey)?.History ?? new()
-            : (FindThread(threadKey)?.History ?? new())
+            ? (histThread?.History ?? new())
+            : (histThread?.History ?? new())
                 .Where(i => i.IsVisible && i is not Response { State: State.Cancelled })
                 .ToList();
 
@@ -261,7 +282,9 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     public IActionResult ExportLog(string threadKey)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
-        List<ThreadItem> items = FindThread(threadKey)?.History ?? new();
+        ARI.LLM.Thread? exportThread = FindThread(threadKey);
+        if (exportThread is not null && !CanAccessThread(exportThread)) return Forbid();
+        List<ThreadItem> items = exportThread?.History ?? new();
         string log = string.Join("\n\n", items.Select(i => i.ToString()));
         var bytes = System.Text.Encoding.UTF8.GetBytes(log);
         return File(bytes, "text/plain", $"ari-{threadKey}-{DateTime.Now:yyyyMMdd-HHmm}.txt");
@@ -291,6 +314,9 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
             return;
         }
 
+        bool   evtCallerIsAdmin = User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
+        string? evtCallerId     = evtCallerIsAdmin ? null : User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
+
         Channel<AppEvent> channel = Channel.CreateUnbounded<AppEvent>(new UnboundedChannelOptions { SingleReader = true });
         using IDisposable sub = Llm.Subscribe(channel);
 
@@ -306,6 +332,13 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                 await Response.WriteAsync(": ping\n\n", cancellationToken);
                 await Response.Body.FlushAsync(cancellationToken);
                 continue;
+            }
+
+            // Guests only receive events for threads they own.
+            if (!evtCallerIsAdmin)
+            {
+                Llm.Threads.TryGetValue(evt.ThreadKey, out ARI.LLM.Thread? evtThread);
+                if (evtThread is null || evtThread.OwnerId != evtCallerId) continue;
             }
 
             string payload = JsonSerializer.Serialize(evt, SseJson);
@@ -327,6 +360,12 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         if (Llm is null)
         {
             await Response.WriteAsync("data: {\"error\":\"not ready\"}\n\n", cancellationToken);
+            return;
+        }
+
+        if (Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? watchThread) && !CanAccessThread(watchThread))
+        {
+            Response.StatusCode = 403;
             return;
         }
 
@@ -442,9 +481,6 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                 if (entry.Name.StartsWith('.'))        continue;
                 if (IsSkippedZipPath(entry.FullName))  continue;
 
-                string ext = Path.GetExtension(entry.Name).ToLowerInvariant();
-                if (!IsTextExtension(ext)) { skipped.Add(entry.FullName); continue; }
-
                 string destPath = Path.Combine(targetDir, entry.FullName.Replace('/', Path.DirectorySeparatorChar));
                 Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
                 using FileStream fs = System.IO.File.Create(destPath);
@@ -456,31 +492,17 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         }
 
         // ── Normal single file ────────────────────────────────────────────────────
-        bool isImage = ImageMimes.Contains(mime);
+        if (BinaryMimes.Contains(mime))
+            return StatusCode(415, new { error = $"{Path.GetExtension(file.FileName).TrimStart('.').ToUpper()} files cannot be attached — binary formats are not supported." });
 
-        if (!isImage && BinaryMimes.Contains(mime))
-            return StatusCode(415, new { error = $"{Path.GetExtension(file.FileName).TrimStart('.').ToUpper()} files cannot be attached as thread context — only images and text files are supported." });
+        // All files land on the filesystem (scratchpad or project dir); ARI reads them via read_file.
+        Directory.CreateDirectory(targetDir);
+        string fileDest = Path.Combine(targetDir, file.FileName);
+        await using FileStream destFs = System.IO.File.Create(fileDest);
+        await file.CopyToAsync(destFs);
+        pendingFileNotes.GetOrAdd(threadKey, _ => new()).Add(file.FileName);
 
-        if (isImage)
-        {
-            // Images stay in memory — vision models need them inline.
-            using MemoryStream ms = new();
-            await file.CopyToAsync(ms);
-            string b64 = Convert.ToBase64String(ms.ToArray());
-            Attachment att = new() { Name = file.FileName, Content = b64, IsImage = true, MimeType = mime };
-            List<Attachment> list = pendingAttachments.GetOrAdd(threadKey, _ => new());
-            list.RemoveAll(a => a.Name == att.Name);
-            list.Add(att);
-        }
-        else
-        {
-            // Text files go to the scratchpad / project directory.
-            string destPath = Path.Combine(targetDir, file.FileName);
-            await using FileStream fs = System.IO.File.Create(destPath);
-            await file.CopyToAsync(fs);
-        }
-
-        return Ok(new { name = file.FileName, isImage });
+        return Ok(new { name = file.FileName });
     }
 
     /// <summary>Extensions treated as plain text and extracted from zips.</summary>
@@ -503,10 +525,9 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     [HttpDelete("{threadKey}/attachments/{name}")]
     public IActionResult RemoveAttachment(string threadKey, string name)
     {
-        // Remove from in-memory images if present.
-        if (pendingAttachments.TryGetValue(threadKey, out List<Attachment>? list))
-            list.RemoveAll(a => a.Name == name);
-        FindThread(threadKey)?.RemoveAttachment(name);
+        // Remove from pending message attachments if present (per-message images staged before send).
+        if (pendingMessageAttachments.TryGetValue(threadKey, out List<Attachment>? msgList))
+            msgList.RemoveAll(a => a.Name == name);
 
         // Remove from disk if present.
         string fileRoot = FindThread(threadKey)?.ProjectRoot ?? Paths.ScratchpadDir(threadKey);
@@ -519,20 +540,15 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     [HttpGet("{threadKey}/attachments")]
     public IActionResult GetAttachments(string threadKey)
     {
-        // In-memory images (pending or on-thread).
-        List<Attachment> images = pendingAttachments.TryGetValue(threadKey, out List<Attachment>? list) ? list : new();
-        images = images.Concat(FindThread(threadKey)?.GetAttachments() ?? Array.Empty<Attachment>())
-                       .GroupBy(a => a.Name).Select(g => g.First()).ToList();
-
-        // Text files on disk (scratchpad or project dir).
+        // All thread files live on disk (scratchpad or project dir).
         string scratchpad = Paths.ScratchpadDir(threadKey);
         string fileRoot   = FindThread(threadKey)?.ProjectRoot ?? scratchpad;
         IEnumerable<object> diskFiles = Directory.Exists(fileRoot)
             ? Directory.GetFiles(fileRoot, "*", SearchOption.AllDirectories)
-                       .Select(p => new { Name = Path.GetRelativePath(fileRoot, p), IsImage = false, MimeType = "text/plain" })
+                       .Select(p => new { Name = Path.GetRelativePath(fileRoot, p) })
             : Enumerable.Empty<object>();
 
-        return Ok(images.Select(a => new { a.Name, a.IsImage, a.MimeType }).Cast<object>().Concat(diskFiles));
+        return Ok(diskFiles);
     }
 
     // ── Promote scratchpad to project ──────────────────────────────────────────
@@ -683,30 +699,6 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         return Ok();
     }
 
-    [HttpPost("{threadKey}/inject-context")]
-    public IActionResult InjectContext(string threadKey, [FromBody] InjectContextRequest req)
-    {
-        if (string.IsNullOrWhiteSpace(req.Name) || req.Content is null)
-            return BadRequest("Name and Content are required.");
-
-        Attachment att = new() { Name = req.Name, Content = req.Content, IsImage = false, MimeType = "text/plain" };
-
-        // If the thread already exists in an agent, add directly so it persists permanently
-        ARI.LLM.Thread? thread = FindThread(threadKey);
-        if (thread is not null)
-        {
-            thread.AddAttachment(att);
-        }
-        else
-        {
-            // Thread not yet initialised — stage in pending attachments (flushed on first send)
-            pendingAttachments.GetOrAdd(threadKey, _ => new()).RemoveAll(a => a.Name == att.Name);
-            pendingAttachments[threadKey].Add(att);
-        }
-
-        return Ok();
-    }
-
     [HttpPost("{threadKey}/typing")]
     public IActionResult NotifyTyping(string threadKey)
     {
@@ -819,7 +811,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         }
 
         pendingMessageAttachments.TryRemove(threadKey, out List<Attachment>? msgAtts);
-        pendingAttachments.TryRemove(threadKey, out List<Attachment>? threadAtts);
+        pendingFileNotes.TryRemove(threadKey, out List<string>? fileNotes);
         pendingSystemContext.TryRemove(threadKey, out string? systemContextBlock);
 
         // ── Scratchpad wiring ─────────────────────────────────────────────────────
@@ -875,38 +867,29 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                 if (isFirstMessage && project.RootPath is { } gitRoot && Directory.Exists(Path.Combine(gitRoot, ".git")))
                     Llm.ForceCodeThread(threadKey);
 
-                // ServerFs projects: bind ProjectRoot on the thread every message (idempotent) so that
-                // filesystem_tools/coding_tools resolve correctly without waiting for Coder.RunLoop to
-                // set it. Covers Repository+ServerFs (web-created repos) and ObsidianGraph+ServerFs.
-                if (boundThread is not null && project is { Backend: StorageBackend.ServerFs, RootPath: { } serverRoot })
+                // Bind ProjectRoot on the thread every message (idempotent) so filesystem_tools/coding_tools
+                // resolve correctly. Local path (Electron) is preferred and set later via effectiveLocalPath;
+                // RootPath here is the server-side fallback for web sessions.
+                if (boundThread is not null && project is { RootPath: { } serverRoot })
                 {
                     boundThread.ProjectRoot   = serverRoot;
                     boundThread.IsBrainVault  = false;
                     boundThread.Ct            = CancellationToken.None;
                 }
 
-                // On the first message, inject project-level attachments as thread attachments
-                if (isFirstMessage)
-                {
-                    List<string> attachmentNames = projectStore.GetAttachmentNames(pid);
-                    if (attachmentNames.Count > 0)
-                    {
-                        threadAtts ??= new();
-                        foreach (string name in attachmentNames)
-                        {
-                            byte[]? data = projectStore.ReadAttachment(pid, name);
-                            if (data is null) continue;
-                            string ext  = Path.GetExtension(name).ToLowerInvariant();
-                            bool isImg  = ext is ".jpg" or ".jpeg" or ".png" or ".gif" or ".webp" or ".bmp";
-                            string mime = isImg ? $"image/{ext.TrimStart('.')}" : "text/plain";
-                            string content = isImg
-                                ? Convert.ToBase64String(data)
-                                : System.Text.Encoding.UTF8.GetString(data);
-                            threadAtts.Add(new Attachment { Name = name, Content = content, IsImage = isImg, MimeType = mime });
-                        }
-                    }
-                }
             }
+        }
+
+        // Append file-upload notes to platformContext so ARI knows to read them.
+        if (fileNotes is { Count: > 0 })
+        {
+            string noteLines = fileNotes.Count == 1
+                ? $"[{fileNotes[0]} was uploaded to your workspace — use read_file to inspect it.]"
+                : "[The following files were uploaded to your workspace — use read_file to inspect them: "
+                  + string.Join(", ", fileNotes) + "]";
+            platformContext = string.IsNullOrEmpty(platformContext)
+                ? noteLines
+                : platformContext + "\n" + noteLines;
         }
 
         // Heartbeat: while the model processes (prompt-processing a large context, running tools, thinking) no
@@ -958,14 +941,14 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
             string? effectiveLocalPath = string.IsNullOrWhiteSpace(body.LocalPath) ? null : body.LocalPath;
             if (effectiveLocalPath is null
                 && ThreadProjects.TryGetValue(threadKey, out string? boundProjectId)
-                && projectStore.Get(boundProjectId) is { Backend: StorageBackend.ServerFs } boundProject)
-                effectiveLocalPath = boundProject.RootPath;
+                && projectStore.Get(boundProjectId) is { RootPath: { } rootPath })
+                effectiveLocalPath = rootPath;
 
             await Llm.PromptStreaming(threadKey, prompt, username, platformContext, async accumulated =>
             {
                 string escaped = accumulated.Replace("\n", "\\n").Replace("\r", "");
                 await WriteEventAsync($"data: {escaped}\n\n");
-            }, CancellationToken.None, messageAttachments: msgAtts, threadAttachments: threadAtts,
+            }, CancellationToken.None, messageAttachments: msgAtts,
                localPath: effectiveLocalPath);
             await WriteEventAsync("data: [DONE]\n\n");
         }

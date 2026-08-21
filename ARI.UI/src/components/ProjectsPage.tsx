@@ -1,13 +1,7 @@
 import { useState, useRef, useEffect } from "react"
-import type { Project, StorageBackend } from "../hooks/useThreads"
+import type { Project } from "../hooks/useThreads"
 import { apiFetch } from "../auth"
 import { env } from "../env"
-import SegmentedControl from "./SegmentedControl"
-
-const BACKEND_OPTIONS: { value: StorageBackend; label: string }[] = [
-    { value: "ServerFs", label: "This server" },
-    { value: "RemoteFs", label: "Attached device" },
-]
 
 interface Props {
     projects:         Project[]
@@ -22,7 +16,6 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
     const [description,      setDescription]      = useState("")
     const [instructions,     setInstructions]     = useState("")
     const [category,         setCategory]         = useState("")
-    const [backend,          setBackend]          = useState<StorageBackend>("ServerFs")
     const [saving,           setSaving]           = useState(false)
     const [error,            setError]            = useState<string | null>(null)
 
@@ -64,10 +57,10 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
             const res = await apiFetch("/projects", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name: name.trim(), description: description.trim(), instructions: instructions.trim(), category: category.trim(), backend }),
+                body: JSON.stringify({ name: name.trim(), description: description.trim(), instructions: instructions.trim(), category: category.trim() }),
             })
             if (!res.ok) { setError((await res.json().catch(() => null))?.error ?? "Failed to create project."); return }
-            setName(""); setDescription(""); setInstructions(""); setCategory(""); setBackend("ServerFs")
+            setName(""); setDescription(""); setInstructions(""); setCategory("")
             setShowForm(false)
             onProjectCreated()
         } catch { setError("Could not reach ARI.") }
@@ -76,7 +69,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
 
     function handleCancelCreate() {
         setShowForm(false)
-        setName(""); setDescription(""); setInstructions(""); setCategory(""); setBackend("ServerFs"); setError(null)
+        setName(""); setDescription(""); setInstructions(""); setCategory(""); setError(null)
     }
 
     // ── Detail ────────────────────────────────────────────────────────────────────
@@ -267,14 +260,11 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                             Category <span className="field-optional">(optional — for your own search/sort)</span>
                             <input type="text" value={editCategory} onChange={e => setEditCategory(e.target.value)} placeholder="e.g. Book, Game, DND Campaign" />
                         </label>
-                        <div className="project-meta-row" style={{ marginBottom: 16 }}>
-                            <span className="project-meta-badge">
-                                {selected.backend === "ServerFs" ? "Server" : "Device"}
-                            </span>
-                            {selected.backend === "ServerFs" && selected.rootPath && (
-                                <span className="project-meta-path">{selected.rootPath}</span>
-                            )}
-                        </div>
+                        {selected.rootPath && (
+                            <div className="project-meta-row" style={{ marginBottom: 16 }}>
+                                <span className="project-meta-path" style={{ opacity: 0.55 }}>{selected.rootPath}</span>
+                            </div>
+                        )}
                         {editError && <p className="form-error">{editError}</p>}
                         <div className="form-actions">
                             <button type="submit" className="btn-primary" disabled={editSaving || !editName.trim()}>
@@ -335,15 +325,15 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                     </div>
                 </div>
 
-                {/* ── App settings (Electron / RemoteFs only) ── */}
-                {isElectron && selected.backend === "RemoteFs" && (
+                {/* ── App settings (Electron only — local path preferred over server path) ── */}
+                {isElectron && (
                     <div className="project-section">
                         <div className="project-section-header">
                             <h2>App settings</h2>
                             <span className="field-optional">Stored on this device only — not synced</span>
                         </div>
                         <label>
-                            Local path
+                            Local path <span className="field-optional">(preferred over server path when set)</span>
                             <div className="folder-picker-row">
                                 <span className="folder-picker-path">
                                     {editPath ?? <span className="project-unavailable">Not available on this machine</span>}
@@ -395,10 +385,6 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                         Category <span className="field-optional">(optional — for your own search/sort)</span>
                         <input type="text" value={category} onChange={e => setCategory(e.target.value)} placeholder="e.g. Book, Game, DND Campaign" />
                     </label>
-                    <label>
-                        Storage <span className="field-optional">(can't be changed after creation)</span>
-                        <SegmentedControl options={BACKEND_OPTIONS} value={backend} onChange={setBackend} />
-                    </label>
                     {error && <p className="form-error">{error}</p>}
                     <div className="form-actions">
                         <button type="button" className="btn-secondary" onClick={handleCancelCreate} disabled={saving}>Cancel</button>
@@ -432,20 +418,12 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                                     {p.category && <span className="field-optional" style={{ marginLeft: "6px" }}>· {p.category}</span>}
                                 </span>
                                 {p.description && <span className="project-card-desc">{p.description}</span>}
-                                {p.backend === "RemoteFs" ? (
-                                    isElectron && localPaths[p.id]
-                                        ? <span className="project-card-path">{localPaths[p.id]}</span>
-                                        : <span className="project-card-path project-card-path--unavailable">
-                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{display:"inline",verticalAlign:"middle",marginRight:"4px",marginTop:"-1px"}}>
-                                                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
-                                            </svg>
-                                            Local — {isElectron ? "not linked on this device" : "link via desktop app"}
-                                          </span>
-                                ) : (
-                                    <span className="project-card-path" style={{ opacity: 0.55 }}>
-                                        Server · {p.rootPath ?? "managed"}
-                                    </span>
-                                )}
+                                {isElectron && localPaths[p.id]
+                                    ? <span className="project-card-path">{localPaths[p.id]}</span>
+                                    : p.rootPath
+                                        ? <span className="project-card-path" style={{ opacity: 0.55 }}>{p.rootPath}</span>
+                                        : null
+                                }
                             </div>
                             <svg className="project-card-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                 <path d="M9 18l6-6-6-6"/>

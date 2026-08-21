@@ -30,14 +30,9 @@ internal abstract class Pipeline
         Func<string, Task>?  onDelta,
         CancellationTokenSource cts,
         List<Attachment>?    messageAttachments = null,
-        List<Attachment>?    threadAttachments  = null,
         string?              localPath          = null,
         Func<string, Task>?  onTextDelta        = null)
     {
-        if (threadAttachments is { Count: > 0 })
-            foreach (Attachment a in threadAttachments)
-                thread.AddAttachment(a);
-
         LiveCallInfo liveCall = BuildLiveCall(threadKey);
         liveCalls[threadKey] = liveCall;
         thread.SetLiveCall(liveCall);

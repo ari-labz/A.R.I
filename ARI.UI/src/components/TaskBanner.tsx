@@ -2,10 +2,11 @@ import { useState, useEffect } from "react"
 
 interface Props {
     tasks: Set<string>
+    sidebarCollapsed: boolean
     onCancel: (name: string) => void
 }
 
-export default function TaskBanner({ tasks, onCancel }: Props) {
+export default function TaskBanner({ tasks, sidebarCollapsed, onCancel }: Props) {
     const [cancelling, setCancelling] = useState<string | null>(null)
 
     useEffect(() => {
@@ -22,7 +23,7 @@ export default function TaskBanner({ tasks, onCancel }: Props) {
     }
 
     return (
-        <div id="task-banner">
+        <div id="task-banner" style={{ left: sidebarCollapsed ? 0 : "var(--sidebar-w)" }}>
             <span className="task-banner-icon">⚠</span>
             <span className="task-banner-text">
                 {names.length === 1

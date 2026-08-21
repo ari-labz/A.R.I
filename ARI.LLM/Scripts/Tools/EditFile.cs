@@ -41,7 +41,7 @@ internal sealed class EditFile : Tool
             using JsonDocument doc = JsonDocument.Parse(argsJson);
             if (doc.RootElement.TryGetProperty("path", out JsonElement p) && p.GetString() is { } path)
             {
-                if (!fs.ReadLedger.Contains(path))
+                if (!fs.WasRead(path))
                     return $"[Blocked] You must call read_file or preview_file on '{path}' before editing it. Read it first so you have the current line numbers.";
             }
         }

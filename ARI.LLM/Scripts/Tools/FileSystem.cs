@@ -16,20 +16,23 @@ namespace ARI.LLM;
 /// </summary>
 internal abstract class FileSystem
 {
-    // Paths the model has successfully read or previewed this session.
-    // EditFile checks this to block edits on files the model has never seen.
-    internal readonly HashSet<string> ReadLedger = new(StringComparer.OrdinalIgnoreCase);
+    // The persistent ledger lives on FileSnapshots (which is kept on the Thread across tool calls).
+    // FileSystem is recreated on every tool call, so a HashSet here would be wiped between read and edit.
+    internal FileSnapshots? Snapshots { get; init; }
 
     internal void MarkRead(string argsJson)
     {
+        if (Snapshots is null) return;
         try
         {
             using JsonDocument doc = JsonDocument.Parse(argsJson);
             if (doc.RootElement.TryGetProperty("path", out JsonElement p) && p.GetString() is { } path)
-                ReadLedger.Add(path);
+                Snapshots.MarkRead(path);
         }
         catch { }
     }
+
+    internal bool WasRead(string path) => Snapshots?.WasRead(path) ?? false;
 
 
     public virtual Task<string> Read(string argsJson)    => Unavailable("read_file");
