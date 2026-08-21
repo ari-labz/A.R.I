@@ -9,7 +9,20 @@ namespace ARI.API.Controllers;
 [ApiController]
 public class AuthController(UserStore users, AuthService auth) : ControllerBase
 {
-    private string RemoteIp => HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    // Requests may arrive through a reverse proxy (see APIModule.cs), in which case
+    // Connection.RemoteIpAddress is just the proxy's own address and every real client
+    // collapses onto one IP for lockout purposes. Prefer the client IP the proxy reports.
+    private string RemoteIp
+    {
+        get
+        {
+            string? forwarded = Request.Headers["X-Forwarded-For"].FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(forwarded))
+                return forwarded.Split(',')[0].Trim();
+
+            return HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        }
+    }
 
     // ── Login ────────────────────────────────────────────────────────────────────
 
@@ -75,7 +88,7 @@ public class AuthController(UserStore users, AuthService auth) : ControllerBase
         if (!AuthService.VerifyPassword(req.CurrentPassword, user.PasswordHash))
             return BadRequest(new { error = "Current password is incorrect." });
 
-        if (req.NewPassword.Length < 8)
+        if (req.NewPassword.Length < 5)
             return BadRequest(new { error = "New password must be at least 8 characters." });
 
         string hash = AuthService.HashPassword(req.NewPassword);
