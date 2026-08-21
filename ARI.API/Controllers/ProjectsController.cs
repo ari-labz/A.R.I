@@ -1,5 +1,4 @@
 using System.Security.Claims;
-using System.Text.Json.Serialization;
 using ARI.API;
 using ARI.API.Auth;
 using Microsoft.AspNetCore.Http;
@@ -37,7 +36,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest(new { error = "Name is required." });
 
-        var summary = projects.Create(req.Name, req.Category, req.Backend?.ToString());
+        var summary = projects.Create(req.Name, req.Category, "ServerFs");
         if (summary is null) return BadRequest(new { error = "Failed to create project." });
 
         Project? created = store.Get(summary.Id);
@@ -67,22 +66,17 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
         if (req.Name.Trim() != existing.Name) projects.Rename(id, req.Name.Trim());
 
         Project current = store.Get(id) ?? existing;
-        StorageBackend newBackend = req.Backend ?? current.Backend;
-        string? newRootPath = current.RootPath;
-        if (newBackend != current.Backend)
-        {
-            newRootPath = newBackend == StorageBackend.ServerFs
-                ? ProjectStore.CreateServerFolder(id, req.Name.Trim())
-                : null;
-        }
+
+        // Ensure every project has a server folder — migrate legacy RemoteFs projects on first save.
+        string rootPath = current.RootPath ?? ProjectStore.CreateServerFolder(id, req.Name.Trim());
 
         Project updated = current with
         {
             Description  = req.Description?.Trim() ?? "",
             Instructions = req.Instructions?.Trim() ?? "",
             Category     = req.Category?.Trim() ?? current.Category,
-            Backend      = newBackend,
-            RootPath     = newRootPath,
+            Backend      = StorageBackend.ServerFs,
+            RootPath     = rootPath,
         };
         store.Update(updated);
         return Ok(updated);
@@ -150,5 +144,4 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
 
 public record CreateProjectRequest(
     string Name, string? Description, string? Instructions,
-    string? Category,
-    [property: JsonConverter(typeof(JsonStringEnumConverter))] StorageBackend? Backend);
+    string? Category);
