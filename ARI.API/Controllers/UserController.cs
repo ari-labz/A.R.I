@@ -44,6 +44,32 @@ public class UserController(UserStore users) : ControllerBase
         return Ok();
     }
 
+    public record UsernameUpdate(string NewUsername, string CurrentPassword);
+
+    [HttpPut("username")]
+    public IActionResult UpdateUsername([FromBody] UsernameUpdate req)
+    {
+        if (!TryGetUserId(out int id)) return Unauthorized();
+        User? user = users.GetById(id);
+        if (user is null) return Unauthorized();
+
+        if (!AuthService.VerifyPassword(req.CurrentPassword, user.PasswordHash))
+            return BadRequest(new { error = "Current password is incorrect." });
+
+        string name = req.NewUsername.Trim();
+        if (name.Length < 2)   return BadRequest(new { error = "Username must be at least 2 characters." });
+        if (name.Length > 40)  return BadRequest(new { error = "Username must be 40 characters or fewer." });
+        if (!System.Text.RegularExpressions.Regex.IsMatch(name, @"^[a-zA-Z0-9_\-\.]+$"))
+            return BadRequest(new { error = "Username may only contain letters, numbers, underscores, hyphens, and dots." });
+
+        if (!users.SetUsername(id, name))
+            return Conflict(new { error = "That username is already taken." });
+
+        // The JWT carries the old username — log out all sessions so the next login picks up the new name.
+        users.RevokeAllSessionsForUser(id);
+        return Ok(new { message = "Username updated. Please sign in again." });
+    }
+
     // ── Sessions ─────────────────────────────────────────────────────────────────
 
     [HttpDelete("sessions/{sessionId}")]

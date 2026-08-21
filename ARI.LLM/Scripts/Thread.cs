@@ -182,6 +182,10 @@ public class Thread
     /// (Discord, proactive, internal) so existing behaviour is preserved.</summary>
     public bool IsOwnerThread { get; set; } = true;
 
+    /// <summary>The user ID (from the JWT NameIdentifier claim) that created this thread.
+    /// Null for system-created threads (proactive, Discord, internal).</summary>
+    public string? OwnerId { get; set; }
+
     /// <summary>True once the user has said anything in this thread — the gate for whether a dormant
     /// sweep has anything to learn. An unanswered proactive thread has none.</summary>
     internal bool HasUserMessages => History.OfType<Prompt>().Any();
@@ -241,7 +245,6 @@ public class Thread
     internal void ClearLiveCall()                    => liveCallInfo = null;
 
     // ── Attachments ────────────────────────────────────────────────────────────
-    private readonly List<Attachment> attachments        = new();
     private readonly List<Attachment> pendingMessageAtts = new();
 
     internal string? PlatformContext { get; init; }
@@ -532,21 +535,6 @@ public class Thread
 
     // ── Attachments ────────────────────────────────────────────────────────────
 
-    public void AddAttachment(Attachment attachment)
-    {
-        lock (attachments) { attachments.RemoveAll(a => a.Name == attachment.Name); attachments.Add(attachment); }
-    }
-
-    public bool RemoveAttachment(string name)
-    {
-        lock (attachments) { return attachments.RemoveAll(a => a.Name == name) > 0; }
-    }
-
-    public IReadOnlyList<Attachment> GetAttachments()
-    {
-        lock (attachments) { return attachments.ToList().AsReadOnly(); }
-    }
-
     public void AddMessageAttachment(Attachment attachment)
     {
         lock (pendingMessageAtts) { pendingMessageAtts.RemoveAll(a => a.Name == attachment.Name); pendingMessageAtts.Add(attachment); }
@@ -565,11 +553,6 @@ public class Thread
     internal void ClearMessageAttachments()
     {
         lock (pendingMessageAtts) { pendingMessageAtts.Clear(); }
-    }
-
-    internal List<Attachment> SnapshotThreadAttachments()
-    {
-        lock (attachments) { return attachments.ToList(); }
     }
 
     internal List<Attachment> SnapshotMessageAttachments(bool fromHistory)

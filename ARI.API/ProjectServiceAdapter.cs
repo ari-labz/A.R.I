@@ -38,6 +38,8 @@ public class ProjectServiceAdapter(ProjectStore store) : IProjectService
 
         store.Add(project);
         EnsureBrainNote(project);
+        if (Modules.Llm is LLMModule llm)
+            llm.BroadcastProjectsChanged();
         return ToSummary(project);
     }
 

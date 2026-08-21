@@ -175,6 +175,19 @@ public class UserStore
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>Returns false if the new username is already taken.</summary>
+    public bool SetUsername(int userId, string newUsername)
+    {
+        if (GetByUsername(newUsername) is { } existing && existing.Id != userId) return false;
+        using SqliteConnection conn = Open();
+        using SqliteCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE Users SET Username = $u WHERE Id = $id";
+        cmd.Parameters.AddWithValue("$u",   newUsername);
+        cmd.Parameters.AddWithValue("$id",  userId);
+        cmd.ExecuteNonQuery();
+        return true;
+    }
+
     public void TouchLastActive(int userId)
     {
         long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();

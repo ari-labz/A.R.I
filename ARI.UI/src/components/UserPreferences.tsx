@@ -29,6 +29,12 @@ export default function UserPreferences({ user, onClose, onLogout, onUserUpdated
     const [pwError,           setPwError]            = useState<string | null>(null)
     const [pwSaved,           setPwSaved]            = useState(false)
 
+    const [unOpen,            setUnOpen]             = useState(false)
+    const [newUsername,       setNewUsername]         = useState("")
+    const [unPassword,        setUnPassword]          = useState("")
+    const [unLoading,         setUnLoading]           = useState(false)
+    const [unError,           setUnError]             = useState<string | null>(null)
+
     const [sessions,          setSessions]           = useState<Session[]>([])
     const [sessionsLoading,   setSessionsLoading]    = useState(true)
 
@@ -68,7 +74,7 @@ export default function UserPreferences({ user, onClose, onLogout, onUserUpdated
 
     async function savePassword(e: React.FormEvent) {
         e.preventDefault()
-        if (newPw.length < 8) { setPwError("At least 8 characters required."); return }
+        if (newPw.length < 5) { setPwError("At least 5 characters required."); return }
         if (newPw !== confirmPw) { setPwError("Passwords do not match."); return }
         setPwError(null)
         setPwLoading(true)
@@ -82,6 +88,27 @@ export default function UserPreferences({ user, onClose, onLogout, onUserUpdated
             setPwError(err instanceof Error ? err.message : "Failed to change password")
         } finally {
             setPwLoading(false)
+        }
+    }
+
+    async function changeUsername(e: React.FormEvent) {
+        e.preventDefault()
+        const name = newUsername.trim()
+        if (!name) { setUnError("Username cannot be empty."); return }
+        setUnError(null)
+        setUnLoading(true)
+        try {
+            const res = await apiFetch("/user/username", {
+                method:  "PUT",
+                headers: { "Content-Type": "application/json" },
+                body:    JSON.stringify({ newUsername: name, currentPassword: unPassword }),
+            })
+            const d = await res.json().catch(() => ({}))
+            if (!res.ok) { setUnError((d as { error?: string }).error ?? "Failed"); return }
+            // Server revoked all sessions — force re-login with the new username visible.
+            onLogout()
+        } finally {
+            setUnLoading(false)
         }
     }
 
@@ -155,6 +182,27 @@ export default function UserPreferences({ user, onClose, onLogout, onUserUpdated
                                 {pwSaved  && <p style={successStyle}>Password changed.</p>}
                                 <button type="submit" style={saveBtn(pwLoading)} disabled={pwLoading}>
                                     {pwLoading ? "Saving…" : "Change password"}
+                                </button>
+                            </form>
+                        )}
+                    </div>
+
+                    {/* Change username accordion */}
+                    <div style={section}>
+                        <button style={accordionBtn} onClick={() => { setUnOpen(o => !o); setUnError(null) }}>
+                            <span>Change username</span>
+                            <svg style={{ transform: unOpen ? "rotate(180deg)" : "none", transition: "transform 0.2s" }} width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                <polyline points="2,5 7,10 12,5"/>
+                            </svg>
+                        </button>
+                        {unOpen && (
+                            <form onSubmit={changeUsername} style={pwForm}>
+                                <input style={inputStyle} type="text"     placeholder="New username"     autoComplete="username"         value={newUsername} onChange={e => setNewUsername(e.target.value)}  disabled={unLoading} />
+                                <input style={inputStyle} type="password" placeholder="Current password" autoComplete="current-password" value={unPassword}  onChange={e => setUnPassword(e.target.value)}   disabled={unLoading} />
+                                {unError && <p style={errorStyle}>{unError}</p>}
+                                <p style={{ ...mutedText, marginTop: 0 }}>You'll be signed out after changing your username.</p>
+                                <button type="submit" style={saveBtn(unLoading)} disabled={unLoading}>
+                                    {unLoading ? "Saving…" : "Change username"}
                                 </button>
                             </form>
                         )}

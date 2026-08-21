@@ -44,6 +44,7 @@ internal sealed class ServerFileSystem : FileSystem
         this.ct         = ct;
         this.gate       = gate;
         this.brainVault = brainVault;
+        Snapshots       = gate;
     }
 
     /// <summary>Resolves a project-relative path to an absolute one, or null if it escapes the root.</summary>
