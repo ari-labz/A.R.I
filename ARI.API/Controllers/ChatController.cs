@@ -867,10 +867,10 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                 if (isFirstMessage && project.RootPath is { } gitRoot && Directory.Exists(Path.Combine(gitRoot, ".git")))
                     Llm.ForceCodeThread(threadKey);
 
-                // ServerFs projects: bind ProjectRoot on the thread every message (idempotent) so that
-                // filesystem_tools/coding_tools resolve correctly without waiting for Coder.RunLoop to
-                // set it. Covers Repository+ServerFs (web-created repos) and ObsidianGraph+ServerFs.
-                if (boundThread is not null && project is { Backend: StorageBackend.ServerFs, RootPath: { } serverRoot })
+                // Bind ProjectRoot on the thread every message (idempotent) so filesystem_tools/coding_tools
+                // resolve correctly. Local path (Electron) is preferred and set later via effectiveLocalPath;
+                // RootPath here is the server-side fallback for web sessions.
+                if (boundThread is not null && project is { RootPath: { } serverRoot })
                 {
                     boundThread.ProjectRoot   = serverRoot;
                     boundThread.IsBrainVault  = false;
@@ -941,8 +941,8 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
             string? effectiveLocalPath = string.IsNullOrWhiteSpace(body.LocalPath) ? null : body.LocalPath;
             if (effectiveLocalPath is null
                 && ThreadProjects.TryGetValue(threadKey, out string? boundProjectId)
-                && projectStore.Get(boundProjectId) is { Backend: StorageBackend.ServerFs } boundProject)
-                effectiveLocalPath = boundProject.RootPath;
+                && projectStore.Get(boundProjectId) is { RootPath: { } rootPath })
+                effectiveLocalPath = rootPath;
 
             await Llm.PromptStreaming(threadKey, prompt, username, platformContext, async accumulated =>
             {

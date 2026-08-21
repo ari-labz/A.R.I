@@ -121,6 +121,28 @@ public class ProjectStore
         return safe.Length == 0 ? "project" : safe;
     }
 
+    // ── Migration ─────────────────────────────────────────────────────────────────
+
+    /// <summary>Ensures every project has a server folder. Converts legacy RemoteFs projects to
+    /// ServerFs by creating their folder under Paths.ServerDir("Projects") if missing.</summary>
+    public void MigrateToServerFs()
+    {
+        lock (_lock)
+        {
+            var all = GetAll();
+            bool changed = false;
+            for (int i = 0; i < all.Count; i++)
+            {
+                Project p = all[i];
+                if (p.Backend == StorageBackend.ServerFs && p.RootPath is not null) continue;
+                string root = p.RootPath ?? CreateServerFolder(p.Id, p.Name);
+                all[i]  = p with { Backend = StorageBackend.ServerFs, RootPath = root };
+                changed = true;
+            }
+            if (changed) Save(all);
+        }
+    }
+
     // ── Thread → Project mapping (in-memory only — threads don't survive restarts) ──
     // Owned here (not by a controller) so both ThreadsController and ProjectServiceAdapter — the
     // REST path and the tool-call path — read/write the exact same shared state.
