@@ -25,7 +25,6 @@ public record Project(
     // relying on the desktop app's own per-device local-path store (see ProjectsPage.tsx) this whole time.
     [property: JsonConverter(typeof(JsonStringEnumConverter))] StorageBackend Backend = StorageBackend.RemoteFs,
     string?        RootPath    = null,
-    List<string>?  Attachments = null,
     // 0 = admin-owned (legacy rows that predate multi-user support).
     int            OwnerId     = 0);
 
@@ -33,7 +32,6 @@ public class ProjectStore
 {
     private readonly string _filePath;
     private readonly string _threadMapPath;
-    private readonly string _attachmentsDir;
     private readonly object _lock = new();
 
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -45,10 +43,8 @@ public class ProjectStore
     public ProjectStore()
     {
         string dir = Paths.ClientData;
-        _filePath       = Path.Combine(dir, "Projects.json");
-        _threadMapPath  = Path.Combine(dir, "thread-projects.json");
-        _attachmentsDir = Path.Combine(dir, "project-attachments");
-        Directory.CreateDirectory(_attachmentsDir);
+        _filePath      = Path.Combine(dir, "Projects.json");
+        _threadMapPath = Path.Combine(dir, "thread-projects.json");
     }
 
     // ── Projects ─────────────────────────────────────────────────────────────────
@@ -91,9 +87,6 @@ public class ProjectStore
             var all = GetAll();
             all.RemoveAll(p => p.Id == id);
             Save(all);
-            // Clean up attachment files
-            string dir = AttachmentDir(id);
-            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
         }
     }
 
@@ -127,7 +120,22 @@ public class ProjectStore
 
         WriteAriIgnore(folderPath);
         RunGit(folderPath, "init");
-        RunGit(folderPath, "commit --allow-empty -m \"Init\"");
+        // Copy .ariignore into info/exclude so `git add --all` honours it natively.
+        // `git add` has no --exclude-from flag; info/exclude is the correct mechanism.
+        SyncExcludeFile(folderPath);
+        RunGit(folderPath, "add --all");
+        // Commit whatever exists; fall back to an empty commit for a brand-new folder.
+        var (code, _) = RunGit(folderPath, "commit -m \"Init\"");
+        if (code != 0) RunGit(folderPath, "commit --allow-empty -m \"Init\"");
+    }
+
+    private static void SyncExcludeFile(string folderPath)
+    {
+        string ariIgnore = Path.Combine(folderPath, ".ariignore");
+        if (!File.Exists(ariIgnore)) return;
+        string infoDir = Path.Combine(folderPath, ".ariproject", "info");
+        Directory.CreateDirectory(infoDir);
+        File.Copy(ariIgnore, Path.Combine(infoDir, "exclude"), overwrite: true);
     }
 
     private static void WriteAriIgnore(string folderPath)
@@ -219,36 +227,4 @@ public class ProjectStore
         return new();
     }
 
-    // ── Project attachments ───────────────────────────────────────────────────────
-
-    private string AttachmentDir(string projectId)
-    {
-        string dir = Path.Combine(_attachmentsDir, projectId);
-        Directory.CreateDirectory(dir);
-        return dir;
-    }
-
-    public List<string> GetAttachmentNames(string projectId)
-    {
-        string dir = AttachmentDir(projectId);
-        return Directory.GetFiles(dir).Select(Path.GetFileName).Where(n => n != null).Cast<string>().OrderBy(n => n).ToList();
-    }
-
-    public void SaveAttachment(string projectId, string fileName, byte[] data)
-    {
-        string path = Path.Combine(AttachmentDir(projectId), fileName);
-        File.WriteAllBytes(path, data);
-    }
-
-    public byte[]? ReadAttachment(string projectId, string fileName)
-    {
-        string path = Path.Combine(AttachmentDir(projectId), fileName);
-        return File.Exists(path) ? File.ReadAllBytes(path) : null;
-    }
-
-    public void DeleteAttachment(string projectId, string fileName)
-    {
-        string path = Path.Combine(AttachmentDir(projectId), fileName);
-        if (File.Exists(path)) File.Delete(path);
-    }
 }

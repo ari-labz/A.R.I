@@ -20,7 +20,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
             return Ok(store.GetAll().Select(p => new
             {
                 p.Id, p.Name, p.Description, p.Instructions, p.CreatedAt,
-                p.Category, p.Backend, p.RootPath, p.Attachments, p.OwnerId,
+                p.Category, p.Backend, p.RootPath, p.OwnerId,
                 OwnerUsername = p.OwnerId == 0 ? "admin" : (allUsers.TryGetValue(p.OwnerId, out string? n) ? n : "unknown"),
             }));
         }
@@ -89,42 +89,6 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
         if (project is null) return NotFound();
         if (!CanAccess(project)) return Forbid();
         store.Delete(id);
-        return Ok();
-    }
-
-    // ── Project attachments ───────────────────────────────────────────────────────
-
-    [HttpGet("{id}/attachments")]
-    public IActionResult GetAttachments(string id)
-    {
-        Project? project = store.Get(id);
-        if (project is null) return NotFound();
-        if (!CanAccess(project)) return Forbid();
-        return Ok(store.GetAttachmentNames(id).Select(n => new { name = n }));
-    }
-
-    [HttpPost("{id}/attachments")]
-    [DisableRequestSizeLimit]
-    public async Task<IActionResult> AddAttachment(string id, IFormFile file)
-    {
-        Project? project = store.Get(id);
-        if (project is null) return NotFound();
-        if (!CanAccess(project)) return Forbid();
-        if (file is null || file.Length == 0) return BadRequest("No file provided.");
-
-        using MemoryStream ms = new();
-        await file.CopyToAsync(ms);
-        store.SaveAttachment(id, file.FileName, ms.ToArray());
-        return Ok(new { name = file.FileName });
-    }
-
-    [HttpDelete("{id}/attachments/{name}")]
-    public IActionResult DeleteAttachment(string id, string name)
-    {
-        Project? project = store.Get(id);
-        if (project is null) return NotFound();
-        if (!CanAccess(project)) return Forbid();
-        store.DeleteAttachment(id, name);
         return Ok();
     }
 
