@@ -14,7 +14,7 @@ import TaskBanner from "./components/TaskBanner"
 import { playResponseChime } from "./notify"
 import LoginScreen from "./components/LoginScreen"
 import UserPreferences from "./components/UserPreferences"
-import { apiFetch, fetchMe, setToken, type AuthUser } from "./auth"
+import { apiFetch, fetchMe, setToken, getToken, type AuthUser } from "./auth"
 import "./styles/app.css"
 
 export type AppMode = "idle" | "active"
@@ -222,6 +222,10 @@ export default function App() {
         fetchMe().then(user => {
             if (user) { setAuthUser(user); setAuthState("authed") }
             else       setAuthState("needsLogin")
+            // Signal Desktop that the renderer has something to display — dismiss the splash
+            // regardless of whether auth succeeded. Without this, the 15-second fallback fires
+            // whenever the token is absent/expired and connectAndInit never runs.
+            window.electronBridge?.markReady()
         })
     }, [])
 
@@ -779,12 +783,15 @@ export default function App() {
     // opened for EVERY thread we start watching, including one created by sending the first message —
     // without it threadStatus never leaves "idle" and the indicator falls back to guessing from content,
     // which cannot tell thinking apart from an empty reply.
+    const isSyncingRef = useRef(false)
+
     const attachWatch = useCallback((key: string) => {
         watchStreamRef.current?.close()
         watchStreamRef.current = openWatchStream(key, (e: WatchEvent) => {
             if (e.deleted) { watchStreamRef.current = null; return }
             if (e.status) {
-                setThreadStatus(e.status)
+                // Don't let server status events overwrite the syncing indicator.
+                if (!isSyncingRef.current) setThreadStatus(e.status)
                 setIsRemembering(e.status === "remembering")
             }
             if (e.isCodeMode !== undefined) setCodeMode(e.isCodeMode)
@@ -970,6 +977,18 @@ export default function App() {
                 // dark-mode overlay animates in (false → true while #main is mounted)
                 // instead of only appearing when the thread is later reopened.
                 setCodeMode(true)
+                // Auto-sync: if the user has opted in and Desktop has a local path, sync before injecting the tree.
+                if (window.electronBridge?.syncRun && localStorage.getItem(`ari-autosync-${selectedProject}`) === "1") {
+                    const lp = await env.getLocalPath(selectedProject)
+                    if (lp) {
+                        isSyncingRef.current = true
+                        setThreadStatus("syncing")
+                        await window.electronBridge.syncRun({ projectId: selectedProject, localPath: lp, token: getToken() })
+                            .catch(e => console.warn("[AutoSync] failed:", e))
+                        isSyncingRef.current = false
+                        setThreadStatus("idle")
+                    }
+                }
                 await injectFileTree(key, selectedProject)
             }
         } else if (mode === "idle") {

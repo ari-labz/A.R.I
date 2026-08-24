@@ -901,6 +901,25 @@ button, a, input, select, textarea, label, [role="button"] {
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .btn-pick-folder { padding: 4px 10px; font-size: 12px; flex-shrink: 0; }
+/* ── Project sync ────────────────────────────────────────────── */
+.sync-row {
+    display: flex; align-items: center; gap: 10px; margin-top: 10px;
+}
+.sync-badge {
+    flex: 1; font-size: 12px; padding: 4px 10px; border-radius: 6px;
+    background: var(--surface-alt, #f0f4f6); color: var(--text-dim);
+}
+.sync-badge-ok      { background: #d1fae5; color: #065f46; }
+.sync-badge-ahead   { background: #dbeafe; color: #1e40af; }
+.sync-badge-behind  { background: #fef3c7; color: #92400e; }
+.sync-badge-conflict{ background: #fee2e2; color: #991b1b; }
+.sync-badge-error   { background: #fee2e2; color: #991b1b; }
+.sync-autosync-row {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; color: var(--text-dim); margin-top: 10px; cursor: pointer;
+    user-select: none;
+}
+.sync-autosync-row input[type="checkbox"] { accent-color: var(--accent, #4a90d9); }
 /* ── iOS-style toggle ────────────────────────────────────── */
 .toggle-row {
     display: flex; align-items: center; justify-content: space-between;

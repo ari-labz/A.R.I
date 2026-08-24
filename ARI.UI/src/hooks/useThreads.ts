@@ -195,7 +195,7 @@ export function openWatchStream(
     return es
 }
 
-export type ThreadStatus = "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching"
+export type ThreadStatus = "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing"
 
 export interface WatchEvent {
     deleted?:    boolean

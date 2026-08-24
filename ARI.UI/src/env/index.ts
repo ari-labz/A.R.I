@@ -60,6 +60,8 @@ declare global {
       getToken?(): string | null
       setToken?(token: string): void
       clearToken?(): void
+      syncStatus?(args: { projectId: string; localPath: string; token: string | null }): Promise<unknown>
+      syncRun?(args:    { projectId: string; localPath: string; token: string | null }): Promise<unknown>
     }
   }
 }

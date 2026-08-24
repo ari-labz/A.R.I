@@ -30,7 +30,7 @@ public class ProjectSyncController(ProjectStore store) : ControllerBase
 
         string ariDir = Path.Combine(root, ".ariproject");
         if (!Directory.Exists(ariDir))
-            return BadRequest(new { error = "Project sync not initialised." });
+            ProjectStore.InitAriProject(root);
 
         var (_, serverSha) = ProjectStore.RunGit(root, "rev-parse HEAD");
         serverSha = serverSha.Trim();
@@ -46,7 +46,16 @@ public class ProjectSyncController(ProjectStore store) : ControllerBase
             int.TryParse(behindStr.Trim(), out behind);
         }
 
-        return Ok(new { serverSha, clientSha, ahead, behind });
+        // True if the server's working tree physically has files beyond .ariignore/.ariproject.
+        // Intentionally checks the filesystem rather than `git ls-files` (the index) — the index
+        // can be ahead of the work-tree if a previous reset --hard failed to materialise files.
+        bool hasContent = Directory.EnumerateFileSystemEntries(root)
+            .Any(e => {
+                string name = Path.GetFileName(e);
+                return name is not (".ariignore" or ".ariproject" or ".DS_Store");
+            });
+
+        return Ok(new { serverSha, clientSha, ahead, behind, hasContent });
     }
 
     // ── Pull (server → client) ────────────────────────────────────────────────────
@@ -60,6 +69,7 @@ public class ProjectSyncController(ProjectStore store) : ControllerBase
         if (project is null) return NotFound();
         if (!CanAccess(project)) return Forbid();
         if (project.RootPath is not { } root) return BadRequest(new { error = "Project has no server folder." });
+        ProjectStore.InitAriProject(root);
 
         string tmp = Path.GetTempFileName();
         try
@@ -99,18 +109,18 @@ public class ProjectSyncController(ProjectStore store) : ControllerBase
             using (var fs = System.IO.File.OpenWrite(tmp))
                 await Request.Body.CopyToAsync(fs);
 
-            // Verify the bundle is valid before applying.
-            var (verifyCode, verifyOut) = ProjectStore.RunGit(root, $"bundle verify \"{tmp}\"");
-            if (verifyCode != 0)
-                return BadRequest(new { error = $"Invalid bundle: {verifyOut}" });
-
-            // Fetch refs from the bundle into the .ariproject repo.
-            var (fetchCode, fetchOut) = ProjectStore.RunGit(root, $"bundle unbundle \"{tmp}\"");
+            // Fetch into a scratch ref — git refuses to fetch into the currently checked-out branch.
+            ProjectStore.RunGit(root, "branch -D ari/incoming"); // clean up any leftover (ignore failure)
+            var (fetchCode, fetchOut) = ProjectStore.RunGit(root, $"fetch \"{tmp}\" HEAD:refs/heads/ari/incoming");
             if (fetchCode != 0)
-                return BadRequest(new { error = $"Unbundle failed: {fetchOut}" });
+                return BadRequest(new { error = $"Fetch failed: {fetchOut}" });
 
-            // Fast-forward HEAD to the incoming tip.
-            ProjectStore.RunGit(root, "merge FETCH_HEAD --ff-only");
+            // Point HEAD at main, fast-forward it to the incoming tip, sync the working tree.
+            ProjectStore.RunGit(root, "symbolic-ref HEAD refs/heads/main");
+            var (resetCode, resetOut) = ProjectStore.RunGit(root, "reset --hard refs/heads/ari/incoming");
+            if (resetCode != 0)
+                return StatusCode(500, new { error = $"Reset failed: {resetOut}" });
+            ProjectStore.RunGit(root, "branch -D ari/incoming");
 
             var (_, newSha) = ProjectStore.RunGit(root, "rev-parse HEAD");
             return Ok(new { serverSha = newSha.Trim() });

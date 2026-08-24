@@ -1,14 +1,16 @@
-import { useState, useRef, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import type { Project } from "../hooks/useThreads"
-import { apiFetch } from "../auth"
+import { apiFetch, getToken } from "../auth"
 import { env } from "../env"
+
+type SyncState = "idle" | "checking" | "up-to-date" | "ahead" | "behind" | "conflict" | "dirty" | "syncing" | "error" | "no-local-path" | "uninitialized"
+interface SyncStatus { state: SyncState; ahead?: number; behind?: number; message?: string }
 
 interface Props {
     projects:         Project[]
     onProjectCreated: () => void
 }
 
-interface FileEntry { name: string; isImage?: boolean; mimeType?: string }
 
 export default function ProjectsPage({ projects, onProjectCreated }: Props) {
     const [showForm,         setShowForm]         = useState(false)
@@ -27,15 +29,13 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
     const [editSaving,       setEditSaving]       = useState(false)
     const [editError,        setEditError]        = useState<string | null>(null)
 
-    const [files,            setFiles]            = useState<FileEntry[]>([])
-    const [uploading,        setUploading]        = useState(false)
-    const [dragging,         setDragging]         = useState(false)
-
     const [localPaths,       setLocalPaths]       = useState<Record<string, string | null>>({})
     const [editPath,         setEditPath]         = useState<string | null>(null)
+    const [syncStatuses,     setSyncStatuses]     = useState<Record<string, SyncStatus>>({})
+    const [syncing,          setSyncing]          = useState(false)
+    const [autoSync,         setAutoSync]         = useState(false)
 
-    const fileInputRef = useRef<HTMLInputElement>(null)
-    const isElectron   = !!window.electronBridge
+    const isElectron = !!window.electronBridge
 
     useEffect(() => {
         if (!isElectron) return
@@ -82,14 +82,8 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
         setEditCategory(p.category)
         setEditPath(localPaths[p.id] ?? null)
         setEditError(null)
-        await loadFiles(p.id)
-    }
-
-    async function loadFiles(projectId: string) {
-        try {
-            const res = await apiFetch(`/projects/${projectId}/attachments`)
-            if (res.ok) setFiles(await res.json())
-        } catch { /* ignore */ }
+        setAutoSync(localStorage.getItem(`ari-autosync-${p.id}`) === "1")
+        if (isElectron) checkSyncStatus(p.id, localPaths[p.id] ?? null)
     }
 
     async function pickEditFolder() {
@@ -99,6 +93,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
         setEditPath(path)
         await env.setLocalPath(selected.id, path)
         setLocalPaths(prev => ({ ...prev, [selected.id]: path }))
+        checkSyncStatus(selected.id, path)
     }
 
     async function clearEditFolder() {
@@ -106,6 +101,37 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
         setEditPath(null)
         await env.setLocalPath(selected.id, null)
         setLocalPaths(prev => ({ ...prev, [selected.id]: null }))
+        setSyncStatuses(prev => ({ ...prev, [selected.id]: { state: "no-local-path" } }))
+    }
+
+    const checkSyncStatus = useCallback(async (projectId: string, localPath: string | null) => {
+        if (!isElectron || !localPath) {
+            setSyncStatuses(prev => ({ ...prev, [projectId]: { state: "no-local-path" } }))
+            return
+        }
+        setSyncStatuses(prev => ({ ...prev, [projectId]: { state: "checking" } }))
+        try {
+            const result = await window.electronBridge!.syncStatus!({ projectId, localPath, token: getToken() })
+            setSyncStatuses(prev => ({ ...prev, [projectId]: result as SyncStatus }))
+        } catch (e: unknown) {
+            setSyncStatuses(prev => ({ ...prev, [projectId]: { state: "error", message: String(e) } }))
+        }
+    }, [isElectron])
+
+    async function handleSync() {
+        if (!selected || syncing) return
+        const localPath = localPaths[selected.id] ?? null
+        if (!localPath) return
+        setSyncing(true)
+        setSyncStatuses(prev => ({ ...prev, [selected.id]: { state: "syncing" } }))
+        try {
+            const result = await window.electronBridge!.syncRun!({ projectId: selected.id, localPath, token: getToken() })
+            setSyncStatuses(prev => ({ ...prev, [selected.id]: result as SyncStatus }))
+        } catch (e: unknown) {
+            setSyncStatuses(prev => ({ ...prev, [selected.id]: { state: "error", message: String(e) } }))
+        } finally {
+            setSyncing(false)
+        }
     }
 
     async function handleSave(e: React.FormEvent) {
@@ -133,89 +159,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
         onProjectCreated()
     }
 
-    // ── File upload ───────────────────────────────────────────────────────────────
-
-    async function uploadFiles(projectId: string, fileList: FileList | File[]) {
-        setUploading(true)
-        for (const file of [...fileList]) {
-            const fd = new FormData(); fd.append("file", file)
-            await apiFetch(`/projects/${projectId}/attachments`, { method: "POST", body: fd })
-        }
-        await loadFiles(projectId)
-        setUploading(false)
-    }
-
-    async function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
-        if (!selected || !e.target.files?.length) return
-        await uploadFiles(selected.id, e.target.files)
-        e.target.value = ""
-    }
-
-    async function handleRemoveFile(name: string) {
-        if (!selected) return
-        await apiFetch(`/projects/${selected.id}/attachments/${encodeURIComponent(name)}`, { method: "DELETE" })
-        await loadFiles(selected.id)
-    }
-
-    function onDragOver(e: React.DragEvent) { e.preventDefault(); setDragging(true) }
-    function onDragLeave()                   { setDragging(false) }
-    async function onDrop(e: React.DragEvent) {
-        e.preventDefault(); setDragging(false)
-        if (selected && e.dataTransfer.files.length) await uploadFiles(selected.id, e.dataTransfer.files)
-    }
-
     // ── File icon (large, Finder-style) ──────────────────────────────────────────
-
-    function FileIcon({ name }: { name: string }) {
-        const ext = name.split(".").pop()?.toLowerCase() ?? ""
-        const isImage = ["png","jpg","jpeg","gif","webp","svg","ico","bmp"].includes(ext)
-        const isCode  = ["ts","tsx","js","jsx","cs","py","json","yaml","yml","xml","html","css","sh","md"].includes(ext)
-        const isPdf   = ext === "pdf"
-
-        if (isImage) return (
-            <svg width="52" height="52" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <rect x="6" y="4" width="40" height="44" rx="4" fill="#e8f4fb" stroke="#b3d4e8" strokeWidth="1.5"/>
-                <rect x="10" y="10" width="32" height="22" rx="2" fill="#c5e3f5"/>
-                <circle cx="16" cy="16" r="3" fill="#f0c060"/>
-                <path d="M10 28l10-8 8 6 6-4 8 6v6a2 2 0 0 1-2 2H12a2 2 0 0 1-2-2v-6z" fill="#6ab8e0"/>
-                <rect x="10" y="36" width="20" height="2" rx="1" fill="#b3d4e8"/>
-                <rect x="10" y="40" width="14" height="2" rx="1" fill="#b3d4e8"/>
-            </svg>
-        )
-        if (isPdf) return (
-            <svg width="52" height="52" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <rect x="6" y="4" width="40" height="44" rx="4" fill="#fff0f0" stroke="#f5b3b3" strokeWidth="1.5"/>
-                <path d="M30 4v12h12" fill="none" stroke="#f5b3b3" strokeWidth="1.5"/>
-                <path d="M30 4l12 12H30V4z" fill="#fde0e0"/>
-                <rect x="10" y="22" width="32" height="14" rx="2" fill="#e55"/>
-                <text x="26" y="33" textAnchor="middle" fill="white" fontSize="9" fontWeight="bold" fontFamily="sans-serif">PDF</text>
-                <rect x="10" y="40" width="20" height="2" rx="1" fill="#f5b3b3"/>
-                <rect x="10" y="44" width="14" height="2" rx="1" fill="#f5b3b3"/>
-            </svg>
-        )
-        if (isCode) return (
-            <svg width="52" height="52" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <rect x="6" y="4" width="40" height="44" rx="4" fill="#f0f4ff" stroke="#b3c4f5" strokeWidth="1.5"/>
-                <path d="M30 4v12h12" fill="none" stroke="#b3c4f5" strokeWidth="1.5"/>
-                <path d="M30 4l12 12H30V4z" fill="#dce6ff"/>
-                <text x="14" y="32" fill="#6080d0" fontSize="8" fontFamily="monospace" fontWeight="bold">{"</ >"}</text>
-                <rect x="10" y="38" width="22" height="2" rx="1" fill="#b3c4f5"/>
-                <rect x="10" y="42" width="16" height="2" rx="1" fill="#b3c4f5"/>
-            </svg>
-        )
-        return (
-            <svg width="52" height="52" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <rect x="6" y="4" width="40" height="44" rx="4" fill="#f5f7fa" stroke="#cdd5e0" strokeWidth="1.5"/>
-                <path d="M30 4v12h12" fill="none" stroke="#cdd5e0" strokeWidth="1.5"/>
-                <path d="M30 4l12 12H30V4z" fill="#e4e9f0"/>
-                <rect x="12" y="22" width="28" height="2" rx="1" fill="#c8d0dc"/>
-                <rect x="12" y="27" width="28" height="2" rx="1" fill="#c8d0dc"/>
-                <rect x="12" y="32" width="20" height="2" rx="1" fill="#c8d0dc"/>
-                <rect x="12" y="37" width="24" height="2" rx="1" fill="#c8d0dc"/>
-                <rect x="12" y="42" width="16" height="2" rx="1" fill="#c8d0dc"/>
-            </svg>
-        )
-    }
 
     // ── Project detail view ───────────────────────────────────────────────────────
 
@@ -274,63 +218,12 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                     </form>
                 </div>
 
-                {/* ── File explorer ── */}
-                <div className="project-section">
-                    <div className="project-section-header">
-                        <h2>Files</h2>
-                        <button
-                            type="button"
-                            className="btn-secondary btn-add-att"
-                            disabled={uploading}
-                            onClick={() => fileInputRef.current?.click()}
-                        >
-                            {uploading ? "Uploading…" : "+ Add file"}
-                        </button>
-                        <input ref={fileInputRef} type="file" multiple style={{ display: "none" }} onChange={handleFileInput} />
-                    </div>
-                    <div
-                        className={`file-explorer${dragging ? " file-explorer--drag" : ""}`}
-                        onDragOver={onDragOver}
-                        onDragLeave={onDragLeave}
-                        onDrop={onDrop}
-                    >
-                        {files.length === 0 ? (
-                            <div className="file-explorer-empty">
-                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.25 }}>
-                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
-                                </svg>
-                                <span>Drop files here or click Add file</span>
-                            </div>
-                        ) : (
-                            <div className="file-grid">
-                                {files.map(f => (
-                                    <div key={f.name} className="file-grid-item" title={f.name}>
-                                        <div className="file-grid-icon">
-                                            <FileIcon name={f.name} />
-                                            <button
-                                                type="button"
-                                                className="file-grid-remove"
-                                                title="Remove"
-                                                onClick={() => handleRemoveFile(f.name)}
-                                            >×</button>
-                                        </div>
-                                        <span className="file-grid-name">{f.name}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                        <div className={`file-explorer-drop-overlay${dragging ? " visible" : ""}`}>
-                            Drop to upload
-                        </div>
-                    </div>
-                </div>
-
                 {/* ── App settings (Electron only — local path preferred over server path) ── */}
                 {isElectron && (
                     <div className="project-section">
                         <div className="project-section-header">
                             <h2>App settings</h2>
-                            <span className="field-optional">Stored on this device only — not synced</span>
+                            <span className="field-optional">Stored on this device only</span>
                         </div>
                         <label>
                             Local path <span className="field-optional">(preferred over server path when set)</span>
@@ -342,6 +235,60 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                                 {editPath && <button type="button" className="btn-secondary btn-pick-folder" onClick={clearEditFolder}>Clear</button>}
                             </div>
                         </label>
+                        {editPath && selected && (() => {
+                            const ss = syncStatuses[selected.id] ?? { state: "idle" }
+                            const label: Record<string, string> = {
+                                "idle":         "Check status",
+                                "checking":     "Checking…",
+                                "up-to-date":   "Synced",
+                                "dirty":        "Unsynced changes",
+                                "ahead":        `${ss.ahead} commit${ss.ahead === 1 ? "" : "s"} ahead`,
+                                "behind":       `${ss.behind} commit${ss.behind === 1 ? "" : "s"} behind`,
+                                "conflict":     "Conflict — manual resolve needed",
+                                "syncing":      "Syncing…",
+                                "error":        `Sync error${ss.message ? `: ${ss.message}` : ""}`,
+                                "no-local-path":"Set a local path to sync",
+                                "uninitialized":"Never synced",
+                            }
+                            const badge: Record<string, string> = {
+                                "up-to-date": "sync-badge-ok",
+                                "dirty":      "sync-badge-ahead",
+                                "ahead":      "sync-badge-ahead",
+                                "behind":     "sync-badge-behind",
+                                "conflict":   "sync-badge-conflict",
+                                "error":      "sync-badge-error",
+                            }
+                            const canSync = ["idle", "up-to-date", "dirty", "ahead", "behind", "uninitialized"].includes(ss.state)
+                            const busy    = ss.state === "checking" || ss.state === "syncing" || syncing
+                            return (<>
+                                <div className="sync-row">
+                                    <span className={`sync-badge ${badge[ss.state] ?? ""}`}>
+                                        {label[ss.state] ?? ss.state}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        className="btn-secondary"
+                                        disabled={busy || ss.state === "conflict"}
+                                        onClick={canSync ? handleSync : () => checkSyncStatus(selected.id, editPath)}
+                                    >
+                                        {busy ? "Working…" : canSync ? "Sync now" : "Refresh"}
+                                    </button>
+                                </div>
+                                <label className="sync-autosync-row">
+                                    <input
+                                        type="checkbox"
+                                        checked={autoSync}
+                                        onChange={e => {
+                                            const on = e.target.checked
+                                            setAutoSync(on)
+                                            if (on) localStorage.setItem(`ari-autosync-${selected.id}`, "1")
+                                            else localStorage.removeItem(`ari-autosync-${selected.id}`)
+                                        }}
+                                    />
+                                    Auto-sync at the start of each conversation
+                                </label>
+                            </>)
+                        })()}
                     </div>
                 )}
             </div>
