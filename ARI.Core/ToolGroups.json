@@ -4,6 +4,10 @@
       "Description": "Git status, diff, log, and commit for the current vault/repo.",
       "Tools": ["git_status", "git_diff", "git_log", "git_commit"]
     },
+    "project_git_tools": {
+      "Description": "Git operations (status, fetch, pull, log, diff) across the project's repositories. Repos are auto-discovered — use this when working with a project that contains multiple git repos.",
+      "Tools": ["git"]
+    },
     "filesystem_tools": {
       "Description": "View and edit files in the current project: preview, read, list, search, find, edit, write.",
       "Tools": ["preview_file", "read_file", "list_directory", "search_files", "find_files", "edit_file", "write_file"]
