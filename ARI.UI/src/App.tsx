@@ -946,23 +946,21 @@ export default function App() {
 
         const needsNew = !activeThreadRef.current
 
+        let optimisticUserItem: ThreadItem | null = null
         if (needsNew && !prompt.startsWith("/")) {
             activate()
             const optimisticAttach = pendingAttach.length ? [...pendingAttach] : undefined
             setPendingAttach([])
             pendingMsgRef.current = prompt
             preSendCountRef.current = items.length
-            const userItem: ThreadItem = {
+            optimisticUserItem = {
                 type: "userMessage", content: prompt,
                 timestamp: new Date().toISOString(),
                 attachments: optimisticAttach as Attachment[] | undefined,
             }
-            setItems(prev => [...prev, userItem, {
-                type: "ariResponse", content: "",
-                timestamp: new Date().toISOString(),
-                isStreaming: true,
-            }])
-            setIsStreaming(true)
+            // Show the user's message immediately. The ARI streaming bubble is added after
+            // sync completes so "Syncing project files" doesn't appear alongside it.
+            setItems(prev => [...prev, optimisticUserItem!])
         }
 
         let key = activeThreadRef.current
@@ -990,6 +988,15 @@ export default function App() {
                     }
                 }
                 await injectFileTree(key, selectedProject)
+            }
+            // Now that sync is done, add the ARI streaming bubble.
+            if (optimisticUserItem) {
+                setItems(prev => [...prev, {
+                    type: "ariResponse", content: "",
+                    timestamp: new Date().toISOString(),
+                    isStreaming: true,
+                }])
+                setIsStreaming(true)
             }
         } else if (mode === "idle") {
             activate()
