@@ -43,7 +43,8 @@ internal sealed class GitMulti : Tool
             name        = "git",
             description = $"Run a git command against one of the project's repositories. "
                         + $"Repos: {string.Join(", ", _repos.Keys)}. "
-                        + "fetch before pull to preview incoming changes. status before commit.",
+                        + "fetch before pull to preview incoming changes. status before commit. "
+                        + "stage with add, then commit with a message, then push.",
             parameters = new
             {
                 type       = "object",
@@ -58,13 +59,18 @@ internal sealed class GitMulti : Tool
                     command = new
                     {
                         type        = "string",
-                        @enum       = new[] { "status", "fetch", "pull", "log", "diff" },
+                        @enum       = new[] { "status", "fetch", "pull", "log", "diff", "add", "commit", "push", "branch", "checkout", "stash", "restore" },
                         description = "git subcommand to run."
+                    },
+                    message = new
+                    {
+                        type        = "string",
+                        description = "Commit message. Only used by commit — passed as -m so spaces and quotes are safe."
                     },
                     args = new
                     {
                         type        = "string",
-                        description = "Optional extra arguments (e.g. a file path for diff/log, '--oneline' for log)."
+                        description = "Optional extra arguments (e.g. a file path for add/diff/log, a branch name for checkout, 'origin main' for push, '--oneline' for log). add with no args stages everything."
                     }
                 },
                 required = new[] { "repo", "command" }
@@ -84,10 +90,19 @@ internal sealed class GitMulti : Tool
 
         var args = new List<string> { command };
 
-        if (command == "log" && string.IsNullOrWhiteSpace(extra))
+        if (command == "commit")
+        {
+            // Message goes through as a single -m argument so spaces/quotes survive the arg split below.
+            string message = Str(a, "message");
+            if (!string.IsNullOrWhiteSpace(message)) args.AddRange(["-m", message]);
+            else if (!string.IsNullOrWhiteSpace(extra)) args.AddRange(SplitArgs(extra));
+        }
+        else if (command == "log" && string.IsNullOrWhiteSpace(extra))
             args.AddRange(["-n15", "--oneline"]);
+        else if (command == "add" && string.IsNullOrWhiteSpace(extra))
+            args.Add("-A");   // stage everything when no path is given
         else if (!string.IsNullOrWhiteSpace(extra))
-            args.AddRange(extra.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+            args.AddRange(SplitArgs(extra));
 
         var (code, outp, err) = RunGit(repoPath, args.ToArray());
 
@@ -98,6 +113,8 @@ internal sealed class GitMulti : Tool
                 "status" => "Working tree clean.",
                 "fetch"  => "Already up to date.",
                 "pull"   => "Already up to date.",
+                "add"    => "Staged.",
+                "push"   => "Pushed (nothing further to report).",
                 _        => "(no output)"
             };
 
@@ -105,6 +122,9 @@ internal sealed class GitMulti : Tool
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────────
+
+    private static string[] SplitArgs(string extra)
+        => extra.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     private static (int Code, string Out, string Err) RunGit(string workDir, string[] args)
     {
