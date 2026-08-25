@@ -22,6 +22,9 @@ internal static class ToolFactories
         // Multi-repo git tool: auto-discovers repos inside the project folder so ARI never constructs paths.
         ["git"] = t => t.ProjectRoot is { } r ? GitMulti.Discover(r) : null,
 
+        // GitHub over the REST API — no gh binary. projectRoot lets it use a project-scoped token.
+        ["github"] = t => new GitHubTool(t.ProjectRoot),
+
         ["preview_file"]   = t => Fs(t) is { } fs ? new PreviewFile(fs)   : null,
         ["read_file"]      = t => Fs(t) is { } fs ? new Read(fs)      : null,
         ["list_directory"] = t => Fs(t) is { } fs ? new ListDirectory(fs) : null,
