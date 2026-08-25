@@ -25,6 +25,8 @@ internal static class ToolFactories
         // GitHub over the REST API — no gh binary. projectRoot lets it use a project-scoped token.
         ["github"] = t => new GitHubTool(t.ProjectRoot),
 
+        ["deliver_file"]   = t => new DeliverFile(t.Key),
+
         ["preview_file"]   = t => Fs(t) is { } fs ? new PreviewFile(fs)   : null,
         ["read_file"]      = t => Fs(t) is { } fs ? new Read(fs)      : null,
         ["list_directory"] = t => Fs(t) is { } fs ? new ListDirectory(fs) : null,

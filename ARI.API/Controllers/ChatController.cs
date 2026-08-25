@@ -682,6 +682,27 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     }
 
     /// <summary>
+    /// Serves a file ARI delivered (via the deliver_file tool) as a download. The file lives in the
+    /// thread's file root — its bound project dir or its scratchpad — and is resolved by the relative
+    /// path from the download card. Path traversal outside the root is refused.
+    /// </summary>
+    [HttpGet("{threadKey}/file")]
+    public IActionResult GetDeliveredFile(string threadKey, [FromQuery] string path)
+    {
+        if (Llm is null) return StatusCode(503);
+        if (string.IsNullOrWhiteSpace(path)) return BadRequest("path is required.");
+
+        string root    = FindThread(threadKey)?.ProjectRoot ?? Paths.ScratchpadDir(threadKey);
+        string rootAbs = Path.GetFullPath(root);
+        string absPath = Path.GetFullPath(Path.Combine(rootAbs, path));
+        if (!absPath.StartsWith(rootAbs, StringComparison.OrdinalIgnoreCase))
+            return BadRequest("Access denied.");
+        if (!System.IO.File.Exists(absPath)) return NotFound();
+
+        return PhysicalFile(absPath, "application/octet-stream", Path.GetFileName(absPath));
+    }
+
+    /// <summary>
     /// Heartbeat sent by the web client while the user is actively composing a message.
     /// Resets the thread's inactivity countdown so Engram doesn't sweep mid-composition.
     /// </summary>
