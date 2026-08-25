@@ -30,19 +30,19 @@ internal sealed class RequestTools : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
+    internal override Task<ToolResult> Execute(string argsJson)
     {
         string group;
         try { group = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson).RootElement.GetProperty("group").GetString() ?? ""; }
         catch { group = ""; }
 
-        if (group.Length == 0) return Task.FromResult("Error: 'group' is required.");
+        if (group.Length == 0) return Task.FromResult<ToolResult>("Error: 'group' is required.");
         if (!ToolGroups.TryGet(group, out _))
-            return Task.FromResult($"Unknown tool group '{group}'. Call list_tools to see what's available.");
+            return Task.FromResult<ToolResult>($"Unknown tool group '{group}'. Call list_tools to see what's available.");
 
         (List<Tool> loaded, List<string> unavailable) = ToolFactories.LoadGroup(group, thread);
 
-        if (loaded.Count == 0) return Task.FromResult($"'{group}' isn't available in this context (no project/vault is bound here).");
+        if (loaded.Count == 0) return Task.FromResult<ToolResult>($"'{group}' isn't available in this context (no project/vault is bound here).");
 
         ToolGroups.TryGet(group, out ToolGroupDef groupDef);
         var sb = new System.Text.StringBuilder();
@@ -52,6 +52,6 @@ internal sealed class RequestTools : Tool
             sb.AppendLine($"  • {tool.Name} — {tool.SchemaDescription}");
         if (unavailable.Count > 0)
             sb.AppendLine($"Not available here: {string.Join(", ", unavailable)}.");
-        return Task.FromResult(sb.ToString().TrimEnd());
+        return Task.FromResult<ToolResult>(sb.ToString().TrimEnd());
     }
 }

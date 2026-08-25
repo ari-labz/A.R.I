@@ -30,7 +30,7 @@ internal sealed class WriteFile : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson) => fs.Write(argsJson);
+    internal override Task<ToolResult> Execute(string argsJson) => fs.Write(argsJson).AsToolResult();
 
     // Enriched tool-start marker (with the +added diff from args) so the card keeps its badge and flips Writing→Wrote.
     internal override Func<string, string>? Display => args =>

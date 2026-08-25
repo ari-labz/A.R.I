@@ -35,7 +35,7 @@ internal sealed class RevertFile : FileTool
         }
     };
 
-    internal override async Task<string> Execute(string argsJson)
+    internal override async Task<ToolResult> Execute(string argsJson)
     {
         try
         {

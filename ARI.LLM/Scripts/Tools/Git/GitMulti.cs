@@ -72,7 +72,7 @@ internal sealed class GitMulti : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
+    internal override Task<ToolResult> Execute(string argsJson)
     {
         JsonElement a = Parse(argsJson);
         string repo    = Str(a, "repo");
@@ -80,7 +80,7 @@ internal sealed class GitMulti : Tool
         string extra   = Str(a, "args");
 
         if (!_repos.TryGetValue(repo, out string? repoPath))
-            return Task.FromResult($"Unknown repo '{repo}'. Available: {string.Join(", ", _repos.Keys)}");
+            return Task.FromResult<ToolResult>($"Unknown repo '{repo}'. Available: {string.Join(", ", _repos.Keys)}");
 
         var args = new List<string> { command };
 
@@ -101,7 +101,7 @@ internal sealed class GitMulti : Tool
                 _        => "(no output)"
             };
 
-        return Task.FromResult(code != 0 ? $"git {command} exited {code}:\n{combined}" : combined);
+        return Task.FromResult<ToolResult>(code != 0 ? $"git {command} exited {code}:\n{combined}" : combined);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────────

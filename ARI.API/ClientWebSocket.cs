@@ -491,7 +491,7 @@ public static class ClientWebSocket
         if (!fileState.ReadRanges.TryGetValue(path, out List<(int Start, int End, int Turn)>? ranges) || ranges is null) return null;
 
         int turn = epochThread.TurnSerial;
-        (int reqStart, int reqEnd) = ARI.LLM.ReadFile.ExtractRange(argsJson);
+        (int reqStart, int reqEnd) = ARI.LLM.Read.ExtractRange(argsJson);
         // Same redundancy algorithm as the server-disk path (FileSnapshots.RedundancyNudge) — one
         // implementation, so both filesystems dedup identically. Scoped to the current turn: content read
         // in an earlier turn may have been condensed out of context, so "scroll up" would be a lie.
@@ -509,7 +509,7 @@ public static class ClientWebSocket
             string file = System.IO.Path.GetFileName(ExtractToolPath(argsJson).Trim('"', '\'', ' ', '\\'))
                 .Replace("--", "&#45;&#45;");
             if (string.IsNullOrWhiteSpace(file)) file = "file";
-            (int start, int end) = ReadFile.ExtractRange(argsJson);
+            (int start, int end) = Read.ExtractRange(argsJson);
             string range = start == 1 && end == int.MaxValue ? ""
                          : end == int.MaxValue               ? $" ({start}-end)"
                          :                                     $" ({start}-{end})";
@@ -519,7 +519,7 @@ public static class ClientWebSocket
     }
 
     /// <summary>Rejects an oversized read_file BEFORE the websocket round-trip — the client never ships
-    /// bytes the model shouldn't receive. Policy and messages live in <see cref="ARI.LLM.ReadFile"/>
+    /// bytes the model shouldn't receive. Policy and messages live in <see cref="ARI.LLM.Read"/>
     /// (shared with the local ServerFileSystem path); this just supplies the remote-side facts: the line
     /// count learned from the file's preview (0 = never previewed) and whether it was previewed at all
     /// (un-previewed files fall through to the <see cref="PreviewBeforeRead"/> divert, which answers with
@@ -528,14 +528,14 @@ public static class ClientWebSocket
     {
         string path = ExtractToolPath(argsJson);
         fileState.KnownLineCounts.TryGetValue(path, out int known);
-        return ARI.LLM.ReadFile.CheckWindow(argsJson, path, known, fileState.PreviewedFiles.ContainsKey(path));
+        return ARI.LLM.Read.CheckWindow(argsJson, path, known, fileState.PreviewedFiles.ContainsKey(path));
     }
 
     // Files at/under this many lines are served directly on an un-previewed read_file — a full read of a
     // small file is cheaper than the preview-plus-second-read round-trip the divert used to force (in
     // practice the model repeated the identical no-range read anyway, paying BOTH costs for every file).
     // Equal to the read window so the direct serve can never exceed it.
-    private const int DirectReadLines = ARI.LLM.ReadFile.WindowLines;
+    private const int DirectReadLines = ARI.LLM.Read.WindowLines;
 
     /// <summary>
     /// Preview-before-read for LARGE files: keeps context lean by forcing the model to see the line count
@@ -552,7 +552,7 @@ public static class ClientWebSocket
         if (string.IsNullOrEmpty(path) || fileState.PreviewedFiles.ContainsKey(path)) return null;
 
         // A targeted range read is exactly what the gate exists to encourage — let it through.
-        (int reqStart, int reqEnd) = ARI.LLM.ReadFile.ExtractRange(argsJson);
+        (int reqStart, int reqEnd) = ARI.LLM.Read.ExtractRange(argsJson);
         bool ranged = !(reqStart == 1 && reqEnd == int.MaxValue);
         if (ranged) return null;
 
@@ -571,7 +571,7 @@ public static class ClientWebSocket
 
         return $"{outline}\n\n[Note: you called read_file on {path} before previewing it, so the preview " +
                $"is shown above. Now call read_file on {path} with start_line/end_line (at most " +
-               $"{ReadFile.WindowLines} lines per call) to read only the section you need; consecutive windows " +
+               $"{Read.WindowLines} lines per call) to read only the section you need; consecutive windows " +
                $"stack in your context as one continuous view.]";
     }
 
@@ -612,7 +612,7 @@ public static class ClientWebSocket
     {
         string path = ExtractToolPath(argsJson);
         if (string.IsNullOrEmpty(path)) return;
-        (int start, int end) = ARI.LLM.ReadFile.ExtractRange(argsJson);
+        (int start, int end) = ARI.LLM.Read.ExtractRange(argsJson);
         List<(int Start, int End, int Turn)> ranges = fileState.ReadRanges.GetOrAdd(path, _ => new List<(int, int, int)>());
         lock (ranges) ranges.Add((start, end, epochThread.TurnSerial));
     }
@@ -959,6 +959,17 @@ public static class ClientWebSocket
         internal ClientFileSystem(WebSocket ws, ILogger log) { this.ws = ws; this.log = log; }
 
         public override Task<string> Read(string a)    => Forward("read_file", a);
+        // Binary read (protocol v3): the client returns the file's raw bytes base64-encoded over the
+        // text channel; a pre-v3 client won't know "read_bytes" and its reply won't be valid base64,
+        // which surfaces as a clean tool error rather than corrupt bytes.
+        public override async Task<byte[]> ReadBytes(string path)
+        {
+            string reply = await Forward("read_bytes", JsonSerializer.Serialize(new { path }));
+            if (reply.StartsWith("[Error", StringComparison.OrdinalIgnoreCase))
+                throw new IOException(reply);
+            try { return Convert.FromBase64String(reply.Trim()); }
+            catch (FormatException) { throw new IOException($"[Error: the desktop client returned an unreadable byte response for {path} — it may be running an older protocol.]"); }
+        }
         // Client returns raw content; build the class-diagram outline server-side (one extractor, #138).
         public override async Task<string> Preview(string a)
             => BuildClientPreview(ExtractToolPath(a), await Forward("preview_file", a));

@@ -32,7 +32,7 @@ internal sealed class FindFiles : Tool
 
     private const int MAX_RESULTS = 50;
 
-    internal override async Task<string> Execute(string argsJson)
+    internal override async Task<ToolResult> Execute(string argsJson)
     {
         string result = await fs.Find(argsJson);
         return Cap(result);

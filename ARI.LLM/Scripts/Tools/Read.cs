@@ -1,12 +1,21 @@
+using System.Text;
 using System.Text.Json;
 
 namespace ARI.LLM;
 
-/// <summary>read_file tool — thin wrapper that delegates to the thread's <see cref="FileSystem"/>.</summary>
-internal sealed class ReadFile : Tool
+/// <summary>read_file tool. The base is the default: for a plain-text file it delegates to the thread's
+/// <see cref="FileSystem"/> (which windows the read and, on the server, gates it behind a preview). For a
+/// recognised binary type it fetches raw bytes and hands them to a subclass <see cref="Decode"/> — so
+/// adding a file type is one new subclass. See Documentation/Server/Read-Tool-Hierarchy.md.</summary>
+internal class Read : Tool
 {
-    private readonly FileSystem fs;
-    internal ReadFile(FileSystem fs) => this.fs = fs;
+    protected readonly FileSystem fs;
+    internal Read(FileSystem fs) => this.fs = fs;
+
+    // A decoded document can't be line-windowed by fs.Read, so PostRun caps it. Set above the text path's
+    // own char cap so a plain-text read (already within it) never trips this net.
+    private const int MAX_TEXT_CHARS  = 60000;
+    private const int MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
     internal override string Name => "read_file";
 
@@ -37,12 +46,72 @@ internal sealed class ReadFile : Tool
         }
     };
 
-    internal override async Task<string> Execute(string argsJson)
+    internal override async Task<ToolResult> Execute(string argsJson)
     {
-        string result = await fs.Read(argsJson);
-        if (!result.StartsWith("[Error", StringComparison.OrdinalIgnoreCase))
-            fs.MarkRead(argsJson);
+        string path    = ExtractPath(argsJson);
+        Read?  decoder = For(path, fs);
+
+        if (decoder is null)   // plain text — the existing windowed, preview-gated path (both backends)
+        {
+            string text = await fs.Read(argsJson);
+            if (!text.StartsWith("[Error", StringComparison.OrdinalIgnoreCase))
+                fs.MarkRead(argsJson);
+            return text;
+        }
+
+        try
+        {
+            byte[] raw = await fs.ReadBytes(path);
+            return decoder.Decode(raw, path);
+        }
+        catch (NotSupportedException)
+        {
+            return $"[Error: this project's filesystem can't read raw bytes, so .{Extension(path)} files can't be decoded here.]";
+        }
+        catch (Exception ex)
+        {
+            return $"[Error reading {path}: {ex.Message}]";
+        }
+    }
+
+    /// <summary>Turns raw bytes into a result. The base reads them as UTF-8 text — the default and the
+    /// fallback any subclass can reach via <c>base.Decode</c> when its own decode fails. Subclasses override
+    /// this and nothing else. <paramref name="path"/> is available for extension-based hints (e.g. mime).</summary>
+    protected virtual ToolResult Decode(byte[] raw, string path) => Encoding.UTF8.GetString(raw);
+
+    /// <summary>Shared read policy on the way back to the model: guard an oversized image, and cap a decoded
+    /// document that fs.Read never got to window. Every read subclass inherits this one hook.</summary>
+    internal override ToolResult PostRun(Thread thread, string argsJson, ToolResult result)
+    {
+        if (result.Kind == ToolResult.ContentKind.Image)
+            return result.Bytes.Length > MAX_IMAGE_BYTES
+                ? $"[Error: image is {result.Bytes.Length / (1024 * 1024)}MB — too large to hand to the vision model. Ask for a smaller or downscaled copy.]"
+                : result;
+
+        if (result.Text.Length > MAX_TEXT_CHARS)
+            return ToolResult.AsText(result.Text[..MAX_TEXT_CHARS] + $"\n[Truncated at {MAX_TEXT_CHARS} chars — this file is large; read a narrower part.]");
         return result;
+    }
+
+    /// <summary>Selects the decoder for a path by extension; null means plain text (the base's fs.Read path).
+    /// Magic-byte sniffing is a later refinement — extension is enough for the first cut.</summary>
+    private static Read? For(string path, FileSystem fs) => Extension(path) switch
+    {
+        "png" or "jpg" or "jpeg" or "gif" or "webp" or "bmp" => new ReadImage(fs),
+        "ipynb"                                              => new ReadNotebook(fs),
+        _                                                    => null
+    };
+
+    protected static string Extension(string path) => Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
+
+    private static string ExtractPath(string argsJson)
+    {
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            return (doc.RootElement.TryGetProperty("path", out JsonElement p) ? p.GetString() : null)?.Trim('"', '\'', ' ') ?? "";
+        }
+        catch { return ""; }
     }
 
     /// <summary>Hard per-call read window shared by every read_file backend (server disk and remote client).

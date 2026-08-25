@@ -210,7 +210,7 @@ internal abstract class MemoryAgent : Agent
         thread.Ct = ct;
 
         ServerFileSystem fs = new(root, ct, brainVault: true);
-        new ReadFile(fs).Register(thread);
+        new Read(fs).Register(thread);
         new WriteFile(fs).Register(thread);
         new EditFile(fs).Register(thread);
         new MoveFile(fs).Register(thread);

@@ -62,7 +62,7 @@ internal sealed class SearchWeb : Tool
         catch { return new WebSearching().Render(); }
     };
 
-    internal override async Task<string> Execute(string argsJson)
+    internal override async Task<ToolResult> Execute(string argsJson)
     {
         JsonElement args;
         try
@@ -273,7 +273,7 @@ internal sealed class FetchPage : Tool
         catch { return new Browsing().Render(); }
     };
 
-    internal override async Task<string> Execute(string argsJson)
+    internal override async Task<ToolResult> Execute(string argsJson)
     {
         JsonElement args;
         try
