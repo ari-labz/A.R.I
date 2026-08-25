@@ -364,7 +364,9 @@ public abstract class Agent
         internal bool   HadImages;
 
         // ── Response tracking ─────────────────────────────────────────────────
-        internal readonly Response        AriResponse;
+        // Not readonly: a mid-turn user interjection splits the turn into consecutive responses, so this
+        // is repointed at the fresh response the continuation streams into (see SplitResponse).
+        internal Response                 AriResponse;
         internal readonly List<TraceStep> Trace;
 
         // ── Session recording ─────────────────────────────────────────────────
@@ -467,7 +469,15 @@ public abstract class Agent
 
         Func<string, Task>? userDelta = opts.OnDelta;
         Func<string, Task>? onDelta   = async text => {
-            ariResponse.StreamText = text;
+            // A split just happened: tell the client to finalize the current bubble, show the interjection,
+            // and open a new one — before the continuation's content arrives.
+            if (thread.PendingSplitNotice is { } notice)
+            {
+                thread.PendingSplitNotice = null;
+                if (userDelta is not null) await userDelta("[SPLIT]" + notice);
+            }
+            // Write to whichever response is currently streaming — SplitResponse repoints this mid-turn.
+            if (thread.streamingResponse is { } sr) sr.StreamText = text;
             if (!opts.ChatHidden) { thread.streamedText = text; thread.RaiseStreaming(text); }
             if (userDelta is not null) await userDelta(text);
         };
@@ -561,7 +571,7 @@ public abstract class Agent
             responseText = OnResponse(thread, responseText);
             if (OnResponsePipeline is not null) responseText = OnResponsePipeline(thread, responseText);
 
-            FinalizeResponse(thread, prompt, opts, responseText, ariResponse, turn.ReasoningBuilder,
+            FinalizeResponse(thread, prompt, opts, responseText, turn.AriResponse, turn.ReasoningBuilder,
                 turn.Clock, turn.Stopwatch.Elapsed.TotalSeconds,
                 turn.CompletionTokens, turn.PromptTokens, turn.PrefilledTokens, turn.PrefillTokPerSec,
                 turn.MaxTokens, turn.EstimatedTextTokens, turn.HadImages, trace, turn.ResponseBuilder,
@@ -586,15 +596,66 @@ public abstract class Agent
     // ── User interjections ("stop and read this, then continue") ──────────────
     // Framing wrapped around a mid-turn message so the model folds it into what it was already doing rather
     // than treating it as a brand-new request. Reused by both drain points (step boundary + mid-stream).
-    private static string? FormatInterjections(Thread thread)
+    /// <summary>Drains pending interjections into both the model-facing steer text and the raw user text +
+    /// username for the visible split. Returns null when the queue is empty.</summary>
+    private static (string Model, string Raw, string User)? TakeInterjections(Thread thread)
     {
         if (thread.Interjections.IsEmpty) return null;
-        var parts = new List<string>();
+        List<string> parts = new(); List<string> raw = new(); string user = "";
         while (thread.Interjections.TryDequeue(out var m))
+        {
             parts.Add(string.IsNullOrWhiteSpace(m.User) ? m.Text : $"{m.User}: {m.Text}");
+            raw.Add(m.Text);
+            if (user.Length == 0) user = m.User;
+        }
         if (parts.Count == 0) return null;
-        return "[The user jumped in mid-response — read this, then continue what you were doing, "
-             + "folding in the new information. Do not restart from scratch.]\n" + string.Join("\n", parts);
+        string model = "[The user jumped in mid-response — read this, then continue what you were doing, "
+                     + "folding in the new information. Do not restart from scratch.]\n" + string.Join("\n", parts);
+        return (model, string.Join("\n", raw), user);
+    }
+
+    /// <summary>A mid-turn interjection is a boundary in the visible thread: finalize the response so far as
+    /// its own completed bubble, drop the user's message into history at that point, then open a fresh
+    /// response for the continuation to stream into — so the thread reads chronologically top to bottom.
+    /// Skipped when the current segment has no visible content yet, which would leave an empty bubble; then
+    /// the interjection just folds into the ongoing response.</summary>
+    private static void SplitResponse(Turn turn, string username, string rawText)
+    {
+        Thread thread    = turn.Thread;
+        Prompt interject = new() { AuthorName = username, Text = rawText };
+        string safeText  = rawText.Replace("\n", " ").Replace("\r", " ");   // keep it one SSE line
+        string segText   = CleanResponse(turn.ContentBuilder, turn.ResponseBuilder);
+
+        if (string.IsNullOrWhiteSpace(segText))
+        {
+            // Nothing rendered yet — don't leave an empty bubble. Slot the interjection in BEFORE the current
+            // response so it reads user → interjection → response, and let that same response stream below it.
+            int idx = thread.History.IndexOf(turn.AriResponse);
+            if (idx >= 0) thread.History.Insert(idx, interject); else thread.History.Add(interject);
+            thread.PendingSplitNotice = $"before\u0001{username}\u0001{safeText}";
+            thread.RaiseUpdated();
+            return;
+        }
+
+        // There is content — finalize it as an earlier (footer-less) segment and open a new one below the
+        // interjection for the continuation.
+        turn.AriResponse.Content    = ContentBlock.Parse(segText);
+        turn.AriResponse.State      = State.Complete;
+        turn.AriResponse.StreamText = null;
+        turn.AriResponse.Continued  = true;   // an earlier segment — no timestamp/feedback footer
+
+        thread.History.Add(interject);
+
+        Response next = new() { IsVisible = turn.AriResponse.IsVisible, Trace = turn.Trace };
+        thread.History.Add(next);
+        thread.streamingResponse = next;
+        turn.AriResponse         = next;
+
+        turn.ContentBuilder.Clear();
+        turn.ResponseBuilder.Clear();
+        // \u0001 separates username from text; newlines stripped so it stays one SSE line.
+        thread.PendingSplitNotice = $"split\u0001{username}\u0001{safeText}";
+        thread.RaiseUpdated();
     }
 
     private void PrepareStep(Turn turn)
@@ -603,9 +664,10 @@ public abstract class Agent
 
         // Between tool rounds: fold in anything the user typed while the previous step was running, as a
         // user message before the next request. Mid-think interjections are handled in ProcessDelta instead.
-        if (FormatInterjections(thread) is { } interjection)
+        if (TakeInterjections(thread) is { } inj)
         {
-            turn.Messages.Add(new { role = "user", content = interjection });
+            SplitResponse(turn, inj.User, inj.Raw);
+            turn.Messages.Add(new { role = "user", content = inj.Model });
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) folded in a user interjection at step boundary.", Name, thread.Key);
         }
 
@@ -832,13 +894,14 @@ public abstract class Agent
                 // thought with the new information.
                 bool thinkBoundary = thinkDelta.Contains('.') || thinkDelta.Contains('!') || thinkDelta.Contains('?') || thinkDelta.Contains('\n');
                 if (turn.PendingThinkRedirect is null && thinkBoundary && thread.HasInterjections
-                    && FormatInterjections(thread) is { } midThink)
+                    && TakeInterjections(thread) is { } midInj)
                 {
+                    SplitResponse(turn, midInj.User, midInj.Raw);
                     string capturedThink = turn.ReasoningBuilder.Length > turn.ReasoningStartLen
                         ? "<think>\n" + turn.ReasoningBuilder.ToString(turn.ReasoningStartLen, turn.ReasoningBuilder.Length - turn.ReasoningStartLen).TrimEnd() + "\n</think>\n"
                         : "";
                     turn.Messages.Add(new { role = "assistant", content = capturedThink });
-                    turn.Messages.Add(new { role = "user", content = midThink });
+                    turn.Messages.Add(new { role = "user", content = midInj.Model });
                     turn.ReasoningStartLen = turn.ReasoningBuilder.Length;
                     turn.ThinkingRedirect  = true;
                     Shared.Logger.LogInformation("[{Agent}] ({Thread}) folded in a user interjection mid-think.", Name, thread.Key);
@@ -1013,13 +1076,14 @@ public abstract class Agent
             // A user interjection ("stop and read this, then continue") takes priority over speech steering:
             // capture the reasoning so far as <think>, inject the message, and restart the step so Ari folds
             // it into the same chain of thought she was mid-way through.
-            if (FormatInterjections(thread) is { } interjection)
+            if (TakeInterjections(thread) is { } inj)
             {
+                SplitResponse(turn, inj.User, inj.Raw);
                 string capturedThink = turn.ReasoningBuilder.Length > turn.ReasoningStartLen
                     ? "<think>\n" + turn.ReasoningBuilder.ToString(turn.ReasoningStartLen, turn.ReasoningBuilder.Length - turn.ReasoningStartLen).TrimEnd() + "\n</think>\n"
                     : "";
                 turn.Messages.Add(new { role = "assistant", content = capturedThink });
-                turn.Messages.Add(new { role = "user", content = interjection });
+                turn.Messages.Add(new { role = "user", content = inj.Model });
                 turn.ReasoningStartLen = turn.ReasoningBuilder.Length;
                 turn.SteeringRedirect  = true;
                 Shared.Logger.LogInformation("[{Agent}] ({Thread}) folded in a user interjection mid-stream.", Name, thread.Key);

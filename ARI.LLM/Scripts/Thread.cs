@@ -121,13 +121,13 @@ public class Thread
     /// the architect edits directly instead of dispatching a Coder.</summary>
     public readonly HashSet<string> TouchedFiles = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>The root filesystem path this thread is bound to (a project root, or the brain vault) —
-    /// set once per turn by whichever agent knows it (Coder.RunLoop, MemoryAgent.RegisterTools). Null
-    /// means no project is bound. ToolFactories reads this to construct project-scoped tools (git,
-    /// filesystem, build) for ANY agent's request_tools call — availability depends on this state, not on
-    /// which agent is asking. There is no per-agent tool allowlist; a group resolves or it doesn't based
-    /// on what's actually bound here.</summary>
-    internal string? ProjectRoot   { get; set; }
+    /// <summary>The root of the filesystem this thread operates on — a bound project (persistent), a
+    /// scratchpad (ephemeral, deleted with the thread; see create_scratchpad), or the brain vault. Set by
+    /// whichever agent/tool knows it (Coder.RunLoop, MemoryAgent.RegisterTools, CreateScratchpad). Null means
+    /// the thread has no filesystem yet, so the file tools (read/write/edit/git/build) don't resolve — a
+    /// scratchpad or project gives it one. ToolFactories reads this for ANY agent's request_tools call;
+    /// availability depends on this state, not on which agent is asking (no per-agent allowlist).</summary>
+    internal string? FilesystemRoot   { get; set; }
     internal FileSnapshots? Snapshots     { get; set; }
     internal bool     IsBrainVault { get; set; }
     internal bool     IsRemoteProject { get; set; }
@@ -226,6 +226,12 @@ public class Thread
     /// next step (between tool rounds) — and fed back into the model with the reasoning preserved, so Ari
     /// folds the new information into her existing chain of thought rather than starting over.</summary>
     internal readonly ConcurrentQueue<(string User, string Text)> Interjections = new();
+
+    /// <summary>Set by Agent.SplitResponse when a mid-turn interjection splits the turn: "{user}{text}".
+    /// The streaming callback emits it to the client as a [SPLIT] control line before the continuation's
+    /// content, so the client finalizes the current bubble, shows the interjection, and opens a new bubble
+    /// live rather than only on the final history reload. Consumed (cleared) on the next delta.</summary>
+    internal string? PendingSplitNotice;
 
     /// <summary>True while a turn is streaming and at least one interjection is waiting to be folded in.</summary>
     internal bool HasInterjections => !Interjections.IsEmpty;
@@ -494,8 +500,8 @@ public class Thread
         State = ThreadState.Deleted;
         DisposeTimers();
 
-        // If ProjectRoot is a scratchpad dir (not a registered project), delete it.
-        if (ProjectRoot is { } root && root.StartsWith(ARI.Common.Paths.ServerDir("Scratchpad"), StringComparison.OrdinalIgnoreCase))
+        // If FilesystemRoot is a scratchpad dir (not a registered project), delete it.
+        if (FilesystemRoot is { } root && root.StartsWith(ARI.Common.Paths.ServerDir("Scratchpad"), StringComparison.OrdinalIgnoreCase))
         {
             try { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
             catch (Exception ex) { Shared.Logger.LogWarning("[Thread] ({ThreadKey}) scratchpad delete failed: {Err}", threadKey, ex.Message); }

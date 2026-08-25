@@ -99,6 +99,7 @@ export interface ThreadItem {
     mimeType?:       string
     name?:           string
     isStreaming?:    boolean
+    continued?:      boolean
 }
 
 export interface MemoryChange {
