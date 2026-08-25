@@ -475,7 +475,7 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
                 </div>
             )}
             {thoughtEl}
-            {!streaming && (
+            {!streaming && !item.continued && (
                 <div className="msg-footer">
                     <div className="msg-time">{t}</div>
                     {item.content && <SpeakButton content={item.content} />}

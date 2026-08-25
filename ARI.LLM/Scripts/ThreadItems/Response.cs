@@ -65,6 +65,12 @@ public class Response : ThreadItem
     [JsonPropertyName("isStreaming")]
     public bool IsStreamingJson => State == State.Streaming;
 
+    /// <summary>True when a mid-turn interjection split the turn and this is an earlier segment that continues
+    /// in a later response below it — so the client hides the timestamp and feedback footer, which belong only
+    /// on the turn's final segment.</summary>
+    [JsonPropertyName("continued")]
+    public bool Continued { get; set; }
+
     /// <summary>Wall-clock split of this turn (see Agent.TurnClock). ThinkingSeconds counts ONLY time spent
     /// receiving reasoning deltas; PrefillSeconds is the server reading the prompt (request sent → first
     /// delta, summed per request); TypingSeconds is time receiving answer/tool-call deltas. TotalSeconds is
