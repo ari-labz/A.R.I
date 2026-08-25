@@ -1597,6 +1597,20 @@ public abstract class Agent
         turn.ContentBuilder.Append("<!--ari-batch-end-->");
         if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
 
+        // ── Image flush ──────────────────────────────────────────────────────────
+        // A role="tool" result can't carry an image, so any image the model read this batch was staged as
+        // bytes (ResolveToolResult) and its tool result was a text stand-in. Hand the bytes over now as
+        // image_url parts on a user message — the same shape a user-attached image takes — so the vision
+        // model actually sees them. The bytes are base64'd inline and never written to disk.
+        if (turn.PendingImages.Count > 0)
+        {
+            List<object> parts = new() { new { type = "text", text = "Here is the image you just read:" } };
+            foreach (ToolResult img in turn.PendingImages)
+                parts.Add(new { type = "image_url", image_url = new { url = $"data:{img.MediaType};base64,{Convert.ToBase64String(img.Bytes)}" } });
+            turn.Messages.Add(new { role = "user", content = (object)parts });
+            turn.PendingImages.Clear();
+        }
+
         // ── Research confidence gate ─────────────────────────────────────────────
         // Searching is kept tight because that is what gets rate limited and what she spirals on.
         // Reading is left generous because that is how answers actually get built.
