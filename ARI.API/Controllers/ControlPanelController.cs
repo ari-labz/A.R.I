@@ -971,6 +971,85 @@ public class VoiceController(
             .FirstOrDefault();
     }
 
+    [HttpGet("{engine}/{modelName}/loss-history")]
+    public IActionResult GetLossHistory(string engine, string modelName)
+    {
+        if (string.IsNullOrEmpty(vsConfig.VoicesPath))
+            return Ok(new { points = Array.Empty<object>(), pauses = Array.Empty<int>() });
+
+        string logPath = Path.Combine(vsConfig.VoicesPath, engine, modelName, "Train.log");
+        if (!System.IO.File.Exists(logPath))
+            return Ok(new { points = Array.Empty<object>(), pauses = Array.Empty<int>() });
+
+        var points    = new List<object>();
+        var pauses    = new List<int>();
+        int lastEpoch = 0;
+        // Epoch [N/total] — tracks current epoch from log lines
+        var epochRe   = new System.Text.RegularExpressions.Regex(@"Epoch \[(\d+)/", System.Text.RegularExpressions.RegexOptions.Compiled);
+        // Old-format: "Validation loss: X, Dur loss: Y, F0 loss: Z"
+        var oldValRe  = new System.Text.RegularExpressions.Regex(
+            @"Validation loss:\s*([\d.]+),\s*Dur loss:\s*([\d.]+),\s*F0 loss:\s*([\d.]+)",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        try
+        {
+            foreach (string rawLine in System.IO.File.ReadLines(logPath))
+            {
+                // Strip INFO timestamp prefix if present
+                string line = rawLine;
+                if (line.StartsWith("INFO:", StringComparison.Ordinal))
+                {
+                    int colon = line.IndexOf(": ", 5, StringComparison.Ordinal);
+                    if (colon >= 0) line = line[(colon + 2)..];
+                }
+
+                // Track epoch from step lines
+                var em = epochRe.Match(line);
+                if (em.Success && int.TryParse(em.Groups[1].Value, out int ep))
+                    lastEpoch = ep;
+
+                if (rawLine.StartsWith("LOSS_JSON: ", StringComparison.Ordinal))
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(rawLine["LOSS_JSON: ".Length..]);
+                        var root = doc.RootElement;
+                        int jsonEp = root.GetProperty("epoch").GetInt32();
+                        lastEpoch  = jsonEp;
+                        double? sty  = root.TryGetProperty("sty",  out var styEl)  ? styEl.GetDouble()  : (double?)null;
+                        double? diff = root.TryGetProperty("diff", out var diffEl) ? diffEl.GetDouble() : (double?)null;
+                        double? dur  = root.TryGetProperty("dur",  out var durEl)  ? durEl.GetDouble()  : (double?)null;
+                        points.Add(new { epoch = jsonEp, val = root.GetProperty("val").GetDouble(), f0 = root.GetProperty("f0").GetDouble(), sty, diff, dur });
+                    }
+                    catch { /* skip malformed */ }
+                }
+                else
+                {
+                    var vm = oldValRe.Match(line);
+                    if (vm.Success && lastEpoch > 0 && (points.Count == 0 || ((dynamic)points[^1]).epoch != lastEpoch))
+                    {
+                        points.Add(new
+                        {
+                            epoch = lastEpoch,
+                            val   = double.Parse(vm.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture),
+                            f0    = double.Parse(vm.Groups[3].Value, System.Globalization.CultureInfo.InvariantCulture),
+                            sty   = (double?)null,
+                            diff  = (double?)null,
+                            dur   = (double?)double.Parse(vm.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture),
+                        });
+                    }
+                    else if (line.TrimStart().StartsWith("── Paused", StringComparison.OrdinalIgnoreCase) && lastEpoch > 0)
+                    {
+                        pauses.Add(lastEpoch);
+                    }
+                }
+            }
+        }
+        catch { /* file may be locked mid-write — return what we have */ }
+
+        return Ok(new { points, pauses });
+    }
+
     [HttpPost("resume")]
     public IActionResult ResumeTraining([FromBody] ResumeRequest req)
     {
