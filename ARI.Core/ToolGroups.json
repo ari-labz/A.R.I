@@ -13,8 +13,8 @@
       "Tools": ["github"]
     },
     "filesystem_tools": {
-      "Description": "View and edit files in the current project: preview, read, list, search, find, edit, write, and deliver a file to the user as a download.",
-      "Tools": ["preview_file", "read_file", "list_directory", "search_files", "find_files", "edit_file", "write_file", "deliver_file"]
+      "Description": "Work with files: preview, read, list, search, find, edit, write, and deliver a file to the user as a download. Files live in a filesystem — either a bound project (persistent) or a scratchpad (ephemeral, deleted with the conversation). If you have neither and need to write or juggle files (e.g. to give the user a file), call create_scratchpad first to get an ephemeral filesystem; you do NOT need a project.",
+      "Tools": ["create_scratchpad", "preview_file", "read_file", "list_directory", "search_files", "find_files", "edit_file", "write_file", "deliver_file"]
     },
     "coding_tools": {
       "Description": "Build the current project to verify edits compile.",
