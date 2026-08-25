@@ -29,7 +29,7 @@ internal abstract class Tool
         }
     }
 
-    internal abstract Task<string> Execute(string argsJson);
+    internal abstract Task<ToolResult> Execute(string argsJson);
 
     /// <summary>Marker emitted when the call is made. Null = no marker.</summary>
     internal virtual Func<string, string>?  Display          => null;
@@ -44,8 +44,14 @@ internal abstract class Tool
     internal virtual string? StreamingPreCheck(Thread thread, string partialArgs) => null;
     internal virtual string? PreCheck(Thread thread, string argsJson) => null;
 
+    /// <summary>Intercepts the result after Run and before it returns to the model — the place for shared
+    /// post-processing a Run body shouldn't carry: truncating oversized text, rejecting a decode that blew
+    /// up in size. A whole tool family (e.g. every read) can share one override. Default passes through.</summary>
+    internal virtual ToolResult PostRun(Thread thread, string argsJson, ToolResult result) => result;
+
     internal void Register(Thread thread)
         => thread.RegisterTool(Name, Schema, Execute, Display, DisplayAfter, StreamingDisplay,
             partialArgs => StreamingPreCheck(thread, partialArgs),
-            argsJson    => PreCheck(thread, argsJson));
+            argsJson    => PreCheck(thread, argsJson),
+            (argsJson, result) => PostRun(thread, argsJson, result));
 }

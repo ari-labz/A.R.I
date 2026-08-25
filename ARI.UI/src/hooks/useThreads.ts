@@ -99,6 +99,7 @@ export interface ThreadItem {
     mimeType?:       string
     name?:           string
     isStreaming?:    boolean
+    continued?:      boolean
 }
 
 export interface MemoryChange {
@@ -195,7 +196,7 @@ export function openWatchStream(
     return es
 }
 
-export type ThreadStatus = "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching"
+export type ThreadStatus = "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing"
 
 export interface WatchEvent {
     deleted?:    boolean

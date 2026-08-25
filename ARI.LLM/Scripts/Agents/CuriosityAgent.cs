@@ -58,7 +58,7 @@ internal sealed class CuriosityAgent : MemoryAgent
     {
         string root = BrainModule.VaultRoot;
         ServerFileSystem fs = new(root, ct, brainVault: true);
-        new ReadFile(fs).Register(thread);
+        new Read(fs).Register(thread);
         new ListDirectory(fs).Register(thread);
         // search_files / find_files over the vault redirect to search_brain (alias-aware) — see ServerFileSystem.
         new SearchBrain().Register(thread);

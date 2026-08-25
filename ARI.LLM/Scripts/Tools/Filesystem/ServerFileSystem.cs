@@ -14,7 +14,7 @@ internal sealed class ServerFileSystem : FileSystem
 {
     private const int MAX_ENTRIES        = 200;   // list_directory recursive cap
     private const int MAX_RESULTS        = 200;   // find_files / search_files result cap
-    private const int READ_MAX_LINES     = 800;   // whole-file read cap (legacy backstop behind ReadFile.CheckWindow)
+    private const int READ_MAX_LINES     = 800;   // whole-file read cap (legacy backstop behind Read.CheckWindow)
     private const int READ_MAX_CHARS     = 48000;
     private const int SEARCH_MAX_CHARS   = 8000;
     private const int MAX_REPLACE_SPAN   = 15;    // edit_file: max lines a content replacement may span
@@ -47,6 +47,17 @@ internal sealed class ServerFileSystem : FileSystem
         Snapshots       = gate;
     }
 
+    /// <summary>Raw bytes off the server's disk, path-traversal checked. The Read tool decodes them.</summary>
+    public override async Task<byte[]> ReadBytes(string path)
+    {
+        string? absPath = Resolve(path);
+        if (absPath is null)
+            throw new UnauthorizedAccessException("Access denied: path traversal is not allowed.");
+        if (!File.Exists(absPath))
+            throw new FileNotFoundException($"File not found: {path}");
+        return await File.ReadAllBytesAsync(absPath, ct);
+    }
+
     /// <summary>Resolves a project-relative path to an absolute one, or null if it escapes the root.</summary>
     private string? Resolve(string relPath)
     {
@@ -71,7 +82,7 @@ internal sealed class ServerFileSystem : FileSystem
         return false;
     }
 
-    // ── read_file (from ReadFile.cs) ───────────────────────────────────────────────────────────────
+    // ── read_file (from Read.cs) ───────────────────────────────────────────────────────────────
     public override async Task<string> Read(string argsJson)
     {
         try
@@ -116,9 +127,9 @@ internal sealed class ServerFileSystem : FileSystem
             if (gate?.RedundantRead(absPath, startLine, endLine) is { } dupNudge)
                 return dupNudge;
 
-            // Hard per-call read window — shared policy with the remote path (see ReadFile.CheckWindow).
+            // Hard per-call read window — shared policy with the remote path (see Read.CheckWindow).
             // previewed: true — the preview gate above has already diverted un-previewed reads.
-            if (ReadFile.CheckWindow(argsJson, relPath, totalLines, previewed: true) is { } windowErr)
+            if (ARI.LLM.Read.CheckWindow(argsJson, relPath, totalLines, previewed: true) is { } windowErr)
                 return windowErr;
 
             // Cap whole-file reads so a single read can't blow the context window.

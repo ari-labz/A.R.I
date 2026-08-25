@@ -39,7 +39,7 @@ internal sealed class PreviewFile : Tool
         }
     };
 
-    internal override async Task<string> Execute(string argsJson)
+    internal override async Task<ToolResult> Execute(string argsJson)
     {
         string result = await fs.Preview(argsJson);
         if (!result.StartsWith("[Error", StringComparison.OrdinalIgnoreCase))

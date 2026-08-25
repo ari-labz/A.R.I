@@ -49,7 +49,7 @@ internal sealed class EditFile : Tool
         return null;
     }
 
-    internal override Task<string> Execute(string argsJson) => fs.Edit(argsJson);
+    internal override Task<ToolResult> Execute(string argsJson) => fs.Edit(argsJson).AsToolResult();
 
     // Emit the enriched tool-start marker (with the +A/-R diff computed from args), not a plain label — so the
     // committed card keeps its diff badges and the client flips it Editing→Edited via the trailing batch-end.

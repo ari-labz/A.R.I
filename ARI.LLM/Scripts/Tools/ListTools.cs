@@ -17,5 +17,5 @@ internal sealed class ListTools : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson) => Task.FromResult(ToolGroups.ManifestText());
+    internal override Task<ToolResult> Execute(string argsJson) => Task.FromResult<ToolResult>(ToolGroups.ManifestText());
 }

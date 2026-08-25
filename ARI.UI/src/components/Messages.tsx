@@ -313,7 +313,7 @@ interface Props {
     isInternal:    boolean
     agentName:     string | null
     processing?:   boolean
-    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching"
+    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing"
 }
 
 function fileExtLabel(name: string) {
@@ -380,7 +380,7 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
     isInternal: boolean
     agentName: string | null
     msgIndex: number
-    threadStatus?: string
+    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing"
     activeThread: string | null
     feedback?: Feedback
     onFeedbackChange: (timestamp: string, feedback: Feedback | null) => void
@@ -475,7 +475,7 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
                 </div>
             )}
             {thoughtEl}
-            {!streaming && (
+            {!streaming && !item.continued && (
                 <div className="msg-footer">
                     <div className="msg-time">{t}</div>
                     {item.content && <SpeakButton content={item.content} />}
@@ -865,6 +865,17 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
                                     threadStatus={isLast ? threadStatus : undefined} activeThread={activeThread}
                                     feedback={feedback[merged.timestamp]} onFeedbackChange={setFeedback} />
             })}
+
+            {threadStatus === "syncing" && (
+                <div className="msg-row assistant" id="typing-indicator">
+                    <div className="sender">A·R·I</div>
+                    <div className="typing-indicator">
+                        <span className="typing-prefix">Syncing</span>
+                        <span className="phase-word">project files</span>
+                        <div className="typing-dots"><b /><b /><b /></div>
+                    </div>
+                </div>
+            )}
 
             {isRemembering && (
                 <div className="msg-row assistant" id="typing-indicator">

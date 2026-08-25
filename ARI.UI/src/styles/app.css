@@ -901,6 +901,25 @@ button, a, input, select, textarea, label, [role="button"] {
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .btn-pick-folder { padding: 4px 10px; font-size: 12px; flex-shrink: 0; }
+/* ── Project sync ────────────────────────────────────────────── */
+.sync-row {
+    display: flex; align-items: center; gap: 10px; margin-top: 10px;
+}
+.sync-badge {
+    flex: 1; font-size: 12px; padding: 4px 10px; border-radius: 6px;
+    background: var(--surface-alt, #f0f4f6); color: var(--text-dim);
+}
+.sync-badge-ok      { background: #d1fae5; color: #065f46; }
+.sync-badge-ahead   { background: #dbeafe; color: #1e40af; }
+.sync-badge-behind  { background: #fef3c7; color: #92400e; }
+.sync-badge-conflict{ background: #fee2e2; color: #991b1b; }
+.sync-badge-error   { background: #fee2e2; color: #991b1b; }
+.sync-autosync-row {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; color: var(--text-dim); margin-top: 10px; cursor: pointer;
+    user-select: none;
+}
+.sync-autosync-row input[type="checkbox"] { accent-color: var(--accent, #4a90d9); }
 /* ── iOS-style toggle ────────────────────────────────────── */
 .toggle-row {
     display: flex; align-items: center; justify-content: space-between;
@@ -1449,6 +1468,19 @@ details.tool-card summary::-webkit-details-marker { display: none; }
     background: rgba(34,55,66,.22); color: var(--accent);
 }
 .file-card-name { font-size: 0.82rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; color: var(--text); }
+
+/* A file ARI delivered — a clickable download card. The download glyph fades in on hover. */
+.file-card--download { position: relative; text-decoration: none; cursor: pointer; transition: background .12s ease; }
+.file-card--download:hover { background: #dbe6fb; }
+.file-card--download .file-card-dl {
+    margin-left: auto; width: 24px; height: 24px; flex-shrink: 0; border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0; transition: opacity .12s ease; background: var(--accent);
+}
+.file-card--download:hover .file-card-dl { opacity: 1; }
+.file-card--download .file-card-dl::after {
+    content: "↓"; color: #fff; font-size: 0.95rem; font-weight: 700; line-height: 1;
+}
 
 /* ── memory events ───────────────────────────────────────── */
 .msg-row.memory-event { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }

@@ -205,12 +205,12 @@ internal abstract class MemoryAgent : Agent
     protected virtual void RegisterTools(Thread thread, string persistentDir, CancellationToken ct)
     {
         string root = BrainModule.VaultRoot;
-        thread.ProjectRoot = root;
+        thread.FilesystemRoot = root;
         thread.IsBrainVault = true;
         thread.Ct = ct;
 
         ServerFileSystem fs = new(root, ct, brainVault: true);
-        new ReadFile(fs).Register(thread);
+        new Read(fs).Register(thread);
         new WriteFile(fs).Register(thread);
         new EditFile(fs).Register(thread);
         new MoveFile(fs).Register(thread);
@@ -223,7 +223,7 @@ internal abstract class MemoryAgent : Agent
 
         // Git tools are used ~once per session (issue #126) — deferred behind request_tools("git_tools")
         // instead of always sitting in context, resolved generically via ToolFactories (agent-agnostic —
-        // see Thread.ProjectRoot). PreloadedTools can still name "git_tools" in Agents.json to keep them
+        // see Thread.FilesystemRoot). PreloadedTools can still name "git_tools" in Agents.json to keep them
         // warm/eager for an agent that calls them almost every turn.
         new ListTools().Register(thread);
         new RequestTools(thread).Register(thread);

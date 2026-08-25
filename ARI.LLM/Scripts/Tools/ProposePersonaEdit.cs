@@ -59,19 +59,19 @@ internal sealed class ProposePersonaEdit : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
+    internal override Task<ToolResult> Execute(string argsJson)
     {
         string oldText = Arg(argsJson, "old_text");
         string newText = Arg(argsJson, "new_text");
         string reason  = Arg(argsJson, "reason");
 
         if (oldText.Length == 0 && newText.Trim().Length == 0)
-            return Task.FromResult("[Error: nothing to change — give old_text, new_text, or both.]");
+            return Task.FromResult<ToolResult>("[Error: nothing to change — give old_text, new_text, or both.]");
 
         string persona = PersonaStore.Get();
 
         if (oldText.Length > 0 && !persona.Contains(oldText, StringComparison.Ordinal))
-            return Task.FromResult(
+            return Task.FromResult<ToolResult>(
                 "[Error: old_text does not appear in your persona verbatim. Copy the line exactly as it is written "
               + "there, including any leading '- ', and try again. Your persona currently reads:]\n\n" + persona);
 
@@ -85,7 +85,7 @@ internal sealed class ProposePersonaEdit : Tool
             CreatedAt = DateTime.Now,
         });
 
-        return Task.FromResult(
+        return Task.FromResult<ToolResult>(
             "Proposed. The user is now looking at the diff and has not yet decided. Say briefly what you have proposed "
           + "and why, then stop — do not claim your persona has changed, and do not propose anything further this turn.");
     }
