@@ -29,27 +29,27 @@ internal sealed class DiscordListVoiceChannels : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
+    internal override Task<ToolResult> Execute(string argsJson)
     {
         if (Modules.Discord is not { } discord)
-            return Task.FromResult("Discord is not connected.");
+            return Task.FromResult<ToolResult>("Discord is not connected.");
 
         JsonElement el;
         try { el = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson).RootElement; }
-        catch { return Task.FromResult("Error: invalid arguments."); }
+        catch { return Task.FromResult<ToolResult>("Error: invalid arguments."); }
 
         if (!el.TryGetProperty("username", out JsonElement unEl) || unEl.GetString() is not { } username || username.Length == 0)
-            return Task.FromResult("Error: 'username' is required.");
+            return Task.FromResult<ToolResult>("Error: 'username' is required.");
 
         IReadOnlyList<VoiceChannelInfo> channels = discord.GetVoiceChannelsForUser(username);
         if (channels.Count == 0)
-            return Task.FromResult("That user is not in any voice channel right now.");
+            return Task.FromResult<ToolResult>("That user is not in any voice channel right now.");
 
         var sb = new StringBuilder();
         foreach (VoiceChannelInfo ch in channels)
             sb.AppendLine($"- #{ch.ChannelName} (channel_id: {ch.ChannelId}) in server \"{ch.GuildName}\" (guild_id: {ch.GuildId})");
 
-        return Task.FromResult(sb.ToString().TrimEnd());
+        return Task.FromResult<ToolResult>(sb.ToString().TrimEnd());
     }
 }
 
@@ -75,20 +75,20 @@ internal sealed class DiscordJoinVoiceChannel : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
+    internal override Task<ToolResult> Execute(string argsJson)
     {
         if (Modules.Discord is not { } discord)
-            return Task.FromResult("Discord is not connected.");
+            return Task.FromResult<ToolResult>("Discord is not connected.");
 
         JsonElement el;
         try { el = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson).RootElement; }
-        catch { return Task.FromResult("Error: invalid arguments."); }
+        catch { return Task.FromResult<ToolResult>("Error: invalid arguments."); }
 
         if (!el.TryGetProperty("channel_id", out JsonElement idEl) || idEl.GetString() is not { } idStr
             || !ulong.TryParse(idStr, out ulong channelId))
-            return Task.FromResult("Error: 'channel_id' is required and must be a Discord snowflake.");
+            return Task.FromResult<ToolResult>("Error: 'channel_id' is required and must be a Discord snowflake.");
 
-        return discord.JoinVoiceChannelAsync(channelId);
+        return discord.JoinVoiceChannelAsync(channelId).AsToolResult();
     }
 }
 
@@ -113,10 +113,10 @@ internal sealed class DiscordLeaveVoiceChannel : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
+    internal override Task<ToolResult> Execute(string argsJson)
     {
         if (Modules.Discord is not { } discord)
-            return Task.FromResult("Discord is not connected.");
+            return Task.FromResult<ToolResult>("Discord is not connected.");
 
         ulong? guildId = null;
         try
@@ -128,6 +128,6 @@ internal sealed class DiscordLeaveVoiceChannel : Tool
         }
         catch { }
 
-        return discord.LeaveVoiceChannelAsync(guildId);
+        return discord.LeaveVoiceChannelAsync(guildId).AsToolResult();
     }
 }

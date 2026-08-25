@@ -298,6 +298,9 @@ public abstract class Agent
         // ── Tool state ───────────────────────────────────────────────────────
         internal readonly ToolTurnState                                          ToolTurn;
         internal readonly List<(int Index, string CallId, string Name, string? Path)> ToolResultSlots = new();
+
+        // Image tool results waiting to be flushed into the next user message as image_url content-parts.
+        internal readonly List<ToolResult> PendingImages = new();
         internal object[]? ToolSchemas;   // rebuilt each step by PrepareStep()
 
         // ── Step flags (reset each StreamStep) ───────────────────────────────
@@ -1336,6 +1339,20 @@ public abstract class Agent
         turn.IsStreaming = false;
     }
 
+    /// <summary>Turns a tool's <see cref="ToolResult"/> into the text that flows through the rest of the
+    /// tool loop (trace, recording, dedup, the role="tool" message). Text passes straight through. An image
+    /// can only reach the model as an image_url content-part on a following user message, which a tool-role
+    /// result can't carry — so when vision is off (the default) the router renders the image back to a text
+    /// stand-in here. Staging the bytes for a vision-enabled turn is wired in the message builder.</summary>
+    private string ResolveToolResult(Turn turn, ToolResult result)
+    {
+        if (result.Kind == ToolResult.ContentKind.Text)
+            return result.Text;
+
+        turn.PendingImages.Add(result);
+        return $"[image: {result.Bytes.Length} bytes, {result.MediaType} — provided to the vision model below]";
+    }
+
     private async Task ExecuteTools(Turn turn)
     {
         Thread thread = turn.Thread;
@@ -1344,7 +1361,7 @@ public abstract class Agent
 
         HashSet<string> readOnlyTools = new(StringComparer.OrdinalIgnoreCase)
             { "read_file", "search_files", "list_directory", "find_files", "search_brain" };
-        Dictionary<int, Task<string>> prelaunched = new();
+        Dictionary<int, Task<ToolResult>> prelaunched = new();
         if (turn.PendingCalls.Count > 1)
             foreach (var (idx, c) in turn.PendingCalls)
                 if (readOnlyTools.Contains(c.Name) && thread.tools.TryGetValue(c.Name, out var roTool))
@@ -1409,9 +1426,12 @@ public abstract class Agent
                 if (isWebTool) AdvancePhase(turn, ThreadPhase.Researching);
                 try
                 {
-                    result = prelaunched.TryGetValue(callIndex, out Task<string>? pre)
+                    ToolResult toolResult = prelaunched.TryGetValue(callIndex, out Task<ToolResult>? pre)
                         ? await pre
                         : await tool.Execute(argsJson);
+                    if (tool.PostRun is not null)
+                        toolResult = tool.PostRun(argsJson, toolResult);
+                    result = ResolveToolResult(turn, toolResult);
                 }
                 finally
                 {

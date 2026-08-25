@@ -245,10 +245,10 @@ internal sealed class Coder : Agent
         parent.RegisterTool("plan_proposed", PlanProposedSchema, argsJson =>
         {
             parent.HandoffPayload = ToolCallParser.TryExtractJsonString(argsJson, "payload");
-            if (bypass) { parent.Phase = CodePhase.Development; return Task.FromResult("[System: plan captured — automated run, building now.]"); }
+            if (bypass) { parent.Phase = CodePhase.Development; return Task.FromResult<ToolResult>("[System: plan captured — automated run, building now.]"); }
             parent.PlanProposed = true;
             parent.EndTurnNow   = true;   // clean boundary — nothing else runs this turn
-            return Task.FromResult("[System: plan proposed and captured. STOP now — the user will approve it (then you build) or ask for changes (then you revise). Do not build yet.]");
+            return Task.FromResult<ToolResult>("[System: plan proposed and captured. STOP now — the user will approve it (then you build) or ask for changes (then you revise). Do not build yet.]");
         });
         // start_build(): the model judged the task simple enough to implement directly — flip to Development
         // NOW, within this same turn, so its edit tools unlock and it just does it (no plan, no approval).
@@ -256,7 +256,7 @@ internal sealed class Coder : Agent
         parent.RegisterTool("start_build", StartBuildSchema, _ =>
         {
             parent.Phase = CodePhase.Development;
-            return Task.FromResult("[System: building now — implement the change directly, then build to verify. " +
+            return Task.FromResult<ToolResult>("[System: building now — implement the change directly, then build to verify. " +
                                    "If it turns out bigger than expected, call replan and propose a plan instead.]");
         });
         // replan(reason): from Development, hand back to Planning when the plan turns out wrong/blocked.
@@ -266,7 +266,7 @@ internal sealed class Coder : Agent
             parent.PlanProposed = false;
             parent.EndTurnNow   = true;
             string reason = ToolCallParser.TryExtractJsonString(argsJson, "reason") ?? "";
-            return Task.FromResult($"[System: the plan needs revising — back in planning. Tell the user what you found: {reason}]");
+            return Task.FromResult<ToolResult>($"[System: the plan needs revising — back in planning. Tell the user what you found: {reason}]");
         });
 
         // Per-turn nudge. The [Mode] system prompt carries the behaviour; this is a short reminder of THIS turn.
@@ -537,8 +537,8 @@ internal sealed class Coder : Agent
         if (touched.Count == 0) return "[System: no files have been changed yet — make your edits first.]";
         if (!parent.tools.TryGetValue("run_command", out var rc))
             return "[System: no run_command tool is available to build on the client — skip the build and write your summary.]";
-        string output = await rc.Execute(JsonSerializer.Serialize(new { command = "dotnet build" }));
-        return "Build output from the client (`dotnet build`):\n\n" + output;
+        ToolResult output = await rc.Execute(JsonSerializer.Serialize(new { command = "dotnet build" }));
+        return "Build output from the client (`dotnet build`):\n\n" + output.Text;
     }
 
 
@@ -552,7 +552,7 @@ internal sealed class Coder : Agent
         // browsing). preview_file satisfies the preview-before-read gate and keeps context lean on its assigned file.
         ServerFileSystem fs = new(root, ct, snapshots);
         new PreviewFile(fs).Register(child);
-        new ReadFile(fs).Register(child);
+        new Read(fs).Register(child);
         new SearchFiles(fs).Register(child);
         new FindFiles(fs).Register(child);
         new EditFile(fs).Register(child);

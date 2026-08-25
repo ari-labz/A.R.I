@@ -20,12 +20,12 @@ internal sealed class ListProjects : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
+    internal override Task<ToolResult> Execute(string argsJson)
     {
-        if (Modules.Projects is not { } svc) return Task.FromResult("Project management isn't available right now.");
+        if (Modules.Projects is not { } svc) return Task.FromResult<ToolResult>("Project management isn't available right now.");
         IReadOnlyList<ProjectSummary> list = svc.List();
-        if (list.Count == 0) return Task.FromResult("No projects exist yet.");
-        return Task.FromResult(string.Join("\n", list.Select(p =>
+        if (list.Count == 0) return Task.FromResult<ToolResult>("No projects exist yet.");
+        return Task.FromResult<ToolResult>(string.Join("\n", list.Select(p =>
             $"- {p.Name} [{p.Id}] — category: {(p.Category.Length > 0 ? p.Category : "none")}, storage: {p.Backend}")));
     }
 }
@@ -54,18 +54,18 @@ internal sealed class CreateProject : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
+    internal override Task<ToolResult> Execute(string argsJson)
     {
-        if (Modules.Projects is not { } svc) return Task.FromResult("Project management isn't available right now.");
+        if (Modules.Projects is not { } svc) return Task.FromResult<ToolResult>("Project management isn't available right now.");
         JsonElement root = Parse(argsJson);
         string  name     = Str(root, "name");
         string? category = root.TryGetProperty("category", out JsonElement c) ? c.GetString() : null;
         string? backend  = root.TryGetProperty("backend", out JsonElement b) ? b.GetString() : null;
-        if (name.Length == 0) return Task.FromResult("Error: 'name' is required.");
+        if (name.Length == 0) return Task.FromResult<ToolResult>("Error: 'name' is required.");
 
         ProjectSummary? created = svc.Create(name, category, backend);
-        if (created is null) return Task.FromResult("Failed to create the project.");
-        return Task.FromResult($"Created '{created.Name}' [{created.Id}] — storage: {created.Backend}. Call bind_project with this id to start using it in this conversation.");
+        if (created is null) return Task.FromResult<ToolResult>("Failed to create the project.");
+        return Task.FromResult<ToolResult>($"Created '{created.Name}' [{created.Id}] — storage: {created.Backend}. Call bind_project with this id to start using it in this conversation.");
     }
 
     private static JsonElement Parse(string argsJson)
@@ -100,14 +100,14 @@ internal sealed class RenameProject : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
+    internal override Task<ToolResult> Execute(string argsJson)
     {
-        if (Modules.Projects is not { } svc) return Task.FromResult("Project management isn't available right now.");
+        if (Modules.Projects is not { } svc) return Task.FromResult<ToolResult>("Project management isn't available right now.");
         JsonElement root = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson).RootElement;
         string id      = root.TryGetProperty("id", out JsonElement i) ? (i.GetString() ?? "").Trim() : "";
         string newName = root.TryGetProperty("newName", out JsonElement n) ? (n.GetString() ?? "").Trim() : "";
-        if (id.Length == 0 || newName.Length == 0) return Task.FromResult("Error: 'id' and 'newName' are both required.");
-        return Task.FromResult(svc.Rename(id, newName) ? $"Renamed to '{newName}'." : "Could not find that project.");
+        if (id.Length == 0 || newName.Length == 0) return Task.FromResult<ToolResult>("Error: 'id' and 'newName' are both required.");
+        return Task.FromResult<ToolResult>(svc.Rename(id, newName) ? $"Renamed to '{newName}'." : "Could not find that project.");
     }
 }
 
@@ -133,13 +133,13 @@ internal sealed class BindProject : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
+    internal override Task<ToolResult> Execute(string argsJson)
     {
-        if (Modules.Projects is not { } svc) return Task.FromResult("Project management isn't available right now.");
+        if (Modules.Projects is not { } svc) return Task.FromResult<ToolResult>("Project management isn't available right now.");
         string id;
         try { id = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson).RootElement.GetProperty("id").GetString() ?? ""; }
         catch { id = ""; }
-        if (id.Length == 0) return Task.FromResult("Error: 'id' is required.");
-        return Task.FromResult(svc.BindThread(thread.Key, id) ? "Bound. You can use this project's tools now." : "Could not find that project.");
+        if (id.Length == 0) return Task.FromResult<ToolResult>("Error: 'id' is required.");
+        return Task.FromResult<ToolResult>(svc.BindThread(thread.Key, id) ? "Bound. You can use this project's tools now." : "Could not find that project.");
     }
 }

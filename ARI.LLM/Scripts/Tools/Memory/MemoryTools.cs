@@ -53,14 +53,14 @@ internal sealed class Neighbours : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
+    internal override Task<ToolResult> Execute(string argsJson)
     {
         JsonElement a = Args.Parse(argsJson);
         string seed = a.Str("seed");
-        if (seed.Length == 0) return Task.FromResult("Error: 'seed' is required.");
+        if (seed.Length == 0) return Task.FromResult<ToolResult>("Error: 'seed' is required.");
         BrainModule.Index();
         string? skeleton = BrainModule.Skeleton(seed, a.Int("depth", 2), a.Int("cap", 50));
-        return Task.FromResult(skeleton is null ? $"No note found for seed '{seed}'." :
+        return Task.FromResult<ToolResult>(skeleton is null ? $"No note found for seed '{seed}'." :
             skeleton.Length == 0 ? $"'{seed}' has no connections." : skeleton);
     }
 }
@@ -96,11 +96,11 @@ internal sealed class SearchBrain : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
+    internal override Task<ToolResult> Execute(string argsJson)
     {
         JsonElement a = Args.Parse(argsJson);
         string query = a.Str("query").Trim();
-        if (query.Length == 0) return Task.FromResult("Error: 'query' is required.");
+        if (query.Length == 0) return Task.FromResult<ToolResult>("Error: 'query' is required.");
         int limit = Math.Clamp(a.Int("limit", DEFAULT_LIMIT), 1, 50);
 
         BrainModule.Index();
@@ -110,9 +110,9 @@ internal sealed class SearchBrain : Tool
             .Where(t => t.Length > 0)
             .ToList();
         List<SearchResult> hits = BrainModule.Search(terms, limit);
-        if (hits.Count == 0) return Task.FromResult($"No notes found for '{query}'. It likely has no note yet.");
+        if (hits.Count == 0) return Task.FromResult<ToolResult>($"No notes found for '{query}'. It likely has no note yet.");
 
-        return Task.FromResult(string.Join('\n', hits.Select(h => $"{h.Note.Title} — {h.Note.Path}")));
+        return Task.FromResult<ToolResult>(string.Join('\n', hits.Select(h => $"{h.Note.Title} — {h.Note.Path}")));
     }
 }
 
@@ -144,18 +144,18 @@ internal sealed class MergeNotesTool : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
+    internal override Task<ToolResult> Execute(string argsJson)
     {
         JsonElement a = Args.Parse(argsJson);
         string from = a.Str("from"), into = a.Str("into");
-        if (from.Length == 0 || into.Length == 0) return Task.FromResult("Error: both 'from' and 'into' are required.");
+        if (from.Length == 0 || into.Length == 0) return Task.FromResult<ToolResult>("Error: both 'from' and 'into' are required.");
         try
         {
             bool ok = BrainModule.MergeNotes(from, into);
-            return Task.FromResult(ok ? $"Merged '{from}' into '{into}' ('{from}' kept as an alias)."
+            return Task.FromResult<ToolResult>(ok ? $"Merged '{from}' into '{into}' ('{from}' kept as an alias)."
                                       : $"Merge failed — '{from}' or '{into}' not found, or they are the same note.");
         }
-        catch (Exception ex) { return Task.FromResult($"Merge failed: {ex.Message}"); }
+        catch (Exception ex) { return Task.FromResult<ToolResult>($"Merge failed: {ex.Message}"); }
     }
 }
 
@@ -192,11 +192,11 @@ internal sealed class AddCuriosity : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
+    internal override Task<ToolResult> Execute(string argsJson)
     {
         JsonElement a = Args.Parse(argsJson);
         string question = a.Str("question"), topic = a.Str("topic");
-        if (question.Length == 0 || topic.Length == 0) return Task.FromResult("Error: 'question' and 'topic' are required.");
+        if (question.Length == 0 || topic.Length == 0) return Task.FromResult<ToolResult>("Error: 'question' and 'topic' are required.");
         Curiosity c = new(
             Id: Guid.NewGuid().ToString("N")[..8],
             Question: question,
@@ -208,7 +208,7 @@ internal sealed class AddCuriosity : Tool
             Created: DateTime.UtcNow.ToString("yyyy-MM-dd"),
             AskedAt: null);
         int added = CuriosityStore.AddNew(persistentDir, new[] { c });
-        return Task.FromResult(added > 0 ? $"Curiosity recorded ({c.Id}): {question}" : "Already have that curiosity queued.");
+        return Task.FromResult<ToolResult>(added > 0 ? $"Curiosity recorded ({c.Id}): {question}" : "Already have that curiosity queued.");
     }
 }
 
@@ -234,11 +234,11 @@ internal sealed class RemoveCuriosity : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
+    internal override Task<ToolResult> Execute(string argsJson)
     {
         string id = Args.Parse(argsJson).Str("id");
-        if (id.Length == 0) return Task.FromResult("Error: 'id' is required.");
-        return Task.FromResult(CuriosityStore.Remove(persistentDir, id) ? $"Removed curiosity {id}." : $"No curiosity with id {id}.");
+        if (id.Length == 0) return Task.FromResult<ToolResult>("Error: 'id' is required.");
+        return Task.FromResult<ToolResult>(CuriosityStore.Remove(persistentDir, id) ? $"Removed curiosity {id}." : $"No curiosity with id {id}.");
     }
 }
 
@@ -259,13 +259,13 @@ internal sealed class ListCuriosities : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
+    internal override Task<ToolResult> Execute(string argsJson)
     {
         List<Curiosity> list = CuriosityStore.Load(persistentDir);
-        if (list.Count == 0) return Task.FromResult("No curiosities queued.");
+        if (list.Count == 0) return Task.FromResult<ToolResult>("No curiosities queued.");
         IEnumerable<string> lines = list
             .OrderByDescending(c => c.Priority)
             .Select(c => $"[{c.Id}] (p{c.Priority}, {c.Status}) {c.Topic}: {c.Question}");
-        return Task.FromResult(string.Join('\n', lines));
+        return Task.FromResult<ToolResult>(string.Join('\n', lines));
     }
 }

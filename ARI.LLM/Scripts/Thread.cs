@@ -161,7 +161,7 @@ public class Thread
         return blocks;
     }
 
-    internal readonly Dictionary<string, (object Schema, Func<string, Task<string>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter, Func<string, string?>? StreamingDisplay, Func<string, string?>? StreamingPreCheck, Func<string, string?>? PreCheck)> tools = new();
+    internal readonly Dictionary<string, (object Schema, Func<string, Task<ToolResult>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter, Func<string, string?>? StreamingDisplay, Func<string, string?>? StreamingPreCheck, Func<string, string?>? PreCheck, Func<string, ToolResult, ToolResult>? PostRun)> tools = new();
 
     // ── Lifecycle ──────────────────────────────────────────────────────────────
     public ThreadState               State           = ThreadState.Active;
@@ -277,8 +277,8 @@ public class Thread
 
     // ── Tools ───────────────────────────────────────────────────────────────────
 
-    public void RegisterTool(string name, object schema, Func<string, Task<string>> executor, Func<string, string>? displayFormatter = null, Func<string, string>? displayAfterFormatter = null, Func<string, string?>? streamingDisplayFormatter = null, Func<string, string?>? streamingPreCheck = null, Func<string, string?>? preCheck = null)
-        => tools[name] = (schema, executor, displayFormatter, displayAfterFormatter, streamingDisplayFormatter, streamingPreCheck, preCheck);
+    public void RegisterTool(string name, object schema, Func<string, Task<ToolResult>> executor, Func<string, string>? displayFormatter = null, Func<string, string>? displayAfterFormatter = null, Func<string, string?>? streamingDisplayFormatter = null, Func<string, string?>? streamingPreCheck = null, Func<string, string?>? preCheck = null, Func<string, ToolResult, ToolResult>? postRun = null)
+        => tools[name] = (schema, executor, displayFormatter, displayAfterFormatter, streamingDisplayFormatter, streamingPreCheck, preCheck, postRun);
 
     public void UnregisterTool(string name)
         => tools.Remove(name);

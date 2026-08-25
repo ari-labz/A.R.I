@@ -23,7 +23,7 @@ internal static class ToolFactories
         ["git"] = t => t.ProjectRoot is { } r ? GitMulti.Discover(r) : null,
 
         ["preview_file"]   = t => Fs(t) is { } fs ? new PreviewFile(fs)   : null,
-        ["read_file"]      = t => Fs(t) is { } fs ? new ReadFile(fs)      : null,
+        ["read_file"]      = t => Fs(t) is { } fs ? new Read(fs)      : null,
         ["list_directory"] = t => Fs(t) is { } fs ? new ListDirectory(fs) : null,
         ["search_files"]   = t => Fs(t) is { } fs ? new SearchFiles(fs)   : null,
         ["find_files"]     = t => Fs(t) is { } fs ? new FindFiles(fs)     : null,
@@ -95,7 +95,7 @@ internal static class ToolFactories
         internal override object Schema => Coder.BuildProjectSchema;
         internal override Func<string, string>? Display => _ => "<!--ari-tool-start:build_project:project-->";
 
-        internal override Task<string> Execute(string argsJson)
-            => Coder.BuildTouched(thread.TouchedFiles, root, thread.Ct);
+        internal override Task<ToolResult> Execute(string argsJson)
+            => Coder.BuildTouched(thread.TouchedFiles, root, thread.Ct).AsToolResult();
     }
 }

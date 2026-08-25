@@ -36,6 +36,12 @@ internal abstract class FileSystem
 
 
     public virtual Task<string> Read(string argsJson)    => Unavailable("read_file");
+
+    /// <summary>Hands the raw bytes of a path to the caller. This is the medium's only job for the Read
+    /// tool hierarchy: route the bytes off disk or over the socket. Decoding those bytes belongs to the
+    /// Read tool, not here. Backends that can't reach raw bytes leave this unimplemented.</summary>
+    public virtual Task<byte[]> ReadBytes(string path)
+        => Task.FromException<byte[]>(new NotSupportedException("ReadBytes is not available for this project."));
     public virtual Task<string> Preview(string argsJson) => Unavailable("preview_file");
     public virtual Task<string> Edit(string argsJson)    => Unavailable("edit_file");
     public virtual Task<string> Write(string argsJson)   => Unavailable("write_file");

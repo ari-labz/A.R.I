@@ -34,7 +34,7 @@ internal sealed class SearchFiles : Tool
 
     private const int MAX_RESULTS = 50;
 
-    internal override async Task<string> Execute(string argsJson)
+    internal override async Task<ToolResult> Execute(string argsJson)
     {
         string result = await fs.Search(argsJson);
         return Cap(result);
