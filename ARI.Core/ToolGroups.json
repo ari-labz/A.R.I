@@ -5,8 +5,12 @@
       "Tools": ["git_status", "git_diff", "git_log", "git_commit"]
     },
     "project_git_tools": {
-      "Description": "Git operations (status, fetch, pull, log, diff) across the project's repositories. Repos are auto-discovered — use this when working with a project that contains multiple git repos.",
+      "Description": "Git operations (status, fetch, pull, log, diff, add, commit, push, branch, checkout, stash, restore) across the project's repositories. Repos are auto-discovered — use this when working with a project that contains multiple git repos.",
       "Tools": ["git"]
+    },
+    "github_tools": {
+      "Description": "Read GitHub over the REST API: view a repo, list/view issues and pull requests, list Actions runs. Prompts for and stores a token when a repo is private.",
+      "Tools": ["github"]
     },
     "filesystem_tools": {
       "Description": "View and edit files in the current project: preview, read, list, search, find, edit, write.",
