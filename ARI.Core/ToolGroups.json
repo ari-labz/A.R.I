@@ -13,8 +13,8 @@
       "Tools": ["github"]
     },
     "filesystem_tools": {
-      "Description": "View and edit files in the current project: preview, read, list, search, find, edit, write.",
-      "Tools": ["preview_file", "read_file", "list_directory", "search_files", "find_files", "edit_file", "write_file"]
+      "Description": "View and edit files in the current project: preview, read, list, search, find, edit, write, and deliver a file to the user as a download.",
+      "Tools": ["preview_file", "read_file", "list_directory", "search_files", "find_files", "edit_file", "write_file", "deliver_file"]
     },
     "coding_tools": {
       "Description": "Build the current project to verify edits compile.",
