@@ -26,7 +26,7 @@ internal sealed class DeleteFile : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson) => fs.Delete(argsJson);
+    internal override Task<ToolResult> Execute(string argsJson) => fs.Delete(argsJson).AsToolResult();
 
     internal override Func<string, string>? Display => args =>
     {

@@ -33,11 +33,11 @@ internal sealed class GitStatus : GitTool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
+    internal override Task<ToolResult> Execute(string argsJson)
     {
         (int _, string outp, string err) = Run("status", "--short");
-        if (err.Length > 0 && outp.Length == 0) return Task.FromResult($"git status failed: {err.Trim()}");
-        return Task.FromResult(string.IsNullOrWhiteSpace(outp) ? "Working tree clean." : outp.TrimEnd());
+        if (err.Length > 0 && outp.Length == 0) return Task.FromResult<ToolResult>($"git status failed: {err.Trim()}");
+        return Task.FromResult<ToolResult>(string.IsNullOrWhiteSpace(outp) ? "Working tree clean." : outp.TrimEnd());
     }
 }
 
@@ -60,12 +60,12 @@ internal sealed class GitDiff : GitTool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
+    internal override Task<ToolResult> Execute(string argsJson)
     {
         string path = GitArgs.Parse(argsJson).Str("path");
         (int _, string outp, string err) = path.Length > 0 ? Run("diff", "--", path) : Run("diff");
-        if (err.Length > 0 && outp.Length == 0) return Task.FromResult($"git diff failed: {err.Trim()}");
-        return Task.FromResult(string.IsNullOrWhiteSpace(outp) ? "No uncommitted changes." : outp.TrimEnd());
+        if (err.Length > 0 && outp.Length == 0) return Task.FromResult<ToolResult>($"git diff failed: {err.Trim()}");
+        return Task.FromResult<ToolResult>(string.IsNullOrWhiteSpace(outp) ? "No uncommitted changes." : outp.TrimEnd());
     }
 }
 
@@ -92,7 +92,7 @@ internal sealed class GitLog : GitTool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
+    internal override Task<ToolResult> Execute(string argsJson)
     {
         JsonElement a = GitArgs.Parse(argsJson);
         string path = a.Str("path");
@@ -100,8 +100,8 @@ internal sealed class GitLog : GitTool
         (int code, string outp, string err) = path.Length > 0
             ? Run("log", $"-n{max}", "--format=%h %ad%n%B", "--date=short", "--", path)
             : Run("log", $"-n{max}", "--format=%h %ad%n%B", "--date=short");
-        if (code != 0) return Task.FromResult($"git log failed: {err.Trim()}");
-        return Task.FromResult(string.IsNullOrWhiteSpace(outp) ? "No history." : outp.TrimEnd());
+        if (code != 0) return Task.FromResult<ToolResult>($"git log failed: {err.Trim()}");
+        return Task.FromResult<ToolResult>(string.IsNullOrWhiteSpace(outp) ? "No history." : outp.TrimEnd());
     }
 }
 
@@ -132,21 +132,21 @@ internal sealed class GitCommit : GitTool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
+    internal override Task<ToolResult> Execute(string argsJson)
     {
         JsonElement a = GitArgs.Parse(argsJson);
         string message = a.Str("message");
-        if (message.Length == 0) return Task.FromResult("Error: 'message' is required.");
+        if (message.Length == 0) return Task.FromResult<ToolResult>("Error: 'message' is required.");
 
         (int _, string status, string _) = Run("status", "--porcelain");
-        if (string.IsNullOrWhiteSpace(status)) return Task.FromResult("Nothing to commit — working tree clean.");
+        if (string.IsNullOrWhiteSpace(status)) return Task.FromResult<ToolResult>("Nothing to commit — working tree clean.");
 
         Run("add", "-A");
         if (!string.IsNullOrWhiteSpace(coAuthor)) message += $"\n\nCo-Authored-By: {coAuthor}";
         (int code, string _, string err) = RunInput(message, "commit", "-F", "-");
-        if (code != 0) return Task.FromResult($"Commit failed: {err.Trim()}");
+        if (code != 0) return Task.FromResult<ToolResult>($"Commit failed: {err.Trim()}");
 
         (int _, string head, string _) = Run("log", "-1", "--format=%h %s");
-        return Task.FromResult($"Committed {head.Trim()}");
+        return Task.FromResult<ToolResult>($"Committed {head.Trim()}");
     }
 }

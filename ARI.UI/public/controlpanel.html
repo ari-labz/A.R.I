@@ -741,6 +741,25 @@ html, body {
         <div class="vs-progress-track"><div class="vs-progress-fill" id="vs-progress-fill" style="width:0%"></div></div>
         <div class="vs-time-row"><span id="vs-elapsed-label" class="vs-time-chip">Elapsed: —</span><span id="vs-avg-label" class="vs-time-chip">Avg/epoch: —</span><span id="vs-eta-label" class="vs-time-chip">ETA: —</span></div>
         <div id="vs-detail-label" class="vs-detail"></div>
+        <!-- Loss graph -->
+        <div id="vs-loss-wrap" style="display:none;margin-top:16px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+            <div style="display:flex;align-items:center;gap:7px;">
+              <span style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);">Training Loss</span>
+              <span id="vs-loss-live-dot" class="live-dot" style="display:none;"></span>
+            </div>
+            <div style="display:flex;gap:12px;align-items:center;">
+              <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-dim);"><span style="width:8px;height:8px;border-radius:50%;background:#518c9a;display:inline-block;"></span>Val</span>
+              <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-dim);"><span style="width:8px;height:8px;border-radius:50%;background:#7abacc;display:inline-block;"></span>F0</span>
+              <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-dim);"><span style="width:8px;height:8px;border-radius:50%;background:#a5c9d4;display:inline-block;"></span>Sty</span>
+              <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-dim);"><span style="width:8px;height:8px;border-radius:50%;background:#c4dde5;display:inline-block;"></span>Diff</span>
+            </div>
+          </div>
+          <div style="position:relative;height:130px;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#fafbfc;">
+            <canvas id="vs-loss-canvas"></canvas>
+          </div>
+          <div id="vs-loss-status" style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-dim);margin-top:6px;font-variant-numeric:tabular-nums;"></div>
+        </div>
         <button id="vs-pause-btn" style="display:none;margin-top:10px;font-size:12px;padding:5px 14px;background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-dim);cursor:pointer;" type="button">Pause training</button>
         <div class="cp-widget" style="margin-top:14px;max-height:280px;overflow-y:auto">
           <div class="cp-widget-header"><span class="cp-widget-title">Training log</span><span class="cp-widget-badge" id="vs-log-badge">—</span></div>
@@ -1140,10 +1159,18 @@ html, body {
 })();
 function cpFetch(url, opts) {
     const token = sessionStorage.getItem('ari_cp_token');
-    if (!token) return fetch(url, opts);
+    if (!token) { window.location.href = '/'; return new Promise(() => {}); }
     const headers = new Headers((opts && opts.headers) || {});
     headers.set('Authorization', 'Bearer ' + token);
-    return fetch(url, Object.assign({}, opts, { headers }));
+    return fetch(url, Object.assign({}, opts, { headers })).then(r => {
+        if (r.status === 401) { sessionStorage.removeItem('ari_cp_token'); window.location.href = '/'; return new Promise(() => {}); }
+        return r;
+    });
+}
+function cpEventSource(url) {
+    const token = sessionStorage.getItem('ari_cp_token');
+    const sep = url.includes('?') ? '&' : '?';
+    return new EventSource(token ? url + sep + 'token=' + encodeURIComponent(token) : url);
 }
 
 // ── tab switching ─────────────────────────────────────────
@@ -2148,7 +2175,7 @@ function appendLogLine(text) {
     else scrollHint.classList.add('visible');
 }
 (function connectLog() {
-    const es = new EventSource('/admin/log');
+    const es = cpEventSource('/admin/log');
     es.onopen    = () => { logStatus.textContent = 'live'; logStatus.classList.add('live'); };
     es.onerror   = () => { logStatus.textContent = 'reconnecting…'; logStatus.classList.remove('live'); setTimeout(connectLog, 3000); es.close(); };
     es.onmessage = e  => appendLogLine(e.data.replace(/↵/g, '\n'));
@@ -3750,7 +3777,7 @@ function startSwitchProgressSse() {
     mdlFill.className = 'vs-progress-fill';
     const PHASES = { 'idle-wait':'Waiting for active requests to finish…', 'powering-down':'Powering down…', 'powering-up':'Powering up…', 'ready':'Model ready.', 'error':'Switch failed.' };
 
-    mdlSwitchEs = new EventSource('/servers/switch/progress');
+    mdlSwitchEs = cpEventSource('/servers/switch/progress');
     mdlSwitchEs.onmessage = e => {
         try {
             const d = JSON.parse(e.data);
@@ -4040,14 +4067,16 @@ function vsSetProgress(step, pct, detail, state) {
         const floatPct = (vsCompletedEpochs / vsTotalEpochs * 100).toFixed(2);
         vsPctLabel.textContent  = floatPct + '%';
         vsProgFill.style.width  = floatPct + '%';
-    } else {
+        vsDetail.textContent = `Epoch ${vsCompletedEpochs} / ${vsTotalEpochs}`;
+    } else if (pct >= 0) {
         vsPctLabel.textContent = pct + '%';
         vsProgFill.style.width = pct + '%';
     }
     const isError = state === 'error';
     vsProgFill.className  = 'vs-progress-fill'  + (state === 'done' ? ' done' : isError ? ' error' : '');
     vsProgTrack.className = 'vs-progress-track' + (isError ? ' error' : '');
-    vsDetail.textContent = detail || '';
+    // Only update the detail label for meaningful messages — skip raw log lines (pct === -1)
+    if (pct !== -1 && detail) vsDetail.textContent = detail;
     if (pct > 0) vsLastPct = pct;
 }
 
@@ -4076,10 +4105,125 @@ async function vsUploadFiles() {
     return { stageId, stagingPath };
 }
 
+// ── Loss graph ────────────────────────────────────────────────────────────────
+const vsLossWrap    = document.getElementById('vs-loss-wrap');
+const vsLossCanvas  = document.getElementById('vs-loss-canvas');
+const vsLossStatus  = document.getElementById('vs-loss-status');
+const vsLossLiveDot = document.getElementById('vs-loss-live-dot');
+let vsLossPoints = []; // { epoch, val, f0, sty, diff }
+let vsLossPauseAt = []; // epoch numbers where a pause marker should appear
+
+function vsLossReset(showEmpty = false) { vsLossPoints = []; vsLossPauseAt = []; vsLossWrap.style.display = showEmpty ? '' : 'none'; vsLossStatus.textContent = ''; vsLossLiveDot.style.display = 'none'; if (showEmpty) vsLossDraw(); }
+
+function vsLossPush(point) {
+    vsLossPoints.push(point);
+    vsLossWrap.style.display = '';
+    vsLossLiveDot.style.display = '';
+    vsLossStatus.innerHTML = `
+        <span id="vs-loss-live-dot-status" class="live-dot" style="width:6px;height:6px;margin:0 4px 0 0;flex-shrink:0;"></span>
+        <span style="color:var(--text-dim);">Epoch <b style="color:var(--text)">${point.epoch}</b></span>
+        <span style="margin-left:12px;display:flex;align-items:center;gap:4px;"><span style="width:7px;height:7px;border-radius:50%;background:#518c9a;display:inline-block;"></span><span style="color:var(--text-dim)">Val</span> <b style="color:var(--text)">${point.val.toFixed(4)}</b></span>
+        <span style="margin-left:8px;display:flex;align-items:center;gap:4px;"><span style="width:7px;height:7px;border-radius:50%;background:#7abacc;display:inline-block;"></span><span style="color:var(--text-dim)">F0</span> <b style="color:var(--text)">${point.f0.toFixed(4)}</b></span>
+        ${point.sty != null ? `<span style="margin-left:8px;display:flex;align-items:center;gap:4px;"><span style="width:7px;height:7px;border-radius:50%;background:#a5c9d4;display:inline-block;"></span><span style="color:var(--text-dim)">Sty</span> <b style="color:var(--text)">${point.sty.toFixed(4)}</b></span>` : ''}
+        ${point.diff != null ? `<span style="margin-left:8px;display:flex;align-items:center;gap:4px;"><span style="width:7px;height:7px;border-radius:50%;background:#c4dde5;display:inline-block;"></span><span style="color:var(--text-dim)">Diff</span> <b style="color:var(--text)">${point.diff.toFixed(4)}</b></span>` : ''}`;
+    vsLossDraw();
+}
+
+function vsLossMarkPause(epoch) { vsLossPauseAt.push(epoch); vsLossDraw(); }
+
+function vsLossDraw() {
+    const pts = vsLossPoints;
+    if (!pts.length) return;
+    const wrap = vsLossCanvas.parentElement;
+    const W = wrap.clientWidth, H = wrap.clientHeight;
+    if (!W || !H) return;
+    const dpr = devicePixelRatio || 1;
+    vsLossCanvas.width  = W * dpr; vsLossCanvas.height = H * dpr;
+    vsLossCanvas.style.width = W + 'px'; vsLossCanvas.style.height = H + 'px';
+    const ctx = vsLossCanvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    const PAD = { top: 16, right: 44, bottom: 22, left: 10 };
+    const cW = W - PAD.left - PAD.right;
+    const cH = H - PAD.top  - PAD.bottom;
+
+    const allV = pts.flatMap(p => [p.val, p.f0, p.sty ?? 0, p.diff ?? 0].filter(v => v > 0));
+    const yMin = Math.max(0, Math.floor((Math.min(...allV) - 0.05) * 10) / 10);
+    const yMax =            Math.ceil ((Math.max(...allV) + 0.10) * 10) / 10;
+    const N = pts.length;
+
+    function xOf(i) { return N < 2 ? PAD.left + cW / 2 : PAD.left + (i / (N - 1)) * cW; }
+    function yOf(v) { return PAD.top + (1 - (v - yMin) / (yMax - yMin)) * cH; }
+
+    // Grid
+    ctx.strokeStyle = '#f1f5f9'; ctx.lineWidth = 1;
+    for (let t = 0; t <= 3; t++) {
+        const v = yMin + (t / 3) * (yMax - yMin);
+        const y = yOf(v);
+        ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(W - PAD.right, y); ctx.stroke();
+        ctx.fillStyle = '#9ca3af'; ctx.font = '10px ui-monospace,monospace'; ctx.textAlign = 'left';
+        ctx.fillText(v.toFixed(2), W - PAD.right + 4, y + 3.5);
+    }
+
+    // X labels (show up to 6 evenly-spaced epochs)
+    ctx.fillStyle = '#9ca3af'; ctx.font = '10px ui-monospace,monospace'; ctx.textAlign = 'center';
+    const step = Math.max(1, Math.floor(N / 6));
+    for (let i = 0; i < N; i += step) {
+        ctx.fillText(pts[i].epoch, xOf(i), H - PAD.bottom + 12);
+    }
+    ctx.fillText(pts[N-1].epoch, xOf(N-1), H - PAD.bottom + 12);
+
+    // Pause markers
+    vsLossPauseAt.forEach(ep => {
+        const i = pts.findIndex(p => p.epoch >= ep);
+        if (i < 0) return;
+        const px = (xOf(Math.max(0, i-1)) + xOf(i)) / 2;
+        ctx.save();
+        ctx.strokeStyle = '#94a3b8'; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);
+        ctx.beginPath(); ctx.moveTo(px, PAD.top); ctx.lineTo(px, PAD.top + cH); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#94a3b8'; ctx.font = '600 9px Inter,system-ui'; ctx.textAlign = 'center';
+        ctx.fillText('PAUSED', px, PAD.top + 9);
+        ctx.restore();
+    });
+
+    // Catmull-Rom spline
+    function spline(series, color, fill) {
+        if (series.length < 1) return;
+        const coords = series.map((v, i) => [xOf(i), yOf(v)]);
+        ctx.save();
+        if (fill && coords.length > 1) {
+            ctx.beginPath();
+            ctx.moveTo(coords[0][0], PAD.top + cH);
+            coords.forEach(([x,y]) => ctx.lineTo(x, y));
+            ctx.lineTo(coords.at(-1)[0], PAD.top + cH);
+            ctx.closePath();
+            ctx.fillStyle = fill; ctx.fill();
+        }
+        ctx.beginPath();
+        ctx.moveTo(coords[0][0], coords[0][1]);
+        for (let i = 0; i < coords.length - 1; i++) {
+            const p0 = coords[Math.max(i-1,0)], p1 = coords[i], p2 = coords[i+1], p3 = coords[Math.min(i+2,coords.length-1)];
+            const t = 0.35;
+            ctx.bezierCurveTo(p1[0]+(p2[0]-p0[0])*t, p1[1]+(p2[1]-p0[1])*t, p2[0]-(p3[0]-p1[0])*t, p2[1]-(p3[1]-p1[1])*t, p2[0], p2[1]);
+        }
+        ctx.strokeStyle = color; ctx.lineWidth = 1.8; ctx.lineJoin = 'round'; ctx.stroke();
+        ctx.beginPath(); ctx.arc(coords.at(-1)[0], coords.at(-1)[1], 3, 0, Math.PI*2);
+        ctx.fillStyle = color; ctx.fill();
+        ctx.restore();
+    }
+
+    if (pts.some(p => p.diff != null && p.diff > 0)) spline(pts.map(p => p.diff ?? 0), '#c4dde5', null);
+    if (pts.some(p => p.sty  != null && p.sty  > 0)) spline(pts.map(p => p.sty  ?? 0), '#a5c9d4', null);
+    spline(pts.map(p => p.f0),  '#7abacc', null);
+    spline(pts.map(p => p.val), '#518c9a', 'rgba(81,140,154,0.07)');
+}
+
 // Shared training kickoff — sends the train request + connects SSE progress
 function vsStartTrainingJob(trainBody, modelName) {
     vsLogBadge.textContent = 'training…'; vsLogBadge.classList.add('live');
     vsShowSetup(false); vsProgSec.style.display = ''; vsLogLines.innerHTML = '';
+    vsLossReset(true);
     vsActiveModelName = modelName; vsPauseBtn.style.display = ''; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training';
     vsStartTimer();
     (async () => {
@@ -4090,14 +4234,26 @@ function vsStartTrainingJob(trainBody, modelName) {
             function connectProgressSse() {
                 if (vsDone) return;
                 if (vsProgressEs) vsProgressEs.close();
-                vsProgressEs = new EventSource('/voice/progress');
+                vsProgressEs = cpEventSource('/voice/progress');
                 vsLogBadge.textContent = 'live'; vsLogBadge.classList.add('live');
                 vsProgressEs.onmessage = e => {
                     try {
                         const d = JSON.parse(e.data);
                         vsSetProgress(d.step, d.percent, d.detail, d.done ? (d.success ? 'done' : 'error') : '');
-                        if (d.detail) vsAppendLog(d.detail, d.step === 'Error' ? 'log-error' : '');
-                        if (d.done) { vsDone = true; vsProgressEs.close(); vsStopTimer(); vsShowSetup(true); vsLogBadge.textContent = d.success ? 'done ✓' : 'failed'; vsLogBadge.classList.remove('live'); vsTrainBtn.disabled = false; vsPauseBtn.style.display = 'none'; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training'; vsActiveModelName = null; if (d.success) vsAppendLog(`✓ Training complete! Model: ${modelName}`); if (d.error) vsAppendLog(`Error: ${d.error}`, 'log-error'); }
+                        if (d.detail) {
+                            const m = d.detail.match(/^LOSS_JSON:\s*(\{.+\})$/);
+                            if (m) {
+                                try { vsLossPush(JSON.parse(m[1])); } catch {}
+                            } else {
+                                vsAppendLog(d.detail, d.step === 'Error' ? 'log-error' : '');
+                                if (/^── Paused/i.test(d.detail)) {
+                                    const ep = vsLossPoints.at(-1)?.epoch;
+                                    if (ep) vsLossMarkPause(ep);
+                                    vsLossLiveDot.style.display = 'none';
+                                }
+                            }
+                        }
+                        if (d.done) { vsDone = true; vsProgressEs.close(); vsStopTimer(); vsShowSetup(true); vsLogBadge.textContent = d.success ? 'done ✓' : 'failed'; vsLogBadge.classList.remove('live'); vsTrainBtn.disabled = false; vsPauseBtn.style.display = 'none'; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training'; vsActiveModelName = null; vsLossLiveDot.style.display = 'none'; if (d.success) vsAppendLog(`✓ Training complete! Model: ${modelName}`); if (d.error) vsAppendLog(`Error: ${d.error}`, 'log-error'); }
                     } catch { /* ignore */ }
                 };
                 vsProgressEs.onerror = () => { if (vsDone) return; vsLogBadge.textContent = 'reconnecting…'; vsLogBadge.classList.remove('live'); vsProgressEs.close(); setTimeout(connectProgressSse, 3000); };
@@ -4631,7 +4787,7 @@ vsTvModel.addEventListener('change', () => {
 
 async function loadVoiceModels() {
     try {
-        const [mr, ar] = await Promise.all([fetch('/voice/models'), fetch('/voice/active')]);
+        const [mr, ar] = await Promise.all([cpFetch('/voice/models'), cpFetch('/voice/active')]);
         const { models } = await mr.json(), { model: activeModel, engine: activeEngine, ready, defaultModel } = await ar.json();
         vsAllModels = models.map(m => ({ ...m, isActive: m.name === activeModel, isDefault: m.name === defaultModel }));
         if (activeEngine) {
@@ -4682,10 +4838,24 @@ async function vsStartResume(modelName, retrain = false) {
     const epochs = epochInput ? parseInt(epochInput.value, 10) || null : null;
     if (btn) btn.disabled = true;
     vsShowSetup(false); vsProgSec.style.display = ''; vsLogLines.innerHTML = '';
+    vsLossReset(true);
     vsActiveModelName = modelName; vsPauseBtn.style.display = ''; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training';
     vsLogBadge.textContent = 'training…'; vsLogBadge.classList.add('live');
     const label = retrain ? 'Retraining' : 'Resuming';
     vsSetProgress(label, 0, `${label} ${modelName}…`, ''); vsStartTimer();
+    // Pre-populate graph from Train.log history
+    if (!retrain) {
+        try {
+            const engine = btn?.dataset.engine ?? 'StyleTTS2';
+            const hr = await cpFetch(`/voice/${encodeURIComponent(engine)}/${encodeURIComponent(modelName)}/loss-history`);
+            if (hr.ok) {
+                const { points, pauses } = await hr.json();
+                for (const p of points) vsLossPush(p);
+                for (const ep of pauses) vsLossMarkPause(ep);
+                vsLossLiveDot.style.display = 'none';
+            }
+        } catch { /* non-fatal */ }
+    }
     try {
         const resp = await cpFetch('/voice/resume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName, epochs, retrain }) });
         if (!resp.ok) throw new Error((await resp.json().catch(()=>({error:resp.statusText}))).error ?? resp.statusText);
@@ -4693,14 +4863,26 @@ async function vsStartResume(modelName, retrain = false) {
         function connectResumeProgressSse() {
             if (vsDone) return;
             if (vsProgressEs) vsProgressEs.close();
-            vsProgressEs = new EventSource('/voice/progress');
+            vsProgressEs = cpEventSource('/voice/progress');
             vsLogBadge.textContent = 'live'; vsLogBadge.classList.add('live');
             vsProgressEs.onmessage = e => {
                 try {
                     const d = JSON.parse(e.data);
                     vsSetProgress(d.step, d.percent, d.detail, d.done ? (d.success ? 'done' : 'error') : '');
-                    if (d.detail) vsAppendLog(d.detail, d.step === 'Error' ? 'log-error' : '');
-                    if (d.done) { vsDone = true; vsProgressEs.close(); vsStopTimer(); vsShowSetup(true); vsLogBadge.textContent = d.success ? 'done ✓' : 'failed'; vsLogBadge.classList.remove('live'); if (btn) btn.disabled = false; vsPauseBtn.style.display = 'none'; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training'; vsActiveModelName = null; if (d.success) vsAppendLog(`✓ Training complete! Model: ${modelName}`); if (d.error) vsAppendLog(`Error: ${d.error}`, 'log-error'); }
+                    if (d.detail) {
+                        const m = d.detail.match(/^LOSS_JSON:\s*(\{.+\})$/);
+                        if (m) {
+                            try { vsLossPush(JSON.parse(m[1])); } catch {}
+                        } else {
+                            vsAppendLog(d.detail, d.step === 'Error' ? 'log-error' : '');
+                            if (/^── Paused/i.test(d.detail)) {
+                                const ep = vsLossPoints.at(-1)?.epoch;
+                                if (ep) vsLossMarkPause(ep);
+                                vsLossLiveDot.style.display = 'none';
+                            }
+                        }
+                    }
+                    if (d.done) { vsDone = true; vsProgressEs.close(); vsStopTimer(); vsShowSetup(true); vsLogBadge.textContent = d.success ? 'done ✓' : 'failed'; vsLogBadge.classList.remove('live'); if (btn) btn.disabled = false; vsPauseBtn.style.display = 'none'; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training'; vsActiveModelName = null; vsLossLiveDot.style.display = 'none'; if (d.success) vsAppendLog(`✓ Training complete! Model: ${modelName}`); if (d.error) vsAppendLog(`Error: ${d.error}`, 'log-error'); }
                 } catch { /* ignore */ }
             };
             vsProgressEs.onerror = () => { if (vsDone) return; vsLogBadge.textContent = 'reconnecting…'; vsLogBadge.classList.remove('live'); vsProgressEs.close(); setTimeout(connectResumeProgressSse, 3000); };
@@ -4724,7 +4906,7 @@ async function loadVoicesList() {
     const container = document.getElementById('voices-list');
     if (!container) return;
     try {
-        const [mr, ar] = await Promise.all([fetch('/voice/models'), fetch('/voice/active')]);
+        const [mr, ar] = await Promise.all([cpFetch('/voice/models'), cpFetch('/voice/active')]);
         const { models } = await mr.json();
         const { model: activeModel, engine: activeEngine, defaultModel } = await ar.json();
         const trained = models.filter(m => m.hasModel);
@@ -4935,7 +5117,7 @@ function dbgCloseWatch() {
 
 function dbgOpenWatch(key) {
     dbgCloseWatch();
-    const es = new EventSource(`/threads/${encodeURIComponent(key)}/watch`);
+    const es = cpEventSource(`/threads/${encodeURIComponent(key)}/watch`);
     es.onmessage = () => {
         if (dbgSelectedThread !== key) return;
         // Throttle, NOT debounce. A trailing debounce (clearTimeout + setTimeout) starves during

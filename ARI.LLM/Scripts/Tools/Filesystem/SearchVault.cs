@@ -30,15 +30,15 @@ internal sealed class SearchVault : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson)
+    internal override Task<ToolResult> Execute(string argsJson)
     {
         string query;
         try { query = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson).RootElement.GetProperty("query").GetString() ?? ""; }
         catch { query = ""; }
-        if (query.Length == 0) return Task.FromResult("Error: 'query' is required.");
+        if (query.Length == 0) return Task.FromResult<ToolResult>("Error: 'query' is required.");
 
         string forwardedArgs = JsonSerializer.Serialize(new { pattern = query, glob = "*.md", ignore_case = true });
-        return fs.Search(forwardedArgs);
+        return fs.Search(forwardedArgs).AsToolResult();
     }
 
     internal override Func<string, string>? Display => _ => "<!--ari-tool-start:search_vault:vault-->";

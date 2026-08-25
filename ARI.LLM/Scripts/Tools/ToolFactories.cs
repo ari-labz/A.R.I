@@ -5,7 +5,7 @@ namespace ARI.LLM;
 /// <summary>
 /// The single global tool-construction registry. Every deferrable tool name maps to ONE factory, callable
 /// for any thread regardless of which agent is running on it — there is no per-agent allowlist. Whether a
-/// tool actually resolves depends only on what context the thread has bound (Thread.ProjectRoot etc.), the
+/// tool actually resolves depends only on what context the thread has bound (Thread.FilesystemRoot etc.), the
 /// same way a real assistant can't edit files with no project open, whoever's asking. Trust that an agent
 /// won't reach for a group it has no business touching is a prompting concern (each agent's system prompt),
 /// not something enforced here.
@@ -14,20 +14,29 @@ internal static class ToolFactories
 {
     private static readonly Dictionary<string, Func<Thread, Tool?>> _factories = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["git_status"] = t => t.ProjectRoot is { } r ? new GitStatus(r) : null,
-        ["git_diff"]   = t => t.ProjectRoot is { } r ? new GitDiff(r)   : null,
-        ["git_log"]    = t => t.ProjectRoot is { } r ? new GitLog(r)    : null,
-        ["git_commit"] = t => t.ProjectRoot is { } r ? new GitCommit(r, "A.R.I <ari@ari.local>") : null,
+        ["git_status"] = t => t.FilesystemRoot is { } r ? new GitStatus(r) : null,
+        ["git_diff"]   = t => t.FilesystemRoot is { } r ? new GitDiff(r)   : null,
+        ["git_log"]    = t => t.FilesystemRoot is { } r ? new GitLog(r)    : null,
+        ["git_commit"] = t => t.FilesystemRoot is { } r ? new GitCommit(r, "A.R.I <ari@ari.local>") : null,
+
+        // Multi-repo git tool: auto-discovers repos inside the project folder so ARI never constructs paths.
+        ["git"] = t => t.FilesystemRoot is { } r ? GitMulti.Discover(r) : null,
+
+        // GitHub over the REST API — no gh binary. projectRoot lets it use a project-scoped token.
+        ["github"] = t => new GitHubTool(t.FilesystemRoot),
+
+        ["deliver_file"]      = t => new DeliverFile(t.Key),
+        ["create_scratchpad"] = t => new CreateScratchpad(t),
 
         ["preview_file"]   = t => Fs(t) is { } fs ? new PreviewFile(fs)   : null,
-        ["read_file"]      = t => Fs(t) is { } fs ? new ReadFile(fs)      : null,
+        ["read_file"]      = t => Fs(t) is { } fs ? new Read(fs)      : null,
         ["list_directory"] = t => Fs(t) is { } fs ? new ListDirectory(fs) : null,
         ["search_files"]   = t => Fs(t) is { } fs ? new SearchFiles(fs)   : null,
         ["find_files"]     = t => Fs(t) is { } fs ? new FindFiles(fs)     : null,
         ["edit_file"]      = t => Fs(t) is { } fs ? new EditFile(fs)      : null,
         ["write_file"]     = t => Fs(t) is { } fs ? new WriteFile(fs)     : null,
 
-        ["build_project"] = t => t is { ProjectRoot: { } r, IsRemoteProject: false } ? new BuildProjectTool(t, r) : null,
+        ["build_project"] = t => t is { FilesystemRoot: { } r, IsRemoteProject: false } ? new BuildProjectTool(t, r) : null,
 
         // No index, no database, nothing shared with ARI.Brain — see SearchVault.cs.
         ["search_vault"] = t => Fs(t) is { } fs ? new SearchVault(fs) : null,
@@ -55,7 +64,7 @@ internal static class ToolFactories
 
     private static ServerFileSystem? Fs(Thread t)
     {
-        if (t.ProjectRoot is not { } r) return null;
+        if (t.FilesystemRoot is not { } r) return null;
         bool isVault = t.IsBrainVault || Directory.Exists(Path.Combine(r, ".obsidian"));
         return new ServerFileSystem(r, t.Ct, t.Snapshots, isVault);
     }
@@ -92,7 +101,7 @@ internal static class ToolFactories
         internal override object Schema => Coder.BuildProjectSchema;
         internal override Func<string, string>? Display => _ => "<!--ari-tool-start:build_project:project-->";
 
-        internal override Task<string> Execute(string argsJson)
-            => Coder.BuildTouched(thread.TouchedFiles, root, thread.Ct);
+        internal override Task<ToolResult> Execute(string argsJson)
+            => Coder.BuildTouched(thread.TouchedFiles, root, thread.Ct).AsToolResult();
     }
 }

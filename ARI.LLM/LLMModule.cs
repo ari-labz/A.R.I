@@ -329,7 +329,7 @@ public class LLMModule : ILLMModule, IDisposable
         threads[threadKey] = thread;
         // list_tools/request_tools are always warm (issue #126) and universal — no agent-identity gate.
         // What a group actually resolves to depends on ToolFactories reading this thread's bound context
-        // (ProjectRoot etc.), set by whichever agent runs on it (Coder.RunLoop, MemoryAgent.RegisterTools).
+        // (FilesystemRoot etc.), set by whichever agent runs on it (Coder.RunLoop, MemoryAgent.RegisterTools).
         // Threads created outside this choke point (MemoryAgent's internal epoch threads) register their
         // own copy for the same reason.
         new ListTools().Register(thread);
@@ -558,7 +558,7 @@ public class LLMModule : ILLMModule, IDisposable
     public void BindProjectContext(string threadKey, string? rootPath, bool isVault)
     {
         if (!Threads.TryGetValue(threadKey, out Thread? thread) || rootPath is null) return;
-        thread.ProjectRoot  = rootPath;
+        thread.FilesystemRoot  = rootPath;
         thread.IsBrainVault = isVault;
         thread.Ct           = CancellationToken.None;
     }

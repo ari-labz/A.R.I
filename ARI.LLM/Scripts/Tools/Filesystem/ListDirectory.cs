@@ -34,7 +34,7 @@ internal sealed class ListDirectory : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson) => fs.List(argsJson);
+    internal override Task<ToolResult> Execute(string argsJson) => fs.List(argsJson).AsToolResult();
 
     internal override Func<string, string>? Display => args =>
     {

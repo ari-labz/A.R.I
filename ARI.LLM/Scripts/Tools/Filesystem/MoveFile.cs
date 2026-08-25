@@ -30,7 +30,7 @@ internal sealed class MoveFile : Tool
         }
     };
 
-    internal override Task<string> Execute(string argsJson) => fs.Move(argsJson);
+    internal override Task<ToolResult> Execute(string argsJson) => fs.Move(argsJson).AsToolResult();
 
     internal override Func<string, string>? Display => args =>
     {

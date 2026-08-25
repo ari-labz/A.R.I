@@ -1,12 +1,21 @@
+using System.Text;
 using System.Text.Json;
 
 namespace ARI.LLM;
 
-/// <summary>read_file tool — thin wrapper that delegates to the thread's <see cref="FileSystem"/>.</summary>
-internal sealed class ReadFile : Tool
+/// <summary>read_file tool. The base is the default: for a plain-text file it delegates to the thread's
+/// <see cref="FileSystem"/> (which windows the read and, on the server, gates it behind a preview). For a
+/// recognised binary type it fetches raw bytes and hands them to a subclass <see cref="Decode"/> — so
+/// adding a file type is one new subclass. See Documentation/Server/Read-Tool-Hierarchy.md.</summary>
+internal class Read : Tool
 {
-    private readonly FileSystem fs;
-    internal ReadFile(FileSystem fs) => this.fs = fs;
+    protected readonly FileSystem fs;
+    internal Read(FileSystem fs) => this.fs = fs;
+
+    // A decoded document can't be line-windowed by fs.Read, so PostRun caps it. Set above the text path's
+    // own char cap so a plain-text read (already within it) never trips this net.
+    private const int MAX_TEXT_CHARS  = 60000;
+    private const int MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
     internal override string Name => "read_file";
 
@@ -22,7 +31,9 @@ internal sealed class ReadFile : Tool
                 "you are copying/imitating it — and then read just THAT method's lines (preview gave you its line number), not the whole file. " +
                 "HARD LIMIT: at most 100 lines per call — wider requests are rejected without being read. ALWAYS preview_file first, then pass " +
                 "start_line and end_line for the exact range. Reading a whole file, or reading 'to be sure', bloats your context and is the main " +
-                "reason this pipeline runs out of room before it finishes. You never need to read a file you have already read.",
+                "reason this pipeline runs out of room before it finishes. You never need to read a file you have already read. " +
+                "You can also read an IMAGE — pass an image file's path, or an http(s) URL to an image, and you will SEE it (no download needed). " +
+                "A .ipynb notebook path returns its cells as text.",
             parameters  = new
             {
                 type       = "object",
@@ -37,12 +48,107 @@ internal sealed class ReadFile : Tool
         }
     };
 
-    internal override async Task<string> Execute(string argsJson)
+    internal override async Task<ToolResult> Execute(string argsJson)
     {
-        string result = await fs.Read(argsJson);
-        if (!result.StartsWith("[Error", StringComparison.OrdinalIgnoreCase))
-            fs.MarkRead(argsJson);
+        string path = ExtractPath(argsJson);
+
+        if (IsUrl(path)) return await ReadWeb(path);
+
+        Read? decoder = For(path, fs);
+
+        if (decoder is null)   // plain text — the existing windowed, preview-gated path (both backends)
+        {
+            string text = await fs.Read(argsJson);
+            if (!text.StartsWith("[Error", StringComparison.OrdinalIgnoreCase))
+                fs.MarkRead(argsJson);
+            return text;
+        }
+
+        try
+        {
+            byte[] raw = await fs.ReadBytes(path);
+            return decoder.Decode(raw, path);
+        }
+        catch (NotSupportedException)
+        {
+            return $"[Error: this project's filesystem can't read raw bytes, so .{Extension(path)} files can't be decoded here.]";
+        }
+        catch (Exception ex)
+        {
+            return $"[Error reading {path}: {ex.Message}]";
+        }
+    }
+
+    private static readonly HttpClient Http = new();
+
+    private static bool IsUrl(string path)
+        => path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || path.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Reads a web resource. The bytes are fetched once into memory and never written to disk. The
+    /// response Content-Type — not the URL extension, which many image URLs (e.g. GitHub attachments) lack —
+    /// decides the decoder: an image is handed to ReadImage so the vision model can see it; anything else
+    /// comes back as text. Nothing here persists, so viewing a web image costs no disk.</summary>
+    private async Task<ToolResult> ReadWeb(string url)
+    {
+        try
+        {
+            using HttpRequestMessage req = new(HttpMethod.Get, url);
+            req.Headers.UserAgent.ParseAdd("ARI");
+            using HttpResponseMessage res = await Http.SendAsync(req);
+            if (!res.IsSuccessStatusCode)
+                return $"[Error: {(int)res.StatusCode} fetching {url}.]";
+
+            string contentType = res.Content.Headers.ContentType?.MediaType ?? "";
+            byte[] bytes       = await res.Content.ReadAsByteArrayAsync();
+
+            if (contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                return ReadImage.Image(bytes, contentType);
+
+            // Not an image — return the text. fetch_page is the better tool for a full page, but a plain
+            // text/JSON resource read this way is still useful.
+            return Encoding.UTF8.GetString(bytes);
+        }
+        catch (Exception ex) { return $"[Error fetching {url}: {ex.Message}]"; }
+    }
+
+    /// <summary>Turns raw bytes into a result. The base reads them as UTF-8 text — the default and the
+    /// fallback any subclass can reach via <c>base.Decode</c> when its own decode fails. Subclasses override
+    /// this and nothing else. <paramref name="path"/> is available for extension-based hints (e.g. mime).</summary>
+    protected virtual ToolResult Decode(byte[] raw, string path) => Encoding.UTF8.GetString(raw);
+
+    /// <summary>Shared read policy on the way back to the model: guard an oversized image, and cap a decoded
+    /// document that fs.Read never got to window. Every read subclass inherits this one hook.</summary>
+    internal override ToolResult PostRun(Thread thread, string argsJson, ToolResult result)
+    {
+        if (result.Kind == ToolResult.ContentKind.Image)
+            return result.Bytes.Length > MAX_IMAGE_BYTES
+                ? $"[Error: image is {result.Bytes.Length / (1024 * 1024)}MB — too large to hand to the vision model. Ask for a smaller or downscaled copy.]"
+                : result;
+
+        if (result.Text.Length > MAX_TEXT_CHARS)
+            return ToolResult.AsText(result.Text[..MAX_TEXT_CHARS] + $"\n[Truncated at {MAX_TEXT_CHARS} chars — this file is large; read a narrower part.]");
         return result;
+    }
+
+    /// <summary>Selects the decoder for a path by extension; null means plain text (the base's fs.Read path).
+    /// Magic-byte sniffing is a later refinement — extension is enough for the first cut.</summary>
+    private static Read? For(string path, FileSystem fs) => Extension(path) switch
+    {
+        "png" or "jpg" or "jpeg" or "gif" or "webp" or "bmp" => new ReadImage(fs),
+        "ipynb"                                              => new ReadNotebook(fs),
+        _                                                    => null
+    };
+
+    protected static string Extension(string path) => Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
+
+    private static string ExtractPath(string argsJson)
+    {
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            return (doc.RootElement.TryGetProperty("path", out JsonElement p) ? p.GetString() : null)?.Trim('"', '\'', ' ') ?? "";
+        }
+        catch { return ""; }
     }
 
     /// <summary>Hard per-call read window shared by every read_file backend (server disk and remote client).

@@ -14,7 +14,7 @@ import TaskBanner from "./components/TaskBanner"
 import { playResponseChime } from "./notify"
 import LoginScreen from "./components/LoginScreen"
 import UserPreferences from "./components/UserPreferences"
-import { apiFetch, fetchMe, setToken, type AuthUser } from "./auth"
+import { apiFetch, fetchMe, setToken, getToken, type AuthUser } from "./auth"
 import "./styles/app.css"
 
 export type AppMode = "idle" | "active"
@@ -185,6 +185,24 @@ const cmdCodeStyle:    CSSProperties = { background: "#111114", border: "1px sol
 const cmdActionsStyle: CSSProperties = { display: "flex", gap: 8, justifyContent: "flex-end" }
 const cmdBtnBase:      CSSProperties = { padding: "7px 14px", borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: "pointer", border: "1px solid transparent" }
 
+// Safety net for the interject split: within the recent tail, drop a userMessage whose content already
+// appeared (the optimistic copy + the server-placed copy can both survive a reconcile if timing is odd).
+// Older history is untouched, so a genuine repeated message elsewhere in the thread is preserved.
+function dedupeRecentUserMessages(items: ThreadItem[]): ThreadItem[] {
+    const cut = Math.max(0, items.length - 10)
+    const seen = new Set<string>()
+    const out: ThreadItem[] = []
+    items.forEach((it, i) => {
+        if (i >= cut && it.type === "userMessage") {
+            const key = it.content ?? ""
+            if (seen.has(key)) return
+            seen.add(key)
+        }
+        out.push(it)
+    })
+    return out
+}
+
 export default function App() {
     const { threads, load: loadThreads } = useThreads()
 
@@ -222,6 +240,10 @@ export default function App() {
         fetchMe().then(user => {
             if (user) { setAuthUser(user); setAuthState("authed") }
             else       setAuthState("needsLogin")
+            // Signal Desktop that the renderer has something to display — dismiss the splash
+            // regardless of whether auth succeeded. Without this, the 15-second fallback fires
+            // whenever the token is absent/expired and connectAndInit never runs.
+            window.electronBridge?.markReady()
         })
     }, [])
 
@@ -328,7 +350,7 @@ export default function App() {
                         loadThreads()
                         // Refresh active thread content when it changes (new message, etc.)
                         if (data.threadKey === activeThreadRef.current && !streamingRef.current)
-                            loadHistory(data.threadKey).then(hist => setItems(hist)).catch(() => {})
+                            loadHistory(data.threadKey).then(hist => setItems(dedupeRecentUserMessages(hist))).catch(() => {})
                         break
                     case "streaming":
                         if (data.threadKey === activeThreadRef.current && !streamingRef.current) {
@@ -348,7 +370,7 @@ export default function App() {
                         loadThreads()
                         playResponseChime()   // issue #63: chime when an Ari response completes
                         if (data.threadKey === activeThreadRef.current && !streamingRef.current)
-                            loadHistory(data.threadKey).then(hist => setItems(hist)).catch(() => {})
+                            loadHistory(data.threadKey).then(hist => setItems(dedupeRecentUserMessages(hist))).catch(() => {})
                         break
                     case "threadDeleted":
                         loadThreads()
@@ -398,7 +420,7 @@ export default function App() {
         // Check protocol compatibility — only relevant in the Desktop app where the
         // client has a fixed protocol baked in and the server may be a different build.
         if (window.electronBridge) {
-            const CLIENT_PROTOCOL = 2
+            const CLIENT_PROTOCOL = 3
             const infoRes = await apiFetch("/api/info/ready").catch(() => null)
             if (infoRes?.ok) {
                 const { protocol: serverProtocol } = await infoRes.json()
@@ -618,6 +640,13 @@ export default function App() {
                     console.warn(`[ToolSocket] → file_content  callId=${callId}  bytes=${result.length}  lines=${start}-${end}/${total}${capped ? " CAPPED" : ""}`)
                     ws.send(JSON.stringify({ type: "file_content", callId, content: result }))
 
+                } else if (type === "read_bytes") {
+                    // Binary read (protocol v3): return the file's raw bytes base64-encoded. The server
+                    // decodes them and hands them to the Read tool's decoder (image, notebook, …).
+                    const base64 = await window.electronBridge!.readBytes(localPath, params.path ?? "")
+                    console.warn(`[ToolSocket] → file_content (read_bytes)  callId=${callId}  b64len=${base64.length}`)
+                    ws.send(JSON.stringify({ type: "file_content", callId, content: base64 }))
+
                 } else if (type === "list_directory") {
                     const depth = typeof (params as Record<string, unknown>).depth === "number"
                         ? (params as Record<string, unknown>).depth as number
@@ -779,12 +808,15 @@ export default function App() {
     // opened for EVERY thread we start watching, including one created by sending the first message —
     // without it threadStatus never leaves "idle" and the indicator falls back to guessing from content,
     // which cannot tell thinking apart from an empty reply.
+    const isSyncingRef = useRef(false)
+
     const attachWatch = useCallback((key: string) => {
         watchStreamRef.current?.close()
         watchStreamRef.current = openWatchStream(key, (e: WatchEvent) => {
             if (e.deleted) { watchStreamRef.current = null; return }
             if (e.status) {
-                setThreadStatus(e.status)
+                // Don't let server status events overwrite the syncing indicator.
+                if (!isSyncingRef.current) setThreadStatus(e.status)
                 setIsRemembering(e.status === "remembering")
             }
             if (e.isCodeMode !== undefined) setCodeMode(e.isCodeMode)
@@ -916,14 +948,11 @@ export default function App() {
         // the running turn instead of aborting — she keeps her chain of thought and incorporates the new info.
         if (isStreaming && activeThreadRef.current && prompt && !prompt.startsWith("/")) {
             const key = activeThreadRef.current
-            const optimisticAttach = pendingAttach.length ? [...pendingAttach] : undefined
             setPendingAttach([])
-            setItems(prev => {
-                // Insert the interjection just before the trailing streaming response bubble.
-                const idx = prev.length && prev[prev.length - 1].type === "ariResponse" ? prev.length - 1 : prev.length
-                const msg: ThreadItem = { type: "userMessage", content: prompt, timestamp: new Date().toISOString(), attachments: optimisticAttach as Attachment[] | undefined }
-                return [...prev.slice(0, idx), msg, ...prev.slice(idx)]
-            })
+            // Show the interjection immediately, appended AFTER the streaming bubble (which keeps streaming
+            // above it). When the server folds it in, a [SPLIT] event finalizes that bubble and opens the
+            // continuation below this message; the [SPLIT]/[DONE] handlers dedupe against this optimistic copy.
+            setItems(prev => [...prev, { type: "userMessage", content: prompt, timestamp: new Date().toISOString() }])
             const res = await apiFetch(`/threads/${key}/interject`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ text: prompt }),
@@ -939,23 +968,21 @@ export default function App() {
 
         const needsNew = !activeThreadRef.current
 
+        let optimisticUserItem: ThreadItem | null = null
         if (needsNew && !prompt.startsWith("/")) {
             activate()
             const optimisticAttach = pendingAttach.length ? [...pendingAttach] : undefined
             setPendingAttach([])
             pendingMsgRef.current = prompt
             preSendCountRef.current = items.length
-            const userItem: ThreadItem = {
+            optimisticUserItem = {
                 type: "userMessage", content: prompt,
                 timestamp: new Date().toISOString(),
                 attachments: optimisticAttach as Attachment[] | undefined,
             }
-            setItems(prev => [...prev, userItem, {
-                type: "ariResponse", content: "",
-                timestamp: new Date().toISOString(),
-                isStreaming: true,
-            }])
-            setIsStreaming(true)
+            // Show the user's message immediately. The ARI streaming bubble is added after
+            // sync completes so "Syncing project files" doesn't appear alongside it.
+            setItems(prev => [...prev, optimisticUserItem!])
         }
 
         let key = activeThreadRef.current
@@ -970,7 +997,28 @@ export default function App() {
                 // dark-mode overlay animates in (false → true while #main is mounted)
                 // instead of only appearing when the thread is later reopened.
                 setCodeMode(true)
+                // Auto-sync: if the user has opted in and Desktop has a local path, sync before injecting the tree.
+                if (window.electronBridge?.syncRun && localStorage.getItem(`ari-autosync-${selectedProject}`) === "1") {
+                    const lp = await env.getLocalPath(selectedProject)
+                    if (lp) {
+                        isSyncingRef.current = true
+                        setThreadStatus("syncing")
+                        await window.electronBridge.syncRun({ projectId: selectedProject, localPath: lp, token: getToken() })
+                            .catch(e => console.warn("[AutoSync] failed:", e))
+                        isSyncingRef.current = false
+                        setThreadStatus("idle")
+                    }
+                }
                 await injectFileTree(key, selectedProject)
+            }
+            // Now that sync is done, add the ARI streaming bubble.
+            if (optimisticUserItem) {
+                setItems(prev => [...prev, {
+                    type: "ariResponse", content: "",
+                    timestamp: new Date().toISOString(),
+                    isStreaming: true,
+                }])
+                setIsStreaming(true)
             }
         } else if (mode === "idle") {
             activate()
@@ -1056,8 +1104,8 @@ export default function App() {
                         loadThreads()
                         // Replace the optimistic streaming item with the finalized server history
                         fetchThread(keyForStream).then(detail => {
-                            if (!detail) return loadHistory(keyForStream).then(hist => { if (activeThreadRef.current === keyForStream) setItems(hist) }).catch(() => {})
-                            if (activeThreadRef.current === keyForStream) setItems(detail.history)
+                            if (!detail) return loadHistory(keyForStream).then(hist => { if (activeThreadRef.current === keyForStream) setItems(dedupeRecentUserMessages(hist)) }).catch(() => {})
+                            if (activeThreadRef.current === keyForStream) setItems(dedupeRecentUserMessages(detail.history))
                         }).catch(() => {})
                         return
                     }
@@ -1084,13 +1132,46 @@ export default function App() {
                         abortRef.current = null; setIsStreaming(false)
                         return
                     }
+                    if (data.startsWith("[SPLIT]")) {
+                        // Mid-turn interjection. Notice = mode + sep + username + sep + text.
+                        //   split  -> the response so far HAS content: cap it off (no footer) and open a new
+                        //             bubble below the interjection for the continuation.
+                        //   before -> the response has NO content yet: slot the interjection ABOVE the still-
+                        //             streaming bubble instead of leaving an empty one; it keeps streaming below.
+                        const fields  = data.slice(7).split("\u0001")
+                        const mode    = fields.length >= 3 ? fields[0] : "split"
+                        const msgText = fields.length >= 3 ? fields.slice(2).join("\u0001") : fields[fields.length - 1]
+                        const mkMsg = () => ({ type: "userMessage" as const, content: msgText, timestamp: new Date().toISOString() })
+                        setItems(prev => {
+                            const arr = [...prev]
+                            let respIdx = -1
+                            for (let i = arr.length - 1; i >= 0; i--) if (arr[i].type === "ariResponse" && arr[i].isStreaming) { respIdx = i; break }
+                            if (mode === "before") {
+                                // Drop the optimistic copy (appended after the bubble), then insert ABOVE the bubble.
+                                const dupIdx = arr.findIndex(it => it.type === "userMessage" && it.content === msgText)
+                                if (dupIdx >= 0 && dupIdx !== respIdx) { arr.splice(dupIdx, 1); if (dupIdx < respIdx) respIdx-- }
+                                arr.splice(respIdx >= 0 ? respIdx : arr.length, 0, mkMsg())
+                            } else {
+                                if (respIdx >= 0) arr[respIdx] = { ...arr[respIdx], isStreaming: false, continued: true }
+                                if (!arr.some(it => it.type === "userMessage" && it.content === msgText)) arr.push(mkMsg())
+                                arr.push({ type: "ariResponse", content: "", timestamp: new Date().toISOString(), isStreaming: true })
+                            }
+                            return dedupeRecentUserMessages(arr)
+                        })
+                        return
+                    }
+
                     const text = data.replace(/\\n/g, "\n")
 
-                    // Update the last ariResponse item in place (it was pre-added with isStreaming: true)
+                    // Update the last STREAMING ariResponse in place. Not necessarily the last item: an
+                    // optimistic interjection may sit after the still-streaming bubble until the split lands.
                     setItems(prev => {
-                        const last = prev[prev.length - 1]
-                        if (!last || last.type !== "ariResponse") return prev
-                        return [...prev.slice(0, -1), { ...last, content: text, isStreaming: true }]
+                        for (let i = prev.length - 1; i >= 0; i--) {
+                            if (prev[i].type === "ariResponse" && prev[i].isStreaming) {
+                                const next = [...prev]; next[i] = { ...prev[i], content: text, isStreaming: true }; return next
+                            }
+                        }
+                        return prev
                     })
                 }
 

@@ -12,6 +12,23 @@ const TOOL_DONE_RE  = /<!--ari-tool-done:([^:]+):([^>]*?)-->/g
 const TOOL_END_RE   = /<!--ari-tool-end:([^:]+):([^>]*?)-->/g
 const TOOL_ERROR_RE = /<!--ari-tool-error:([^:]+):([^:]*):([^>]*?)-->/g
 const TOOL_MODE_RE  = /<!--ari-tool-mode:([^:]+):([^>]*?)-->/g
+const FILE_RE       = /<!--ari-file:([^:]+):([^>]*?)-->/g
+
+// Turns deliver_file markers into a hover-to-download card. Shared by the streaming render
+// (preprocessToolCards) and the finished-blocks render (renderBlockHtml text blocks), so the card
+// doesn't vanish when a reply finishes and switches from raw content to typed blocks.
+function renderFileMarkers(s: string): string {
+    return s.replace(FILE_RE, (_, threadKey, rawPath) => {
+        const path = decodeMarkerLabel(rawPath)
+        const name = path.split("/").pop() || path
+        const ext  = (name.includes(".") ? name.split(".").pop()! : "file").toUpperCase().slice(0, 4)
+        const href = `/threads/${encodeURIComponent(threadKey)}/file?path=${encodeURIComponent(path)}`
+        return `\n\n<a class="file-card file-card--download" href="${href}" download="${escHtml(name)}" title="Download ${escHtml(name)}">`
+             + `<span class="file-card-icon">${escHtml(ext)}</span>`
+             + `<span class="file-card-name">${escHtml(name)}</span>`
+             + `<span class="file-card-dl" aria-hidden="true"></span></a>\n\n`
+    })
+}
 
 function escHtml(s: string): string {
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -137,6 +154,10 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
     // leave a plain chip rather than a stray HTML comment.
     out = out.replace(/<!--ari-persona-edit:[^>]*?-->/g,
         `\n\n<div class="tool-card tool-card--plan"><span>Ari proposed a persona change</span></div>\n\n`)
+
+    // Delivered file: a download card ARI emitted with deliver_file. Also applied in the finished-blocks
+    // path (renderBlockHtml) so the card survives after streaming — the marker rides in a text block there.
+    out = renderFileMarkers(out)
 
     // Mode switch (replan): a light-blue info card, NOT an error.
     out = out.replace(TOOL_MODE_RE, (_, _name, rawLabel) => {
@@ -343,7 +364,7 @@ export function renderBlockHtml(block: BlockLike): string {
     const done = (block.state ?? 0) === 1
     const err  = (block.state ?? 0) === 2
 
-    if (block.type === "text")     return marked.parse(block.text ?? "", { async: false }) as string
+    if (block.type === "text")     return marked.parse(renderFileMarkers(block.text ?? ""), { async: false }) as string
     if (block.type === "thinking") return ""   // reasoning is shown via the thought-block, not inline
 
     // Plan proposed: a subtle non-interactive chip in the transcript — the Accept/Amend actions live in the
@@ -398,16 +419,24 @@ export function renderBlockHtml(block: BlockLike): string {
     return `<div class="tool-card ${cls}"><span>${verb} ${escHtml(label)}</span></div>`
 }
 
-export function renderMd(content: string, msgIndex = 0): string {
-    const html = marked.parse(preprocessToolCards(content ?? "", msgIndex), { async: false }) as string
-    const tmp = document.createElement("div")
-    tmp.innerHTML = html
-    tmp.querySelectorAll("pre").forEach(pre => {
+// Wraps every bare <pre> in a .code-block div so the code-block background/header CSS applies. Shared by
+// the streaming render and the finished-blocks render — without it a code block loses its background the
+// moment streaming ends and the typed-blocks path takes over.
+function wrapCodeBlocks(root: HTMLElement) {
+    root.querySelectorAll("pre").forEach(pre => {
+        if (pre.parentElement?.classList.contains("code-block")) return
         const wrapper = document.createElement("div")
         wrapper.className = "code-block"
         pre.parentNode!.insertBefore(wrapper, pre)
         wrapper.appendChild(pre)
     })
+}
+
+export function renderMd(content: string, msgIndex = 0): string {
+    const html = marked.parse(preprocessToolCards(content ?? "", msgIndex), { async: false }) as string
+    const tmp = document.createElement("div")
+    tmp.innerHTML = html
+    wrapCodeBlocks(tmp)
     return tmp.innerHTML
 }
 
@@ -514,6 +543,7 @@ export function setBubbleBlocks(el: HTMLElement, blocks: BlockLike[], baseClass 
             seg.innerHTML = html
             el.appendChild(seg)
         }
+        wrapCodeBlocks(el)
         attachCopyButtons(el)
         return
     }
@@ -527,5 +557,6 @@ export function setBubbleBlocks(el: HTMLElement, blocks: BlockLike[], baseClass 
         div.innerHTML = html
         el.appendChild(div)
     }
+    wrapCodeBlocks(el)
     attachCopyButtons(el)
 }

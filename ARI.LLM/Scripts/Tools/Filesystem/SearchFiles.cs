@@ -2,28 +2,30 @@ using System.Text.Json;
 
 namespace ARI.LLM;
 
-/// <summary>find_files tool — thin wrapper that delegates to the thread's <see cref="FileSystem"/>.</summary>
-internal sealed class FindFiles : Tool
+/// <summary>search_files tool — thin wrapper that delegates to the thread's <see cref="FileSystem"/>.</summary>
+internal sealed class SearchFiles : Tool
 {
     private readonly FileSystem fs;
-    internal FindFiles(FileSystem fs) => this.fs = fs;
+    internal SearchFiles(FileSystem fs) => this.fs = fs;
 
-    internal override string Name => "find_files";
+    internal override string Name => "search_files";
 
     internal override object Schema => new
     {
         type     = "function",
         function = new
         {
-            name        = "find_files",
-            description = "Find files by name with a glob pattern, e.g. '*.cs', 'User*.cs', or '**/Services/*.cs'. Returns paths relative to the project root. Build/VCS directories are skipped. Use search_files to match file contents.",
+            name        = "search_files",
+            description = "Search file contents across the project with a regular expression (.NET regex). Returns matching lines with file path and line number. Case-sensitive by default; set ignore_case or use an inline (?i) flag. Build/VCS directories (node_modules, bin, obj, .git, …) are skipped.",
             parameters  = new
             {
                 type       = "object",
                 properties = new
                 {
-                    pattern = new { type = "string", description = "Glob pattern, e.g. '*.cs' or '**/User*.cs'." },
-                    path    = new { type = "string", description = "Directory to search under, relative to project root. Defaults to root." }
+                    pattern     = new { type = "string",  description = "Regular expression to search for, e.g. 'public .* MethodName\\('." },
+                    path        = new { type = "string",  description = "Directory to search in, relative to project root. Defaults to project root." },
+                    glob        = new { type = "string",  description = "File filter pattern e.g. '*.cs', '*.json'. Defaults to all files." },
+                    ignore_case = new { type = "boolean", description = "Case-insensitive match. Defaults to false." }
                 },
                 required = new[] { "pattern" }
             }
@@ -32,9 +34,9 @@ internal sealed class FindFiles : Tool
 
     private const int MAX_RESULTS = 50;
 
-    internal override async Task<string> Execute(string argsJson)
+    internal override async Task<ToolResult> Execute(string argsJson)
     {
-        string result = await fs.Find(argsJson);
+        string result = await fs.Search(argsJson);
         return Cap(result);
     }
 
@@ -72,8 +74,8 @@ internal sealed class FindFiles : Tool
         {
             using JsonDocument doc = JsonDocument.Parse(args);
             string p = doc.RootElement.GetProperty("pattern").GetString() ?? "";
-            return $"<!--ari-tool-start:find_files:{p.Replace("&", "&amp;").Replace("<", "&lt;").Replace("--", "&#45;&#45;")}-->";
+            return $"<!--ari-tool-start:search_files:{p.Replace("&", "&amp;").Replace("<", "&lt;").Replace("--", "&#45;&#45;")}-->";
         }
-        catch { return "<!--ari-tool-start:find_files:files-->"; }
+        catch { return "<!--ari-tool-start:search_files:files-->"; }
     };
 }
