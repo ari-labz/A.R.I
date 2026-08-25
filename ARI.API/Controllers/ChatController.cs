@@ -866,7 +866,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                         .Any(d => Directory.Exists(Path.Combine(d, ".git")));
                     if (hasInnerRepos)
                         ctx.AppendLine()
-                           .AppendLine("This project contains git repositories. Before working in any repository, use git_status and git_pull to check for upstream changes and pull the latest version. Always work on up-to-date code.");
+                           .AppendLine("This project contains git repositories. Load project_git_tools to get the `git` tool, which lists the available repos automatically. Before working in any repo, run git({repo}, \"fetch\") then git({repo}, \"status\") to check for upstream changes, and git({repo}, \"pull\") to update. Always work on up-to-date code.");
                 }
 
                 platformContext = ctx.ToString().TrimEnd();
