@@ -31,7 +31,9 @@ internal class Read : Tool
                 "you are copying/imitating it — and then read just THAT method's lines (preview gave you its line number), not the whole file. " +
                 "HARD LIMIT: at most 100 lines per call — wider requests are rejected without being read. ALWAYS preview_file first, then pass " +
                 "start_line and end_line for the exact range. Reading a whole file, or reading 'to be sure', bloats your context and is the main " +
-                "reason this pipeline runs out of room before it finishes. You never need to read a file you have already read.",
+                "reason this pipeline runs out of room before it finishes. You never need to read a file you have already read. " +
+                "You can also read an IMAGE — pass an image file's path, or an http(s) URL to an image, and you will SEE it (no download needed). " +
+                "A .ipynb notebook path returns its cells as text.",
             parameters  = new
             {
                 type       = "object",
@@ -48,8 +50,11 @@ internal class Read : Tool
 
     internal override async Task<ToolResult> Execute(string argsJson)
     {
-        string path    = ExtractPath(argsJson);
-        Read?  decoder = For(path, fs);
+        string path = ExtractPath(argsJson);
+
+        if (IsUrl(path)) return await ReadWeb(path);
+
+        Read? decoder = For(path, fs);
 
         if (decoder is null)   // plain text — the existing windowed, preview-gated path (both backends)
         {
@@ -72,6 +77,38 @@ internal class Read : Tool
         {
             return $"[Error reading {path}: {ex.Message}]";
         }
+    }
+
+    private static readonly HttpClient Http = new();
+
+    private static bool IsUrl(string path)
+        => path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || path.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Reads a web resource. The bytes are fetched once into memory and never written to disk. The
+    /// response Content-Type — not the URL extension, which many image URLs (e.g. GitHub attachments) lack —
+    /// decides the decoder: an image is handed to ReadImage so the vision model can see it; anything else
+    /// comes back as text. Nothing here persists, so viewing a web image costs no disk.</summary>
+    private async Task<ToolResult> ReadWeb(string url)
+    {
+        try
+        {
+            using HttpRequestMessage req = new(HttpMethod.Get, url);
+            req.Headers.UserAgent.ParseAdd("ARI");
+            using HttpResponseMessage res = await Http.SendAsync(req);
+            if (!res.IsSuccessStatusCode)
+                return $"[Error: {(int)res.StatusCode} fetching {url}.]";
+
+            string contentType = res.Content.Headers.ContentType?.MediaType ?? "";
+            byte[] bytes       = await res.Content.ReadAsByteArrayAsync();
+
+            if (contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                return ReadImage.Image(bytes, contentType);
+
+            // Not an image — return the text. fetch_page is the better tool for a full page, but a plain
+            // text/JSON resource read this way is still useful.
+            return Encoding.UTF8.GetString(bytes);
+        }
+        catch (Exception ex) { return $"[Error fetching {url}: {ex.Message}]"; }
     }
 
     /// <summary>Turns raw bytes into a result. The base reads them as UTF-8 text — the default and the
