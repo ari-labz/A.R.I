@@ -5,7 +5,7 @@ namespace ARI.LLM;
 /// <summary>
 /// Loads a deferred tool group onto the calling thread (issue #126). Generic and agent-agnostic: any
 /// thread can ask for any group. Whether it actually gets tools back depends only on ToolFactories —
-/// which needs context (Thread.ProjectRoot etc.) that may or may not be bound on this thread — never on
+/// which needs context (Thread.FilesystemRoot etc.) that may or may not be bound on this thread — never on
 /// which agent is asking. See ToolFactories.cs for the construction logic.
 /// </summary>
 internal sealed class RequestTools : Tool

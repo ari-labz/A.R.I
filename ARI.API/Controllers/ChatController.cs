@@ -459,7 +459,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                    || file.FileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
 
         // Resolve the target directory — project dir if already bound, otherwise the thread's scratchpad.
-        string targetDir = FindThread(threadKey)?.ProjectRoot is { } root
+        string targetDir = FindThread(threadKey)?.FilesystemRoot is { } root
                         && !root.StartsWith(Paths.ServerDir("Scratchpad"), StringComparison.OrdinalIgnoreCase)
             ? root
             : Paths.ScratchpadDir(threadKey);
@@ -530,7 +530,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
             msgList.RemoveAll(a => a.Name == name);
 
         // Remove from disk if present.
-        string fileRoot = FindThread(threadKey)?.ProjectRoot ?? Paths.ScratchpadDir(threadKey);
+        string fileRoot = FindThread(threadKey)?.FilesystemRoot ?? Paths.ScratchpadDir(threadKey);
         string path     = Path.Combine(fileRoot, name);
         if (System.IO.File.Exists(path)) System.IO.File.Delete(path);
 
@@ -542,7 +542,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     {
         // All thread files live on disk (scratchpad or project dir).
         string scratchpad = Paths.ScratchpadDir(threadKey);
-        string fileRoot   = FindThread(threadKey)?.ProjectRoot ?? scratchpad;
+        string fileRoot   = FindThread(threadKey)?.FilesystemRoot ?? scratchpad;
         IEnumerable<object> diskFiles = Directory.Exists(fileRoot)
             ? Directory.GetFiles(fileRoot, "*", SearchOption.AllDirectories)
                        .Select(p => new { Name = Path.GetRelativePath(fileRoot, p) })
@@ -561,7 +561,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 
         string scratchpadDir = Paths.ScratchpadDir(threadKey);
         ARI.LLM.Thread? thread = FindThread(threadKey);
-        string? currentRoot = thread?.ProjectRoot;
+        string? currentRoot = thread?.FilesystemRoot;
 
         // Only scratchpad-rooted threads can be promoted (not already-bound projects).
         if (currentRoot is null || !currentRoot.StartsWith(scratchpadDir.TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
@@ -692,7 +692,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         if (Llm is null) return StatusCode(503);
         if (string.IsNullOrWhiteSpace(path)) return BadRequest("path is required.");
 
-        string root    = FindThread(threadKey)?.ProjectRoot ?? Paths.ScratchpadDir(threadKey);
+        string root    = FindThread(threadKey)?.FilesystemRoot ?? Paths.ScratchpadDir(threadKey);
         string rootAbs = Path.GetFullPath(root);
         string absPath = Path.GetFullPath(Path.Combine(rootAbs, path));
         if (!absPath.StartsWith(rootAbs, StringComparison.OrdinalIgnoreCase))
@@ -837,7 +837,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 
         // ── Scratchpad wiring ─────────────────────────────────────────────────────
         // If files have been written to this thread's scratchpad, bind it as the
-        // ProjectRoot (if no project is already bound) and inject a file listing so
+        // FilesystemRoot (if no project is already bound) and inject a file listing so
         // ARI knows to use her file tools.
         string? platformContext = null;
         {
@@ -846,9 +846,9 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
             bool hasScratchpad = Directory.Exists(scratchpadDir) && Directory.GetFiles(scratchpadDir, "*", SearchOption.AllDirectories).Length > 0;
             bool noProjectBound = !ThreadProjects.ContainsKey(threadKey);
 
-            if (hasScratchpad && noProjectBound && scratchThread is not null && scratchThread.ProjectRoot is null)
+            if (hasScratchpad && noProjectBound && scratchThread is not null && scratchThread.FilesystemRoot is null)
             {
-                scratchThread.ProjectRoot = scratchpadDir;
+                scratchThread.FilesystemRoot = scratchpadDir;
                 scratchThread.IsBrainVault = false;
                 scratchThread.Ct = CancellationToken.None;
 
@@ -899,12 +899,12 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                 if (isFirstMessage && project.RootPath is { } gitRoot && Directory.Exists(Path.Combine(gitRoot, ".git")))
                     Llm.ForceCodeThread(threadKey);
 
-                // Bind ProjectRoot on the thread every message (idempotent) so filesystem_tools/coding_tools
+                // Bind FilesystemRoot on the thread every message (idempotent) so filesystem_tools/coding_tools
                 // resolve correctly. Local path (Electron) is preferred and set later via effectiveLocalPath;
                 // RootPath here is the server-side fallback for web sessions.
                 if (boundThread is not null && project is { RootPath: { } serverRoot })
                 {
-                    boundThread.ProjectRoot   = serverRoot;
+                    boundThread.FilesystemRoot   = serverRoot;
                     boundThread.IsBrainVault  = false;
                     boundThread.Ct            = CancellationToken.None;
                 }

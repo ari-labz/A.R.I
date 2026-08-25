@@ -193,9 +193,9 @@ internal sealed class Coder : Agent
         // Bind this turn's project context onto the thread. ToolFactories (global, agent-agnostic) reads
         // this to construct filesystem_tools/coding_tools for request_tools — there is no per-agent
         // allowlist; a group resolves for whichever thread actually has a project bound, local only (a
-        // remote project's files live on the client's disk, not this server's, so ProjectRoot stays null
+        // remote project's files live on the client's disk, not this server's, so FilesystemRoot stays null
         // and those groups correctly report unavailable — the client's forwarded tools cover that case).
-        parent.ProjectRoot     = remote ? null : root;
+        parent.FilesystemRoot     = remote ? null : root;
         parent.Snapshots       = remote ? null : snapshots;
         parent.IsRemoteProject = remote;
         parent.Ct              = cts.Token;
@@ -208,7 +208,7 @@ internal sealed class Coder : Agent
         // this agent (or any other) from calling request_tools for them explicitly too — preloading just
         // means it doesn't have to.
         // root is null when no project is bound and the client sent no path — no ServerFileSystem,
-        // no filesystem_tools/coding_tools (ToolFactories resolves both off ProjectRoot, which is
+        // no filesystem_tools/coding_tools (ToolFactories resolves both off FilesystemRoot, which is
         // null here). The architect still runs: a request that only needs what's already in the
         // conversation (an attachment, pasted code) doesn't need a project at all.
         if (!remote && root is not null)
@@ -227,7 +227,7 @@ internal sealed class Coder : Agent
         // tool layer by BeforeTool alongside the Planning-mode edit block.
         bool editsForbidden = UserForbadeEdits(prompt);
 
-        // Remote: build_project isn't behind the group system above (ProjectRoot is null for a remote project,
+        // Remote: build_project isn't behind the group system above (FilesystemRoot is null for a remote project,
         // by design — see comment above) — the client's forwarded tools already put its equivalents on
         // `parent`, so this is registered directly the same way, outside ToolFactories.
         if (remote)
