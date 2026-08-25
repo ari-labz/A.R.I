@@ -33,6 +33,7 @@ declare global {
     electronBridge?: {
       platform: string
       readFile(root: string, path: string): Promise<string>
+      readBytes(root: string, path: string): Promise<string>
       writeFile(root: string, path: string, content: string): Promise<void>
       listDirectory(root: string, dirPath?: string, depth?: number): Promise<string[]>
       searchFiles(root: string, pattern: string, searchPath?: string, glob?: string, ignoreCase?: boolean): Promise<string[]>

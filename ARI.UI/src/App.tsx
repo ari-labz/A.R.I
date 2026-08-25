@@ -402,7 +402,7 @@ export default function App() {
         // Check protocol compatibility — only relevant in the Desktop app where the
         // client has a fixed protocol baked in and the server may be a different build.
         if (window.electronBridge) {
-            const CLIENT_PROTOCOL = 2
+            const CLIENT_PROTOCOL = 3
             const infoRes = await apiFetch("/api/info/ready").catch(() => null)
             if (infoRes?.ok) {
                 const { protocol: serverProtocol } = await infoRes.json()
@@ -621,6 +621,13 @@ export default function App() {
                     result = `${header}\n\`\`\`\n${numbered}\n\`\`\`${capNote}`
                     console.warn(`[ToolSocket] → file_content  callId=${callId}  bytes=${result.length}  lines=${start}-${end}/${total}${capped ? " CAPPED" : ""}`)
                     ws.send(JSON.stringify({ type: "file_content", callId, content: result }))
+
+                } else if (type === "read_bytes") {
+                    // Binary read (protocol v3): return the file's raw bytes base64-encoded. The server
+                    // decodes them and hands them to the Read tool's decoder (image, notebook, …).
+                    const base64 = await window.electronBridge!.readBytes(localPath, params.path ?? "")
+                    console.warn(`[ToolSocket] → file_content (read_bytes)  callId=${callId}  b64len=${base64.length}`)
+                    ws.send(JSON.stringify({ type: "file_content", callId, content: base64 }))
 
                 } else if (type === "list_directory") {
                     const depth = typeof (params as Record<string, unknown>).depth === "number"
