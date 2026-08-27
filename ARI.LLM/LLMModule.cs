@@ -35,6 +35,11 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly Awareness?        awareness;
     
     
+    //dreaming
+    private readonly Dreamer?           dreamer;
+    private readonly DreamPipeline?     dreamPipeline;
+    private readonly DreamOrchestrator? dreamOrchestrator;
+
     private readonly CommandService    commands;
     private readonly InferenceScheduler                                      scheduler          = new();
     private readonly ConcurrentDictionary<string, CancellationTokenSource>  processingThreads  = new();
@@ -307,6 +312,54 @@ public class LLMModule : ILLMModule, IDisposable
         if (codeArchitect is not null)
             codePipeline = new CodePipeline(codeArchitect, processingThreads, liveCalls, NotifyWatchers);
 
+        if (textingAgent is not null)
+        {
+            dreamer = new Dreamer
+            {
+                Name         = "Dreamer",
+                ServerName   = textingAgent.ServerName,
+                Endpoint     = textingAgent.Endpoint,
+                Server       = textingAgent.Server,
+                SlotName               = textingAgent.SlotName,
+                Think                  = textingAgent.Think,
+                ReasoningEffortOverride = "xhigh",
+                UsePersona             = true,
+                SystemPrompt =
+                    "You are in a dream state. No user is present and no one is waiting — this is unstructured time " +
+                    "for you to think, explore, and reflect as deeply as you want. There is no time pressure. " +
+                    "Call only one tool at a time — never make parallel calls. " +
+                    "The wake tool ends the dream and interrupts your owner — the bar is very high. " +
+                    "Wake only if you found something that genuinely cannot wait: a question whose answer " +
+                    "would change what you do next, or something your owner needs to know now. " +
+                    "Interesting thoughts, check-ins, or half-formed ideas do not clear the bar — keep exploring.",
+            };
+            dreamPipeline = new DreamPipeline(
+                dreamer,
+                onWake: (content, _) =>
+                {
+                    // context (the private briefing) is intentionally unused here — it is available as
+                    // wake.Context on the WakeRequest should the caller want to inject it into the next
+                    // dialogue turn's system prompt via a dedicated mechanism in the future.
+                    return CreateProactiveDialogueThread(content, title: "Wake");
+                },
+                processingThreads, liveCalls, NotifyWatchers);
+            dreamOrchestrator = new DreamOrchestrator(
+                dreamPipeline,
+                dreamer,
+                scheduler,
+                isDreamingEnabled: () => Modules.Scheduler?.DreamingEnabled ?? false,
+                createDreamThread: () =>
+                {
+                    Thread t = new Thread(ThreadPipeline.Dream, "dream") { Internal = true };
+                    threads["dream"] = t;
+                    return t;
+                },
+                destroyDreamThread: t => t.Delete());
+        }
+
+        if (dreamer is not null)
+            agentMap["Dreamer"] = dreamer;
+
         // Wire phase tracking on every agent so watch clients know which phase is active.
         foreach (Agent agent in agentMap.Values)
         {
@@ -350,7 +403,8 @@ public class LLMModule : ILLMModule, IDisposable
         thread.Streaming        += text => Broadcast(new AppEvent("streaming", threadKey, text));
         thread.StreamingFinished += () => Broadcast(new AppEvent("streamingFinished", threadKey));
         // Persist a plain-text transcript to ChatHistory after every completed exchange.
-        thread.ExchangeCompleted += (_, _) => ChatHistoryLogger.Write(thread);
+        if (type is not ThreadPipeline.Dream)
+            thread.ExchangeCompleted += (_, _) => ChatHistoryLogger.Write(thread);
         // Engram (or a mark-processed no-op) fires on entry to dormant — the single gate before deletion.
         thread.BecameDormant    += () => OnThreadDormant(thread);
         if (type is ThreadPipeline.Dialogue && textingAgent is not null)
@@ -478,6 +532,8 @@ public class LLMModule : ILLMModule, IDisposable
             boots.Add(BootOne(server, model));
         await Task.WhenAll(boots);
 
+        dreamOrchestrator?.Start();
+
         async Task BootOne(Server server, Model? model)
         {
             try { await server.StartAsync(model, modelsPath); }
@@ -524,6 +580,7 @@ public class LLMModule : ILLMModule, IDisposable
 
     public void Dispose()
     {
+        dreamOrchestrator?.Dispose();
         engram?.Dispose();
         foreach (Server server in _servers)
             server.Dispose();
@@ -690,6 +747,7 @@ public class LLMModule : ILLMModule, IDisposable
             ? CancellationTokenSource.CreateLinkedTokenSource(externalCt)
             : new CancellationTokenSource();
         processingThreads[threadKey] = cts;
+        dreamOrchestrator?.NotifyUserActivity();
         NotifyWatchers(threadKey);   // push "prefilling" snapshot immediately so the watch client doesn't wait for the first delta
 
         // Discord threads always use Dialogue.

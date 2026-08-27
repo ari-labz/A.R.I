@@ -7,10 +7,13 @@ namespace ARI.LLM;
 /// display markers, and registers itself onto a thread through the same public
 /// <see cref="Thread.RegisterTool"/> extension point that external clients use.
 /// </summary>
+internal enum ToolAccess { Read, Write, ReadWrite }
+
 internal abstract class Tool
 {
-    internal abstract string Name   { get; }
-    internal abstract object Schema { get; }
+    internal abstract string     Name   { get; }
+    internal abstract object     Schema { get; }
+    internal virtual  ToolAccess Access => ToolAccess.ReadWrite;
 
     /// <summary>One-line description extracted from the schema's function.description field.</summary>
     internal string SchemaDescription

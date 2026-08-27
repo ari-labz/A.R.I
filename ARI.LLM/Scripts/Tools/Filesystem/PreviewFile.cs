@@ -11,7 +11,8 @@ internal sealed class PreviewFile : Tool
     private readonly FileSystem fs;
     internal PreviewFile(FileSystem fs) => this.fs = fs;
 
-    internal override string Name => "preview_file";
+    internal override string     Name   => "preview_file";
+    internal override ToolAccess Access => ToolAccess.Read;
 
     internal override object Schema => new
     {

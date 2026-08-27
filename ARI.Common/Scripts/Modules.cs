@@ -82,6 +82,9 @@ public interface ISchedulerModule
     /// <summary>Master switch for proactive messages (checked by the ProactiveMessage job at fire time).</summary>
     bool ProactiveEnabled { get; set; }
 
+    /// <summary>Master switch for background dreaming (checked by DreamOrchestrator on each idle tick).</summary>
+    bool DreamingEnabled { get; set; }
+
     /// <summary>Active-hours window: proactive messages are held during the quiet hours OUTSIDE this window.
     /// Stored as the quiet-window bounds (start = when they stop, end = when they resume), local 0-23.</summary>
     (int QuietStartHour, int QuietEndHour) QuietHours { get; }

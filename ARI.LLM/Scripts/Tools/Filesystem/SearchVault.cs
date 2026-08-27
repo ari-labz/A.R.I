@@ -13,7 +13,8 @@ internal sealed class SearchVault : Tool
     private readonly FileSystem fs;
     internal SearchVault(FileSystem fs) => this.fs = fs;
 
-    internal override string Name => "search_vault";
+    internal override string     Name   => "search_vault";
+    internal override ToolAccess Access => ToolAccess.Read;
     internal override object Schema => new
     {
         type = "function",

@@ -21,7 +21,8 @@ file static class GitArgs
 internal sealed class GitStatus : GitTool
 {
     internal GitStatus(string root) : base(root) { }
-    internal override string Name => "git_status";
+    internal override string     Name   => "git_status";
+    internal override ToolAccess Access => ToolAccess.Read;
     internal override object Schema => new
     {
         type = "function",
@@ -44,7 +45,8 @@ internal sealed class GitStatus : GitTool
 internal sealed class GitDiff : GitTool
 {
     internal GitDiff(string root) : base(root) { }
-    internal override string Name => "git_diff";
+    internal override string     Name   => "git_diff";
+    internal override ToolAccess Access => ToolAccess.Read;
     internal override object Schema => new
     {
         type = "function",
@@ -72,7 +74,8 @@ internal sealed class GitDiff : GitTool
 internal sealed class GitLog : GitTool
 {
     internal GitLog(string root) : base(root) { }
-    internal override string Name => "git_log";
+    internal override string     Name   => "git_log";
+    internal override ToolAccess Access => ToolAccess.Read;
     internal override object Schema => new
     {
         type = "function",

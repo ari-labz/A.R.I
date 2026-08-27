@@ -16,7 +16,8 @@ internal sealed class SearchWeb : Tool
     // Agent matches on this prefix to detect a search that returned nothing useful and not charge the budget.
     internal const string NoRelevantPrefix = "No relevant results for";
 
-    internal override string Name => "search_web";
+    internal override string     Name   => "search_web";
+    internal override ToolAccess Access => ToolAccess.Read;
     internal override object Schema => new
     {
         type = "function",
@@ -237,7 +238,8 @@ internal sealed class FetchPage : Tool
         AllowAutoRedirect      = true,
     }) { Timeout = TimeSpan.FromSeconds(20) };
 
-    internal override string Name => "fetch_page";
+    internal override string     Name   => "fetch_page";
+    internal override ToolAccess Access => ToolAccess.Read;
     internal override object Schema => new
     {
         type = "function",
