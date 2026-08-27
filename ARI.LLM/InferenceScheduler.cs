@@ -4,7 +4,7 @@ namespace ARI.LLM;
 /// Priority used when enqueuing an inference request. Lower value = higher priority.
 /// Voice inference jumps ahead of text so a live conversation is never stalled behind a chat message.
 /// </summary>
-public enum InferencePriority { Voice = 0, Normal = 1 }
+public enum InferencePriority { Voice = 0, Normal = 1, Dream = 2 }
 
 /// <summary>
 /// Global single-slot scheduler for llama.cpp inference requests. Ensures only one request runs at a

@@ -5371,11 +5371,25 @@ function dbgRenderTrace(item, host, workers = [], cursor = { i: 0 }, depth = 0) 
                         return JSON.stringify(msg.content ?? '');
                     };
 
-                    msgs.filter(m => m.role === 'system').forEach(msg => {
-                        const r = document.createElement('div');
+                    msgs.filter(m => m.role === 'system').forEach((msg, idx) => {
+                        const r    = document.createElement('div');
                         r.className = 'dbg-row right';
-                        r.innerHTML = `<div class="dbg-bubble system"><div class="dbg-bhead"><span>System</span></div>`
-                            + `<div class="dbg-bbody dbg-md dbg-prompt-body">${marked.parse(extractText(msg))}</div></div>`;
+                        const text = extractText(msg);
+                        const COLLAPSE_THRESHOLD = 400;
+                        // Collapse large system messages (persona block) by default — they're identical
+                        // across every step and dominate the view when expanded.
+                        if (text.length > COLLAPSE_THRESHOLD) {
+                            const words     = text.slice(0, 60).replace(/\n/g, ' ').trim();
+                            const preview   = words.length < text.slice(0, 60).trim().length ? words : words;
+                            const charCount = text.length.toLocaleString();
+                            r.innerHTML = `<div class="dbg-bubble system">` +
+                                `<details><summary class="dbg-bhead" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">` +
+                                `<span>System</span><span style="opacity:.5;font-size:11px;font-weight:400;">${charCount} chars — click to expand</span></summary>` +
+                                `<div class="dbg-bbody dbg-md dbg-prompt-body">${marked.parse(text)}</div></details></div>`;
+                        } else {
+                            r.innerHTML = `<div class="dbg-bubble system"><div class="dbg-bhead"><span>System</span></div>`
+                                + `<div class="dbg-bbody dbg-md dbg-prompt-body">${marked.parse(text)}</div></div>`;
+                        }
                         host.appendChild(r);
                     });
 

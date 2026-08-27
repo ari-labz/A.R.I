@@ -31,7 +31,8 @@ file static class Args
 // agent just made through the file tools.
 internal sealed class Neighbours : Tool
 {
-    internal override string Name => "neighbours";
+    internal override string     Name   => "neighbours";
+    internal override ToolAccess Access => ToolAccess.Read;
     internal override object Schema => new
     {
         type = "function",
@@ -75,7 +76,8 @@ internal sealed class SearchBrain : Tool
 {
     private const int DEFAULT_LIMIT = 15;
 
-    internal override string Name => "search_brain";
+    internal override string     Name   => "search_brain";
+    internal override ToolAccess Access => ToolAccess.Read;
     internal override object Schema => new
     {
         type = "function",
@@ -247,7 +249,8 @@ internal sealed class ListCuriosities : Tool
     private readonly string persistentDir;
     internal ListCuriosities(string persistentDir) => this.persistentDir = persistentDir;
 
-    internal override string Name => "list_curiosities";
+    internal override string     Name   => "list_curiosities";
+    internal override ToolAccess Access => ToolAccess.Read;
     internal override object Schema => new
     {
         type = "function",

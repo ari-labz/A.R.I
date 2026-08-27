@@ -86,7 +86,14 @@ public class VoiceModuleTrainer : IVoiceTrainer
                     if (root.TryGetProperty("log", out var logs))
                     {
                         foreach (var line in logs.EnumerateArray())
-                            logger?.LogInformation("[Training] {Line}", line.GetString());
+                        {
+                            var text = line.GetString();
+                            if (text == null) continue;
+                            logger?.LogInformation("[Training] {Line}", text);
+                            // Forward every log line to the UI so the graph and log widget stay live.
+                            // LOSS_JSON lines are parsed by the control panel JS.
+                            progress?.Report(new TrainingProgress("Training", -1, text));
+                        }
                     }
 
                     switch (status)

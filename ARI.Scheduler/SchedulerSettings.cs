@@ -14,6 +14,7 @@ public sealed class SchedulerSettings
     public int?  QuietStartHour   { get; set; }
     public int?  QuietEndHour     { get; set; }
     public bool? ProactiveEnabled { get; set; }
+    public bool? DreamingEnabled  { get; set; }
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {

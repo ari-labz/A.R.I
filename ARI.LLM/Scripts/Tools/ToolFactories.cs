@@ -53,6 +53,9 @@ internal static class ToolFactories
         // Available on any thread — the persona is global, not project-bound.
         ["propose_persona_edit"] = t => new ProposePersonaEdit(t),
 
+        // Brain search — always available; uses the global brain index, no project binding needed.
+        ["search_brain"] = _ => new SearchBrain(),
+
         // Web tools — always available regardless of project/vault context.
         ["search_web"]  = _ => new SearchWeb(),
         ["fetch_page"]  = _ => new FetchPage(),
@@ -68,6 +71,8 @@ internal static class ToolFactories
         bool isVault = t.IsBrainVault || Directory.Exists(Path.Combine(r, ".obsidian"));
         return new ServerFileSystem(r, t.Ct, t.Snapshots, isVault);
     }
+
+    internal static IEnumerable<string> AllNames() => _factories.Keys;
 
     internal static bool TryBuild(string toolName, Thread thread, out Tool tool)
     {

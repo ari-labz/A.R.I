@@ -8,7 +8,8 @@ namespace ARI.LLM;
 
 internal sealed class ListProjects : Tool
 {
-    internal override string Name => "list_projects";
+    internal override string     Name   => "list_projects";
+    internal override ToolAccess Access => ToolAccess.Read;
     internal override object Schema => new
     {
         type = "function",
@@ -116,7 +117,8 @@ internal sealed class BindProject : Tool
     private readonly Thread thread;
     internal BindProject(Thread thread) => this.thread = thread;
 
-    internal override string Name => "bind_project";
+    internal override string     Name   => "bind_project";
+    internal override ToolAccess Access => ToolAccess.Read;
     internal override object Schema => new
     {
         type = "function",
@@ -140,6 +142,8 @@ internal sealed class BindProject : Tool
         try { id = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson).RootElement.GetProperty("id").GetString() ?? ""; }
         catch { id = ""; }
         if (id.Length == 0) return Task.FromResult<ToolResult>("Error: 'id' is required.");
-        return Task.FromResult<ToolResult>(svc.BindThread(thread.Key, id) ? "Bound. You can use this project's tools now." : "Could not find that project.");
+        return Task.FromResult<ToolResult>(svc.BindThread(thread.Key, id)
+            ? "Bound. The project's filesystem is now accessible — call list_directory with no arguments to see the root, then read_file to open anything that interests you."
+            : "Could not find that project.");
     }
 }

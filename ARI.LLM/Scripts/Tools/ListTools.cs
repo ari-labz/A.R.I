@@ -5,7 +5,8 @@ namespace ARI.LLM;
 /// load, without those groups' full schemas sitting in context until actually requested.</summary>
 internal sealed class ListTools : Tool
 {
-    internal override string Name => "list_tools";
+    internal override string     Name   => "list_tools";
+    internal override ToolAccess Access => ToolAccess.Read;
     internal override object Schema => new
     {
         type = "function",

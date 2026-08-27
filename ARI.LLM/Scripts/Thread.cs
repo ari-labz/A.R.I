@@ -14,7 +14,7 @@ namespace ARI.LLM;
 public enum ThreadState { Unread, Active, Streaming, Inactive, Dormant, Deleted }
 
 /// <summary>The pipeline a thread belongs to. Determines how its prompts are processed.</summary>
-public enum ThreadPipeline { Dialogue, Code, Speech }
+public enum ThreadPipeline { Dialogue, Code, Speech, Dream }
 
 /// <summary>Coding-pipeline state. Planning = explore/infer/propose (no edits); Development = execute the
 /// approved plan (no exploration). Each phase feeds the agent a different system prompt and sampling.</summary>
