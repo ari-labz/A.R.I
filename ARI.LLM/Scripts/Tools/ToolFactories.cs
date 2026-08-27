@@ -63,6 +63,9 @@ internal static class ToolFactories
         ["discord_list_voice_channels"] = _ => Modules.Discord is not null ? new DiscordListVoiceChannels() : null,
         ["discord_join_voice_channel"]  = _ => Modules.Discord is not null ? new DiscordJoinVoiceChannel()  : null,
         ["discord_leave_voice_channel"] = _ => Modules.Discord is not null ? new DiscordLeaveVoiceChannel() : null,
+
+        // Image generation — only available when the ImageGen module is enabled and ComfyUI is ready.
+        ["generate_image"] = _ => Modules.ImageGen?.IsReady == true ? new GenerateImage() : null,
     };
 
     private static ServerFileSystem? Fs(Thread t)

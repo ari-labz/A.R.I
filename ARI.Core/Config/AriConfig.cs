@@ -10,6 +10,7 @@ using ARI.VoiceSynthesis;
 using ARI.API;
 using ARI.Listener;
 using ARI.Scheduler;
+using ARI.ImageGen;
 
 namespace ARI.Core;
 
@@ -115,7 +116,8 @@ public class Modules
     public BrainConfig Brain { get; init; }
     public DiscordConfig Discord { get; init; }
     public ListenerConfig Listener { get; init; } = new();
-    public SchedulerConfig Scheduler { get; init; } = new();
+    public SchedulerConfig  Scheduler { get; init; } = new();
+    public ImageGenConfig   ImageGen  { get; init; } = new();
 }
 
 

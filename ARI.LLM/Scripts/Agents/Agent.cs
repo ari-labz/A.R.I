@@ -1497,8 +1497,10 @@ public abstract class Agent
                     if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
                 };
 
-                bool isWebTool = call.Name is "search_web" or "fetch_page";
-                if (isWebTool) AdvancePhase(turn, ThreadPhase.Researching);
+                bool isWebTool      = call.Name is "search_web" or "fetch_page";
+                bool isImageGenTool = call.Name is "generate_image";
+                if (isWebTool)      AdvancePhase(turn, ThreadPhase.Researching);
+                if (isImageGenTool) AdvancePhase(turn, ThreadPhase.Generating);
                 try
                 {
                     ToolResult toolResult = prelaunched.TryGetValue(callIndex, out Task<ToolResult>? pre)

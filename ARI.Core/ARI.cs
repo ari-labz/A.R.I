@@ -12,6 +12,8 @@ using ARI.API;
 using ARI.API.Data;
 using ARI.Listener;
 using ARI.Brain;
+using ARI.ImageGen;
+using ImageGenDependency = ARI.ImageGen.Dependency;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -288,6 +290,31 @@ public class ARI : BackgroundService
                 _logger.LogError("Listener setup failed — continuing without voice input. {Error}", ex.Message);
                 if (ex is SetupException { Hint: { } hint }) _logger.LogError("{Hint}", hint);
                 listenerModule = null;
+            }
+        }
+
+        // ── ImageGen ─────────────────────────────────────────────────────────────
+        if (config.modules.ImageGen.Enabled)
+        {
+            try
+            {
+                _logger.LogInformation("ImageGen module is enabled. Checking ComfyUI...");
+                await ImageGenDependency.Check(config.modules.ImageGen.ComfyUiPath);
+
+                if (string.IsNullOrEmpty(ImageGenDependency.Status))
+                {
+                    ImageGenModule imageGenModule = new(config.modules.ImageGen);
+                    CommonModules.Register(imageGen: imageGenModule);
+                    _logger.LogInformation("ImageGen ready.");
+                }
+                else
+                {
+                    _logger.LogWarning("ImageGen unavailable: {Reason}", ImageGenDependency.Status);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError("ImageGen setup failed — continuing without image generation. {Error}", ex.Message);
             }
         }
 

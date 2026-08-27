@@ -203,6 +203,28 @@ function dedupeRecentUserMessages(items: ThreadItem[]): ThreadItem[] {
     return out
 }
 
+// Extract <!--ari-image:threadKey:filename--> markers from ariResponse content
+// and replace them with standalone ariImage items so images render as their own rows.
+const ARI_IMAGE_RE = /\n?<!--ari-image:([^:]+):([^>]+?)-->/g
+function extractImageItems(items: ThreadItem[]): ThreadItem[] {
+    const out: ThreadItem[] = []
+    for (const item of items) {
+        if (item.type !== "ariResponse" || !item.content?.includes("<!--ari-image:")) {
+            out.push(item)
+            continue
+        }
+        const images: ThreadItem[] = []
+        const cleaned = item.content.replace(ARI_IMAGE_RE, (_, threadKey, filename) => {
+            const url = `/threads/${encodeURIComponent(threadKey)}/scratchpad/${encodeURIComponent(filename)}`
+            images.push({ type: "ariImage", content: url, timestamp: item.timestamp })
+            return ""
+        })
+        out.push({ ...item, content: cleaned })
+        out.push(...images)
+    }
+    return out
+}
+
 export default function App() {
     const { threads, load: loadThreads } = useThreads()
 
@@ -350,7 +372,7 @@ export default function App() {
                         loadThreads()
                         // Refresh active thread content when it changes (new message, etc.)
                         if (data.threadKey === activeThreadRef.current && !streamingRef.current)
-                            loadHistory(data.threadKey).then(hist => setItems(dedupeRecentUserMessages(hist))).catch(() => {})
+                            loadHistory(data.threadKey).then(hist => setItems(extractImageItems(dedupeRecentUserMessages(hist)))).catch(() => {})
                         break
                     case "streaming":
                         if (data.threadKey === activeThreadRef.current && !streamingRef.current) {
@@ -366,11 +388,26 @@ export default function App() {
                             })
                         }
                         break
+                    case "imageReady":
+                        // Image is ready mid-stream: add it as a standalone ariImage item so it
+                        // appears as its own row rather than embedded inside the text bubble.
+                        if (data.threadKey === activeThreadRef.current && data.text) {
+                            const url = data.text
+                            setItems(prev => {
+                                if (prev.some(it => it.type === "ariImage" && it.content === url)) return prev
+                                return [...prev, { type: "ariImage", content: url, timestamp: new Date().toISOString() }]
+                            })
+                            refreshThreadAttach(data.threadKey)
+                        }
+                        break
                     case "streamingFinished":
                         loadThreads()
                         playResponseChime()   // issue #63: chime when an Ari response completes
-                        if (data.threadKey === activeThreadRef.current && !streamingRef.current)
-                            loadHistory(data.threadKey).then(hist => setItems(dedupeRecentUserMessages(hist))).catch(() => {})
+                        if (data.threadKey === activeThreadRef.current) {
+                            refreshThreadAttach(data.threadKey)
+                            if (!streamingRef.current)
+                                loadHistory(data.threadKey).then(hist => setItems(extractImageItems(dedupeRecentUserMessages(hist)))).catch(() => {})
+                        }
                         break
                     case "threadDeleted":
                         loadThreads()
@@ -846,7 +883,7 @@ export default function App() {
         // Fetch the thread (state + history) via the new polling endpoint
         const detail = await fetchThread(key).catch(() => null)
         setSpeechMode(detail?.pipeline === "speech")
-        const hist = detail?.history ?? await loadHistory(key, internal).catch(() => [])
+        const hist = extractImageItems(detail?.history ?? await loadHistory(key, internal).catch(() => []))
         setItems(hist)
         activate(hist.length > 0)
 
@@ -1104,8 +1141,8 @@ export default function App() {
                         loadThreads()
                         // Replace the optimistic streaming item with the finalized server history
                         fetchThread(keyForStream).then(detail => {
-                            if (!detail) return loadHistory(keyForStream).then(hist => { if (activeThreadRef.current === keyForStream) setItems(dedupeRecentUserMessages(hist)) }).catch(() => {})
-                            if (activeThreadRef.current === keyForStream) setItems(dedupeRecentUserMessages(detail.history))
+                            if (!detail) return loadHistory(keyForStream).then(hist => { if (activeThreadRef.current === keyForStream) setItems(extractImageItems(dedupeRecentUserMessages(hist))) }).catch(() => {})
+                            if (activeThreadRef.current === keyForStream) setItems(extractImageItems(dedupeRecentUserMessages(detail.history)))
                         }).catch(() => {})
                         return
                     }

@@ -343,7 +343,7 @@ html, body {
     border-radius: 6px; padding: 5px 6px;
     background: rgba(255,255,255,.12);
 }
-#attachment-list li.attachment-empty { color: rgba(255,255,255,.55); font-size: 12px; background: transparent; }
+.attachment-empty { color: rgba(255,255,255,.55); font-size: 12px; padding: 2px 0; }
 .attachment-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attachment-item-remove {
     flex-shrink: 0; background: transparent; border: none;
@@ -351,6 +351,20 @@ html, body {
     font-size: 15px; line-height: 1; transition: color .15s;
 }
 .attachment-item-remove:hover { color: #fff; }
+
+/* Image grid in thread panel */
+.attachment-image-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-bottom: 8px; }
+.attachment-thumb-wrap { cursor: zoom-in; border-radius: 6px; overflow: hidden; background: rgba(0,0,0,.25); aspect-ratio: 1; }
+.attachment-thumb { width: 100%; height: 100%; object-fit: cover; display: block; transition: opacity .15s; }
+.attachment-thumb-wrap:hover .attachment-thumb { opacity: 0.85; }
+
+/* Fullscreen lightbox */
+.attachment-lightbox {
+    position: fixed; inset: 0; z-index: 9999;
+    background: rgba(0,0,0,.88); cursor: zoom-out;
+    display: flex; align-items: center; justify-content: center;
+}
+.attachment-lightbox img { max-width: 90vw; max-height: 90vh; border-radius: 6px; box-shadow: 0 8px 40px #000a; }
 
 /* ── topbar-toggle (collapsed sidebar button) ───────────── */
 #topbar-toggle {
@@ -461,7 +475,7 @@ button, a, input, select, textarea, label, [role="button"] {
        (pull-to-refresh / rubber-band bounce on iOS Safari and some Android browsers). */
     overscroll-behavior: contain;
 }
-#main.active #messages { opacity: 1; pointer-events: auto; max-height: 100dvh; overflow-y: auto; }
+#main.active #messages { opacity: 1; pointer-events: auto; max-height: 100dvh; overflow-y: auto; overflow-anchor: none; }
 
 .msg-row { width: 100%; max-width: var(--col-max); margin: 0 auto; padding: 8px 0; }
 
@@ -1212,6 +1226,9 @@ button, a, input, select, textarea, label, [role="button"] {
 .tool-card--active { color: #e5e7eb; }
 .tool-card--error { color: #fca5a5; border-color: #7f1d1d; background: rgba(127,29,29,0.85); }
 .tool-card--mode  { color: #93c5fd; border-color: #1e40af; background: rgba(30,64,175,0.55); }
+.tool-card--image { cursor: zoom-in; padding: 0; overflow: hidden; flex-direction: column; align-items: flex-start; border-color: rgba(255,255,255,0.12); background: rgba(20,28,32,0.6); gap: 0; }
+.tool-card--image span { padding: 5px 10px; font-size: 11px; color: #8e9caa; }
+.tool-card-image-thumb { display: block; max-width: 380px; max-height: 380px; width: 100%; object-fit: contain; border-radius: 6px 6px 0 0; }
 /* web cards: not italic — a query is a literal string and reads wrong when slanted */
 .tool-card--web { font-style: normal; }
 .tool-card--web span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46ch; }

@@ -39,6 +39,10 @@
     "web_tools": {
       "Description": "Search the web and read web pages. Use for current events, factual lookups, or anything time-sensitive.",
       "Tools": ["search_web", "fetch_page"]
+    },
+    "image_tools": {
+      "Description": "Generate an image from a text description using Stable Diffusion via ComfyUI. Only available when the ImageGen module is enabled.",
+      "Tools": ["generate_image"]
     }
   }
 }

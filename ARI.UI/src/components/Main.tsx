@@ -18,7 +18,7 @@ interface Props {
     items:         ThreadItem[]
     isRemembering: boolean
     isStreaming:   boolean
-    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing"
+    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing" | "generating"
     activeThread:  string | null
     isInternal:    boolean
     agentName:     string | null
