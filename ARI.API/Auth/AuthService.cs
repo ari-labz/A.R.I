@@ -12,8 +12,12 @@ namespace ARI.API.Auth;
 /// </summary>
 public class AuthService
 {
-    private const int BrowserTokenDays = 1;
+    private const int BrowserTokenDays = 30;
     private const int DesktopTokenDays = 30;
+
+    /// <summary>How long a token issued for this client kind stays valid.</summary>
+    public static TimeSpan TokenLifetime(bool isDesktop) =>
+        TimeSpan.FromDays(isDesktop ? DesktopTokenDays : BrowserTokenDays);
 
     private readonly SymmetricSecurityKey signingKey;
     private readonly JwtSecurityTokenHandler handler = new();
@@ -27,8 +31,7 @@ public class AuthService
 
     public (string token, UserSession session) IssueToken(User user, string sessionId, string deviceHint, bool isDesktop)
     {
-        int    days    = isDesktop ? DesktopTokenDays : BrowserTokenDays;
-        long   expUnix = DateTimeOffset.UtcNow.AddDays(days).ToUnixTimeSeconds();
+        long   expUnix = DateTimeOffset.UtcNow.Add(TokenLifetime(isDesktop)).ToUnixTimeSeconds();
         long   nowUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
         ClaimsIdentity identity = new(

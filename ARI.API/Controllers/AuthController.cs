@@ -56,6 +56,7 @@ public class AuthController(UserStore users, AuthService auth) : ControllerBase
         string      hint      = req.DeviceHint ?? (req.IsDesktop ? "ARI Desktop" : "Browser");
         var (token, session)  = auth.IssueToken(user, sessionId, hint, req.IsDesktop);
         users.CreateSession(session);
+        AuthCookie.Set(Response, token, req.IsDesktop, Request.IsHttps);
 
         return Ok(new LoginResponse(token, user.Role, user.DisplayName, user.MustChangePassword));
     }
@@ -68,6 +69,7 @@ public class AuthController(UserStore users, AuthService auth) : ControllerBase
         string? sessionId = User.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Jti);
         if (sessionId is not null)
             users.RevokeSession(sessionId);
+        AuthCookie.Clear(Response);
         return Ok();
     }
 

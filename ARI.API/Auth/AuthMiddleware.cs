@@ -97,6 +97,11 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
         string? queryToken = ctx.Request.Query["token"];
         if (!string.IsNullOrEmpty(queryToken))
             return queryToken;
+        // Browsers keep the session in a cookie, so a fresh tab (or a direct hit on
+        // /controlpanel.html) is still signed in without passing the token around.
+        string? cookieToken = ctx.Request.Cookies[AuthCookie.Name];
+        if (!string.IsNullOrEmpty(cookieToken))
+            return cookieToken;
         return null;
     }
 }
