@@ -1149,6 +1149,8 @@ html, body {
 // ── auth token ────────────────────────────────────────────
 // Token is passed as ?token=... when the control panel link is opened from the main app.
 // Stored in sessionStorage so refreshes within the same tab work without re-passing it.
+// Opening the panel directly works too: with no token the browser's `ari_session` cookie
+// authenticates the request, and only a real 401 sends us back to the login screen.
 (function() {
     const urlToken = new URLSearchParams(location.search).get('token');
     if (urlToken) {
@@ -1159,9 +1161,8 @@ html, body {
 })();
 function cpFetch(url, opts) {
     const token = sessionStorage.getItem('ari_cp_token');
-    if (!token) { window.location.href = '/'; return new Promise(() => {}); }
     const headers = new Headers((opts && opts.headers) || {});
-    headers.set('Authorization', 'Bearer ' + token);
+    if (token) headers.set('Authorization', 'Bearer ' + token);
     return fetch(url, Object.assign({}, opts, { headers })).then(r => {
         if (r.status === 401) { sessionStorage.removeItem('ari_cp_token'); window.location.href = '/'; return new Promise(() => {}); }
         return r;
@@ -1206,6 +1207,7 @@ function switchTab(name) {
     if (name === 'users-manage') loadUserManagement();
     if (name === 'modules') loadModules();
     if (name === 'voices') loadVoicesList();
+    if (name === 'voice') vsRestoreTraining();
 }
 navItems.forEach(n => n.addEventListener('click', () => switchTab(n.dataset.tab)));
 switchTab('overview');
@@ -4230,38 +4232,104 @@ function vsStartTrainingJob(trainBody, modelName) {
         try {
             const trainResp = await cpFetch('/voice/train', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(trainBody) });
             if (!trainResp.ok) throw new Error('Start failed: ' + (await trainResp.text()));
-            let vsDone = false;
-            function connectProgressSse() {
-                if (vsDone) return;
-                if (vsProgressEs) vsProgressEs.close();
-                vsProgressEs = cpEventSource('/voice/progress');
-                vsLogBadge.textContent = 'live'; vsLogBadge.classList.add('live');
-                vsProgressEs.onmessage = e => {
-                    try {
-                        const d = JSON.parse(e.data);
-                        vsSetProgress(d.step, d.percent, d.detail, d.done ? (d.success ? 'done' : 'error') : '');
-                        if (d.detail) {
-                            const m = d.detail.match(/^LOSS_JSON:\s*(\{.+\})$/);
-                            if (m) {
-                                try { vsLossPush(JSON.parse(m[1])); } catch {}
-                            } else {
-                                vsAppendLog(d.detail, d.step === 'Error' ? 'log-error' : '');
-                                if (/^── Paused/i.test(d.detail)) {
-                                    const ep = vsLossPoints.at(-1)?.epoch;
-                                    if (ep) vsLossMarkPause(ep);
-                                    vsLossLiveDot.style.display = 'none';
-                                }
-                            }
-                        }
-                        if (d.done) { vsDone = true; vsProgressEs.close(); vsStopTimer(); vsShowSetup(true); vsLogBadge.textContent = d.success ? 'done ✓' : 'failed'; vsLogBadge.classList.remove('live'); vsTrainBtn.disabled = false; vsPauseBtn.style.display = 'none'; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training'; vsActiveModelName = null; vsLossLiveDot.style.display = 'none'; if (d.success) vsAppendLog(`✓ Training complete! Model: ${modelName}`); if (d.error) vsAppendLog(`Error: ${d.error}`, 'log-error'); }
-                    } catch { /* ignore */ }
-                };
-                vsProgressEs.onerror = () => { if (vsDone) return; vsLogBadge.textContent = 'reconnecting…'; vsLogBadge.classList.remove('live'); vsProgressEs.close(); setTimeout(connectProgressSse, 3000); };
-            }
-            connectProgressSse();
+            vsAttachProgress(modelName, () => { vsTrainBtn.disabled = false; });
         } catch (err) { vsStopTimer(); vsShowSetup(true); vsAppendLog('Error: ' + err.message, 'log-error'); vsLogBadge.textContent = 'failed'; vsLogBadge.classList.remove('live'); vsTrainBtn.disabled = false; }
     })();
 }
+
+// ── live training progress ────────────────────────────────
+// One SSE stream, three entry points: starting a run, resuming one, and re-attaching to a run
+// that is already going (page reload, or coming back to this tab). The server replays the whole
+// event list on every connection, so `applied` is what stops a reconnect from re-rendering
+// lines and loss points we have already drawn.
+function vsAttachProgress(modelName, onDone) {
+    let done = false, applied = 0;
+    function connect() {
+        if (done) return;
+        if (vsProgressEs) vsProgressEs.close();
+        vsProgressEs = cpEventSource('/voice/progress');
+        vsLogBadge.textContent = 'live'; vsLogBadge.classList.add('live');
+        let seen = 0;
+        vsProgressEs.onmessage = e => {
+            try {
+                seen++;
+                if (seen <= applied) return;   // replayed event we already handled
+                applied = seen;
+                const d = JSON.parse(e.data);
+                vsSetProgress(d.step, d.percent, d.detail, d.done ? (d.success ? 'done' : 'error') : '');
+                if (d.detail) {
+                    const m = d.detail.match(/^LOSS_JSON:\s*(\{.+\})$/);
+                    if (m) {
+                        try { vsLossPush(JSON.parse(m[1])); } catch {}
+                    } else {
+                        vsAppendLog(d.detail, d.step === 'Error' ? 'log-error' : '');
+                        if (/^── Paused/i.test(d.detail)) {
+                            const ep = vsLossPoints.at(-1)?.epoch;
+                            if (ep) vsLossMarkPause(ep);
+                            vsLossLiveDot.style.display = 'none';
+                        }
+                    }
+                }
+                if (d.done) {
+                    done = true; vsProgressEs.close(); vsProgressEs = null;
+                    vsStopTimer(); vsShowSetup(true);
+                    vsLogBadge.textContent = d.success ? 'done ✓' : 'failed'; vsLogBadge.classList.remove('live');
+                    vsPauseBtn.style.display = 'none'; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training';
+                    vsActiveModelName = null; vsLossLiveDot.style.display = 'none';
+                    if (d.success) vsAppendLog(`✓ Training complete! Model: ${modelName}`);
+                    if (d.error) vsAppendLog(`Error: ${d.error}`, 'log-error');
+                    if (onDone) onDone(d.success);
+                }
+            } catch { /* ignore */ }
+        };
+        vsProgressEs.onerror = () => {
+            if (done) return;
+            vsLogBadge.textContent = 'reconnecting…'; vsLogBadge.classList.remove('live');
+            vsProgressEs.close();
+            setTimeout(connect, 3000);
+        };
+    }
+    connect();
+}
+
+// Re-attach to a run that is already in progress. Training lives on the server, so leaving this
+// tab (or reloading the page) only ever loses the view of it — this puts the view back.
+async function vsRestoreTraining() {
+    if (vsProgressEs || vsActiveModelName) return;   // already showing it
+    let status;
+    try {
+        const r = await cpFetch('/voice/status');
+        if (!r.ok) return;
+        status = await r.json();
+    } catch { return; }
+    if (!status || status.idle || !status.isRunning) return;
+
+    vsShowSetup(false); vsProgSec.style.display = ''; vsLogLines.innerHTML = '';
+    vsLossReset(true);
+    vsActiveModelName = status.modelName;
+    vsPauseBtn.style.display = ''; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training';
+    vsSetProgress('Reconnecting', 0, `Re-attaching to training of ${status.modelName}…`, '');
+    vsStartTimer();
+    // Elapsed should count from when the run started, not from when this tab opened
+    const firstTs = status.events?.[0]?.timestamp;
+    if (firstTs) {
+        const started = Date.parse(/(Z|[+-]\d\d:\d\d)$/.test(firstTs) ? firstTs : firstTs + 'Z');
+        if (!isNaN(started)) vsStartTime = started;
+    }
+    // Epochs from before this run (a resumed model) only exist in Train.log, not in the event list
+    try {
+        const hr = await cpFetch(`/voice/StyleTTS2/${encodeURIComponent(status.modelName)}/loss-history`);
+        if (hr.ok) {
+            const { points, pauses } = await hr.json();
+            for (const pt of points) vsLossPush(pt);
+            for (const ep of pauses) vsLossMarkPause(ep);
+        }
+    } catch { /* non-fatal */ }
+    vsAttachProgress(status.modelName, () => {});
+}
+
+// A run may already be going when the panel loads — show it without waiting for a tab click.
+vsRestoreTraining();
 
 // Play a transcript clip
 function trPlay(btn, fileName) {
@@ -4859,35 +4927,7 @@ async function vsStartResume(modelName, retrain = false) {
     try {
         const resp = await cpFetch('/voice/resume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName, epochs, retrain }) });
         if (!resp.ok) throw new Error((await resp.json().catch(()=>({error:resp.statusText}))).error ?? resp.statusText);
-        let vsDone = false;
-        function connectResumeProgressSse() {
-            if (vsDone) return;
-            if (vsProgressEs) vsProgressEs.close();
-            vsProgressEs = cpEventSource('/voice/progress');
-            vsLogBadge.textContent = 'live'; vsLogBadge.classList.add('live');
-            vsProgressEs.onmessage = e => {
-                try {
-                    const d = JSON.parse(e.data);
-                    vsSetProgress(d.step, d.percent, d.detail, d.done ? (d.success ? 'done' : 'error') : '');
-                    if (d.detail) {
-                        const m = d.detail.match(/^LOSS_JSON:\s*(\{.+\})$/);
-                        if (m) {
-                            try { vsLossPush(JSON.parse(m[1])); } catch {}
-                        } else {
-                            vsAppendLog(d.detail, d.step === 'Error' ? 'log-error' : '');
-                            if (/^── Paused/i.test(d.detail)) {
-                                const ep = vsLossPoints.at(-1)?.epoch;
-                                if (ep) vsLossMarkPause(ep);
-                                vsLossLiveDot.style.display = 'none';
-                            }
-                        }
-                    }
-                    if (d.done) { vsDone = true; vsProgressEs.close(); vsStopTimer(); vsShowSetup(true); vsLogBadge.textContent = d.success ? 'done ✓' : 'failed'; vsLogBadge.classList.remove('live'); if (btn) btn.disabled = false; vsPauseBtn.style.display = 'none'; vsPauseBtn.disabled = false; vsPauseBtn.textContent = 'Pause training'; vsActiveModelName = null; vsLossLiveDot.style.display = 'none'; if (d.success) vsAppendLog(`✓ Training complete! Model: ${modelName}`); if (d.error) vsAppendLog(`Error: ${d.error}`, 'log-error'); }
-                } catch { /* ignore */ }
-            };
-            vsProgressEs.onerror = () => { if (vsDone) return; vsLogBadge.textContent = 'reconnecting…'; vsLogBadge.classList.remove('live'); vsProgressEs.close(); setTimeout(connectResumeProgressSse, 3000); };
-        }
-        connectResumeProgressSse();
+        vsAttachProgress(modelName, () => { if (btn) btn.disabled = false; });
     } catch(err) { vsStopTimer(); vsAppendLog('Error: ' + err.message, 'log-error'); vsLogBadge.textContent = 'failed'; vsLogBadge.classList.remove('live'); if (btn) btn.disabled = false; }
 }
 

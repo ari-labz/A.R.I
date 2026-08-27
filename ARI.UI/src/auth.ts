@@ -10,7 +10,9 @@ export interface AuthUser {
 
 // ── Token storage ─────────────────────────────────────────────────────────────
 // Desktop (electronBridge): persisted across restarts via the bridge (30-day JWT).
-// Browser: sessionStorage — clears when the tab is closed.
+// Browser: sessionStorage for the life of the tab, backed by the HttpOnly `ari_session`
+// cookie the server sets at login. The cookie is what keeps the user signed in after the
+// tab is closed — requests with no token still authenticate on it.
 
 type BridgeWithAuth = typeof window.electronBridge & {
     getToken(): string | null
@@ -91,9 +93,8 @@ export async function changePassword(currentPassword: string, newPassword: strin
     }
 }
 
+/** Resolves the signed-in user from the token, or — on a fresh tab — from the session cookie. */
 export async function fetchMe(): Promise<AuthUser | null> {
-    const token = getToken()
-    if (!token) return null
     try {
         const res = await apiFetch("/auth/me")
         if (!res.ok) return null
