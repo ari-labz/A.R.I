@@ -13,6 +13,7 @@ const TOOL_END_RE   = /<!--ari-tool-end:([^:]+):([^>]*?)-->/g
 const TOOL_ERROR_RE = /<!--ari-tool-error:([^:]+):([^:]*):([^>]*?)-->/g
 const TOOL_MODE_RE  = /<!--ari-tool-mode:([^:]+):([^>]*?)-->/g
 const FILE_RE       = /<!--ari-file:([^:]+):([^>]*?)-->/g
+const IMAGE_RE      = /<!--ari-image:([^:]+):([^>]+?)-->/g
 
 // Turns deliver_file markers into a hover-to-download card. Shared by the streaming render
 // (preprocessToolCards) and the finished-blocks render (renderBlockHtml text blocks), so the card
@@ -32,6 +33,41 @@ function renderFileMarkers(s: string): string {
 
 function escHtml(s: string): string {
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+}
+
+function renderImageMarkers(s: string): string {
+    return s.replace(IMAGE_RE, (_, threadKey, filename) => {
+        const src = `/threads/${encodeURIComponent(threadKey)}/scratchpad/${encodeURIComponent(filename)}`
+        return `\n\n<div class="tool-card tool-card--image" data-image-src="${escHtml(src)}" data-image-name="${escHtml(filename)}">`
+             + `<img class="tool-card-image-thumb" src="${escHtml(src)}" alt="${escHtml(filename)}" />`
+             + `<span>${escHtml(filename)}</span>`
+             + `</div>\n\n`
+    })
+}
+
+// Global lightbox — one shared overlay, opened by clicking any .tool-card--image.
+// Attached once on first use.
+let _lightboxSetup = false
+export function ensureImageLightbox() {
+    if (_lightboxSetup) return
+    _lightboxSetup = true
+    const overlay = document.createElement("div")
+    overlay.id = "ari-lightbox"
+    overlay.style.cssText = "display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;cursor:zoom-out;align-items:center;justify-content:center;"
+    const img = document.createElement("img")
+    img.style.cssText = "max-width:90vw;max-height:90vh;border-radius:6px;box-shadow:0 8px 40px #000a;"
+    overlay.appendChild(img)
+    overlay.addEventListener("click", () => { overlay.style.display = "none" })
+    document.body.appendChild(overlay)
+
+    document.addEventListener("click", e => {
+        const card = (e.target as Element).closest(".tool-card--image")
+        if (!card) return
+        const src = (card as HTMLElement).dataset.imageSrc
+        if (!src) return
+        img.src = src
+        overlay.style.display = "flex"
+    })
 }
 
 // Reverses the marker-grammar escaping applied server-side (RunCommandMarker & friends), which neutralise
@@ -364,7 +400,7 @@ export function renderBlockHtml(block: BlockLike): string {
     const done = (block.state ?? 0) === 1
     const err  = (block.state ?? 0) === 2
 
-    if (block.type === "text")     return marked.parse(renderFileMarkers(block.text ?? ""), { async: false }) as string
+    if (block.type === "text")     return marked.parse(renderImageMarkers(renderFileMarkers(block.text ?? "")), { async: false }) as string
     if (block.type === "thinking") return ""   // reasoning is shown via the thought-block, not inline
 
     // Plan proposed: a subtle non-interactive chip in the transcript — the Accept/Amend actions live in the

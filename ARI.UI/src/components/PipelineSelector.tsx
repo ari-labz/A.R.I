@@ -26,7 +26,7 @@ function labelFor(id: string) {
 export default function PipelineSelector({ pipelines, value, onChange, orientation = "horizontal", disabled = false }: Props) {
     const options: Array<{ id: string | null; label: string }> = [
         { id: null, label: "Default" },
-        ...pipelines.filter(id => id !== "dialogue").map(id => ({ id, label: labelFor(id) })),
+        ...pipelines.filter(id => id !== "dialogue" && id !== "dream").map(id => ({ id, label: labelFor(id) })),
     ]
 
     const activeIndex = Math.max(0, options.findIndex(o => o.id === value))

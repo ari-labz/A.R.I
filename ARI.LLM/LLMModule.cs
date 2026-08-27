@@ -14,7 +14,7 @@ namespace ARI.LLM;
 public record AppEvent(string Type, string ThreadKey, string? Text = null);
 
 /// <summary>The current processing phase of a thread, sent to watching clients via the watch SSE stream.</summary>
-public enum ThreadPhase { Idle, Prefilling, Thinking, Typing, Researching }
+public enum ThreadPhase { Idle, Prefilling, Thinking, Typing, Researching, Generating }
 
 public class LLMModule : ILLMModule, IDisposable
 {
@@ -103,6 +103,8 @@ public class LLMModule : ILLMModule, IDisposable
         }
 
         _servers.AddRange(servers);
+
+        CleanScratchpads();
 
         Dictionary<string, Server> serverByName = servers.ToDictionary(s => s.Name, s => s);
 
@@ -398,10 +400,11 @@ public class LLMModule : ILLMModule, IDisposable
         // Discord or voice thread has no way to show.
         if (!isDiscord && type is ThreadPipeline.Dialogue or ThreadPipeline.Code)
             ToolFactories.LoadGroup("persona_tools", thread);
-        thread.Updated          += () => Broadcast(new AppEvent("threadUpdated", threadKey));
-        thread.Deleted          += () => { threads.TryRemove(threadKey, out _); Broadcast(new AppEvent("threadDeleted", threadKey)); };
-        thread.Streaming        += text => Broadcast(new AppEvent("streaming", threadKey, text));
+        thread.Updated           += () => Broadcast(new AppEvent("threadUpdated", threadKey));
+        thread.Deleted           += () => { threads.TryRemove(threadKey, out _); Broadcast(new AppEvent("threadDeleted", threadKey)); };
+        thread.Streaming         += text => Broadcast(new AppEvent("streaming", threadKey, text));
         thread.StreamingFinished += () => Broadcast(new AppEvent("streamingFinished", threadKey));
+        thread.ScratchpadFileReady += url => Broadcast(new AppEvent("imageReady", threadKey, url));
         // Persist a plain-text transcript to ChatHistory after every completed exchange.
         if (type is not ThreadPipeline.Dream)
             thread.ExchangeCompleted += (_, _) => ChatHistoryLogger.Write(thread);
@@ -738,6 +741,9 @@ public class LLMModule : ILLMModule, IDisposable
         if (IsThreadProcessing(threadKey))
             Interrupt(threadKey);
 
+        // Cancel any in-flight dream immediately so it releases the slot before we try to acquire it.
+        dreamOrchestrator?.NotifyUserActivity();
+
         // Acquire the global inference slot before building the CTS so cancellation while waiting
         // never leaves a stale entry in processingThreads.
         using IDisposable slot = await scheduler.AcquireAsync(priority, externalCt);
@@ -747,7 +753,6 @@ public class LLMModule : ILLMModule, IDisposable
             ? CancellationTokenSource.CreateLinkedTokenSource(externalCt)
             : new CancellationTokenSource();
         processingThreads[threadKey] = cts;
-        dreamOrchestrator?.NotifyUserActivity();
         NotifyWatchers(threadKey);   // push "prefilling" snapshot immediately so the watch client doesn't wait for the first delta
 
         // Discord threads always use Dialogue.
@@ -1170,7 +1175,25 @@ public class LLMModule : ILLMModule, IDisposable
         return true;
     }
 
-    // ── Data types ───────────────────────────────────────────────────────────────
+    // ── Helpers ───────────────────────────────────────────────────────────────────
+
+    private void CleanScratchpads()
+    {
+        string scratchpadRoot = ARI.Common.Paths.ServerDir("Scratchpad");
+        if (!Directory.Exists(scratchpadRoot)) return;
+
+        int deleted = 0;
+        foreach (string dir in Directory.GetDirectories(scratchpadRoot))
+        {
+            try { Directory.Delete(dir, recursive: true); deleted++; }
+            catch (Exception ex) { _logger.LogWarning("[LLM] Scratchpad cleanup failed for {Dir}: {Err}", dir, ex.Message); }
+        }
+
+        if (deleted > 0)
+            _logger.LogInformation("[LLM] Cleaned up {Count} stale scratchpad(s) from previous run.", deleted);
+    }
+
+// ── Data types ───────────────────────────────────────────────────────────────
 
     public record InternalThreadInfo(string Key, string AgentName, DateTime LastMessageAt, int MessageCount);
 
