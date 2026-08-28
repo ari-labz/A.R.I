@@ -365,15 +365,65 @@ function diffBadges(added = 0, removed = 0): string {
 
 // A proposed persona change: the reason, the before/after, and — while it is still pending — the two
 // buttons that are the only thing standing between the proposal and her actual persona file.
+// Word-level LCS diff — returns spans with only the changed tokens highlighted.
+function wordDiffHtml(oldLine: string, newLine: string): { del: string; add: string } {
+    // Tokenise by word boundaries so punctuation and spaces are their own tokens.
+    const tokenise = (s: string) => s.match(/\S+|\s+/g) ?? []
+    const a = tokenise(oldLine)
+    const b = tokenise(newLine)
+
+    // Classic LCS via DP — O(mn) but persona lines are short.
+    const m = a.length, n = b.length
+    const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0))
+    for (let i = m - 1; i >= 0; i--)
+        for (let j = n - 1; j >= 0; j--)
+            dp[i][j] = a[i] === b[j] ? 1 + dp[i+1][j+1] : Math.max(dp[i+1][j], dp[i][j+1])
+
+    // Walk the LCS table to build diff ops.
+    type Op = { kind: "same" | "del" | "add"; tok: string }
+    const ops: Op[] = []
+    let i = 0, j = 0
+    while (i < m || j < n) {
+        if (i < m && j < n && a[i] === b[j])     { ops.push({ kind: "same", tok: a[i] }); i++; j++ }
+        else if (j < n && (i >= m || dp[i][j+1] >= dp[i+1][j])) { ops.push({ kind: "add", tok: b[j] }); j++ }
+        else                                       { ops.push({ kind: "del", tok: a[i] }); i++ }
+    }
+
+    const render = (side: "del" | "add") =>
+        ops.filter(o => o.kind === "same" || o.kind === side)
+           .map(o => o.kind === "same"
+               ? escHtml(o.tok)
+               : `<mark class="diff-word diff-word--${side}">${escHtml(o.tok)}</mark>`)
+           .join("")
+
+    return { del: render("del"), add: render("add") }
+}
+
 function personaEditHtml(block: BlockLike): string {
     const status = block.status ?? "pending"
     const id     = block.proposalId ?? ""
 
-    const lines = (text: string, sign: "-" | "+") =>
-        text.length === 0 ? "" : text.split("\n").map(l =>
-            `<div class="diff-line diff-line--${sign === "+" ? "add" : "del"}">${escHtml(sign + " " + l)}</div>`).join("")
+    const oldLines = (block.oldText ?? "").split("\n")
+    const newLines = (block.newText ?? "").split("\n")
 
-    const diff = lines(block.oldText ?? "", "-") + lines(block.newText ?? "", "+")
+    // Pair up lines where both sides have content for word-level diff; fall back to full-line otherwise.
+    let diffHtml = ""
+    const maxLen = Math.max(oldLines.length, newLines.length)
+    for (let i = 0; i < maxLen; i++) {
+        const o = oldLines[i] ?? ""
+        const n = newLines[i] ?? ""
+        if (i < oldLines.length && i < newLines.length && o !== n) {
+            const { del, add } = wordDiffHtml(o, n)
+            diffHtml += `<div class="diff-line diff-line--del">- ${del}</div>`
+            diffHtml += `<div class="diff-line diff-line--add">+ ${add}</div>`
+        } else if (i < oldLines.length) {
+            diffHtml += `<div class="diff-line diff-line--del">- ${escHtml(o)}</div>`
+        } else {
+            diffHtml += `<div class="diff-line diff-line--add">+ ${escHtml(n)}</div>`
+        }
+    }
+
+    const diff = diffHtml
 
     const decision = status === "pending"
         ? `<div class="persona-edit-actions">

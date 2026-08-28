@@ -126,6 +126,7 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
         {
             enabled          = sched.Enabled,
             proactiveEnabled = sched.ProactiveEnabled,
+            dreamingEnabled  = sched.DreamingEnabled,
             quietStartHour   = quietStart,
             quietEndHour     = quietEnd,
             tasks = sched.GetTasks().Select(t => new
@@ -159,6 +160,15 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
             return BadRequest(new { error = "name and cron are required." });
         if (!sched.SetTaskCron(req.Name, req.Cron))
             return BadRequest(new { error = "Invalid cron expression or unknown task." });
+        return Ok(new { ok = true });
+    }
+
+    [HttpPost("scheduler/dreaming")]
+    public IActionResult SetDreaming([FromBody] SchedulerDreamingRequest req)
+    {
+        ISchedulerModule? sched = Modules.Scheduler;
+        if (sched is null) return StatusCode(503, "Scheduler is not available.");
+        sched.DreamingEnabled = req.Enabled;
         return Ok(new { ok = true });
     }
 
@@ -1610,6 +1620,7 @@ public record UserNameRequest(string? Name);
 public record SafeModePromptRequest(string? Text);
 public record SchedulerTaskRequest(string? Name, string? Cron);
 public record SchedulerProactiveRequest(bool Enabled);
+public record SchedulerDreamingRequest(bool Enabled);
 public record SchedulerQuietHoursRequest(int QuietStartHour, int QuietEndHour);
 
 public record TrainRequest(
