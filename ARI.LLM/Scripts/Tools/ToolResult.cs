@@ -14,14 +14,16 @@ public readonly struct ToolResult
     internal byte[]      Bytes     { get; }   // set when Kind is Image
     internal string      MediaType { get; }   // e.g. "image/png"; empty for text
     internal string      Context   { get; }   // set when Kind is Wake — briefing for the new thread
+    internal string      Title     { get; }   // set when Kind is Wake — title for the new thread
 
-    private ToolResult(ContentKind kind, string text, byte[] bytes, string mediaType, string context = "")
+    private ToolResult(ContentKind kind, string text, byte[] bytes, string mediaType, string context = "", string title = "")
     {
         Kind      = kind;
         Text      = text;
         Bytes     = bytes;
         MediaType = mediaType;
         Context   = context;
+        Title     = title;
     }
 
     internal static ToolResult AsText(string text)
@@ -31,8 +33,8 @@ public readonly struct ToolResult
         => new(ContentKind.Image, "", bytes, mediaType);
 
     // content = message sent to the user; context = briefing injected into the new thread's system prompt.
-    internal static ToolResult AsWake(string content, string context)
-        => new(ContentKind.Wake, content, System.Array.Empty<byte>(), "", context);
+    internal static ToolResult AsWake(string content, string context, string title = "")
+        => new(ContentKind.Wake, content, System.Array.Empty<byte>(), "", context, title);
 
     public static implicit operator ToolResult(string text) => AsText(text);
 }

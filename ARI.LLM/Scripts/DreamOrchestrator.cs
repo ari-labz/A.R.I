@@ -116,6 +116,12 @@ internal sealed class DreamOrchestrator : IDisposable
         {
             Shared.Logger.LogWarning(ex, "[Dream] Turn failed.");
         }
+        finally
+        {
+            // Pipeline.ExecuteAsync disposes the CTS in its own finally block. Null it here so
+            // InterruptDream/NotifyUserActivity never calls Cancel() on an already-disposed CTS.
+            if (ReferenceEquals(dreamCts, cts)) dreamCts = null;
+        }
     }
 
     private void InterruptDream()

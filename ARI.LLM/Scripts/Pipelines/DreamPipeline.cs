@@ -7,14 +7,14 @@ namespace ARI.LLM;
 internal sealed class DreamPipeline : Pipeline
 {
     private readonly Dreamer                  dreamer;
-    private readonly Func<string, string, string> onWake; // (content, context) → new threadKey
+    private readonly Func<string, string, string, string> onWake; // (content, context, title) → new threadKey
 
     protected override Agent  PrimaryAgent => dreamer;
     protected override string PipelineName => "Dream";
 
     internal DreamPipeline(
         Dreamer                                                dreamer,
-        Func<string, string, string>                           onWake,
+        Func<string, string, string, string>                   onWake,
         ConcurrentDictionary<string, CancellationTokenSource> processingThreads,
         ConcurrentDictionary<string, LiveCallInfo>             liveCalls,
         Action<string>                                          notifyWatchers)
@@ -54,38 +54,28 @@ internal sealed class DreamPipeline : Pipeline
         if (dreamer.WakeRequest is { Kind: ToolResult.ContentKind.Wake } wake)
         {
             Shared.Logger.LogInformation("[Dream] ({Thread}) Wake called — opening proactive thread.", threadKey);
-            onWake(wake.Text, wake.Context);
+            onWake(wake.Text, wake.Context, wake.Title);
         }
 
         return result;
     }
 
-    // Read filesystem tools that require a bound project. When no project is bound, stubs are
-    // registered in their place so the LLM can see and call them — and get a clear redirect.
-    private static readonly string[] FilesystemReadTools =
-        ["read_file", "list_directory", "preview_file", "search_files", "find_files", "search_vault"];
-
-    // Read tools excluded from dreams — external/communication tools that don't belong here.
+    // Communication tools excluded from dreams — no voice channels, no external side-effects.
     private static readonly HashSet<string> DreamExcluded =
-        ["discord_list_voice_channels"];
+        ["discord_list_voice_channels", "discord_join_voice_channel", "discord_leave_voice_channel",
+         "edit_memory"];
 
+    /// <summary>
+    /// Registers the always-available Read tools for a dream turn. Filesystem tools are NOT
+    /// registered here — they unlock in the same step that bind_project succeeds, via
+    /// ToolFactories.RegisterFilesystemTools. Wake is always registered regardless of access level.
+    /// </summary>
     internal static void RegisterDreamTools(Thread thread)
     {
-        // Register all Read tools that resolve for this thread.
-        HashSet<string> registered = [];
         foreach (string name in ToolFactories.AllNames())
             if (!DreamExcluded.Contains(name) &&
                 ToolFactories.TryBuild(name, thread, out Tool tool) && tool.Access == ToolAccess.Read)
-            {
                 tool.Register(thread);
-                registered.Add(name);
-            }
-
-        // For filesystem Read tools that didn't resolve (no project bound yet), register stubs
-        // so the LLM knows they exist and gets a clear error if it calls them too early.
-        foreach (string name in FilesystemReadTools)
-            if (!registered.Contains(name))
-                new UnboundFilesystemTool(name).Register(thread);
 
         new Wake().Register(thread);
     }
