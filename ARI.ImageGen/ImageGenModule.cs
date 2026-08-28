@@ -22,14 +22,16 @@ public class ImageGenModule : IImageGenModule
     }
 
     public async Task<byte[]> GenerateAsync(
-        string prompt,
-        string negativePrompt     = "",
-        string checkpointFilename = "",
-        int    steps              = 25,
-        int    width              = 1024,
-        int    height             = 1024,
-        long   seed               = -1,
-        CancellationToken ct      = default)
+        string   prompt,
+        string   negativePrompt     = "",
+        string   checkpointFilename = "",
+        int      steps              = 25,
+        int      width              = 1024,
+        int      height             = 1024,
+        long     seed               = -1,
+        string[] referenceImages    = default!,
+        float    denoise            = 1.0f,
+        CancellationToken ct        = default)
     {
         await EnsureRunning(ct);
         ResetIdleTimer();
@@ -39,17 +41,42 @@ public class ImageGenModule : IImageGenModule
         if (string.IsNullOrWhiteSpace(checkpointFilename))
             checkpointFilename = _config.Checkpoint;
 
-        string workflow = BuildWorkflow(prompt, negativePrompt, checkpointFilename, steps, width, height, seed);
+        referenceImages ??= [];
 
-        using HttpClient hc = new();
+        // Upload reference images to ComfyUI's input directory before building the workflow.
         string baseUrl = $"http://127.0.0.1:{_config.Port}";
+        List<string> uploadedNames = new();
+        using HttpClient hc = new();
+        foreach (string path in referenceImages)
+        {
+            if (!File.Exists(path)) continue;
+            using MultipartFormDataContent form = new();
+            byte[] imgBytes = await File.ReadAllBytesAsync(path, ct);
+            form.Add(new ByteArrayContent(imgBytes), "image", Path.GetFileName(path));
+            form.Add(new StringContent("true"), "overwrite");
+            HttpResponseMessage upResp = await hc.PostAsync($"{baseUrl}/upload/image", form, ct);
+            if (upResp.IsSuccessStatusCode)
+            {
+                JsonNode? upJson = JsonNode.Parse(await upResp.Content.ReadAsStringAsync(ct));
+                string? uploadedName = upJson?["name"]?.GetValue<string>();
+                if (uploadedName is not null) uploadedNames.Add(uploadedName);
+            }
+        }
+
+        string workflow = uploadedNames.Count > 0
+            ? BuildImg2ImgWorkflow(prompt, negativePrompt, checkpointFilename, steps, width, height, seed, uploadedNames[0], denoise)
+            : BuildWorkflow(prompt, negativePrompt, checkpointFilename, steps, width, height, seed);
 
         // Submit the prompt
         HttpResponseMessage submitResp = await hc.PostAsync(
             $"{baseUrl}/prompt",
             new StringContent(workflow, System.Text.Encoding.UTF8, "application/json"),
             ct);
-        submitResp.EnsureSuccessStatusCode();
+        if (!submitResp.IsSuccessStatusCode)
+        {
+            string body = await submitResp.Content.ReadAsStringAsync(ct);
+            throw new Exception($"ComfyUI rejected workflow ({(int)submitResp.StatusCode}): {body}");
+        }
 
         JsonNode? submitJson = JsonNode.Parse(await submitResp.Content.ReadAsStringAsync(ct));
         string promptId = submitJson?["prompt_id"]?.GetValue<string>()
@@ -284,6 +311,106 @@ public class ImageGenModule : IImageGenModule
                 {
                     ["images"]         = new JsonArray { "6", 0 },
                     ["filename_prefix"] = "ari"
+                }
+            }
+        };
+
+        return JsonSerializer.Serialize(new JsonObject { ["prompt"] = workflow });
+    }
+
+    // Standard img2img: load reference image → VAE encode → KSampler with denoise < 1 → SaveImage.
+    private static string BuildImg2ImgWorkflow(
+        string prompt, string negativePrompt, string checkpoint,
+        int steps, int width, int height, long seed,
+        string referenceImageName, float denoise)
+    {
+        JsonObject workflow = new()
+        {
+            ["1"] = new JsonObject
+            {
+                ["class_type"] = "CheckpointLoaderSimple",
+                ["inputs"]     = new JsonObject { ["ckpt_name"] = checkpoint }
+            },
+            ["2"] = new JsonObject
+            {
+                ["class_type"] = "CLIPTextEncode",
+                ["inputs"]     = new JsonObject
+                {
+                    ["text"] = prompt,
+                    ["clip"] = new JsonArray { "1", 1 }
+                }
+            },
+            ["3"] = new JsonObject
+            {
+                ["class_type"] = "CLIPTextEncode",
+                ["inputs"]     = new JsonObject
+                {
+                    ["text"] = negativePrompt,
+                    ["clip"] = new JsonArray { "1", 1 }
+                }
+            },
+            // Load the reference image
+            ["8"] = new JsonObject
+            {
+                ["class_type"] = "LoadImage",
+                ["inputs"]     = new JsonObject { ["image"] = referenceImageName, ["upload"] = "image" }
+            },
+            // Resize to target resolution before encoding
+            ["9"] = new JsonObject
+            {
+                ["class_type"] = "ImageScale",
+                ["inputs"]     = new JsonObject
+                {
+                    ["image"]          = new JsonArray { "8", 0 },
+                    ["upscale_method"] = "lanczos",
+                    ["width"]          = width,
+                    ["height"]         = height,
+                    ["crop"]           = "center"
+                }
+            },
+            // VAE encode to latent
+            ["10"] = new JsonObject
+            {
+                ["class_type"] = "VAEEncode",
+                ["inputs"]     = new JsonObject
+                {
+                    ["pixels"] = new JsonArray { "9", 0 },
+                    ["vae"]    = new JsonArray { "1", 2 }
+                }
+            },
+            ["5"] = new JsonObject
+            {
+                ["class_type"] = "KSampler",
+                ["inputs"]     = new JsonObject
+                {
+                    ["model"]          = new JsonArray { "1", 0 },
+                    ["positive"]       = new JsonArray { "2", 0 },
+                    ["negative"]       = new JsonArray { "3", 0 },
+                    ["latent_image"]   = new JsonArray { "10", 0 },
+                    ["seed"]           = seed,
+                    ["steps"]          = steps,
+                    ["cfg"]            = 7.0,
+                    ["sampler_name"]   = "euler",
+                    ["scheduler"]      = "normal",
+                    ["denoise"]        = (double)denoise
+                }
+            },
+            ["6"] = new JsonObject
+            {
+                ["class_type"] = "VAEDecode",
+                ["inputs"]     = new JsonObject
+                {
+                    ["samples"] = new JsonArray { "5", 0 },
+                    ["vae"]     = new JsonArray { "1", 2 }
+                }
+            },
+            ["7"] = new JsonObject
+            {
+                ["class_type"] = "SaveImage",
+                ["inputs"]     = new JsonObject
+                {
+                    ["images"]          = new JsonArray { "6", 0 },
+                    ["filename_prefix"] = "ari-img2img"
                 }
             }
         };

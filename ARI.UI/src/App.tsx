@@ -208,18 +208,37 @@ function dedupeRecentUserMessages(items: ThreadItem[]): ThreadItem[] {
 const ARI_IMAGE_RE = /\n?<!--ari-image:([^:]+):([^>]+?)-->/g
 function extractImageItems(items: ThreadItem[]): ThreadItem[] {
     const out: ThreadItem[] = []
+    const seenImageUrls = new Set<string>()
     for (const item of items) {
-        if (item.type !== "ariResponse" || !item.content?.includes("<!--ari-image:")) {
+        if (item.type === "ariImage" && item.content) {
+            if (seenImageUrls.has(item.content)) continue
+            seenImageUrls.add(item.content)
+        }
+        if (item.type !== "ariResponse") {
+            out.push(item)
+            continue
+        }
+        const hasMarkerInContent = item.content?.includes("<!--ari-image:")
+        const hasMarkerInBlocks  = item.blocks?.some((b: { type?: string; text?: string }) => b.type === "text" && b.text?.includes("<!--ari-image:"))
+        if (!hasMarkerInContent && !hasMarkerInBlocks) {
             out.push(item)
             continue
         }
         const images: ThreadItem[] = []
-        const cleaned = item.content.replace(ARI_IMAGE_RE, (_, threadKey, filename) => {
+        const stripMarker = (s: string) => s.replace(ARI_IMAGE_RE, (_, threadKey, filename) => {
             const url = `/threads/${encodeURIComponent(threadKey)}/scratchpad/${encodeURIComponent(filename)}`
-            images.push({ type: "ariImage", content: url, timestamp: item.timestamp })
+            if (!seenImageUrls.has(url)) {
+                seenImageUrls.add(url)
+                images.push({ type: "ariImage", content: url, timestamp: item.timestamp })
+            }
             return ""
         })
-        out.push({ ...item, content: cleaned })
+        const cleaned = hasMarkerInContent ? stripMarker(item.content ?? "") : (item.content ?? "")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const cleanedBlocks = item.blocks?.map((b: any) =>
+            b.type === "text" && typeof b.text === "string" && b.text.includes("<!--ari-image:") ? { ...b, text: stripMarker(b.text) } : b
+        ) as typeof item.blocks
+        out.push({ ...item, content: cleaned, ...(cleanedBlocks ? { blocks: cleanedBlocks } : {}) } as ThreadItem)
         out.push(...images)
     }
     return out
@@ -500,7 +519,25 @@ export default function App() {
         const readyPollId   = setInterval(checkReady, 5 * 1000)
         const versionPollId = setInterval(checkVersion, 60 * 1000)
 
-        return () => { clearInterval(pollId); clearInterval(versionPollId); clearInterval(readyPollId); globalEsRef.current?.close() }
+        // When the app comes back to the foreground (minimised → restored, tab switch, etc.),
+        // re-sync thread state and reconnect the global SSE if it dropped while backgrounded.
+        function handleVisibilityChange() {
+            if (document.visibilityState !== "visible") return
+            loadThreads()
+            if (!globalEsRef.current || globalEsRef.current.readyState === EventSource.CLOSED)
+                openGlobalStream()
+            if (activeThreadRef.current && !streamingRef.current)
+                loadHistory(activeThreadRef.current)
+                    .then(hist => { if (activeThreadRef.current) setItems(extractImageItems(dedupeRecentUserMessages(hist))) })
+                    .catch(() => {})
+        }
+        document.addEventListener("visibilitychange", handleVisibilityChange)
+
+        return () => {
+            clearInterval(pollId); clearInterval(versionPollId); clearInterval(readyPollId)
+            globalEsRef.current?.close()
+            document.removeEventListener("visibilitychange", handleVisibilityChange)
+        }
     }, [authState, connectAndInit, loadThreads, loadProjects])
 
     // ── toast ─────────────────────────────────────────────
@@ -1223,13 +1260,21 @@ export default function App() {
                 if (buf) handleLine(buf.trimEnd())
             } catch (err: unknown) {
                 if (err instanceof Error && err.name === "AbortError") return
+                // Stream dropped (e.g. app backgrounded/minimised). Finalise the streaming bubble
+                // and reload history — ARI may have finished while we were disconnected.
+                abortRef.current = null; setIsStreaming(false)
                 setItems(prev => {
                     const last = prev[prev.length - 1]
                     if (last?.type === "ariResponse" && last.isStreaming)
-                        return [...prev.slice(0, -1), { ...last, content: "[connection error]", isStreaming: false }]
-                    return [...prev, { type: "ariResponse", content: "[connection error]", timestamp: new Date().toISOString() }]
+                        return [...prev.slice(0, -1), { ...last, isStreaming: false }]
+                    return prev
                 })
-                abortRef.current = null; setIsStreaming(false)
+                if (activeThreadRef.current === keyForStream) {
+                    fetchThread(keyForStream).then(detail => {
+                        if (!detail) return loadHistory(keyForStream).then(hist => { if (activeThreadRef.current === keyForStream) setItems(extractImageItems(dedupeRecentUserMessages(hist))) }).catch(() => {})
+                        if (activeThreadRef.current === keyForStream) setItems(extractImageItems(dedupeRecentUserMessages(detail.history)))
+                    }).catch(() => {})
+                }
             }
         }
 

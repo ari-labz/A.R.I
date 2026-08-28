@@ -505,6 +505,59 @@ public static class SessionRecorder
         return hash.ToString("x16");
     }
 
+    // ── Disk session listing ──────────────────────────────────────────────────
+
+    /// <summary>Returns the .jsonl files recorded today, one entry per file. Used by the DTI to list
+    /// completed/ephemeral threads (e.g. Engram sweeps) that are no longer in the live thread registry.</summary>
+    public static List<DiskSession> ListTodaysSessions()
+    {
+        if (Off) return [];
+        try
+        {
+            string dir = Path.Combine(Paths.Sessions, DateTime.Now.ToString("yyyy-MM-dd"));
+            if (!Directory.Exists(dir)) return [];
+            return Directory.GetFiles(dir, "*.jsonl")
+                .Where(f => !Path.GetFileName(f).Equals("index.jsonl", StringComparison.OrdinalIgnoreCase))
+                .Select(f =>
+                {
+                    string name = Path.GetFileNameWithoutExtension(f);
+                    long   size = new FileInfo(f).Length;
+                    return new DiskSession(name, f, size);
+                })
+                .OrderByDescending(s => new FileInfo(s.Path).LastWriteTime)
+                .ToList();
+        }
+        catch { return []; }
+    }
+
+    /// <summary>Reads a raw .jsonl session file by its stem name (no extension). Returns each line parsed
+    /// as a JsonDocument, newest-first. Returns null if the file does not exist or Off.</summary>
+    public static List<Dictionary<string, object?>>? ReadSessionFile(string stem)
+    {
+        if (Off) return null;
+        try
+        {
+            string dir  = Path.Combine(Paths.Sessions, DateTime.Now.ToString("yyyy-MM-dd"));
+            string path = Path.Combine(dir, $"{Sanitize(stem)}.jsonl");
+            if (!File.Exists(path)) return null;
+            var lines = new List<Dictionary<string, object?>>();
+            foreach (string line in File.ReadLines(path))
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                try
+                {
+                    var d = JsonSerializer.Deserialize<Dictionary<string, object?>>(line, SerializerOptions);
+                    if (d is not null) lines.Add(d);
+                }
+                catch { /* malformed line — skip */ }
+            }
+            return lines;
+        }
+        catch { return null; }
+    }
+
+    public sealed record DiskSession(string Stem, string Path, long Bytes);
+
     private static double Round(double value) => Math.Round(value, 3);
 
     private static string Sanitize(string name)

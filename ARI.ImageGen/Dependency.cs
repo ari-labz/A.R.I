@@ -24,46 +24,43 @@ public static class Dependency
 
         ComfyUiPath = installDir;
 
-        if (File.Exists(Path.Combine(installDir, MARKER_FILE)))
-        {
-            Shared.Logger.LogInformation("[ImageGen] ComfyUI already provisioned at {Path}.", installDir);
-            Status = "";
-            return;
-        }
-
         string? python = await FindPython();
-        if (python is null)
+        string? git    = await FindGit();
+
+        // Step 1: ComfyUI core
+        if (!File.Exists(Path.Combine(installDir, MARKER_FILE)))
         {
-            string reason = "Python 3 is required for ComfyUI but was not found.";
-            Shared.Logger.LogWarning("[ImageGen] {Reason}", reason);
-            Status = reason;
-            return;
+            if (python is null)
+            {
+                Status = "Python 3 is required for ComfyUI but was not found.";
+                Shared.Logger.LogWarning("[ImageGen] {Status}", Status);
+                return;
+            }
+
+            Shared.Logger.LogInformation("[ImageGen] Installing ComfyUI to {Path}...", installDir);
+            Directory.CreateDirectory(installDir);
+
+            try
+            {
+                if (git is not null)
+                    await CloneWithGit(git, installDir);
+                else
+                    await DownloadZip(installDir);
+
+                await InstallRequirements(python, installDir);
+                File.WriteAllText(Path.Combine(installDir, MARKER_FILE), "1");
+                Shared.Logger.LogInformation("[ImageGen] ComfyUI installed.");
+            }
+            catch (Exception ex)
+            {
+                Status = $"ComfyUI installation failed: {ex.Message}";
+                Shared.Logger.LogWarning("[ImageGen] {Status}", Status);
+                return;
+            }
         }
 
-        string? git = await FindGit();
-
-        Shared.Logger.LogInformation("[ImageGen] Installing ComfyUI to {Path}...", installDir);
-        Directory.CreateDirectory(installDir);
-
-        try
-        {
-            if (git is not null)
-                await CloneWithGit(git, installDir);
-            else
-                await DownloadZip(installDir);
-
-            await InstallRequirements(python, installDir);
-
-            File.WriteAllText(Path.Combine(installDir, MARKER_FILE), "1");
-            Shared.Logger.LogInformation("[ImageGen] ComfyUI ready.");
-            Status = "";
-        }
-        catch (Exception ex)
-        {
-            string reason = $"ComfyUI installation failed: {ex.Message}";
-            Shared.Logger.LogWarning("[ImageGen] {Reason}", reason);
-            Status = reason;
-        }
+        Shared.Logger.LogInformation("[ImageGen] ComfyUI ready.");
+        Status = "";
     }
 
     private static async Task CloneWithGit(string git, string installDir)
@@ -142,6 +139,13 @@ public static class Dependency
         string venvPip = VenvExecutable(venvDir, "pip");
         Shared.Logger.LogInformation("[ImageGen] Installing Python requirements into venv...");
         await Run(venvPip, $"install -r \"{req}\" --quiet");
+    }
+
+    // Returns the path to the venv's pip executable, or null if the venv hasn't been created yet.
+    private static string? VenvPip(string installDir)
+    {
+        string pip = VenvExecutable(Path.Combine(installDir, "venv"), "pip");
+        return File.Exists(pip) ? pip : null;
     }
 
     // Returns the path to the venv's Python executable (used by ImageGenModule to launch ComfyUI).

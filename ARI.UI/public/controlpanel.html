@@ -5327,43 +5327,139 @@ async function loadDebugThreads() {
     const list = document.getElementById('dbg-thread-list');
     list.innerHTML = '<div class="cp-placeholder" style="padding:10px 12px;">Loading…</div>';
     try {
-        const r = await cpFetch('/threads?includeInternal=true');
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const threads = await r.json();
-        dbgRenderThreadList(threads);
+        const [liveRes, diskRes] = await Promise.all([
+            cpFetch('/threads?includeInternal=true'),
+            cpFetch('/threads/debug/sessions'),
+        ]);
+        if (!liveRes.ok) throw new Error('HTTP ' + liveRes.status);
+        const liveThreads = await liveRes.json();
+        const liveKeys    = new Set(liveThreads.map(t => t.key));
+
+        // Disk sessions that are no longer live (completed Engram sweeps etc.)
+        let diskSessions = [];
+        if (diskRes.ok) {
+            const disk = await diskRes.json();
+            diskSessions = disk
+                .filter(s => !liveKeys.has(s.stem))
+                .map(s => ({ key: s.stem, isInternal: true, isDisk: true, agentName: s.stem.split('_')[0], bytes: s.bytes }));
+        }
+
+        dbgRenderThreadList(liveThreads, diskSessions);
     } catch(e) {
         list.innerHTML = `<div class="cp-placeholder" style="padding:10px 12px;color:#dc2626;">Error: ${escHtml(e.message)}</div>`;
     }
 }
 
-function dbgRenderThreadList(threads) {
+function dbgRenderThreadList(threads, diskSessions = []) {
     const list = document.getElementById('dbg-thread-list');
-    if (!threads.length) {
+    if (!threads.length && !diskSessions.length) {
         list.innerHTML = '<div class="cp-placeholder" style="padding:10px 12px;">No threads found</div>';
         return;
     }
     list.innerHTML = '';
-    threads.forEach(t => {
+
+    function addThreadItem(key, typeLabel, meta, onClick, container) {
         const item = document.createElement('div');
-        item.className = 'dbg-thread-item' + (t.key === dbgSelectedThread ? ' active' : '');
-        const typeLabel = t.isInternal ? (t.agentName || 'Internal') : (t.isCodeMode ? 'Code' : 'Dialogue');
-        const ago = t.lastMessageAt ? dbgFmtAgo(t.lastMessageAt) : '';
+        item.className = 'dbg-thread-item' + (key === dbgSelectedThread ? ' active' : '');
         item.innerHTML = `
-            <div class="dbg-thread-key">${escHtml(t.key)}</div>
-            <div class="dbg-thread-meta">${escHtml(typeLabel)} · ${t.messageCount || 0} msgs${ago ? ' · ' + ago : ''}</div>`;
+            <div class="dbg-thread-key">${escHtml(key)}</div>
+            <div class="dbg-thread-meta">${escHtml(typeLabel)} · ${escHtml(meta)}</div>`;
         item.addEventListener('click', () => {
-            dbgSelectedThread = t.key;
+            dbgSelectedThread = key;
             dbgLastRenderCount = 0;
             list.querySelectorAll('.dbg-thread-item').forEach(el => el.classList.toggle('active', el === item));
-            dbgOpenWatch(t.key);
-            dbgLoadThread(t.key);
+            onClick();
         });
-        list.appendChild(item);
-    });
-    // Re-select previously selected thread if it's still in the list
+        (container ?? list).appendChild(item);
+        return item;
+    }
+
+    threads
+        .filter(t => !t.key.startsWith('memory:') && !t.key.startsWith('extract:'))
+        .forEach(t => {
+            const typeLabel = t.isInternal ? (t.agentName || 'Internal') : (t.isCodeMode ? 'Code' : 'Dialogue');
+            const ago = t.lastMessageAt ? dbgFmtAgo(t.lastMessageAt) : '';
+            const meta = `${t.messageCount || 0} msgs${ago ? ' · ' + ago : ''}`;
+            addThreadItem(t.key, typeLabel, meta, () => { dbgOpenWatch(t.key); dbgLoadThread(t.key); });
+        });
+
+    const visibleDisk = diskSessions.filter(s => !s.key.startsWith('Memory_memory_') && !s.key.startsWith('Memory_extract_'));
+    if (visibleDisk.length) {
+        const diskOpen = sessionStorage.getItem('dti-disk-open') === 'true';
+        const header = document.createElement('div');
+        header.style.cssText = 'font-size:10px;color:var(--text-dim);padding:6px 10px 2px;text-transform:uppercase;letter-spacing:.05em;cursor:pointer;user-select:none;display:flex;align-items:center;gap:4px;';
+        const arrow = document.createElement('span');
+        arrow.style.cssText = 'display:inline-block;transition:transform .15s;font-style:normal;';
+        arrow.textContent = '▶';
+        if (diskOpen) arrow.style.transform = 'rotate(90deg)';
+        header.appendChild(arrow);
+        header.appendChild(document.createTextNode('Today — completed'));
+        list.appendChild(header);
+
+        const diskGroup = document.createElement('div');
+        diskGroup.style.display = diskOpen ? '' : 'none';
+        visibleDisk.forEach(s => {
+            const kb = s.bytes > 0 ? `${(s.bytes / 1024).toFixed(1)} KB` : '';
+            addThreadItem(s.key, s.agentName || 'Disk', kb, () => { dbgCloseWatch(); dbgLoadDiskSession(s.key); }, diskGroup);
+        });
+        list.appendChild(diskGroup);
+
+        header.addEventListener('click', () => {
+            const nowOpen = diskGroup.style.display === 'none';
+            diskGroup.style.display = nowOpen ? '' : 'none';
+            arrow.style.transform = nowOpen ? 'rotate(90deg)' : '';
+            sessionStorage.setItem('dti-disk-open', nowOpen);
+        });
+    }
+
+    // Re-select previously selected thread if it's still in either list
     if (dbgSelectedThread) {
-        const found = threads.find(t => t.key === dbgSelectedThread);
-        if (found) dbgLoadThread(dbgSelectedThread);
+        const inLive = threads.find(t => t.key === dbgSelectedThread);
+        const inDisk = diskSessions.find(s => s.key === dbgSelectedThread);
+        if (inLive) { dbgOpenWatch(dbgSelectedThread); dbgLoadThread(dbgSelectedThread); }
+        else if (inDisk) dbgLoadDiskSession(dbgSelectedThread);
+        else { dbgSelectedThread = null; } // thread gone — fall through to auto-select
+    }
+    // Auto-select the most recently active dialogue thread when nothing is selected
+    if (!dbgSelectedThread && threads.length) {
+        const first = threads.find(t => !t.key.startsWith('memory:') && !t.key.startsWith('extract:'));
+        if (first) {
+            dbgSelectedThread = first.key;
+            dbgLastRenderCount = 0;
+            list.querySelectorAll('.dbg-thread-item').forEach(el => {
+                el.classList.toggle('active', el.querySelector('.dbg-thread-key')?.textContent === first.key);
+            });
+            dbgOpenWatch(first.key);
+            dbgLoadThread(first.key);
+        }
+    }
+}
+
+async function dbgLoadDiskSession(stem) {
+    const body  = document.getElementById('dbg-view-body');
+    const head  = document.getElementById('dbg-view-head');
+    const keyEl = document.getElementById('dbg-view-key');
+    head.style.display = '';
+    keyEl.textContent = stem + ' (archived)';
+    body.innerHTML = '<div class="dbg-empty">Loading…</div>';
+    try {
+        const r = await cpFetch(`/threads/debug/sessions/${encodeURIComponent(stem)}`);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const events = await r.json();
+        body.dataset.loaded = '1';
+        if (!events.length) { body.innerHTML = '<div class="dbg-empty">No events recorded.</div>'; return; }
+        body.innerHTML = '';
+        events.forEach(ev => {
+            const row = document.createElement('div');
+            row.style.cssText = 'padding:6px 10px;border-bottom:1px solid var(--border);font-size:12px;font-family:ui-monospace,Menlo,monospace;white-space:pre-wrap;word-break:break-all;';
+            const ts   = ev.ts ? `<span style="color:var(--text-dim)">${escHtml(String(ev.ts))}</span> ` : '';
+            const evt  = ev.event ? `<strong>${escHtml(String(ev.event))}</strong> ` : '';
+            const rest = Object.entries(ev).filter(([k]) => k !== 'ts' && k !== 'event').map(([k, v]) => `${escHtml(k)}=${escHtml(JSON.stringify(v))}`).join(' ');
+            row.innerHTML = ts + evt + escHtml(rest);
+            body.appendChild(row);
+        });
+    } catch(e) {
+        body.innerHTML = `<div class="dbg-empty" style="color:#dc2626;">Error: ${escHtml(e.message)}</div>`;
     }
 }
 
@@ -5886,6 +5982,39 @@ document.getElementById('dbg-view-refresh').addEventListener('click', () => {
     if (dbgSelectedThread) dbgLoadThread(dbgSelectedThread);
 });
 document.getElementById('dbg-view-download').addEventListener('click', dbgDownloadThread);
+
+// ── DTI live events — auto-refresh thread list and auto-select active threads ──
+function dbgIsActive() { return document.getElementById('tab-debug')?.style.display !== 'none'; }
+
+(function connectDtiEvents() {
+    const es = cpEventSource('/events');
+    es.onmessage = e => {
+        let evt;
+        try { evt = JSON.parse(e.data); } catch { return; }
+        const type = evt.type;
+        if (!type) return;
+
+        if (type === 'newThread') {
+            if (dbgIsActive()) loadDebugThreads();
+            // Auto-select the new thread if nothing is selected yet
+            if (dbgIsActive() && !dbgSelectedThread && evt.threadKey) {
+                dbgSelectedThread = evt.threadKey;
+                dbgLastRenderCount = 0;
+                dbgOpenWatch(evt.threadKey);
+                dbgLoadThread(evt.threadKey);
+            }
+        } else if (type === 'threadDeleted') {
+            if (dbgIsActive()) loadDebugThreads();
+            if (dbgSelectedThread === evt.threadKey) {
+                dbgCloseWatch();
+                dbgSelectedThread = null;
+                document.getElementById('dbg-view-head').style.display = 'none';
+                document.getElementById('dbg-view-body').innerHTML = '<div class="dbg-empty">Thread ended.</div>';
+            }
+        }
+    };
+    es.onerror = () => { es.close(); setTimeout(connectDtiEvents, 5000); };
+})();
 
 // ── Image Generation ───────────────────────────────────────────────────────────
 
