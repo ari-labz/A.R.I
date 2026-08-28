@@ -61,14 +61,16 @@ public interface IImageGenModule
 {
     bool IsReady { get; }
     Task<byte[]> GenerateAsync(
-        string prompt,
-        string negativePrompt     = "",
-        string checkpointFilename = "",
-        int    steps              = 25,
-        int    width              = 1024,
-        int    height             = 1024,
-        long   seed               = -1,
-        CancellationToken ct      = default);
+        string   prompt,
+        string   negativePrompt     = "",
+        string   checkpointFilename = "",
+        int      steps              = 25,
+        int      width              = 1024,
+        int      height             = 1024,
+        long     seed               = -1,
+        string[] referenceImages    = default!,
+        float    denoise            = 1.0f,
+        CancellationToken ct        = default);
     void Shutdown();
 }
 

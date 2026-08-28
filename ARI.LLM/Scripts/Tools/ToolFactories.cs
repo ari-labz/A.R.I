@@ -69,7 +69,7 @@ internal static class ToolFactories
         ["discord_leave_voice_channel"] = _ => Modules.Discord is not null ? new DiscordLeaveVoiceChannel() : null,
 
         // Image generation — only available when the ImageGen module is enabled and ComfyUI is ready.
-        ["generate_image"] = _ => Modules.ImageGen?.IsReady == true ? new GenerateImage() : null,
+        ["generate_image"] = t => Modules.ImageGen?.IsReady == true ? new GenerateImage(t) : null,
     };
 
     private static ServerFileSystem? Fs(Thread t)

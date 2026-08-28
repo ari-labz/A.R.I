@@ -1228,8 +1228,7 @@ button, a, input, select, textarea, label, [role="button"] {
 .tool-card--mode  { color: #93c5fd; border-color: #1e40af; background: rgba(30,64,175,0.55); }
 .tool-card--image { cursor: zoom-in; padding: 0; overflow: hidden; flex-direction: column; align-items: flex-start; border-color: rgba(255,255,255,0.12); background: rgba(20,28,32,0.6); gap: 0; }
 .tool-card--image span { padding: 5px 10px; font-size: 11px; color: #8e9caa; }
-.tool-card-image-thumb { display: block; max-width: 380px; max-height: 380px; width: 100%; object-fit: contain; border-radius: 6px 6px 0 0; }
-/* web cards: not italic — a query is a literal string and reads wrong when slanted */
+.tool-card-image-thumb { display: block; max-width: 380px; max-height: 380px; width: 100%; object-fit: contain; border-radius: 6px 6px 0 0; }/* web cards: not italic — a query is a literal string and reads wrong when slanted */
 .tool-card--web { font-style: normal; }
 .tool-card--web span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46ch; }
 .tool-card-favicon { width: 13px; height: 13px; border-radius: 3px; object-fit: contain; flex-shrink: 0; }

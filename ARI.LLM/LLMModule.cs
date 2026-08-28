@@ -406,6 +406,9 @@ public class LLMModule : ILLMModule, IDisposable
         // Discord or voice thread has no way to show.
         if (!isDiscord && type is ThreadPipeline.Dialogue or ThreadPipeline.Code)
             ToolFactories.LoadGroup("persona_tools", thread);
+        // Image/video generation tools are always hot when the module is ready — no request_tools hop.
+        if (Modules.ImageGen?.IsReady == true && type is ThreadPipeline.Dialogue or ThreadPipeline.Speech)
+            ToolFactories.LoadGroup("image_tools", thread);
         thread.Updated           += () => Broadcast(new AppEvent("threadUpdated", threadKey));
         thread.Deleted           += () => { threads.TryRemove(threadKey, out _); Broadcast(new AppEvent("threadDeleted", threadKey)); };
         thread.Streaming         += text => Broadcast(new AppEvent("streaming", threadKey, text));

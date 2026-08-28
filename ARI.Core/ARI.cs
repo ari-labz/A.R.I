@@ -33,6 +33,7 @@ public class ARI : BackgroundService
     public ListenerModule?        listenerModule;
     private LLMModule?           llmModule;
     private SchedulerModule?     schedulerModule;
+    private ImageGenModule?      imageGenModule;
 
     private readonly ILoggerFactory loggerFactory;
     private ILogger _logger = Shared.Logger;
@@ -303,7 +304,7 @@ public class ARI : BackgroundService
 
                 if (string.IsNullOrEmpty(ImageGenDependency.Status))
                 {
-                    ImageGenModule imageGenModule = new(config.modules.ImageGen);
+                    imageGenModule = new(config.modules.ImageGen);
                     CommonModules.Register(imageGen: imageGenModule);
                     _logger.LogInformation("ImageGen ready.");
                 }
@@ -607,6 +608,9 @@ public class ARI : BackgroundService
 
         llmModule?.StopAllServersAsync();
         llmModule?.Dispose();
+
+        imageGenModule?.Shutdown();
+        LLMDependency.StopSearXng();
 
         if (apiModule is not null)
             await apiModule.Stop(cancellationToken);
