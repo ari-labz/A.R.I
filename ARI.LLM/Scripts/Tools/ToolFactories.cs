@@ -1,3 +1,4 @@
+using ARI.Brain;
 using ARI.Common;
 
 namespace ARI.LLM;
@@ -53,8 +54,11 @@ internal static class ToolFactories
         // Available on any thread — the persona is global, not project-bound.
         ["propose_persona_edit"] = t => new ProposePersonaEdit(t),
 
-        // Brain search — always available; uses the global brain index, no project binding needed.
-        ["search_brain"] = _ => new SearchBrain(),
+        // Brain tools — always available; use the global brain index and vault, no project binding needed.
+        ["search_brain"]   = _ => new SearchBrain(),
+        ["recall_memory"]  = _ => new RecallMemory(),
+        ["edit_memory"]    = _ => BrainModule.Ready ? new EditMemory() : null,
+        ["get_time"]       = _ => new GetTime(),
 
         // Web tools — always available regardless of project/vault context.
         ["search_web"]  = _ => new SearchWeb(),
@@ -73,6 +77,28 @@ internal static class ToolFactories
         if (t.FilesystemRoot is not { } r) return null;
         bool isVault = t.IsBrainVault || Directory.Exists(Path.Combine(r, ".obsidian"));
         return new ServerFileSystem(r, t.Ct, t.Snapshots, isVault);
+    }
+
+    // Filesystem tool names that unlock when a FilesystemRoot is set.
+    // Read-only subset registered for dream/read-only agents; full set for normal agents.
+    private static readonly string[] FilesystemReadToolNames  = ["preview_file", "read_file", "list_directory", "search_files", "find_files", "search_vault"];
+    private static readonly string[] FilesystemWriteToolNames = ["edit_file", "write_file", "deliver_file", "create_scratchpad", "build_project"];
+
+    /// <summary>
+    /// Registers all filesystem tools that now resolve for the thread. Call this immediately after
+    /// setting thread.FilesystemRoot (i.e. in bind_project and create_scratchpad) so the tools are
+    /// available in the same tool-call step — no OnStepComplete round-trip needed.
+    /// Pass readOnly=true to register only the Read-access subset (used by the Dreamer).
+    /// </summary>
+    internal static void RegisterFilesystemTools(Thread thread, bool readOnly = false)
+    {
+        IEnumerable<string> names = readOnly
+            ? FilesystemReadToolNames
+            : FilesystemReadToolNames.Concat(FilesystemWriteToolNames);
+
+        foreach (string name in names)
+            if (TryBuild(name, thread, out Tool tool))
+                tool.Register(thread);
     }
 
     internal static IEnumerable<string> AllNames() => _factories.Keys;

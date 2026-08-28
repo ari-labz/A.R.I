@@ -1312,9 +1312,11 @@ details.tool-card summary::-webkit-details-marker { display: none; }
     font-family: monospace; font-size: 11px; font-style: normal;
     border: 1px solid rgba(255,255,255,.1); max-height: 320px; overflow-y: auto;
 }
-.diff-line { padding: 1px 8px; white-space: pre; }
+.diff-line { padding: 1px 8px; white-space: pre-wrap; word-break: break-word; }
 .diff-line--add { background: rgba(74,222,128,.12); color: #4ade80; }
 .diff-line--del { background: rgba(248,113,113,.12); color: #f87171; }
+.diff-word--add { background: rgba(74,222,128,.35); border-radius: 2px; }
+.diff-word--del { background: rgba(248,113,113,.35); border-radius: 2px; }
 .tool-card-diff--too-large {
     padding: 6px 10px; color: rgba(255,255,255,0.4);
     font-style: italic; font-size: 11px;

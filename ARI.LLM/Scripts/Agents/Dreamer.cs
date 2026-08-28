@@ -12,13 +12,11 @@ internal sealed class Dreamer : Agent
     internal override bool UseSystemContinuation => true;
 
     // Re-enter the loop after each step so ARI keeps thinking without an external nudge.
-    // Re-registers dream tools each step so filesystem tools become available after bind_project
-    // sets thread.FilesystemRoot — registration at turn start is too early for those.
     // Returns null once Wake has been called — the pipeline checks WakeRequest and breaks.
+    // Filesystem tools unlock inside bind_project itself (same step), so no re-registration needed here.
     internal override string? OnStepComplete(Thread thread, string stepText, bool hadTools)
     {
         if (WakeRequest is not null) return null;
-        DreamPipeline.RegisterDreamTools(thread);
         return "(continue)";
     }
 

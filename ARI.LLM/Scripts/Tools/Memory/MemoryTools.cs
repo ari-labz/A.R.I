@@ -272,3 +272,46 @@ internal sealed class ListCuriosities : Tool
         return Task.FromResult<ToolResult>(string.Join('\n', lines));
     }
 }
+
+// ── recall_memory ──────────────────────────────────────────────────────────────────────
+
+// Reads the full content of a brain note by path or title.
+// Use search_brain first to find the path, then recall_memory to read it.
+// In non-owner conversations: only recall notes that are non-sensitive and appropriate to share.
+internal sealed class RecallMemory : Tool
+{
+    internal override string     Name   => "recall_memory";
+    internal override ToolAccess Access => ToolAccess.Read;
+    internal override object Schema => new
+    {
+        type = "function",
+        function = new
+        {
+            name        = "recall_memory",
+            description = "Read the full content of a brain note by its path or title. Use search_brain first to find the path, then call this to read it. The note path comes from search_brain results (e.g. 'People/Xywren.md'). In conversations with someone other than the owner, only recall notes whose content is non-sensitive and appropriate to share with a third party.",
+            parameters  = new
+            {
+                type       = "object",
+                properties = new
+                {
+                    path = new { type = "string", description = "Note path or title, as returned by search_brain." }
+                },
+                required = new[] { "path" }
+            }
+        }
+    };
+
+    internal override Task<ToolResult> Execute(string argsJson)
+    {
+        string path = Args.Parse(argsJson).Str("path").Trim();
+        if (path.Length == 0) return Task.FromResult<ToolResult>("Error: 'path' is required.");
+
+        BrainModule.Index();
+        Note? note = BrainModule.GetNote(path);
+        if (note is null) return Task.FromResult<ToolResult>($"No note found for '{path}'. Use search_brain to find the correct path.");
+
+        string content = note.Content;
+        if (content.Trim().Length == 0) return Task.FromResult<ToolResult>($"'{note.Title}' exists but has no content yet.");
+        return Task.FromResult<ToolResult>($"# {note.Title}\n\n{content}");
+    }
+}
