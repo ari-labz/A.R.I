@@ -354,7 +354,7 @@ public class LLMModule : ILLMModule, IDisposable
                 dreamPipeline,
                 dreamer,
                 scheduler,
-                isDreamingEnabled: () => Modules.Scheduler?.DreamingEnabled ?? false,
+                isDreamingEnabled: () => (Modules.Scheduler?.DreamingEnabled ?? false) && !ConversationActive,
                 createDreamThread: () =>
                 {
                     string key = $"dream-{DateTime.Now:yyyyMMdd-HHmmss}";
@@ -972,11 +972,12 @@ public class LLMModule : ILLMModule, IDisposable
     // runs background work only while this holds, and long tasks poll it to yield the moment Ari is busy.
     public bool IsIdle => processingThreads.IsEmpty;
 
-    // Actively in conversation = a user-facing thread is live or still inside its response window
-    // (Active/Streaming). Internal threads (the memory walks' own epoch threads) are excluded so a
-    // running background walk never counts as "in conversation" and blocks the next one.
+    // Ari is "active" whenever any visible (non-Internal) thread is in a state the user can see in the
+    // sidebar and is not yet fully settled — Unread (proactive awaiting first reply), Active, Streaming,
+    // or Inactive (response window open). Only Dormant and Deleted are settled enough to dream through.
     public bool ConversationActive =>
-        threads.Values.Any(t => !t.Internal && t.State is ThreadState.Active or ThreadState.Streaming);
+        threads.Values.Any(t => !t.Internal &&
+            t.State is ThreadState.Unread or ThreadState.Active or ThreadState.Streaming or ThreadState.Inactive);
 
     /// <summary>True when Refactor is loaded and can be run by the Scheduler (the graph walk that replaced BrainScan).</summary>
     public bool HasRefactor => refactor is not null;
