@@ -126,6 +126,16 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
         }
     }
 
+    public bool DreamingEnabled
+    {
+        get { lock (_settingsLock) return _settings.DreamingEnabled ?? false; }
+        set
+        {
+            lock (_settingsLock) { _settings.DreamingEnabled = value; _settings.Save(_settingsPath); }
+            _logger.LogInformation("[Scheduler] Dreaming {State}.", value ? "enabled" : "disabled");
+        }
+    }
+
     public (int QuietStartHour, int QuietEndHour) QuietHours
     {
         get { lock (_settingsLock) return (_settings.QuietStartHour ?? _config.QuietStartHour, _settings.QuietEndHour ?? _config.QuietEndHour); }

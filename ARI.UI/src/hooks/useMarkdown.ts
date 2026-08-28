@@ -13,6 +13,7 @@ const TOOL_END_RE   = /<!--ari-tool-end:([^:]+):([^>]*?)-->/g
 const TOOL_ERROR_RE = /<!--ari-tool-error:([^:]+):([^:]*):([^>]*?)-->/g
 const TOOL_MODE_RE  = /<!--ari-tool-mode:([^:]+):([^>]*?)-->/g
 const FILE_RE       = /<!--ari-file:([^:]+):([^>]*?)-->/g
+const IMAGE_RE      = /<!--ari-image:([^:]+):([^>]+?)-->/g
 
 // Turns deliver_file markers into a hover-to-download card. Shared by the streaming render
 // (preprocessToolCards) and the finished-blocks render (renderBlockHtml text blocks), so the card
@@ -32,6 +33,41 @@ function renderFileMarkers(s: string): string {
 
 function escHtml(s: string): string {
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+}
+
+function renderImageMarkers(s: string): string {
+    return s.replace(IMAGE_RE, (_, threadKey, filename) => {
+        const src = `/threads/${encodeURIComponent(threadKey)}/scratchpad/${encodeURIComponent(filename)}`
+        return `\n\n<div class="tool-card tool-card--image" data-image-src="${escHtml(src)}" data-image-name="${escHtml(filename)}">`
+             + `<img class="tool-card-image-thumb" src="${escHtml(src)}" alt="${escHtml(filename)}" />`
+             + `<span>${escHtml(filename)}</span>`
+             + `</div>\n\n`
+    })
+}
+
+// Global lightbox — one shared overlay, opened by clicking any .tool-card--image.
+// Attached once on first use.
+let _lightboxSetup = false
+export function ensureImageLightbox() {
+    if (_lightboxSetup) return
+    _lightboxSetup = true
+    const overlay = document.createElement("div")
+    overlay.id = "ari-lightbox"
+    overlay.style.cssText = "display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;cursor:zoom-out;align-items:center;justify-content:center;"
+    const img = document.createElement("img")
+    img.style.cssText = "max-width:90vw;max-height:90vh;border-radius:6px;box-shadow:0 8px 40px #000a;"
+    overlay.appendChild(img)
+    overlay.addEventListener("click", () => { overlay.style.display = "none" })
+    document.body.appendChild(overlay)
+
+    document.addEventListener("click", e => {
+        const card = (e.target as Element).closest(".tool-card--image")
+        if (!card) return
+        const src = (card as HTMLElement).dataset.imageSrc
+        if (!src) return
+        img.src = src
+        overlay.style.display = "flex"
+    })
 }
 
 // Reverses the marker-grammar escaping applied server-side (RunCommandMarker & friends), which neutralise
@@ -329,15 +365,65 @@ function diffBadges(added = 0, removed = 0): string {
 
 // A proposed persona change: the reason, the before/after, and — while it is still pending — the two
 // buttons that are the only thing standing between the proposal and her actual persona file.
+// Word-level LCS diff — returns spans with only the changed tokens highlighted.
+function wordDiffHtml(oldLine: string, newLine: string): { del: string; add: string } {
+    // Tokenise by word boundaries so punctuation and spaces are their own tokens.
+    const tokenise = (s: string) => s.match(/\S+|\s+/g) ?? []
+    const a = tokenise(oldLine)
+    const b = tokenise(newLine)
+
+    // Classic LCS via DP — O(mn) but persona lines are short.
+    const m = a.length, n = b.length
+    const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0))
+    for (let i = m - 1; i >= 0; i--)
+        for (let j = n - 1; j >= 0; j--)
+            dp[i][j] = a[i] === b[j] ? 1 + dp[i+1][j+1] : Math.max(dp[i+1][j], dp[i][j+1])
+
+    // Walk the LCS table to build diff ops.
+    type Op = { kind: "same" | "del" | "add"; tok: string }
+    const ops: Op[] = []
+    let i = 0, j = 0
+    while (i < m || j < n) {
+        if (i < m && j < n && a[i] === b[j])     { ops.push({ kind: "same", tok: a[i] }); i++; j++ }
+        else if (j < n && (i >= m || dp[i][j+1] >= dp[i+1][j])) { ops.push({ kind: "add", tok: b[j] }); j++ }
+        else                                       { ops.push({ kind: "del", tok: a[i] }); i++ }
+    }
+
+    const render = (side: "del" | "add") =>
+        ops.filter(o => o.kind === "same" || o.kind === side)
+           .map(o => o.kind === "same"
+               ? escHtml(o.tok)
+               : `<mark class="diff-word diff-word--${side}">${escHtml(o.tok)}</mark>`)
+           .join("")
+
+    return { del: render("del"), add: render("add") }
+}
+
 function personaEditHtml(block: BlockLike): string {
     const status = block.status ?? "pending"
     const id     = block.proposalId ?? ""
 
-    const lines = (text: string, sign: "-" | "+") =>
-        text.length === 0 ? "" : text.split("\n").map(l =>
-            `<div class="diff-line diff-line--${sign === "+" ? "add" : "del"}">${escHtml(sign + " " + l)}</div>`).join("")
+    const oldLines = (block.oldText ?? "").split("\n")
+    const newLines = (block.newText ?? "").split("\n")
 
-    const diff = lines(block.oldText ?? "", "-") + lines(block.newText ?? "", "+")
+    // Pair up lines where both sides have content for word-level diff; fall back to full-line otherwise.
+    let diffHtml = ""
+    const maxLen = Math.max(oldLines.length, newLines.length)
+    for (let i = 0; i < maxLen; i++) {
+        const o = oldLines[i] ?? ""
+        const n = newLines[i] ?? ""
+        if (i < oldLines.length && i < newLines.length && o !== n) {
+            const { del, add } = wordDiffHtml(o, n)
+            diffHtml += `<div class="diff-line diff-line--del">- ${del}</div>`
+            diffHtml += `<div class="diff-line diff-line--add">+ ${add}</div>`
+        } else if (i < oldLines.length) {
+            diffHtml += `<div class="diff-line diff-line--del">- ${escHtml(o)}</div>`
+        } else {
+            diffHtml += `<div class="diff-line diff-line--add">+ ${escHtml(n)}</div>`
+        }
+    }
+
+    const diff = diffHtml
 
     const decision = status === "pending"
         ? `<div class="persona-edit-actions">
@@ -364,7 +450,7 @@ export function renderBlockHtml(block: BlockLike): string {
     const done = (block.state ?? 0) === 1
     const err  = (block.state ?? 0) === 2
 
-    if (block.type === "text")     return marked.parse(renderFileMarkers(block.text ?? ""), { async: false }) as string
+    if (block.type === "text")     return marked.parse(renderImageMarkers(renderFileMarkers(block.text ?? "")), { async: false }) as string
     if (block.type === "thinking") return ""   // reasoning is shown via the thought-block, not inline
 
     // Plan proposed: a subtle non-interactive chip in the transcript — the Accept/Amend actions live in the

@@ -20,8 +20,12 @@
       "Description": "Build the current project to verify edits compile.",
       "Tools": ["build_project"]
     },
-    "obsidian_tools": {
-      "Description": "Search this project's notes (regex, no index) — a project's own vault, not the brain.",
+    "memory_tools": {
+      "Description": "Recall and correct Ari's personal brain (memory graph). search_brain finds notes by title/alias/content — returns 'title — path' pairs. recall_memory reads the full content of a note by path. edit_memory corrects wrong or inconsistent information in a note and commits the change immediately. neighbours shows graph connections around a note. These tools access Ari's own stored memories, not a project filesystem.",
+      "Tools": ["search_brain", "recall_memory", "edit_memory", "neighbours", "list_curiosities"]
+    },
+    "vault_tools": {
+      "Description": "Search an Obsidian note graph within the bound project (regex, no index). Only useful when the project is an Obsidian vault — calling this on a code repository will return nothing. For searching your own memory, use search_brain / recall_memory instead.",
       "Tools": ["search_vault"]
     },
     "project_tools": {

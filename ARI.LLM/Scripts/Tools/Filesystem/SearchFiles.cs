@@ -8,7 +8,8 @@ internal sealed class SearchFiles : Tool
     private readonly FileSystem fs;
     internal SearchFiles(FileSystem fs) => this.fs = fs;
 
-    internal override string Name => "search_files";
+    internal override string     Name   => "search_files";
+    internal override ToolAccess Access => ToolAccess.Read;
 
     internal override object Schema => new
     {

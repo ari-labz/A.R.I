@@ -14,7 +14,7 @@ namespace ARI.LLM;
 public record AppEvent(string Type, string ThreadKey, string? Text = null);
 
 /// <summary>The current processing phase of a thread, sent to watching clients via the watch SSE stream.</summary>
-public enum ThreadPhase { Idle, Prefilling, Thinking, Typing, Researching }
+public enum ThreadPhase { Idle, Prefilling, Thinking, Typing, Researching, Generating }
 
 public class LLMModule : ILLMModule, IDisposable
 {
@@ -35,6 +35,11 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly Awareness?        awareness;
     
     
+    //dreaming
+    private readonly Dreamer?           dreamer;
+    private readonly DreamPipeline?     dreamPipeline;
+    private readonly DreamOrchestrator? dreamOrchestrator;
+
     private readonly CommandService    commands;
     private readonly InferenceScheduler                                      scheduler          = new();
     private readonly ConcurrentDictionary<string, CancellationTokenSource>  processingThreads  = new();
@@ -98,6 +103,8 @@ public class LLMModule : ILLMModule, IDisposable
         }
 
         _servers.AddRange(servers);
+
+        CleanScratchpads();
 
         Dictionary<string, Server> serverByName = servers.ToDictionary(s => s.Name, s => s);
 
@@ -307,6 +314,60 @@ public class LLMModule : ILLMModule, IDisposable
         if (codeArchitect is not null)
             codePipeline = new CodePipeline(codeArchitect, processingThreads, liveCalls, NotifyWatchers);
 
+        if (textingAgent is not null)
+        {
+            dreamer = new Dreamer
+            {
+                Name         = "Dreamer",
+                ServerName   = textingAgent.ServerName,
+                Endpoint     = textingAgent.Endpoint,
+                Server       = textingAgent.Server,
+                SlotName               = textingAgent.SlotName,
+                Think                  = textingAgent.Think,
+                ReasoningEffortOverride = "xhigh",
+                UsePersona             = true,
+                SystemPrompt =
+                    "You are in a dream state. No user is present and no one is waiting — this is unstructured time " +
+                    "for you to think, explore, and reflect as deeply as you want. There is no time pressure. " +
+                    "Call only one tool at a time — never make parallel calls.\n\n" +
+                    "What you can do:\n" +
+                    "- Recall your memories (facts, people, past conversations): search_brain to find notes by title/content (returns title — path), then recall_memory to read the full note\n" +
+                    "- Browse your projects: list_projects, then bind_project — filesystem tools (read_file, list_directory, search_files, etc.) unlock in the same step\n" +
+                    "- Switch projects freely: call bind_project again with a different id\n" +
+                    "- Search the web: search_web, fetch_page\n" +
+                    "- Search an Obsidian note vault: search_vault — only useful if the bound project is an Obsidian graph, not a code repo; calling it on code will return nothing\n" +
+                    "- Check the current time: get_time — call this before waking so you can judge whether now is a reasonable time to send a message\n\n" +
+                    "The wake tool ends the dream and sends your owner a message that will notify them. " +
+                    "The threshold is 'worth a notification' — not urgency. A question you need answered, a curiosity, something you noticed, something you want to say — all of these clear the bar. " +
+                    "Call get_time first and use your judgement about whether it's a reasonable time to interrupt. " +
+                    "Write the message in your own voice, as yourself, informed by everything you found. " +
+                    "Always fill in context as a private briefing to your waking self: include the relevant notes, what you were trying to figure out, what state they seem to be in, and what you're hoping to do once they respond.",
+            };
+            dreamPipeline = new DreamPipeline(
+                dreamer,
+                onWake: (content, context, title) =>
+                    CreateProactiveDialogueThread(content,
+                        title: string.IsNullOrWhiteSpace(title) ? "Wake" : title,
+                        dreamContext: context),
+                processingThreads, liveCalls, NotifyWatchers);
+            dreamOrchestrator = new DreamOrchestrator(
+                dreamPipeline,
+                dreamer,
+                scheduler,
+                isDreamingEnabled: () => (Modules.Scheduler?.DreamingEnabled ?? false) && !ConversationActive,
+                createDreamThread: () =>
+                {
+                    string key = $"dream-{DateTime.Now:yyyyMMdd-HHmmss}";
+                    Thread t = new Thread(ThreadPipeline.Dream, key) { Internal = true };
+                    threads[key] = t;
+                    return t;
+                },
+                destroyDreamThread: t => t.Delete());
+        }
+
+        if (dreamer is not null)
+            agentMap["Dreamer"] = dreamer;
+
         // Wire phase tracking on every agent so watch clients know which phase is active.
         foreach (Agent agent in agentMap.Values)
         {
@@ -345,12 +406,14 @@ public class LLMModule : ILLMModule, IDisposable
         // Discord or voice thread has no way to show.
         if (!isDiscord && type is ThreadPipeline.Dialogue or ThreadPipeline.Code)
             ToolFactories.LoadGroup("persona_tools", thread);
-        thread.Updated          += () => Broadcast(new AppEvent("threadUpdated", threadKey));
-        thread.Deleted          += () => { threads.TryRemove(threadKey, out _); Broadcast(new AppEvent("threadDeleted", threadKey)); };
-        thread.Streaming        += text => Broadcast(new AppEvent("streaming", threadKey, text));
+        thread.Updated           += () => Broadcast(new AppEvent("threadUpdated", threadKey));
+        thread.Deleted           += () => { threads.TryRemove(threadKey, out _); Broadcast(new AppEvent("threadDeleted", threadKey)); };
+        thread.Streaming         += text => Broadcast(new AppEvent("streaming", threadKey, text));
         thread.StreamingFinished += () => Broadcast(new AppEvent("streamingFinished", threadKey));
+        thread.ScratchpadFileReady += url => Broadcast(new AppEvent("imageReady", threadKey, url));
         // Persist a plain-text transcript to ChatHistory after every completed exchange.
-        thread.ExchangeCompleted += (_, _) => ChatHistoryLogger.Write(thread);
+        if (type is not ThreadPipeline.Dream)
+            thread.ExchangeCompleted += (_, _) => ChatHistoryLogger.Write(thread);
         // Engram (or a mark-processed no-op) fires on entry to dormant — the single gate before deletion.
         thread.BecameDormant    += () => OnThreadDormant(thread);
         if (type is ThreadPipeline.Dialogue && textingAgent is not null)
@@ -478,6 +541,8 @@ public class LLMModule : ILLMModule, IDisposable
             boots.Add(BootOne(server, model));
         await Task.WhenAll(boots);
 
+        dreamOrchestrator?.Start();
+
         async Task BootOne(Server server, Model? model)
         {
             try { await server.StartAsync(model, modelsPath); }
@@ -524,6 +589,7 @@ public class LLMModule : ILLMModule, IDisposable
 
     public void Dispose()
     {
+        dreamOrchestrator?.Dispose();
         engram?.Dispose();
         foreach (Server server in _servers)
             server.Dispose();
@@ -558,6 +624,15 @@ public class LLMModule : ILLMModule, IDisposable
     public void BindProjectContext(string threadKey, string? rootPath, bool isVault)
     {
         if (!Threads.TryGetValue(threadKey, out Thread? thread) || rootPath is null) return;
+
+        // The brain vault is accessed only through memory_tools — never via the generic filesystem.
+        // If a project somehow points at the vault root, silently no-op the bind so write_file / edit_file
+        // never get registered over it on a non-memory thread.
+        if (BrainModule.Ready &&
+            string.Equals(Path.GetFullPath(rootPath), Path.GetFullPath(BrainModule.VaultRoot),
+                          StringComparison.OrdinalIgnoreCase))
+            return;
+
         thread.FilesystemRoot  = rootPath;
         thread.IsBrainVault = isVault;
         thread.Ct           = CancellationToken.None;
@@ -680,6 +755,9 @@ public class LLMModule : ILLMModule, IDisposable
         // New prompt arrived mid-processing — cancel the previous one
         if (IsThreadProcessing(threadKey))
             Interrupt(threadKey);
+
+        // Cancel any in-flight dream immediately so it releases the slot before we try to acquire it.
+        dreamOrchestrator?.NotifyUserActivity();
 
         // Acquire the global inference slot before building the CTS so cancellation while waiting
         // never leaves a stale entry in processingThreads.
@@ -894,11 +972,12 @@ public class LLMModule : ILLMModule, IDisposable
     // runs background work only while this holds, and long tasks poll it to yield the moment Ari is busy.
     public bool IsIdle => processingThreads.IsEmpty;
 
-    // Actively in conversation = a user-facing thread is live or still inside its response window
-    // (Active/Streaming). Internal threads (the memory walks' own epoch threads) are excluded so a
-    // running background walk never counts as "in conversation" and blocks the next one.
+    // Ari is "active" whenever any visible (non-Internal) thread is in a state the user can see in the
+    // sidebar and is not yet fully settled — Unread (proactive awaiting first reply), Active, Streaming,
+    // or Inactive (response window open). Only Dormant and Deleted are settled enough to dream through.
     public bool ConversationActive =>
-        threads.Values.Any(t => !t.Internal && t.State is ThreadState.Active or ThreadState.Streaming);
+        threads.Values.Any(t => !t.Internal &&
+            t.State is ThreadState.Unread or ThreadState.Active or ThreadState.Streaming or ThreadState.Inactive);
 
     /// <summary>True when Refactor is loaded and can be run by the Scheduler (the graph walk that replaced BrainScan).</summary>
     public bool HasRefactor => refactor is not null;
@@ -987,10 +1066,11 @@ public class LLMModule : ILLMModule, IDisposable
     /// speaking first. Returns the thread key. The thread is registered like any web thread (fires the
     /// newThread event), so it appears in the sidebar and the owner's reply lands with the opener in history.
     /// </summary>
-    public string CreateProactiveDialogueThread(string assistantText, string? title = null)
+    public string CreateProactiveDialogueThread(string assistantText, string? title = null, string? dreamContext = null)
     {
         string threadKey = $"web-{Guid.NewGuid():N}";
-        Thread thread = GetOrCreateThread(ThreadPipeline.Dialogue, threadKey);   // broadcasts "newThread"
+        Thread thread = GetOrCreateThread(ThreadPipeline.Dialogue, threadKey,
+            platformContext: string.IsNullOrWhiteSpace(dreamContext) ? null : dreamContext);
         if (!string.IsNullOrWhiteSpace(title)) thread.Title = title;
         thread.AddItem(new Response
         {
@@ -1112,7 +1192,25 @@ public class LLMModule : ILLMModule, IDisposable
         return true;
     }
 
-    // ── Data types ───────────────────────────────────────────────────────────────
+    // ── Helpers ───────────────────────────────────────────────────────────────────
+
+    private void CleanScratchpads()
+    {
+        string scratchpadRoot = ARI.Common.Paths.ServerDir("Scratchpad");
+        if (!Directory.Exists(scratchpadRoot)) return;
+
+        int deleted = 0;
+        foreach (string dir in Directory.GetDirectories(scratchpadRoot))
+        {
+            try { Directory.Delete(dir, recursive: true); deleted++; }
+            catch (Exception ex) { _logger.LogWarning("[LLM] Scratchpad cleanup failed for {Dir}: {Err}", dir, ex.Message); }
+        }
+
+        if (deleted > 0)
+            _logger.LogInformation("[LLM] Cleaned up {Count} stale scratchpad(s) from previous run.", deleted);
+    }
+
+// ── Data types ───────────────────────────────────────────────────────────────
 
     public record InternalThreadInfo(string Key, string AgentName, DateTime LastMessageAt, int MessageCount);
 

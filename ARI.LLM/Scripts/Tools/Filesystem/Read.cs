@@ -17,7 +17,8 @@ internal class Read : Tool
     private const int MAX_TEXT_CHARS  = 60000;
     private const int MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
-    internal override string Name => "read_file";
+    internal override string     Name   => "read_file";
+    internal override ToolAccess Access => ToolAccess.Read;
 
     internal override object Schema => new
     {

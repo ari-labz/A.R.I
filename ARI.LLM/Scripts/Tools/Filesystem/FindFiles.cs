@@ -8,7 +8,8 @@ internal sealed class FindFiles : Tool
     private readonly FileSystem fs;
     internal FindFiles(FileSystem fs) => this.fs = fs;
 
-    internal override string Name => "find_files";
+    internal override string     Name   => "find_files";
+    internal override ToolAccess Access => ToolAccess.Read;
 
     internal override object Schema => new
     {

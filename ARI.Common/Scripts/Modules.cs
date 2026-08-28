@@ -57,6 +57,21 @@ public interface IVoiceSynthesisModule
 
 public interface IBrainModule { }
 
+public interface IImageGenModule
+{
+    bool IsReady { get; }
+    Task<byte[]> GenerateAsync(
+        string prompt,
+        string negativePrompt     = "",
+        string checkpointFilename = "",
+        int    steps              = 25,
+        int    width              = 1024,
+        int    height             = 1024,
+        long   seed               = -1,
+        CancellationToken ct      = default);
+    void Shutdown();
+}
+
 /// <summary>Live view of one scheduled job for the control panel.</summary>
 public record SchedulerTaskInfo(string Name, string Cron, DateTime? LastRunUtc, DateTime? NextRunUtc, bool Running);
 
@@ -81,6 +96,9 @@ public interface ISchedulerModule
 
     /// <summary>Master switch for proactive messages (checked by the ProactiveMessage job at fire time).</summary>
     bool ProactiveEnabled { get; set; }
+
+    /// <summary>Master switch for background dreaming (checked by DreamOrchestrator on each idle tick).</summary>
+    bool DreamingEnabled { get; set; }
 
     /// <summary>Active-hours window: proactive messages are held during the quiet hours OUTSIDE this window.
     /// Stored as the quiet-window bounds (start = when they stop, end = when they resume), local 0-23.</summary>
@@ -127,6 +145,7 @@ public static class Modules
     public static IWebPushModule?        WebPush        { get; private set; }
     public static ISchedulerModule?      Scheduler      { get; private set; }
     public static IProjectService?       Projects       { get; private set; }
+    public static IImageGenModule?       ImageGen       { get; private set; }
 
     public static void Register(
         IDiscordModule?        discord        = null,
@@ -137,7 +156,8 @@ public static class Modules
         IListenerModule?       listener       = null,
         IWebPushModule?        webPush        = null,
         ISchedulerModule?      scheduler      = null,
-        IProjectService?       projects       = null)
+        IProjectService?       projects       = null,
+        IImageGenModule?       imageGen       = null)
     {
         if (discord        is not null) Discord        = discord;
         if (llm            is not null) Llm            = llm;
@@ -148,5 +168,6 @@ public static class Modules
         if (webPush        is not null) WebPush        = webPush;
         if (scheduler      is not null) Scheduler      = scheduler;
         if (projects       is not null) Projects       = projects;
+        if (imageGen       is not null) ImageGen       = imageGen;
     }
 }
