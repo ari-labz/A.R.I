@@ -171,6 +171,15 @@ internal class Engram : MemoryAgent, IDisposable
 
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] sweep triggered (trigger: {Trigger})", threadKey, trigger);
 
+            // No user messages — ARI-only thread (proactive, internal monologue, etc.). Nothing to
+            // store: the user said nothing and there is no interaction to remember.
+            if (!conversationItems.OfType<Prompt>().Any())
+            {
+                outcome   = "skipped — no user messages (ARI-only thread)";
+                processed = true;
+                return;
+            }
+
             // --- Classify: is there anything worth remembering? ---
             transcriptSeen = BuildTranscript(recentItems);
             if (!await Classify(recentItems, trigger))
