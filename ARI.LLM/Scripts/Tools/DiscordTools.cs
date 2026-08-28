@@ -9,7 +9,8 @@ namespace ARI.LLM;
 
 internal sealed class DiscordListVoiceChannels : Tool
 {
-    internal override string Name => "discord_list_voice_channels";
+    internal override string     Name   => "discord_list_voice_channels";
+    internal override ToolAccess Access => ToolAccess.Read;
     internal override object Schema => new
     {
         type = "function",

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react"
 import type { ThreadItem, Attachment } from "../hooks/useThreads"
-import { setBubbleMd, setBubbleBlocks } from "../hooks/useMarkdown"
+import { setBubbleMd, setBubbleBlocks, ensureImageLightbox } from "../hooks/useMarkdown"
 import type { ContentBlock } from "../hooks/useThreads"
 import { apiFetch } from "../auth"
 
@@ -313,7 +313,7 @@ interface Props {
     isInternal:    boolean
     agentName:     string | null
     processing?:   boolean
-    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing"
+    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing" | "generating"
 }
 
 function fileExtLabel(name: string) {
@@ -330,6 +330,7 @@ function MdBubble({ content, baseClass = "bubble", msgIndex = 0, blocks }: { con
     const ref = useRef<HTMLDivElement>(null)
     const blocksKey = blocks ? JSON.stringify(blocks) : ""
     useEffect(() => {
+        ensureImageLightbox()
         if (!ref.current) return
         // The render functions own el.className: "bubble" for plain text, "blocks-container" when
         // tool cards are present so each card is its own separate row in the thread.
@@ -380,7 +381,7 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
     isInternal: boolean
     agentName: string | null
     msgIndex: number
-    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing"
+    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing" | "generating"
     activeThread: string | null
     feedback?: Feedback
     onFeedbackChange: (timestamp: string, feedback: Feedback | null) => void
@@ -442,12 +443,13 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
     }
 
     // Phase: prefer server-reported status, fall back to content heuristic.
-    let streamPhase: "reading" | "thinking" | "typing" | "researching" = "reading"
+    let streamPhase: "reading" | "thinking" | "typing" | "researching" | "generating" = "reading"
     if (streaming) {
-        if (threadStatus === "thinking")        streamPhase = "thinking"
-        else if (threadStatus === "typing")     streamPhase = "typing"
-        else if (threadStatus === "prefilling") streamPhase = "reading"
+        if (threadStatus === "thinking")         streamPhase = "thinking"
+        else if (threadStatus === "typing")      streamPhase = "typing"
+        else if (threadStatus === "prefilling")  streamPhase = "reading"
         else if (threadStatus === "researching") streamPhase = "researching"
+        else if (threadStatus === "generating")  streamPhase = "generating"
         else {
             // Heuristic fallback when no server status has arrived yet. Tool markers are NOT prose: a turn
             // that has only called tools has written nothing to the user, and counting markers as text is
@@ -470,7 +472,7 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
             {streaming && (
                 <div className="typing-indicator">
                     <span className="typing-prefix">A·R·I is</span>
-                    <span className="phase-word">{streamPhase === "reading" ? "Reading" : streamPhase === "thinking" ? "Thinking" : streamPhase === "researching" ? "Researching" : "Typing"}</span>
+                    <span className="phase-word">{streamPhase === "reading" ? "Reading" : streamPhase === "thinking" ? "Thinking" : streamPhase === "researching" ? "Researching" : streamPhase === "generating" ? "Generating" : "Typing"}</span>
                     <div className="typing-dots"><b /><b /><b /></div>
                 </div>
             )}
@@ -568,6 +570,25 @@ function WebSources({ sources }: { sources: { url: string; content?: string }[] 
                     </details>
                 )
             })}
+        </div>
+    )
+}
+
+function AriImage({ item }: { item: ThreadItem }) {
+    const src = item.content ?? ""
+    const filename = src.split("/").pop() ?? src
+    return (
+        <div className="msg-row assistant">
+            <div className="sender">A·R·I</div>
+            <div
+                className="tool-card tool-card--image"
+                data-image-src={src}
+                data-image-name={filename}
+                style={{ cursor: "zoom-in" }}
+            >
+                <img className="tool-card-image-thumb" src={src} alt={filename} />
+                <span>{filename}</span>
+            </div>
         </div>
     )
 }
@@ -758,8 +779,8 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
     }, [])
 
     useEffect(() => {
-        if (stick.current) bottomRef.current?.scrollIntoView({ behavior: "smooth" })
-    }, [items, isRemembering])
+        if (stick.current) bottomRef.current?.scrollIntoView({ behavior: "instant" })
+    }, [items, isRemembering, processing])
 
     // Persona-edit cards are rendered as plain HTML inside the bubble, so their buttons are picked up by
     // delegation rather than React. Approving posts and stops there: the server raises threadUpdated, which
@@ -824,6 +845,7 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
                 if (u.kind === "item") {
                     switch (u.item.type) {
                         case "userMessage":     return <UserMessage key={u.key} item={u.item} activeThread={activeThread} />
+                        case "ariImage":        return <AriImage key={u.key} item={u.item} />
                         case "commandInput":    return <CommandInput key={u.key} item={u.item} />
                         case "commandResponse": return <CommandResponse key={u.key} item={u.item} />
                         case "engramEvent":     return <MemoryEvent key={u.key} item={u.item} />

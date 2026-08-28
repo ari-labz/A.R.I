@@ -114,6 +114,7 @@ export interface Attachment {
     isImage:  boolean
     mimeType: string | null
     content:  string | null
+    url?:     string   // for thread scratchpad / project file attachments served by the API
 }
 
 export async function createThread(projectId?: string | null, pipeline?: string | null): Promise<string> {
@@ -196,7 +197,7 @@ export function openWatchStream(
     return es
 }
 
-export type ThreadStatus = "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing"
+export type ThreadStatus = "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing" | "generating"
 
 export interface WatchEvent {
     deleted?:    boolean
@@ -205,7 +206,7 @@ export interface WatchEvent {
 }
 
 export interface AppEvent {
-    type:       "newThread" | "streaming" | "streamingFinished" | "threadDeleted" | "threadUpdated" | "taskStarted" | "taskStopped" | "projectsChanged"
+    type:       "newThread" | "streaming" | "streamingFinished" | "threadDeleted" | "threadUpdated" | "taskStarted" | "taskStopped" | "projectsChanged" | "imageReady"
     threadKey:  string
     text?:      string | null
 }

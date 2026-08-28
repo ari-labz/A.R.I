@@ -10,7 +10,8 @@ internal sealed class ListDirectory : Tool
     private readonly FileSystem fs;
     internal ListDirectory(FileSystem fs) => this.fs = fs;
 
-    internal override string Name => "list_directory";
+    internal override string     Name   => "list_directory";
+    internal override ToolAccess Access => ToolAccess.Read;
 
     internal override object Schema => new
     {

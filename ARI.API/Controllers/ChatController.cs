@@ -414,6 +414,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                             ARI.LLM.ThreadPhase.Thinking    => "thinking",
                             ARI.LLM.ThreadPhase.Typing      => "typing",
                             ARI.LLM.ThreadPhase.Researching => "researching",
+                            ARI.LLM.ThreadPhase.Generating  => "generating",
                             _                              => (Llm?.IsThreadProcessing(threadKey) ?? false) ? "prefilling" : "idle",
                         };
         bool isCodeMode = Llm?.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? wt) == true && wt?.Pipeline == ARI.LLM.ThreadPipeline.Code;
@@ -540,12 +541,26 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     [HttpGet("{threadKey}/attachments")]
     public IActionResult GetAttachments(string threadKey)
     {
+        static bool IsImageExt(string ext) => ext is ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp";
+
         // All thread files live on disk (scratchpad or project dir).
         string scratchpad = Paths.ScratchpadDir(threadKey);
         string fileRoot   = FindThread(threadKey)?.FilesystemRoot ?? scratchpad;
+        bool   isInScratchpad = fileRoot.StartsWith(Path.GetFullPath(scratchpad), StringComparison.OrdinalIgnoreCase);
+
         IEnumerable<object> diskFiles = Directory.Exists(fileRoot)
             ? Directory.GetFiles(fileRoot, "*", SearchOption.AllDirectories)
-                       .Select(p => new { Name = Path.GetRelativePath(fileRoot, p) })
+                       .Select(p =>
+                       {
+                           string rel = Path.GetRelativePath(fileRoot, p);
+                           string ext = Path.GetExtension(p).ToLowerInvariant();
+                           bool isImg = IsImageExt(ext);
+                           // Scratchpad files are served via /scratchpad/{name}; project files via /file?path=...
+                           string url = isInScratchpad && !rel.Contains(Path.DirectorySeparatorChar)
+                               ? $"/threads/{Uri.EscapeDataString(threadKey)}/scratchpad/{Uri.EscapeDataString(rel)}"
+                               : $"/threads/{Uri.EscapeDataString(threadKey)}/file?path={Uri.EscapeDataString(rel)}";
+                           return (object)new { Name = rel, Url = url, IsImage = isImg };
+                       })
             : Enumerable.Empty<object>();
 
         return Ok(diskFiles);
@@ -700,6 +715,30 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         if (!System.IO.File.Exists(absPath)) return NotFound();
 
         return PhysicalFile(absPath, "application/octet-stream", Path.GetFileName(absPath));
+    }
+
+    /// <summary>
+    /// Serves a file from a thread's scratchpad for inline display (images, etc.).
+    /// Only files directly inside the scratchpad root are accessible — no subdirectory traversal.
+    /// </summary>
+    [HttpGet("{threadKey}/scratchpad/{filename}")]
+    public IActionResult GetScratchpadFile(string threadKey, string filename)
+    {
+        if (string.IsNullOrWhiteSpace(filename) || filename.Contains('/') || filename.Contains('\\'))
+            return BadRequest("Invalid filename.");
+
+        string dir     = Paths.ScratchpadDir(threadKey);
+        string absPath = Path.Combine(Path.GetFullPath(dir), filename);
+
+        // Verify the resolved path is still inside the scratchpad dir (belt-and-suspenders).
+        if (!absPath.StartsWith(Path.GetFullPath(dir), StringComparison.OrdinalIgnoreCase))
+            return BadRequest("Access denied.");
+
+        if (!System.IO.File.Exists(absPath)) return NotFound();
+
+        string ext  = Path.GetExtension(filename).TrimStart('.').ToLowerInvariant();
+        string mime = ext switch { "png" => "image/png", "jpg" or "jpeg" => "image/jpeg", "gif" => "image/gif", "webp" => "image/webp", _ => "application/octet-stream" };
+        return PhysicalFile(absPath, mime);
     }
 
     /// <summary>

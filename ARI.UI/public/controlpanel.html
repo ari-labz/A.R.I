@@ -69,11 +69,15 @@ html, body {
 #btn-back:hover { background: var(--sidebar-hover); border-color: rgba(255,255,255,.25); }
 #btn-back svg { flex-shrink: 0; opacity: .7; }
 
-#cp-sidebar-nav { padding: 0 8px; }
+#cp-sidebar-nav { padding: 0 8px; flex: 1; overflow-y: auto; min-height: 0; }
 .cp-nav-item { padding: 7px 12px 7px 20px; border-radius: 7px; font-size: 13.5px; color: var(--sidebar-text); cursor: pointer; transition: background .1s; }
 .cp-nav-item:hover  { background: var(--sidebar-hover); }
 .cp-nav-item.active { background: var(--sidebar-active); color: #fff; }
-.cp-nav-group { padding: 14px 12px 4px; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--sidebar-dim); user-select: none; }
+.cp-nav-group { padding: 14px 12px 4px; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--sidebar-dim); user-select: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; }
+.cp-nav-group:hover { color: var(--sidebar-text); }
+.cp-nav-group .nav-chevron { font-size: 9px; transition: transform .2s; display: inline-block; }
+.cp-nav-group.collapsed .nav-chevron { transform: rotate(-90deg); }
+.cp-nav-item.nav-hidden { display: none !important; }
 .cp-nav-item.top-level { padding-left: 12px; font-size: 14px; }
 
 /* ── main ────────────────────────────────────────────── */
@@ -500,29 +504,33 @@ html, body {
       <div id="cp-sidebar-nav">
         <div class="cp-nav-item top-level active" data-tab="overview">Overview</div>
         <div class="cp-nav-item top-level" data-tab="debug">Deep Thread Inspection (DTI)</div>
-        <div class="cp-nav-group">Users</div>
-        <div class="cp-nav-item" data-tab="users-new">New User</div>
-        <div class="cp-nav-item" data-tab="users-manage">User Management</div>
-        <div class="cp-nav-group">System</div>
-        <div class="cp-nav-item" data-tab="modules">Modules</div>
-        <div class="cp-nav-item" data-tab="scheduler">Scheduler</div>
-        <div class="cp-nav-group">LLM</div>
-        <div class="cp-nav-item" data-tab="servers">Servers</div>
-        <div class="cp-nav-item" data-tab="models">Models</div>
-        <div class="cp-nav-item" data-tab="agents">Agents</div>
-        <div class="cp-nav-item" data-tab="conventions">Coding Conventions</div>
-        <div class="cp-nav-item" data-tab="persona">Persona</div>
-        <div class="cp-nav-item" data-tab="feedback">Response Feedback</div>
-        <div class="cp-nav-item" data-tab="llmconfigs">Configurations</div>
-        <div class="cp-nav-group" id="nav-group-voice">Voice</div>
-        <div class="cp-nav-item" data-tab="voices" id="nav-voices">Voices</div>
-        <div class="cp-nav-item" data-tab="voicesettings" id="nav-voicesettings">Voice Settings</div>
-        <div class="cp-nav-item" data-tab="voice" id="nav-voice">Voice Synthesis</div>
-        <div class="cp-nav-item" data-tab="dataset" id="nav-dataset">Dataset Builder</div>
-        <div class="cp-nav-group">Memory</div>
-        <div class="cp-nav-item" data-tab="brain">Brain</div>
-        <div class="cp-nav-group" id="nav-group-integrations">Integrations</div>
-        <div class="cp-nav-item" data-tab="discord" id="nav-discord">Discord</div>
+        <div class="cp-nav-group" data-group-id="users">Users<span class="nav-chevron">▾</span></div>
+        <div class="cp-nav-item" data-tab="users-new" data-group="users">New User</div>
+        <div class="cp-nav-item" data-tab="users-manage" data-group="users">User Management</div>
+        <div class="cp-nav-group" data-group-id="system">System<span class="nav-chevron">▾</span></div>
+        <div class="cp-nav-item" data-tab="modules" data-group="system">Modules</div>
+        <div class="cp-nav-item" data-tab="scheduler" data-group="system">Scheduler</div>
+        <div class="cp-nav-item" data-tab="dreaming" data-group="system">Dreaming</div>
+        <div class="cp-nav-group" data-group-id="llm">LLM<span class="nav-chevron">▾</span></div>
+        <div class="cp-nav-item" data-tab="servers" data-group="llm">Servers</div>
+        <div class="cp-nav-item" data-tab="models" data-group="llm">Models</div>
+        <div class="cp-nav-item" data-tab="agents" data-group="llm">Agents</div>
+        <div class="cp-nav-item" data-tab="conventions" data-group="llm">Coding Conventions</div>
+        <div class="cp-nav-item" data-tab="persona" data-group="llm">Persona</div>
+        <div class="cp-nav-item" data-tab="feedback" data-group="llm">Response Feedback</div>
+        <div class="cp-nav-item" data-tab="llmconfigs" data-group="llm">Configurations</div>
+        <div class="cp-nav-group" id="nav-group-voice" data-group-id="voice">Voice<span class="nav-chevron">▾</span></div>
+        <div class="cp-nav-item" data-tab="voices" data-group="voice" id="nav-voices">Voices</div>
+        <div class="cp-nav-item" data-tab="voicesettings" data-group="voice" id="nav-voicesettings">Voice Settings</div>
+        <div class="cp-nav-item" data-tab="voice" data-group="voice" id="nav-voice">Voice Synthesis</div>
+        <div class="cp-nav-item" data-tab="dataset" data-group="voice" id="nav-dataset">Dataset Builder</div>
+        <div class="cp-nav-group" data-group-id="memory">Memory<span class="nav-chevron">▾</span></div>
+        <div class="cp-nav-item" data-tab="brain" data-group="memory">Brain</div>
+        <div class="cp-nav-group" id="nav-group-integrations" data-group-id="integrations">Integrations<span class="nav-chevron">▾</span></div>
+        <div class="cp-nav-item" data-tab="discord" data-group="integrations" id="nav-discord">Discord</div>
+        <div class="cp-nav-group" id="nav-group-imagegen" data-group-id="imagegen">Image Generation<span class="nav-chevron">▾</span></div>
+        <div class="cp-nav-item" data-tab="imagegen-model" data-group="imagegen" id="nav-imagegen-model">Model</div>
+        <div class="cp-nav-item" data-tab="imagegen-settings" data-group="imagegen" id="nav-imagegen-settings">Settings</div>
       </div>
     </div>
   </aside>
@@ -970,6 +978,22 @@ html, body {
       </div>
     </div>
 
+    <!-- Dreaming tab -->
+    <div id="tab-dreaming" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div class="vs-section">
+        <div class="vs-section-title">Dreaming</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 14px;">
+          When enabled, Ari enters a dream state after two minutes of inactivity — she explores her memory and
+          projects freely using read-only tools. No user is present; she self-drives until she wakes or a message arrives.
+        </p>
+        <label style="display:flex;align-items:center;gap:10px;font-size:14px;cursor:pointer;user-select:none;">
+          <input type="checkbox" id="dream-enabled" style="width:16px;height:16px;">
+          Enable dreaming
+        </label>
+        <span id="dream-status" style="display:block;margin-top:10px;font-size:12px;color:var(--text-dim);min-height:16px;"></span>
+      </div>
+    </div>
+
     <!-- Modules tab -->
     <div id="tab-modules" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
@@ -1080,6 +1104,66 @@ html, body {
       </div>
     </div>
 
+    <!-- Image Generation — Model tab -->
+    <div id="tab-imagegen-model" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div class="vs-section">
+        <div class="vs-section-title">Status</div>
+        <div id="ig-status" style="font-size:13px;color:var(--text-dim);">Loading…</div>
+      </div>
+      <div class="vs-section">
+        <div class="vs-section-title">Active Checkpoint</div>
+        <p style="font-size:12px;color:var(--text-dim);margin:0 0 12px;">
+          Filename of the model inside ComfyUI's <code>models/checkpoints/</code> folder.
+          Place your <code>.safetensors</code> file there, then select it below.
+        </p>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;">
+          <select id="ig-checkpoint-select" class="vs-input" style="flex:1;">
+            <option value="">— select a checkpoint —</option>
+          </select>
+          <button class="vs-btn-primary" id="ig-refresh-models-btn" type="button" style="white-space:nowrap;">Refresh</button>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px;">
+          <input type="text" id="ig-checkpoint-custom" class="vs-input" placeholder="or type a filename manually" style="flex:1;" autocomplete="off" />
+        </div>
+        <div style="margin-top:12px;">
+          <button class="vs-btn-primary" id="ig-save-model-btn" type="button">Save</button>
+          <span id="ig-model-save-status" style="margin-left:10px;font-size:12px;color:var(--text-dim);"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Image Generation — Settings tab -->
+    <div id="tab-imagegen-settings" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div class="vs-section">
+        <div class="vs-section-title">Module</div>
+        <label class="vs-label" style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+          <input type="checkbox" id="ig-enabled" style="width:16px;height:16px;cursor:pointer;" />
+          <span style="font-size:13px;">Enable image generation</span>
+        </label>
+        <p style="font-size:12px;color:var(--text-dim);margin:8px 0 0;">
+          Requires a restart to take effect. ComfyUI is installed automatically on first enable.
+        </p>
+      </div>
+      <div class="vs-section">
+        <div class="vs-section-title">ComfyUI</div>
+        <div class="vs-form-grid">
+          <label class="vs-label">Install path
+            <input type="text" id="ig-comfyui-path" class="vs-input" placeholder="Leave blank for default (~/.comfyui)" autocomplete="off" />
+          </label>
+          <label class="vs-label">Port
+            <input type="number" id="ig-port" class="vs-input" value="8188" min="1024" max="65535" />
+          </label>
+          <label class="vs-label">Idle shutdown (seconds)
+            <input type="number" id="ig-idle-seconds" class="vs-input" value="300" min="30" />
+          </label>
+        </div>
+      </div>
+      <div style="margin-top:4px;">
+        <button class="vs-btn-primary" id="ig-save-settings-btn" type="button">Save settings</button>
+        <span id="ig-settings-save-status" style="margin-left:10px;font-size:12px;color:var(--text-dim);"></span>
+      </div>
+    </div>
+
     <div id="tab-debug" class="cp-tab" style="display:none;flex:1;overflow:hidden;">
       <div class="dbg-layout">
         <div class="dbg-sidebar">
@@ -1180,8 +1264,8 @@ cpFetch('/admin/username').then(r => r.json()).then(d => { if (d.name) window._a
 
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), scheduler: document.getElementById('tab-scheduler'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), 'users-new': document.getElementById('tab-users-new'), 'users-manage': document.getElementById('tab-users-manage'), modules: document.getElementById('tab-modules') };
-const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', scheduler: 'Scheduler', llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', 'users-new': 'New User', 'users-manage': 'User Management', modules: 'Modules' };
+const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), scheduler: document.getElementById('tab-scheduler'), dreaming: document.getElementById('tab-dreaming'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), 'users-new': document.getElementById('tab-users-new'), 'users-manage': document.getElementById('tab-users-manage'), modules: document.getElementById('tab-modules'), 'imagegen-model': document.getElementById('tab-imagegen-model'), 'imagegen-settings': document.getElementById('tab-imagegen-settings') };
+const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', scheduler: 'Scheduler', dreaming: 'Dreaming', llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', 'users-new': 'New User', 'users-manage': 'User Management', modules: 'Modules', 'imagegen-model': 'Image Generation — Model', 'imagegen-settings': 'Image Generation — Settings' };
 
 let srvPollTimer = null;
 function switchTab(name) {
@@ -1202,12 +1286,14 @@ function switchTab(name) {
     if (name === 'agents') loadAgents();
     if (name === 'llmconfigs') loadLLMConfigs();
     if (name === 'scheduler') loadScheduler();
+    if (name === 'dreaming') loadDreaming();
     if (name === 'discord') loadDiscord();
     if (name === 'debug') loadDebugThreads();
     if (name === 'users-manage') loadUserManagement();
     if (name === 'modules') loadModules();
     if (name === 'voices') loadVoicesList();
     if (name === 'voice') vsRestoreTraining();
+    if (name === 'imagegen-model' || name === 'imagegen-settings') igLoad();
 }
 navItems.forEach(n => n.addEventListener('click', () => switchTab(n.dataset.tab)));
 switchTab('overview');
@@ -1540,6 +1626,57 @@ async function saveQuietHours() {
         setTimeout(() => { status.textContent = ''; }, 2000);
     } catch { status.textContent = 'Save failed.'; }
 }
+
+// ── dreaming ──────────────────────────────────────────────
+async function loadDreaming() {
+    const cb  = document.getElementById('dream-enabled');
+    const st  = document.getElementById('dream-status');
+    try {
+        const r = await cpFetch('/admin/scheduler');
+        if (!r.ok) throw new Error();
+        const d = await r.json();
+        cb.checked = d.dreamingEnabled ?? false;
+    } catch { st.textContent = 'Failed to load settings.'; return; }
+
+    cb.onchange = async () => {
+        st.textContent = 'Saving…';
+        try {
+            const r = await cpFetch('/admin/scheduler/dreaming', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: cb.checked }),
+            });
+            if (!r.ok) throw new Error();
+            st.textContent = cb.checked ? 'Dreaming enabled.' : 'Dreaming disabled.';
+            setTimeout(() => { st.textContent = ''; }, 2000);
+        } catch { st.textContent = 'Save failed.'; cb.checked = !cb.checked; }
+    };
+}
+
+// ── collapsible sidebar groups ─────────────────────────────
+(function initNavGroups() {
+    const STORE_KEY = 'ari-cp-nav-collapsed';
+    let collapsed;
+    try { collapsed = new Set(JSON.parse(localStorage.getItem(STORE_KEY) || '[]')); }
+    catch { collapsed = new Set(); }
+
+    function applyGroup(groupEl, id, isCollapsed) {
+        groupEl.classList.toggle('collapsed', isCollapsed);
+        document.querySelectorAll(`.cp-nav-item[data-group="${id}"]`).forEach(el => {
+            el.classList.toggle('nav-hidden', isCollapsed);
+        });
+    }
+
+    document.querySelectorAll('.cp-nav-group[data-group-id]').forEach(groupEl => {
+        const id = groupEl.dataset.groupId;
+        applyGroup(groupEl, id, collapsed.has(id));
+        groupEl.addEventListener('click', () => {
+            const nowCollapsed = !collapsed.has(id);
+            if (nowCollapsed) collapsed.add(id); else collapsed.delete(id);
+            try { localStorage.setItem(STORE_KEY, JSON.stringify([...collapsed])); } catch {}
+            applyGroup(groupEl, id, nowCollapsed);
+        });
+    });
+})();
 
 // ── brain backups ─────────────────────────────────────────
 const brainStatus = () => document.getElementById('brain-status');
@@ -5371,11 +5508,25 @@ function dbgRenderTrace(item, host, workers = [], cursor = { i: 0 }, depth = 0) 
                         return JSON.stringify(msg.content ?? '');
                     };
 
-                    msgs.filter(m => m.role === 'system').forEach(msg => {
-                        const r = document.createElement('div');
+                    msgs.filter(m => m.role === 'system').forEach((msg, idx) => {
+                        const r    = document.createElement('div');
                         r.className = 'dbg-row right';
-                        r.innerHTML = `<div class="dbg-bubble system"><div class="dbg-bhead"><span>System</span></div>`
-                            + `<div class="dbg-bbody dbg-md dbg-prompt-body">${marked.parse(extractText(msg))}</div></div>`;
+                        const text = extractText(msg);
+                        const COLLAPSE_THRESHOLD = 400;
+                        // Collapse large system messages (persona block) by default — they're identical
+                        // across every step and dominate the view when expanded.
+                        if (text.length > COLLAPSE_THRESHOLD) {
+                            const words     = text.slice(0, 60).replace(/\n/g, ' ').trim();
+                            const preview   = words.length < text.slice(0, 60).trim().length ? words : words;
+                            const charCount = text.length.toLocaleString();
+                            r.innerHTML = `<div class="dbg-bubble system">` +
+                                `<details><summary class="dbg-bhead" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">` +
+                                `<span>System</span><span style="opacity:.5;font-size:11px;font-weight:400;">${charCount} chars — click to expand</span></summary>` +
+                                `<div class="dbg-bbody dbg-md dbg-prompt-body">${marked.parse(text)}</div></details></div>`;
+                        } else {
+                            r.innerHTML = `<div class="dbg-bubble system"><div class="dbg-bhead"><span>System</span></div>`
+                                + `<div class="dbg-bbody dbg-md dbg-prompt-body">${marked.parse(text)}</div></div>`;
+                        }
                         host.appendChild(r);
                     });
 
@@ -5735,6 +5886,88 @@ document.getElementById('dbg-view-refresh').addEventListener('click', () => {
     if (dbgSelectedThread) dbgLoadThread(dbgSelectedThread);
 });
 document.getElementById('dbg-view-download').addEventListener('click', dbgDownloadThread);
+
+// ── Image Generation ───────────────────────────────────────────────────────────
+
+let igConfig = {};
+
+async function igLoad() {
+    try {
+        igConfig = await cpFetch('/imagegen/config').then(r => r.json());
+        document.getElementById('ig-enabled').checked        = igConfig.enabled      ?? false;
+        document.getElementById('ig-comfyui-path').value     = igConfig.comfyUiPath  ?? '';
+        document.getElementById('ig-port').value             = igConfig.port         ?? 8188;
+        document.getElementById('ig-idle-seconds').value     = igConfig.idleSeconds  ?? 300;
+        document.getElementById('ig-checkpoint-custom').value = igConfig.checkpoint  ?? '';
+    } catch(e) { console.error('ImageGen config load failed', e); }
+
+    try {
+        const status = await cpFetch('/imagegen/status').then(r => r.json());
+        const el = document.getElementById('ig-status');
+        if (status.ready)         el.innerHTML   = '<span style="color:#3a8a5c">● ComfyUI ready</span>';
+        else if (status.active)   el.textContent = 'Module loaded — ComfyUI will start on first generation request.';
+        else if (igConfig.enabled) el.innerHTML  = '<span style="color:#c89600">⚠ Enabled in config but not yet loaded — restart ARI to activate.</span>';
+        else                      el.textContent = 'Module disabled — enable it in Settings, then restart ARI.';
+    } catch(e) { document.getElementById('ig-status').textContent = 'Could not reach server.'; }
+
+    await igLoadModels();
+}
+
+async function igLoadModels() {
+    const sel = document.getElementById('ig-checkpoint-select');
+    sel.innerHTML = '<option value="">— select a checkpoint —</option>';
+    try {
+        const models = await cpFetch('/imagegen/models').then(r => r.json());
+        models.forEach(m => {
+            const opt = document.createElement('option');
+            opt.value = opt.textContent = m;
+            if (m === (igConfig.checkpoint ?? '')) opt.selected = true;
+            sel.appendChild(opt);
+        });
+        if (!models.length) sel.innerHTML += '<option disabled>No .safetensors files found in ComfyUI/models/checkpoints/</option>';
+    } catch(e) { sel.innerHTML += '<option disabled>Could not load model list</option>'; }
+}
+
+document.getElementById('ig-refresh-models-btn').addEventListener('click', igLoadModels);
+
+document.getElementById('ig-checkpoint-select').addEventListener('change', function() {
+    if (this.value) document.getElementById('ig-checkpoint-custom').value = this.value;
+});
+
+document.getElementById('ig-save-model-btn').addEventListener('click', async () => {
+    const checkpoint = document.getElementById('ig-checkpoint-custom').value.trim()
+        || document.getElementById('ig-checkpoint-select').value;
+    const status = document.getElementById('ig-model-save-status');
+    status.textContent = 'Saving…';
+    try {
+        await cpFetch('/imagegen/config', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
+            enabled:     document.getElementById('ig-enabled').checked,
+            checkpoint,
+            port:        parseInt(document.getElementById('ig-port').value) || 8188,
+            idleSeconds: parseInt(document.getElementById('ig-idle-seconds').value) || 300,
+        })});
+        igConfig.checkpoint = checkpoint;
+        status.textContent = 'Saved.';
+        setTimeout(() => status.textContent = '', 2500);
+    } catch(e) { status.textContent = 'Save failed: ' + e.message; }
+});
+
+document.getElementById('ig-save-settings-btn').addEventListener('click', async () => {
+    const status = document.getElementById('ig-settings-save-status');
+    status.textContent = 'Saving…';
+    try {
+        await cpFetch('/imagegen/config', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
+            enabled:     document.getElementById('ig-enabled').checked,
+            checkpoint:  igConfig.checkpoint ?? '',
+            comfyUiPath: document.getElementById('ig-comfyui-path').value.trim(),
+            port:        parseInt(document.getElementById('ig-port').value) || 8188,
+            idleSeconds: parseInt(document.getElementById('ig-idle-seconds').value) || 300,
+        })});
+        status.textContent = 'Saved. Restart ARI for changes to take effect.';
+        setTimeout(() => status.textContent = '', 4000);
+    } catch(e) { status.textContent = 'Save failed: ' + e.message; }
+});
+
 
 </script>
 </body>

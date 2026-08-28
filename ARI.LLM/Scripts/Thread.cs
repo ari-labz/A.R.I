@@ -14,7 +14,7 @@ namespace ARI.LLM;
 public enum ThreadState { Unread, Active, Streaming, Inactive, Dormant, Deleted }
 
 /// <summary>The pipeline a thread belongs to. Determines how its prompts are processed.</summary>
-public enum ThreadPipeline { Dialogue, Code, Speech }
+public enum ThreadPipeline { Dialogue, Code, Speech, Dream }
 
 /// <summary>Coding-pipeline state. Planning = explore/infer/propose (no edits); Development = execute the
 /// approved plan (no exploration). Each phase feeds the agent a different system prompt and sampling.</summary>
@@ -265,12 +265,16 @@ public class Thread
     internal event Action? Deleted;
     internal event Action<string>? Streaming;
     internal event Action? StreamingFinished;
+    /// <summary>Fires when a file is ready in the thread's scratchpad (e.g. a generated image). Payload is
+    /// the API-relative URL path the client can fetch immediately.</summary>
+    internal event Action<string>? ScratchpadFileReady;
 
     internal void RaiseUpdated()                              => Updated?.Invoke();
     internal void RaiseExchangeCompleted(string p, string r)  => ExchangeCompleted?.Invoke(p, r);
     internal void RaiseBufferFull()                           => BufferFull?.Invoke();
     internal void RaiseStreaming(string text)                 => Streaming?.Invoke(text);
     internal void RaiseStreamingFinished()                    => StreamingFinished?.Invoke();
+    internal void RaiseScratchpadFileReady(string url)        => ScratchpadFileReady?.Invoke(url);
 
     // ── Constructor ─────────────────────────────────────────────────────────────
 

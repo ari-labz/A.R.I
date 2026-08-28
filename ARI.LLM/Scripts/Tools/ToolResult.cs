@@ -7,19 +7,23 @@ namespace ARI.LLM;
 /// Text result through the implicit conversion, so text tools stay unchanged.</summary>
 public readonly struct ToolResult
 {
-    internal enum ContentKind { Text, Image }
+    internal enum ContentKind { Text, Image, Wake }
 
     internal ContentKind Kind      { get; }
     internal string      Text      { get; }   // set when Kind is Text
     internal byte[]      Bytes     { get; }   // set when Kind is Image
     internal string      MediaType { get; }   // e.g. "image/png"; empty for text
+    internal string      Context   { get; }   // set when Kind is Wake — briefing for the new thread
+    internal string      Title     { get; }   // set when Kind is Wake — title for the new thread
 
-    private ToolResult(ContentKind kind, string text, byte[] bytes, string mediaType)
+    private ToolResult(ContentKind kind, string text, byte[] bytes, string mediaType, string context = "", string title = "")
     {
         Kind      = kind;
         Text      = text;
         Bytes     = bytes;
         MediaType = mediaType;
+        Context   = context;
+        Title     = title;
     }
 
     internal static ToolResult AsText(string text)
@@ -27,6 +31,10 @@ public readonly struct ToolResult
 
     internal static ToolResult AsImage(byte[] bytes, string mediaType)
         => new(ContentKind.Image, "", bytes, mediaType);
+
+    // content = message sent to the user; context = briefing injected into the new thread's system prompt.
+    internal static ToolResult AsWake(string content, string context, string title = "")
+        => new(ContentKind.Wake, content, System.Array.Empty<byte>(), "", context, title);
 
     public static implicit operator ToolResult(string text) => AsText(text);
 }

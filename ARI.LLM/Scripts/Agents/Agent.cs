@@ -20,7 +20,9 @@ public abstract class Agent
     public bool Enabled { get; init; }
     public int BudgetResponse { get; init; } = -1;
     public int MaxToolCalls { get; init; }
-    public bool Think { get; init; }
+    public bool    Think                  { get; init; }
+    /// <summary>When set, overrides the global ReasoningEffortStore level for this agent's requests.</summary>
+    public string? ReasoningEffortOverride { get; init; }
     public int BudgetThinking { get; init; }
     // Resolved to Slot (and id_slot) at bind time. Null = no slot pin.
     public string? SlotName { get; set; }
@@ -153,7 +155,9 @@ public abstract class Agent
     internal virtual string OnToolResult(Thread thread, ToolTurnState state, string name, string argsJson, string result) => result;
     internal Func<Thread, string, string, string>? OnToolResultPipeline { get; set; }
 
-    // Non-null = inject as user message and restart the loop.
+    // Non-null = inject and restart the loop. Role is "user" by default; override UseSystemContinuation
+    // to inject as "system" instead (used by Dreamer — no actual user is driving the loop).
+    internal virtual bool    UseSystemContinuation                                          => false;
     internal virtual string? OnStepComplete(Thread thread, string stepText, bool hadTools) => null;
     internal Func<Thread, string, bool, string?>? OnStepCompletePipeline { get; set; }
 
@@ -506,7 +510,7 @@ public abstract class Agent
         // Opened here rather than in a pipeline so it covers every agent unconditionally — the
         // dialogue agent, Memory's recall, Context's summariser, Engram's sweep, a Coder sub-thread.
         turn.Rec = SessionRecorder.BeginRun(Name, thread, prompt, turn.MaxTokens, turn.ThinkBudget,
-            Think && Server?.ActiveModel?.SupportsReasoningEffort == true ? ReasoningEffortStore.Level : null);
+            Think && Server?.ActiveModel?.SupportsReasoningEffort == true ? (ReasoningEffortOverride ?? ReasoningEffortStore.Level) : null);
 
         // ── System block & messages ───────────────────────────────────────────
         int maxChars = BudgetContext > 0 ? (int)(BudgetContext * 3.5) : 0;
@@ -1375,7 +1379,8 @@ public abstract class Agent
                 stepInjection = OnStepCompletePipeline(thread, stepText, hadTools);
             if (stepInjection is not null)
             {
-                turn.Messages.Add(new { role = "user", content = stepInjection });
+                string stepRole = UseSystemContinuation ? "system" : "user";
+                turn.Messages.Add(new { role = stepRole, content = stepInjection });
                 turn.ResponseBuilder.Clear();
                 return;
             }
@@ -1412,6 +1417,12 @@ public abstract class Agent
     {
         if (result.Kind == ToolResult.ContentKind.Text)
             return result.Text;
+
+        if (result.Kind == ToolResult.ContentKind.Wake)
+        {
+            if (this is Dreamer dreamer) dreamer.RecordWake(result);
+            return "[wake requested]";
+        }
 
         turn.PendingImages.Add(result);
         return $"[image: {result.Bytes.Length} bytes, {result.MediaType} — provided to the vision model below]";
@@ -1486,8 +1497,10 @@ public abstract class Agent
                     if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
                 };
 
-                bool isWebTool = call.Name is "search_web" or "fetch_page";
-                if (isWebTool) AdvancePhase(turn, ThreadPhase.Researching);
+                bool isWebTool      = call.Name is "search_web" or "fetch_page";
+                bool isImageGenTool = call.Name is "generate_image";
+                if (isWebTool)      AdvancePhase(turn, ThreadPhase.Researching);
+                if (isImageGenTool) AdvancePhase(turn, ThreadPhase.Generating);
                 try
                 {
                     ToolResult toolResult = prelaunched.TryGetValue(callIndex, out Task<ToolResult>? pre)
@@ -1977,8 +1990,9 @@ public abstract class Agent
         Dictionary<string, object?> chatTemplateKwargs = new() { ["enable_thinking"] = enableThinking };
         if (Think && srv.ActiveModel?.SupportsReasoningEffort == true)
         {
-            chatTemplateKwargs["reasoning_effort"] = ReasoningEffortStore.Level;
-            body["reasoning_effort"]               = ReasoningEffortStore.Level;
+            string effort = ReasoningEffortOverride ?? ReasoningEffortStore.Level;
+            chatTemplateKwargs["reasoning_effort"] = effort;
+            body["reasoning_effort"]               = effort;
         }
         body["chat_template_kwargs"] = chatTemplateKwargs;
 
