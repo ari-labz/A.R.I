@@ -22,7 +22,7 @@ public interface IProjectService
     bool Rename(string id, string newName);
 
     /// <summary>Binds a thread to a project: persists the thread→project mapping and, for a ServerFs
-    /// project, immediately makes filesystem_tools/obsidian_tools resolve on that thread — the model
+    /// project, immediately makes filesystem tools and vault_tools resolve on that thread — the model
     /// doesn't have to wait for the next message to act on what it just bound.</summary>
     bool BindThread(string threadKey, string projectId);
 }

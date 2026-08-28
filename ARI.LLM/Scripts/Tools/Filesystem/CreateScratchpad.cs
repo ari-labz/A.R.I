@@ -38,7 +38,7 @@ internal sealed class CreateScratchpad : Tool
         string dir = Paths.ScratchpadDir(thread.Key);
         Directory.CreateDirectory(dir);
         thread.FilesystemRoot = dir;
-        ToolFactories.LoadGroup("filesystem_tools", thread);
+        ToolFactories.RegisterFilesystemTools(thread);
         return Task.FromResult<ToolResult>("Scratchpad ready. Now write the file with write_file, then hand it over with deliver_file.");
     }
 }

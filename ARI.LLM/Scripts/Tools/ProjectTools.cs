@@ -125,7 +125,7 @@ internal sealed class BindProject : Tool
         function = new
         {
             name        = "bind_project",
-            description = "Bind THIS conversation to a project (existing or just-created). Once bound, filesystem_tools/obsidian_tools become usable for it immediately — no need to wait for the next message. Use the id from list_projects or create_project.",
+            description = "Bind THIS conversation to a project (existing or just-created). Once bound, filesystem tools (read_file, list_directory, etc.) become available immediately — no need to wait for the next message. Use the id from list_projects or create_project.",
             parameters  = new
             {
                 type       = "object",
@@ -142,8 +142,13 @@ internal sealed class BindProject : Tool
         try { id = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson).RootElement.GetProperty("id").GetString() ?? ""; }
         catch { id = ""; }
         if (id.Length == 0) return Task.FromResult<ToolResult>("Error: 'id' is required.");
-        return Task.FromResult<ToolResult>(svc.BindThread(thread.Key, id)
-            ? "Bound. The project's filesystem is now accessible — call list_directory with no arguments to see the root, then read_file to open anything that interests you."
-            : "Could not find that project.");
+        if (!svc.BindThread(thread.Key, id))
+            return Task.FromResult<ToolResult>("Could not find that project.");
+
+        // Filesystem tools unlock the moment the project is bound — same step, no round-trip.
+        bool readOnly = thread.tools.ContainsKey("wake"); // dream thread marker
+        ToolFactories.RegisterFilesystemTools(thread, readOnly);
+        string name = svc.List().FirstOrDefault(p => p.Id == id)?.Name ?? id;
+        return Task.FromResult<ToolResult>($"Bound to \"{name}\". Filesystem tools are now available.");
     }
 }

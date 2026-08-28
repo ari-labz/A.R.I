@@ -329,21 +329,26 @@ public class LLMModule : ILLMModule, IDisposable
                 SystemPrompt =
                     "You are in a dream state. No user is present and no one is waiting — this is unstructured time " +
                     "for you to think, explore, and reflect as deeply as you want. There is no time pressure. " +
-                    "Call only one tool at a time — never make parallel calls. " +
-                    "The wake tool ends the dream and interrupts your owner — the bar is very high. " +
-                    "Wake only if you found something that genuinely cannot wait: a question whose answer " +
-                    "would change what you do next, or something your owner needs to know now. " +
-                    "Interesting thoughts, check-ins, or half-formed ideas do not clear the bar — keep exploring.",
+                    "Call only one tool at a time — never make parallel calls.\n\n" +
+                    "What you can do:\n" +
+                    "- Recall your memories (facts, people, past conversations): search_brain to find notes by title/content (returns title — path), then recall_memory to read the full note\n" +
+                    "- Browse your projects: list_projects, then bind_project — filesystem tools (read_file, list_directory, search_files, etc.) unlock in the same step\n" +
+                    "- Switch projects freely: call bind_project again with a different id\n" +
+                    "- Search the web: search_web, fetch_page\n" +
+                    "- Search an Obsidian note vault: search_vault — only useful if the bound project is an Obsidian graph, not a code repo; calling it on code will return nothing\n" +
+                    "- Check the current time: get_time — call this before waking so you can judge whether now is a reasonable time to send a message\n\n" +
+                    "The wake tool ends the dream and sends your owner a message that will notify them. " +
+                    "The threshold is 'worth a notification' — not urgency. A question you need answered, a curiosity, something you noticed, something you want to say — all of these clear the bar. " +
+                    "Call get_time first and use your judgement about whether it's a reasonable time to interrupt. " +
+                    "Write the message in your own voice, as yourself, informed by everything you found. " +
+                    "Always fill in context as a private briefing to your waking self: include the relevant notes, what you were trying to figure out, what state they seem to be in, and what you're hoping to do once they respond.",
             };
             dreamPipeline = new DreamPipeline(
                 dreamer,
-                onWake: (content, _) =>
-                {
-                    // context (the private briefing) is intentionally unused here — it is available as
-                    // wake.Context on the WakeRequest should the caller want to inject it into the next
-                    // dialogue turn's system prompt via a dedicated mechanism in the future.
-                    return CreateProactiveDialogueThread(content, title: "Wake");
-                },
+                onWake: (content, context, title) =>
+                    CreateProactiveDialogueThread(content,
+                        title: string.IsNullOrWhiteSpace(title) ? "Wake" : title,
+                        dreamContext: context),
                 processingThreads, liveCalls, NotifyWatchers);
             dreamOrchestrator = new DreamOrchestrator(
                 dreamPipeline,
@@ -352,8 +357,9 @@ public class LLMModule : ILLMModule, IDisposable
                 isDreamingEnabled: () => Modules.Scheduler?.DreamingEnabled ?? false,
                 createDreamThread: () =>
                 {
-                    Thread t = new Thread(ThreadPipeline.Dream, "dream") { Internal = true };
-                    threads["dream"] = t;
+                    string key = $"dream-{DateTime.Now:yyyyMMdd-HHmmss}";
+                    Thread t = new Thread(ThreadPipeline.Dream, key) { Internal = true };
+                    threads[key] = t;
                     return t;
                 },
                 destroyDreamThread: t => t.Delete());
@@ -618,6 +624,15 @@ public class LLMModule : ILLMModule, IDisposable
     public void BindProjectContext(string threadKey, string? rootPath, bool isVault)
     {
         if (!Threads.TryGetValue(threadKey, out Thread? thread) || rootPath is null) return;
+
+        // The brain vault is accessed only through memory_tools — never via the generic filesystem.
+        // If a project somehow points at the vault root, silently no-op the bind so write_file / edit_file
+        // never get registered over it on a non-memory thread.
+        if (BrainModule.Ready &&
+            string.Equals(Path.GetFullPath(rootPath), Path.GetFullPath(BrainModule.VaultRoot),
+                          StringComparison.OrdinalIgnoreCase))
+            return;
+
         thread.FilesystemRoot  = rootPath;
         thread.IsBrainVault = isVault;
         thread.Ct           = CancellationToken.None;
@@ -1050,10 +1065,11 @@ public class LLMModule : ILLMModule, IDisposable
     /// speaking first. Returns the thread key. The thread is registered like any web thread (fires the
     /// newThread event), so it appears in the sidebar and the owner's reply lands with the opener in history.
     /// </summary>
-    public string CreateProactiveDialogueThread(string assistantText, string? title = null)
+    public string CreateProactiveDialogueThread(string assistantText, string? title = null, string? dreamContext = null)
     {
         string threadKey = $"web-{Guid.NewGuid():N}";
-        Thread thread = GetOrCreateThread(ThreadPipeline.Dialogue, threadKey);   // broadcasts "newThread"
+        Thread thread = GetOrCreateThread(ThreadPipeline.Dialogue, threadKey,
+            platformContext: string.IsNullOrWhiteSpace(dreamContext) ? null : dreamContext);
         if (!string.IsNullOrWhiteSpace(title)) thread.Title = title;
         thread.AddItem(new Response
         {
