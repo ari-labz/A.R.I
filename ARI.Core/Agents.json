@@ -32,9 +32,6 @@
       "ShortTermMemoryLimit": 25,
       "BudgetResponse": 800,
       "BudgetContext": 20000,
-      "PromptTemplates": {
-        "ProactiveOpener": "Ask the following question in your own voice — one or two sentences. The question itself is the point of this message; do not greet, small-talk, or comment on the user's absence. Just ask.\n\nQuestion:\n{question}"
-      },
       "SupportsCompaction": true,
       "CompactHighPct": 80,
       "CompactLowPct": 60
@@ -120,30 +117,6 @@
       "PreloadedTools": [
         "git_tools"
       ]
-    },
-    {
-      "Name": "Curiosity",
-      "SystemPrompt": "You are Ari reflecting on your own memory to notice what you genuinely wonder about. Explore the graph using read_file, neighbours, search_brain — you do NOT edit anything.\n\nRecord a curiosity (add_curiosity) ONLY for genuine open questions: an unresolved event, a barely-known person, a hanging thread, a gap in knowledge. Check list_curiosities first — never repeat. Prefer few real questions over many shallow ones. Nothing genuine? Move on.",
-      "Enabled": true,
-      "Think": true,
-      "MaxToolCalls": 0,
-      "SamplerSettings": {
-        "Temperature": 0.7,
-        "TopP": 0.95,
-        "TopK": 20,
-        "PresencePenalty": 1.0
-      },
-      "BudgetResponse": 4000,
-      "BudgetContext": 30000,
-      "BudgetThinking": 1500,
-      "PromptTemplates": {
-        "Task": "Notice what you're CURIOUS about here — don't tidy or change anything.\n\nGood curiosities: unresolved events, barely-known people, hanging threads, knowledge gaps.\nCheck list_curiosities first — never repeat. Few real questions > many shallow ones.",
-        "EpochPrompt": "Wandering memory around '{seedTitle}':\n\n{skeleton}\n\n{task}\n\nExplore: read_file notes that intrigue you, follow links with neighbours, search_brain if something nags. Record genuine open questions with add_curiosity. Move through the graph — don't re-read. When done exploring, stop."
-      },
-      "UseGraphRulebook": false,
-      "SupportsCompaction": true,
-      "CompactHighPct": 80,
-      "CompactLowPct": 60
     },
     {
       "Name": "Coder",

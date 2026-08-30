@@ -116,16 +116,6 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
         return true;
     }
 
-    public bool ProactiveEnabled
-    {
-        get { lock (_settingsLock) return _settings.ProactiveEnabled ?? true; }
-        set
-        {
-            lock (_settingsLock) { _settings.ProactiveEnabled = value; _settings.Save(_settingsPath); }
-            _logger.LogInformation("[Scheduler] Proactive messages {State}.", value ? "enabled" : "disabled");
-        }
-    }
-
     public bool DreamingEnabled
     {
         get { lock (_settingsLock) return _settings.DreamingEnabled ?? false; }
@@ -134,25 +124,6 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
             lock (_settingsLock) { _settings.DreamingEnabled = value; _settings.Save(_settingsPath); }
             _logger.LogInformation("[Scheduler] Dreaming {State}.", value ? "enabled" : "disabled");
         }
-    }
-
-    public (int QuietStartHour, int QuietEndHour) QuietHours
-    {
-        get { lock (_settingsLock) return (_settings.QuietStartHour ?? _config.QuietStartHour, _settings.QuietEndHour ?? _config.QuietEndHour); }
-    }
-
-    public void SetQuietHours(int quietStartHour, int quietEndHour)
-    {
-        int start = ((quietStartHour % 24) + 24) % 24;
-        int end   = ((quietEndHour   % 24) + 24) % 24;
-        lock (_settingsLock) { _settings.QuietStartHour = start; _settings.QuietEndHour = end; _settings.Save(_settingsPath); }
-        _logger.LogInformation("[Scheduler] Quiet hours set to {Start}:00–{End}:00.", start, end);
-    }
-
-    public bool IsQuietHour(int hour)
-    {
-        (int start, int end) = QuietHours;
-        return start <= end ? hour >= start && hour < end : hour >= start || hour < end;
     }
 
     private static bool IsValidCron(string? cron)

@@ -48,6 +48,7 @@ internal abstract class Pipeline
             Timestamp   = DateTime.Now,
             Attachments = messageAttachments is { Count: > 0 } ? messageAttachments : null,
         });
+        SessionRecorder.ChatLine(thread, threadKey, username, prompt);
 
         // Everything this prompt sets off — Memory's recall, Context's summariser, the primary agent,
         // any sub-thread — records under one exchange id, so the fan-out reassembles from its separate
@@ -56,7 +57,9 @@ internal abstract class Pipeline
 
         try
         {
-            return await RunAsync(thread, threadKey, effectivePrompt, username, platformContext, onDelta, cts, localPath, onTextDelta);
+            string reply = await RunAsync(thread, threadKey, effectivePrompt, username, platformContext, onDelta, cts, localPath, onTextDelta);
+            SessionRecorder.ChatLine(thread, threadKey, "ARI", reply);
+            return reply;
         }
         catch (OperationCanceledException)
         {

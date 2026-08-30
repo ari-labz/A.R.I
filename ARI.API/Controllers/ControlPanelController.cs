@@ -121,14 +121,10 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
     {
         ISchedulerModule? sched = Modules.Scheduler;
         if (sched is null) return StatusCode(503, "Scheduler is not available.");
-        (int quietStart, int quietEnd) = sched.QuietHours;
         return Ok(new
         {
             enabled          = sched.Enabled,
-            proactiveEnabled = sched.ProactiveEnabled,
             dreamingEnabled  = sched.DreamingEnabled,
-            quietStartHour   = quietStart,
-            quietEndHour     = quietEnd,
             tasks = sched.GetTasks().Select(t => new
             {
                 name       = t.Name,
@@ -169,26 +165,6 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
         ISchedulerModule? sched = Modules.Scheduler;
         if (sched is null) return StatusCode(503, "Scheduler is not available.");
         sched.DreamingEnabled = req.Enabled;
-        return Ok(new { ok = true });
-    }
-
-    [HttpPost("scheduler/proactive")]
-    public IActionResult SetProactive([FromBody] SchedulerProactiveRequest req)
-    {
-        ISchedulerModule? sched = Modules.Scheduler;
-        if (sched is null) return StatusCode(503, "Scheduler is not available.");
-        sched.ProactiveEnabled = req.Enabled;
-        return Ok(new { ok = true });
-    }
-
-    [HttpPost("scheduler/quiet-hours")]
-    public IActionResult SetQuietHours([FromBody] SchedulerQuietHoursRequest req)
-    {
-        ISchedulerModule? sched = Modules.Scheduler;
-        if (sched is null) return StatusCode(503, "Scheduler is not available.");
-        if (req.QuietStartHour is < 0 or > 23 || req.QuietEndHour is < 0 or > 23)
-            return BadRequest(new { error = "Hours must be 0-23." });
-        sched.SetQuietHours(req.QuietStartHour, req.QuietEndHour);
         return Ok(new { ok = true });
     }
 
@@ -1619,9 +1595,7 @@ public record PersonaRequest(string? Text);
 public record UserNameRequest(string? Name);
 public record SafeModePromptRequest(string? Text);
 public record SchedulerTaskRequest(string? Name, string? Cron);
-public record SchedulerProactiveRequest(bool Enabled);
 public record SchedulerDreamingRequest(bool Enabled);
-public record SchedulerQuietHoursRequest(int QuietStartHour, int QuietEndHour);
 
 public record TrainRequest(
     string ModelName,
