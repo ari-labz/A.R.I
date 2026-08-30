@@ -939,33 +939,6 @@ html, body {
     <!-- Scheduler tab -->
     <div id="tab-scheduler" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
-        <div class="vs-section-title">Proactive Messages</div>
-        <p style="color:var(--text-dim);font-size:13px;margin:0 0 14px;">
-          When enabled, Ari reaches out on her own during active hours — opening a new thread with a question
-          that's been on her mind and sending you a push notification.
-        </p>
-        <label style="display:flex;align-items:center;gap:10px;font-size:14px;cursor:pointer;user-select:none;">
-          <input type="checkbox" id="sch-proactive" style="width:16px;height:16px;">
-          Enable proactive messages
-        </label>
-
-        <div style="margin-top:22px;">
-          <div style="font-size:13px;font-weight:600;margin-bottom:8px;">Active hours</div>
-          <p style="color:var(--text-dim);font-size:12px;margin:0 0 10px;">
-            Ari only messages between these times (local). Outside this window she stays quiet.
-          </p>
-          <div style="display:flex;align-items:center;gap:10px;">
-            <span style="font-size:13px;color:var(--text-dim);">From</span>
-            <select id="sch-active-start" class="vs-input" style="width:110px;font-size:13px;"></select>
-            <span style="font-size:13px;color:var(--text-dim);">to</span>
-            <select id="sch-active-end" class="vs-input" style="width:110px;font-size:13px;"></select>
-            <button class="vs-btn-primary" id="sch-hours-save" type="button" style="font-size:12px;padding:6px 16px;">Save hours</button>
-            <span id="sch-hours-status" style="font-size:12px;color:var(--text-dim);"></span>
-          </div>
-        </div>
-      </div>
-
-      <div class="vs-section" style="margin-top:20px;">
         <div class="vs-section-title">Schedules</div>
         <p style="color:var(--text-dim);font-size:13px;margin:0 0 16px;">
           How often each background job runs, in
@@ -1440,16 +1413,6 @@ function describeCron(c) {
     }
     return 'custom schedule';
 }
-function fillHourSelect(sel) {
-    sel.innerHTML = '';
-    for (let h = 0; h < 24; h++) {
-        const o = document.createElement('option');
-        o.value = h;
-        o.textContent = `${String(h).padStart(2, '0')}:00`;
-        sel.appendChild(o);
-    }
-}
-let schActiveStartEl, schActiveEndEl;
 // Running state changes without any user action, so the scheduler tab polls while it is open.
 // var, not let: switchTab('overview') runs above this line on load and calls schStopPoll().
 var schPollTimer = null;
@@ -1479,23 +1442,11 @@ async function schRefreshRunning() {
 
 async function loadScheduler() {
     const listEl = document.getElementById('sch-task-list');
-    if (!schActiveStartEl) {
-        schActiveStartEl = document.getElementById('sch-active-start');
-        schActiveEndEl   = document.getElementById('sch-active-end');
-        fillHourSelect(schActiveStartEl);
-        fillHourSelect(schActiveEndEl);
-        document.getElementById('sch-proactive').addEventListener('change', saveProactive);
-        document.getElementById('sch-hours-save').addEventListener('click', saveQuietHours);
-    }
     listEl.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Loading…</span>';
     try {
         const r = await cpFetch('/admin/scheduler');
         if (!r.ok) throw new Error();
         const d = await r.json();
-        document.getElementById('sch-proactive').checked = !!d.proactiveEnabled;
-        // Server stores the QUIET window; the UI shows the ACTIVE window (its complement).
-        schActiveStartEl.value = d.quietEndHour;
-        schActiveEndEl.value   = d.quietStartHour;
 
         listEl.innerHTML = '';
         (d.tasks || []).forEach(t => listEl.appendChild(buildTaskRow(t)));
@@ -1601,32 +1552,6 @@ function buildTaskRow(t) {
     card.append(head, presets, row, desc);
     return card;
 }
-async function saveProactive() {
-    const enabled = document.getElementById('sch-proactive').checked;
-    try {
-        await cpFetch('/admin/scheduler/proactive', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled }),
-        });
-    } catch {}
-}
-async function saveQuietHours() {
-    const status = document.getElementById('sch-hours-status');
-    // UI holds the ACTIVE window; convert back to the QUIET window the server stores.
-    const activeStart = +schActiveStartEl.value;
-    const activeEnd   = +schActiveEndEl.value;
-    status.textContent = 'Saving…';
-    try {
-        const r = await cpFetch('/admin/scheduler/quiet-hours', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ quietStartHour: activeEnd, quietEndHour: activeStart }),
-        });
-        if (!r.ok) throw new Error();
-        status.textContent = 'Saved.';
-        setTimeout(() => { status.textContent = ''; }, 2000);
-    } catch { status.textContent = 'Save failed.'; }
-}
-
 // ── dreaming ──────────────────────────────────────────────
 async function loadDreaming() {
     const cb  = document.getElementById('dream-enabled');
@@ -2693,11 +2618,7 @@ const AG_TREE = [
     { name: 'Awareness',  prompts: [] },
     { name: 'Context',    prompts: [],
       systemTokens: [['memoryLimit', "Dialogue's short-term memory limit — how many messages back stay relevant"]] },
-    { name: 'Dialogue',   prompts: [
-        { key: 'ProactiveOpener', label: 'Proactive opener',
-          hint: 'her turn when she messages you first, unprompted',
-          tokens: [['question', 'the curiosity she picked to raise with you']] },
-    ]},
+    { name: 'Dialogue',   prompts: [] },
     { name: 'Memory',     prompts: [
         { key: 'HopPrompt', label: 'Hop prompt',
           hint: 'sent on each hop while she decides which notes are relevant',
@@ -2723,14 +2644,6 @@ const AG_TREE = [
         ]},
         { name: 'Refactor',  prompts: [
             { key: 'Task', label: 'Task', hint: 'the turn sent on each scheduled run', tokens: [] },
-        ]},
-        { name: 'Curiosity', prompts: [
-            { key: 'Task', label: 'Task', hint: 'the turn sent on each scheduled run', tokens: [] },
-            { key: 'EpochPrompt', label: 'Epoch prompt',
-              hint: 'overrides the shared one above — Curiosity wanders rather than tidies',
-              tokens: [['seedTitle', 'the note at the centre of this neighbourhood'],
-                       ['skeleton', "the neighbourhood's notes and their links"],
-                       ['task', "Curiosity's own task text, inserted here"]] },
         ]},
     ]},
 ];

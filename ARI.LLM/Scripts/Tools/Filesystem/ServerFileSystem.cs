@@ -129,13 +129,17 @@ internal sealed class ServerFileSystem : FileSystem
 
             // Hard per-call read window — shared policy with the remote path (see Read.CheckWindow).
             // previewed: true — the preview gate above has already diverted un-previewed reads.
-            if (ARI.LLM.Read.CheckWindow(argsJson, relPath, totalLines, previewed: true) is { } windowErr)
+            // Brain notes are exempt: they're short, curation agents (Engram/Curiosity/Refactor) need to
+            // read one whole note to decide what to change, and the windowing cap on this vault was what
+            // locked Engram out of a 106-line note entirely (see MemoryAgent.OnToolResult read-guard).
+            if (!brainVault && ARI.LLM.Read.CheckWindow(argsJson, relPath, totalLines, previewed: true) is { } windowErr)
                 return windowErr;
 
             // Cap whole-file reads so a single read can't blow the context window.
             // Targeted reads (start_line/end_line supplied) are not capped — the caller chose the range.
+            // Brain vault is exempt from this backstop too, for the same reason as the window check above.
             bool capped = false;
-            if (!hasStart && !hasEnd && totalLines > 0)
+            if (!brainVault && !hasStart && !hasEnd && totalLines > 0)
             {
                 int chars = 0, lim = totalLines;
                 for (int i = 0; i < totalLines; i++)

@@ -184,8 +184,14 @@ internal abstract class MemoryAgent : Agent
             }
             else if (toolName == "read_file")
             {
-                string? path = ArgPath(argsJson);   // only actual (non-blocked) reads reach here
-                if (path is not null) m.ReadPaths.Add(path);
+                // A "[Read window]" (file too big, pick a range) or "[Error...]" response delivers no
+                // content — only a real "[file: ...]" result actually put the note in context. Marking
+                // ReadPaths on those failures used to permanently lock the model out of ever reading the
+                // file (the guard above blocks any path already in ReadPaths), so a big note it never
+                // successfully read became unreadable for the rest of the epoch.
+                string? path = ArgPath(argsJson);
+                if (path is not null && result.TrimStart().StartsWith("[file:", StringComparison.Ordinal))
+                    m.ReadPaths.Add(path);
             }
             else if (toolName == "git_diff")
                 m.DiffViewedSinceWrite = true;
@@ -232,18 +238,7 @@ internal abstract class MemoryAgent : Agent
 
         new Neighbours().Register(thread);
         new MergeNotesTool().Register(thread);
-        // Curiosity-recording is Engram's (and the Curiosity agent's) job, not the tidy walk's. Refactor
-        // turns these off so it stays tidy-only and isn't tempted by tools it never uses.
-        if (IncludeCuriosityTools)
-        {
-            new AddCuriosity(persistentDir).Register(thread);
-            new RemoveCuriosity(persistentDir).Register(thread);
-            new ListCuriosities(persistentDir).Register(thread);
-        }
     }
-
-    // Whether the base tool set includes the add/remove/list-curiosity tools. Refactor overrides to false.
-    protected virtual bool IncludeCuriosityTools => true;
 
     // ── The walk ──────────────────────────────────────────────────────────────────────────
     // Seeds by degree, re-ranked each epoch; skips seeds visited since the last full pass so consecutive
