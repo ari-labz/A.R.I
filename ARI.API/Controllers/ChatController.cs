@@ -219,6 +219,26 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         return Ok(SerializeDebugThread(thread));
     }
 
+    /// <summary>Lists today's recorded session files from disk. Includes completed Engram sweeps and other
+    /// ephemeral threads that are no longer in the live registry. Admin-only (raw session data).</summary>
+    [HttpGet("debug/sessions")]
+    public IActionResult GetDebugSessions()
+    {
+        if (!User.IsInRole(ARI.API.Auth.Roles.Admin)) return Forbid();
+        var sessions = ARI.LLM.SessionRecorder.ListTodaysSessions();
+        return Ok(sessions.Select(s => new { stem = s.Stem, bytes = s.Bytes }));
+    }
+
+    /// <summary>Returns the raw events from a disk-recorded session file. Admin-only.</summary>
+    [HttpGet("debug/sessions/{stem}")]
+    public IActionResult GetDebugSession(string stem)
+    {
+        if (!User.IsInRole(ARI.API.Auth.Roles.Admin)) return Forbid();
+        var lines = ARI.LLM.SessionRecorder.ReadSessionFile(stem);
+        if (lines is null) return NotFound();
+        return Ok(lines);
+    }
+
     /// <summary>Recursively serialises a thread for the Debug pane: its history (with reasoning + raw
     /// request/response) and every sub-thread it spawned. Debug-only.</summary>
     private static object SerializeDebugThread(ARI.LLM.Thread thread) => new
@@ -646,6 +666,15 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
             return Ok(new { name = file.FileName, isImage = false, mimeType = mime, promoted = true });
         }
 
+        // Images are also saved to the scratchpad so ARI can pass them to image generation tools.
+        if (isImage)
+        {
+            string scratchDir = Paths.ScratchpadDir(threadKey);
+            Directory.CreateDirectory(scratchDir);
+            byte[] imgBytes = Convert.FromBase64String(content);
+            await System.IO.File.WriteAllBytesAsync(Path.Combine(scratchDir, file.FileName), imgBytes);
+        }
+
         Attachment attachment = new Attachment { Name = file.FileName, Content = content, IsImage = isImage, MimeType = mime };
         List<Attachment> msgList = pendingMessageAttachments.GetOrAdd(threadKey, _ => new());
         msgList.RemoveAll(a => a.Name == attachment.Name);
@@ -737,7 +766,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         if (!System.IO.File.Exists(absPath)) return NotFound();
 
         string ext  = Path.GetExtension(filename).TrimStart('.').ToLowerInvariant();
-        string mime = ext switch { "png" => "image/png", "jpg" or "jpeg" => "image/jpeg", "gif" => "image/gif", "webp" => "image/webp", _ => "application/octet-stream" };
+        string mime = ext switch { "png" => "image/png", "jpg" or "jpeg" => "image/jpeg", "gif" => "image/gif", "webp" => "image/webp", "mp4" => "video/mp4", "webm" => "video/webm", _ => "application/octet-stream" };
         return PhysicalFile(absPath, mime);
     }
 

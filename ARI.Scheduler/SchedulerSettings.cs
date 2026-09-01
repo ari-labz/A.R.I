@@ -4,16 +4,13 @@ namespace ARI.Scheduler;
 
 /// <summary>
 /// Runtime-editable scheduler overrides, persisted to Scheduler.Settings.json under PersistentData.
-/// AriConfig.json is read-only at startup, so control-panel edits (cron per task, active hours, the
-/// proactive on/off switch) live here instead and are layered over the AriConfig defaults on load.
+/// AriConfig.json is read-only at startup, so control-panel edits (cron per task, the dreaming on/off
+/// switch) live here instead and are layered over the AriConfig defaults on load.
 /// A null/absent field means "fall back to the AriConfig default".
 /// </summary>
 public sealed class SchedulerSettings
 {
     public Dictionary<string, string> Schedules { get; set; } = new();
-    public int?  QuietStartHour   { get; set; }
-    public int?  QuietEndHour     { get; set; }
-    public bool? ProactiveEnabled { get; set; }
     public bool? DreamingEnabled  { get; set; }
 
     private static readonly JsonSerializerOptions JsonOpts = new()

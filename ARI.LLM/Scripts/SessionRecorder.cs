@@ -84,8 +84,12 @@ public static class SessionRecorder
 
         try
         {
-            Directory.CreateDirectory(Paths.Sessions);
-            Prune();
+            Directory.CreateDirectory(Paths.DTILogs);
+            Directory.CreateDirectory(Paths.DreamLogs);
+            Directory.CreateDirectory(Paths.ChatLogs);
+            Prune(Paths.DTILogs);
+            Prune(Paths.DreamLogs);
+            Prune(Paths.ChatLogs);
             AppendIndex(new Dictionary<string, object?>
             {
                 ["ts"]      = Stamp(),
@@ -94,7 +98,7 @@ public static class SessionRecorder
                 ["devmode"] = Shared.DevMode,
             });
             Shared.Logger.LogInformation("[SessionRecorder] recording to {Path} (full requests: {Full}, retention: {Days}d)",
-                Paths.Sessions, config.IncludeFullRequests, config.RetentionDays);
+                Paths.DTILogs, config.IncludeFullRequests, config.RetentionDays);
         }
         catch (Exception ex)
         {
@@ -102,13 +106,13 @@ public static class SessionRecorder
         }
     }
 
-    /// <summary>Deletes date folders older than the retention window.</summary>
-    private static void Prune()
+    /// <summary>Deletes date folders older than the retention window under the given log root.</summary>
+    private static void Prune(string logRoot)
     {
         if (config.RetentionDays <= 0) return;
 
         DateTime cutoff = DateTime.Today.AddDays(-config.RetentionDays);
-        foreach (string dir in Directory.GetDirectories(Paths.Sessions))
+        foreach (string dir in Directory.GetDirectories(logRoot))
         {
             if (DateTime.TryParse(Path.GetFileName(dir), out DateTime day) && day < cutoff)
                 try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
@@ -147,6 +151,29 @@ public static class SessionRecorder
         public void Dispose() => AmbientExchange.Value = previous;
     }
 
+    // ── Chat transcript ───────────────────────────────────────────────────────
+
+    /// <summary>Appends one line to the human-readable "who said what when" script for a user-facing
+    /// thread — a plain-text script, not the DTI trace. One file per thread under Logs/ChatLogs/&lt;date&gt;.
+    /// Dream threads are excluded — they have no human on the other end, so DreamLogs (the DTI trace) is
+    /// their whole record.</summary>
+    internal static void ChatLine(Thread thread, string threadKey, string speaker, string text)
+    {
+        if (Off || thread.Pipeline == ThreadPipeline.Dream || string.IsNullOrWhiteSpace(text)) return;
+
+        try
+        {
+            string file = Path.Combine(DayDir(Paths.ChatLogs), $"{Sanitize(threadKey)}.md");
+            string line = $"[{DateTime.Now:HH:mm:ss}] {speaker}: {text}\n\n";
+            lock (FileGates.GetOrAdd(file, _ => new object()))
+                File.AppendAllText(file, line);
+        }
+        catch (Exception ex)
+        {
+            Shared.Logger.LogWarning("[SessionRecorder] failed to write chat log for {Thread}: {Error}", threadKey, ex.Message);
+        }
+    }
+
     // ── Run lifecycle ─────────────────────────────────────────────────────────
 
     /// <summary>Starts recording one agent run. An agent invoked outside any exchange (Engram sweeping a
@@ -164,7 +191,10 @@ public static class SessionRecorder
             // identifiable at a glance; user-facing threads are named by thread key alone and accumulate
             // every exchange of that day in one file.
             string stem = thread.Internal ? $"{agent}_{thread.Key}" : thread.Key;
-            string file = Path.Combine(DayDir(), $"{Sanitize(stem)}.jsonl");
+            // Dream threads get the same DTI-format JSONL, just filed separately under DreamLogs instead
+            // of DTILogs — everything about a dream (reasoning, tool calls, tool results) lives in one place.
+            string root = thread.Pipeline == ThreadPipeline.Dream ? Paths.DreamLogs : Paths.DTILogs;
+            string file = Path.Combine(DayDir(root), $"{Sanitize(stem)}.jsonl");
 
             Run run = new()
             {
@@ -364,6 +394,7 @@ public static class SessionRecorder
                 return;
             }
 
+            string root = threadKey.StartsWith("dream-", StringComparison.OrdinalIgnoreCase) ? Paths.DreamLogs : Paths.DTILogs;
             Run scratch = new()
             {
                 Id         = Guid.NewGuid().ToString("N")[..8],
@@ -371,7 +402,7 @@ public static class SessionRecorder
                 RootThread = threadKey,
                 Agent      = agent,
                 ThreadKey  = threadKey,
-                File       = Path.Combine(DayDir(), $"{Sanitize($"{agent}_{threadKey}")}.jsonl"),
+                File       = Path.Combine(DayDir(root), $"{Sanitize($"{agent}_{threadKey}")}.jsonl"),
             };
             Note(scratch, label, facts);
         }
@@ -421,7 +452,7 @@ public static class SessionRecorder
 
     private static void AppendIndex(Dictionary<string, object?> line)
     {
-        try { Append(Path.Combine(DayDir(), "index.jsonl"), line); }
+        try { Append(Path.Combine(DayDir(Paths.DTILogs), "index.jsonl"), line); }
         catch (Exception ex) { Shared.Logger.LogWarning("[SessionRecorder] failed to write index: {Error}", ex.Message); }
     }
 
@@ -442,9 +473,9 @@ public static class SessionRecorder
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private static string DayDir()
+    private static string DayDir(string logRoot)
     {
-        string dir = Path.Combine(Paths.Sessions, DateTime.Now.ToString("yyyy-MM-dd"));
+        string dir = Path.Combine(logRoot, DateTime.Now.ToString("yyyy-MM-dd"));
         Directory.CreateDirectory(dir);
         return dir;
     }
@@ -504,6 +535,67 @@ public static class SessionRecorder
         }
         return hash.ToString("x16");
     }
+
+    // ── Disk session listing ──────────────────────────────────────────────────
+
+    /// <summary>Returns the .jsonl files recorded today, one entry per file. Used by the DTI to list
+    /// completed/ephemeral threads (e.g. Engram sweeps) that are no longer in the live thread registry.</summary>
+    // Both roots hold the same DTI-format JSONL — DreamLogs is just the Dream-pipeline slice of it — so
+    // anything that lists or reads "today's sessions" has to look in both to see the whole picture.
+    private static readonly string[] DTIRoots = [Paths.DTILogs, Paths.DreamLogs];
+
+    public static List<DiskSession> ListTodaysSessions()
+    {
+        if (Off) return [];
+        try
+        {
+            List<DiskSession> sessions = new();
+            foreach (string root in DTIRoots)
+            {
+                string dir = Path.Combine(root, DateTime.Now.ToString("yyyy-MM-dd"));
+                if (!Directory.Exists(dir)) continue;
+                sessions.AddRange(Directory.GetFiles(dir, "*.jsonl")
+                    .Where(f => !Path.GetFileName(f).Equals("index.jsonl", StringComparison.OrdinalIgnoreCase))
+                    .Select(f =>
+                    {
+                        string name = Path.GetFileNameWithoutExtension(f);
+                        long   size = new FileInfo(f).Length;
+                        return new DiskSession(name, f, size);
+                    }));
+            }
+            return sessions.OrderByDescending(s => new FileInfo(s.Path).LastWriteTime).ToList();
+        }
+        catch { return []; }
+    }
+
+    /// <summary>Reads a raw .jsonl session file by its stem name (no extension). Returns each line parsed
+    /// as a JsonDocument, newest-first. Returns null if the file does not exist or Off.</summary>
+    public static List<Dictionary<string, object?>>? ReadSessionFile(string stem)
+    {
+        if (Off) return null;
+        try
+        {
+            string? path = DTIRoots
+                .Select(root => Path.Combine(root, DateTime.Now.ToString("yyyy-MM-dd"), $"{Sanitize(stem)}.jsonl"))
+                .FirstOrDefault(File.Exists);
+            if (path is null) return null;
+            var lines = new List<Dictionary<string, object?>>();
+            foreach (string line in File.ReadLines(path))
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                try
+                {
+                    var d = JsonSerializer.Deserialize<Dictionary<string, object?>>(line, SerializerOptions);
+                    if (d is not null) lines.Add(d);
+                }
+                catch { /* malformed line — skip */ }
+            }
+            return lines;
+        }
+        catch { return null; }
+    }
+
+    public sealed record DiskSession(string Stem, string Path, long Bytes);
 
     private static double Round(double value) => Math.Round(value, 3);
 

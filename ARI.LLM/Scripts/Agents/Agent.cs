@@ -17,6 +17,10 @@ public abstract class Agent
     
     // Tool groups registered eagerly (skips the request_tools round-trip). Null/empty = defer all.
     public string[]? PreloadedTools { get; init; }
+    // Inference queue priority (see InferencePriority) — higher runs first, ties break FIFO. Unset (0)
+    // sits between Normal and Background: live-facing agents don't need to state one, background writers
+    // (Engram, Refactor, Curiosity) set a negative value so they never delay a live reply.
+    public int Priority { get; init; }
     public bool Enabled { get; init; }
     public int BudgetResponse { get; init; } = -1;
     public int MaxToolCalls { get; init; }
@@ -45,6 +49,7 @@ public abstract class Agent
     [JsonIgnore] public string Endpoint { get; internal set; } = "";
     [JsonIgnore] internal Server?    Server { get; set; }
     [JsonIgnore] internal NamedSlot? Slot   { get; set; }
+    [JsonIgnore] internal InferenceScheduler? Scheduler { get; set; }
 
     /// <summary>Called when the processing phase changes for a thread. Set by LLMModule to update the watch-stream status.</summary>
     [JsonIgnore] internal Action<string, ThreadPhase>? OnPhaseChange { get; set; }
@@ -539,6 +544,15 @@ public abstract class Agent
             // A Step is one LLM request/response cycle; it streams until the model stops generating.
             while (turn.IsStreaming)
             {
+                // Acquired per step, not once for the whole turn — a long-held lock across a many-step
+                // background turn (Engram, Refactor) would still stall a live reply queued behind it. Per-
+                // step acquisition bounds the worst case to one step's generation time, and is released
+                // below before tool execution, which is file/network I/O, not GPU work, and shouldn't hold
+                // the inference slot while it runs.
+                IDisposable? slot = Scheduler is not null
+                    ? await Scheduler.AcquireAsync((InferencePriority)Priority, turn.Ct)
+                    : null;
+
                 // ── Prepare step ──────────────────────────────────────────────
                 // Refresh system message, rebuild tool list (may be exhausted),
                 // compact if context is full, inject dynamic context, serialise.
@@ -547,7 +561,7 @@ public abstract class Agent
 
                 // ── Stream ────────────────────────────────────────────────────
                 using Step? step = await OpenStep(turn, json);
-                if (step is null) continue;   // HTTP error recovery; hint injected, retry
+                if (step is null) { slot?.Dispose(); continue; }   // HTTP error recovery; hint injected, retry
 
                 while (await step.IsStreaming(turn.Ct))
                 {
@@ -563,6 +577,7 @@ public abstract class Agent
 
                 // ── Process result & execute tools ────────────────────────────
                 await ProcessStep(turn);
+                slot?.Dispose();
                 if (turn.IsStreaming && turn.PendingCalls.Count > 0)
                     await ExecuteTools(turn);
             }
@@ -1110,6 +1125,11 @@ public abstract class Agent
                 return;
             }
         }
+        // Reasoning is over and a real reply is beginning — any queued-but-undelivered think-budget
+        // redirect has missed its window (it only fires on a sentence boundary inside the reasoning
+        // stream) and is now moot. Drop it here, before it can survive to the step-end fallback flush
+        // and discard a reply that's already committing.
+        turn.PendingThinkRedirect = null;
         turn.ResponseContentStarted = true;
         deltaText = deltaText
             .Replace("<|think_off|>", "")

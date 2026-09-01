@@ -6,7 +6,9 @@ namespace ARI.LLM;
 internal sealed class WriteFile : Tool
 {
     private readonly FileSystem fs;
-    internal WriteFile(FileSystem fs) => this.fs = fs;
+    // See EditFile's allowedPath — same per-instance scope guard, same reason.
+    private readonly string? allowedPath;
+    internal WriteFile(FileSystem fs, string? allowedPath = null) { this.fs = fs; this.allowedPath = allowedPath; }
 
     internal override string Name => "write_file";
 
@@ -29,6 +31,20 @@ internal sealed class WriteFile : Tool
             }
         }
     };
+
+    internal override string? PreCheck(Thread thread, string argsJson)
+    {
+        if (allowedPath is null) return null;
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            if (doc.RootElement.TryGetProperty("path", out JsonElement p) && p.GetString() is { } path
+                && !PathScope.Matches(path, allowedPath))
+                return $"[Blocked] This call may only write '{allowedPath}'.";
+        }
+        catch { }
+        return null;
+    }
 
     internal override Task<ToolResult> Execute(string argsJson) => fs.Write(argsJson).AsToolResult();
 

@@ -61,14 +61,16 @@ public interface IImageGenModule
 {
     bool IsReady { get; }
     Task<byte[]> GenerateAsync(
-        string prompt,
-        string negativePrompt     = "",
-        string checkpointFilename = "",
-        int    steps              = 25,
-        int    width              = 1024,
-        int    height             = 1024,
-        long   seed               = -1,
-        CancellationToken ct      = default);
+        string   prompt,
+        string   negativePrompt     = "",
+        string   checkpointFilename = "",
+        int      steps              = 25,
+        int      width              = 1024,
+        int      height             = 1024,
+        long     seed               = -1,
+        string[] referenceImages    = default!,
+        float    denoise            = 1.0f,
+        CancellationToken ct        = default);
     void Shutdown();
 }
 
@@ -94,21 +96,8 @@ public interface ISchedulerModule
     /// or the task is unknown.</summary>
     bool SetTaskCron(string name, string cron);
 
-    /// <summary>Master switch for proactive messages (checked by the ProactiveMessage job at fire time).</summary>
-    bool ProactiveEnabled { get; set; }
-
     /// <summary>Master switch for background dreaming (checked by DreamOrchestrator on each idle tick).</summary>
     bool DreamingEnabled { get; set; }
-
-    /// <summary>Active-hours window: proactive messages are held during the quiet hours OUTSIDE this window.
-    /// Stored as the quiet-window bounds (start = when they stop, end = when they resume), local 0-23.</summary>
-    (int QuietStartHour, int QuietEndHour) QuietHours { get; }
-
-    /// <summary>Sets the quiet-hours window (local 0-23) and persists it.</summary>
-    void SetQuietHours(int quietStartHour, int quietEndHour);
-
-    /// <summary>True if the given local hour falls in the quiet window.</summary>
-    bool IsQuietHour(int hour);
 }
 
 public interface IWebPushModule

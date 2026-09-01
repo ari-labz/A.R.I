@@ -10,14 +10,11 @@ namespace ARI.LLM;
 
 internal class Engram : MemoryAgent, IDisposable
 {
-    // Engram places several memories from one conversation in a single turn, so it does NOT end after
-    // the first commit (that's the Refactor walk's behaviour).
-    internal override bool StopAfterCommit => false;
-
-    // No work-call ceiling: the circuit breaker exists for the single-change Refactor epoch. Engram must
-    // recon several existing entities (find/search/read) before it can place memories, so an 8-call cap
-    // guillotines the sweep during exploration — it never reaches write_file/git_commit. Disable it here.
-    internal override int? EpochToolCeiling => null;
+    // Each Stage-3 call now places exactly one entity in its own short-lived thread, so there's no
+    // multi-entity turn left to keep open — this and the ceiling below fall back to MemoryAgent's
+    // defaults (single-commit-per-turn, 8-call breaker), which fit a one-note, one-tool call cleanly.
+    // The old override existed because Engram used to recon a whole entity SET (find/search/read many
+    // notes) before writing any of them inside one giant turn — that turn shape is gone.
 
     [JsonIgnore] internal Dialogue?    dialogue       { get; set; }
     [JsonIgnore] internal Context?     context        { get; set; }
@@ -156,6 +153,7 @@ internal class Engram : MemoryAgent, IDisposable
         string  transcriptSeen = "";
         string  outcome        = "incomplete (unexpected exit)";
         int     committed      = 0;
+        int     blockedCount   = 0;
         bool    processed      = false;
 
         try
@@ -170,6 +168,15 @@ internal class Engram : MemoryAgent, IDisposable
             lastHistoryCount[threadKey] = conversationItems.Count;
 
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] sweep triggered (trigger: {Trigger})", threadKey, trigger);
+
+            // No user messages — ARI-only thread (proactive, internal monologue, etc.). Nothing to
+            // store: the user said nothing and there is no interaction to remember.
+            if (!conversationItems.OfType<Prompt>().Any())
+            {
+                outcome   = "skipped — no user messages (ARI-only thread)";
+                processed = true;
+                return;
+            }
 
             // --- Classify: is there anything worth remembering? ---
             transcriptSeen = BuildTranscript(recentItems);
@@ -188,27 +195,44 @@ internal class Engram : MemoryAgent, IDisposable
                 ?? ReadStoredUserName()
                 ?? "the user";
 
-            // --- Tool-driven placement: the agent walks the graph and stores the memories itself. ---
-            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] placing memories via graph walk...", threadKey);
-            Thread parent = new(ThreadPipeline.Dialogue, $"engram:{threadKey}:{Guid.NewGuid():N}") { Internal = true };
-            RegisterTools(parent, PersistentDir, CancellationToken.None);
-            PublishForInspection(parent);   // surface the sweep in the DTI
-            placementKey = parent.Key;
+            // --- Stage 2: extract everything worth storing, regardless of whether it's already known —
+            //     Stage 3 (not this step) is what checks the vault and decides new/duplicate/updated. One
+            //     tool-free call, so it can't wander; the excerpt it captures per entity is what keeps
+            //     Stage 3 faithful to what was actually said without needing one continuous thread. ---
+            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] extracting entities...", threadKey);
+            List<ExtractedEntity> entities = await ExtractAsync(transcript, contextSummary);
 
-            await Prompt(parent, EngramTask(transcript, contextSummary, speaker), new PromptOptions
+            // --- Stage 3: place each entity independently — a short, scoped call per entity instead of
+            //     one long wandering thread, so context stays flat (no compounding prefill) and a write
+            //     structurally cannot reach a note other than the one it's about. ---
+            int commits = 0, blocked = 0;
+            foreach (ExtractedEntity entity in entities)
             {
-                Username = "system",
-                OnDelta  = async _ => { Notify?.Invoke(parent.Key); await Task.CompletedTask; },
-            });
+                switch (await PlaceEntityAsync(threadKey, entity, speaker))
+                {
+                    case PlacementOutcome.Committed: commits++; break;
+                    case PlacementOutcome.Blocked:   blocked++; break;
+                }
+            }
 
-            int commits = parent.History.OfType<Response>()
-                .SelectMany(r => r.Trace ?? Enumerable.Empty<TraceStep>())
-                .Count(s => s.Kind == "tool_result" && s.Name == "git_commit"
-                            && (s.Text?.StartsWith("Committed", StringComparison.Ordinal) ?? false));
-            committed = commits;
-            outcome   = $"{commits} memory change(s) committed";
+            // Deterministic, code-built log line — no extra LLM round trip just to summarise what the
+            // extraction step already told us.
+            if (entities.Count > 0)
+            {
+                DateTime logStart = recentItems.Count > 0 ? recentItems[0].Timestamp : DateTime.Now;
+                DateTime logEnd   = recentItems.Count > 0 ? recentItems[^1].Timestamp : DateTime.Now;
+                string   logLine  = "Discussed: " + string.Join(", ", entities.Select(e => e.Entity).Distinct()) + ".";
+                AppendToConversationLog(DateTime.Now.ToString("yyyy-MM-dd"), logLine, logStart, logEnd);
+            }
+
+            committed    = commits;
+            blockedCount = blocked;
+            outcome      = entities.Count == 0
+                ? "0 memory change(s) committed (nothing extracted)"
+                : $"{commits} memory change(s) committed ({entities.Count} entit{(entities.Count == 1 ? "y" : "ies")} considered" +
+                  (blocked > 0 ? $", {blocked} blocked by the write-scope guard" : "") + ")";
             processed = true;
-            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] sweep complete — {Commits} change(s).", threadKey, commits);
+            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] sweep complete — {Commits}/{Total} change(s), {Blocked} blocked.", threadKey, commits, entities.Count, blocked);
         }
         finally
         {
@@ -218,6 +242,7 @@ internal class Engram : MemoryAgent, IDisposable
                 ["swept_thread"]        = threadKey,
                 ["classified_transcript"] = transcriptSeen,
                 ["commits"]             = committed,
+                ["blocked"]             = blockedCount,
                 ["outcome"]             = outcome,
                 ["processed"]           = processed,
             });
@@ -232,21 +257,154 @@ internal class Engram : MemoryAgent, IDisposable
         }
     }
 
-    // ── Placement task ─────────────────────────────────────────────────────────────────
+    // ── Stage 2: extract ───────────────────────────────────────────────────────────────
 
-    // The task turn, templated from Agents.json. The context block is its own entry so that an empty
-    // context emits nothing at all rather than a bare "CONTEXT:" header.
-    private string EngramTask(string transcript, string contextSummary, string speaker)
+    private readonly record struct ExtractedEntity(string Entity, bool IsNew, string Excerpt);
+
+    /// <summary>One tool-free completion over the whole transcript: every entity worth remembering,
+    /// regardless of whether it's already in the vault (Stage 3 checks that), each with the actual
+    /// transcript lines it came from — not a paraphrase, so Stage 3 has real material to work from
+    /// without needing to share a thread with this call.</summary>
+    private async Task<List<ExtractedEntity>> ExtractAsync(string transcript, string contextSummary)
     {
         string context = string.IsNullOrWhiteSpace(contextSummary)
             ? ""
             : ResolveTemplate("ContextBlock", "", ("contextSummary", contextSummary));
 
-        return ResolveTemplate("Task", "",
-            ("context",    context),
-            ("speaker",    speaker),
-            ("transcript", transcript),
-            ("date",       DateTime.Now.ToString("yyyy-MM-dd")));
+        object requestBody = new
+        {
+            model    = "local",
+            messages = new[]
+            {
+                new { role = "system", content = ResolveTemplate("ExtractSystem", "") + "\n<|think_off|>" },
+                new { role = "user",   content = ResolveTemplate("ExtractTask", "", ("context", context), ("transcript", transcript)) }
+            },
+            stream      = false,
+            max_tokens  = 1500,
+            temperature = 0.3,
+            thinking             = false,
+            enable_thinking      = false,
+            chat_template_kwargs = new { enable_thinking = false }
+        };
+
+        try
+        {
+            HttpRequestMessage request = new(HttpMethod.Post, $"{Endpoint}/v1/chat/completions")
+            {
+                Content = new StringContent(JsonSerializer.Serialize(requestBody), Encoding.UTF8, "application/json")
+            };
+            HttpResponseMessage response = await httpClient.SendAsync(request);
+            response.EnsureSuccessStatusCode();
+
+            string json = await response.Content.ReadAsStringAsync();
+            using JsonDocument doc = JsonDocument.Parse(json);
+            string content = doc.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString() ?? "";
+            return ParseExtracted(content);
+        }
+        catch (Exception ex)
+        {
+            Shared.Logger.LogWarning("[Engram] Extraction failed ({Error}) — treating as nothing extracted.", ex.Message);
+            return new();
+        }
+    }
+
+    // The model may wrap the array in prose or a fenced code block despite instructions — pull out the
+    // first [...] span rather than requiring the whole completion to be pure JSON.
+    private static List<ExtractedEntity> ParseExtracted(string content)
+    {
+        int start = content.IndexOf('[');
+        int end   = content.LastIndexOf(']');
+        if (start < 0 || end <= start) return new();
+
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(content[start..(end + 1)]);
+            List<ExtractedEntity> results = new();
+            foreach (JsonElement el in doc.RootElement.EnumerateArray())
+            {
+                string entity  = el.TryGetProperty("entity",  out JsonElement e) ? e.GetString() ?? "" : "";
+                string excerpt = el.TryGetProperty("excerpt", out JsonElement x) ? x.GetString() ?? "" : "";
+                bool   isNew   = el.TryGetProperty("is_new",  out JsonElement n) && n.ValueKind == JsonValueKind.True;
+                if (entity.Length > 0 && excerpt.Length > 0)
+                    results.Add(new ExtractedEntity(entity, isNew, excerpt));
+            }
+            return results;
+        }
+        catch (Exception ex)
+        {
+            Shared.Logger.LogWarning("[Engram] Failed to parse extraction output ({Error}) — treating as nothing extracted.", ex.Message);
+            return new();
+        }
+    }
+
+    // ── Stage 3: save ──────────────────────────────────────────────────────────────────
+
+    private enum PlacementOutcome { Committed, NoChange, Blocked }
+
+    /// <summary>Places one entity: a short, fresh call, tool-scoped to the single note it's about. Looks
+    /// the note up in code (no search_brain round trip) and hands its current content straight to the
+    /// model rather than making it re-discover the note through tools.</summary>
+    private async Task<PlacementOutcome> PlaceEntityAsync(string threadKey, ExtractedEntity entity, string speaker)
+    {
+        BrainModule.Index();   // pick up commits from entities already placed earlier this same sweep
+        // Exact lookup by title/alias/path (BrainModule.GetNote -> Database.FindNote), not the fuzzy
+        // ranked content search (BrainModule.Search) search_brain uses for exploratory discovery. The
+        // fuzzy search was the actual cause of writes landing on the wrong note when an entity name had
+        // any incidental word overlap with something unrelated — the write-scope guard then faithfully
+        // protected that wrong note instead of the right one. An exact match is the only safe basis for
+        // treating a note as "this entity already exists"; anything less confident should read as new.
+        Note? existing = BrainModule.GetNote(entity.Entity);
+
+        string existingBlock = existing is not null
+            ? $"The note already exists at '{existing.Path}':\n\n{existing.Content}"
+            : "No note exists yet for this entity — create one at an appropriate path per the rulebook above.";
+
+        Thread mini = new(ThreadPipeline.Dialogue, $"engram:{threadKey}:{Guid.NewGuid():N}") { Internal = true };
+        mini.FilesystemRoot = BrainModule.VaultRoot;
+        mini.IsBrainVault   = true;
+        mini.Ct             = CancellationToken.None;
+        ServerFileSystem fs = new(BrainModule.VaultRoot, CancellationToken.None, brainVault: true);
+        // existing?.Path scopes the write to this one note when it already exists — the structural guard
+        // against an unrelated edit silently stripping another note's content with nothing catching it.
+        // A brand-new note has no existing content to protect,
+        // so it's left unscoped (the model states its own path, per the taxonomy rules already in its
+        // persistent context) — at worst a wrongly-placed new note, which is a normal tidy-up, not a loss.
+        new WriteFile(fs, allowedPath: existing?.Path).Register(mini);
+        PublishForInspection(mini);
+
+        string task = ResolveTemplate("SaveTask", "",
+            ("entity",   entity.Entity),
+            ("existing", existingBlock),
+            ("excerpt",  entity.Excerpt),
+            ("speaker",  speaker));
+
+        await Prompt(mini, task, new PromptOptions
+        {
+            Username = "system",
+            OnDelta  = async _ => { Notify?.Invoke(mini.Key); await Task.CompletedTask; },
+        });
+
+        List<TraceStep> writeResults = mini.History.OfType<Response>()
+            .SelectMany(r => r.Trace ?? Enumerable.Empty<TraceStep>())
+            .Where(s => s.Kind == "tool_result" && s.Name == "write_file")
+            .ToList();
+
+        bool wrote   = writeResults.Any(s => !(s.Text?.StartsWith("[Blocked]", StringComparison.Ordinal) ?? true));
+        bool blocked = !wrote && writeResults.Any(s => s.Text?.StartsWith("[Blocked]", StringComparison.Ordinal) ?? false);
+
+        if (blocked)
+        {
+            // The scope guard fired against a real attempt — distinct from the model simply deciding
+            // nothing needed to change, and worth knowing about even though nothing was lost (the write
+            // just didn't land). Silent here is how the same failure mode would go unnoticed again.
+            Shared.Logger.LogWarning("[Engram] [{ThreadKey}] write blocked for entity '{Entity}' — scope guard rejected the path.", threadKey, entity.Entity);
+            return PlacementOutcome.Blocked;
+        }
+        if (!wrote) return PlacementOutcome.NoChange;
+
+        string committedPath = existing?.Path ?? entity.Entity;
+        GitCommitBrain($"Engram: update {Path.GetFileNameWithoutExtension(committedPath)} — {threadKey}");
+        return PlacementOutcome.Committed;
     }
 
     // ── Lightweight code-thread summary ────────────────────────────────────────────────
@@ -288,7 +446,7 @@ internal class Engram : MemoryAgent, IDisposable
             if (string.IsNullOrWhiteSpace(summary)) { outcome = "skipped — empty summary"; processed = true; return; }
 
             string date = DateTime.Now.ToString("yyyy-MM-dd");
-            AppendToConversationLog(date, summary);
+            AppendToConversationLog(date, summary, items[0].Timestamp, items[^1].Timestamp, "Coding session");
 
             outcome   = "code summary saved";
             processed = true;
@@ -352,13 +510,18 @@ internal class Engram : MemoryAgent, IDisposable
         }
     }
 
-    private static void AppendToConversationLog(string date, string summary)
+    // Each entry carries the actual time range of that conversation (first message → last message),
+    // rather than one undifferentiated blob per day — several separate conversations on the same day
+    // stay distinguishable.
+    private static void AppendToConversationLog(string date, string summary, DateTime start, DateTime end, string label = "Conversation")
     {
-        string noteName = $"Conversations/{date}";
         string path = Path.Combine(BrainModule.VaultRoot, "Conversations", $"{date}.md");
         string existing = File.Exists(path) ? File.ReadAllText(path) : "";
 
-        string entry = $"\n\n---\n**Coding session**\n{summary}";
+        string timeRange = start.ToString("HH:mm") == end.ToString("HH:mm")
+            ? start.ToString("HH:mm")
+            : $"{start:HH:mm}–{end:HH:mm}";
+        string entry = $"\n\n---\n### {timeRange} — {label}\n{summary}";
         if (existing.Length > 0)
         {
             File.AppendAllText(path, entry);
