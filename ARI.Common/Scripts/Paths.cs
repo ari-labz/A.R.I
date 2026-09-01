@@ -27,8 +27,19 @@ public static class Paths
     public static string Voices         { get; }
     public static string Brain          { get; }
     public static string Logs           { get; }
-    /// <summary>Root of the JSONL session records — one date folder per day. See SessionRecorder.</summary>
-    public static string Sessions       { get; }
+    /// <summary>Human-readable per-thread scripts — "who said what when" for user-facing conversations.
+    /// One file per thread. See SessionRecorder.</summary>
+    public static string ChatLogs       { get; }
+    /// <summary>Timestamped copies of the console/ARI.log output, one file per process run (never
+    /// overwritten) so a crash from an earlier run stays legible after a restart. See Program.cs.</summary>
+    public static string SystemLogs     { get; }
+    /// <summary>Root of the JSONL session records — everything the LLM saw and everything it output:
+    /// reasoning, tool calls, tool results. One date folder per day, one file per thread. Excludes Dream
+    /// threads, which get the same format under <see cref="DreamLogs"/> instead. See SessionRecorder.</summary>
+    public static string DTILogs        { get; }
+    /// <summary>DTI-format JSONL records (same shape as <see cref="DTILogs"/>) but scoped to Dream
+    /// threads only. See SessionRecorder.</summary>
+    public static string DreamLogs      { get; }
     public static string ChatHistory    { get; }
     /// <summary>Upvoted/downvoted responses with the user's note and the turns that led to them —
     /// the growing liked/disliked dataset. See FeedbackStore.</summary>
@@ -152,7 +163,10 @@ public static class Paths
         Voices         = ServerDir("Voices");
         Brain          = ServerDir("Brain");
         Logs           = ServerDir("Logs");
-        Sessions       = ServerDir("Logs/Sessions");
+        ChatLogs       = ServerDir("Logs/ChatLogs");
+        SystemLogs     = ServerDir("Logs/SystemLogs");
+        DTILogs        = ServerDir("Logs/DTILogs");
+        DreamLogs      = ServerDir("Logs/DreamLogs");
         ChatHistory    = ServerDir("ChatHistory");
         Feedback       = ServerDir("Feedback");
         Keys           = ServerDir("Keys");

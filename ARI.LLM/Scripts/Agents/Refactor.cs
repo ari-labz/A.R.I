@@ -20,9 +20,6 @@ internal sealed class Refactor : MemoryAgent
 
     public Refactor() { }
 
-    // Refactor is tidy-only — curiosity-recording is the Curiosity agent's job now.
-    protected override bool IncludeCuriosityTools => false;
-
     // Refactor acts on the skeleton — it rarely needs more than the seed + one neighbour.
     internal override int ReadCeiling => 2;
 

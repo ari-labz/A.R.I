@@ -80,6 +80,18 @@ public static class Dependency
         SearXngStatus = "";
     }
 
+    public static void StopSearXng() => _ = StopSearXngAsync();
+
+    private static async Task StopSearXngAsync()
+    {
+        string? docker = await FindDocker();
+        if (docker is null) return;
+        if (!await IsContainerRunning(docker)) return;
+        await RunDocker(docker, $"stop {SEARXNG_CONTAINER}");
+        Shared.Logger.LogInformation("[LLM] SearXNG stopped.");
+        SearXngStatus = null;
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static async Task<bool> IsDaemonRunning(string docker)

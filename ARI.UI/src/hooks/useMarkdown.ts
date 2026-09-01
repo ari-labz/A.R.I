@@ -194,6 +194,7 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
     // Delivered file: a download card ARI emitted with deliver_file. Also applied in the finished-blocks
     // path (renderBlockHtml) so the card survives after streaming — the marker rides in a text block there.
     out = renderFileMarkers(out)
+    out = renderImageMarkers(out)
 
     // Mode switch (replan): a light-blue info card, NOT an error.
     out = out.replace(TOOL_MODE_RE, (_, _name, rawLabel) => {

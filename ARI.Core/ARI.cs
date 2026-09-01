@@ -33,6 +33,7 @@ public class ARI : BackgroundService
     public ListenerModule?        listenerModule;
     private LLMModule?           llmModule;
     private SchedulerModule?     schedulerModule;
+    private ImageGenModule?      imageGenModule;
 
     private readonly ILoggerFactory loggerFactory;
     private ILogger _logger = Shared.Logger;
@@ -303,7 +304,7 @@ public class ARI : BackgroundService
 
                 if (string.IsNullOrEmpty(ImageGenDependency.Status))
                 {
-                    ImageGenModule imageGenModule = new(config.modules.ImageGen);
+                    imageGenModule = new(config.modules.ImageGen);
                     CommonModules.Register(imageGen: imageGenModule);
                     _logger.LogInformation("ImageGen ready.");
                 }
@@ -380,31 +381,10 @@ public class ARI : BackgroundService
             if (llmModule.HasRefactor)
                 schedulerModule.AddTask("Refactor", "0 4 * * *", ct => llmModule.RunRefactorAsync(ct), respectActivity: true);
 
-            // Curiosity walk: once a day (05:00 UTC), the Curiosity agent explores the graph and records
-            // open questions to Curiosities.json (BrainScan's successor). Staggered an hour off Refactor so
-            // the two brain walks don't fire together; same activity-aware deferral.
-            if (llmModule.HasCuriosity)
-                schedulerModule.AddTask("Curiosity", "0 5 * * *", ct => llmModule.RunCuriosityAsync(ct), respectActivity: true);
-
-            // Proactive message: every 2 hours (while idle, outside quiet hours), Ari opens a thread + pushes.
-            // The enable switch and quiet-hours window are read LIVE from the scheduler each fire, so control-
-            // panel edits take effect without a restart.
-            LLMModule llm = llmModule;
-            SchedulerModule sched = schedulerModule;
-            schedulerModule.AddTask("ProactiveMessage", "0 */2 * * *", async ct =>
-            {
-                if (!sched.ProactiveEnabled)
-                {
-                    _logger.LogInformation("[Scheduler] proactive message held — disabled.");
-                    return;
-                }
-                if (sched.IsQuietHour(DateTime.Now.Hour))
-                {
-                    _logger.LogInformation("[Scheduler] proactive message held — quiet hours.");
-                    return;
-                }
-                await llm.RunProactiveMessageAsync(ariPersistentDir, ct);
-            });
+            // Curiosity and ProactiveMessage are retired — Dreaming (see DreamOrchestrator) is their
+            // successor: instead of a scheduled graph-walk queuing questions for a separate scheduled task
+            // to raise later, Ari explores during idle dream time and wakes with a message when something
+            // clears the bar, via the same CreateProactiveDialogueThread + push-notify path.
 
             schedulerModule.TaskStateChanged += (name, running) => llmModule.BroadcastTaskState(name, running);
             CommonModules.Register(scheduler: schedulerModule);
@@ -607,6 +587,9 @@ public class ARI : BackgroundService
 
         llmModule?.StopAllServersAsync();
         llmModule?.Dispose();
+
+        imageGenModule?.Shutdown();
+        LLMDependency.StopSearXng();
 
         if (apiModule is not null)
             await apiModule.Stop(cancellationToken);

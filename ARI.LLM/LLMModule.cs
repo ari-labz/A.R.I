@@ -31,7 +31,6 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly Context?          context;
     private readonly Engram?           engram;
     private readonly Refactor?         refactor;
-    private readonly CuriosityAgent?   curiosity;
     private readonly Awareness?        awareness;
     
     
@@ -137,6 +136,7 @@ public class LLMModule : ILLMModule, IDisposable
         T Deserialize<T>(JsonElement el) where T : Agent
         {
             T agent = JsonSerializer.Deserialize<T>(el.GetRawText(), JsonOptions)!;
+            agent.Scheduler = scheduler;
 
             if (serverByName.TryGetValue(agent.ServerName, out Server? bound))
             {
@@ -283,16 +283,6 @@ public class LLMModule : ILLMModule, IDisposable
                 _logger.LogInformation("Refactor is active.");
             }
 
-            if (rawAgents.TryGetValue("Curiosity", out JsonElement curiosityEl))
-            {
-                curiosity = Deserialize<CuriosityAgent>(curiosityEl);
-                curiosity.PersistentDir = PersistentDataDir;
-                curiosity.Registry = threads;
-                curiosity.Notify = NotifyWatchers;
-                agentMap["Curiosity"] = curiosity;
-                _logger.LogInformation("Curiosity is active.");
-            }
-
             commands = new CommandService(engram, refactor);
         }
         else
@@ -406,6 +396,9 @@ public class LLMModule : ILLMModule, IDisposable
         // Discord or voice thread has no way to show.
         if (!isDiscord && type is ThreadPipeline.Dialogue or ThreadPipeline.Code)
             ToolFactories.LoadGroup("persona_tools", thread);
+        // Image/video generation tools are always hot when the module is ready — no request_tools hop.
+        if (Modules.ImageGen?.IsReady == true && type is ThreadPipeline.Dialogue or ThreadPipeline.Speech)
+            ToolFactories.LoadGroup("image_tools", thread);
         thread.Updated           += () => Broadcast(new AppEvent("threadUpdated", threadKey));
         thread.Deleted           += () => { threads.TryRemove(threadKey, out _); Broadcast(new AppEvent("threadDeleted", threadKey)); };
         thread.Streaming         += text => Broadcast(new AppEvent("streaming", threadKey, text));
@@ -837,18 +830,6 @@ public class LLMModule : ILLMModule, IDisposable
                    : trimmed == "/code"     ? "Switched to **Code** mode."
                    :                          "Switched to **Dialogue** mode.";
         }
-        else if (trimmed == "/curiosity" || trimmed == "/brainscan")
-        {
-            // /brainscan retained as an alias — the Curiosity agent is BrainScan's successor (graph-walk).
-            if (!HasCuriosity) result = "Curiosity is not loaded.";
-            else { _ = Task.Run(() => RunCuriosityAsync(CancellationToken.None)); result = "Curiosity walk started — watch the log / Curiosities.json."; }
-        }
-        else if (trimmed == "/proactive")
-        {
-            // Manual trigger for the proactive message: pick a curiosity and DM the owner now.
-            await RunProactiveMessageAsync(PersistentDataDir, CancellationToken.None);
-            result = "Proactive message attempted — check the log and your DMs.";
-        }
         else
         {
             result = await commands.Handle(input, threadKey);
@@ -995,76 +976,12 @@ public class LLMModule : ILLMModule, IDisposable
     // LastRefactored (oldest first) means each run advances to notes the previous runs never reached.
     private const int SCHEDULED_REFACTOR_EPOCHS = 10;
 
-    /// <summary>True when the Curiosity agent is loaded and can be run by the Scheduler.</summary>
-    public bool HasCuriosity => curiosity is not null;
-
-    /// <summary>Runs a curiosity walk (idle-gated by the Scheduler; yields when cancelled).</summary>
-    public Task RunCuriosityAsync(CancellationToken ct) =>
-        curiosity?.Run(ct) ?? Task.CompletedTask;
-
-    /// <summary>
-    /// Picks the top pending curiosity, phrases it in Ari's voice, opens a normal Dialogue thread seeded
-    /// with that opening message (so Ari can see its own question when the owner replies), and rings the
-    /// owner's phone with a Web Push notification. The curiosity is marked "asked" only after the thread is
-    /// created, so a failure simply retries next time. Quiet-hours gating is the caller's responsibility.
-    /// </summary>
-    public async Task RunProactiveMessageAsync(string persistentDir, CancellationToken ct)
-    {
-        if (textingAgent is null) return;
-
-        if (textingAgent.Server?.Status != ServerStatus.Online ||
-            memory?.Server?.Status      != ServerStatus.Online)
-        {
-            _logger.LogInformation("[Proactive] Skipping — required servers (Dialogue: {D}, Memory: {M}) are not online.",
-                textingAgent.Server?.Status ?? ServerStatus.Offline,
-                memory?.Server?.Status      ?? ServerStatus.Offline);
-            return;
-        }
-
-        List<Curiosity> all = CuriosityStore.Load(persistentDir);
-        Curiosity? pick = all.Where(c => c.Status == "pending")
-            .OrderByDescending(c => c.Priority).ThenBy(c => c.Created)
-            .FirstOrDefault();
-        if (pick is null) { _logger.LogInformation("[Proactive] no pending curiosities to raise."); return; }
-
-        // Framed to make Ari WRITE its own opening message, not narrate the task. The earlier "Greet them
-        // The question drives memory recall; the instruction is a trailing system nudge so Ari writes the
-        // opener rather than acknowledging a command. Keeping them separate prevents weird question wording
-        // from corrupting the instruction framing.
-        string instruction = textingAgent.ResolveTemplate("ProactiveOpener", "", ("question", pick.Question));
-
-        string opener;
-        Thread draft = new(ThreadPipeline.Dialogue, $"proactive-draft:{Guid.NewGuid()}") { Internal = true };
-        CancellationTokenSource draftCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        processingThreads[draft.Key] = draftCts;
-        try
-        {
-            opener = dialoguePipeline is not null
-                ? await dialoguePipeline.RunProactiveAsync(draft, draft.Key, pick.Question, instruction, draftCts)
-                : await textingAgent.Prompt(draft, pick.Question, new PromptOptions { ModeNudge = instruction, Ct = ct });
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex) { _logger.LogWarning("[Proactive] phrasing failed ({Msg}); using the raw question.", ex.Message); opener = pick.Question; }
-        finally { processingThreads.TryRemove(draft.Key, out _); }
-        if (string.IsNullOrWhiteSpace(opener)) opener = pick.Question;
-        opener = opener.Trim();
-
-        // Create the real, owner-facing thread and seed Ari's opening message into its history.
-        string threadKey = CreateProactiveDialogueThread(opener, title: pick.Topic);
-
-        // Ring the phone. Web Push is best-effort — a missing/failed push must not lose the thread.
-        try { await (Modules.WebPush?.SendPushNotification(opener, url: $"/?thread={threadKey}", title: "Ari") ?? Task.CompletedTask); }
-        catch (Exception ex) { _logger.LogWarning("[Proactive] push notification failed: {Msg}", ex.Message); }
-
-        int idx = all.FindIndex(c => c.Id == pick.Id);
-        if (idx >= 0) { all[idx] = pick with { Status = "asked", AskedAt = DateTime.UtcNow.ToString("o") }; CuriosityStore.Save(persistentDir, all); }
-        _logger.LogInformation("[Proactive] opened thread '{Key}' about '{Topic}'.", threadKey, pick.Topic);
-    }
-
     /// <summary>
     /// Creates a fresh, owner-facing Dialogue thread whose history is a single assistant message — Ari
-    /// speaking first. Returns the thread key. The thread is registered like any web thread (fires the
-    /// newThread event), so it appears in the sidebar and the owner's reply lands with the opener in history.
+    /// speaking first (e.g. a Dream wake). Returns the thread key. The thread is registered like any web
+    /// thread (fires the newThread event), so it appears in the sidebar and the owner's reply lands with
+    /// the opener in history. Every call rings the owner's phone with a Web Push notification — an
+    /// agent-initiated message the owner never prompted for is exactly the case a push exists for.
     /// </summary>
     public string CreateProactiveDialogueThread(string assistantText, string? title = null, string? dreamContext = null)
     {
@@ -1080,7 +997,17 @@ public class LLMModule : ILLMModule, IDisposable
             IsVisible = true,
         });
         thread.StartUnread();   // proactive opener: await the user's reply, else unread → dormant → deleted
+
+        // Best-effort — a missing/failed push must not lose the thread, which is already created either way.
+        _ = SendProactivePush(assistantText, threadKey);
+
         return threadKey;
+    }
+
+    private async Task SendProactivePush(string body, string threadKey)
+    {
+        try { await (Modules.WebPush?.SendPushNotification(body, url: $"/?thread={threadKey}", title: "Ari") ?? Task.CompletedTask); }
+        catch (Exception ex) { _logger.LogWarning("[Push] notification failed for thread '{Key}': {Msg}", threadKey, ex.Message); }
     }
 
     public void NotifyTyping(string threadKey)

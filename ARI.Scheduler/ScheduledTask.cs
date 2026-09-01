@@ -20,7 +20,7 @@ internal sealed class ScheduledTask
     internal DateTime LastRunUtc { get; set; }
 
     // When true, a due slot is held (not run) while Ari is actively in conversation, and re-checked
-    // after DeferWindow. The memory walks (Refactor/Curiosity) opt in; jobs like ProactiveMessage don't.
+    // after DeferWindow. The memory walk (Refactor) opts in.
     internal bool RespectActivity { get; }
 
     // Activity-deferral state for the CURRENT due slot. DeferredUntil holds the next re-check time;

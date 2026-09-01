@@ -39,38 +39,6 @@ internal sealed class DialoguePipeline : Pipeline
     protected override LiveCallInfo BuildLiveCall(string threadKey) =>
         new("Dialogue", threadKey, 0, textingAgent.BudgetResponse, textingAgent.BudgetContext, textingAgent.BudgetImage);
 
-    /// <summary>Runs memory recall + Dialogue for a proactive draft thread. The question drives memory
-    /// recall; the instruction is injected as a trailing system nudge so Ari writes the opener rather
-    /// than acknowledging a command.</summary>
-    internal async Task<string> RunProactiveAsync(
-        Thread                  thread,
-        string                  threadKey,
-        string                  question,
-        string                  instruction,
-        CancellationTokenSource cts)
-    {
-        string? contextSummary = context?.GetContext(threadKey);
-        string? recallBlock    = null;
-        double? recallSeconds  = null;
-        if (memory is not null)
-        {
-            var recallSw = System.Diagnostics.Stopwatch.StartNew();
-            try   { recallBlock = await memory.GetNotes(new List<ThreadMessage>(), question, contextSummary, cts.Token, PrivacyMode.Guarded); }
-            catch (OperationCanceledException) when (cts.IsCancellationRequested) { throw; }
-            catch (Exception ex) { Shared.Logger.LogWarning(ex, "[Proactive] Memory recall failed — drafting without memories."); }
-            recallSeconds = recallSw.Elapsed.TotalSeconds;
-        }
-
-        return await textingAgent.Prompt(thread, "(proactive opener)", new PromptOptions
-        {
-            RecallNotes    = recallBlock,
-            RecallSeconds  = recallSeconds,
-            ModeNudge      = instruction,
-            ChatHidden     = true,
-            Ct             = cts.Token,
-        });
-    }
-
     private static PrivacyMode ResolvePrivacyMode(string threadKey, string? platformContext)
     {
         if (threadKey.StartsWith("guild:", StringComparison.OrdinalIgnoreCase))

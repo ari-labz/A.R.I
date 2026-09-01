@@ -49,10 +49,7 @@
     "Scheduler": {
       "Enabled": true,
       "TickSeconds": 30,
-      "QuietStartHour": 22,
-      "QuietEndHour": 8,
       "Schedules": {
-        "ProactiveMessage": "0 */2 * * *",
         "Refactor": "0 */6 * * *"
       }
     },

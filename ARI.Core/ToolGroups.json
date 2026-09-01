@@ -22,7 +22,7 @@
     },
     "memory_tools": {
       "Description": "Recall and correct Ari's personal brain (memory graph). search_brain finds notes by title/alias/content — returns 'title — path' pairs. recall_memory reads the full content of a note by path. edit_memory corrects wrong or inconsistent information in a note and commits the change immediately. neighbours shows graph connections around a note. These tools access Ari's own stored memories, not a project filesystem.",
-      "Tools": ["search_brain", "recall_memory", "edit_memory", "neighbours", "list_curiosities"]
+      "Tools": ["search_brain", "recall_memory", "edit_memory", "neighbours"]
     },
     "vault_tools": {
       "Description": "Search an Obsidian note graph within the bound project (regex, no index). Only useful when the project is an Obsidian vault — calling this on a code repository will return nothing. For searching your own memory, use search_brain / recall_memory instead.",
@@ -35,6 +35,10 @@
     "persona_tools": {
       "Description": "Propose a change to your own persona. Load this when the user criticises HOW you replied — your tone, a verbal tic, a habit they find annoying — since promising to change does nothing on its own; your persona is what actually drives your behaviour.",
       "Tools": ["propose_persona_edit"]
+    },
+    "image_tools": {
+      "Description": "Generate images using Stable Diffusion via ComfyUI. Supports text-to-image and img2img (pass reference_images from the user's attachments to guide composition). Prefer higher denoise (0.9–1.0) for creative freedom; lower (0.5–0.75) to stay close to a reference.",
+      "Tools": ["generate_image"]
     },
     "discord_tools": {
       "Description": "Discord voice-channel control: find which VC a user is in, join a voice channel, or leave one.",
