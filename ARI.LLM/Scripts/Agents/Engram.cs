@@ -202,13 +202,19 @@ internal class Engram : MemoryAgent, IDisposable
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] extracting entities...", threadKey);
             List<ExtractedEntity> entities = await ExtractAsync(transcript, contextSummary);
 
+            // The conversation's own date — not "today", since Engram can run well after the fact.
+            // Stage 3 is told this explicitly so it never has to guess or invent one.
+            DateTime logStart = recentItems.Count > 0 ? recentItems[0].Timestamp : DateTime.Now;
+            DateTime logEnd   = recentItems.Count > 0 ? recentItems[^1].Timestamp : DateTime.Now;
+            string   conversationDate = logStart.ToString("yyyy-MM-dd");
+
             // --- Stage 3: place each entity independently — a short, scoped call per entity instead of
             //     one long wandering thread, so context stays flat (no compounding prefill) and a write
             //     structurally cannot reach a note other than the one it's about. ---
             int commits = 0, blocked = 0;
             foreach (ExtractedEntity entity in entities)
             {
-                switch (await PlaceEntityAsync(threadKey, entity, speaker))
+                switch (await PlaceEntityAsync(threadKey, entity, speaker, conversationDate))
                 {
                     case PlacementOutcome.Committed: commits++; break;
                     case PlacementOutcome.Blocked:   blocked++; break;
@@ -219,9 +225,7 @@ internal class Engram : MemoryAgent, IDisposable
             // extraction step already told us.
             if (entities.Count > 0)
             {
-                DateTime logStart = recentItems.Count > 0 ? recentItems[0].Timestamp : DateTime.Now;
-                DateTime logEnd   = recentItems.Count > 0 ? recentItems[^1].Timestamp : DateTime.Now;
-                string   logLine  = "Discussed: " + string.Join(", ", entities.Select(e => e.Entity).Distinct()) + ".";
+                string logLine = "Discussed: " + string.Join(", ", entities.Select(e => e.Entity).Distinct()) + ".";
                 AppendToConversationLog(DateTime.Now.ToString("yyyy-MM-dd"), logLine, logStart, logEnd);
             }
 
@@ -344,7 +348,7 @@ internal class Engram : MemoryAgent, IDisposable
     /// <summary>Places one entity: a short, fresh call, tool-scoped to the single note it's about. Looks
     /// the note up in code (no search_brain round trip) and hands its current content straight to the
     /// model rather than making it re-discover the note through tools.</summary>
-    private async Task<PlacementOutcome> PlaceEntityAsync(string threadKey, ExtractedEntity entity, string speaker)
+    private async Task<PlacementOutcome> PlaceEntityAsync(string threadKey, ExtractedEntity entity, string speaker, string conversationDate)
     {
         BrainModule.Index();   // pick up commits from entities already placed earlier this same sweep
         // Exact lookup by title/alias/path (BrainModule.GetNote -> Database.FindNote), not the fuzzy
@@ -376,7 +380,8 @@ internal class Engram : MemoryAgent, IDisposable
             ("entity",   entity.Entity),
             ("existing", existingBlock),
             ("excerpt",  entity.Excerpt),
-            ("speaker",  speaker));
+            ("speaker",  speaker),
+            ("date",     conversationDate));
 
         await Prompt(mini, task, new PromptOptions
         {
