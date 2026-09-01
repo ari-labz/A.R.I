@@ -1110,6 +1110,11 @@ public abstract class Agent
                 return;
             }
         }
+        // Reasoning is over and a real reply is beginning — any queued-but-undelivered think-budget
+        // redirect has missed its window (it only fires on a sentence boundary inside the reasoning
+        // stream) and is now moot. Drop it here, before it can survive to the step-end fallback flush
+        // and discard a reply that's already committing.
+        turn.PendingThinkRedirect = null;
         turn.ResponseContentStarted = true;
         deltaText = deltaText
             .Replace("<|think_off|>", "")
