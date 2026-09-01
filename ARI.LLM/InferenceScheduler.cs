@@ -1,22 +1,26 @@
 namespace ARI.LLM;
 
 /// <summary>
-/// Priority used when enqueuing an inference request. Lower value = higher priority.
-/// Voice inference jumps ahead of text so a live conversation is never stalled behind a chat message.
+/// Priority used when enqueuing an inference request. Higher value = higher priority; ties break FIFO.
+/// Voice inference always jumps ahead of everything else so a live conversation is never stalled.
+/// Callers that never state a priority land at the implicit default of 0 (between Normal and Background).
 /// </summary>
-public enum InferencePriority { Voice = 0, Normal = 1, Dream = 2 }
+public enum InferencePriority { Subagent = -2, Background = -1, Dream = -1, Normal = 1, Voice = 2 }
 
 /// <summary>
 /// Global single-slot scheduler for llama.cpp inference requests. Ensures only one request runs at a
-/// time (matching the server's single KV-cache slot) while letting voice requests jump ahead of queued
-/// text requests. Thread-safe; callers await AcquireAsync, do their work, then dispose the returned handle.
+/// time (matching the server's single KV-cache slot) while letting higher-priority requests jump ahead
+/// of queued lower-priority ones. Thread-safe; callers await AcquireAsync, do their work, then dispose
+/// the returned handle.
 /// </summary>
 internal sealed class InferenceScheduler
 {
     private readonly object _lock = new();
     private bool _running;
 
-    // Each waiter is (tcs, cancellationRegistration). Priority: 0=Voice, 1=Normal.
+    // Each waiter is (tcs, cancellationRegistration). PriorityQueue dequeues the SMALLEST key first, but
+    // InferencePriority is "bigger number = more urgent" — so waiters are enqueued under -priority,
+    // making the queue's natural smallest-first order serve the highest-priority caller first.
     private readonly PriorityQueue<(TaskCompletionSource<bool> Tcs, CancellationTokenRegistration Reg), int> _waiting = new();
 
     /// <summary>
@@ -42,7 +46,7 @@ internal sealed class InferenceScheduler
             {
                 lock (_lock) { tcs.TrySetCanceled(ct); }
             });
-            _waiting.Enqueue((tcs, reg), (int)priority);
+            _waiting.Enqueue((tcs, reg), -(int)priority);
         }
 
         try
