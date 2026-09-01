@@ -136,6 +136,7 @@ public class LLMModule : ILLMModule, IDisposable
         T Deserialize<T>(JsonElement el) where T : Agent
         {
             T agent = JsonSerializer.Deserialize<T>(el.GetRawText(), JsonOptions)!;
+            agent.Scheduler = scheduler;
 
             if (serverByName.TryGetValue(agent.ServerName, out Server? bound))
             {

@@ -227,14 +227,16 @@ internal abstract class MemoryAgent : Agent
         new SearchFiles(fs).Register(thread);
         new FindFiles(fs).Register(thread);
 
-        // Git tools are used ~once per session (issue #126) — deferred behind request_tools("git_tools")
-        // instead of always sitting in context, resolved generically via ToolFactories (agent-agnostic —
-        // see Thread.FilesystemRoot). PreloadedTools can still name "git_tools" in Agents.json to keep them
-        // warm/eager for an agent that calls them almost every turn.
+        // Git tools (and others, e.g. memory_tools' recall_memory/edit_memory) are deferred behind
+        // request_tools(group) instead of always sitting in context, resolved generically via
+        // ToolFactories (agent-agnostic — see Thread.FilesystemRoot). Any group named in an agent's
+        // PreloadedTools (Agents.json) is loaded eagerly instead — for an agent that calls a deferred
+        // group almost every turn, discovering it via list_tools/request_tools first is a wasted
+        // round-trip (a full extra prefill+think cycle) on every single run.
         new ListTools().Register(thread);
         new RequestTools(thread).Register(thread);
-        if (PreloadedTools?.Contains("git_tools", StringComparer.OrdinalIgnoreCase) == true)
-            ToolFactories.LoadGroup("git_tools", thread);
+        foreach (string group in PreloadedTools ?? [])
+            ToolFactories.LoadGroup(group, thread);
 
         new Neighbours().Register(thread);
         new MergeNotesTool().Register(thread);

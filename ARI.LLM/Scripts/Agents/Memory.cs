@@ -117,10 +117,18 @@ internal class Memory : Agent
         // Pure SQL, no LLM yet — see BrainModule.Recall.
         RecallResult recall = BrainModule.Recall(terms, HopLimit, SEED_NEAR_LIMIT, TOP_CANDIDATES);
 
-        Shared.Logger.LogInformation("[Memory] terms [{Terms}] → {Candidates} candidate(s), {Paths} path(s)",
-            string.Join(", ", terms), recall.Candidates.Count, recall.Paths.Count);
+        // Guarded mode (talking to someone other than the owner): Private/ notes are never even offered
+        // to the selection model, not just filtered afterward. This is deliberately a hard path check
+        // rather than another judgment call — "never discuss the owner's private life with a third
+        // party" should not depend on an LLM getting a borderline case right every single time.
+        List<SearchResult> candidates = privacyMode == PrivacyMode.Guarded
+            ? recall.Candidates.Where(c => !c.Note.Path.StartsWith("Private/", StringComparison.OrdinalIgnoreCase)).ToList()
+            : recall.Candidates.ToList();
 
-        if (recall.Candidates.Count == 0)
+        Shared.Logger.LogInformation("[Memory] terms [{Terms}] → {Candidates} candidate(s), {Paths} path(s)",
+            string.Join(", ", terms), candidates.Count, recall.Paths.Count);
+
+        if (candidates.Count == 0)
         {
             Shared.Logger.LogInformation("[Memory] complete 0.0s, 0 tokens, 0.0 t/s — no candidates found");
             SessionRecorder.StandaloneNote("Memory", memThread.Key, "no-candidates", new Dictionary<string, object?>
@@ -140,7 +148,7 @@ internal class Memory : Agent
         string transcript = transcriptBuilder.ToString();
 
         StringBuilder candidateBlock = new();
-        foreach (SearchResult candidate in recall.Candidates)
+        foreach (SearchResult candidate in candidates)
         {
             string aliasNote = candidate.Note.Aliases.Count > 0
                 ? $"(aka {string.Join(", ", candidate.Note.Aliases)}) "
@@ -175,7 +183,7 @@ internal class Memory : Agent
             {
                 ["incoming_prompt"]    = incomingPrompt,
                 ["search_terms"]       = terms,
-                ["candidates_offered"] = recall.Candidates.Count,
+                ["candidates_offered"] = candidates.Count,
                 ["elapsed_s"]          = Math.Round(timer.Elapsed.TotalSeconds, 3),
                 ["completion_tokens"]  = completionTokens,
                 ["tok_per_sec"]        = Math.Round(tokPerSec, 2),
@@ -187,7 +195,7 @@ internal class Memory : Agent
         // The model is asked for exact titles but often echoes the whole decorated candidate line
         // ("Alex: (aka Al) - **Formal Name:** Alexander"). Constrain the fuzzy fallback to the notes
         // actually offered, so a mangled pick can never resolve to a note that wasn't in the list.
-        HashSet<string> offered = recall.Candidates.Select(c => c.Note.Name).ToHashSet();
+        HashSet<string> offered = candidates.Select(c => c.Note.Name).ToHashSet();
 
         List<string> fetched = new();
         List<string> fuzzy = new();
@@ -229,7 +237,7 @@ internal class Memory : Agent
         {
             ["incoming_prompt"]    = incomingPrompt,
             ["search_terms"]       = terms,
-            ["candidates_offered"] = recall.Candidates.Count,
+            ["candidates_offered"] = candidates.Count,
             ["paths_found"]        = recall.Paths.Count,
             ["elapsed_s"]          = Math.Round(timer.Elapsed.TotalSeconds, 3),
             ["completion_tokens"]  = completionTokens,

@@ -6,7 +6,12 @@ namespace ARI.LLM;
 internal sealed class EditFile : Tool
 {
     private readonly FileSystem fs;
-    internal EditFile(FileSystem fs) => this.fs = fs;
+    // When set, this instance can only touch this one path — used by Engram's per-entity placement
+    // calls so a write about one entity structurally cannot reach an unrelated note, regardless of what
+    // the model was told in the prompt (an unrelated commit once silently stripped another note's
+    // content with no guard catching it — this closes that class of bug).
+    private readonly string? allowedPath;
+    internal EditFile(FileSystem fs, string? allowedPath = null) { this.fs = fs; this.allowedPath = allowedPath; }
 
     internal override string Name => "edit_file";
 
@@ -41,6 +46,8 @@ internal sealed class EditFile : Tool
             using JsonDocument doc = JsonDocument.Parse(argsJson);
             if (doc.RootElement.TryGetProperty("path", out JsonElement p) && p.GetString() is { } path)
             {
+                if (allowedPath is not null && !PathScope.Matches(path, allowedPath))
+                    return $"[Blocked] This call may only edit '{allowedPath}'.";
                 if (!fs.WasRead(path))
                     return $"[Blocked] You must call read_file or preview_file on '{path}' before editing it. Read it first so you have the current line numbers.";
             }
@@ -66,6 +73,18 @@ internal sealed class EditFile : Tool
         }
         catch { return "<!--ari-tool-start:edit_file:file-->"; }
     };
+}
+
+/// <summary>Path comparison for the allowedPath scope guard — case-insensitive, tolerant of a leading
+/// slash or backslash-vs-forward-slash mismatch, since the model may echo the path back slightly
+/// differently than it was given.</summary>
+internal static class PathScope
+{
+    internal static bool Matches(string given, string allowed)
+    {
+        static string Norm(string p) => p.Replace('\\', '/').Trim('/', ' ');
+        return string.Equals(Norm(given), Norm(allowed), StringComparison.OrdinalIgnoreCase);
+    }
 }
 
 /// <summary>Computes +added / -removed line counts for an edit/write call from its arguments, for the diff badge
