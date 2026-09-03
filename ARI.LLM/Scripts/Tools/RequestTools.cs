@@ -3,10 +3,12 @@ using System.Text.Json;
 namespace ARI.LLM;
 
 /// <summary>
-/// Loads a deferred tool group onto the calling thread (issue #126). Generic and agent-agnostic: any
-/// thread can ask for any group. Whether it actually gets tools back depends only on ToolFactories —
-/// which needs context (Thread.FilesystemRoot etc.) that may or may not be bound on this thread — never on
-/// which agent is asking. See ToolFactories.cs for the construction logic.
+/// Loads a deferred tool group, OR a single standalone tool, onto the calling thread (issue #126).
+/// Generic and agent-agnostic: any thread can ask for any group or tool name. Whether it actually gets
+/// tools back depends only on ToolFactories — which needs context (Thread.FilesystemRoot etc.) that may
+/// or may not be bound on this thread — never on which agent is asking. Grouping only exists so several
+/// tools can be pulled in one call; nothing is reachable ONLY through a group. See ToolFactories.cs for
+/// the construction logic.
 /// </summary>
 internal sealed class RequestTools : Tool
 {
@@ -20,38 +22,48 @@ internal sealed class RequestTools : Tool
         function = new
         {
             name        = "request_tools",
-            description = "Load a tool group by name so its tools become callable. Call list_tools first if you don't already know the group name.",
+            description = "Load a tool group OR a single standalone tool by name so it becomes callable. Call list_tools first if you don't already know the name you need.",
             parameters  = new
             {
                 type       = "object",
-                properties = new { group = new { type = "string", description = "The tool group name, e.g. 'git_tools'." } },
-                required   = new[] { "group" }
+                properties = new { name = new { type = "string", description = "A tool group name (e.g. 'git_tools') or a single tool's own name (e.g. 'get_time')." } },
+                required   = new[] { "name" }
             }
         }
     };
 
     internal override Task<ToolResult> Execute(string argsJson)
     {
-        string group;
-        try { group = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson).RootElement.GetProperty("group").GetString() ?? ""; }
-        catch { group = ""; }
+        string name;
+        try { name = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson).RootElement.GetProperty("name").GetString() ?? ""; }
+        catch { name = ""; }
 
-        if (group.Length == 0) return Task.FromResult<ToolResult>("Error: 'group' is required.");
-        if (!ToolGroups.TryGet(group, out _))
-            return Task.FromResult<ToolResult>($"Unknown tool group '{group}'. Call list_tools to see what's available.");
+        if (name.Length == 0) return Task.FromResult<ToolResult>("Error: 'name' is required.");
 
-        (List<Tool> loaded, List<string> unavailable) = ToolFactories.LoadGroup(group, thread);
+        if (ToolGroups.TryGet(name, out ToolGroupDef groupDef))
+        {
+            (List<Tool> loaded, List<string> unavailable) = ToolFactories.LoadGroup(name, thread);
+            if (loaded.Count == 0) return Task.FromResult<ToolResult>($"'{name}' isn't available in this context (no project/vault is bound here).");
 
-        if (loaded.Count == 0) return Task.FromResult<ToolResult>($"'{group}' isn't available in this context (no project/vault is bound here).");
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"Group: {name} — {groupDef.Description}");
+            sb.AppendLine("Tools loaded:");
+            foreach (Tool tool in loaded)
+                sb.AppendLine($"  • {tool.Name} — {tool.SchemaDescription}");
+            if (unavailable.Count > 0)
+                sb.AppendLine($"Not available here: {string.Join(", ", unavailable)}.");
+            return Task.FromResult<ToolResult>(sb.ToString().TrimEnd());
+        }
 
-        ToolGroups.TryGet(group, out ToolGroupDef groupDef);
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"Group: {group} — {groupDef?.Description}");
-        sb.AppendLine("Tools loaded:");
-        foreach (Tool tool in loaded)
-            sb.AppendLine($"  • {tool.Name} — {tool.SchemaDescription}");
-        if (unavailable.Count > 0)
-            sb.AppendLine($"Not available here: {string.Join(", ", unavailable)}.");
-        return Task.FromResult<ToolResult>(sb.ToString().TrimEnd());
+        if (ToolFactories.TryBuild(name, thread, out Tool single))
+        {
+            single.Register(thread);
+            return Task.FromResult<ToolResult>($"Tool loaded: {single.Name} — {single.SchemaDescription}");
+        }
+
+        return Task.FromResult<ToolResult>(
+            ToolFactories.AllNames().Contains(name, StringComparer.OrdinalIgnoreCase)
+                ? $"'{name}' isn't available in this context (no project/vault is bound here)."
+                : $"Unknown tool or group '{name}'. Call list_tools to see what's available.");
     }
 }
