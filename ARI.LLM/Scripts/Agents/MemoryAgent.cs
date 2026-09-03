@@ -240,7 +240,7 @@ internal abstract class MemoryAgent : Agent
         // PreloadedTools (Agents.json) is loaded eagerly instead — for an agent that calls a deferred
         // group almost every turn, discovering it via list_tools/request_tools first is a wasted
         // round-trip (a full extra prefill+think cycle) on every single run.
-        new ListTools().Register(thread);
+        new ListTools(thread).Register(thread);
         new RequestTools(thread).Register(thread);
         foreach (string group in PreloadedTools ?? [])
             ToolFactories.LoadGroup(group, thread);

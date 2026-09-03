@@ -394,7 +394,7 @@ public class LLMModule : ILLMModule, IDisposable
         // (FilesystemRoot etc.), set by whichever agent runs on it (Coder.RunLoop, MemoryAgent.RegisterTools).
         // Threads created outside this choke point (MemoryAgent's internal epoch threads) register their
         // own copy for the same reason.
-        new ListTools().Register(thread);
+        new ListTools(thread).Register(thread);
         new RequestTools(thread).Register(thread);
         // Discord threads get discord_tools hot — no request_tools round-trip needed.
         bool isDiscord = threadKey.StartsWith("dm:", StringComparison.OrdinalIgnoreCase) ||

@@ -37,6 +37,11 @@ internal static class ToolGroups
 
     internal static bool TryGet(string name, out ToolGroupDef def) => _groups.TryGetValue(name, out def!);
 
+    /// <summary>Every tool name that belongs to at least one group — used to find the leftover
+    /// ungrouped tools that list_tools/request_tools must still surface individually.</summary>
+    internal static HashSet<string> AllGroupedToolNames()
+        => new(_groups.Values.SelectMany(g => g.Tools), StringComparer.OrdinalIgnoreCase);
+
     /// <summary>The always-resident manifest content: every group's name and one-liner. This is what
     /// list_tools returns, and it's cheap enough (names + descriptions, no schemas) to answer from memory.</summary>
     internal static string ManifestText()
