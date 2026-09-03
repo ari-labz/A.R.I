@@ -12,7 +12,7 @@ public abstract class Agent
     // ── JSON-serialised fields (common to all agents) ────────────────────────
     public string Name { get; init; } = "";
     public string ServerName { get; set; } = "";
-    public string SystemPrompt { get; init; } = "";
+    public string AgentPrompt { get; init; } = "";
     public Dictionary<string, string>? PromptTemplates { get; init; }
     
     // Tool groups registered eagerly (skips the request_tools round-trip). Null/empty = defer all.
@@ -80,7 +80,7 @@ public abstract class Agent
     // ── Context-building hooks ───────────────────────────────────────────────
     internal virtual string PersistentContext(Thread thread)    => "";
     internal virtual string DynamicContext(Thread thread, bool lastStepToolOnly) => "";
-    internal virtual string BuildSystemPrompt(Thread thread) => SystemPrompt;
+    internal virtual string BuildSystemPrompt(Thread thread) => AgentPrompt;
 
     private static string BuildBudgets(int thinking, int reply, int context, int toolCalls)
     {
@@ -1829,19 +1829,42 @@ public abstract class Agent
         return msgAtts;
     }
 
+    private const string BlockRule = "--------------------------------";
+
     private (string baseSystem, string budgetsBlock, string thinkSuffix) BuildSystemBlock(
         Thread thread, int thinkBudget, int respBudget, bool Think)
     {
-        // Persona comes FIRST — byte-identical across turns so the KV prefix cache survives.
-        string persona   = UsePersona ? PersonaStore.Get() : "";
-        string roleBody  = BuildSystemPrompt(thread);
-        string roleBlock = thread.PlatformContext is null
-            ? roleBody
-            : $"{roleBody}\n\n{thread.PlatformContext}";
-        string baseSystem = persona.Length == 0 ? roleBlock : $"# Persona\n{persona}\n\n{roleBlock}";
-        baseSystem += PersistentContext(thread);
+        // All blocks below are byte-identical across turns so the KV prefix cache survives —
+        // only [Budgets] at the very bottom carries per-turn values.
+        string roleBody   = BuildSystemPrompt(thread);
+        string systemBody = UsePersona ? SystemPromptStore.Get() : "";
+        string systemFull = systemBody.Length == 0 ? roleBody : $"{systemBody}\n\n{roleBody}";
+        string systemBlock = thread.PlatformContext is null
+            ? systemFull
+            : $"{systemFull}\n\n{thread.PlatformContext}";
+
+        List<string> sections = new()
+        {
+            $"--- **System Prompt** ---\n{systemBlock}\n{BlockRule}"
+        };
+
         if (thread.tools.ContainsKey("list_tools"))
-            baseSystem += "\n\n" + SharedPrompts.ToolSystemBlock;
+        {
+            string capabilities = UsePersona ? CapabilitiesStore.Get() : "";
+            string capsBlock = capabilities.Length == 0
+                ? SharedPrompts.ToolSystemBlock
+                : $"{capabilities}\n\n{SharedPrompts.ToolSystemBlock}";
+            sections.Add($"--- **Capabilities** ---\n{capsBlock}\n{BlockRule}");
+        }
+
+        if (UsePersona)
+        {
+            string persona = PersonaStore.Get();
+            if (persona.Length > 0)
+                sections.Add($"--- **Persona** ---\n{persona}\n{BlockRule}");
+        }
+
+        string baseSystem = string.Join("\n\n", sections) + PersistentContext(thread);
 
         // [Budgets] at the BOTTOM — per-turn values must not invalidate the cached prefix above.
         string budgetsBlock = BuildBudgets(thinkBudget, respBudget, BudgetContext, MaxToolCalls);
@@ -1885,7 +1908,7 @@ public abstract class Agent
         if (collapsed.Count > 0)
         {
             ThreadMessage current   = collapsed[^1];
-            string        promptText = $"{memoryBlock}{current.Username}: {current.Content}";
+            string        promptText = $"{memoryBlock}**Prompt:**\n{current.Username}: {current.Content}";
 
             var msgImages = new List<Attachment>();
             var msgTexts  = new List<Attachment>();

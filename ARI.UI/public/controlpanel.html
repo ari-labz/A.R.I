@@ -2780,7 +2780,7 @@ function agBuildAgent(spec, agent, host, depth) {
     const sec = agSection(spec.name, { right: agBindingPickers(agent) });
     if (depth) sec.card.style.marginTop = '8px';
 
-    agField(sec.body, 'System Prompt', '', spec.systemTokens || [], agent.systemPrompt, v => agent.systemPrompt = v);
+    agField(sec.body, 'Agent Prompt', '', spec.systemTokens || [], agent.agentPrompt, v => agent.agentPrompt = v);
 
     (spec.prompts || []).forEach(p => {
         agent.prompts = agent.prompts || {};
