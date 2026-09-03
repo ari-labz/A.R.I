@@ -1,19 +1,26 @@
 namespace ARI.LLM;
 
 /// <summary>
-/// Priority used when enqueuing an inference request. Higher value = higher priority; ties break FIFO.
+/// Priority used when enqueuing a prompt. Higher value = higher priority; ties break FIFO.
 /// Voice inference always jumps ahead of everything else so a live conversation is never stalled.
 /// Callers that never state a priority land at the implicit default of 0 (between Normal and Background).
 /// </summary>
 public enum InferencePriority { Subagent = -2, Background = -1, Dream = -1, Normal = 1, Voice = 2 }
 
 /// <summary>
-/// Global single-slot scheduler for llama.cpp inference requests. Ensures only one request runs at a
-/// time (matching the server's single KV-cache slot) while letting higher-priority requests jump ahead
-/// of queued lower-priority ones. Thread-safe; callers await AcquireAsync, do their work, then dispose
-/// the returned handle.
+/// One physical llama-server's prompt queue. Ensures only one prompt runs on that server at a time
+/// (matching its single KV-cache slot) while letting higher-priority prompts jump ahead of queued
+/// lower-priority ones. Every agent bound to the same server shares the same LLMQueue instance; agents
+/// on different servers get separate queues, so two physically independent servers can genuinely run at
+/// the same time instead of taking turns for no reason. Thread-safe; callers await AcquireAsync, do
+/// their work, then dispose the returned handle.
+///
+/// IMPORTANT: acquire once per single prompt/turn, as close as possible to the actual HTTP call — never
+/// hold a slot across a call that itself prompts the same server again (directly or through another
+/// agent). This queue is a single, non-reentrant slot: a caller that holds it while waiting on a nested
+/// prompt to the same queue deadlocks forever, since the nested prompt can never get the slot back.
 /// </summary>
-internal sealed class InferenceScheduler
+internal sealed class LLMQueue
 {
     private readonly object _lock = new();
     private bool _running;
@@ -24,8 +31,8 @@ internal sealed class InferenceScheduler
     private readonly PriorityQueue<(TaskCompletionSource<bool> Tcs, CancellationTokenRegistration Reg), int> _waiting = new();
 
     /// <summary>
-    /// Acquire the inference slot. Awaitable; resolves when this caller is at the front of the queue
-    /// and the previous inference has finished. Dispose the returned handle to release the slot.
+    /// Wait for this server's turn. Awaitable; resolves when this caller is at the front of the queue
+    /// and the previous prompt on this server has finished. Dispose the returned handle to release it.
     /// </summary>
     internal async Task<IDisposable> AcquireAsync(InferencePriority priority, CancellationToken ct)
     {
@@ -71,7 +78,7 @@ internal sealed class InferenceScheduler
                 (TaskCompletionSource<bool> tcs, CancellationTokenRegistration reg) = _waiting.Dequeue();
                 reg.Dispose();
                 if (tcs.TrySetResult(true))
-                    return; // handed off; slot remains "running"
+                    return; // handed off; this server's turn remains "running"
                 // tcs was already cancelled — skip it and try next waiter
             }
 
@@ -81,16 +88,16 @@ internal sealed class InferenceScheduler
 
     private sealed class SlotHandle : IDisposable
     {
-        private readonly InferenceScheduler _scheduler;
+        private readonly LLMQueue _queue;
         private bool _disposed;
 
-        internal SlotHandle(InferenceScheduler scheduler) => _scheduler = scheduler;
+        internal SlotHandle(LLMQueue queue) => _queue = queue;
 
         public void Dispose()
         {
             if (_disposed) return;
             _disposed = true;
-            _scheduler.Release();
+            _queue.Release();
         }
     }
 }
