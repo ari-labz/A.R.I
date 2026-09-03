@@ -1,12 +1,13 @@
 using System.Text.Json;
-using ARI.Brain;
+using ARI.BrainVault;
 
 namespace ARI.LLM;
 
-// Brain-specific tools for the memory agents. Note content is read/written through the ordinary file
-// tools (read_file / write_file / edit_file / move_file / delete_file) pointed at the vault — the vault
-// IS a markdown filesystem. These tools cover only what a plain file op cannot express: the graph
-// skeleton, structural merge, git history, and the curiosity queue.
+// Brain-specific read tools for the memory agents. Writes go through create_memory/edit_memory/
+// delete_memory (CreateMemory.cs/EditMemory.cs/DeleteMemory.cs) — never the generic filesystem tools —
+// so every note write goes through Brain's own shape-aware logic (sticky frontmatter, rename-merge,
+// reference repointing) instead of a raw overwrite. These cover the rest: search, full-note read, the
+// graph skeleton, and structural merge.
 
 file static class Args
 {
@@ -59,8 +60,8 @@ internal sealed class Neighbours : Tool
         JsonElement a = Args.Parse(argsJson);
         string seed = a.Str("seed");
         if (seed.Length == 0) return Task.FromResult<ToolResult>("Error: 'seed' is required.");
-        BrainModule.Index();
-        string? skeleton = BrainModule.Skeleton(seed, a.Int("depth", 2), a.Int("cap", 50));
+        Brain.Index();
+        string? skeleton = Brain.Skeleton(seed, a.Int("depth", 2), a.Int("cap", 50));
         return Task.FromResult<ToolResult>(skeleton is null ? $"No note found for seed '{seed}'." :
             skeleton.Length == 0 ? $"'{seed}' has no connections." : skeleton);
     }
@@ -105,13 +106,13 @@ internal sealed class SearchBrain : Tool
         if (query.Length == 0) return Task.FromResult<ToolResult>("Error: 'query' is required.");
         int limit = Math.Clamp(a.Int("limit", DEFAULT_LIMIT), 1, 50);
 
-        BrainModule.Index();
+        Brain.Index();
         List<string> terms = System.Text.RegularExpressions.Regex
             .Split(query, @"[^a-zA-Z0-9']+")
             .Select(t => t.Trim('\''))
             .Where(t => t.Length > 0)
             .ToList();
-        List<SearchResult> hits = BrainModule.Search(terms, limit);
+        List<SearchResult> hits = Brain.Search(terms, limit);
         if (hits.Count == 0) return Task.FromResult<ToolResult>($"No notes found for '{query}'. It likely has no note yet.");
 
         return Task.FromResult<ToolResult>(string.Join('\n', hits.Select(h => $"{h.Note.Title} — {h.Note.Path}")));
@@ -153,7 +154,7 @@ internal sealed class MergeNotesTool : Tool
         if (from.Length == 0 || into.Length == 0) return Task.FromResult<ToolResult>("Error: both 'from' and 'into' are required.");
         try
         {
-            bool ok = BrainModule.MergeNotes(from, into);
+            bool ok = Brain.MergeNotes(from, into);
             return Task.FromResult<ToolResult>(ok ? $"Merged '{from}' into '{into}' ('{from}' kept as an alias)."
                                       : $"Merge failed — '{from}' or '{into}' not found, or they are the same note.");
         }
@@ -194,8 +195,8 @@ internal sealed class RecallMemory : Tool
         string path = Args.Parse(argsJson).Str("path").Trim();
         if (path.Length == 0) return Task.FromResult<ToolResult>("Error: 'path' is required.");
 
-        BrainModule.Index();
-        Note? note = BrainModule.GetNote(path);
+        Brain.Index();
+        Note? note = Brain.GetNote(path);
         if (note is null) return Task.FromResult<ToolResult>($"No note found for '{path}'. Use search_brain to find the correct path.");
 
         string content = note.Content;

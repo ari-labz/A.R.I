@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Threading.Channels;
-using ARI.Brain;
+using ARI.BrainVault;
 using ARI.Common;
 using Microsoft.Extensions.Logging;
 
@@ -195,7 +195,7 @@ public class LLMModule : ILLMModule, IDisposable
 
         if (brainConfig is not null)
         {
-            IndexStats brainStats = BrainModule.Initialize(brainConfig);
+            IndexStats brainStats = Brain.Initialize(brainConfig);
             _logger.LogInformation("Brain vault indexed: {Notes} notes, {Edges} edges, {Aliases} aliases, {Thoughts} thoughts.",
                 brainStats.Notes, brainStats.Edges, brainStats.Aliases, brainStats.Thoughts);
             if (brainStats.SkippedNotes.Count > 0)
@@ -253,7 +253,7 @@ public class LLMModule : ILLMModule, IDisposable
             _logger.LogWarning("No Awareness entry in Agents.json — using default server/slot with no system prompt. Add an Awareness entry to configure it.");
         }
 
-        if (BrainModule.Ready && rawAgents.TryGetValue("Memory", out JsonElement memoryEl))
+        if (Brain.Ready && rawAgents.TryGetValue("Memory", out JsonElement memoryEl))
         {
             Memory mem = Deserialize<Memory>(memoryEl);
             if (mem.HopLimit > 0)
@@ -264,7 +264,7 @@ public class LLMModule : ILLMModule, IDisposable
             }
         }
 
-        if (BrainModule.Ready && textingAgent is not null)
+        if (Brain.Ready && textingAgent is not null)
         {
             if (rawAgents.TryGetValue("Engram", out JsonElement engramEl))
             {
@@ -606,10 +606,10 @@ public class LLMModule : ILLMModule, IDisposable
     }
 
     // ── Brain backups ───────────────────────────────────────────────────────────
-    public bool BrainAvailable => BrainModule.Ready;
-    public string BackupBrain()                   => BrainModule.Ready ? BrainModule.Backup()            : "Brain is not available.";
-    public List<BackupInfo> ListBrainBackups()    => BrainModule.Ready ? BrainModule.ListBackups()       : new List<BackupInfo>();
-    public string RestoreBrainBackup(string file) => BrainModule.Ready ? BrainModule.RestoreBackup(file) : "Brain is not available.";
+    public bool BrainAvailable => Brain.Ready;
+    public string BackupBrain()                   => Brain.Ready ? BrainBackup.Backup()            : "Brain is not available.";
+    public List<BackupInfo> ListBrainBackups()    => Brain.Ready ? BrainBackup.ListBackups()       : new List<BackupInfo>();
+    public string RestoreBrainBackup(string file) => Brain.Ready ? BrainBackup.RestoreBackup(file) : "Brain is not available.";
 
     // ── Prompting ───────────────────────────────────────────────────────────────
 
@@ -638,8 +638,8 @@ public class LLMModule : ILLMModule, IDisposable
         // The brain vault is accessed only through memory_tools — never via the generic filesystem.
         // If a project somehow points at the vault root, silently no-op the bind so write_file / edit_file
         // never get registered over it on a non-memory thread.
-        if (BrainModule.Ready &&
-            string.Equals(Path.GetFullPath(rootPath), Path.GetFullPath(BrainModule.VaultRoot),
+        if (Brain.Ready &&
+            string.Equals(Path.GetFullPath(rootPath), Path.GetFullPath(Brain.VaultRoot),
                           StringComparison.OrdinalIgnoreCase))
             return;
 

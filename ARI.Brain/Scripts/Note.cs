@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace ARI.Brain;
+namespace ARI.BrainVault;
 
 public class Note
 {
@@ -12,6 +12,7 @@ public class Note
     private static readonly Regex aliasesLine = new(@"^aliases: \[(.*)\]$", RegexOptions.Multiline | RegexOptions.Compiled);
     private static readonly Regex keywordsLine = new(@"^keywords: \[(.*)\]$", RegexOptions.Multiline | RegexOptions.Compiled);
     private static readonly Regex typeLine = new(@"^type: (.+)$", RegexOptions.Multiline | RegexOptions.Compiled);
+    private static readonly Regex sensitiveLine = new(@"^sensitive: true$", RegexOptions.Multiline | RegexOptions.Compiled);
     private static readonly Regex createdLine = new(@"^created: (\S+)$", RegexOptions.Multiline | RegexOptions.Compiled);
     private static readonly Regex quotedValue = new(@"""((?:[^""\\]|\\.)*)""", RegexOptions.Compiled);
 
@@ -45,28 +46,32 @@ public class Note
     // Node type from frontmatter (null = leaf). Read fresh, like Content.
     public string? Type => Parse(File.ReadAllText(AbsolutePath)).Type;
 
-    public string Url => $"obsidian://open?vault={Uri.EscapeDataString(BrainModule.VaultName)}&file={Uri.EscapeDataString(Name)}";
+    // Whether this note carries "sensitive: true" in frontmatter — the backstop signal for Private/
+    // content, in addition to the path itself. Read fresh, like Content.
+    public bool IsSensitive => Parse(File.ReadAllText(AbsolutePath)).IsSensitive;
+
+    public string Url => $"obsidian://open?vault={Uri.EscapeDataString(Brain.VaultName)}&file={Uri.EscapeDataString(Name)}";
 
     public List<Note> GetLinks() => Database.LinksFrom(id);
 
     public List<Note> GetReferences() => Database.LinksTo(id);
 
-    public bool HasChildren() => Directory.Exists(System.IO.Path.Combine(BrainModule.VaultRoot, Name))
-        && Directory.EnumerateFiles(System.IO.Path.Combine(BrainModule.VaultRoot, Name), "*.md", SearchOption.AllDirectories).Any();
+    public bool HasChildren() => Directory.Exists(System.IO.Path.Combine(Brain.VaultRoot, Name))
+        && Directory.EnumerateFiles(System.IO.Path.Combine(Brain.VaultRoot, Name), "*.md", SearchOption.AllDirectories).Any();
 
     public List<Note> GetChildren() => Database.ChildrenOf(Name);
 
     public void Save(string content, IReadOnlyList<string> aliases, IReadOnlyList<string>? keywords = null)
     {
         Write(Path, CarryThoughtsInto(Content, content), aliases, Parse(File.ReadAllText(AbsolutePath)).Created, keywords: keywords ?? Keywords);
-        BrainModule.Index();
+        Brain.Index();
     }
 
     public void Delete()
     {
         if (HasChildren()) throw new InvalidOperationException($"'{Title}' has child notes and cannot be deleted.");
         File.Delete(AbsolutePath);
-        BrainModule.Index();
+        Brain.Index();
     }
 
     // The old title becomes an alias on the winner, so existing [[links]] keep resolving.
@@ -84,8 +89,8 @@ public class Note
         Write(winner.Path, content, combined, null);
         // Repoint every [[loserTitle]] to the winner so referrers don't keep pointing at the folded-away
         // note. The loser title is also kept as an alias on the winner, so anything missed still resolves.
-        BrainModule.RepointReferences(loserTitle, winner.Title);
-        BrainModule.Index();
+        Brain.RepointReferences(loserTitle, winner.Title);
+        Brain.Index();
     }
 
     public string ToPrompt()
@@ -122,10 +127,10 @@ public class Note
         ParsedThought thought = new(kind, spanText, comment, confidence, DateTime.UtcNow.ToString("yyyy-MM-dd"));
         string newBody = InsertThought(Content, thought);
         Write(Path, newBody, Aliases, Parse(File.ReadAllText(AbsolutePath)).Created);
-        BrainModule.Index();
+        Brain.Index();
     }
 
-    private string AbsolutePath => System.IO.Path.Combine(BrainModule.VaultRoot, Path);
+    private string AbsolutePath => System.IO.Path.Combine(Brain.VaultRoot, Path);
 
     // ── Thoughts (margin annotations) ────────────────────────────────────────────────
 
@@ -236,7 +241,7 @@ public class Note
 
     // ── File format ──────────────────────────────────────────────────────────────────
 
-    internal record Parsed(string Body, IReadOnlyList<string> AliasList, IReadOnlyList<string> KeywordList, DateTime? Created, string? Type);
+    internal record Parsed(string Body, IReadOnlyList<string> AliasList, IReadOnlyList<string> KeywordList, DateTime? Created, string? Type, bool IsSensitive);
 
     internal static Parsed Parse(string raw)
     {
@@ -245,6 +250,7 @@ public class Note
         List<string> keywords = new();
         DateTime? created = null;
         string? type = null;
+        bool isSensitive = false;
 
         Match frontmatter = frontmatterBlock.Match(raw);
         if (frontmatter.Success)
@@ -261,11 +267,12 @@ public class Note
                     keywords.Add(value.Groups[1].Value.Replace("\\\"", "\"").Replace("\\\\", "\\"));
             Match typeMatch = typeLine.Match(head);
             if (typeMatch.Success) type = typeMatch.Groups[1].Value.Trim();
+            isSensitive = sensitiveLine.IsMatch(head);
             Match createdMatch = createdLine.Match(head);
             if (createdMatch.Success && DateTime.TryParse(createdMatch.Groups[1].Value, null, DateTimeStyles.AdjustToUniversal, out DateTime parsed))
                 created = parsed;
         }
-        return new Parsed(body, aliases, keywords, created, type);
+        return new Parsed(body, aliases, keywords, created, type, isSensitive);
     }
 
     // temp + rename: a crash can never leave a half-written note.
@@ -274,17 +281,18 @@ public class Note
     // renames) never strips its colour group or, worse, silently backdates-forward when it was
     // created. No caller decides this; it's enforced here so it can't be gotten wrong per call site.
     // updated is never sticky — every write is, definitionally, an update.
-    internal static void Write(string relativePath, string body, IReadOnlyList<string> aliases, DateTime? created, string? type = null, IReadOnlyList<string>? keywords = null)
+    internal static void Write(string relativePath, string body, IReadOnlyList<string> aliases, DateTime? created, string? type = null, IReadOnlyList<string>? keywords = null, bool? isSensitive = null)
     {
-        string file = System.IO.Path.Combine(BrainModule.VaultRoot, relativePath);
+        string file = System.IO.Path.Combine(Brain.VaultRoot, relativePath);
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file)!);
 
         if (File.Exists(file))
         {
             Parsed existing = Parse(File.ReadAllText(file));
-            type     ??= existing.Type;
-            created  ??= existing.Created;
-            keywords ??= existing.KeywordList;
+            type        ??= existing.Type;
+            created     ??= existing.Created;
+            keywords    ??= existing.KeywordList;
+            isSensitive ??= existing.IsSensitive;
         }
 
         StringBuilder content = new();
@@ -297,6 +305,8 @@ public class Note
                 keywords.Select(kw => $"\"{kw.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"")) + "]");
         if (!string.IsNullOrWhiteSpace(type))
             content.AppendLine($"type: {type.Trim()}");
+        if (isSensitive == true)
+            content.AppendLine("sensitive: true");
         content.AppendLine($"created: {(created ?? DateTime.UtcNow).ToString(TIMESTAMP_FORMAT)}");
         content.AppendLine($"updated: {DateTime.UtcNow.ToString(TIMESTAMP_FORMAT)}");
         content.AppendLine("---");

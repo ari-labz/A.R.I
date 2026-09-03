@@ -1,4 +1,4 @@
-using ARI.Brain;
+using ARI.BrainVault;
 using ARI.Common;
 using ARI.LLM;
 using Microsoft.AspNetCore.Mvc;

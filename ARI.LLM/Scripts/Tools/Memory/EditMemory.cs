@@ -1,15 +1,11 @@
-using System.Diagnostics;
 using System.Text.Json;
-using ARI.Brain;
+using ARI.BrainVault;
 
 namespace ARI.LLM;
 
-/// <summary>
-/// Edits a brain note by line number — identical semantics to edit_file but commits to the brain
-/// git repo immediately so every correction is reversible. Use ONLY to fix incorrect information
-/// in memory: wrong facts, outdated details, inconsistent entries. Never add new content here —
-/// that belongs to Engram. Never delete notes.
-/// </summary>
+// Edits an existing brain note through Brain.EditNote — never a raw file write. EditNote knows a
+// note's real shape (sticky frontmatter fields, rename-with-merge, reference repointing), so this is
+// safe on notes a plain overwrite would otherwise corrupt. Use create_memory if the note is new.
 internal sealed class EditMemory : Tool
 {
     internal override string Name => "edit_memory";
@@ -20,102 +16,69 @@ internal sealed class EditMemory : Tool
         function = new
         {
             name        = "edit_memory",
-            description = "Correct a mistake in a brain note. Use ONLY to fix information that is wrong or inconsistent — not to add new content (that is Engram's job). Edits by line number, same as edit_file. Call recall_memory first so you have the current line numbers. On success, the change is committed to the brain git repo immediately so it can be rolled back if needed.",
+            description = "Replace the content of an existing brain note (whole-note replacement, not a line edit). Optionally rename it, retype it, or change its alias/keyword/sensitivity fields — omitted fields are left as they are. Fails with guidance if the note doesn't exist. Commits to the brain git repo immediately.",
             parameters  = new
             {
                 type       = "object",
                 properties = new
                 {
-                    path         = new { type = "string",  description = "Note path relative to the brain vault root (e.g. 'People/Xywren.md'), as returned by search_brain or recall_memory." },
-                    start_line   = new { type = "integer", description = "REPLACE mode: first line to replace (1-based inclusive). Omit when inserting." },
-                    end_line     = new { type = "integer", description = "REPLACE mode: last line to replace (1-based inclusive). Equals start_line for a single-line change. Omit when inserting." },
-                    insert_after = new { type = "integer", description = "INSERT mode: add new_string immediately after this 1-based line (0 = top of file), replacing nothing." },
-                    new_string   = new { type = "string",  description = "Replacement or inserted line(s). Empty string in REPLACE mode deletes the range." },
-                    edits        = new { type = "array",   description = "Multiple changes at once. Each item is a replace {start_line,end_line,new_string} or insert {insert_after,new_string}. Resolve against the file as last read." },
-                    commit_message = new { type = "string", description = "One-line summary of what was corrected and why (e.g. 'Fix pronouns in Xywren note — confirmed he/him')." }
+                    name           = new { type = "string", description = "Existing note's current name/path, as returned by search_brain or recall_memory." },
+                    content        = new { type = "string", description = "The note's full replacement body (markdown, dense linked prose). This replaces the whole note content." },
+                    aliases        = new { type = "array", items = new { type = "string" }, description = "Full replacement alias list. Omit to keep the note's existing aliases." },
+                    new_name       = new { type = "string", description = "Rename the note to this name/path. Old title becomes an alias; references are repointed automatically." },
+                    type           = new { type = "string", description = "Node type, e.g. 'hub', 'person', 'project'. Omit to leave unchanged." },
+                    keywords       = new { type = "array", items = new { type = "string" }, description = "Full replacement keyword list. Omit to leave unchanged." },
+                    is_sensitive   = new { type = "boolean", description = "True if this note holds private/intimate content. Omit to leave unchanged." },
+                    commit_message = new { type = "string", description = "One-line summary of what changed and why (e.g. 'Add job change — confirmed new role starts next month')." }
                 },
-                required = new[] { "path", "commit_message" }
+                required = new[] { "name", "content", "commit_message" }
             }
         }
     };
 
     internal override string? PreCheck(Thread thread, string argsJson)
     {
+        if (!Brain.Ready) return "Brain is not available right now.";
         try
         {
             using JsonDocument doc = JsonDocument.Parse(argsJson);
-            if (doc.RootElement.TryGetProperty("path", out JsonElement p) && p.GetString() is { } path)
-            {
-                string full = System.IO.Path.Combine(BrainModule.VaultRoot, path);
-                if (!System.IO.File.Exists(full))
-                    return $"[Blocked] '{path}' not found in the brain vault. Use search_brain to find the correct path, then recall_memory to read it before editing.";
-            }
+            if (doc.RootElement.TryGetProperty("name", out JsonElement n) && n.GetString() is { Length: > 0 } name
+                && Brain.GetNote(name) is null)
+                return $"[Blocked] No note named '{name}' found. Use search_brain to find the correct name, or create_memory if it doesn't exist yet.";
         }
         catch { }
         return null;
     }
 
-    internal override async Task<ToolResult> Execute(string argsJson)
+    internal override Task<ToolResult> Execute(string argsJson)
     {
-        if (!BrainModule.Ready)
-            return "Brain is not available right now.";
-
         JsonElement root;
-        string path, commitMessage;
-        try
-        {
-            root          = JsonDocument.Parse(argsJson).RootElement;
-            path          = root.TryGetProperty("path", out JsonElement p) ? p.GetString() ?? "" : "";
-            commitMessage = root.TryGetProperty("commit_message", out JsonElement cm) ? cm.GetString() ?? "" : "";
-        }
-        catch { return "Error: could not parse arguments."; }
+        try { root = JsonDocument.Parse(argsJson).RootElement; }
+        catch { return Task.FromResult<ToolResult>("Error: could not parse arguments."); }
 
-        if (path.Length == 0)          return "Error: 'path' is required.";
-        if (commitMessage.Length == 0) return "Error: 'commit_message' is required.";
+        string name           = root.TryGetProperty("name", out JsonElement n) ? n.GetString() ?? "" : "";
+        string content        = root.TryGetProperty("content", out JsonElement c) ? c.GetString() ?? "" : "";
+        string commitMessage  = root.TryGetProperty("commit_message", out JsonElement cm) ? cm.GetString() ?? "" : "";
+        string? newName       = root.TryGetProperty("new_name", out JsonElement nn) && nn.ValueKind == JsonValueKind.String ? nn.GetString() : null;
+        string? type          = root.TryGetProperty("type", out JsonElement ty) && ty.ValueKind == JsonValueKind.String ? ty.GetString() : null;
+        bool? isSensitive     = root.TryGetProperty("is_sensitive", out JsonElement isv) && isv.ValueKind is JsonValueKind.True or JsonValueKind.False ? isv.GetBoolean() : null;
+        bool aliasesGiven     = root.TryGetProperty("aliases", out JsonElement al) && al.ValueKind == JsonValueKind.Array;
+        bool keywordsGiven    = root.TryGetProperty("keywords", out JsonElement kw) && kw.ValueKind == JsonValueKind.Array;
+        List<string>? aliases = aliasesGiven ? al.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).ToList() : null;
+        List<string>? keywords = keywordsGiven ? kw.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).ToList() : null;
 
-        string vaultRoot = BrainModule.VaultRoot;
-        ServerFileSystem fs = new(vaultRoot, CancellationToken.None, brainVault: true);
+        if (name.Length == 0)          return Task.FromResult<ToolResult>("Error: 'name' is required.");
+        if (content.Length == 0)       return Task.FromResult<ToolResult>("Error: 'content' is required.");
+        if (commitMessage.Length == 0) return Task.FromResult<ToolResult>("Error: 'commit_message' is required.");
 
-        // Rewrite args so the path resolves against the vault root (fs.Edit expects project-relative paths)
-        string editResult = await fs.Edit(argsJson);
-        if (editResult.StartsWith("Error", StringComparison.OrdinalIgnoreCase) ||
-            editResult.StartsWith("[", StringComparison.OrdinalIgnoreCase))
-            return editResult;
+        Note existing = Brain.GetNote(name)!;
+        List<string> finalAliases = aliases ?? existing.Aliases.ToList();
 
-        // Commit the change to the brain repo
-        (int _, string status, string _) = Run(vaultRoot, "status", "--porcelain");
-        if (string.IsNullOrWhiteSpace(status))
-            return $"{editResult}\n(No git changes detected — file may be unchanged.)";
+        Note note;
+        try { note = Brain.EditNote(name, content, finalAliases, newName, type, keywords, isSensitive); }
+        catch (Exception ex) { return Task.FromResult<ToolResult>($"Failed to edit note: {ex.Message}"); }
 
-        Run(vaultRoot, "add", "-A");
-        (int code, string _, string err) = RunInput(vaultRoot, commitMessage, "commit", "-F", "-");
-        if (code != 0) return $"{editResult}\nCommit failed: {err.Trim()}";
-
-        (int _, string head, string _) = Run(vaultRoot, "log", "-1", "--format=%h %s");
-        BrainModule.Index();
-        return $"{editResult}\nCommitted to brain: {head.Trim()}";
+        string commitResult = BrainGit.Commit(Brain.VaultRoot, commitMessage);
+        return Task.FromResult<ToolResult>($"Updated '{note.Title}' at {note.Path}.\n{commitResult}");
     }
-
-    private static (int Code, string Out, string Err) RunInput(string workDir, string? stdin, params string[] args)
-    {
-        ProcessStartInfo psi = new()
-        {
-            FileName               = "git",
-            WorkingDirectory       = workDir,
-            RedirectStandardOutput = true,
-            RedirectStandardError  = true,
-            RedirectStandardInput  = stdin is not null,
-            UseShellExecute        = false,
-        };
-        foreach (string arg in args) psi.ArgumentList.Add(arg);
-        using Process process = Process.Start(psi)!;
-        if (stdin is not null) { process.StandardInput.Write(stdin); process.StandardInput.Close(); }
-        string outp = process.StandardOutput.ReadToEnd();
-        string err  = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        return (process.ExitCode, outp, err);
-    }
-
-    private static (int Code, string Out, string Err) Run(string workDir, params string[] args)
-        => RunInput(workDir, null, args);
 }

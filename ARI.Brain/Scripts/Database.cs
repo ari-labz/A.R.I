@@ -1,11 +1,11 @@
 using Microsoft.Data.Sqlite;
 using System.Text;
 
-namespace ARI.Brain;
+namespace ARI.BrainVault;
 
 // Derived and disposable — the markdown files are the source of truth; delete this and rebuild anytime.
 // Every call opens a fresh connection: nothing stays resident, the OS page cache provides the speed.
-// Every SQL statement in the brain lives in this file. BrainModule and Note call named methods here;
+// Every SQL statement in the brain lives in this file. Brain and Note call named methods here;
 // they never write SQL themselves.
 internal static class Database
 {
@@ -134,7 +134,7 @@ internal static class Database
         foreach ((string path, Note.Parsed parsed, DateTime _) in files)
         {
             long source = idsByName[System.IO.Path.GetFileNameWithoutExtension(path)];
-            foreach (string target in BrainModule.GetWikilinks(parsed.Body))
+            foreach (string target in Brain.GetWikilinks(parsed.Body))
             {
                 if (!idsByName.TryGetValue(target, out long destination))
                 {

@@ -1,4 +1,4 @@
-using ARI.Brain;
+using ARI.BrainVault;
 using ARI.Common;
 using Microsoft.Extensions.Logging;
 
@@ -87,23 +87,23 @@ internal class CommandService
 
     private static string HandlePurge()
     {
-        if (!BrainModule.Ready) return "Brain is not available.";
+        if (!Brain.Ready) return "Brain is not available.";
         Shared.Logger.LogInformation("[Commands] Brain purge requested.");
-        int deleted = BrainModule.PurgeAllNotes();
+        int deleted = Brain.PurgeAllNotes();
         return $"Purged {deleted} note(s) from the brain.";
     }
 
     private static string HandleBackup()
     {
-        if (!BrainModule.Ready) return "Brain is not available.";
+        if (!Brain.Ready) return "Brain is not available.";
         Shared.Logger.LogInformation("[Commands] Brain backup requested.");
-        return BrainModule.Backup();
+        return BrainBackup.Backup();
     }
 
     private static string HandleDirtyNotes()
     {
-        if (!BrainModule.Ready) return "Brain is not available.";
-        List<string> dirty = BrainModule.GetDirtyNotes();
+        if (!Brain.Ready) return "Brain is not available.";
+        List<string> dirty = Brain.GetDirtyNotes();
         if (dirty.Count == 0) return "No dirty notes — graph is clean.";
         return $"**{dirty.Count} dirty note(s):**\n" + string.Join("\n", dirty.Select(n => $"- {n}"));
     }

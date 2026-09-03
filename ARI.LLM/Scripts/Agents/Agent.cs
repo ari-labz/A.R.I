@@ -903,7 +903,13 @@ public abstract class Agent
             }
             if (turn.LiveReasoning is null) { turn.LiveReasoning = new TraceStep { Kind = "reasoning", Text = "" }; turn.Trace.Add(turn.LiveReasoning); }
             turn.LiveReasoning.Text = turn.ReasoningBuilder.ToString(turn.ReasoningStartLen, turn.ReasoningBuilder.Length - turn.ReasoningStartLen);
-            if (!turn.ChatHidden) thread.RaiseStreaming(thread.streamedText);
+            if (!turn.ChatHidden) thread.RaiseStreaming(thread.streamedReasoning);
+            // Content deltas ping OnDelta on every token (this is what drives the DTI's live watch —
+            // see ChatController.Watch / LLMModule.WatchThread); reasoning deltas never did, so a live
+            // viewer saw nothing update until real content started. Same call, same payload shape as
+            // every content-delta call site below — callers that only care about being pinged (e.g.
+            // Engram's Notify) don't inspect the string anyway.
+            if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
 
             if (!string.IsNullOrEmpty(thinkDelta))
             {

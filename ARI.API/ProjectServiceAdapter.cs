@@ -1,4 +1,4 @@
-using ARI.Brain;
+using ARI.BrainVault;
 using ARI.Common;
 using ARI.LLM;
 using Microsoft.Extensions.Logging;
@@ -77,22 +77,15 @@ public class ProjectServiceAdapter(ProjectStore store) : IProjectService
 
     private static void EnsureBrainNote(Project project)
     {
-        if (!BrainModule.Ready) return;
+        if (!Brain.Ready) return;
         try
         {
-            List<EngramAdd> adds = new();
-            if (BrainModule.GetNote("Projects") is null)
-                adds.Add(new EngramAdd { NoteName = "Projects", Content = "Hub for every project Ari knows about.", Type = "hub" });
-            adds.Add(new EngramAdd
-            {
-                NoteName = $"Projects/{project.Name}",
-                Content  = ProjectNoteBody(project),
-                Type     = "project",
-            });
-            BrainModule.AddNotes(adds);
+            if (Brain.GetNote("Projects") is null)
+                Brain.AddNote("Projects", "Hub for every project Ari knows about.", Array.Empty<string>(), type: "hub");
+            Brain.AddNote($"Projects/{project.Name}", ProjectNoteBody(project), Array.Empty<string>(), type: "project");
             // The hub links DOWN to each direct child (GraphRulebook) — deterministic, idempotent,
             // safe to call even if other hubs in the vault also happen to be missing a member link.
-            BrainModule.EnsureHubChildLinks();
+            GraphMaintenance.EnsureHubChildLinks();
         }
         catch (Exception ex)
         {
@@ -102,22 +95,12 @@ public class ProjectServiceAdapter(ProjectStore store) : IProjectService
 
     private static void RenameBrainNote(string oldName, string newName)
     {
-        if (!BrainModule.Ready) return;
+        if (!Brain.Ready) return;
         try
         {
-            Note? existing = BrainModule.GetNote(oldName);
+            Note? existing = Brain.GetNote(oldName);
             if (existing is null) return; // no note to rename (e.g. brain wasn't ready at creation)
-            BrainModule.EditNotes(new[]
-            {
-                new EngramEdit
-                {
-                    NoteName    = oldName,
-                    NewNoteName = $"Projects/{newName}",
-                    Content     = existing.Content,
-                    Aliases     = existing.Aliases,
-                    Type        = "project",
-                }
-            });
+            Brain.EditNote(oldName, existing.Content, existing.Aliases, newName: $"Projects/{newName}", type: "project");
         }
         catch (Exception ex)
         {

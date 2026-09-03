@@ -1,4 +1,4 @@
-using ARI.Brain;
+using ARI.BrainVault;
 using ARI.Common;
 using System.Diagnostics;
 using System.Text;
@@ -69,7 +69,7 @@ internal class Context : Agent
 
             // If the brain has a note for this user (matched by title or alias), inject it so the
             // context model has explicit identity/pronoun facts rather than inferring them.
-            Note? userNote = BrainModule.GetNote(username);
+            Note? userNote = Brain.GetNote(username);
             string userProfile = userNote is not null
                 ? $"USER PROFILE ({username}):\n{userNote.ToPrompt()}\n\n"
                 : string.Empty;

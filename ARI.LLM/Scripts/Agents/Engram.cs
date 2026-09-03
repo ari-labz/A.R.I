@@ -3,7 +3,7 @@ using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using ARI.Brain;
+using ARI.BrainVault;
 using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
@@ -104,7 +104,7 @@ internal class Engram : MemoryAgent, IDisposable
         Shared.Logger.LogInformation("[Engram] Disabled.");
     }
 
-    internal int PurgeNotes() => BrainModule.PurgeAllNotes();
+    internal int PurgeNotes() => Brain.PurgeAllNotes();
 
     public void Dispose()
     {
@@ -355,7 +355,7 @@ internal class Engram : MemoryAgent, IDisposable
     /// word. This is purely lookup; nothing is written here.</summary>
     private static ResolvedEntity ResolveEntity(ExtractedEntity entity)
     {
-        Note? normalNote = BrainModule.GetNote(entity.Entity);
+        Note? normalNote = Brain.GetNote(entity.Entity);
         HashSet<string> allowedPaths = new(StringComparer.OrdinalIgnoreCase);
 
         if (entity.Sensitive)
@@ -364,7 +364,7 @@ internal class Engram : MemoryAgent, IDisposable
             // conversation happened to phrase the topic. This is the fix for the sprawl bug: resolution
             // no longer depends on the model reinventing an identical title twice.
             string privatePath = $"Private/{SanitizeNoteFileName(entity.Entity)}.md";
-            Note?  existing    = BrainModule.GetNote(privatePath);
+            Note?  existing    = Brain.GetNote(privatePath);
             allowedPaths.Add(privatePath);
             if (normalNote is not null) allowedPaths.Add(normalNote.Path);   // rare migrate-out-of-normal-note case
 
@@ -397,7 +397,7 @@ internal class Engram : MemoryAgent, IDisposable
     {
         if (entities.Count == 0) return (0, 0);
 
-        BrainModule.Index();   // pick up any commits made just before this sweep started
+        Brain.Index();   // pick up any commits made just before this sweep started
         List<ResolvedEntity> resolved = entities.Select(ResolveEntity).ToList();
 
         HashSet<string> allowedPaths    = new(StringComparer.OrdinalIgnoreCase);
@@ -412,10 +412,10 @@ internal class Engram : MemoryAgent, IDisposable
         }
 
         Thread mini = new(ThreadPipeline.Dialogue, $"engram:{threadKey}:{Guid.NewGuid():N}") { Internal = true };
-        mini.FilesystemRoot = BrainModule.VaultRoot;
+        mini.FilesystemRoot = Brain.VaultRoot;
         mini.IsBrainVault   = true;
         mini.Ct             = CancellationToken.None;
-        ServerFileSystem fs = new(BrainModule.VaultRoot, CancellationToken.None, brainVault: true);
+        ServerFileSystem fs = new(Brain.VaultRoot, CancellationToken.None, brainVault: true);
         new WriteFile(fs, allowedPaths: allowedPaths, allowedPrefixes: allowedPrefixes).Register(mini);
         PublishForInspection(mini);
 
@@ -580,7 +580,7 @@ internal class Engram : MemoryAgent, IDisposable
     // stay distinguishable.
     private static void AppendToConversationLog(string date, string summary, DateTime start, DateTime end, string label = "Conversation")
     {
-        string path = Path.Combine(BrainModule.VaultRoot, "Conversations", $"{date}.md");
+        string path = Path.Combine(Brain.VaultRoot, "Conversations", $"{date}.md");
         string existing = File.Exists(path) ? File.ReadAllText(path) : "";
 
         string timeRange = start.ToString("HH:mm") == end.ToString("HH:mm")
@@ -596,7 +596,7 @@ internal class Engram : MemoryAgent, IDisposable
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, $"# {date}{entry}");
         }
-        BrainModule.Index();
+        Brain.Index();
         GitCommitBrain($"Conversation log: coding session {date}");
     }
 
@@ -604,7 +604,7 @@ internal class Engram : MemoryAgent, IDisposable
     {
         try
         {
-            string vault = BrainModule.VaultRoot;
+            string vault = Brain.VaultRoot;
             RunGit(vault, "add", "-A");
             RunGit(vault, "commit", "-m", message);
         }

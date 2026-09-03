@@ -1,9 +1,7 @@
-using System.IO.Compression;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using ARI.Common;
 
-namespace ARI.Brain;
+namespace ARI.BrainVault;
 
 public record IndexStats(int Notes, int Edges, int Aliases, int Thoughts, IReadOnlyList<string> UnresolvedLinks, IReadOnlyList<string> SkippedAliases, IReadOnlyList<string> SkippedNotes);
 public record SearchResult(Note Note, double Score, int TermsMatched);
@@ -11,16 +9,16 @@ public record RecallPath(Note From, Note To, IReadOnlyList<Note> Notes);
 public record RecallResult(IReadOnlyList<SearchResult> Candidates, IReadOnlyList<RecallPath> Paths);
 public record ThoughtRecord(string Kind, string SpanText, string Comment, string Confidence, string Created);
 
-public static class BrainModule
+// The brain's own database: every read and write to a note goes through here, never through a raw
+// filesystem tool. A note is a structured thing (frontmatter fields, aliases, thoughts, links) —
+// Brain.AddNote/EditNote know that shape and touch only the fields they're given; a generic file
+// write does not, and will destroy whatever it wasn't told about.
+public static class Brain
 {
-    private const string BACKUP_PREFIX = "ARI-Brain-";
     private const double PATH_BONUS = 60.0;
 
     private static readonly Regex wikiLink = new(@"\[\[([^\]|]+?)(?:\|[^\]]*)?\]\]", RegexOptions.Compiled);
     private static readonly Regex invalidFileChars = new(@"[/\\:""?*|<>]", RegexOptions.Compiled);
-
-    private static string backupPath = "./Backups";
-    private static int maxBackups = 5;
 
     public static bool Ready { get; private set; }
     public static string VaultRoot { get; private set; } = string.Empty;
@@ -33,8 +31,8 @@ public static class BrainModule
             : Paths.Brain;
         VaultName = Path.GetFileName(VaultRoot);
         Database.Path = Path.Combine(VaultRoot, ".ari", "index.db");
-        backupPath = config.BackupPath;
-        maxBackups = config.MaxBackups;
+        BrainBackup.Path_ = config.BackupPath;
+        BrainBackup.MaxBackups = config.MaxBackups;
         Directory.CreateDirectory(VaultRoot);
         Directory.CreateDirectory(Path.GetDirectoryName(Database.Path)!);
         IndexStats stats = Index();
@@ -260,59 +258,51 @@ public static class BrainModule
 
     // ── Writes (file first, then reindex) ───────────────────────────────────────────
 
-    public static Note CreateNote(string name, string content, IReadOnlyList<string> aliases, IReadOnlyList<string>? keywords = null)
+    // Creates a note, or extends it if one already exists for this name — either way returns the
+    // resulting note. Fields left unset (type/keywords) stay whatever they already were; see
+    // Note.Write's "sticky" behaviour. This is the only way a new note should ever be created.
+    public static Note AddNote(string name, string content, IReadOnlyList<string> aliases, string? type = null, IReadOnlyList<string>? keywords = null, bool? isSensitive = null)
     {
-        Note? existing = GetNote(name.Contains('/') ? name[(name.LastIndexOf('/') + 1)..] : name) ?? GetNote(name);
-        if (existing is not null)
-        {
-            existing.Save(content, MergedAliases(existing, aliases), keywords);
-            return GetNote(existing.Title)!;
-        }
-        Note.Write(PathFor(name), content, aliases, null, keywords: keywords);
+        WriteNamed(name, content, aliases, type, keywords, isSensitive);
         Index();
         return GetNote(name)!;
     }
 
-    public static void AddNotes(IReadOnlyList<EngramAdd> adds)
+    // Updates an existing note in place, or renames it when newName names a different, valid title.
+    // A malformed or empty newName (e.g. "People/") is never treated as a rename — that would delete
+    // the note or rename it to an empty title — it's treated as an in-place edit instead, guarding
+    // the vault against bad model output.
+    public static Note EditNote(string name, string content, IReadOnlyList<string> aliases, string? newName = null, string? type = null, IReadOnlyList<string>? keywords = null, bool? isSensitive = null)
     {
-        foreach (EngramAdd add in adds) WriteNamed(add.NoteName, add.Content, add.Aliases, add.Type, add.Keywords);
-        Index();
-    }
+        string newBareTitle = newName is null ? string.Empty
+            : (newName.Contains('/') ? newName[(newName.LastIndexOf('/') + 1)..] : newName).Trim();
+        string oldBareTitle = name.Contains('/') ? name[(name.LastIndexOf('/') + 1)..] : name;
+        bool isRename = newBareTitle.Length > 0 && !string.Equals(newBareTitle, oldBareTitle, StringComparison.OrdinalIgnoreCase);
 
-    public static void EditNotes(IReadOnlyList<EngramEdit> edits)
-    {
-        foreach (EngramEdit edit in edits)
+        if (!isRename)
         {
-            // A rename only happens when NewNoteName names a DIFFERENT, valid title. A malformed or
-            // empty newName (e.g. "People/") must never delete the note or rename to an empty title —
-            // treat it as an in-place edit. This guards the vault against bad model output.
-            string newBareTitle = edit.NewNoteName is null ? string.Empty
-                : (edit.NewNoteName.Contains('/') ? edit.NewNoteName[(edit.NewNoteName.LastIndexOf('/') + 1)..] : edit.NewNoteName).Trim();
-            string oldBareTitle = edit.NoteName.Contains('/') ? edit.NoteName[(edit.NoteName.LastIndexOf('/') + 1)..] : edit.NoteName;
-            bool isRename = newBareTitle.Length > 0 && !string.Equals(newBareTitle, oldBareTitle, StringComparison.OrdinalIgnoreCase);
-
-            if (!isRename)
-            {
-                WriteNamed(edit.NoteName, edit.Content, edit.Aliases, edit.Type, edit.Keywords);
-                continue;
-            }
-            Note? old = GetNote(edit.NoteName);
-            List<string> aliases = new(edit.Aliases);
-            string newContent = edit.Content;
-            string? renamedFrom = null;
-            if (old is not null)
-            {
-                if (!aliases.Contains(old.Title, StringComparer.OrdinalIgnoreCase)) aliases.Add(old.Title);
-                newContent = Note.CarryThoughtsInto(old.Content, newContent);
-                File.Delete(Path.Combine(VaultRoot, old.Path));
-                renamedFrom = old.Title;
-            }
-            Note.Write(PathFor(edit.NewNoteName!), newContent, aliases, null, edit.Type, edit.Keywords.Count > 0 ? edit.Keywords : null);
-            // Rewrite every [[oldTitle]] in other notes to [[newBareTitle]] so a rename never leaves the
-            // referrers pointing at the old name (the alias still resolves them, but the text is repointed).
-            if (renamedFrom is not null) RepointReferences(renamedFrom, newBareTitle);
+            WriteNamed(name, content, aliases, type, keywords, isSensitive);
+            Index();
+            return GetNote(name)!;
         }
+
+        Note? old = GetNote(name);
+        List<string> mergedAliases = new(aliases);
+        string newContent = content;
+        string? renamedFrom = null;
+        if (old is not null)
+        {
+            if (!mergedAliases.Contains(old.Title, StringComparer.OrdinalIgnoreCase)) mergedAliases.Add(old.Title);
+            newContent = Note.CarryThoughtsInto(old.Content, newContent);
+            File.Delete(Path.Combine(VaultRoot, old.Path));
+            renamedFrom = old.Title;
+        }
+        Note.Write(PathFor(newName!), newContent, mergedAliases, null, type, keywords is { Count: > 0 } ? keywords : null, isSensitive);
+        // Rewrite every [[oldTitle]] in other notes to [[newBareTitle]] so a rename never leaves the
+        // referrers pointing at the old name (the alias still resolves them, but the text is repointed).
+        if (renamedFrom is not null) RepointReferences(renamedFrom, newBareTitle);
         Index();
+        return GetNote(newName!)!;
     }
 
     public static bool MergeNotes(string fromName, string intoName)
@@ -347,73 +337,6 @@ public static class BrainModule
 
     public static void ClearDirty(IEnumerable<string> titles) => Database.ClearDirty(titles);
 
-    // ── Structural maintenance ──────────────────────────────────────────────────────
-
-    // A folder full of notes needs a hub note beside it (Pets/ → Pets.md) to index them. Engram places
-    // members correctly but doesn't always create the hub note; this makes it deterministic.
-    public static int EnsureHubNotes()
-    {
-        int created = 0;
-        foreach (string dir in Directory.EnumerateDirectories(VaultRoot, "*", SearchOption.AllDirectories))
-        {
-            string relative = Path.GetRelativePath(VaultRoot, dir).Replace(Path.DirectorySeparatorChar, '/');
-            if (relative.Split('/').Any(segment => segment.StartsWith('.'))) continue;
-            if (!Directory.EnumerateFiles(dir, "*.md").Any()) continue;   // no direct child notes → not a hub
-            if (File.Exists(dir + ".md")) continue;                        // hub note already exists
-
-            string name = Path.GetFileName(dir);
-            Note.Write($"{relative}.md", $"# {name}\n\nHub for {name}.\n\n## Changelog\n\n- {DateTime.UtcNow:yyyy-MM-dd}: Created hub note.\n",
-                Array.Empty<string>(), null);
-            created++;
-        }
-        if (created > 0) Index();
-        return created;
-    }
-
-    // Merges a drifted title variant ("Alex — User", "Jordan - partner") back into its base note when
-    // the base exists — the write phase sometimes appends a descriptor to a resolved note's title, which
-    // would otherwise leave a duplicate. The variant title becomes an alias on the base (via MergeNotes).
-    public static int MergeTitleVariants()
-    {
-        int merged = 0;
-        List<string> titles = Database.AllTitles();
-        HashSet<string> titleSet = new(titles, StringComparer.OrdinalIgnoreCase);
-        foreach (string title in titles)
-        {
-            int cut = title.IndexOf(" — ", StringComparison.Ordinal);
-            if (cut < 0) cut = title.IndexOf(" - ", StringComparison.Ordinal);
-            if (cut <= 0) continue;
-            string basePart = title[..cut].Trim();
-            if (basePart.Length > 0 && !basePart.Equals(title, StringComparison.OrdinalIgnoreCase) && titleSet.Contains(basePart))
-                if (MergeNotes(title, basePart)) merged++;
-        }
-        return merged;
-    }
-
-    public static int EnsureHubChildLinks()
-    {
-        int updated = 0;
-        foreach (Note hub in Database.AllNotes())
-        {
-            if (!hub.HasChildren()) continue;
-            string content = hub.Content;
-            List<string> linked = GetWikilinks(content);
-            List<Note> missing = hub.GetChildren()
-                .Where(child => !linked.Contains(child.Title, StringComparer.OrdinalIgnoreCase))
-                .ToList();
-            if (missing.Count == 0) continue;
-
-            string additions = string.Join('\n', missing.Select(child => $"- [[{child.Title}]]"));
-            content = content.Contains("## Members")
-                ? content.Replace("## Members", $"## Members\n{additions}")
-                : $"{content.TrimEnd()}\n\n## Members\n{additions}\n";
-            Note.Write(hub.Path, content, hub.Aliases, null);
-            updated++;
-        }
-        if (updated > 0) Index();
-        return updated;
-    }
-
     // ── Graph walk ────────────────────────────────────────────────────────────────────
 
     // Highest total-degree notes — the starting points for a walk, where sprawl concentrates.
@@ -432,100 +355,16 @@ public static class BrainModule
         return seed is null ? null : Database.Skeleton(seed.id, depth, cap);
     }
 
-    public static int CleanUnknownStubs()
-    {
-        int cleaned = 0;
-        foreach (Note stub in Database.UnknownStubs())
-        {
-            Note? owner = Database.AliasOwner(stub.Title, stub.id);
-            if (owner is null) continue;
-            stub.MergeInto(owner);
-            cleaned++;
-        }
-        return cleaned;
-    }
-
-    // ── Backup ──────────────────────────────────────────────────────────────────────
-
-    private record BackupNote(string Title, string Folder, string Content, IReadOnlyList<string>? Aliases, IReadOnlyList<string>? Keywords);
-
-    public static string Backup()
-    {
-        Directory.CreateDirectory(backupPath);
-        List<BackupNote> notes = Database.AllNotes()
-            .Select(note => new BackupNote(note.Title, note.Folder, note.ToPrompt(), note.Aliases, note.Keywords.Count > 0 ? note.Keywords : null))
-            .ToList();
-
-        string json = JsonSerializer.Serialize(new { timestamp = DateTime.UtcNow, noteCount = notes.Count, notes },
-            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
-        string fileName = $"{BACKUP_PREFIX}{DateTime.UtcNow:yyyy-MM-ddTHH-mm-ss}.zip";
-        string zipPath = Path.Combine(backupPath, fileName);
-        using (FileStream stream = File.Create(zipPath))
-        using (ZipArchive zip = new(stream, ZipArchiveMode.Create))
-        using (StreamWriter writer = new(zip.CreateEntry("brain.json").Open()))
-            writer.Write(json);
-
-        List<string> existing = Directory.EnumerateFiles(backupPath, $"{BACKUP_PREFIX}*.zip").OrderByDescending(f => f).ToList();
-        foreach (string stale in existing.Skip(maxBackups)) File.Delete(stale);
-        return $"Backed up {notes.Count} notes to {fileName}.";
-    }
-
-    public static List<BackupInfo> ListBackups()
-    {
-        if (!Directory.Exists(backupPath)) return new List<BackupInfo>();
-        List<BackupInfo> backups = new();
-        foreach (string file in Directory.EnumerateFiles(backupPath, $"{BACKUP_PREFIX}*.zip").OrderByDescending(f => f))
-        {
-            using FileStream stream = File.OpenRead(file);
-            using ZipArchive zip = new(stream, ZipArchiveMode.Read);
-            using StreamReader reader = new(zip.GetEntry("brain.json")!.Open());
-            JsonDocument document = JsonDocument.Parse(reader.ReadToEnd());
-            backups.Add(new BackupInfo(Path.GetFileName(file), File.GetCreationTimeUtc(file),
-                new FileInfo(file).Length, document.RootElement.GetProperty("noteCount").GetInt32()));
-        }
-        return backups;
-    }
-
-    // Additive: recreates missing notes, overwrites existing ones, never deletes.
-    public static string RestoreBackup(string fileName)
-    {
-        string zipPath = Path.Combine(backupPath, fileName);
-        using FileStream stream = File.OpenRead(zipPath);
-        using ZipArchive zip = new(stream, ZipArchiveMode.Read);
-        using StreamReader reader = new(zip.GetEntry("brain.json")!.Open());
-        JsonDocument document = JsonDocument.Parse(reader.ReadToEnd());
-
-        int restored = 0;
-        foreach (JsonElement element in document.RootElement.GetProperty("notes").EnumerateArray())
-        {
-            string title = element.GetProperty("title").GetString()!;
-            string folder = element.GetProperty("folder").GetString() ?? string.Empty;
-            string content = element.GetProperty("content").GetString()!;
-            List<string> aliases = element.TryGetProperty("aliases", out JsonElement aliasElement) && aliasElement.ValueKind == JsonValueKind.Array
-                ? aliasElement.EnumerateArray().Select(a => a.GetString()!).ToList()
-                : new List<string>();
-            List<string> keywords = element.TryGetProperty("keywords", out JsonElement kwElement) && kwElement.ValueKind == JsonValueKind.Array
-                ? kwElement.EnumerateArray().Select(k => k.GetString()!).ToList()
-                : new List<string>();
-
-            int bodyStart = content.StartsWith("Path: ") ? content.IndexOf('\n') + 1 : 0;
-            Note.Write(PathFor(folder.Length > 0 ? $"{folder}/{title}" : title), content[bodyStart..].TrimStart('\n'), aliases, null, keywords: keywords.Count > 0 ? keywords : null);
-            restored++;
-        }
-        Index();
-        return $"Restored {restored} notes from {fileName}.";
-    }
-
     // ── Internal ────────────────────────────────────────────────────────────────────
 
-    private static void WriteNamed(string name, string content, IReadOnlyList<string> aliases, string? type = null, IReadOnlyList<string>? keywords = null)
+    private static void WriteNamed(string name, string content, IReadOnlyList<string> aliases, string? type = null, IReadOnlyList<string>? keywords = null, bool? isSensitive = null)
     {
         string bareTitle = name.Contains('/') ? name[(name.LastIndexOf('/') + 1)..] : name;
         Note? existing = GetNote(bareTitle);
         if (existing is not null)
-            Note.Write(existing.Path, Note.CarryThoughtsInto(existing.Content, content), MergedAliases(existing, aliases), null, type, keywords);
+            Note.Write(existing.Path, Note.CarryThoughtsInto(existing.Content, content), MergedAliases(existing, aliases), null, type, keywords, isSensitive);
         else
-            Note.Write(PathFor(name), content, aliases, null, type, keywords);
+            Note.Write(PathFor(name), content, aliases, null, type, keywords, isSensitive);
     }
 
     private static List<string> MergedAliases(Note note, IReadOnlyList<string> incoming)
