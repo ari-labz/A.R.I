@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Linq;
 
 namespace ARI.LLM;
 
@@ -6,12 +7,14 @@ namespace ARI.LLM;
 internal sealed class EditFile : Tool
 {
     private readonly FileSystem fs;
-    // When set, this instance can only touch this one path — used by Engram's per-entity placement
-    // calls so a write about one entity structurally cannot reach an unrelated note, regardless of what
-    // the model was told in the prompt (an unrelated commit once silently stripped another note's
-    // content with no guard catching it — this closes that class of bug).
-    private readonly string? allowedPath;
-    internal EditFile(FileSystem fs, string? allowedPath = null) { this.fs = fs; this.allowedPath = allowedPath; }
+    // When set, this instance can only touch paths in this set — used by Engram's per-entity placement
+    // calls so a write structurally cannot reach a note outside what was already resolved by exact
+    // match, regardless of what the model was told in the prompt (an unrelated commit once silently
+    // stripped another note's content with no guard catching it — this closes that class of bug). A set
+    // rather than one path so a legitimate two-note operation (splitting a section into its own note)
+    // can still touch both of the specific notes that were resolved for it, and nothing else.
+    private readonly IReadOnlyCollection<string>? allowedPaths;
+    internal EditFile(FileSystem fs, IReadOnlyCollection<string>? allowedPaths = null) { this.fs = fs; this.allowedPaths = allowedPaths; }
 
     internal override string Name => "edit_file";
 
@@ -46,8 +49,8 @@ internal sealed class EditFile : Tool
             using JsonDocument doc = JsonDocument.Parse(argsJson);
             if (doc.RootElement.TryGetProperty("path", out JsonElement p) && p.GetString() is { } path)
             {
-                if (allowedPath is not null && !PathScope.Matches(path, allowedPath))
-                    return $"[Blocked] This call may only edit '{allowedPath}'.";
+                if (allowedPaths is not null && !allowedPaths.Any(a => PathScope.Matches(path, a)))
+                    return $"[Blocked] This call may only edit one of: {string.Join(", ", allowedPaths)}.";
                 if (!fs.WasRead(path))
                     return $"[Blocked] You must call read_file or preview_file on '{path}' before editing it. Read it first so you have the current line numbers.";
             }
