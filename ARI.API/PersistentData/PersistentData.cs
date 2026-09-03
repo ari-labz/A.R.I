@@ -15,7 +15,7 @@ public sealed class AgentDefinition
 {
     public string  Name              { get; set; } = "";
     public string  ServerName        { get; set; } = "";
-    public string  SystemPrompt      { get; set; } = "";
+    public string  AgentPrompt       { get; set; } = "";
     public Dictionary<string, string>? PromptTemplates { get; set; }
     // Modelled here or Save() drops them: the Coder's per-phase prompts, and Curiosity's rulebook opt-out.
     public Dictionary<string, PhaseConfig>? Phases { get; set; }

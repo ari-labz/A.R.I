@@ -316,7 +316,7 @@ public class LLMModule : ILLMModule, IDisposable
                 Think                  = textingAgent.Think,
                 ReasoningEffortOverride = "xhigh",
                 UsePersona             = true,
-                SystemPrompt =
+                AgentPrompt =
                     "You are in a dream state. No user is present and no one is waiting — this is unstructured time " +
                     "for you to think, explore, and reflect as deeply as you want. There is no time pressure. " +
                     "Call only one tool at a time — never make parallel calls.\n\n" +

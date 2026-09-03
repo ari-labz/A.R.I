@@ -31,7 +31,7 @@ internal class Context : Agent
 
     internal void Init(int shortTermMemoryLimit)
     {
-        resolvedPrompt = SystemPrompt.Replace("{memoryLimit}", shortTermMemoryLimit.ToString());
+        resolvedPrompt = AgentPrompt.Replace("{memoryLimit}", shortTermMemoryLimit.ToString());
     }
 
     internal string GetContext(string threadKey)
