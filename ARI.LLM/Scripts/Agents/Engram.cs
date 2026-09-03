@@ -263,7 +263,11 @@ internal class Engram : MemoryAgent, IDisposable
 
     // ── Stage 2: extract ───────────────────────────────────────────────────────────────
 
-    private readonly record struct ExtractedEntity(string Entity, bool IsNew, string Excerpt);
+    // Subject is set only when Entity is a split-off from a normal entity (e.g. Entity "Alex —
+    // Private Topic", Subject "Alex") — it tells Stage 3 which second note it may also touch,
+    // resolved by the same exact match as Entity itself, so a genuine move-a-section-out edit can
+    // update both notes without ever reaching a third, unresolved one.
+    private readonly record struct ExtractedEntity(string Entity, bool IsNew, string Excerpt, string? Subject);
 
     /// <summary>One tool-free completion over the whole transcript: every entity worth remembering,
     /// regardless of whether it's already in the vault (Stage 3 checks that), each with the actual
@@ -326,11 +330,12 @@ internal class Engram : MemoryAgent, IDisposable
             List<ExtractedEntity> results = new();
             foreach (JsonElement el in doc.RootElement.EnumerateArray())
             {
-                string entity  = el.TryGetProperty("entity",  out JsonElement e) ? e.GetString() ?? "" : "";
-                string excerpt = el.TryGetProperty("excerpt", out JsonElement x) ? x.GetString() ?? "" : "";
-                bool   isNew   = el.TryGetProperty("is_new",  out JsonElement n) && n.ValueKind == JsonValueKind.True;
+                string  entity  = el.TryGetProperty("entity",  out JsonElement e) ? e.GetString() ?? "" : "";
+                string  excerpt = el.TryGetProperty("excerpt", out JsonElement x) ? x.GetString() ?? "" : "";
+                bool    isNew   = el.TryGetProperty("is_new",  out JsonElement n) && n.ValueKind == JsonValueKind.True;
+                string? subject = el.TryGetProperty("subject", out JsonElement s) && s.ValueKind == JsonValueKind.String ? s.GetString() : null;
                 if (entity.Length > 0 && excerpt.Length > 0)
-                    results.Add(new ExtractedEntity(entity, isNew, excerpt));
+                    results.Add(new ExtractedEntity(entity, isNew, excerpt, string.IsNullOrWhiteSpace(subject) ? null : subject));
             }
             return results;
         }
@@ -345,9 +350,9 @@ internal class Engram : MemoryAgent, IDisposable
 
     private enum PlacementOutcome { Committed, NoChange, Blocked }
 
-    /// <summary>Places one entity: a short, fresh call, tool-scoped to the single note it's about. Looks
-    /// the note up in code (no search_brain round trip) and hands its current content straight to the
-    /// model rather than making it re-discover the note through tools.</summary>
+    /// <summary>Places one entity: a short, fresh call, tool-scoped to only the note(s) already resolved
+    /// by exact match for this call. Looks the note(s) up in code (no search_brain round trip) and hands
+    /// their current content straight to the model rather than making it re-discover them through tools.</summary>
     private async Task<PlacementOutcome> PlaceEntityAsync(string threadKey, ExtractedEntity entity, string speaker, string conversationDate)
     {
         BrainModule.Index();   // pick up commits from entities already placed earlier this same sweep
@@ -359,29 +364,55 @@ internal class Engram : MemoryAgent, IDisposable
         // treating a note as "this entity already exists"; anything less confident should read as new.
         Note? existing = BrainModule.GetNote(entity.Entity);
 
+        HashSet<string> allowedPaths = new(StringComparer.OrdinalIgnoreCase);
+        if (existing is not null) allowedPaths.Add(existing.Path);
+
         string existingBlock = existing is not null
             ? $"The note already exists at '{existing.Path}':\n\n{existing.Content}"
             : "No note exists yet for this entity — create one at an appropriate path per the rulebook above.";
+
+        // A subject means this is a private split-off (per the rulebook, subject is only ever set for
+        // Private/ content) — so unlike a normal new entity, its path isn't left for the model to pick:
+        // it's deterministic, same as any other exact-match resolution, which lets it join the allowed
+        // set even when the note doesn't exist yet. The subject's own note, when it resolves, is added
+        // too — the model may genuinely need to trim a moved section out of it, not just link to it.
+        string subjectBlock = "";
+        if (entity.Subject is { } subjectName)
+        {
+            string newPrivatePath = existing?.Path ?? $"Private/{SanitizeNoteFileName(entity.Entity)}.md";
+            allowedPaths.Add(newPrivatePath);
+
+            Note? subjectNote = BrainModule.GetNote(subjectName);
+            if (subjectNote is not null)
+            {
+                allowedPaths.Add(subjectNote.Path);
+                subjectBlock = $"This is a split-off from '{subjectName}', at '{subjectNote.Path}':\n\n{subjectNote.Content}\n\n" +
+                    $"You may write BOTH '{newPrivatePath}' (this entity) and '{subjectNote.Path}' (the subject) if content needs to move out " +
+                    $"of the subject note into this one — link the subject note outward to this one, and if you remove content from it, reword " +
+                    $"the surrounding prose so nothing dangles. If the subject note doesn't need to change, only write this entity's note.\n";
+            }
+        }
 
         Thread mini = new(ThreadPipeline.Dialogue, $"engram:{threadKey}:{Guid.NewGuid():N}") { Internal = true };
         mini.FilesystemRoot = BrainModule.VaultRoot;
         mini.IsBrainVault   = true;
         mini.Ct             = CancellationToken.None;
         ServerFileSystem fs = new(BrainModule.VaultRoot, CancellationToken.None, brainVault: true);
-        // existing?.Path scopes the write to this one note when it already exists — the structural guard
-        // against an unrelated edit silently stripping another note's content with nothing catching it.
-        // A brand-new note has no existing content to protect,
-        // so it's left unscoped (the model states its own path, per the taxonomy rules already in its
-        // persistent context) — at worst a wrongly-placed new note, which is a normal tidy-up, not a loss.
-        new WriteFile(fs, allowedPath: existing?.Path).Register(mini);
+        // A brand-new, non-private entity has no resolved path and nothing existing to protect, so it's
+        // left unscoped (the model states its own path, per the taxonomy rules already in its persistent
+        // context) — at worst a wrongly-placed new note, a normal tidy-up, not a loss. Every other case
+        // (existing note, or any private split-off — new or not) is restricted to the paths resolved above.
+        IReadOnlyCollection<string>? scope = (existing is null && entity.Subject is null) ? null : allowedPaths;
+        new WriteFile(fs, allowedPaths: scope).Register(mini);
         PublishForInspection(mini);
 
         string task = ResolveTemplate("SaveTask", "",
-            ("entity",   entity.Entity),
-            ("existing", existingBlock),
-            ("excerpt",  entity.Excerpt),
-            ("speaker",  speaker),
-            ("date",     conversationDate));
+            ("entity",        entity.Entity),
+            ("existing",      existingBlock),
+            ("subject_block", subjectBlock),
+            ("excerpt",       entity.Excerpt),
+            ("speaker",       speaker),
+            ("date",          conversationDate));
 
         await Prompt(mini, task, new PromptOptions
         {
@@ -407,10 +438,18 @@ internal class Engram : MemoryAgent, IDisposable
         }
         if (!wrote) return PlacementOutcome.NoChange;
 
-        string committedPath = existing?.Path ?? entity.Entity;
-        GitCommitBrain($"Engram: update {Path.GetFileNameWithoutExtension(committedPath)} — {threadKey}");
+        string message = entity.Subject is { } subj
+            ? $"Engram: update {entity.Entity} (split from {subj}) — {threadKey}"
+            : $"Engram: update {entity.Entity} — {threadKey}";
+        GitCommitBrain(message);
         return PlacementOutcome.Committed;
     }
+
+    // Filenames can't carry the taxonomy's " — " em-dash convention verbatim if the source has path-
+    // hostile characters (rare, but an entity name is model output) — strip anything a filesystem would
+    // reject rather than let a bad character break the write.
+    private static string SanitizeNoteFileName(string entity) =>
+        string.Concat(entity.Split(Path.GetInvalidFileNameChars())).Trim();
 
     // ── Lightweight code-thread summary ────────────────────────────────────────────────
 

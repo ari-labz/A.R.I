@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Linq;
 
 namespace ARI.LLM;
 
@@ -6,9 +7,12 @@ namespace ARI.LLM;
 internal sealed class WriteFile : Tool
 {
     private readonly FileSystem fs;
-    // See EditFile's allowedPath — same per-instance scope guard, same reason.
-    private readonly string? allowedPath;
-    internal WriteFile(FileSystem fs, string? allowedPath = null) { this.fs = fs; this.allowedPath = allowedPath; }
+    // See EditFile's allowedPaths — same per-instance scope guard, same reason. A set rather than a
+    // single path so a call that legitimately needs to touch two notes it already resolved by exact
+    // match (e.g. splitting a section out of one note into a new one) can — while anything not in this
+    // pre-resolved set is still structurally unreachable, regardless of what the model asks for.
+    private readonly IReadOnlyCollection<string>? allowedPaths;
+    internal WriteFile(FileSystem fs, IReadOnlyCollection<string>? allowedPaths = null) { this.fs = fs; this.allowedPaths = allowedPaths; }
 
     internal override string Name => "write_file";
 
@@ -34,13 +38,13 @@ internal sealed class WriteFile : Tool
 
     internal override string? PreCheck(Thread thread, string argsJson)
     {
-        if (allowedPath is null) return null;
+        if (allowedPaths is null) return null;
         try
         {
             using JsonDocument doc = JsonDocument.Parse(argsJson);
             if (doc.RootElement.TryGetProperty("path", out JsonElement p) && p.GetString() is { } path
-                && !PathScope.Matches(path, allowedPath))
-                return $"[Blocked] This call may only write '{allowedPath}'.";
+                && !allowedPaths.Any(a => PathScope.Matches(path, a)))
+                return $"[Blocked] This call may only write one of: {string.Join(", ", allowedPaths)}.";
         }
         catch { }
         return null;
