@@ -12,7 +12,16 @@ internal sealed class WriteFile : Tool
     // match (e.g. splitting a section out of one note into a new one) can — while anything not in this
     // pre-resolved set is still structurally unreachable, regardless of what the model asks for.
     private readonly IReadOnlyCollection<string>? allowedPaths;
-    internal WriteFile(FileSystem fs, IReadOnlyCollection<string>? allowedPaths = null) { this.fs = fs; this.allowedPaths = allowedPaths; }
+    // Lets a scoped write create a not-yet-existing sibling note (a split-off from an oversized one)
+    // without knowing its exact name ahead of time — the write still can't leave this entity's own
+    // family of notes. See PathScope.MatchesPrefix.
+    private readonly IReadOnlyCollection<string>? allowedPrefixes;
+    internal WriteFile(FileSystem fs, IReadOnlyCollection<string>? allowedPaths = null, IReadOnlyCollection<string>? allowedPrefixes = null)
+    {
+        this.fs = fs;
+        this.allowedPaths = allowedPaths;
+        this.allowedPrefixes = allowedPrefixes;
+    }
 
     internal override string Name => "write_file";
 
@@ -38,13 +47,21 @@ internal sealed class WriteFile : Tool
 
     internal override string? PreCheck(Thread thread, string argsJson)
     {
-        if (allowedPaths is null) return null;
+        if (allowedPaths is null && allowedPrefixes is null) return null;
         try
         {
             using JsonDocument doc = JsonDocument.Parse(argsJson);
-            if (doc.RootElement.TryGetProperty("path", out JsonElement p) && p.GetString() is { } path
-                && !allowedPaths.Any(a => PathScope.Matches(path, a)))
-                return $"[Blocked] This call may only write one of: {string.Join(", ", allowedPaths)}.";
+            if (doc.RootElement.TryGetProperty("path", out JsonElement p) && p.GetString() is { } path)
+            {
+                bool ok = (allowedPaths?.Any(a => PathScope.Matches(path, a)) ?? false)
+                       || (allowedPrefixes?.Any(pre => PathScope.MatchesPrefix(path, pre)) ?? false);
+                if (!ok)
+                {
+                    List<string> allowed = new(allowedPaths ?? Array.Empty<string>());
+                    if (allowedPrefixes is not null) allowed.AddRange(allowedPrefixes.Select(pre => $"{pre}*"));
+                    return $"[Blocked] This call may only write one of: {string.Join(", ", allowed)}.";
+                }
+            }
         }
         catch { }
         return null;

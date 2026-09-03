@@ -15,7 +15,7 @@ internal sealed class DreamOrchestrator : IDisposable
 
     private readonly DreamPipeline                                         pipeline;
     private readonly Dreamer                                               dreamer;
-    private readonly InferenceScheduler                                    scheduler;
+    private readonly LLMQueue                                              queue;
     private readonly Func<bool>                                            isDreamingEnabled;
     private readonly Func<Thread>                                          createDreamThread;
     private readonly Action<Thread>                                        destroyDreamThread;
@@ -30,14 +30,14 @@ internal sealed class DreamOrchestrator : IDisposable
     internal DreamOrchestrator(
         DreamPipeline       pipeline,
         Dreamer             dreamer,
-        InferenceScheduler  scheduler,
+        LLMQueue            queue,
         Func<bool>          isDreamingEnabled,
         Func<Thread>        createDreamThread,
         Action<Thread>      destroyDreamThread)
     {
         this.pipeline           = pipeline;
         this.dreamer            = dreamer;
-        this.scheduler          = scheduler;
+        this.queue              = queue;
         this.isDreamingEnabled  = isDreamingEnabled;
         this.createDreamThread  = createDreamThread;
         this.destroyDreamThread = destroyDreamThread;
@@ -92,21 +92,19 @@ internal sealed class DreamOrchestrator : IDisposable
 
     private async Task ExecuteDreamTurn(CancellationTokenSource cts)
     {
-        IDisposable slot;
-        try { slot = await scheduler.AcquireAsync(InferencePriority.Dream, cts.Token); }
-        catch (OperationCanceledException) { return; }
-
+        // No outer acquire here — pipeline.ExecuteAsync -> dreamer.Prompt already acquires this queue
+        // itself, per step. Holding it here too would deadlock: this call could never release it until
+        // the nested prompt finishes, and the nested prompt can never start without it back.
         try
         {
-            using (slot)
-                await pipeline.ExecuteAsync(
-                    dreamThread!,
-                    dreamThread!.Key,
-                    prompt:          "",
-                    username:        "dream",
-                    platformContext: DreamAnchor.Pull(),
-                    onDelta:         null,
-                    cts:             cts);
+            await pipeline.ExecuteAsync(
+                dreamThread!,
+                dreamThread!.Key,
+                prompt:          "",
+                username:        "dream",
+                platformContext: DreamAnchor.Pull(),
+                onDelta:         null,
+                cts:             cts);
         }
         catch (OperationCanceledException)
         {

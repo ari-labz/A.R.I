@@ -49,7 +49,7 @@ public abstract class Agent
     [JsonIgnore] public string Endpoint { get; internal set; } = "";
     [JsonIgnore] internal Server?    Server { get; set; }
     [JsonIgnore] internal NamedSlot? Slot   { get; set; }
-    [JsonIgnore] internal InferenceScheduler? Scheduler { get; set; }
+    [JsonIgnore] internal LLMQueue? Queue { get; set; }
 
     /// <summary>Called when the processing phase changes for a thread. Set by LLMModule to update the watch-stream status.</summary>
     [JsonIgnore] internal Action<string, ThreadPhase>? OnPhaseChange { get; set; }
@@ -549,8 +549,8 @@ public abstract class Agent
                 // step acquisition bounds the worst case to one step's generation time, and is released
                 // below before tool execution, which is file/network I/O, not GPU work, and shouldn't hold
                 // the inference slot while it runs.
-                IDisposable? slot = Scheduler is not null
-                    ? await Scheduler.AcquireAsync((InferencePriority)Priority, turn.Ct)
+                IDisposable? slot = Queue is not null
+                    ? await Queue.AcquireAsync((InferencePriority)Priority, turn.Ct)
                     : null;
 
                 // ── Prepare step ──────────────────────────────────────────────
@@ -1845,7 +1845,7 @@ public abstract class Agent
 
         List<string> sections = new()
         {
-            $"--- **System Prompt** ---\n{systemBlock}\n{BlockRule}"
+            $"--- **System Prompt** ---\n\n{systemBlock}\n\n{BlockRule}"
         };
 
         if (thread.tools.ContainsKey("list_tools"))
@@ -1854,14 +1854,14 @@ public abstract class Agent
             string capsBlock = capabilities.Length == 0
                 ? SharedPrompts.ToolSystemBlock
                 : $"{capabilities}\n\n{SharedPrompts.ToolSystemBlock}";
-            sections.Add($"--- **Capabilities** ---\n{capsBlock}\n{BlockRule}");
+            sections.Add($"--- **Capabilities** ---\n\n{capsBlock}\n\n{BlockRule}");
         }
 
         if (UsePersona)
         {
             string persona = PersonaStore.Get();
             if (persona.Length > 0)
-                sections.Add($"--- **Persona** ---\n{persona}\n{BlockRule}");
+                sections.Add($"--- **Persona** ---\n\n{persona}\n\n{BlockRule}");
         }
 
         string baseSystem = string.Join("\n\n", sections) + PersistentContext(thread);
@@ -1901,14 +1901,15 @@ public abstract class Agent
 
         // modeNudge is a trailing system message — mid-conversation system messages ARE rendered by Qwen3's template.
         string memoryBlock = opts.RecallNotes != null
-            ? $"[ARI's Memories]\n{(string.IsNullOrWhiteSpace(opts.RecallNotes) ? "none" : opts.RecallNotes.Trim())}\n" +
-              "(These memories describe the USER's life, possessions, and experiences — not yours. Never adopt them as your own.)\n\n"
+            ? $"--- **Ari's Memories** ---\n\n" +
+              "(These memories describe the USER's life, possessions, and experiences — not yours. Never adopt them as your own.)\n\n" +
+              $"{(string.IsNullOrWhiteSpace(opts.RecallNotes) ? "None" : opts.RecallNotes.Trim())}\n\n{BlockRule}\n\n"
             : string.Empty;
 
         if (collapsed.Count > 0)
         {
             ThreadMessage current   = collapsed[^1];
-            string        promptText = $"{memoryBlock}**Prompt:**\n{current.Username}: {current.Content}";
+            string        promptText = $"{memoryBlock}# Prompt:\n\n{current.Username}: {current.Content}";
 
             var msgImages = new List<Attachment>();
             var msgTexts  = new List<Attachment>();

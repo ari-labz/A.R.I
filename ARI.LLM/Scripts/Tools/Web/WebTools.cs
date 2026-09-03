@@ -30,7 +30,9 @@ internal sealed class SearchWeb : Tool
                           "'Qwen3.6-35B-A3B' finds the model, 'Qwen 3.6 35B A3B model' finds nothing. " +
                           "Keep queries short, one subject at a time, and leave out filler words like 'model', " +
                           "'vs' or 'comparison' — they make a working query fail. " +
-                          "Append site:reddit.com for community discussion and opinion.",
+                          "Append site:reddit.com for community discussion and opinion. " +
+                          "Search once or twice to find the right pages, then read them properly with fetch_page — " +
+                          "rewording a query that found nothing returns the same nothing.",
             parameters = new
             {
                 type       = "object",
