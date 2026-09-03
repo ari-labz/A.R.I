@@ -10,6 +10,10 @@ namespace ARI.LLM;
 
 internal class Engram : MemoryAgent, IDisposable
 {
+    // Save always reads the existing note first (see ResolveEntity) and its own prompt promises
+    // write_file as the only tool — the base guard's blind-overwrite premise doesn't apply here.
+    internal override bool BlocksWriteOverExisting => false;
+
     // Each Stage-3 call now places exactly one entity in its own short-lived thread, so there's no
     // multi-entity turn left to keep open — this and the ceiling below fall back to MemoryAgent's
     // defaults (single-commit-per-turn, 8-call breaker), which fit a one-note, one-tool call cleanly.
@@ -208,18 +212,11 @@ internal class Engram : MemoryAgent, IDisposable
             DateTime logEnd   = recentItems.Count > 0 ? recentItems[^1].Timestamp : DateTime.Now;
             string   conversationDate = logStart.ToString("yyyy-MM-dd");
 
-            // --- Stage 3: place each entity independently — a short, scoped call per entity instead of
-            //     one long wandering thread, so context stays flat (no compounding prefill) and a write
-            //     structurally cannot reach a note other than the one it's about. ---
-            int commits = 0, blocked = 0;
-            foreach (ExtractedEntity entity in entities)
-            {
-                switch (await PlaceEntityAsync(threadKey, entity, speaker, conversationDate))
-                {
-                    case PlacementOutcome.Committed: commits++; break;
-                    case PlacementOutcome.Blocked:   blocked++; break;
-                }
-            }
+            // --- Stage 3: save everything from this conversation in one call. Each entity's note is
+            //     still resolved by exact match beforehand and the write tool is still confined to that
+            //     pre-resolved set of paths — one call now covers the whole sweep's entities instead of
+            //     one call per entity, but no entity can still reach a note it wasn't resolved against. ---
+            (int commits, int blocked) = await SaveAllAsync(threadKey, entities, speaker, conversationDate);
 
             // Deterministic, code-built log line — no extra LLM round trip just to summarise what the
             // extraction step already told us.
@@ -263,11 +260,11 @@ internal class Engram : MemoryAgent, IDisposable
 
     // ── Stage 2: extract ───────────────────────────────────────────────────────────────
 
-    // Subject is set only when Entity is a split-off from a normal entity (e.g. Entity "Alex —
-    // Private Topic", Subject "Alex") — it tells Stage 3 which second note it may also touch,
-    // resolved by the same exact match as Entity itself, so a genuine move-a-section-out edit can
-    // update both notes without ever reaching a third, unresolved one.
-    private readonly record struct ExtractedEntity(string Entity, bool IsNew, string Excerpt, string? Subject);
+    // Entity is always the plain subject name (a person or relationship), never an invented compound
+    // title — that's what let two private notes about the same subject drift into two different titles
+    // and never resolve to each other. Sensitive marks it as Private/ content; Save resolves the
+    // deterministic Private/{Entity}.md path itself rather than the model inventing one.
+    private readonly record struct ExtractedEntity(string Entity, bool IsNew, string Excerpt, bool Sensitive);
 
     /// <summary>One tool-free completion over the whole transcript: every entity worth remembering,
     /// regardless of whether it's already in the vault (Stage 3 checks that), each with the actual
@@ -330,12 +327,12 @@ internal class Engram : MemoryAgent, IDisposable
             List<ExtractedEntity> results = new();
             foreach (JsonElement el in doc.RootElement.EnumerateArray())
             {
-                string  entity  = el.TryGetProperty("entity",  out JsonElement e) ? e.GetString() ?? "" : "";
-                string  excerpt = el.TryGetProperty("excerpt", out JsonElement x) ? x.GetString() ?? "" : "";
-                bool    isNew   = el.TryGetProperty("is_new",  out JsonElement n) && n.ValueKind == JsonValueKind.True;
-                string? subject = el.TryGetProperty("subject", out JsonElement s) && s.ValueKind == JsonValueKind.String ? s.GetString() : null;
+                string entity    = el.TryGetProperty("entity",    out JsonElement e) ? e.GetString() ?? "" : "";
+                string excerpt   = el.TryGetProperty("excerpt",   out JsonElement x) ? x.GetString() ?? "" : "";
+                bool   isNew     = el.TryGetProperty("is_new",    out JsonElement n) && n.ValueKind == JsonValueKind.True;
+                bool   sensitive = el.TryGetProperty("sensitive", out JsonElement s) && s.ValueKind == JsonValueKind.True;
                 if (entity.Length > 0 && excerpt.Length > 0)
-                    results.Add(new ExtractedEntity(entity, isNew, excerpt, string.IsNullOrWhiteSpace(subject) ? null : subject));
+                    results.Add(new ExtractedEntity(entity, isNew, excerpt, sensitive));
             }
             return results;
         }
@@ -348,49 +345,70 @@ internal class Engram : MemoryAgent, IDisposable
 
     // ── Stage 3: save ──────────────────────────────────────────────────────────────────
 
-    private enum PlacementOutcome { Committed, NoChange, Blocked }
+    // One resolved entity, ready to hand to the single Save call: its allowed write path(s)/prefix, and
+    // the existing-content block describing what (if anything) is already there.
+    private readonly record struct ResolvedEntity(string Entity, string ExistingBlock, HashSet<string> AllowedPaths, string AllowedPrefix);
 
-    /// <summary>Places one entity: a short, fresh call, tool-scoped to only the note(s) already resolved
-    /// by exact match for this call. Looks the note(s) up in code (no search_brain round trip) and hands
-    /// their current content straight to the model rather than making it re-discover them through tools.</summary>
-    private async Task<PlacementOutcome> PlaceEntityAsync(string threadKey, ExtractedEntity entity, string speaker, string conversationDate)
+    /// <summary>Resolves one entity's note by exact match (title/alias/path for ordinary entities, a
+    /// deterministic Private/{Entity}.md for sensitive ones) — never the fuzzy ranked search used for
+    /// exploratory discovery, which is what let a write land on an unrelated note that merely shared a
+    /// word. This is purely lookup; nothing is written here.</summary>
+    private static ResolvedEntity ResolveEntity(ExtractedEntity entity)
     {
-        BrainModule.Index();   // pick up commits from entities already placed earlier this same sweep
-        // Exact lookup by title/alias/path (BrainModule.GetNote -> Database.FindNote), not the fuzzy
-        // ranked content search (BrainModule.Search) search_brain uses for exploratory discovery. The
-        // fuzzy search was the actual cause of writes landing on the wrong note when an entity name had
-        // any incidental word overlap with something unrelated — the write-scope guard then faithfully
-        // protected that wrong note instead of the right one. An exact match is the only safe basis for
-        // treating a note as "this entity already exists"; anything less confident should read as new.
-        Note? existing = BrainModule.GetNote(entity.Entity);
-
+        Note? normalNote = BrainModule.GetNote(entity.Entity);
         HashSet<string> allowedPaths = new(StringComparer.OrdinalIgnoreCase);
-        if (existing is not null) allowedPaths.Add(existing.Path);
 
-        string existingBlock = existing is not null
-            ? $"The note already exists at '{existing.Path}':\n\n{existing.Content}"
-            : "No note exists yet for this entity — create one at an appropriate path per the rulebook above.";
-
-        // A subject means this is a private split-off (per the rulebook, subject is only ever set for
-        // Private/ content) — so unlike a normal new entity, its path isn't left for the model to pick:
-        // it's deterministic, same as any other exact-match resolution, which lets it join the allowed
-        // set even when the note doesn't exist yet. The subject's own note, when it resolves, is added
-        // too — the model may genuinely need to trim a moved section out of it, not just link to it.
-        string subjectBlock = "";
-        if (entity.Subject is { } subjectName)
+        if (entity.Sensitive)
         {
-            string newPrivatePath = existing?.Path ?? $"Private/{SanitizeNoteFileName(entity.Entity)}.md";
-            allowedPaths.Add(newPrivatePath);
+            // Deterministic, same family every time — Private/{Entity}.md — regardless of how this
+            // conversation happened to phrase the topic. This is the fix for the sprawl bug: resolution
+            // no longer depends on the model reinventing an identical title twice.
+            string privatePath = $"Private/{SanitizeNoteFileName(entity.Entity)}.md";
+            Note?  existing    = BrainModule.GetNote(privatePath);
+            allowedPaths.Add(privatePath);
+            if (normalNote is not null) allowedPaths.Add(normalNote.Path);   // rare migrate-out-of-normal-note case
 
-            Note? subjectNote = BrainModule.GetNote(subjectName);
-            if (subjectNote is not null)
-            {
-                allowedPaths.Add(subjectNote.Path);
-                subjectBlock = $"This is a split-off from '{subjectName}', at '{subjectNote.Path}':\n\n{subjectNote.Content}\n\n" +
-                    $"You may write BOTH '{newPrivatePath}' (this entity) and '{subjectNote.Path}' (the subject) if content needs to move out " +
-                    $"of the subject note into this one — link the subject note outward to this one, and if you remove content from it, reword " +
-                    $"the surrounding prose so nothing dangles. If the subject note doesn't need to change, only write this entity's note.\n";
-            }
+            string block = existing is not null
+                ? $"The consolidated private note already exists at '{privatePath}':\n\n{existing.Content}\n\n" +
+                  "Add this under the right topic subheading (or a new one if none fits) — don't create a separate note for it."
+                : $"No private note exists yet for this subject — create it at '{privatePath}'.";
+            return new ResolvedEntity(entity.Entity, block, allowedPaths, privatePath[..^3]);
+        }
+        else
+        {
+            if (normalNote is not null) allowedPaths.Add(normalNote.Path);
+            string block = normalNote is not null
+                ? $"The note already exists at '{normalNote.Path}':\n\n{normalNote.Content}"
+                : "No note exists yet for this entity — create one at an appropriate path per the rulebook above.";
+            // Same family split-note allowance as the sensitive case — lets Save split an oversized
+            // ordinary note into a sibling in the same call, without a separate Refactor pass. A
+            // brand-new entity has no existing path to build a prefix from, so it's simply unscoped
+            // below (nothing to protect yet — at worst a wrongly-placed new note, a normal tidy-up).
+            return new ResolvedEntity(entity.Entity, block, allowedPaths, normalNote is not null ? normalNote.Path[..^3] : "");
+        }
+    }
+
+    /// <summary>Saves every entity from this sweep in one call: each is still resolved by exact match
+    /// beforehand (see <see cref="ResolveEntity"/>) and the write tool is confined to the union of every
+    /// entity's own pre-resolved path/prefix, so no entity's write can land on a note it wasn't resolved
+    /// against — the scoping the old per-entity design had, just covering the whole sweep in one turn
+    /// instead of one call per entity.</summary>
+    private async Task<(int Commits, int Blocked)> SaveAllAsync(string threadKey, List<ExtractedEntity> entities, string speaker, string conversationDate)
+    {
+        if (entities.Count == 0) return (0, 0);
+
+        BrainModule.Index();   // pick up any commits made just before this sweep started
+        List<ResolvedEntity> resolved = entities.Select(ResolveEntity).ToList();
+
+        HashSet<string> allowedPaths    = new(StringComparer.OrdinalIgnoreCase);
+        List<string>    allowedPrefixes = new();
+        StringBuilder   entityBlocks    = new();
+        for (int i = 0; i < resolved.Count; i++)
+        {
+            ResolvedEntity r = resolved[i];
+            foreach (string p in r.AllowedPaths) allowedPaths.Add(p);
+            if (r.AllowedPrefix.Length > 0) allowedPrefixes.Add(r.AllowedPrefix);
+            entityBlocks.Append($"### {r.Entity}\n{r.ExistingBlock}\n\nWhat was said (speaker: {speaker}):\n{entities[i].Excerpt}\n\n");
         }
 
         Thread mini = new(ThreadPipeline.Dialogue, $"engram:{threadKey}:{Guid.NewGuid():N}") { Internal = true };
@@ -398,21 +416,12 @@ internal class Engram : MemoryAgent, IDisposable
         mini.IsBrainVault   = true;
         mini.Ct             = CancellationToken.None;
         ServerFileSystem fs = new(BrainModule.VaultRoot, CancellationToken.None, brainVault: true);
-        // A brand-new, non-private entity has no resolved path and nothing existing to protect, so it's
-        // left unscoped (the model states its own path, per the taxonomy rules already in its persistent
-        // context) — at worst a wrongly-placed new note, a normal tidy-up, not a loss. Every other case
-        // (existing note, or any private split-off — new or not) is restricted to the paths resolved above.
-        IReadOnlyCollection<string>? scope = (existing is null && entity.Subject is null) ? null : allowedPaths;
-        new WriteFile(fs, allowedPaths: scope).Register(mini);
+        new WriteFile(fs, allowedPaths: allowedPaths, allowedPrefixes: allowedPrefixes).Register(mini);
         PublishForInspection(mini);
 
         string task = ResolveTemplate("SaveTask", "",
-            ("entity",        entity.Entity),
-            ("existing",      existingBlock),
-            ("subject_block", subjectBlock),
-            ("excerpt",       entity.Excerpt),
-            ("speaker",       speaker),
-            ("date",          conversationDate));
+            ("entities", entityBlocks.ToString().TrimEnd()),
+            ("date",     conversationDate));
 
         await Prompt(mini, task, new PromptOptions
         {
@@ -420,29 +429,41 @@ internal class Engram : MemoryAgent, IDisposable
             OnDelta  = async _ => { Notify?.Invoke(mini.Key); await Task.CompletedTask; },
         });
 
-        List<TraceStep> writeResults = mini.History.OfType<Response>()
-            .SelectMany(r => r.Trace ?? Enumerable.Empty<TraceStep>())
-            .Where(s => s.Kind == "tool_result" && s.Name == "write_file")
-            .ToList();
-
-        bool wrote   = writeResults.Any(s => !(s.Text?.StartsWith("[Blocked]", StringComparison.Ordinal) ?? true));
-        bool blocked = !wrote && writeResults.Any(s => s.Text?.StartsWith("[Blocked]", StringComparison.Ordinal) ?? false);
-
-        if (blocked)
+        // tool_call carries the path attempted (Args); the following tool_result carries whether it
+        // landed or was blocked. Pairing them (by index within the same trace) is what lets one call
+        // covering several entities still report per-write outcomes and name what actually changed.
+        List<TraceStep> trace = mini.History.OfType<Response>().SelectMany(r => r.Trace ?? Enumerable.Empty<TraceStep>()).ToList();
+        List<string> writtenPaths = new();
+        int commits = 0, blocked = 0;
+        for (int i = 0; i < trace.Count; i++)
         {
-            // The scope guard fired against a real attempt — distinct from the model simply deciding
-            // nothing needed to change, and worth knowing about even though nothing was lost (the write
-            // just didn't land). Silent here is how the same failure mode would go unnoticed again.
-            Shared.Logger.LogWarning("[Engram] [{ThreadKey}] write blocked for entity '{Entity}' — scope guard rejected the path.", threadKey, entity.Entity);
-            return PlacementOutcome.Blocked;
-        }
-        if (!wrote) return PlacementOutcome.NoChange;
+            if (trace[i].Kind != "tool_call" || trace[i].Name != "write_file") continue;
+            string? path = null;
+            try
+            {
+                using JsonDocument doc = JsonDocument.Parse(trace[i].Args ?? "{}");
+                path = doc.RootElement.TryGetProperty("path", out JsonElement p) ? p.GetString() : null;
+            }
+            catch { }
 
-        string message = entity.Subject is { } subj
-            ? $"Engram: update {entity.Entity} (split from {subj}) — {threadKey}"
-            : $"Engram: update {entity.Entity} — {threadKey}";
-        GitCommitBrain(message);
-        return PlacementOutcome.Committed;
+            TraceStep? result = trace.Skip(i + 1).FirstOrDefault(s => s.Kind == "tool_result" && s.Name == "write_file");
+            bool wasBlocked = result?.Text?.StartsWith("[Blocked]", StringComparison.Ordinal) ?? false;
+            if (wasBlocked)
+            {
+                blocked++;
+                Shared.Logger.LogWarning("[Engram] [{ThreadKey}] write blocked for '{Path}' — scope guard rejected the path.", threadKey, path ?? "(unknown)");
+            }
+            else
+            {
+                commits++;
+                if (path is not null) writtenPaths.Add(path);
+            }
+        }
+
+        if (writtenPaths.Count > 0)
+            GitCommitBrain($"Engram: update {string.Join(", ", writtenPaths.Distinct())} — {threadKey}");
+
+        return (commits, blocked);
     }
 
     // Filenames can't carry the taxonomy's " — " em-dash convention verbatim if the source has path-

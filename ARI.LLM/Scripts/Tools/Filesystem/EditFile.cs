@@ -83,11 +83,17 @@ internal sealed class EditFile : Tool
 /// differently than it was given.</summary>
 internal static class PathScope
 {
-    internal static bool Matches(string given, string allowed)
-    {
-        static string Norm(string p) => p.Replace('\\', '/').Trim('/', ' ');
-        return string.Equals(Norm(given), Norm(allowed), StringComparison.OrdinalIgnoreCase);
-    }
+    internal static string Norm(string p) => p.Replace('\\', '/').Trim('/', ' ');
+
+    internal static bool Matches(string given, string allowed) =>
+        string.Equals(Norm(given), Norm(allowed), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>True if <paramref name="given"/> starts with <paramref name="prefix"/> — lets a scoped write
+    /// create a not-yet-existing sibling note (e.g. a split-off "Private/Xywren - Topic.md" alongside
+    /// "Private/Xywren.md") without knowing its exact name in advance, while still confining the write to
+    /// that one entity's family of notes.</summary>
+    internal static bool MatchesPrefix(string given, string prefix) =>
+        Norm(given).StartsWith(Norm(prefix), StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>Computes +added / -removed line counts for an edit/write call from its arguments, for the diff badge

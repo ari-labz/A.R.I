@@ -34,6 +34,13 @@ internal abstract class MemoryAgent : Agent
     // makes that a fatal deserialise error at startup.
     [JsonPropertyName("useGraphRulebook")] public bool? UseGraphRulebook { get; init; }
 
+    // The write-guard below predates Engram's 3-stage redesign — it was built for Refactor's line-edit
+    // walk, where a blind write_file over a live note (no prior read) really did destroy frontmatter.
+    // Engram's Save step always reads the existing note first and its own prompt promises write_file
+    // as the only tool, so the guard's premise doesn't hold there. Refactor (and Curiosity, inert by
+    // default) keep the protection they actually need; only Engram opts out.
+    internal virtual bool BlocksWriteOverExisting => true;
+
     internal override string PersistentContext(Thread thread)
         => (UseGraphRulebook ?? true) ? "\n\n" + SharedPrompts.GraphRulebook : "";
 
@@ -129,7 +136,7 @@ internal abstract class MemoryAgent : Agent
         // Block wholesale rewrites of an EXISTING note — write_file over a live note repeatedly destroyed its
         // YAML frontmatter/structure (the model then burned its whole epoch trying to repair the damage).
         // write_file is only for creating a NEW note; to change an existing one, edit the specific lines.
-        if (toolName == "write_file")
+        if (toolName == "write_file" && BlocksWriteOverExisting)
         {
             string? wpath = ArgPath(argsJson);
             if (wpath is not null)

@@ -40,7 +40,12 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly DreamOrchestrator? dreamOrchestrator;
 
     private readonly CommandService    commands;
-    private readonly InferenceScheduler                                      scheduler          = new();
+    // One queue per physical server — two servers can genuinely run at the same time; agents sharing
+    // one server share its queue and take turns. Never acquire more than one queue at once per prompt,
+    // and never hold a queue across a call that prompts the same server again (see LLMQueue's own doc).
+    private readonly Dictionary<Server, LLMQueue>                            queues             = new();
+    private readonly LLMQueue                                                unboundQueue       = new();   // agents with no resolved server (shouldn't normally happen)
+    private LLMQueue QueueFor(Server? server) => server is not null && queues.TryGetValue(server, out LLMQueue? q) ? q : unboundQueue;
     private readonly ConcurrentDictionary<string, CancellationTokenSource>  processingThreads  = new();
     private readonly ConcurrentDictionary<string, LiveCallInfo>            liveCalls           = new();
     private readonly ConcurrentDictionary<Guid, Channel<AppEvent>>         globalSubscribers   = new();
@@ -102,6 +107,7 @@ public class LLMModule : ILLMModule, IDisposable
         }
 
         _servers.AddRange(servers);
+        foreach (Server s in _servers) queues[s] = new LLMQueue();
 
         CleanScratchpads();
 
@@ -136,7 +142,6 @@ public class LLMModule : ILLMModule, IDisposable
         T Deserialize<T>(JsonElement el) where T : Agent
         {
             T agent = JsonSerializer.Deserialize<T>(el.GetRawText(), JsonOptions)!;
-            agent.Scheduler = scheduler;
 
             if (serverByName.TryGetValue(agent.ServerName, out Server? bound))
             {
@@ -184,6 +189,7 @@ public class LLMModule : ILLMModule, IDisposable
                     agent.SlotName  = agent.Slot.Name;
                 }
             }
+            agent.Queue = QueueFor(agent.Server);
             return agent;
         }
 
@@ -309,6 +315,7 @@ public class LLMModule : ILLMModule, IDisposable
             dreamer = new Dreamer
             {
                 Name         = "Dreamer",
+                Priority     = (int)InferencePriority.Dream,   // background: any real prompt queues ahead of it
                 ServerName   = textingAgent.ServerName,
                 Endpoint     = textingAgent.Endpoint,
                 Server       = textingAgent.Server,
@@ -333,6 +340,10 @@ public class LLMModule : ILLMModule, IDisposable
                     "Write the message in your own voice, as yourself, informed by everything you found. " +
                     "Always fill in context as a private briefing to your waking self: include the relevant notes, what you were trying to figure out, what state they seem to be in, and what you're hoping to do once they respond.",
             };
+            // Built manually rather than through Deserialize<T>, so it needs its queue assigned by hand —
+            // without this, Agent.Prompt's per-step acquisition is a silent no-op (Queue is null) and
+            // Dreamer's turns get zero coordination with anything else on the same server.
+            dreamer.Queue = QueueFor(dreamer.Server);
             dreamPipeline = new DreamPipeline(
                 dreamer,
                 onWake: (content, context, title) =>
@@ -343,7 +354,7 @@ public class LLMModule : ILLMModule, IDisposable
             dreamOrchestrator = new DreamOrchestrator(
                 dreamPipeline,
                 dreamer,
-                scheduler,
+                QueueFor(dreamer.Server),
                 isDreamingEnabled: () => (Modules.Scheduler?.DreamingEnabled ?? false) && !ConversationActive,
                 createDreamThread: () =>
                 {
@@ -562,9 +573,15 @@ public class LLMModule : ILLMModule, IDisposable
     {
         _servers.Clear();
         _servers.AddRange(servers);
+        queues.Clear();
+        foreach (Server s in _servers) queues[s] = new LLMQueue();
     }
 
-    public void AddServer(Server server) => _servers.Add(server);
+    public void AddServer(Server server)
+    {
+        _servers.Add(server);
+        queues[server] = new LLMQueue();
+    }
 
     public void RemoveServer(Guid id) => _servers.RemoveAll(s => s.Id == id);
 
@@ -708,7 +725,8 @@ public class LLMModule : ILLMModule, IDisposable
         if (awareness is null || string.IsNullOrWhiteSpace(transcript)) return true;
         try
         {
-            using IDisposable _ = await scheduler.AcquireAsync(InferencePriority.Voice, ct);
+            // No outer acquire — awareness.IsAddressed -> Agent.Prompt already acquires this agent's
+            // queue itself, per step. An outer acquire here would deadlock the same way Route's did.
             return await awareness.IsAddressed(transcript, context, ct);
         }
         catch (OperationCanceledException) { throw; }
@@ -727,7 +745,7 @@ public class LLMModule : ILLMModule, IDisposable
             var recent = threads.TryGetValue(threadKey, out Thread? thread)
                 ? thread.GetChatHistory(maxMessages: 10)
                 : [];
-            using IDisposable _ = await scheduler.AcquireAsync(InferencePriority.Normal, ct);
+            // No outer acquire — same reasoning as EvaluateAwareness above.
             return await awareness.ShouldRespond(recent, latestMessage, ct);
         }
         catch (OperationCanceledException) { throw; }
@@ -749,12 +767,14 @@ public class LLMModule : ILLMModule, IDisposable
         if (IsThreadProcessing(threadKey))
             Interrupt(threadKey);
 
-        // Cancel any in-flight dream immediately so it releases the slot before we try to acquire it.
+        // Cancel any in-flight dream immediately so it doesn't compete with this live prompt.
         dreamOrchestrator?.NotifyUserActivity();
 
-        // Acquire the global inference slot before building the CTS so cancellation while waiting
-        // never leaves a stale entry in processingThreads.
-        using IDisposable slot = await scheduler.AcquireAsync(priority, externalCt);
+        // No outer acquire here — this pipeline calls into Memory's own Prompt (a separate agent,
+        // separate per-step acquisition) before the primary agent's own Prompt call. Holding a queue
+        // slot across both would deadlock the moment either of them tried to acquire it themselves.
+        // Each agent's own Agent.Prompt loop acquires its bound server's queue per step; that's the
+        // only place a slot is ever held.
 
         // create a cancellation token in case this prompt needs cancelling later
         CancellationTokenSource cts = externalCt.CanBeCanceled
@@ -1059,7 +1079,8 @@ public class LLMModule : ILLMModule, IDisposable
         string?             localPath = null)
     {
         if (codeArchitect is null) throw new InvalidOperationException("Coder agent not loaded");
-        using IDisposable slot = await scheduler.AcquireAsync(InferencePriority.Normal, ct);
+        // No outer acquire — codePipeline.ExecuteAsync -> codeArchitect.Prompt already acquires
+        // codeArchitect's own queue per step. Same deadlock risk as Route if held here too.
         CancellationTokenSource cts = ct.CanBeCanceled
             ? CancellationTokenSource.CreateLinkedTokenSource(ct)
             : new CancellationTokenSource();
