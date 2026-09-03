@@ -1,4 +1,4 @@
-using ARI.Brain;
+using ARI.BrainVault;
 using ARI.Common;
 
 namespace ARI.LLM;
@@ -57,7 +57,9 @@ internal static class ToolFactories
         // Brain tools — always available; use the global brain index and vault, no project binding needed.
         ["search_brain"]   = _ => new SearchBrain(),
         ["recall_memory"]  = _ => new RecallMemory(),
-        ["edit_memory"]    = _ => BrainModule.Ready ? new EditMemory() : null,
+        ["create_memory"]  = _ => Brain.Ready ? new CreateMemory() : null,
+        ["edit_memory"]    = _ => Brain.Ready ? new EditMemory() : null,
+        ["delete_memory"]  = _ => Brain.Ready ? new DeleteMemory() : null,
         ["get_time"]       = _ => new GetTime(),
 
         // Web tools — always available regardless of project/vault context.

@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json.Serialization;
-using ARI.Brain;
+using ARI.BrainVault;
 using ARI.Common;
 using Microsoft.Extensions.Logging;
 
@@ -141,7 +141,7 @@ internal abstract class MemoryAgent : Agent
             string? wpath = ArgPath(argsJson);
             if (wpath is not null)
             {
-                string abs = System.IO.Path.Combine(BrainModule.VaultRoot, wpath);
+                string abs = System.IO.Path.Combine(Brain.VaultRoot, wpath);
                 if (System.IO.File.Exists(abs))
                 {
                     Shared.Logger.LogInformation("[{Agent}] write guard: blocked wholesale write_file of existing note {Path}.", Name, wpath);
@@ -217,7 +217,7 @@ internal abstract class MemoryAgent : Agent
     // Virtual so a read-only walker (Curiosity) can register a navigation + curiosity subset instead.
     protected virtual void RegisterTools(Thread thread, string persistentDir, CancellationToken ct)
     {
-        string root = BrainModule.VaultRoot;
+        string root = Brain.VaultRoot;
         thread.FilesystemRoot = root;
         thread.IsBrainVault = true;
         thread.Ct = ct;
@@ -270,21 +270,21 @@ internal abstract class MemoryAgent : Agent
         while (epoch < maxEpochs && (!convergeOnNoChange || noChange < CONVERGED_AFTER) && stalled < STALL_LIMIT)
         {
             ct.ThrowIfCancellationRequested();
-            BrainModule.Index();
+            Brain.Index();
 
             // Default: top-degree seeds. Refactor instead ranks the WHOLE vault by least-recently-
             // refactored (never-refactored = DateTime.MinValue, so it sorts first), with the SQL
             // degree-DESC order preserved as the tiebreak because OrderBy is a stable sort.
             List<Note> seeds = refactorLog is null
-                ? BrainModule.TopDegreeSeeds(SEED_COUNT)
-                : BrainModule.AllSeedsByDegree().OrderBy(s => refactorLog.SortKey(s.Title)).ToList();
+                ? Brain.TopDegreeSeeds(SEED_COUNT)
+                : Brain.AllSeedsByDegree().OrderBy(s => refactorLog.SortKey(s.Title)).ToList();
             if (seeds.Count == 0) break;
 
             Note? seed = seeds.FirstOrDefault(s => !visitedThisPass.Contains(s.Title));
             if (seed is null) { visitedThisPass.Clear(); seed = seeds[0]; }  // full pass done — start another
             visitedThisPass.Add(seed.Title);
 
-            string skeleton = BrainModule.Skeleton(seed.Title, WALK_DEPTH, WALK_CAP) ?? "";
+            string skeleton = Brain.Skeleton(seed.Title, WALK_DEPTH, WALK_CAP) ?? "";
 
             Thread epochThread = new(ThreadPipeline.Dialogue, $"{threadKey}#epoch{epoch}:{Guid.NewGuid():N}")
                 { Internal = true, Parent = parent, Label = $"epoch {epoch}: {seed.Title}" };

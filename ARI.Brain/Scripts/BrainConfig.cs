@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace ARI.Brain;
+namespace ARI.BrainVault;
 
 public class BrainConfig
 {

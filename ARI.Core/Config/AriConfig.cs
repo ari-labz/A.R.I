@@ -2,7 +2,7 @@ using ARI.Common;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
-using ARI.Brain;
+using ARI.BrainVault;
 using ARI.Discord;
 using ARI.LLM;
 using ARI.Voice;

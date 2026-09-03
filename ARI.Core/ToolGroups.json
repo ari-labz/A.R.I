@@ -21,8 +21,8 @@
       "Tools": ["build_project"]
     },
     "memory_tools": {
-      "Description": "Recall and correct Ari's personal brain (memory graph). search_brain finds notes by title/alias/content — returns 'title — path' pairs. recall_memory reads the full content of a note by path. edit_memory corrects wrong or inconsistent information in a note and commits the change immediately. neighbours shows graph connections around a note. These tools access Ari's own stored memories, not a project filesystem.",
-      "Tools": ["search_brain", "recall_memory", "edit_memory", "neighbours"]
+      "Description": "Read and write Ari's personal brain (memory graph) — never through the generic filesystem tools. search_brain finds notes by title/alias/content — returns 'title — path' pairs. recall_memory reads the full content of a note by path. create_memory adds a new note; edit_memory replaces an existing note's content (and optionally renames/retypes it); delete_memory removes one. All three take a commit_message explaining what changed and why, and commit to the brain git repo immediately, one commit per note. neighbours shows graph connections around a note. These tools access Ari's own stored memories, not a project filesystem.",
+      "Tools": ["search_brain", "recall_memory", "create_memory", "edit_memory", "delete_memory", "neighbours"]
     },
     "vault_tools": {
       "Description": "Search an Obsidian note graph within the bound project (regex, no index). Only useful when the project is an Obsidian vault — calling this on a code repository will return nothing. For searching your own memory, use search_brain / recall_memory instead.",

@@ -4,7 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
-using ARI.Brain;
+using ARI.BrainVault;
 using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
@@ -76,7 +76,7 @@ internal class Memory : Agent
         // If a brain note exists whose title or alias matches the user's name, pin its header — always
         // surface identity/pronoun facts without model selection, but only the top block, not the full note.
         string? speakerName = chatHistory.LastOrDefault(m => m.Username != "ARI")?.Username;
-        Note? userNote = string.IsNullOrWhiteSpace(speakerName) ? null : BrainModule.GetNote(speakerName);
+        Note? userNote = string.IsNullOrWhiteSpace(speakerName) ? null : Brain.GetNote(speakerName);
         string pinnedBlock = userNote is not null
             ? $"[{userNote.Title}|{userNote.Url}]\n{userNote.ToHeader()}\n\n"
             : string.Empty;
@@ -114,8 +114,8 @@ internal class Memory : Agent
             return string.IsNullOrEmpty(pinnedBlock) ? string.Empty : pinnedBlock.TrimEnd();
         }
 
-        // Pure SQL, no LLM yet — see BrainModule.Recall.
-        RecallResult recall = BrainModule.Recall(terms, HopLimit, SEED_NEAR_LIMIT, TOP_CANDIDATES);
+        // Pure SQL, no LLM yet — see Brain.Recall.
+        RecallResult recall = Brain.Recall(terms, HopLimit, SEED_NEAR_LIMIT, TOP_CANDIDATES);
 
         // Guarded mode (talking to someone other than the owner): Private/ notes are never even offered
         // to the selection model, not just filtered afterward. This is deliberately a hard path check
@@ -297,13 +297,13 @@ internal class Memory : Agent
     private static Note? Resolve(string pick, HashSet<string> offered, out bool viaFuzzy)
     {
         viaFuzzy = false;
-        Note? note = BrainModule.GetNote(pick);
+        Note? note = Brain.GetNote(pick);
         if (note is not null) return note;
 
         List<string> tokens = Tokenize(pick);
         if (tokens.Count == 0) return null;
 
-        SearchResult? best = BrainModule.Search(tokens, TOP_CANDIDATES)
+        SearchResult? best = Brain.Search(tokens, TOP_CANDIDATES)
             .FirstOrDefault(r => offered.Contains(r.Note.Name));
         if (best is null) return null;
 

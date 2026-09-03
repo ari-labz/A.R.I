@@ -11,7 +11,7 @@ using ARI.VoiceSynthesis;
 using ARI.API;
 using ARI.API.Data;
 using ARI.Listener;
-using ARI.Brain;
+using ARI.BrainVault;
 using ARI.ImageGen;
 using ImageGenDependency = ARI.ImageGen.Dependency;
 using Microsoft.Extensions.Hosting;
