@@ -40,7 +40,7 @@ public class VoiceModuleTrainer : IVoiceTrainer
     {
         progress?.Report(new TrainingProgress("Starting", 0, "Sending training request to module"));
 
-        var payload = new Dictionary<string, object>
+        Dictionary<string, object> payload = new Dictionary<string, object>
         {
             ["voice_dir"] = voiceDir,
             ["audio_path"] = audioPath,
@@ -54,7 +54,7 @@ public class VoiceModuleTrainer : IVoiceTrainer
 
         string json = JsonSerializer.Serialize(payload);
         using StringContent body = new(json, Encoding.UTF8, "application/json");
-        var resp = await http.PostAsync($"{baseUrl}/train", body, ct);
+        HttpResponseMessage resp = await http.PostAsync($"{baseUrl}/train", body, ct);
         resp.EnsureSuccessStatusCode();
 
         progress?.Report(new TrainingProgress("Training", 5, "Training started"));
@@ -67,27 +67,27 @@ public class VoiceModuleTrainer : IVoiceTrainer
 
                 try
                 {
-                    var statusResp = await http.GetAsync($"{baseUrl}/train/status", ct);
+                    HttpResponseMessage statusResp = await http.GetAsync($"{baseUrl}/train/status", ct);
                     statusResp.EnsureSuccessStatusCode();
                     string statusJson = await statusResp.Content.ReadAsStringAsync(ct);
-                    using var doc = JsonDocument.Parse(statusJson);
-                    var root = doc.RootElement;
+                    using JsonDocument doc = JsonDocument.Parse(statusJson);
+                    JsonElement root = doc.RootElement;
 
                     string status = root.GetProperty("status").GetString() ?? "unknown";
 
-                    if (root.TryGetProperty("progress", out var prog))
+                    if (root.TryGetProperty("progress", out JsonElement prog))
                     {
-                        string step = prog.TryGetProperty("step", out var s) ? s.GetString() ?? "Training" : "Training";
-                        int percent = prog.TryGetProperty("percent", out var pct) ? pct.GetInt32() : 0;
-                        string? detail = prog.TryGetProperty("detail", out var d) ? d.GetString() : null;
+                        string step = prog.TryGetProperty("step", out JsonElement s) ? s.GetString() ?? "Training" : "Training";
+                        int percent = prog.TryGetProperty("percent", out JsonElement pct) ? pct.GetInt32() : 0;
+                        string? detail = prog.TryGetProperty("detail", out JsonElement d) ? d.GetString() : null;
                         progress?.Report(new TrainingProgress(step, percent, detail));
                     }
 
-                    if (root.TryGetProperty("log", out var logs))
+                    if (root.TryGetProperty("log", out JsonElement logs))
                     {
-                        foreach (var line in logs.EnumerateArray())
+                        foreach (JsonElement line in logs.EnumerateArray())
                         {
-                            var text = line.GetString();
+                            string? text = line.GetString();
                             if (text == null) continue;
                             logger?.LogInformation("[Training] {Line}", text);
                             // Forward every log line to the UI so the graph and log widget stay live.
@@ -102,7 +102,7 @@ public class VoiceModuleTrainer : IVoiceTrainer
                             progress?.Report(new TrainingProgress("Complete", 100, "Training finished"));
                             return "completed";
                         case "failed":
-                            int exitCode = root.TryGetProperty("exit_code", out var ec) ? ec.GetInt32() : -1;
+                            int exitCode = root.TryGetProperty("exit_code", out JsonElement ec) ? ec.GetInt32() : -1;
                             throw new Exception($"Training failed with exit code {exitCode}");
                         case "paused":
                             progress?.Report(new TrainingProgress("Paused", -1, "Training paused — resume to continue"));
@@ -127,19 +127,19 @@ public class VoiceModuleTrainer : IVoiceTrainer
 
     public async Task Pause()
     {
-        var resp = await http.PostAsync($"{baseUrl}/train/pause", null);
+        HttpResponseMessage resp = await http.PostAsync($"{baseUrl}/train/pause", null);
         resp.EnsureSuccessStatusCode();
     }
 
     public async Task Resume()
     {
-        var resp = await http.PostAsync($"{baseUrl}/train/resume", null);
+        HttpResponseMessage resp = await http.PostAsync($"{baseUrl}/train/resume", null);
         resp.EnsureSuccessStatusCode();
     }
 
     public async Task Cancel()
     {
-        var resp = await http.PostAsync($"{baseUrl}/train/cancel", null);
+        HttpResponseMessage resp = await http.PostAsync($"{baseUrl}/train/cancel", null);
         resp.EnsureSuccessStatusCode();
     }
 }

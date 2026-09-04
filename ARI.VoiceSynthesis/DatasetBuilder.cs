@@ -190,7 +190,7 @@ public class DatasetBuilder
 
         // Last line of stdout is the JSON result
         string json = output.TrimEnd().Split('\n')[^1];
-        var result = JsonSerializer.Deserialize<SplitResult>(json, manifestFormat);
+        SplitResult? result = JsonSerializer.Deserialize<SplitResult>(json, manifestFormat);
         return result?.Parts ?? new();
     }
 
@@ -215,7 +215,7 @@ public class DatasetBuilder
             throw new Exception("Unsplit failed.");
 
         string json = output.TrimEnd().Split('\n')[^1];
-        var result = JsonSerializer.Deserialize<UnsplitResult>(json, manifestFormat);
+        UnsplitResult? result = JsonSerializer.Deserialize<UnsplitResult>(json, manifestFormat);
         return result?.Part;
     }
 
