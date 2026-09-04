@@ -55,7 +55,7 @@ public abstract class Agent
     [JsonIgnore] internal Action<string, ThreadPhase>? OnPhaseChange { get; set; }
 
     [JsonIgnore] internal virtual int  MemoryLimit => 0;  // 0 = unlimited
-    internal virtual bool SuppressLog()    => false;
+    internal virtual bool SuppressLog => false;
     [JsonIgnore] internal virtual bool LogReasoning    => false;
 
     // ── Constants ────────────────────────────────────────────────────────────
@@ -421,16 +421,16 @@ public abstract class Agent
     // CurrentDoc; Dispose() closes the stream and signals the server slot is free.
     private sealed class Step : IDisposable
     {
-        private readonly Stream        _stream;
-        private readonly StreamReader  _reader;
-        private readonly Action        _onClose;
+        private readonly Stream        stream;
+        private readonly StreamReader  reader;
+        private readonly Action        onClose;
         internal         JsonDocument? CurrentDoc;
 
         internal Step(Stream stream, StreamReader reader, Action onClose)
         {
-            _stream  = stream;
-            _reader  = reader;
-            _onClose = onClose;
+            this.stream = stream;
+            this.reader = reader;
+            this.onClose = onClose;
         }
 
         internal async Task<bool> IsStreaming(CancellationToken ct)
@@ -438,7 +438,7 @@ public abstract class Agent
             CurrentDoc?.Dispose();
             CurrentDoc = null;
             string? line;
-            while ((line = await _reader.ReadLineAsync(ct)) is not null)
+            while ((line = await reader.ReadLineAsync(ct)) is not null)
             {
                 if (string.IsNullOrWhiteSpace(line) || !line.StartsWith("data: ")) continue;
                 string payload = line["data: ".Length..];
@@ -452,9 +452,9 @@ public abstract class Agent
         public void Dispose()
         {
             CurrentDoc?.Dispose();
-            _reader.Dispose();
-            _stream.Dispose();
-            _onClose();
+            reader.Dispose();
+            stream.Dispose();
+            onClose();
         }
     }
 
@@ -464,7 +464,7 @@ public abstract class Agent
 
         prompt = OnPrompt(thread, prompt, opts);
         if (OnPromptPipeline is not null) prompt = OnPromptPipeline(thread, prompt, opts);
-        if (!SuppressLog())
+        if (!SuppressLog)
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) prompt\n\"{Prompt}\"", Name, thread.Key, prompt);
 
         // ── Build turn ────────────────────────────────────────────────────────
@@ -720,7 +720,7 @@ public abstract class Agent
             lci.EstimatedInputTokens = (int)(totalChars / CHARS_PER_TOKEN);
         }
 
-        if (!SuppressLog() && turn.ToolCallCount == 0)
+        if (!SuppressLog && turn.ToolCallCount == 0)
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) {Tools}", Name, thread.Key,
                 turn.ToolSchemas is not null ? $"{turn.ToolSchemas.Length} tool(s) available: {string.Join(", ", thread.tools.Keys)}" : "no tools registered");
     }
@@ -737,7 +737,7 @@ public abstract class Agent
         Dictionary<string, object?> body = BuildRequest(thread, turn.Messages, turn.MaxTokens, turn.ThinkBudget, turn.Opts.ThinkingBudget, turn.ToolSchemas, Think);
 
         string json = JsonSerializer.Serialize(body);
-        if (!SuppressLog())
+        if (!SuppressLog)
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) → request (step {Step}): reply_budget={MT}, tools={N}, msgs={Msgs}, think={Think} (et={ET}/budget={B})",
                 Name, thread.Key, turn.ToolCallCount,
                 turn.MaxTokens,
@@ -859,7 +859,7 @@ public abstract class Agent
         // Any reasoning token means she is Thinking, immediately.
         if (reasoningDelta) AdvancePhase(turn, ThreadPhase.Thinking);
 
-        if (!SuppressLog())
+        if (!SuppressLog)
         {
             DateTime now = DateTime.UtcNow;
             if ((now - turn.LastProgressLog).TotalSeconds >= 3)
@@ -998,7 +998,7 @@ public abstract class Agent
                     if (turn.OnTextDelta is not null) turn.TextOnlyBuilder.Append(preText + "\n");
                     if (turn.LiveText is not null) { turn.Trace.Remove(turn.LiveText); turn.LiveText = null; }
                     turn.Trace.Add(new TraceStep { Kind = "text", Text = preText });
-                    if (!SuppressLog()) Shared.Logger.LogInformation("[{Agent}] ({Thread}) \"{Text}\"", Name, thread.Key, preText);
+                    if (!SuppressLog) Shared.Logger.LogInformation("[{Agent}] ({Thread}) \"{Text}\"", Name, thread.Key, preText);
                 }
                 turn.ResponseBuilder.Clear();
                 if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
@@ -1249,7 +1249,7 @@ public abstract class Agent
             catch { /* tracing must never break a turn */ }
         }
 
-        if (!SuppressLog())
+        if (!SuppressLog)
         {
             int doneArgChars = 0;
             List<string> doneNames    = new List<string>();
@@ -2128,7 +2128,7 @@ public abstract class Agent
 
         double tokPerSec = completionTokens > 0 ? completionTokens / elapsed : 0;
 
-        if (!SuppressLog())
+        if (!SuppressLog)
         {
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) responded in {Seconds}s (prefill {Prefill}s, thinking {Thinking}s, typing {Typing}s; {Tokens} tokens, {TokPerSec} t/s)",
                 Name, thread.Key, elapsed.ToString("F1"),
