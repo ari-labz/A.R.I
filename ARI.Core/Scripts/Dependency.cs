@@ -505,7 +505,7 @@ public class Dependency
         string json = await hc.GetStringAsync("https://api.github.com/repos/ggml-org/llama.cpp/releases/latest");
         using JsonDocument doc = JsonDocument.Parse(json);
 
-        var (url, isTarGz) = SelectAsset(doc.RootElement.GetProperty("assets"));
+        (string? url, bool isTarGz) = SelectAsset(doc.RootElement.GetProperty("assets"));
         if (url is null)
             throw new Exception(
                 "No prebuilt llama.cpp binary matched this platform. " +
@@ -585,13 +585,13 @@ public class Dependency
 
         if (OperatingSystem.IsMacOS())
         {
-            var match = candidates.FirstOrDefault();
+            (string Name, string Url) match = candidates.FirstOrDefault();
             return match.Url is not null ? (match.Url, match.Name.EndsWith(".tar.gz")) : (null, false);
         }
 
         // Windows + Linux: Vulkan works on both Nvidia and AMD
         {
-            var match = candidates.FirstOrDefault(c => c.Name.Contains("vulkan"));
+            (string Name, string Url) match = candidates.FirstOrDefault(c => c.Name.Contains("vulkan"));
             if (match.Url is not null)
                 return (match.Url, match.Name.EndsWith(".tar.gz"));
         }

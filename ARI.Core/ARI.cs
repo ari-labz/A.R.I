@@ -468,7 +468,7 @@ public class ARI : BackgroundService
 
         int port = ModulePorts.GetValueOrDefault(engine, 8021 + ModulePorts.Count);
 
-        var extraArgs = new List<string>();
+        List<string> extraArgs = new List<string>();
         if (!string.IsNullOrEmpty(dataDir))
             extraArgs.Add($"--data-dir \"{dataDir}\"");
         if (PhonemeSubstitutions.Path is { } subsPath)
@@ -552,7 +552,7 @@ public class ARI : BackgroundService
         _logger.LogInformation("[Client] Launching ARI.Client...");
         Environment.SetEnvironmentVariable("ARI_BASE_URL", $"http://localhost:{port}");
 
-        var psi = OperatingSystem.IsMacOS()
+        System.Diagnostics.ProcessStartInfo psi = OperatingSystem.IsMacOS()
             ? new System.Diagnostics.ProcessStartInfo("open", $"-a Terminal \"{scriptPath}\"") { UseShellExecute = false }
             : new System.Diagnostics.ProcessStartInfo("/bin/bash", $"\"{scriptPath}\"") { UseShellExecute = true, CreateNoWindow = false };
 
