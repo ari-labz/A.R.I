@@ -78,7 +78,7 @@ internal class Memory : Agent
         string? speakerName = chatHistory.LastOrDefault(m => m.Username != "ARI")?.Username;
         Note? userNote = string.IsNullOrWhiteSpace(speakerName) ? null : Brain.GetNote(speakerName);
         string pinnedBlock = userNote is not null
-            ? $"[{userNote.Title}|{userNote.Url}]\n{userNote.ToHeader()}\n\n"
+            ? $"[{userNote.Title}|{userNote.Url}]\n{userNote.SensitivityNotice}{userNote.ToHeader()}\n\n"
             : string.Empty;
 
         // Recall always runs — it's fast enough that a keyword gate only ever costs a real hit.
@@ -223,6 +223,10 @@ internal class Memory : Agent
             Note note = resolved[i].Note;
             string extracted = extractions[i];
             result.AppendLine($"[{note.Title}|{note.Url}]");
+            // The extraction sub-call may not carry a whole-note sensitivity flag through into its summary
+            // (it never saw one — that flag lives in frontmatter, stripped out of what it was shown), so
+            // it's re-applied here rather than trusted to survive the extraction step.
+            result.Append(note.SensitivityNotice);
             result.AppendLine(string.IsNullOrWhiteSpace(extracted) ? note.ToPrompt() : $"Path: {note.Name}\n\n{extracted}");
             result.AppendLine();
         }
