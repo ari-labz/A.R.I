@@ -49,8 +49,8 @@ public static partial class SentenceSplitter
 
     private static IReadOnlyList<string> SplitSentences(string text)
     {
-        var sentences = new List<string>();
-        var current   = new StringBuilder();
+        List<string> sentences = new List<string>();
+        StringBuilder current   = new StringBuilder();
 
         for (int i = 0; i < text.Length; i++)
         {

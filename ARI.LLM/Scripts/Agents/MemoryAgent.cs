@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using ARI.BrainVault;
 using ARI.Common;
@@ -99,8 +100,8 @@ internal abstract class MemoryAgent : Agent
 
     protected static string? ArgPath(string argsJson)
     {
-        try { using System.Text.Json.JsonDocument d = System.Text.Json.JsonDocument.Parse(argsJson);
-              return d.RootElement.TryGetProperty("path", out System.Text.Json.JsonElement p) ? p.GetString()?.Trim() : null; }
+        try { using JsonDocument d = JsonDocument.Parse(argsJson);
+              return d.RootElement.TryGetProperty("path", out JsonElement p) ? p.GetString()?.Trim() : null; }
         catch { return null; }
     }
 

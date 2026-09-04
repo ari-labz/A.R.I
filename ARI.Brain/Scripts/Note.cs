@@ -8,6 +8,7 @@ namespace ARI.BrainVault;
 public class Note
 {
     private const string TIMESTAMP_FORMAT = "yyyy-MM-ddTHH:mm:ssZ";
+    private const int MAX_ERROR_SNIPPET_LENGTH = 200;
 
     private static readonly Regex frontmatterBlock = new(@"\A---\n(.*?)\n---\n", RegexOptions.Singleline | RegexOptions.Compiled);
     private static readonly Regex aliasesLine = new(@"^aliases: \[(.*)\]$", RegexOptions.Multiline | RegexOptions.Compiled);
@@ -96,7 +97,7 @@ public class Note
 
     public string ToPrompt()
     {
-        var sb = new StringBuilder($"Path: {Name}");
+        StringBuilder sb = new StringBuilder($"Path: {Name}");
         if (Aliases.Count > 0) sb.Append($"\nAliases: {string.Join(", ", Aliases)}");
         if (Keywords.Count > 0) sb.Append($"\nKeywords: {string.Join(", ", Keywords)}");
         sb.Append($"\n\n{Content}");
@@ -109,7 +110,7 @@ public class Note
     public string ToHeader()
     {
         string[] lines = Content.Split('\n');
-        var sb = new StringBuilder();
+        StringBuilder sb = new StringBuilder();
         if (Aliases.Count > 0) sb.AppendLine($"Aliases: {string.Join(", ", Aliases)}");
         if (Keywords.Count > 0) sb.AppendLine($"Keywords: {string.Join(", ", Keywords)}");
         foreach (string line in lines)
@@ -257,8 +258,9 @@ public class Note
         // An unterminated fence would otherwise silently read as "no frontmatter" with no signal — warn instead.
         if (!frontmatter.Success && raw.StartsWith("---\n", StringComparison.Ordinal))
             ARI.Common.Shared.Logger.LogWarning(
-                "[Note] Frontmatter fence looks unterminated — treating as no frontmatter. First 200 chars: {Snippet}",
-                raw.Length > 200 ? raw[..200] : raw);
+                "[Note] Frontmatter fence looks unterminated — treating as no frontmatter. First {MaxLength} chars: {Snippet}",
+                MAX_ERROR_SNIPPET_LENGTH,
+                raw.Length > MAX_ERROR_SNIPPET_LENGTH ? raw[..MAX_ERROR_SNIPPET_LENGTH] : raw);
         if (frontmatter.Success)
         {
             body = raw[frontmatter.Length..];

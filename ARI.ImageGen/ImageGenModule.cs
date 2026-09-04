@@ -9,7 +9,12 @@ namespace ARI.ImageGen;
 
 public class ImageGenModule : IImageGenModule
 {
-    private readonly ImageGenConfig _config;
+    private const int POLL_DELAY_MS = 1000;
+    private const int MAX_CONSECUTIVE_POLL_ERRORS = 10;
+    private const int COMFYUI_STARTUP_TIMEOUT_SEC = 60;
+    private const int COMFYUI_STARTUP_RETRY_DELAY_MS = 500;
+
+    private readonly ImageGenConfig config;
     private readonly object         _lock    = new();
     private Process?                _process = null;
     private Timer?                  _idleTimer;
@@ -18,7 +23,7 @@ public class ImageGenModule : IImageGenModule
 
     public ImageGenModule(ImageGenConfig config)
     {
-        _config = config;
+        this.config = config;
     }
 
     public async Task<byte[]> GenerateAsync(
@@ -39,12 +44,12 @@ public class ImageGenModule : IImageGenModule
         if (seed == -1) seed = Random.Shared.NextInt64(0, long.MaxValue);
 
         if (string.IsNullOrWhiteSpace(checkpointFilename))
-            checkpointFilename = _config.Checkpoint;
+            checkpointFilename = config.Checkpoint;
 
         referenceImages ??= [];
 
         // Upload reference images to ComfyUI's input directory before building the workflow.
-        string baseUrl = $"http://127.0.0.1:{_config.Port}";
+        string baseUrl = $"http://127.0.0.1:{config.Port}";
         List<string> uploadedNames = new();
         using HttpClient hc = new();
         foreach (string path in referenceImages)
@@ -86,7 +91,7 @@ public class ImageGenModule : IImageGenModule
         int consecutiveErrors = 0;
         while (!ct.IsCancellationRequested)
         {
-            await Task.Delay(1000, ct);
+            await Task.Delay(POLL_DELAY_MS, ct);
 
             try
             {
@@ -142,7 +147,7 @@ public class ImageGenModule : IImageGenModule
                 consecutiveErrors++;
                 Shared.Logger.LogWarning("[ImageGen] Poll error ({Count}): {Msg}", consecutiveErrors, ex.Message);
                 // If ComfyUI has crashed (10 consecutive failures), give up rather than hanging forever.
-                if (consecutiveErrors >= 10)
+                if (consecutiveErrors >= MAX_CONSECUTIVE_POLL_ERRORS)
                     throw new Exception($"ComfyUI stopped responding after {consecutiveErrors} consecutive poll failures: {ex.Message}", ex);
             }
         }
@@ -176,7 +181,7 @@ public class ImageGenModule : IImageGenModule
         if (!File.Exists(mainScript))
             throw new Exception($"ComfyUI main.py not found at {mainScript}. Is it installed?");
 
-        ProcessStartInfo psi = new(python, $"\"{mainScript}\" --port {_config.Port} --listen 127.0.0.1 --preview-method none")
+        ProcessStartInfo psi = new(python, $"\"{mainScript}\" --port {config.Port} --listen 127.0.0.1 --preview-method none")
         {
             UseShellExecute        = false,
             RedirectStandardOutput = true,
@@ -192,14 +197,14 @@ public class ImageGenModule : IImageGenModule
         process.BeginErrorReadLine();
         lock (_lock) _process = process;
 
-        Shared.Logger.LogInformation("[ImageGen] ComfyUI starting on port {Port}...", _config.Port);
+        Shared.Logger.LogInformation("[ImageGen] ComfyUI starting on port {Port}...", config.Port);
 
         // Wait until the HTTP server is ready
         using HttpClient hc = new() { Timeout = TimeSpan.FromSeconds(2) };
-        string url = $"http://127.0.0.1:{_config.Port}";
+        string url = $"http://127.0.0.1:{config.Port}";
         Stopwatch sw = Stopwatch.StartNew();
 
-        while (sw.Elapsed < TimeSpan.FromSeconds(60) && !ct.IsCancellationRequested)
+        while (sw.Elapsed < TimeSpan.FromSeconds(COMFYUI_STARTUP_TIMEOUT_SEC) && !ct.IsCancellationRequested)
         {
             try
             {
@@ -207,7 +212,7 @@ public class ImageGenModule : IImageGenModule
                 if (r.IsSuccessStatusCode) break;
             }
             catch { }
-            await Task.Delay(500, ct);
+            await Task.Delay(COMFYUI_STARTUP_RETRY_DELAY_MS, ct);
         }
 
         Shared.Logger.LogInformation("[ImageGen] ComfyUI ready.");
@@ -235,7 +240,7 @@ public class ImageGenModule : IImageGenModule
         {
             _idleTimer?.Dispose();
             _idleTimer = new Timer(_ => Shutdown(), null,
-                TimeSpan.FromSeconds(_config.IdleSeconds),
+                TimeSpan.FromSeconds(config.IdleSeconds),
                 Timeout.InfiniteTimeSpan);
         }
     }

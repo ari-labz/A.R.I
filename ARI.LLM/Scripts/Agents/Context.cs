@@ -25,7 +25,7 @@ internal class Context : Agent
 
     public Context()
     {
-        httpClient = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+        httpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
         resolvedPrompt = "";
     }
 

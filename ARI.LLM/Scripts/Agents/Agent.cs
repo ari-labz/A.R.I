@@ -55,7 +55,7 @@ public abstract class Agent
     [JsonIgnore] internal Action<string, ThreadPhase>? OnPhaseChange { get; set; }
 
     [JsonIgnore] internal virtual int  MemoryLimit => 0;  // 0 = unlimited
-    internal virtual bool SuppressLog()    => false;
+    internal virtual bool SuppressLog => false;
     [JsonIgnore] internal virtual bool LogReasoning    => false;
 
     // ── Constants ────────────────────────────────────────────────────────────
@@ -65,6 +65,7 @@ public abstract class Agent
     private const int    MAX_DEGRADE_EVENTS  = 5;
     private const int    AVERAGE_RESPONSE_WINDOW = 25;
     private const string ATTACHMENT_DIVIDER  = "-------------------";
+    private const double CONTEXT_CHAR_MULTIPLIER = 3.5;
 
     // Sent as a user message when the thinking budget runs out, at the end of the sentence in progress.
     // It must leave acting on the table: the old server-side wording demanded a finished reply, so a turn
@@ -84,7 +85,7 @@ public abstract class Agent
 
     private static string BuildBudgets(int thinking, int reply, int context, int toolCalls)
     {
-        var lines = new List<string>();
+        List<string> lines = new List<string>();
 
         if (thinking  > 0) lines.Add($"Thinking Token Budget: {thinking}");
         if (reply     > 0) lines.Add($"Reply Token Budget: {reply}");
@@ -107,7 +108,7 @@ public abstract class Agent
             ? v
             : fallback;
         foreach ((string token, string value) in tokens)
-            text = text.Replace("{" + token + "}", value);
+            text = text.Replace($"{{{token}}}", value);
         return text;
     }
 
@@ -130,7 +131,7 @@ public abstract class Agent
     public (int Used, int Limit) GetContextStats(Thread? thread)
     {
         if (thread is null) return (0, BudgetContext);
-        int maxChars = BudgetContext > 0 ? (int)(BudgetContext * 3.5) : 0;
+        int maxChars = BudgetContext > 0 ? (int)(BudgetContext * CONTEXT_CHAR_MULTIPLIER) : 0;
         List<ThreadMessage> ctx = thread.GetChatHistory(MemoryLimit, maxChars);
         int chars = 0;
         foreach (ThreadMessage m in ctx)
@@ -420,16 +421,16 @@ public abstract class Agent
     // CurrentDoc; Dispose() closes the stream and signals the server slot is free.
     private sealed class Step : IDisposable
     {
-        private readonly Stream        _stream;
-        private readonly StreamReader  _reader;
-        private readonly Action        _onClose;
+        private readonly Stream        stream;
+        private readonly StreamReader  reader;
+        private readonly Action        onClose;
         internal         JsonDocument? CurrentDoc;
 
         internal Step(Stream stream, StreamReader reader, Action onClose)
         {
-            _stream  = stream;
-            _reader  = reader;
-            _onClose = onClose;
+            this.stream = stream;
+            this.reader = reader;
+            this.onClose = onClose;
         }
 
         internal async Task<bool> IsStreaming(CancellationToken ct)
@@ -437,7 +438,7 @@ public abstract class Agent
             CurrentDoc?.Dispose();
             CurrentDoc = null;
             string? line;
-            while ((line = await _reader.ReadLineAsync(ct)) is not null)
+            while ((line = await reader.ReadLineAsync(ct)) is not null)
             {
                 if (string.IsNullOrWhiteSpace(line) || !line.StartsWith("data: ")) continue;
                 string payload = line["data: ".Length..];
@@ -451,9 +452,9 @@ public abstract class Agent
         public void Dispose()
         {
             CurrentDoc?.Dispose();
-            _reader.Dispose();
-            _stream.Dispose();
-            _onClose();
+            reader.Dispose();
+            stream.Dispose();
+            onClose();
         }
     }
 
@@ -463,7 +464,7 @@ public abstract class Agent
 
         prompt = OnPrompt(thread, prompt, opts);
         if (OnPromptPipeline is not null) prompt = OnPromptPipeline(thread, prompt, opts);
-        if (!SuppressLog())
+        if (!SuppressLog)
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) prompt\n\"{Prompt}\"", Name, thread.Key, prompt);
 
         // ── Build turn ────────────────────────────────────────────────────────
@@ -621,7 +622,7 @@ public abstract class Agent
     {
         if (thread.Interjections.IsEmpty) return null;
         List<string> parts = new(); List<string> raw = new(); string user = "";
-        while (thread.Interjections.TryDequeue(out var m))
+        while (thread.Interjections.TryDequeue(out (string User, string Text) m))
         {
             parts.Add(string.IsNullOrWhiteSpace(m.User) ? m.Text : $"{m.User}: {m.Text}");
             raw.Add(m.Text);
@@ -701,7 +702,7 @@ public abstract class Agent
         if (!toolsExhausted && thread.tools.Count > 0)
         {
             List<object> schemas = new();
-            foreach (var (name, tool) in thread.tools)
+            foreach ((string name, (object Schema, Func<string, Task<ToolResult>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter, Func<string, string?>? StreamingDisplay, Func<string, string?>? StreamingPreCheck, Func<string, string?>? PreCheck, Func<string, ToolResult, ToolResult>? PostRun) tool) in thread.tools)
             {
                 // Hard research gate: withdraw whichever half of the web tools is spent, so reading
                 // survives a search block and she can still finish the job from what she already found.
@@ -719,7 +720,7 @@ public abstract class Agent
             lci.EstimatedInputTokens = (int)(totalChars / CHARS_PER_TOKEN);
         }
 
-        if (!SuppressLog() && turn.ToolCallCount == 0)
+        if (!SuppressLog && turn.ToolCallCount == 0)
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) {Tools}", Name, thread.Key,
                 turn.ToolSchemas is not null ? $"{turn.ToolSchemas.Length} tool(s) available: {string.Join(", ", thread.tools.Keys)}" : "no tools registered");
     }
@@ -736,7 +737,7 @@ public abstract class Agent
         Dictionary<string, object?> body = BuildRequest(thread, turn.Messages, turn.MaxTokens, turn.ThinkBudget, turn.Opts.ThinkingBudget, turn.ToolSchemas, Think);
 
         string json = JsonSerializer.Serialize(body);
-        if (!SuppressLog())
+        if (!SuppressLog)
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) → request (step {Step}): reply_budget={MT}, tools={N}, msgs={Msgs}, think={Think} (et={ET}/budget={B})",
                 Name, thread.Key, turn.ToolCallCount,
                 turn.MaxTokens,
@@ -858,7 +859,7 @@ public abstract class Agent
         // Any reasoning token means she is Thinking, immediately.
         if (reasoningDelta) AdvancePhase(turn, ThreadPhase.Thinking);
 
-        if (!SuppressLog())
+        if (!SuppressLog)
         {
             DateTime now = DateTime.UtcNow;
             if ((now - turn.LastProgressLog).TotalSeconds >= 3)
@@ -866,7 +867,7 @@ public abstract class Agent
                 turn.LastProgressLog = now;
                 int argChars = 0;
                 List<string> callNames = new();
-                foreach (var call in turn.PendingCalls.Values) { argChars += call.Args.Length; callNames.Add(call.Name); }
+                foreach ((string Id, string Name, StringBuilder Args) call in turn.PendingCalls.Values) { argChars += call.Args.Length; callNames.Add(call.Name); }
                 string tail = turn.ResponseBuilder.Length > 0
                     ? turn.ResponseBuilder.ToString()
                     : (turn.PendingCalls.Count > 0 ? turn.PendingCalls.Values.Last().Args.ToString() : "");
@@ -997,7 +998,7 @@ public abstract class Agent
                     if (turn.OnTextDelta is not null) turn.TextOnlyBuilder.Append(preText + "\n");
                     if (turn.LiveText is not null) { turn.Trace.Remove(turn.LiveText); turn.LiveText = null; }
                     turn.Trace.Add(new TraceStep { Kind = "text", Text = preText });
-                    if (!SuppressLog()) Shared.Logger.LogInformation("[{Agent}] ({Thread}) \"{Text}\"", Name, thread.Key, preText);
+                    if (!SuppressLog) Shared.Logger.LogInformation("[{Agent}] ({Thread}) \"{Text}\"", Name, thread.Key, preText);
                 }
                 turn.ResponseBuilder.Clear();
                 if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
@@ -1054,7 +1055,7 @@ public abstract class Agent
                         {
                             string partialArgs = call.Args.ToString();
                             string? abortMsg = null;
-                            if (thread.tools.TryGetValue(call.Name, out var streamTool))
+                            if (thread.tools.TryGetValue(call.Name, out (object Schema, Func<string, Task<ToolResult>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter, Func<string, string?>? StreamingDisplay, Func<string, string?>? StreamingPreCheck, Func<string, string?>? PreCheck, Func<string, ToolResult, ToolResult>? PostRun) streamTool))
                                 abortMsg = streamTool.StreamingPreCheck?.Invoke(partialArgs);
                             if (abortMsg is null)
                                 abortMsg = OnToolStreaming(thread, turn.ToolTurn, call.Name, partialArgs);
@@ -1064,7 +1065,7 @@ public abstract class Agent
                                 turn.EarlyAbort = (call.Id, call.Name, partialArgs, abortMsg);
                         }
 
-                        if (thread.tools.TryGetValue(call.Name, out var liveTool) && liveTool.StreamingDisplay is not null)
+                        if (thread.tools.TryGetValue(call.Name, out (object Schema, Func<string, Task<ToolResult>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter, Func<string, string?>? StreamingDisplay, Func<string, string?>? StreamingPreCheck, Func<string, string?>? PreCheck, Func<string, ToolResult, ToolResult>? PostRun) liveTool) && liveTool.StreamingDisplay is not null)
                         {
                             string? newMarker = liveTool.StreamingDisplay(call.Args.ToString());
                             if (newMarker != null)
@@ -1248,11 +1249,11 @@ public abstract class Agent
             catch { /* tracing must never break a turn */ }
         }
 
-        if (!SuppressLog())
+        if (!SuppressLog)
         {
             int doneArgChars = 0;
-            var doneNames    = new List<string>();
-            foreach (var call in turn.PendingCalls.Values) { doneArgChars += call.Args.Length; doneNames.Add(call.Name); }
+            List<string> doneNames    = new List<string>();
+            foreach ((string Id, string Name, StringBuilder Args) call in turn.PendingCalls.Values) { doneArgChars += call.Args.Length; doneNames.Add(call.Name); }
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) ← stream done: finish={FR}, completion_tokens={CT}, reasoning_chars={RC}, {PC} native call(s) [{Names}], {CC} content chars, {AC} arg chars",
                 Name, thread.Key, turn.FinishReason ?? "null", turn.CompletionTokens, turn.ReasoningChars, turn.PendingCalls.Count,
                 string.Join(",", doneNames), turn.ResponseBuilder.Length, doneArgChars);
@@ -1317,7 +1318,7 @@ public abstract class Agent
 
         if (turn.EarlyAbort is not null)
         {
-            var (aId, aName, aArgs, aErr) = turn.EarlyAbort.Value;
+            (string aId, string aName, string aArgs, string aErr) = turn.EarlyAbort.Value;
             string? aPath    = ToolCallParser.TryExtractJsonString(aArgs, "path");
             string  safeArgs = JsonSerializer.Serialize(new { path = aPath ?? "" });
 
@@ -1361,9 +1362,9 @@ public abstract class Agent
         if (turn.PendingCalls.Count > 0 && (turn.FinishReason == "tool_calls" || turn.FinishReason == "stop" || turn.FinishReason == null))
         {
             // Sanitise args before execution — repair malformed JSON, strip think leaks, salvage runaway args.
-            foreach (var key in turn.PendingCalls.Keys)
+            foreach (int key in turn.PendingCalls.Keys)
             {
-                var (id, name, args) = turn.PendingCalls[key];
+                (string id, string name, StringBuilder args) = turn.PendingCalls[key];
                 string original = args.ToString();
                 string raw      = original;
                 if (Runaway.IsToolLeak(raw))
@@ -1380,11 +1381,11 @@ public abstract class Agent
 
             turn.ToolCallCount += turn.PendingCalls.Count;
 
-            var orderedCalls = new List<KeyValuePair<int, (string Id, string Name, StringBuilder Args)>>(turn.PendingCalls);
+            List<KeyValuePair<int, (string Id, string Name, StringBuilder Args)>> orderedCalls = new List<KeyValuePair<int, (string Id, string Name, StringBuilder Args)>>(turn.PendingCalls);
             orderedCalls.Sort((a, b) => a.Key.CompareTo(b.Key));
 
-            var toolCallList = new List<object>();
-            foreach (var kv in orderedCalls)
+            List<object> toolCallList = new List<object>();
+            foreach (KeyValuePair<int, (string Id, string Name, StringBuilder Args)> kv in orderedCalls)
             {
                 string args = ToolCallParser.TrimArgs(kv.Value.Name, kv.Value.Args.ToString());
                 toolCallList.Add(new { id = kv.Value.Id, type = "function", function = new { name = kv.Value.Name, arguments = args } });
@@ -1466,14 +1467,14 @@ public abstract class Agent
             { "read_file", "search_files", "list_directory", "find_files", "search_brain" };
         Dictionary<int, Task<ToolResult>> prelaunched = new();
         if (turn.PendingCalls.Count > 1)
-            foreach (var (idx, c) in turn.PendingCalls)
-                if (readOnlyTools.Contains(c.Name) && thread.tools.TryGetValue(c.Name, out var roTool))
+            foreach ((int idx, (string Id, string Name, StringBuilder Args) c) in turn.PendingCalls)
+                if (readOnlyTools.Contains(c.Name) && thread.tools.TryGetValue(c.Name, out (object Schema, Func<string, Task<ToolResult>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter, Func<string, string?>? StreamingDisplay, Func<string, string?>? StreamingPreCheck, Func<string, string?>? PreCheck, Func<string, ToolResult, ToolResult>? PostRun) roTool))
                     prelaunched[idx] = roTool.Execute(c.Args.ToString());
 
         bool productiveBatch   = false;
         bool batchRevealedCard = false;
 
-        foreach (var (callIndex, call) in turn.PendingCalls)
+        foreach ((int callIndex, (string Id, string Name, StringBuilder Args) call) in turn.PendingCalls)
         {
             string argsJson = call.Args.ToString();
             string result;
@@ -1482,7 +1483,7 @@ public abstract class Agent
             SessionRecorder.ToolCall(turn.Rec, turn.RecStep, call.Id, call.Name, argsJson);
 
             string? guard = null;
-            bool toolFound = thread.tools.TryGetValue(call.Name, out var tool);
+            bool toolFound = thread.tools.TryGetValue(call.Name, out (object Schema, Func<string, Task<ToolResult>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter, Func<string, string?>? StreamingDisplay, Func<string, string?>? StreamingPreCheck, Func<string, string?>? PreCheck, Func<string, ToolResult, ToolResult>? PostRun) tool);
             if (toolFound)
                 guard = tool.PreCheck?.Invoke(argsJson);
             if (guard is null)
@@ -1665,8 +1666,8 @@ public abstract class Agent
                 try
                 {
                     using JsonDocument lDoc = JsonDocument.Parse(argsJson);
-                    string lp = lDoc.RootElement.TryGetProperty("path",    out var lpe)  ? lpe.GetString()  ?? "" :
-                                lDoc.RootElement.TryGetProperty("pattern", out var lpte) ? lpte.GetString() ?? "" : "";
+                    string lp = lDoc.RootElement.TryGetProperty("path",    out JsonElement lpe)  ? lpe.GetString()  ?? "" :
+                                lDoc.RootElement.TryGetProperty("pattern", out JsonElement lpte) ? lpte.GetString() ?? "" : "";
                     label = System.IO.Path.GetFileName(lp.Trim('"', '\'', ' ', '\\'));
                 }
                 catch { /* ignore */ }
@@ -1690,7 +1691,7 @@ public abstract class Agent
                 try
                 {
                     using JsonDocument pDoc = JsonDocument.Parse(argsJson);
-                    if (pDoc.RootElement.TryGetProperty("path", out var pe)) readPath = pe.GetString();
+                    if (pDoc.RootElement.TryGetProperty("path", out JsonElement pe)) readPath = pe.GetString();
                 }
                 catch { /* ignore — dedup exemption just won't fire for this call */ }
             }
@@ -1779,8 +1780,8 @@ public abstract class Agent
         [System.Runtime.CompilerServices.CallerLineNumber] int callerLine = 0)
     {
         if (turn.PendingPrefillFlips.Count == 0) return false;
-        var flipDones = new List<string>();
-        foreach (var flip in turn.PendingPrefillFlips) flipDones.Add(flip.Done);
+        List<string> flipDones = new List<string>();
+        foreach ((string Active, string Done) flip in turn.PendingPrefillFlips) flipDones.Add(flip.Done);
         Shared.Logger.LogInformation("[{Agent}] ({Thread}) flush-prefill-flips @L{Line}: {Count} card(s) — {Cards}",
             Name, turn.Thread.Key, callerLine, turn.PendingPrefillFlips.Count, string.Join(", ", flipDones));
         foreach ((string active, string done) in turn.PendingPrefillFlips)
@@ -1919,8 +1920,8 @@ public abstract class Agent
             ThreadMessage current   = collapsed[^1];
             string        promptText = $"{memoryBlock}# Prompt:\n\n{current.Username}: {current.Content}";
 
-            var msgImages = new List<Attachment>();
-            var msgTexts  = new List<Attachment>();
+            List<Attachment> msgImages = new List<Attachment>();
+            List<Attachment> msgTexts  = new List<Attachment>();
             foreach (Attachment a in msgAtts)
             {
                 if (a.IsImage) msgImages.Add(a);
@@ -2127,7 +2128,7 @@ public abstract class Agent
 
         double tokPerSec = completionTokens > 0 ? completionTokens / elapsed : 0;
 
-        if (!SuppressLog())
+        if (!SuppressLog)
         {
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) responded in {Seconds}s (prefill {Prefill}s, thinking {Thinking}s, typing {Typing}s; {Tokens} tokens, {TokPerSec} t/s)",
                 Name, thread.Key, elapsed.ToString("F1"),
@@ -2194,7 +2195,7 @@ public abstract class Agent
 
     private static string ExtractLogText(string content)
     {
-        var sb = new StringBuilder();
+        StringBuilder sb = new StringBuilder();
         foreach (object block in ContentBlock.Parse(content))
         {
             if (block is TextBlock tb) sb.Append(tb.Text);

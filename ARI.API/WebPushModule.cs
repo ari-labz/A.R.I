@@ -18,9 +18,9 @@ public sealed class WebPushModule : IWebPushModule
 
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
 
-    private readonly ILogger<WebPushModule> _log;
+    private readonly ILogger<WebPushModule> log;
     private readonly string _subsPath;
-    private readonly string _subject;               // mailto: or https: contact, required by the VAPID spec
+    private readonly string subject;               // mailto: or https: contact, required by the VAPID spec
     private readonly VapidDetails _vapid;
     private readonly WebPushClient _client = new();
     private readonly ConcurrentDictionary<string, StoredSubscription> _subs = new();
@@ -30,17 +30,17 @@ public sealed class WebPushModule : IWebPushModule
 
     public WebPushModule(ILogger<WebPushModule> log, string storageDir, string subject)
     {
-        _log     = log;
-        _subject = string.IsNullOrWhiteSpace(subject) ? "mailto:owner@a-r-i.ai" : subject;
+        this.log = log;
+        this.subject = string.IsNullOrWhiteSpace(subject) ? "mailto:owner@a-r-i.ai" : subject;
         Directory.CreateDirectory(storageDir);
         _subsPath = Path.Combine(storageDir, "PushSubscriptions.json");
 
         VapidKeys keys = LoadOrCreateVapidKeys(Path.Combine(storageDir, "VapidKeys.json"));
-        _vapid = new VapidDetails(_subject, keys.PublicKey, keys.PrivateKey);
+        _vapid = new VapidDetails(subject, keys.PublicKey, keys.PrivateKey);
 
         foreach (StoredSubscription s in LoadSubscriptions())
             _subs[s.Endpoint] = s;
-        _log.LogInformation("[WebPush] ready — {Count} subscription(s) loaded.", _subs.Count);
+        log.LogInformation("[WebPush] ready — {Count} subscription(s) loaded.", _subs.Count);
     }
 
     public void AddSubscription(string endpoint, string p256dh, string auth)
@@ -48,17 +48,17 @@ public sealed class WebPushModule : IWebPushModule
         if (string.IsNullOrWhiteSpace(endpoint)) return;
         _subs[endpoint] = new StoredSubscription(endpoint, p256dh, auth);
         Save();
-        _log.LogInformation("[WebPush] subscription registered ({Count} total).", _subs.Count);
+        log.LogInformation("[WebPush] subscription registered ({Count} total).", _subs.Count);
     }
 
     public void RemoveSubscription(string endpoint)
     {
-        if (_subs.TryRemove(endpoint, out _)) { Save(); _log.LogInformation("[WebPush] subscription removed ({Count} left).", _subs.Count); }
+        if (_subs.TryRemove(endpoint, out _)) { Save(); log.LogInformation("[WebPush] subscription removed ({Count} left).", _subs.Count); }
     }
 
     public async Task SendPushNotification(string text, string? url = null, string? title = null)
     {
-        if (_subs.IsEmpty) { _log.LogInformation("[WebPush] no subscriptions — nothing to notify."); return; }
+        if (_subs.IsEmpty) { log.LogInformation("[WebPush] no subscriptions — nothing to notify."); return; }
 
         string payload = JsonSerializer.Serialize(new
         {
@@ -67,7 +67,7 @@ public sealed class WebPushModule : IWebPushModule
             url,
         });
 
-        _log.LogInformation("[WebPush] sending to {Count} subscription(s)…", _subs.Count);
+        log.LogInformation("[WebPush] sending to {Count} subscription(s)…", _subs.Count);
         List<string> dead = new();
         foreach (StoredSubscription s in _subs.Values.ToArray())
         {
@@ -81,18 +81,18 @@ public sealed class WebPushModule : IWebPushModule
                 // far as the server can ever confirm; whether the OS/browser actually surfaces it on
                 // the device is outside this process (battery optimization, the PWA not being
                 // installed to the home screen, notifications disabled at the OS level, etc.).
-                _log.LogInformation("[WebPush] accepted by push service ({Tag}).", tag);
+                log.LogInformation("[WebPush] accepted by push service ({Tag}).", tag);
             }
             catch (WebPushException ex) when (ex.StatusCode is System.Net.HttpStatusCode.Gone
                                                             or System.Net.HttpStatusCode.NotFound)
             {
                 // 404/410 — the browser dropped this subscription; prune it.
-                _log.LogWarning("[WebPush] subscription gone ({Tag}, {Status}) — pruning.", tag, ex.StatusCode);
+                log.LogWarning("[WebPush] subscription gone ({Tag}, {Status}) — pruning.", tag, ex.StatusCode);
                 dead.Add(s.Endpoint);
             }
             catch (Exception ex)
             {
-                _log.LogWarning("[WebPush] send failed ({Tag}): {Msg}", tag, ex.Message);
+                log.LogWarning("[WebPush] send failed ({Tag}): {Msg}", tag, ex.Message);
             }
         }
 
@@ -100,7 +100,7 @@ public sealed class WebPushModule : IWebPushModule
         {
             foreach (string endpoint in dead) _subs.TryRemove(endpoint, out _);
             Save();
-            _log.LogInformation("[WebPush] pruned {Count} expired subscription(s).", dead.Count);
+            log.LogInformation("[WebPush] pruned {Count} expired subscription(s).", dead.Count);
         }
     }
 
@@ -116,13 +116,13 @@ public sealed class WebPushModule : IWebPushModule
                 if (existing is { PublicKey.Length: > 0, PrivateKey.Length: > 0 }) return existing;
             }
         }
-        catch (Exception ex) { _log.LogWarning("[WebPush] could not read VAPID keys ({Msg}); regenerating.", ex.Message); }
+        catch (Exception ex) { log.LogWarning("[WebPush] could not read VAPID keys ({Msg}); regenerating.", ex.Message); }
 
         VapidDetails generated = VapidHelper.GenerateVapidKeys();
         VapidKeys keys = new(generated.PublicKey, generated.PrivateKey);
         try { File.WriteAllText(path, JsonSerializer.Serialize(keys, JsonOpts)); }
-        catch (Exception ex) { _log.LogWarning("[WebPush] could not persist VAPID keys: {Msg}", ex.Message); }
-        _log.LogInformation("[WebPush] generated a new VAPID keypair.");
+        catch (Exception ex) { log.LogWarning("[WebPush] could not persist VAPID keys: {Msg}", ex.Message); }
+        log.LogInformation("[WebPush] generated a new VAPID keypair.");
         return keys;
     }
 
@@ -133,7 +133,7 @@ public sealed class WebPushModule : IWebPushModule
             if (File.Exists(_subsPath))
                 return JsonSerializer.Deserialize<List<StoredSubscription>>(File.ReadAllText(_subsPath), JsonOpts) ?? new();
         }
-        catch (Exception ex) { _log.LogWarning("[WebPush] could not read subscriptions ({Msg}).", ex.Message); }
+        catch (Exception ex) { log.LogWarning("[WebPush] could not read subscriptions ({Msg}).", ex.Message); }
         return new();
     }
 
@@ -142,7 +142,7 @@ public sealed class WebPushModule : IWebPushModule
         lock (_saveLock)
         {
             try { File.WriteAllText(_subsPath, JsonSerializer.Serialize(_subs.Values.ToList(), JsonOpts)); }
-            catch (Exception ex) { _log.LogWarning("[WebPush] could not persist subscriptions: {Msg}", ex.Message); }
+            catch (Exception ex) { log.LogWarning("[WebPush] could not persist subscriptions: {Msg}", ex.Message); }
         }
     }
 }

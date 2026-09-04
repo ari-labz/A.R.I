@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.IO.Compression;
 using System.Security.Claims;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Channels;
@@ -102,7 +103,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
 
-        var allThreads = Llm.Threads;
+        IReadOnlyDictionary<string, ARI.LLM.Thread> allThreads = Llm.Threads;
 
         bool   callerIsAdmin = User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
         string? callerId     = callerIsAdmin ? null : User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
@@ -247,7 +248,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     {
         if (!User.IsInRole(ARI.API.Auth.Roles.Admin)) return Forbid();
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
-        var entities = await Llm.DebugExtractOnly(threadKey);
+        List<(string Entity, bool IsNew, string Excerpt, bool Sensitive)> entities = await Llm.DebugExtractOnly(threadKey);
         return Ok(entities.Select(e => new { e.Entity, e.IsNew, e.Excerpt, e.Sensitive }));
     }
 
@@ -257,7 +258,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     public IActionResult GetDebugSessions()
     {
         if (!User.IsInRole(ARI.API.Auth.Roles.Admin)) return Forbid();
-        var sessions = ARI.LLM.SessionRecorder.ListTodaysSessions();
+        List<ARI.LLM.SessionRecorder.DiskSession> sessions = ARI.LLM.SessionRecorder.ListTodaysSessions();
         return Ok(sessions.Select(s => new { stem = s.Stem, bytes = s.Bytes }));
     }
 
@@ -266,7 +267,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     public IActionResult GetDebugSession(string stem)
     {
         if (!User.IsInRole(ARI.API.Auth.Roles.Admin)) return Forbid();
-        var lines = ARI.LLM.SessionRecorder.ReadSessionFile(stem);
+        List<Dictionary<string, object?>>? lines = ARI.LLM.SessionRecorder.ReadSessionFile(stem);
         if (lines is null) return NotFound();
         return Ok(lines);
     }
@@ -338,7 +339,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         if (exportThread is not null && !CanAccessThread(exportThread)) return Forbid();
         List<ThreadItem> items = exportThread?.History ?? new();
         string log = string.Join("\n\n", items.Select(i => i.ToString()));
-        var bytes = System.Text.Encoding.UTF8.GetBytes(log);
+        byte[] bytes = Encoding.UTF8.GetBytes(log);
         return File(bytes, "text/plain", $"ari-{threadKey}-{DateTime.Now:yyyyMMdd-HHmm}.txt");
     }
 
@@ -953,7 +954,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                 scratchThread.Ct = CancellationToken.None;
 
                 string[] files = Directory.GetFiles(scratchpadDir, "*", SearchOption.AllDirectories);
-                var listing = new System.Text.StringBuilder();
+                StringBuilder listing = new StringBuilder();
                 listing.AppendLine("[Workspace files]");
                 foreach (string f in files)
                     listing.AppendLine(Path.GetRelativePath(scratchpadDir, f));
@@ -967,7 +968,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
             Project? project = projectStore.Get(pid);
             if (project is not null)
             {
-                var ctx = new System.Text.StringBuilder();
+                StringBuilder ctx = new StringBuilder();
                 ctx.AppendLine($"Project: {project.Name}");
                 if (!string.IsNullOrWhiteSpace(project.Instructions))
                     ctx.AppendLine().AppendLine(project.Instructions);

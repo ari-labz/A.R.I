@@ -12,6 +12,8 @@ namespace ARI.API.Auth;
 /// </summary>
 public class UserStore
 {
+    private const int FAILED_ATTEMPTS_BLOCK_THRESHOLD = 3;
+
     private readonly string            connStr;
     private readonly ILogger<UserStore> log;
 
@@ -130,7 +132,7 @@ public class UserStore
         using SqliteCommand cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT * FROM Users ORDER BY CreatedAt";
         using SqliteDataReader r = cmd.ExecuteReader();
-        var list = new List<User>();
+        List<User> list = new List<User>();
         while (r.Read()) list.Add(ReadUser(r));
         return list;
     }
@@ -246,7 +248,7 @@ public class UserStore
         cmd.Parameters.AddWithValue("$uid", userId);
         cmd.Parameters.AddWithValue("$now", now);
         using SqliteDataReader r = cmd.ExecuteReader();
-        var list = new List<UserSession>();
+        List<UserSession> list = new List<UserSession>();
         while (r.Read()) list.Add(ReadSession(r));
         return list;
     }
@@ -259,7 +261,7 @@ public class UserStore
         cmd.CommandText = "SELECT * FROM Sessions WHERE ExpiresAt > $now ORDER BY LastUsedAt DESC";
         cmd.Parameters.AddWithValue("$now", now);
         using SqliteDataReader r = cmd.ExecuteReader();
-        var list = new List<UserSession>();
+        List<UserSession> list = new List<UserSession>();
         while (r.Read()) list.Add(ReadSession(r));
         return list;
     }
@@ -299,7 +301,7 @@ public class UserStore
     {
         using SqliteConnection conn = Open();
         using SqliteCommand cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM IpBlocklist WHERE Ip = $ip AND FailedAttempts >= 3";
+        cmd.CommandText = $"SELECT COUNT(*) FROM IpBlocklist WHERE Ip = $ip AND FailedAttempts >= {FAILED_ATTEMPTS_BLOCK_THRESHOLD}";
         cmd.Parameters.AddWithValue("$ip", ip);
         return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
     }
@@ -343,9 +345,9 @@ public class UserStore
     {
         using SqliteConnection conn = Open();
         using SqliteCommand cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT * FROM IpBlocklist WHERE FailedAttempts >= 3 ORDER BY BlockedAt DESC";
+        cmd.CommandText = $"SELECT * FROM IpBlocklist WHERE FailedAttempts >= {FAILED_ATTEMPTS_BLOCK_THRESHOLD} ORDER BY BlockedAt DESC";
         using SqliteDataReader r = cmd.ExecuteReader();
-        var list = new List<BlockedIp>();
+        List<BlockedIp> list = new List<BlockedIp>();
         while (r.Read())
             list.Add(new BlockedIp
             {
@@ -369,10 +371,10 @@ public class UserStore
 
     private SqliteConnection Open()
     {
-        var conn = new SqliteConnection(connStr);
+        SqliteConnection conn = new SqliteConnection(connStr);
         conn.Open();
         conn.CreateCommand().ExecuteNonQuery(); // ensure WAL pragma
-        using var pragma = conn.CreateCommand();
+        using SqliteCommand pragma = conn.CreateCommand();
         pragma.CommandText = "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;";
         pragma.ExecuteNonQuery();
         return conn;

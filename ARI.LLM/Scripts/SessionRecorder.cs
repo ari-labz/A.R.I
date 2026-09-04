@@ -579,13 +579,13 @@ public static class SessionRecorder
                 .Select(root => Path.Combine(root, DateTime.Now.ToString("yyyy-MM-dd"), $"{Sanitize(stem)}.jsonl"))
                 .FirstOrDefault(File.Exists);
             if (path is null) return null;
-            var lines = new List<Dictionary<string, object?>>();
+            List<Dictionary<string, object?>> lines = new List<Dictionary<string, object?>>();
             foreach (string line in File.ReadLines(path))
             {
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 try
                 {
-                    var d = JsonSerializer.Deserialize<Dictionary<string, object?>>(line, SerializerOptions);
+                    Dictionary<string, object?>? d = JsonSerializer.Deserialize<Dictionary<string, object?>>(line, SerializerOptions);
                     if (d is not null) lines.Add(d);
                 }
                 catch { /* malformed line — skip */ }

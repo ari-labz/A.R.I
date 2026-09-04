@@ -2,6 +2,8 @@ using ARI.Common;
 using ARI.LLM;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace ARI.API;
 
@@ -11,11 +13,11 @@ public record RamSegment(string Label, string ServerName, long Bytes);
 public class SystemInfo
 {
     private LLMModule? _llm => (LLMModule?)Modules.Llm;
-    private readonly string _modelsPath;
+    private readonly string modelsPath;
 
     public SystemInfo(string modelsPath)
     {
-        _modelsPath = modelsPath;
+        this.modelsPath = modelsPath;
     }
 
     public long GetTotalRamBytes()
@@ -26,7 +28,7 @@ public class SystemInfo
         try
         {
             // Total physical unified memory (CPU + GPU share the same pool on Apple Silicon)
-            var psiHw = new ProcessStartInfo("/bin/sh", "-c \"sysctl -n hw.memsize\"")
+            ProcessStartInfo psiHw = new ProcessStartInfo("/bin/sh", "-c \"sysctl -n hw.memsize\"")
             {
                 RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true
             };
@@ -37,7 +39,7 @@ public class SystemInfo
                 throw new Exception("hw.memsize parse failed");
 
             // Free + speculative pages are the only truly unused unified memory
-            var psiVm = new ProcessStartInfo("/bin/sh", "-c \"vm_stat\"")
+            ProcessStartInfo psiVm = new ProcessStartInfo("/bin/sh", "-c \"vm_stat\"")
             {
                 RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true
             };
@@ -69,10 +71,10 @@ public class SystemInfo
         long totalSystem = GetTotalRamBytes();
         long accounted   = 0;
 
-        var serverEntries = new List<(string Name, long FileBytes, int ContextSize)>();
+        List<(string Name, long FileBytes, int ContextSize)> serverEntries = new List<(string Name, long FileBytes, int ContextSize)>();
 
         // PID-keyed: servers whose RAM we've already measured via PhysFootprint
-        var pidMeasuredSegments = new List<RamSegment>();
+        List<RamSegment> pidMeasuredSegments = new List<RamSegment>();
 
         if (_llm is not null)
         {
@@ -81,7 +83,7 @@ public class SystemInfo
                 if (server.Status != ServerStatus.Online || server.Pid <= 0 || server.ActiveModel is null)
                     continue;
 
-                string modelFile = Path.Combine(_modelsPath, server.ActiveModel.Path);
+                string modelFile = Path.Combine(modelsPath, server.ActiveModel.Path);
                 long   fileBytes = File.Exists(modelFile) ? new FileInfo(modelFile).Length : 0;
 
                 if (fileBytes > 0)
@@ -115,10 +117,10 @@ public class SystemInfo
         long kvPool   = Math.Max(0, totalSystem - accounted - OsBaselineBytes);
         long totalCtx = serverEntries.Sum(e => (long)e.ContextSize);
 
-        var segments = new List<RamSegment>();
+        List<RamSegment> segments = new List<RamSegment>();
 
         // File-size tracked servers: split kvPool proportionally by context size
-        foreach (var e in serverEntries)
+        foreach ((string Name, long FileBytes, int ContextSize) e in serverEntries)
         {
             segments.Add(new RamSegment(e.Name, e.Name, e.FileBytes));
             if (kvPool > 0 && totalCtx > 0)
@@ -132,7 +134,7 @@ public class SystemInfo
         if (pidMeasuredSegments.Count > 0)
         {
             long kvPerPidServer = kvPool > 0 ? kvPool / pidMeasuredSegments.Count : 0;
-            foreach (var seg in pidMeasuredSegments)
+            foreach (RamSegment seg in pidMeasuredSegments)
             {
                 segments.Add(seg);
                 if (kvPerPidServer > 0)
@@ -153,7 +155,7 @@ public class SystemInfo
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return 0;
         try
         {
-            var psi = new ProcessStartInfo("/bin/sh", "-c \"sysctl vm.swapusage\"")
+            ProcessStartInfo psi = new ProcessStartInfo("/bin/sh", "-c \"sysctl vm.swapusage\"")
             {
                 RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true
             };
@@ -175,22 +177,22 @@ public class SystemInfo
 
     public List<GpuInfo> GetGpus()
     {
-        var gpus = new List<GpuInfo>();
+        List<GpuInfo> gpus = new List<GpuInfo>();
         try
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
                 // Apple Silicon shares unified memory — report total physical RAM as "VRAM"
-                var psi = new ProcessStartInfo("/bin/sh", "-c \"system_profiler SPDisplaysDataType -json\"")
+                ProcessStartInfo psi = new ProcessStartInfo("/bin/sh", "-c \"system_profiler SPDisplaysDataType -json\"")
                     { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
                 using Process p = Process.Start(psi)!;
                 string json = p.StandardOutput.ReadToEnd();
                 p.WaitForExit();
 
-                using var doc = System.Text.Json.JsonDocument.Parse(json);
+                using JsonDocument doc = JsonDocument.Parse(json);
                 // Fetch total physical RAM once — Apple Silicon shares it as unified GPU/CPU memory
                 long hwMemsize = 0;
-                var hwPsi = new ProcessStartInfo("/bin/sh", "-c \"sysctl -n hw.memsize\"")
+                ProcessStartInfo hwPsi = new ProcessStartInfo("/bin/sh", "-c \"sysctl -n hw.memsize\"")
                     { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
                 using (Process hw = Process.Start(hwPsi)!)
                 {
@@ -199,12 +201,12 @@ public class SystemInfo
                     long.TryParse(hwOut, out hwMemsize);
                 }
 
-                foreach (var display in doc.RootElement.GetProperty("SPDisplaysDataType").EnumerateArray())
+                foreach (JsonElement display in doc.RootElement.GetProperty("SPDisplaysDataType").EnumerateArray())
                 {
-                    string name = display.TryGetProperty("sppci_model", out var n) ? n.GetString() ?? "Unknown" : "Unknown";
+                    string name = display.TryGetProperty("sppci_model", out JsonElement n) ? n.GetString() ?? "Unknown" : "Unknown";
 
                     long vram = 0;
-                    bool builtin = display.TryGetProperty("sppci_bus", out var bus)
+                    bool builtin = display.TryGetProperty("sppci_bus", out JsonElement bus)
                                    && bus.GetString()?.Contains("builtin", StringComparison.OrdinalIgnoreCase) == true;
 
                     if (builtin)
@@ -212,10 +214,10 @@ public class SystemInfo
                         // Apple Silicon — unified memory pool shared between CPU and GPU
                         vram = hwMemsize;
                     }
-                    else if (display.TryGetProperty("sppci_vram", out var vramStr))
+                    else if (display.TryGetProperty("sppci_vram", out JsonElement vramStr))
                     {
                         string vs = vramStr.GetString() ?? "";
-                        var match = System.Text.RegularExpressions.Regex.Match(vs, @"(\d+)\s*(MB|GB)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        Match match = Regex.Match(vs, @"(\d+)\s*(MB|GB)", RegexOptions.IgnoreCase);
                         if (match.Success)
                         {
                             long val = long.Parse(match.Groups[1].Value);
@@ -230,7 +232,7 @@ public class SystemInfo
                 // Try nvidia-smi first for NVIDIA GPUs (accurate VRAM)
                 try
                 {
-                    var nv = new ProcessStartInfo("nvidia-smi", "--query-gpu=name,memory.total --format=csv,noheader,nounits")
+                    ProcessStartInfo nv = new ProcessStartInfo("nvidia-smi", "--query-gpu=name,memory.total --format=csv,noheader,nounits")
                         { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
                     using Process nvp = Process.Start(nv)!;
                     string nvOut = nvp.StandardOutput.ReadToEnd();
@@ -254,7 +256,7 @@ public class SystemInfo
                 // Fallback to WMI for non-NVIDIA or if nvidia-smi failed
                 if (gpus.Count == 0)
                 {
-                    var wmi = new ProcessStartInfo("cmd.exe", "/c wmic path win32_VideoController get Name,AdapterRAM /format:csv")
+                    ProcessStartInfo wmi = new ProcessStartInfo("cmd.exe", "/c wmic path win32_VideoController get Name,AdapterRAM /format:csv")
                         { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
                     using Process wp = Process.Start(wmi)!;
                     string wmiOut = wp.StandardOutput.ReadToEnd();
@@ -276,7 +278,7 @@ public class SystemInfo
             {
                 try
                 {
-                    var nv = new ProcessStartInfo("nvidia-smi", "--query-gpu=name,memory.total --format=csv,noheader,nounits")
+                    ProcessStartInfo nv = new ProcessStartInfo("nvidia-smi", "--query-gpu=name,memory.total --format=csv,noheader,nounits")
                         { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
                     using Process nvp = Process.Start(nv)!;
                     string nvOut = nvp.StandardOutput.ReadToEnd();
@@ -308,7 +310,7 @@ public class SystemInfo
         {
             try
             {
-                var psi = new ProcessStartInfo("/bin/sh", "-c \"sysctl -n hw.memsize\"")
+                ProcessStartInfo psi = new ProcessStartInfo("/bin/sh", "-c \"sysctl -n hw.memsize\"")
                     { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
                 using Process p = Process.Start(psi)!;
                 string output = p.StandardOutput.ReadToEnd().Trim();
@@ -321,7 +323,7 @@ public class SystemInfo
         {
             try
             {
-                var psi = new ProcessStartInfo("cmd.exe", "/c wmic ComputerSystem get TotalPhysicalMemory /format:csv")
+                ProcessStartInfo psi = new ProcessStartInfo("cmd.exe", "/c wmic ComputerSystem get TotalPhysicalMemory /format:csv")
                     { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
                 using Process p = Process.Start(psi)!;
                 string output = p.StandardOutput.ReadToEnd();
@@ -364,7 +366,7 @@ public class SystemInfo
 
         try
         {
-            var info   = new RUsageInfoV0();
+            RUsageInfoV0 info   = new RUsageInfoV0();
             int result = proc_pid_rusage(pid, 0, ref info);
             return result == 0 ? (long)info.ri_phys_footprint : 0;
         }

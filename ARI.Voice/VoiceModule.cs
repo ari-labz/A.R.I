@@ -51,7 +51,7 @@ public class VoiceModule : IVoiceModule, IDisposable
 
     public async Task SwitchEngine(string engine, string modelName, CancellationToken ct = default)
     {
-        var newSynth = await factory(engine, modelName)
+        ITtsSynthesiser? newSynth = await factory(engine, modelName)
             ?? throw new InvalidOperationException($"Could not create {engine} synthesiser for model '{modelName}'.");
 
         logger?.LogInformation("[Voice] Switching to {Engine} / {Model}...", engine, modelName);
