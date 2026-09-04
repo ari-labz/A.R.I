@@ -12,7 +12,7 @@ public class EngramEvent : ThreadItem
 
     public override string ToString()
     {
-        var parts = Changes.Select(c => c.Op == "created"
+        IEnumerable<string> parts = Changes.Select(c => c.Op == "created"
             ? $"added \"{c.Title}\""
             : $"updated \"{c.Title}\"");
         return $"[{Timestamp:HH:mm}] [Memory] {string.Join(", ", parts)}";

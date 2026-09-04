@@ -45,7 +45,7 @@ internal sealed class RequestTools : Tool
             (List<Tool> loaded, List<string> unavailable) = ToolFactories.LoadGroup(name, thread);
             if (loaded.Count == 0) return Task.FromResult<ToolResult>($"'{name}' isn't available in this context (no project/vault is bound here).");
 
-            var sb = new System.Text.StringBuilder();
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
             sb.AppendLine($"Group: {name} — {groupDef.Description}");
             sb.AppendLine("Tools loaded:");
             foreach (Tool tool in loaded)

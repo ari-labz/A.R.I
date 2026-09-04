@@ -74,7 +74,7 @@ internal sealed class DialoguePipeline : Pipeline
         double? recallSeconds = null;
         if (memory is not null && thread.IsOwnerThread)
         {
-            var recallSw = System.Diagnostics.Stopwatch.StartNew();
+            System.Diagnostics.Stopwatch recallSw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 List<ThreadMessage> chatHistory = thread.GetChatHistory();

@@ -27,9 +27,9 @@ internal class Awareness : Agent
     {
         Thread ephemeral = new Thread(ThreadPipeline.Dialogue, $"__aware_{Guid.NewGuid():N}") { Internal = true };
 
-        var sb = new System.Text.StringBuilder();
+        System.Text.StringBuilder sb = new System.Text.StringBuilder();
         sb.AppendLine("Recent chat:");
-        foreach (var msg in recentMessages)
+        foreach (ThreadMessage msg in recentMessages)
             sb.AppendLine($"  {msg.Username}: {msg.Content}");
         sb.AppendLine();
         sb.AppendLine($"Latest message: {latestMessage}");
