@@ -1,5 +1,6 @@
 using ARI.Common;
 using ARI.Scheduler;
+using System.Diagnostics;
 using CommonModules = ARI.Common.Modules;
 using ARI.Core.Scripts;
 using ARI.Discord;
@@ -40,7 +41,7 @@ public class ARI : BackgroundService
     private ITtsSynthesiser? synthesiser;
     private SpeechQueue?    speechQueue;
     private bool startupFailed;
-    private static System.Diagnostics.Process? clientProcess;
+    private static Process? clientProcess;
 
     public ARI(ILoggerFactory loggerFactory)
     {
@@ -499,7 +500,7 @@ public class ARI : BackgroundService
                     "sd.play(data, sr, blocking=True)\n" +
                     $"import os; os.remove(r'{tmp}')\n");
 
-                System.Diagnostics.Process? proc = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                Process? proc = Process.Start(new ProcessStartInfo
                 {
                     FileName              = python,
                     Arguments             = $"\"{scriptPath}\"",
@@ -552,11 +553,11 @@ public class ARI : BackgroundService
         _logger.LogInformation("[Client] Launching ARI.Client...");
         Environment.SetEnvironmentVariable("ARI_BASE_URL", $"http://localhost:{port}");
 
-        System.Diagnostics.ProcessStartInfo psi = OperatingSystem.IsMacOS()
-            ? new System.Diagnostics.ProcessStartInfo("open", $"-a Terminal \"{scriptPath}\"") { UseShellExecute = false }
-            : new System.Diagnostics.ProcessStartInfo("/bin/bash", $"\"{scriptPath}\"") { UseShellExecute = true, CreateNoWindow = false };
+        ProcessStartInfo psi = OperatingSystem.IsMacOS()
+            ? new ProcessStartInfo("open", $"-a Terminal \"{scriptPath}\"") { UseShellExecute = false }
+            : new ProcessStartInfo("/bin/bash", $"\"{scriptPath}\"") { UseShellExecute = true, CreateNoWindow = false };
 
-        try { clientProcess = System.Diagnostics.Process.Start(psi); }
+        try { clientProcess = Process.Start(psi); }
         catch (Exception ex) { _logger.LogWarning("[Client] Failed to launch client: {Error}", ex.Message); }
     }
 
