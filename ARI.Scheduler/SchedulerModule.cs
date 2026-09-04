@@ -70,6 +70,8 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
     // dropped and the task falls through to its next cron occurrence.
     private static readonly TimeSpan DeferWindow = TimeSpan.FromMinutes(30);
     private const int MaxDeferrals = 3;
+    private const int MIN_TICK_DELAY_SECONDS = 5;
+    private const int SHUTDOWN_WAIT_TIMEOUT_SECONDS = 3;
 
     // ── ISchedulerModule (control-panel surface) ──────────────────────────────────────
 
@@ -164,7 +166,7 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
                 _logger.LogError(ex, "[Scheduler] Loop error.");
             }
 
-            try { await Task.Delay(TimeSpan.FromSeconds(Math.Max(5, _config.TickSeconds)), ct); }
+            try { await Task.Delay(TimeSpan.FromSeconds(Math.Max(MIN_TICK_DELAY_SECONDS, _config.TickSeconds)), ct); }
             catch (OperationCanceledException) { break; }
         }
     }
@@ -270,7 +272,7 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
     public void Dispose()
     {
         _loopCts?.Cancel();
-        try { _loop?.Wait(TimeSpan.FromSeconds(3)); } catch { }
+        try { _loop?.Wait(TimeSpan.FromSeconds(SHUTDOWN_WAIT_TIMEOUT_SECONDS)); } catch { }
         _loopCts?.Dispose();
     }
 }
