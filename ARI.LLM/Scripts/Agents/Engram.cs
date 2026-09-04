@@ -384,10 +384,10 @@ internal class Engram : MemoryAgent, IDisposable
               "on the note it actually concerns, not a new note.";
         if (entity.Sensitive)
             block += "\n\nThis is information about a user's private life. Keep it on the same note as everything else about " +
-                     "this subject, under its own topic subheading if needed — never a separate Private/ note or file. " +
-                     "Whichever tool call you make for this entity (create_memory or edit_memory), pass is_sensitive: true " +
-                     "in that same call — this is required whenever any sensitive content ends up on the note, not optional, " +
-                     "and applies to the whole note, not just the new part.";
+                     "this subject, under its own topic subheading if needed — never a separate Private/ note or file. Mark it " +
+                     "with a `> [!sensitive]` callout right after the specific line/section it covers, same as `> [!ari-thought]`. " +
+                     "Only pass is_sensitive: true on the tool call if the note is entirely about this subject's private life — " +
+                     "not just because this one new bit is.";
         // Lets Save split an oversized note into a sibling create_memory call in the same turn.
         return new ResolvedEntity(entity.Entity, block, allowedNames, normalNote?.Name ?? "");
     }

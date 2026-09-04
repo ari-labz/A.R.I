@@ -47,9 +47,15 @@ public class Note
     // Node type from frontmatter (null = leaf). Read fresh, like Content.
     public string? Type => Parse(File.ReadAllText(AbsolutePath)).Type;
 
-    // Whether this note carries "sensitive: true" in frontmatter — the backstop signal for Private/
-    // content, in addition to the path itself. Read fresh, like Content.
+    // Whether this note carries "sensitive: true" in frontmatter — the whole note is private, not just a marked span within it. Read fresh, like Content.
     public bool IsSensitive => Parse(File.ReadAllText(AbsolutePath)).IsSensitive;
+
+    // Frontmatter is stripped out of Content before it ever reaches a model, so a whole-note-sensitive
+    // note otherwise carries no visible sign of that when read — this puts the flag back in view, in the
+    // same place a [!sensitive] callout on one line would put it.
+    public string SensitivityNotice => IsSensitive
+        ? "> [!sensitive] This entire note is private — never share it with anyone but the owner.\n\n"
+        : "";
 
     public string Url => $"obsidian://open?vault={Uri.EscapeDataString(Brain.VaultName)}&file={Uri.EscapeDataString(Name)}";
 

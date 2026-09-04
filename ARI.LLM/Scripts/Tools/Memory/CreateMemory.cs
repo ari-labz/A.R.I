@@ -25,7 +25,7 @@ internal sealed class CreateMemory : Tool
                     aliases        = new { type = "array", items = new { type = "string" }, description = "Alternate names this note should also be found under." },
                     type           = new { type = "string", description = "Node type, e.g. 'hub', 'person', 'project'. Omit for a plain leaf note." },
                     keywords       = new { type = "array", items = new { type = "string" }, description = "Search keywords beyond the title/aliases." },
-                    is_sensitive   = new { type = "boolean", description = "True if this note holds information about a user's private life." },
+                    is_sensitive   = new { type = "boolean", description = "True if the note is entirely about a user's private life. For a note that's mostly ordinary with just one sensitive line or section, leave this false and mark that span with a `> [!sensitive]` callout in content instead." },
                     commit_message = new { type = "string", description = "One-line summary of what this note captures and why it's being added now." }
                 },
                 required = new[] { "name", "content", "commit_message" }

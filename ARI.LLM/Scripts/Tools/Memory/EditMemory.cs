@@ -39,7 +39,7 @@ internal sealed class EditMemory : Tool
                     new_name       = new { type = "string", description = "Rename the note to this name/path. Old title becomes an alias; references are repointed automatically." },
                     type           = new { type = "string", description = "Node type, e.g. 'hub', 'person', 'project'. Omit to leave unchanged." },
                     keywords       = new { type = "array", items = new { type = "string" }, description = "Full replacement keyword list. Omit to leave unchanged." },
-                    is_sensitive   = new { type = "boolean", description = "True if this note holds private/intimate content. Omit to leave unchanged." },
+                    is_sensitive   = new { type = "boolean", description = "True if the note is entirely about a user's private life. For a note that's mostly ordinary with just one sensitive line or section, leave this unchanged and mark that span with a `> [!sensitive]` callout in new_string instead. Omit to leave unchanged." },
                     commit_message = new { type = "string", description = "One-line summary of what changed and why (e.g. 'Add job change — confirmed new role starts next month')." }
                 },
                 required = new[] { "name", "old_string", "new_string", "commit_message" }

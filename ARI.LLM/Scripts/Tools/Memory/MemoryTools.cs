@@ -164,7 +164,8 @@ internal sealed class MergeNotesTool : Tool
 
 // ── recall_memory ──────────────────────────────────────────────────────────────────────
 
-// Reads a brain note's full content. In non-owner conversations, only recall non-sensitive notes.
+// Reads a brain note's full content. Sensitive content is fine to read in any conversation — the
+// restriction is on repeating it to someone other than the owner, not on reading it.
 internal sealed class RecallMemory : Tool
 {
     internal override string     Name   => "recall_memory";
@@ -175,7 +176,7 @@ internal sealed class RecallMemory : Tool
         function = new
         {
             name        = "recall_memory",
-            description = "Read the full content of a brain note by its name or title. Use search_brain first to find the name, then call this to read it. The note name comes from search_brain results (e.g. 'People/Alex') — this same name is what create_memory/edit_memory take. In conversations with someone other than the owner, only recall notes whose content is non-sensitive and appropriate to share with a third party.",
+            description = "Read the full content of a brain note by its name or title. Use search_brain first to find the name, then call this to read it. The note name comes from search_brain results (e.g. 'People/Alex') — this same name is what create_memory/edit_memory take. Content marked sensitive (a note flagged is_sensitive, or a [!sensitive] callout on a specific line) is fine to read here regardless of who you're talking to — just never repeat or reveal it to anyone other than the owner.",
             parameters  = new
             {
                 type       = "object",
@@ -199,6 +200,6 @@ internal sealed class RecallMemory : Tool
 
         string content = note.Content;
         if (content.Trim().Length == 0) return Task.FromResult<ToolResult>($"'{note.Title}' exists but has no content yet.");
-        return Task.FromResult<ToolResult>($"# {note.Title}\n\n{content}");
+        return Task.FromResult<ToolResult>($"# {note.Title}\n\n{note.SensitivityNotice}{content}");
     }
 }
