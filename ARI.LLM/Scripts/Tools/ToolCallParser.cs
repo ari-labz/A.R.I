@@ -230,7 +230,7 @@ internal static class ToolCallParser
         if (i >= partialJson.Length || partialJson[i] != '"') return null; // value not a string, or not started
         i++; // past the opening quote
 
-        System.Text.StringBuilder sb = new();
+        StringBuilder sb = new();
         while (i < partialJson.Length)
         {
             char c = partialJson[i];

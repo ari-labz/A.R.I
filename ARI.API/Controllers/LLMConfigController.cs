@@ -75,7 +75,7 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
                               ReadEntryText(metaEntry), JsonOpts) ?? new()
                         : new() { Name = Path.GetFileNameWithoutExtension(path) };
 
-                    var entries = zip.Entries
+                    List<string> entries = zip.Entries
                         .Where(e => e.Name != "meta.json")
                         .Select(e => e.Name)
                         .ToList();
@@ -194,8 +194,8 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
         // Restart servers that have BootStartup = true
         if (llm is not null)
         {
-            var models   = persistentData.GetModels().ToList();
-            var servers  = persistentData.GetServers().ToList();
+            List<Model> models   = persistentData.GetModels().ToList();
+            List<Server> servers  = persistentData.GetServers().ToList();
             llm.ReplaceServers(servers);
             _ = Task.Run(() => llm.StartServersAsync(models, llm.ModelsPath));
         }
@@ -277,7 +277,7 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
 
             if (existing is JsonObject existingObj && restore is JsonObject restoreObj)
             {
-                foreach (var kvp in restoreObj)
+                foreach (KeyValuePair<string, JsonNode?> kvp in restoreObj)
                 {
                     if (DiscordTokenFields.Contains(kvp.Key))
                         continue;

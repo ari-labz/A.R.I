@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ARI.Common;
@@ -65,14 +66,14 @@ public class ProjectStore
 
     public void Add(Project project)
     {
-        lock (_lock) { var all = GetAll(); all.Add(project); Save(all); }
+        lock (_lock) { List<Project> all = GetAll(); all.Add(project); Save(all); }
     }
 
     public void Update(Project project)
     {
         lock (_lock)
         {
-            var all = GetAll();
+            List<Project> all = GetAll();
             int idx = all.FindIndex(p => p.Id == project.Id);
             if (idx < 0) return;
             all[idx] = project;
@@ -84,7 +85,7 @@ public class ProjectStore
     {
         lock (_lock)
         {
-            var all = GetAll();
+            List<Project> all = GetAll();
             all.RemoveAll(p => p.Id == id);
             Save(all);
         }
@@ -125,7 +126,7 @@ public class ProjectStore
         SyncExcludeFile(folderPath);
         RunGit(folderPath, "add --all");
         // Commit whatever exists; fall back to an empty commit for a brand-new folder.
-        var (code, _) = RunGit(folderPath, "commit -m \"Init\"");
+        (int code, _) = RunGit(folderPath, "commit -m \"Init\"");
         if (code != 0) RunGit(folderPath, "commit --allow-empty -m \"Init\"");
     }
 
@@ -161,9 +162,9 @@ public class ProjectStore
     {
         string ariDir = Path.Combine(workTree, ".ariproject");
         string fullArgs = $"--git-dir=\"{ariDir}\" --work-tree=\"{workTree}\" {arguments}";
-        using var proc = new System.Diagnostics.Process
+        using Process proc = new Process
         {
-            StartInfo = new System.Diagnostics.ProcessStartInfo
+            StartInfo = new ProcessStartInfo
             {
                 FileName               = "git",
                 Arguments              = fullArgs,
@@ -194,7 +195,7 @@ public class ProjectStore
     {
         lock (_lock)
         {
-            var all = GetAll();
+            List<Project> all = GetAll();
             bool changed = false;
             for (int i = 0; i < all.Count; i++)
             {

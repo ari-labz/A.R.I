@@ -1,6 +1,7 @@
 using ARI.Common;
 using System.Diagnostics;
 using System.Linq;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 
@@ -27,6 +28,11 @@ public class NamedSlot
 /// </summary>
 public class Server : IDisposable
 {
+    // ── Constants ────────────────────────────────────────────────────────────────
+    private const double DEFAULT_TEMPERATURE = 0.80;
+    private const int HEALTH_CHECK_POLL_INTERVAL_MS = 1000;
+    private const int IDLE_CHECK_POLL_INTERVAL_MS = 500;
+
     // ── Persisted config ────────────────────────────────────────────────────────
 
     [JsonPropertyName("id")]
@@ -101,7 +107,7 @@ public class Server : IDisposable
     // agent falls through to whatever's here. This is the ONLY place that fallback bottoms out —
     // there is no further fallback to "let llama.cpp decide" by omitting the param.
 
-    [JsonPropertyName("temperature")]      public double Temperature      { get; set; } = 0.80;
+    [JsonPropertyName("temperature")]      public double Temperature      { get; set; } = DEFAULT_TEMPERATURE;
     [JsonPropertyName("topP")]             public double TopP             { get; set; } = 0.95;
     [JsonPropertyName("topK")]             public int    TopK             { get; set; } = 40;
     [JsonPropertyName("minP")]             public double MinP             { get; set; } = 0.05;
@@ -487,7 +493,7 @@ public class Server : IDisposable
             }
             catch (HttpRequestException) { }
 
-            await Task.Delay(1000);
+            await Task.Delay(HEALTH_CHECK_POLL_INTERVAL_MS);
         }
 
         throw new Exception($"[{Name}] llama-server did not come online within 3 minutes.");
@@ -506,7 +512,7 @@ public class Server : IDisposable
                 if (resp.IsSuccessStatusCode)
                 {
                     string body = await resp.Content.ReadAsStringAsync();
-                    using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(body);
+                    using JsonDocument doc = JsonDocument.Parse(body);
                     bool allIdle = true;
                     foreach (System.Text.Json.JsonElement slot in doc.RootElement.EnumerateArray())
                         if (slot.GetProperty("state").GetInt32() != 0) { allIdle = false; break; }
@@ -515,7 +521,7 @@ public class Server : IDisposable
             }
             catch { return; }
 
-            await Task.Delay(500);
+            await Task.Delay(IDLE_CHECK_POLL_INTERVAL_MS);
         }
 
         Log.LogWarning("[{Server}] Timed out waiting for idle — forcing shutdown.", Name);

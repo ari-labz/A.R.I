@@ -10,6 +10,8 @@ public static class Dependency
     private const string SEARXNG_IMAGE     = "searxng/searxng";
     private const string SEARXNG_CONTAINER = "ari-searxng";
     internal const int   SEARXNG_PORT      = 8085;
+    private const int    LLM_SERVER_STARTUP_TIMEOUT_SEC = 60;
+    private const int    LLM_STARTUP_POLL_INTERVAL_MS   = 2000;
 
     // null = check still in progress, "" = ready, non-empty = unavailable with reason
     internal static string? SearXngStatus { get; private set; } = null;
@@ -128,9 +130,9 @@ public static class Dependency
         if (docker is null) return false;
 
         Stopwatch sw = Stopwatch.StartNew();
-        while (sw.Elapsed < TimeSpan.FromSeconds(60))
+        while (sw.Elapsed < TimeSpan.FromSeconds(LLM_SERVER_STARTUP_TIMEOUT_SEC))
         {
-            await Task.Delay(2000);
+            await Task.Delay(LLM_STARTUP_POLL_INTERVAL_MS);
             if (await IsDaemonRunning(docker)) return true;
         }
         return false;

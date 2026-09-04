@@ -31,7 +31,7 @@ internal static class SharedPrompts
     private static string Sub(string text, (string Token, string Value)[] tokens)
     {
         foreach ((string token, string value) in tokens)
-            text = text.Replace("{" + token + "}", value);
+            text = text.Replace($"{{{token}}}", value);
         return text;
     }
 

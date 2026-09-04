@@ -12,6 +12,8 @@ public class SetupException : Exception
 
 public static class SetupDiagnostics
 {
+    private const int PROCESS_PROBE_TIMEOUT_MS = 5000;
+
     /// <summary>User-facing fix line for a missing MSVC toolchain — the dependency several Python
     /// packages (webrtcvad, monotonic_align) compile against on Windows.</summary>
     public const string MsvcBuildToolsHint =
@@ -43,7 +45,7 @@ public static class SetupDiagnostics
                 if (p is not null)
                 {
                     string outp = p.StandardOutput.ReadToEnd();
-                    p.WaitForExit(5000);
+                    p.WaitForExit(PROCESS_PROBE_TIMEOUT_MS);
                     if (!string.IsNullOrWhiteSpace(outp)) return false; // toolchain present
                 }
             }
@@ -57,7 +59,7 @@ public static class SetupDiagnostics
             });
             if (where is not null)
             {
-                where.WaitForExit(5000);
+                where.WaitForExit(PROCESS_PROBE_TIMEOUT_MS);
                 if (where.HasExited && where.ExitCode == 0) return false;
             }
         }

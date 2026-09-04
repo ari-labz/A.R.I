@@ -66,13 +66,13 @@ public class Model
 
     public void RefreshDownloadedState(string modelsPath)
     {
-        var fullPath = System.IO.Path.Combine(modelsPath, Path);
+        string fullPath = System.IO.Path.Combine(modelsPath, Path);
         Downloaded = File.Exists(fullPath);
         if (Downloaded)
         {
             FileSizeBytes = new FileInfo(fullPath).Length;
             KvArch = GgufReader.TryRead(fullPath);
-            var tmplPath = ChatTemplatePath is { Length: > 0 } t ? System.IO.Path.Combine(Paths.PersistentData, t) : null;
+            string? tmplPath = ChatTemplatePath is { Length: > 0 } t ? System.IO.Path.Combine(Paths.PersistentData, t) : null;
             SupportsReasoningEffort = GgufReader.SupportsReasoningEffort(fullPath, tmplPath);
         }
         else

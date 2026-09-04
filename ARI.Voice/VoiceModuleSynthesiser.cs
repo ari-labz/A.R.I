@@ -81,27 +81,27 @@ public class VoiceModuleSynthesiser : ITtsSynthesiser
     {
         try
         {
-            var resp = await http.GetAsync($"http://localhost:{serverPort}/info", ct);
+            HttpResponseMessage resp = await http.GetAsync($"http://localhost:{serverPort}/info", ct);
             resp.EnsureSuccessStatusCode();
             string json = await resp.Content.ReadAsStringAsync(ct);
-            using var doc = JsonDocument.Parse(json);
+            using JsonDocument doc = JsonDocument.Parse(json);
             moduleInfo = doc.RootElement.Clone();
 
-            if (moduleInfo.Value.TryGetProperty("engine", out var eng))
+            if (moduleInfo.Value.TryGetProperty("engine", out JsonElement eng))
                 engineName = eng.GetString();
 
-            if (moduleInfo.Value.TryGetProperty("parameters", out var parms))
+            if (moduleInfo.Value.TryGetProperty("parameters", out JsonElement parms))
             {
                 parameters = [];
-                foreach (var p in parms.EnumerateArray())
+                foreach (JsonElement p in parms.EnumerateArray())
                 {
                     parameters.Add(new EngineParameter(
                         p.GetProperty("name").GetString()!,
                         p.GetProperty("label").GetString()!,
-                        p.TryGetProperty("min", out var mn) ? mn.GetSingle() : 0,
-                        p.TryGetProperty("max", out var mx) ? mx.GetSingle() : 1,
-                        p.TryGetProperty("default", out var df) ? df.GetSingle() : 0,
-                        p.TryGetProperty("step", out var st) ? st.GetSingle() : 0.1f
+                        p.TryGetProperty("min", out JsonElement mn) ? mn.GetSingle() : 0,
+                        p.TryGetProperty("max", out JsonElement mx) ? mx.GetSingle() : 1,
+                        p.TryGetProperty("default", out JsonElement df) ? df.GetSingle() : 0,
+                        p.TryGetProperty("step", out JsonElement st) ? st.GetSingle() : 0.1f
                     ));
                 }
             }
@@ -115,7 +115,7 @@ public class VoiceModuleSynthesiser : ITtsSynthesiser
     }
 
     public bool IsTrainable =>
-        moduleInfo?.TryGetProperty("type", out var t) == true && t.GetString() == "trainable";
+        moduleInfo?.TryGetProperty("type", out JsonElement t) == true && t.GetString() == "trainable";
 
     public async Task<bool> CheckHealth()
     {
@@ -134,11 +134,11 @@ public class VoiceModuleSynthesiser : ITtsSynthesiser
 
     public async Task<byte[]> Synthesise(string text, Dictionary<string, object>? engineParams, CancellationToken ct = default)
     {
-        var payload = new Dictionary<string, object> { ["text"] = text };
+        Dictionary<string, object> payload = new Dictionary<string, object> { ["text"] = text };
 
         if (engineParams != null)
         {
-            foreach (var kvp in engineParams)
+            foreach (KeyValuePair<string, object> kvp in engineParams)
                 payload[kvp.Key] = kvp.Value;
         }
 
@@ -183,9 +183,9 @@ public class VoiceModuleSynthesiser : ITtsSynthesiser
         try
         {
             if (!File.Exists(SettingsPath)) return;
-            using var doc = JsonDocument.Parse(File.ReadAllText(SettingsPath));
-            if (doc.RootElement.TryGetProperty("speed", out var s)) Speed = s.GetSingle();
-            if (doc.RootElement.TryGetProperty("pauseScale", out var p)) PauseScale = p.GetSingle();
+            using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(SettingsPath));
+            if (doc.RootElement.TryGetProperty("speed", out JsonElement s)) Speed = s.GetSingle();
+            if (doc.RootElement.TryGetProperty("pauseScale", out JsonElement p)) PauseScale = p.GetSingle();
         }
         catch (Exception ex) { logger?.LogWarning(ex, "[{Engine}] Failed to load voice settings.", EngineName); }
     }
@@ -266,7 +266,7 @@ public class VoiceModuleSynthesiser : ITtsSynthesiser
         {
             try
             {
-                var proc = Process.Start(new ProcessStartInfo(candidate, "--version")
+                Process? proc = Process.Start(new ProcessStartInfo(candidate, "--version")
                     { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false });
                 proc?.WaitForExit(3000);
                 if (proc?.ExitCode == 0) return candidate;

@@ -158,7 +158,7 @@ public class ClientController : ControllerBase
             new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" }, content = new { type = "string", description = "Full content to write" } }, required = new[] { "path", "content" } },
             displayVerb: "Writing", displayDoneVerb: "Written");
 
-        var state = new ConnectionState { ProjectRoot = "" };
+        ConnectionState state = new ConnectionState { ProjectRoot = "" };
 
         try
         {

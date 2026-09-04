@@ -755,7 +755,7 @@ public class LLMModule : ILLMModule, IDisposable
         if (awareness is null || string.IsNullOrWhiteSpace(latestMessage)) return true;
         try
         {
-            var recent = threads.TryGetValue(threadKey, out Thread? thread)
+            List<ThreadMessage> recent = threads.TryGetValue(threadKey, out Thread? thread)
                 ? thread.GetChatHistory(maxMessages: 10)
                 : [];
             // No outer acquire — same reasoning as EvaluateAwareness above.
@@ -1159,7 +1159,7 @@ public class LLMModule : ILLMModule, IDisposable
         // Insert the visible message just before the in-flight response so the transcript reads in order:
         // prior prompt → this interjection → the response that continues after it.
         int at = thread.streamingResponse is { } sr ? thread.History.IndexOf(sr) : -1;
-        var msg = new Prompt { AuthorName = username, Text = text, Timestamp = DateTime.Now, IsVisible = true };
+        Prompt msg = new Prompt { AuthorName = username, Text = text, Timestamp = DateTime.Now, IsVisible = true };
         if (at >= 0) thread.History.Insert(at, msg); else thread.History.Add(msg);
 
         thread.Interject(username, text);
@@ -1171,7 +1171,7 @@ public class LLMModule : ILLMModule, IDisposable
 
     private void CleanScratchpads()
     {
-        string scratchpadRoot = ARI.Common.Paths.ServerDir("Scratchpad");
+        string scratchpadRoot = Paths.ServerDir("Scratchpad");
         if (!Directory.Exists(scratchpadRoot)) return;
 
         int deleted = 0;
