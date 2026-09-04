@@ -14,7 +14,7 @@ public class ImageGenModule : IImageGenModule
     private const int COMFYUI_STARTUP_TIMEOUT_SEC = 60;
     private const int COMFYUI_STARTUP_RETRY_DELAY_MS = 500;
 
-    private readonly ImageGenConfig _config;
+    private readonly ImageGenConfig config;
     private readonly object         _lock    = new();
     private Process?                _process = null;
     private Timer?                  _idleTimer;
@@ -23,7 +23,7 @@ public class ImageGenModule : IImageGenModule
 
     public ImageGenModule(ImageGenConfig config)
     {
-        _config = config;
+        this.config = config;
     }
 
     public async Task<byte[]> GenerateAsync(
@@ -44,12 +44,12 @@ public class ImageGenModule : IImageGenModule
         if (seed == -1) seed = Random.Shared.NextInt64(0, long.MaxValue);
 
         if (string.IsNullOrWhiteSpace(checkpointFilename))
-            checkpointFilename = _config.Checkpoint;
+            checkpointFilename = config.Checkpoint;
 
         referenceImages ??= [];
 
         // Upload reference images to ComfyUI's input directory before building the workflow.
-        string baseUrl = $"http://127.0.0.1:{_config.Port}";
+        string baseUrl = $"http://127.0.0.1:{config.Port}";
         List<string> uploadedNames = new();
         using HttpClient hc = new();
         foreach (string path in referenceImages)
@@ -181,7 +181,7 @@ public class ImageGenModule : IImageGenModule
         if (!File.Exists(mainScript))
             throw new Exception($"ComfyUI main.py not found at {mainScript}. Is it installed?");
 
-        ProcessStartInfo psi = new(python, $"\"{mainScript}\" --port {_config.Port} --listen 127.0.0.1 --preview-method none")
+        ProcessStartInfo psi = new(python, $"\"{mainScript}\" --port {config.Port} --listen 127.0.0.1 --preview-method none")
         {
             UseShellExecute        = false,
             RedirectStandardOutput = true,
@@ -197,11 +197,11 @@ public class ImageGenModule : IImageGenModule
         process.BeginErrorReadLine();
         lock (_lock) _process = process;
 
-        Shared.Logger.LogInformation("[ImageGen] ComfyUI starting on port {Port}...", _config.Port);
+        Shared.Logger.LogInformation("[ImageGen] ComfyUI starting on port {Port}...", config.Port);
 
         // Wait until the HTTP server is ready
         using HttpClient hc = new() { Timeout = TimeSpan.FromSeconds(2) };
-        string url = $"http://127.0.0.1:{_config.Port}";
+        string url = $"http://127.0.0.1:{config.Port}";
         Stopwatch sw = Stopwatch.StartNew();
 
         while (sw.Elapsed < TimeSpan.FromSeconds(COMFYUI_STARTUP_TIMEOUT_SEC) && !ct.IsCancellationRequested)
@@ -240,7 +240,7 @@ public class ImageGenModule : IImageGenModule
         {
             _idleTimer?.Dispose();
             _idleTimer = new Timer(_ => Shutdown(), null,
-                TimeSpan.FromSeconds(_config.IdleSeconds),
+                TimeSpan.FromSeconds(config.IdleSeconds),
                 Timeout.InfiniteTimeSpan);
         }
     }

@@ -88,16 +88,16 @@ internal sealed class LLMQueue
 
     private sealed class SlotHandle : IDisposable
     {
-        private readonly LLMQueue _queue;
+        private readonly LLMQueue queue;
         private bool _disposed;
 
-        internal SlotHandle(LLMQueue queue) => _queue = queue;
+        internal SlotHandle(LLMQueue queue) => this.queue = queue;
 
         public void Dispose()
         {
             if (_disposed) return;
             _disposed = true;
-            _queue.Release();
+            queue.Release();
         }
     }
 }

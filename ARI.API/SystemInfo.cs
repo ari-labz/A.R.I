@@ -13,11 +13,11 @@ public record RamSegment(string Label, string ServerName, long Bytes);
 public class SystemInfo
 {
     private LLMModule? _llm => (LLMModule?)Modules.Llm;
-    private readonly string _modelsPath;
+    private readonly string modelsPath;
 
     public SystemInfo(string modelsPath)
     {
-        _modelsPath = modelsPath;
+        this.modelsPath = modelsPath;
     }
 
     public long GetTotalRamBytes()
@@ -83,7 +83,7 @@ public class SystemInfo
                 if (server.Status != ServerStatus.Online || server.Pid <= 0 || server.ActiveModel is null)
                     continue;
 
-                string modelFile = Path.Combine(_modelsPath, server.ActiveModel.Path);
+                string modelFile = Path.Combine(modelsPath, server.ActiveModel.Path);
                 long   fileBytes = File.Exists(modelFile) ? new FileInfo(modelFile).Length : 0;
 
                 if (fileBytes > 0)

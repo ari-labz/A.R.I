@@ -10,11 +10,11 @@ namespace ARI.LLM;
 /// </summary>
 internal sealed class GitMulti : Tool
 {
-    private readonly Dictionary<string, string> _repos;  // display name → absolute path
+    private readonly Dictionary<string, string> repos;  // display name → absolute path
 
     internal override string Name => "git";
 
-    private GitMulti(Dictionary<string, string> repos) => _repos = repos;
+    private GitMulti(Dictionary<string, string> repos) => this.repos = repos;
 
     /// <summary>Scans projectRoot (one level deep) for subdirectories that contain a .git folder.
     /// Returns null if none are found so ToolFactories can skip registration cleanly.</summary>
@@ -42,7 +42,7 @@ internal sealed class GitMulti : Tool
         {
             name        = "git",
             description = $"Run a git command against one of the project's repositories. "
-                        + $"Repos: {string.Join(", ", _repos.Keys)}. "
+                        + $"Repos: {string.Join(", ", repos.Keys)}. "
                         + "fetch before pull to preview incoming changes. status before commit. "
                         + "stage with add, then commit with a message, then push.",
             parameters = new
@@ -53,7 +53,7 @@ internal sealed class GitMulti : Tool
                     repo = new
                     {
                         type        = "string",
-                        @enum       = _repos.Keys.Order().ToArray(),
+                        @enum       = repos.Keys.Order().ToArray(),
                         description = "Which repository to target."
                     },
                     command = new
@@ -85,8 +85,8 @@ internal sealed class GitMulti : Tool
         string command = Str(a, "command");
         string extra   = Str(a, "args");
 
-        if (!_repos.TryGetValue(repo, out string? repoPath))
-            return Task.FromResult<ToolResult>($"Unknown repo '{repo}'. Available: {string.Join(", ", _repos.Keys)}");
+        if (!repos.TryGetValue(repo, out string? repoPath))
+            return Task.FromResult<ToolResult>($"Unknown repo '{repo}'. Available: {string.Join(", ", repos.Keys)}");
 
         List<string> args = new List<string> { command };
 
