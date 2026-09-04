@@ -65,6 +65,7 @@ public abstract class Agent
     private const int    MAX_DEGRADE_EVENTS  = 5;
     private const int    AVERAGE_RESPONSE_WINDOW = 25;
     private const string ATTACHMENT_DIVIDER  = "-------------------";
+    private const double CONTEXT_CHAR_MULTIPLIER = 3.5;
 
     // Sent as a user message when the thinking budget runs out, at the end of the sentence in progress.
     // It must leave acting on the table: the old server-side wording demanded a finished reply, so a turn
@@ -130,7 +131,7 @@ public abstract class Agent
     public (int Used, int Limit) GetContextStats(Thread? thread)
     {
         if (thread is null) return (0, BudgetContext);
-        int maxChars = BudgetContext > 0 ? (int)(BudgetContext * 3.5) : 0;
+        int maxChars = BudgetContext > 0 ? (int)(BudgetContext * CONTEXT_CHAR_MULTIPLIER) : 0;
         List<ThreadMessage> ctx = thread.GetChatHistory(MemoryLimit, maxChars);
         int chars = 0;
         foreach (ThreadMessage m in ctx)

@@ -27,6 +27,9 @@ public class NamedSlot
 /// </summary>
 public class Server : IDisposable
 {
+    // ── Constants ────────────────────────────────────────────────────────────────
+    private const double DEFAULT_TEMPERATURE = 0.80;
+
     // ── Persisted config ────────────────────────────────────────────────────────
 
     [JsonPropertyName("id")]
@@ -101,7 +104,7 @@ public class Server : IDisposable
     // agent falls through to whatever's here. This is the ONLY place that fallback bottoms out —
     // there is no further fallback to "let llama.cpp decide" by omitting the param.
 
-    [JsonPropertyName("temperature")]      public double Temperature      { get; set; } = 0.80;
+    [JsonPropertyName("temperature")]      public double Temperature      { get; set; } = DEFAULT_TEMPERATURE;
     [JsonPropertyName("topP")]             public double TopP             { get; set; } = 0.95;
     [JsonPropertyName("topK")]             public int    TopK             { get; set; } = 40;
     [JsonPropertyName("minP")]             public double MinP             { get; set; } = 0.05;
