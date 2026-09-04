@@ -166,7 +166,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
             return 0;
         }
 
-        var channels = new List<IMessageChannel>();
+        List<IMessageChannel> channels = new List<IMessageChannel>();
         foreach (SocketGuild guild in client.Guilds)
             channels.AddRange(guild.TextChannels);
 
@@ -186,7 +186,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
         {
             try
             {
-                var messages = new List<IMessage>();
+                List<IMessage> messages = new List<IMessage>();
                 await foreach (var batch in channel.GetMessagesAsync(500))
                     messages.AddRange(batch);
 
@@ -489,7 +489,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
 
     public IReadOnlyList<VoiceChannelInfo> GetVoiceChannelsForUser(string username)
     {
-        var results = new List<VoiceChannelInfo>();
+        List<VoiceChannelInfo> results = new List<VoiceChannelInfo>();
         foreach (SocketGuild guild in client.Guilds)
         {
             SocketGuildUser? user = guild.Users.FirstOrDefault(u =>
@@ -576,7 +576,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
 
     public async Task<string> LeaveVoiceChannelAsync(ulong? guildId = null)
     {
-        var left = new List<string>();
+        List<string> left = new List<string>();
         foreach (SocketGuild guild in client.Guilds)
         {
             if (guildId.HasValue && guild.Id != guildId.Value) continue;
