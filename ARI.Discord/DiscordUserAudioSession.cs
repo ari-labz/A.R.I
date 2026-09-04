@@ -34,6 +34,12 @@ internal sealed class DiscordUserAudioSession : IAsyncDisposable
     private const double RmsThreshold = 200.0;  // ~-44 dBFS for 16-bit — tune if needed
     private const int    SilenceEndMs = 300;     // ms of quiet before gate closes
 
+    // Whisper connection and I/O timeouts
+    private const int WHISPER_CONNECT_TIMEOUT_SEC = 30;
+    private const int WHISPER_RECONNECT_DELAY_MS  = 750;
+    private const int DISPOSE_GRACE_DELAY_MS      = 50;
+    private const int WEBSOCKET_BUFFER_SIZE_BYTES = 64 * 1024;
+
     private readonly string userId;
     private readonly AudioInStream opusStream;
     private readonly string whisperUrl;
@@ -74,7 +80,7 @@ internal sealed class DiscordUserAudioSession : IAsyncDisposable
         if (ct.IsCancellationRequested) return;
 
         ClientWebSocket? ws = null;
-        using CancellationTokenSource connectTimeout = new(TimeSpan.FromSeconds(30));
+        using CancellationTokenSource connectTimeout = new(TimeSpan.FromSeconds(WHISPER_CONNECT_TIMEOUT_SEC));
         while (ws is null && !connectTimeout.IsCancellationRequested)
         {
             ClientWebSocket attempt = new();
@@ -86,7 +92,7 @@ internal sealed class DiscordUserAudioSession : IAsyncDisposable
             catch
             {
                 attempt.Dispose();
-                try { await Task.Delay(750, connectTimeout.Token); } catch { break; }
+                try { await Task.Delay(WHISPER_RECONNECT_DELAY_MS, connectTimeout.Token); } catch { break; }
             }
         }
         if (ws is null) { logger?.LogWarning("[VoiceSession:{UserId}] could not connect to Whisper.", userId); return; }
@@ -172,7 +178,7 @@ internal sealed class DiscordUserAudioSession : IAsyncDisposable
 
     private async Task ReceiveTranscriptsAsync(ClientWebSocket ws, CancellationToken ct)
     {
-        byte[]        buf = new byte[64 * 1024];
+        byte[]        buf = new byte[WEBSOCKET_BUFFER_SIZE_BYTES];
         StringBuilder sb  = new();
 
         while (!ct.IsCancellationRequested && ws.State == WebSocketState.Open)
@@ -242,7 +248,7 @@ internal sealed class DiscordUserAudioSession : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         cts.Cancel();
-        await Task.Delay(50);
+        await Task.Delay(DISPOSE_GRACE_DELAY_MS);
         cts.Dispose();
     }
 
