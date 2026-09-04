@@ -1,4 +1,6 @@
+using System.Text;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace ARI.LLM;
 
@@ -40,7 +42,7 @@ public class Response : ThreadItem
     /// in <see cref="Content"/> references one of these; the child's blocks are spliced into the display view
     /// here, never into context — so a sub-agent's work shows inline yet cannot contaminate the parent's context.</summary>
     [JsonIgnore]
-    internal Dictionary<string, ARI.LLM.Thread> Subthreads { get; } = new();
+    internal Dictionary<string, Thread> Subthreads { get; } = new();
 
     /// <summary>The typed block list sent to clients — the canonical, single source of truth for rendering.
     /// While streaming, derived live from the stream buffer (so it is identical before and after completion —
@@ -54,7 +56,7 @@ public class Response : ThreadItem
         {
             List<ContentBlock> blocks = Content.Count > 0 ? Content : ContentBlock.Parse(ContentText);
             foreach (Subthread sub in blocks.OfType<Subthread>())
-                sub.Blocks = Subthreads.TryGetValue(sub.ChildKey, out ARI.LLM.Thread? child)
+                sub.Blocks = Subthreads.TryGetValue(sub.ChildKey, out Thread? child)
                     ? child.DisplayBlocks()
                     : sub.Blocks;
             return blocks;
@@ -129,11 +131,11 @@ public class Response : ThreadItem
 
     public override string ToString()
     {
-        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+        StringBuilder sb = new StringBuilder();
         sb.Append($"[{Timestamp:HH:mm}] A·R·I (thought for {ThinkingSeconds:F1}s):");
         if (RecallNotes != null)
         {
-            IEnumerable<string> names = System.Text.RegularExpressions.Regex.Matches(RecallNotes, @"^\[([^|\]]+)", System.Text.RegularExpressions.RegexOptions.Multiline)
+            IEnumerable<string> names = Regex.Matches(RecallNotes, @"^\[([^|\]]+)", RegexOptions.Multiline)
                             .Select(m => $"[{m.Groups[1].Value}]");
             sb.Append($"\n  Recalled Notes: {string.Join(", ", names)}");
         }

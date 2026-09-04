@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace ARI.LLM;
 
 /// <summary>
@@ -27,7 +29,7 @@ internal class Awareness : Agent
     {
         Thread ephemeral = new Thread(ThreadPipeline.Dialogue, $"__aware_{Guid.NewGuid():N}") { Internal = true };
 
-        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+        StringBuilder sb = new StringBuilder();
         sb.AppendLine("Recent chat:");
         foreach (ThreadMessage msg in recentMessages)
             sb.AppendLine($"  {msg.Username}: {msg.Content}");
