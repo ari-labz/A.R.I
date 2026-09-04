@@ -77,7 +77,7 @@ internal sealed class SentenceChunker
 
     private static string CleanMarkdown(string sentence)
     {
-        var sb = new System.Text.StringBuilder(sentence.Length);
+        System.Text.StringBuilder sb = new System.Text.StringBuilder(sentence.Length);
         foreach (char c in sentence)
         {
             if (c == '*' || c == '`' || c == '#') continue;
