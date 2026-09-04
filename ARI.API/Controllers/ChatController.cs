@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.IO.Compression;
 using System.Security.Claims;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Channels;
@@ -338,7 +339,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         if (exportThread is not null && !CanAccessThread(exportThread)) return Forbid();
         List<ThreadItem> items = exportThread?.History ?? new();
         string log = string.Join("\n\n", items.Select(i => i.ToString()));
-        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(log);
+        byte[] bytes = Encoding.UTF8.GetBytes(log);
         return File(bytes, "text/plain", $"ari-{threadKey}-{DateTime.Now:yyyyMMdd-HHmm}.txt");
     }
 
@@ -953,7 +954,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                 scratchThread.Ct = CancellationToken.None;
 
                 string[] files = Directory.GetFiles(scratchpadDir, "*", SearchOption.AllDirectories);
-                System.Text.StringBuilder listing = new System.Text.StringBuilder();
+                StringBuilder listing = new StringBuilder();
                 listing.AppendLine("[Workspace files]");
                 foreach (string f in files)
                     listing.AppendLine(Path.GetRelativePath(scratchpadDir, f));
@@ -967,7 +968,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
             Project? project = projectStore.Get(pid);
             if (project is not null)
             {
-                System.Text.StringBuilder ctx = new System.Text.StringBuilder();
+                StringBuilder ctx = new StringBuilder();
                 ctx.AppendLine($"Project: {project.Name}");
                 if (!string.IsNullOrWhiteSpace(project.Instructions))
                     ctx.AppendLine().AppendLine(project.Instructions);
