@@ -20,12 +20,12 @@ internal sealed class CreateMemory : Tool
                 type       = "object",
                 properties = new
                 {
-                    name           = new { type = "string", description = "Note name/path, e.g. 'People/Alex' or 'Private/Alex' for sensitive content." },
+                    name           = new { type = "string", description = "Note name/path, e.g. 'People/Alex'. Information about a user's private life is not a separate path — it lives on the ordinary note, flagged with is_sensitive below." },
                     content        = new { type = "string", description = "The note BODY ONLY — dense linked prose, starting directly with the text. Do NOT include a YAML frontmatter block (a '---' fenced section) and do NOT include a '# Title' heading — the title comes from `name` and frontmatter is generated automatically from the type/keywords/is_sensitive/aliases parameters below. Writing them again here corrupts the file." },
                     aliases        = new { type = "array", items = new { type = "string" }, description = "Alternate names this note should also be found under." },
                     type           = new { type = "string", description = "Node type, e.g. 'hub', 'person', 'project'. Omit for a plain leaf note." },
                     keywords       = new { type = "array", items = new { type = "string" }, description = "Search keywords beyond the title/aliases." },
-                    is_sensitive   = new { type = "boolean", description = "True if this note holds private/intimate content." },
+                    is_sensitive   = new { type = "boolean", description = "True if this note holds information about a user's private life." },
                     commit_message = new { type = "string", description = "One-line summary of what this note captures and why it's being added now." }
                 },
                 required = new[] { "name", "content", "commit_message" }
