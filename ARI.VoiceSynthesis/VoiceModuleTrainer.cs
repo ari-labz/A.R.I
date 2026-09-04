@@ -6,6 +6,9 @@ namespace ARI.VoiceSynthesis;
 
 public class VoiceModuleTrainer : IVoiceTrainer
 {
+    private const int HTTP_TIMEOUT_MIN = 30;
+    private const int POLL_INTERVAL_MS = 2000;
+
     private readonly string baseUrl;
     private readonly string audioPath;
     private readonly string voiceDir;
@@ -33,7 +36,7 @@ public class VoiceModuleTrainer : IVoiceTrainer
         this.transcripts = transcripts;
         this.phonemeSubs = phonemeSubs;
         this.logger = logger;
-        http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
+        http = new HttpClient { Timeout = TimeSpan.FromMinutes(HTTP_TIMEOUT_MIN) };
     }
 
     public async Task<string> Train(IProgress<TrainingProgress>? progress = null, CancellationToken ct = default)
@@ -63,7 +66,7 @@ public class VoiceModuleTrainer : IVoiceTrainer
         {
             while (!ct.IsCancellationRequested)
             {
-                await Task.Delay(2000, ct);
+                await Task.Delay(POLL_INTERVAL_MS, ct);
 
                 try
                 {
