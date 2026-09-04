@@ -3,6 +3,7 @@ using System.Linq;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using ARI.LLM;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
@@ -563,7 +564,7 @@ public static class ClientWebSocket
         fileState.PreviewedFiles.TryAdd(path, 0);
 
         // Small file → serve the whole-file read directly (no second round-trip, no note to re-issue).
-        System.Text.RegularExpressions.Match lc = System.Text.RegularExpressions.Regex.Match(outline, @"—\s*(\d+)\s+lines");
+        Match lc = Regex.Match(outline, @"—\s*(\d+)\s+lines");
         if (lc.Success && int.TryParse(lc.Groups[1].Value, out int lines))
         {
             fileState.KnownLineCounts[path] = lines;
@@ -592,7 +593,7 @@ public static class ClientWebSocket
         string header  = nl >= 0 ? clientRaw.Substring(0, nl) : clientRaw;
         string content = nl >= 0 ? clientRaw.Substring(nl + 1) : "";
         long   bytes   = 0;
-        System.Text.RegularExpressions.Match    m       = System.Text.RegularExpressions.Regex.Match(header, @"(\d+)");
+        Match    m       = Regex.Match(header, @"(\d+)");
         if (m.Success) long.TryParse(m.Value, out bytes);
 
         string[] lines = content.Split('\n');
@@ -689,12 +690,12 @@ public static class ClientWebSocket
         if (fenceEnd <= bodyStart) return null;
 
         string[] lines = readResult[(bodyStart + 1)..fenceEnd].Split('\n');
-        System.Text.StringBuilder sb = new StringBuilder();
-        System.Text.RegularExpressions.Regex numbered = new System.Text.RegularExpressions.Regex(@"^\s{0,7}\d+: ?");
+        StringBuilder sb = new StringBuilder();
+        Regex numbered = new Regex(@"^\s{0,7}\d+: ?");
         int matched = 0;
         for (int i = 0; i < lines.Length; i++)
         {
-            System.Text.RegularExpressions.Match m = numbered.Match(lines[i]);
+            Match m = numbered.Match(lines[i]);
             if (m.Success) matched++;
             if (i > 0) sb.Append('\n');
             sb.Append(m.Success ? lines[i][m.Length..] : lines[i]);
@@ -736,7 +737,7 @@ public static class ClientWebSocket
     {
         if (files.Count == 0) return "";
         const int CAP = 200;
-        System.Collections.Generic.IEnumerable<string> sorted = files.OrderBy(f => f, StringComparer.OrdinalIgnoreCase).Take(CAP);
+        IEnumerable<string> sorted = files.OrderBy(f => f, StringComparer.OrdinalIgnoreCase).Take(CAP);
         string body = string.Join("\n", sorted);
         if (files.Count > CAP)
             body += $"\n... ({files.Count - CAP} more — use find_files / list_directory to explore)";
@@ -766,7 +767,7 @@ public static class ClientWebSocket
     /// </summary>
     private static string EditLabel(string argsJson)
     {
-        System.Text.RegularExpressions.Match m = System.Text.RegularExpressions.Regex.Match(argsJson, "\"path\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
+        Match m = Regex.Match(argsJson, "\"path\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
         if (!m.Success) return "file";
         string path = m.Groups[1].Value.Replace("\\\\", "\\").Replace("\\\"", "\"").Replace("\\/", "/");
         try
@@ -808,7 +809,7 @@ public static class ClientWebSocket
 
     private static string BuildPatch(string newStr)
     {
-        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+        StringBuilder sb = new StringBuilder();
         foreach (string line in newStr.Split('\n'))
             sb.Append('+').AppendLine(line);
         return sb.ToString();
@@ -1027,7 +1028,7 @@ public static class ClientWebSocket
             "write_file" or "edit_file" => 90,
             _                           => 30
         };
-        using System.Threading.CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+        using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
         cts.Token.Register(() => tcs.TrySetCanceled());
         try
         {
@@ -1056,7 +1057,7 @@ public static class ClientWebSocket
     {
         int pos = FindJsonFieldValue(partial, fieldName);
         if (pos < 0) return "";
-        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+        StringBuilder sb = new StringBuilder();
         bool esc = false;
         for (int i = pos; i < partial.Length; i++)
         {
@@ -1124,7 +1125,7 @@ public static class ClientWebSocket
         {
             while (ws.State == WebSocketState.Open)
             {
-                using System.IO.MemoryStream ms = new MemoryStream();
+                using MemoryStream ms = new MemoryStream();
                 WebSocketReceiveResult result;
                 do
                 {
@@ -1245,7 +1246,7 @@ public static class ClientWebSocket
                 rebuilt[prop.Name] = prop.Value;
 
             // Serialize with the clean path value substituted.
-            using System.IO.MemoryStream ms = new System.IO.MemoryStream();
+            using MemoryStream ms = new MemoryStream();
             using Utf8JsonWriter writer = new Utf8JsonWriter(ms);
             writer.WriteStartObject();
             foreach (KeyValuePair<string, JsonElement> kv in rebuilt)

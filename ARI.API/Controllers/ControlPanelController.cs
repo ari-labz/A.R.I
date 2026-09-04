@@ -11,6 +11,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 
 namespace ARI.API.Controllers;
 
@@ -972,11 +973,11 @@ public class VoiceController(
         List<int> pauses    = new List<int>();
         int lastEpoch = 0;
         // Epoch [N/total] — tracks current epoch from log lines
-        System.Text.RegularExpressions.Regex epochRe   = new System.Text.RegularExpressions.Regex(@"Epoch \[(\d+)/", System.Text.RegularExpressions.RegexOptions.Compiled);
+        Regex epochRe   = new Regex(@"Epoch \[(\d+)/", RegexOptions.Compiled);
         // Old-format: "Validation loss: X, Dur loss: Y, F0 loss: Z"
-        System.Text.RegularExpressions.Regex oldValRe  = new System.Text.RegularExpressions.Regex(
+        Regex oldValRe  = new Regex(
             @"Validation loss:\s*([\d.]+),\s*Dur loss:\s*([\d.]+),\s*F0 loss:\s*([\d.]+)",
-            System.Text.RegularExpressions.RegexOptions.Compiled);
+            RegexOptions.Compiled);
 
         try
         {
@@ -991,7 +992,7 @@ public class VoiceController(
                 }
 
                 // Track epoch from step lines
-                System.Text.RegularExpressions.Match em = epochRe.Match(line);
+                Match em = epochRe.Match(line);
                 if (em.Success && int.TryParse(em.Groups[1].Value, out int ep))
                     lastEpoch = ep;
 
@@ -1012,7 +1013,7 @@ public class VoiceController(
                 }
                 else
                 {
-                    System.Text.RegularExpressions.Match vm = oldValRe.Match(line);
+                    Match vm = oldValRe.Match(line);
                     if (vm.Success && lastEpoch > 0 && (points.Count == 0 || ((dynamic)points[^1]).epoch != lastEpoch))
                     {
                         points.Add(new

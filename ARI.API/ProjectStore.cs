@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ARI.Common;
@@ -161,9 +162,9 @@ public class ProjectStore
     {
         string ariDir = Path.Combine(workTree, ".ariproject");
         string fullArgs = $"--git-dir=\"{ariDir}\" --work-tree=\"{workTree}\" {arguments}";
-        using System.Diagnostics.Process proc = new System.Diagnostics.Process
+        using Process proc = new Process
         {
-            StartInfo = new System.Diagnostics.ProcessStartInfo
+            StartInfo = new ProcessStartInfo
             {
                 FileName               = "git",
                 Arguments              = fullArgs,

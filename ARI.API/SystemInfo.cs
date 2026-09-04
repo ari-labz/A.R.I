@@ -2,6 +2,8 @@ using ARI.Common;
 using ARI.LLM;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace ARI.API;
 
@@ -187,7 +189,7 @@ public class SystemInfo
                 string json = p.StandardOutput.ReadToEnd();
                 p.WaitForExit();
 
-                using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(json);
+                using JsonDocument doc = JsonDocument.Parse(json);
                 // Fetch total physical RAM once — Apple Silicon shares it as unified GPU/CPU memory
                 long hwMemsize = 0;
                 ProcessStartInfo hwPsi = new ProcessStartInfo("/bin/sh", "-c \"sysctl -n hw.memsize\"")
@@ -199,12 +201,12 @@ public class SystemInfo
                     long.TryParse(hwOut, out hwMemsize);
                 }
 
-                foreach (System.Text.Json.JsonElement display in doc.RootElement.GetProperty("SPDisplaysDataType").EnumerateArray())
+                foreach (JsonElement display in doc.RootElement.GetProperty("SPDisplaysDataType").EnumerateArray())
                 {
-                    string name = display.TryGetProperty("sppci_model", out System.Text.Json.JsonElement n) ? n.GetString() ?? "Unknown" : "Unknown";
+                    string name = display.TryGetProperty("sppci_model", out JsonElement n) ? n.GetString() ?? "Unknown" : "Unknown";
 
                     long vram = 0;
-                    bool builtin = display.TryGetProperty("sppci_bus", out System.Text.Json.JsonElement bus)
+                    bool builtin = display.TryGetProperty("sppci_bus", out JsonElement bus)
                                    && bus.GetString()?.Contains("builtin", StringComparison.OrdinalIgnoreCase) == true;
 
                     if (builtin)
@@ -212,10 +214,10 @@ public class SystemInfo
                         // Apple Silicon — unified memory pool shared between CPU and GPU
                         vram = hwMemsize;
                     }
-                    else if (display.TryGetProperty("sppci_vram", out System.Text.Json.JsonElement vramStr))
+                    else if (display.TryGetProperty("sppci_vram", out JsonElement vramStr))
                     {
                         string vs = vramStr.GetString() ?? "";
-                        System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(vs, @"(\d+)\s*(MB|GB)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        Match match = Regex.Match(vs, @"(\d+)\s*(MB|GB)", RegexOptions.IgnoreCase);
                         if (match.Success)
                         {
                             long val = long.Parse(match.Groups[1].Value);
