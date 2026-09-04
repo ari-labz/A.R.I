@@ -29,6 +29,8 @@ public class Server : IDisposable
 {
     // ── Constants ────────────────────────────────────────────────────────────────
     private const double DEFAULT_TEMPERATURE = 0.80;
+    private const int HEALTH_CHECK_POLL_INTERVAL_MS = 1000;
+    private const int IDLE_CHECK_POLL_INTERVAL_MS = 500;
 
     // ── Persisted config ────────────────────────────────────────────────────────
 
@@ -490,7 +492,7 @@ public class Server : IDisposable
             }
             catch (HttpRequestException) { }
 
-            await Task.Delay(1000);
+            await Task.Delay(HEALTH_CHECK_POLL_INTERVAL_MS);
         }
 
         throw new Exception($"[{Name}] llama-server did not come online within 3 minutes.");
@@ -518,7 +520,7 @@ public class Server : IDisposable
             }
             catch { return; }
 
-            await Task.Delay(500);
+            await Task.Delay(IDLE_CHECK_POLL_INTERVAL_MS);
         }
 
         Log.LogWarning("[{Server}] Timed out waiting for idle — forcing shutdown.", Name);
