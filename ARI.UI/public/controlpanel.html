@@ -1017,6 +1017,23 @@ html, body {
 
     <div id="tab-brain" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
+        <div class="vs-section-title">Engram sweep interval</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
+          How many message exchanges an active conversation accumulates before Engram sweeps it into
+          memory mid-conversation, instead of waiting for the thread to go idle or be closed. Set to 0
+          to disable interval sweeping (Engram will still sweep on close/dormant as usual). Applies
+          immediately — no restart needed.
+        </p>
+        <div style="display:flex;align-items:center;gap:14px;max-width:480px;">
+          <input type="range" id="brain-interval-slider" min="0" max="30" step="1" value="5" style="flex:1;">
+          <span id="brain-interval-value" style="font-size:13px;color:var(--text);min-width:110px;text-align:right;">5 turns</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;margin-top:12px;">
+          <button class="vs-btn-primary" id="brain-interval-save-btn" type="button">Save</button>
+          <span id="brain-interval-status" style="font-size:12px;color:var(--text-dim);"></span>
+        </div>
+      </div>
+      <div class="vs-section">
         <div class="vs-section-title">Backups</div>
         <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
           Snapshots of ARI's knowledge graph. Create one before any large change. Restoring is
@@ -1607,7 +1624,38 @@ async function loadDreaming() {
 const brainStatus = () => document.getElementById('brain-status');
 function fmtBytes(b){ if(b<1024) return b+' B'; if(b<1048576) return (b/1024).toFixed(1)+' KB'; return (b/1048576).toFixed(1)+' MB'; }
 function fmtDate(s){ try { return new Date(s).toLocaleString(); } catch { return s; } }
+function fmtTurns(n) { return n === 0 ? 'Off' : (n + (n === 1 ? ' turn' : ' turns')); }
+
+async function loadEngramInterval() {
+    const slider = document.getElementById('brain-interval-slider');
+    const label  = document.getElementById('brain-interval-value');
+    try {
+        const r = await cpFetch('/admin/brain/engram-interval');
+        const d = await r.json();
+        slider.value = d.turns;
+        label.textContent = fmtTurns(d.turns);
+    } catch { /* leave the default shown */ }
+}
+document.getElementById('brain-interval-slider').addEventListener('input', (e) => {
+    document.getElementById('brain-interval-value').textContent = fmtTurns(parseInt(e.target.value, 10));
+});
+document.getElementById('brain-interval-save-btn').addEventListener('click', async () => {
+    const turns = parseInt(document.getElementById('brain-interval-slider').value, 10);
+    const s = document.getElementById('brain-interval-status');
+    s.textContent = 'Saving…';
+    try {
+        const r = await cpFetch('/admin/brain/engram-interval', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ turns })
+        });
+        const d = await r.json();
+        s.textContent = `Saved — ${fmtTurns(d.turns)}.`;
+    } catch { s.textContent = 'Save failed.'; }
+});
+
 async function loadBrain() {
+    loadEngramInterval();
     const list = document.getElementById('brain-backup-list');
     list.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Loading…</span>';
     try {

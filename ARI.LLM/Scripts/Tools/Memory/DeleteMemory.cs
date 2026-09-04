@@ -3,9 +3,7 @@ using ARI.BrainVault;
 
 namespace ARI.LLM;
 
-// Deletes a brain note through Brain.DeleteNote — never a raw file delete. Rare on purpose: Engram
-// never uses this (it only adds/extends), so this exists for Refactor-style cleanup of genuine dead
-// stubs/duplicates. Commits immediately so a bad delete is one git revert away from undone.
+// Deletes a brain note through Brain.DeleteNote — never a raw file delete. Engram never calls this; it's for Refactor-style cleanup.
 internal sealed class DeleteMemory : Tool
 {
     internal override string Name => "delete_memory";
@@ -63,7 +61,7 @@ internal sealed class DeleteMemory : Tool
         try { Brain.DeleteNote(name); }
         catch (Exception ex) { return Task.FromResult<ToolResult>($"Failed to delete note: {ex.Message}"); }
 
-        string commitResult = BrainGit.Commit(Brain.VaultRoot, commitMessage);
+        string commitResult = BrainGit.Commit(Brain.VaultRoot, commitMessage, path);
         return Task.FromResult<ToolResult>($"Deleted '{title}' ({path}).\n{commitResult}");
     }
 }

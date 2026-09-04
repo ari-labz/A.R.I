@@ -38,6 +38,8 @@ public sealed class AgentDefinition
     // Engram-specific
     public int?    SweepIntervalMinutes { get; set; }
     public int?    RecursiveBrainSearchDepth { get; set; }
+    // Exchanges before an interval sweep; 0/null disables it. Control panel Brain tab slider.
+    public int?    TurnsBeforeSweep     { get; set; }
 }
 
 /// <summary>

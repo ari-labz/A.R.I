@@ -3,9 +3,7 @@ using ARI.BrainVault;
 
 namespace ARI.LLM;
 
-// Creates a new brain note through Brain.AddNote — never a raw file write. AddNote knows a note's real
-// shape (frontmatter, aliases, sticky fields) and commits are one-per-note so the brain's history stays
-// legible. Use edit_memory instead if the note already exists.
+// Creates a new brain note through Brain.AddNote — never a raw file write. Use edit_memory if it already exists.
 internal sealed class CreateMemory : Tool
 {
     internal override string Name => "create_memory";
@@ -22,8 +20,8 @@ internal sealed class CreateMemory : Tool
                 type       = "object",
                 properties = new
                 {
-                    name           = new { type = "string", description = "Note name/path, e.g. 'People/Alex' or 'Private/Alex' for sensitive content. No .md extension." },
-                    content        = new { type = "string", description = "The note body (markdown, dense linked prose)." },
+                    name           = new { type = "string", description = "Note name/path, e.g. 'People/Alex' or 'Private/Alex' for sensitive content." },
+                    content        = new { type = "string", description = "The note BODY ONLY — dense linked prose, starting directly with the text. Do NOT include a YAML frontmatter block (a '---' fenced section) and do NOT include a '# Title' heading — the title comes from `name` and frontmatter is generated automatically from the type/keywords/is_sensitive/aliases parameters below. Writing them again here corrupts the file." },
                     aliases        = new { type = "array", items = new { type = "string" }, description = "Alternate names this note should also be found under." },
                     type           = new { type = "string", description = "Node type, e.g. 'hub', 'person', 'project'. Omit for a plain leaf note." },
                     keywords       = new { type = "array", items = new { type = "string" }, description = "Search keywords beyond the title/aliases." },
@@ -69,11 +67,14 @@ internal sealed class CreateMemory : Tool
         if (content.Length == 0)       return Task.FromResult<ToolResult>("Error: 'content' is required.");
         if (commitMessage.Length == 0) return Task.FromResult<ToolResult>("Error: 'commit_message' is required.");
 
+        content = Brain.StripAccidentalFrontmatter(content, name);
+        if (content.Length == 0) return Task.FromResult<ToolResult>("Error: 'content' is required.");
+
         Note note;
         try { note = Brain.AddNote(name, content, aliases, type, keywords.Count > 0 ? keywords : null, isSensitive); }
         catch (Exception ex) { return Task.FromResult<ToolResult>($"Failed to create note: {ex.Message}"); }
 
-        string commitResult = BrainGit.Commit(Brain.VaultRoot, commitMessage);
+        string commitResult = BrainGit.Commit(Brain.VaultRoot, commitMessage, note.Path);
         return Task.FromResult<ToolResult>($"Created '{note.Title}' at {note.Path}.\n{commitResult}");
     }
 }

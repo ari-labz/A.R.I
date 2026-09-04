@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
 
 namespace ARI.BrainVault;
 
@@ -253,6 +254,11 @@ public class Note
         bool isSensitive = false;
 
         Match frontmatter = frontmatterBlock.Match(raw);
+        // An unterminated fence would otherwise silently read as "no frontmatter" with no signal — warn instead.
+        if (!frontmatter.Success && raw.StartsWith("---\n", StringComparison.Ordinal))
+            ARI.Common.Shared.Logger.LogWarning(
+                "[Note] Frontmatter fence looks unterminated — treating as no frontmatter. First 200 chars: {Snippet}",
+                raw.Length > 200 ? raw[..200] : raw);
         if (frontmatter.Success)
         {
             body = raw[frontmatter.Length..];

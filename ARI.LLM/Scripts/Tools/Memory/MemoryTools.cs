@@ -85,7 +85,7 @@ internal sealed class SearchBrain : Tool
         function = new
         {
             name        = "search_brain",
-            description = "Search notes by title, alias, or content. Plain words only (not regex). Returns 'title — path' ranked by relevance.",
+            description = "Search notes by title, alias, or content. Plain words only (not regex). Returns 'title — name' ranked by relevance — that name is what recall_memory/edit_memory take.",
             parameters  = new
             {
                 type       = "object",
@@ -115,7 +115,7 @@ internal sealed class SearchBrain : Tool
         List<SearchResult> hits = Brain.Search(terms, limit);
         if (hits.Count == 0) return Task.FromResult<ToolResult>($"No notes found for '{query}'. It likely has no note yet.");
 
-        return Task.FromResult<ToolResult>(string.Join('\n', hits.Select(h => $"{h.Note.Title} — {h.Note.Path}")));
+        return Task.FromResult<ToolResult>(string.Join('\n', hits.Select(h => $"{h.Note.Title} — {h.Note.Name}")));
     }
 }
 
@@ -164,9 +164,7 @@ internal sealed class MergeNotesTool : Tool
 
 // ── recall_memory ──────────────────────────────────────────────────────────────────────
 
-// Reads the full content of a brain note by path or title.
-// Use search_brain first to find the path, then recall_memory to read it.
-// In non-owner conversations: only recall notes that are non-sensitive and appropriate to share.
+// Reads a brain note's full content. In non-owner conversations, only recall non-sensitive notes.
 internal sealed class RecallMemory : Tool
 {
     internal override string     Name   => "recall_memory";
@@ -177,27 +175,27 @@ internal sealed class RecallMemory : Tool
         function = new
         {
             name        = "recall_memory",
-            description = "Read the full content of a brain note by its path or title. Use search_brain first to find the path, then call this to read it. The note path comes from search_brain results (e.g. 'People/Xywren.md'). In conversations with someone other than the owner, only recall notes whose content is non-sensitive and appropriate to share with a third party.",
+            description = "Read the full content of a brain note by its name or title. Use search_brain first to find the name, then call this to read it. The note name comes from search_brain results (e.g. 'People/Alex') — this same name is what create_memory/edit_memory take. In conversations with someone other than the owner, only recall notes whose content is non-sensitive and appropriate to share with a third party.",
             parameters  = new
             {
                 type       = "object",
                 properties = new
                 {
-                    path = new { type = "string", description = "Note path or title, as returned by search_brain." }
+                    name = new { type = "string", description = "Note name or title, as returned by search_brain." }
                 },
-                required = new[] { "path" }
+                required = new[] { "name" }
             }
         }
     };
 
     internal override Task<ToolResult> Execute(string argsJson)
     {
-        string path = Args.Parse(argsJson).Str("path").Trim();
-        if (path.Length == 0) return Task.FromResult<ToolResult>("Error: 'path' is required.");
+        string name = Args.Parse(argsJson).Str("name").Trim();
+        if (name.Length == 0) return Task.FromResult<ToolResult>("Error: 'name' is required.");
 
         Brain.Index();
-        Note? note = Brain.GetNote(path);
-        if (note is null) return Task.FromResult<ToolResult>($"No note found for '{path}'. Use search_brain to find the correct path.");
+        Note? note = Brain.GetNote(name);
+        if (note is null) return Task.FromResult<ToolResult>($"No note found for '{name}'. Use search_brain to find the correct name.");
 
         string content = note.Content;
         if (content.Trim().Length == 0) return Task.FromResult<ToolResult>($"'{note.Title}' exists but has no content yet.");
