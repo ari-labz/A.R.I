@@ -22,7 +22,7 @@ internal sealed class GitMulti : Tool
     {
         if (!Directory.Exists(projectRoot)) return null;
 
-        var repos = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, string> repos = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (string subdir in Directory.EnumerateDirectories(projectRoot))
         {
@@ -88,7 +88,7 @@ internal sealed class GitMulti : Tool
         if (!_repos.TryGetValue(repo, out string? repoPath))
             return Task.FromResult<ToolResult>($"Unknown repo '{repo}'. Available: {string.Join(", ", _repos.Keys)}");
 
-        var args = new List<string> { command };
+        List<string> args = new List<string> { command };
 
         if (command == "commit")
         {
@@ -104,7 +104,7 @@ internal sealed class GitMulti : Tool
         else if (!string.IsNullOrWhiteSpace(extra))
             args.AddRange(SplitArgs(extra));
 
-        var (code, outp, err) = RunGit(repoPath, args.ToArray());
+        (int code, string outp, string err) = RunGit(repoPath, args.ToArray());
 
         string combined = (outp + "\n" + err).Trim();
         if (string.IsNullOrWhiteSpace(combined))
@@ -128,7 +128,7 @@ internal sealed class GitMulti : Tool
 
     private static (int Code, string Out, string Err) RunGit(string workDir, string[] args)
     {
-        var psi = new ProcessStartInfo
+        ProcessStartInfo psi = new ProcessStartInfo
         {
             FileName               = "git",
             WorkingDirectory       = workDir,

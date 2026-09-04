@@ -371,7 +371,7 @@ internal sealed class ServerFileSystem : FileSystem
                 return $"File not found: {relPath}";
 
             static EditSpec Parse(JsonElement e) => new(
-                Normalize(e.TryGetProperty("new_string", out var n) ? n.GetString() ?? "" : ""),
+                Normalize(e.TryGetProperty("new_string", out JsonElement n) ? n.GetString() ?? "" : ""),
                 ReadEditLine(e, "start_line"),
                 ReadEditLine(e, "end_line"),
                 ReadInsertAfter(e));

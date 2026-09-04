@@ -129,11 +129,11 @@ public class Response : ThreadItem
 
     public override string ToString()
     {
-        var sb = new System.Text.StringBuilder();
+        System.Text.StringBuilder sb = new System.Text.StringBuilder();
         sb.Append($"[{Timestamp:HH:mm}] A·R·I (thought for {ThinkingSeconds:F1}s):");
         if (RecallNotes != null)
         {
-            var names = System.Text.RegularExpressions.Regex.Matches(RecallNotes, @"^\[([^|\]]+)", System.Text.RegularExpressions.RegexOptions.Multiline)
+            IEnumerable<string> names = System.Text.RegularExpressions.Regex.Matches(RecallNotes, @"^\[([^|\]]+)", System.Text.RegularExpressions.RegexOptions.Multiline)
                             .Select(m => $"[{m.Groups[1].Value}]");
             sb.Append($"\n  Recalled Notes: {string.Join(", ", names)}");
         }

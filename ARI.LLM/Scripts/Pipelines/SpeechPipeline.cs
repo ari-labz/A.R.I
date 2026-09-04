@@ -73,7 +73,7 @@ internal sealed class SpeechPipeline : Pipeline
         double? recallSeconds = null;
         if (memory is not null)
         {
-            var recallSw = System.Diagnostics.Stopwatch.StartNew();
+            System.Diagnostics.Stopwatch recallSw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 List<ThreadMessage> chatHistory = thread.GetChatHistory();

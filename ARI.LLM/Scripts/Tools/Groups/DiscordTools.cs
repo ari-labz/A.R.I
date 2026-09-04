@@ -46,7 +46,7 @@ internal sealed class DiscordListVoiceChannels : Tool
         if (channels.Count == 0)
             return Task.FromResult<ToolResult>("That user is not in any voice channel right now.");
 
-        var sb = new StringBuilder();
+        StringBuilder sb = new StringBuilder();
         foreach (VoiceChannelInfo ch in channels)
             sb.AppendLine($"- #{ch.ChannelName} (channel_id: {ch.ChannelId}) in server \"{ch.GuildName}\" (guild_id: {ch.GuildId})");
 
