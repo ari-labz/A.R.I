@@ -1,6 +1,7 @@
 using ARI.Common;
 using System.Diagnostics;
 using System.Linq;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 
@@ -511,7 +512,7 @@ public class Server : IDisposable
                 if (resp.IsSuccessStatusCode)
                 {
                     string body = await resp.Content.ReadAsStringAsync();
-                    using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(body);
+                    using JsonDocument doc = JsonDocument.Parse(body);
                     bool allIdle = true;
                     foreach (System.Text.Json.JsonElement slot in doc.RootElement.EnumerateArray())
                         if (slot.GetProperty("state").GetInt32() != 0) { allIdle = false; break; }
