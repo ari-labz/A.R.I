@@ -6,11 +6,11 @@ namespace ARI.LLM;
 
 internal sealed class GenerateImage : Tool
 {
-    private readonly Thread _thread;
-    private string? _savedFilename;
-    private string? _savedThreadKey;
+    private readonly Thread boundThread;
+    private string? savedFilename;
+    private string? savedThreadKey;
 
-    internal GenerateImage(Thread thread) => _thread = thread;
+    internal GenerateImage(Thread thread) => boundThread = thread;
 
     internal override string     Name   => "generate_image";
     internal override ToolAccess Access => ToolAccess.Write;
@@ -97,7 +97,7 @@ internal sealed class GenerateImage : Tool
         string[] referenceImages = [];
         if (root.TryGetProperty("reference_images", out JsonElement ri) && ri.ValueKind == JsonValueKind.Array)
         {
-            string scratchpad = _thread?.FilesystemRoot ?? "";
+            string scratchpad = boundThread?.FilesystemRoot ?? "";
             referenceImages = ri.EnumerateArray()
                 .Select(e => e.GetString() ?? "")
                 .Where(name => !string.IsNullOrWhiteSpace(name))
@@ -138,8 +138,8 @@ internal sealed class GenerateImage : Tool
         // Ensure thread cleanup will delete the scratchpad on death.
         thread.FilesystemRoot ??= dir;
 
-        _savedFilename  = filename;
-        _savedThreadKey = thread.Key;
+        savedFilename  = filename;
+        savedThreadKey = thread.Key;
 
         string url = $"/threads/{Uri.EscapeDataString(thread.Key)}/scratchpad/{Uri.EscapeDataString(filename)}";
         thread.RaiseScratchpadFileReady(url);
@@ -148,7 +148,7 @@ internal sealed class GenerateImage : Tool
     }
 
     internal override Func<string, string>? DisplayAfter => _ =>
-        _savedFilename is not null && _savedThreadKey is not null
-            ? $"\n<!--ari-image:{_savedThreadKey}:{_savedFilename}-->"
+        savedFilename is not null && savedThreadKey is not null
+            ? $"\n<!--ari-image:{savedThreadKey}:{savedFilename}-->"
             : "";
 }
