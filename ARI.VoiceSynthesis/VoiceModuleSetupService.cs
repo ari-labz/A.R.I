@@ -52,7 +52,7 @@ public class VoiceModuleSetupService(string moduleName, ILogger? logger = null)
         if (http.DefaultRequestHeaders.UserAgent.Count == 0)
             http.DefaultRequestHeaders.UserAgent.Add(new System.Net.Http.Headers.ProductInfoHeaderValue("ARI", "1.0"));
         string json = await http.GetStringAsync(apiUrl);
-        var release = JsonDocument.Parse(json);
+        JsonDocument release = JsonDocument.Parse(json);
         string tag = release.RootElement.GetProperty("tag_name").GetString()!;
         string tarball = $"https://github.com/{repo}/archive/refs/tags/{tag}.tar.gz";
 
@@ -61,8 +61,8 @@ public class VoiceModuleSetupService(string moduleName, ILogger? logger = null)
         string tempTar = Path.Combine(Path.GetTempPath(), $"ari-module-{moduleName}-{Guid.NewGuid():N}.tar.gz");
         try
         {
-            await using (var stream = await http.GetStreamAsync(tarball))
-            await using (var file = File.Create(tempTar))
+            await using (Stream stream = await http.GetStreamAsync(tarball))
+            await using (FileStream file = File.Create(tempTar))
                 await stream.CopyToAsync(file);
 
             Directory.CreateDirectory(Path.GetDirectoryName(ModuleDir)!);
@@ -70,7 +70,7 @@ public class VoiceModuleSetupService(string moduleName, ILogger? logger = null)
             string tempExtract = Path.Combine(Path.GetTempPath(), $"ari-module-{moduleName}-{Guid.NewGuid():N}");
             Directory.CreateDirectory(tempExtract);
 
-            var tar = Process.Start(new ProcessStartInfo
+            Process tar = Process.Start(new ProcessStartInfo
             {
                 FileName = "tar",
                 Arguments = $"-xzf \"{tempTar}\" -C \"{tempExtract}\"",
@@ -90,9 +90,9 @@ public class VoiceModuleSetupService(string moduleName, ILogger? logger = null)
             logger?.LogInformation("[{Module}] Installed {Tag} to {Path}.", moduleName, tag, ModuleDir);
 
             // Download release assets (e.g. base model weights) that aren't in the source archive
-            if (release.RootElement.TryGetProperty("assets", out var assets))
+            if (release.RootElement.TryGetProperty("assets", out JsonElement assets))
             {
-                foreach (var asset in assets.EnumerateArray())
+                foreach (JsonElement asset in assets.EnumerateArray())
                 {
                     string name = asset.GetProperty("name").GetString()!;
                     string downloadUrl = asset.GetProperty("browser_download_url").GetString()!;
@@ -102,8 +102,8 @@ public class VoiceModuleSetupService(string moduleName, ILogger? logger = null)
 
                     logger?.LogInformation("[{Module}] Downloading asset {Name}...", moduleName, name);
                     Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
-                    await using var assetStream = await http.GetStreamAsync(downloadUrl);
-                    await using var destFile = File.Create(destPath);
+                    await using Stream assetStream = await http.GetStreamAsync(downloadUrl);
+                    await using FileStream destFile = File.Create(destPath);
                     await assetStream.CopyToAsync(destFile);
                     logger?.LogInformation("[{Module}] Saved {Name} ({Size}).", moduleName, name, new FileInfo(destPath).Length);
                 }
@@ -124,7 +124,7 @@ public class VoiceModuleSetupService(string moduleName, ILogger? logger = null)
             if (!File.Exists(registryPath)) return null;
         }
 
-        var registry = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(registryPath));
+        Dictionary<string, string>? registry = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(registryPath));
         return registry?.GetValueOrDefault(moduleName);
     }
 
