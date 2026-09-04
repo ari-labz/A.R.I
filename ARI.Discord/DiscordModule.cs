@@ -18,6 +18,12 @@ public class DiscordModule : BackgroundService, IDiscordModule
     private const int MAX_MESSAGE_LENGTH = 2000;
     private const int MESSAGE_SEND_DELAY_MS = 500;
 
+    // Voice audio pipeline delays
+    private const int AUDIO_BUFFER_DELAY_MS = 1500;
+    private const int FRAME_ENCODE_DELAY_MS = 20;
+    private const int SILENCE_TIMEOUT_MS = 1000;
+    private const int CRASH_RECOVERY_DELAY_MS = 8000;
+
     private static readonly HashSet<string> ReadableExtensions = new(StringComparer.OrdinalIgnoreCase)
         { ".txt", ".md", ".cs", ".py", ".js", ".ts", ".json", ".yaml", ".yml", ".toml", ".xml", ".html", ".css", ".sh", ".log" };
 
@@ -659,7 +665,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
     private static async Task RunSilenceLoopAsync(IAudioClient audio, SemaphoreSlim writeLock, CancellationToken ct)
     {
         // Wait for DAVE E2EE handshake to complete before opening the PCM stream.
-        await Task.Delay(1500, ct);
+        await Task.Delay(AUDIO_BUFFER_DELAY_MS, ct);
         while (!ct.IsCancellationRequested)
         {
             try
@@ -670,7 +676,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
                     await writeLock.WaitAsync(ct);
                     try   { await pcm.WriteAsync(SilenceFrame, ct); }
                     finally { writeLock.Release(); }
-                    await Task.Delay(20, ct);
+                    await Task.Delay(FRAME_ENCODE_DELAY_MS, ct);
                 }
                 await pcm.FlushAsync(ct);
                 return; // clean shutdown
@@ -679,7 +685,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
             catch (Exception ex)
             {
                 Shared.Logger.LogWarning("[Discord] Silence loop restarting after error: {Message}", ex.Message);
-                try { await Task.Delay(1000, ct); } catch (OperationCanceledException) { return; }
+                try { await Task.Delay(SILENCE_TIMEOUT_MS, ct); } catch (OperationCanceledException) { return; }
             }
         }
     }
@@ -732,7 +738,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
         while (!ct.IsCancellationRequested)
         {
             await channel.TriggerTypingAsync();
-            try { await Task.Delay(8000, ct); } catch (TaskCanceledException) { break; }
+            try { await Task.Delay(CRASH_RECOVERY_DELAY_MS, ct); } catch (TaskCanceledException) { break; }
         }
     }
 
