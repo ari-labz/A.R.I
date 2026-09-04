@@ -7,12 +7,16 @@ namespace ARI.LLM;
 // entry at a time instead of one blob per Engram sweep.
 internal static class BrainGit
 {
-    internal static string Commit(string vaultRoot, string message)
+    // relativePaths scopes the commit to exactly the file(s) this call touched (2 for a rename: the old
+    // path being deleted and the new one being written) — `git add -A` would sweep in whatever else
+    // happens to be sitting dirty in the vault (a manual Obsidian edit, a stray deletion from outside
+    // any tool call) and silently misattribute it to this note's commit.
+    internal static string Commit(string vaultRoot, string message, params string[] relativePaths)
     {
         (int _, string status, string _) = Run(vaultRoot, "status", "--porcelain");
         if (string.IsNullOrWhiteSpace(status)) return "(No git changes detected.)";
 
-        Run(vaultRoot, "add", "-A");
+        foreach (string path in relativePaths) Run(vaultRoot, "add", "--", path);
         (int code, string _, string err) = RunInput(vaultRoot, message, "commit", "-F", "-");
         if (code != 0) return $"Commit failed: {err.Trim()}";
 

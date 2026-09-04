@@ -440,6 +440,19 @@ public class LLMModule : ILLMModule, IDisposable
                     string uname = thread.History.OfType<Prompt>().LastOrDefault()?.AuthorName ?? "User";
                     _ = context.Update(threadKey, user, asst, uname);
                 };
+
+            // Every TurnsBeforeSweep exchanges, an active thread gets an ordinary sweep without waiting to go dormant.
+            if (engram is not null)
+                thread.ExchangeCompleted += (_, _) =>
+                {
+                    if (thread.Internal || !thread.HasUserMessages || !thread.IsOwnerThread) return;
+                    if (!engram.ShouldIntervalSweep(threadKey)) return;
+                    _ = Task.Run(async () =>
+                    {
+                        try { await engram.RunEngram(threadKey, "interval"); }
+                        catch (Exception ex) { _logger.LogWarning("[Interval] Engram failed for {Key}: {Err}", threadKey, ex.Message); }
+                    });
+                };
         }
         Broadcast(new AppEvent("newThread", threadKey));
         return thread;
@@ -966,6 +979,20 @@ public class LLMModule : ILLMModule, IDisposable
     }
 
     public bool IsEngramSweeping(string threadKey) => engram?.IsSweeping(threadKey) ?? false;
+
+    /// <summary>How many completed exchanges an active thread accumulates before Engram sweeps it
+    /// mid-conversation. 0 = interval sweeping disabled (dormant/close remain the only triggers).</summary>
+    public int GetEngramTurnInterval() => engram?.TurnsBeforeSweep ?? 0;
+
+    /// <summary>Live update, no restart needed — takes effect on the very next completed exchange.</summary>
+    public void SetEngramTurnInterval(int turns)
+    {
+        if (engram is not null) engram.TurnsBeforeSweep = Math.Max(0, turns);
+    }
+
+    // Test-only passthrough — see Engram.DebugExtractOnly.
+    public async Task<List<(string Entity, bool IsNew, string Excerpt, bool Sensitive)>> DebugExtractOnly(string threadKey)
+        => engram is null ? new() : await engram.DebugExtractOnly(threadKey);
 
     public ThreadPhase GetThreadPhase(string threadKey) => threadPhases.TryGetValue(threadKey, out ThreadPhase p) ? p : ThreadPhase.Idle;
 

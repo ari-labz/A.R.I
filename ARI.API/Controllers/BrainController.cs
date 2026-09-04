@@ -1,3 +1,4 @@
+using ARI.API.Data;
 using ARI.BrainVault;
 using ARI.Common;
 using ARI.LLM;
@@ -12,7 +13,7 @@ namespace ARI.API.Controllers;
 /// </summary>
 [Route("admin/brain")]
 [ApiController]
-public class BrainController : ControllerBase
+public class BrainController(PersistentData persistentData) : ControllerBase
 {
     private LLMModule? Llm => (LLMModule?)Modules.Llm;
 
@@ -49,5 +50,31 @@ public class BrainController : ControllerBase
         if (Llm is null || !Llm.BrainAvailable) return BadRequest(new { message = "Brain is not available." });
         if (string.IsNullOrWhiteSpace(request.File)) return BadRequest(new { message = "No backup file specified." });
         return Ok(new { message = Llm.RestoreBrainBackup(request.File) });
+    }
+
+    /// <summary>How many completed exchanges an active thread accumulates before Engram sweeps it
+    /// mid-conversation, instead of waiting for the thread to go dormant or be closed. 0 = disabled.</summary>
+    [HttpGet("engram-interval")]
+    public IActionResult GetEngramInterval()
+    {
+        int turns = Llm?.GetEngramTurnInterval() ?? persistentData.GetAgent("Engram")?.TurnsBeforeSweep ?? 5;
+        return Ok(new { turns });
+    }
+
+    public record EngramIntervalRequest(int Turns);
+
+    /// <summary>Persists to Agents.json AND applies live to the running Engram instance — no restart needed.</summary>
+    [HttpPut("engram-interval")]
+    public IActionResult SetEngramInterval([FromBody] EngramIntervalRequest request)
+    {
+        int turns = Math.Max(0, request.Turns);
+
+        AgentDefinition? agent = persistentData.GetAgent("Engram");
+        if (agent is null) return NotFound(new { message = "Engram agent definition not found." });
+        agent.TurnsBeforeSweep = turns;
+        persistentData.UpdateAgent(agent);
+
+        Llm?.SetEngramTurnInterval(turns);
+        return Ok(new { turns });
     }
 }

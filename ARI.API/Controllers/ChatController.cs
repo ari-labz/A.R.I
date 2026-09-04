@@ -219,6 +219,38 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         return Ok(SerializeDebugThread(thread));
     }
 
+    // Test-only: injects a fixed transcript directly into a thread's history, no LLM call, so Engram can be exercised repeatedly against the same input. Admin-only.
+    [HttpPost("{threadKey}/debug/seed")]
+    public IActionResult SeedDebugHistory(string threadKey, [FromBody] List<SeedTurn> turns)
+    {
+        if (!User.IsInRole(ARI.API.Auth.Roles.Admin)) return Forbid();
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+
+        ARI.LLM.Thread thread = Llm.GetOrCreateDialogueThread(threadKey);
+        DateTime t = DateTime.Now.AddMinutes(-turns.Count);
+        foreach (SeedTurn turn in turns)
+        {
+            t = t.AddMinutes(1);
+            ThreadItem item = turn.Speaker.Equals("ari", StringComparison.OrdinalIgnoreCase)
+                ? new Response { State = State.Complete, Content = ContentBlock.Parse(turn.Text), Timestamp = t }
+                : new Prompt { Text = turn.Text, AuthorName = turn.AuthorName ?? "User", Timestamp = t };
+            thread.History.Add(item);
+        }
+        return Ok(new { threadKey, added = turns.Count });
+    }
+
+    public record SeedTurn(string Speaker, string Text, string? AuthorName = null);
+
+    // Test-only: runs Engram's Classify+Extract stages and returns the raw entity list — never touches Save. Admin-only.
+    [HttpPost("{threadKey}/debug/extract-only")]
+    public async Task<IActionResult> DebugExtractOnly(string threadKey)
+    {
+        if (!User.IsInRole(ARI.API.Auth.Roles.Admin)) return Forbid();
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        var entities = await Llm.DebugExtractOnly(threadKey);
+        return Ok(entities.Select(e => new { e.Entity, e.IsNew, e.Excerpt, e.Sensitive }));
+    }
+
     /// <summary>Lists today's recorded session files from disk. Includes completed Engram sweeps and other
     /// ephemeral threads that are no longer in the live registry. Admin-only (raw session data).</summary>
     [HttpGet("debug/sessions")]

@@ -10,10 +10,6 @@ namespace ARI.LLM;
 
 internal class Engram : MemoryAgent, IDisposable
 {
-    // Save always reads the existing note first (see ResolveEntity) and its own prompt promises
-    // write_file as the only tool — the base guard's blind-overwrite premise doesn't apply here.
-    internal override bool BlocksWriteOverExisting => false;
-
     // Each Stage-3 call now places exactly one entity in its own short-lived thread, so there's no
     // multi-entity turn left to keep open — this and the ceiling below fall back to MemoryAgent's
     // defaults (single-commit-per-turn, 8-call breaker), which fit a one-note, one-tool call cleanly.
@@ -24,12 +20,24 @@ internal class Engram : MemoryAgent, IDisposable
     [JsonIgnore] internal Context?     context        { get; set; }
     [JsonIgnore] internal string       PersistentDir  { get; set; } = string.Empty;
 
+    // Completed exchanges an active thread accumulates before an interval sweep; 0 disables it.
+    public int TurnsBeforeSweep { get; set; } = 5;
+
     private readonly Dictionary<string, DateTime>       lastRun          = new();
     private readonly Dictionary<string, int>            lastHistoryCount = new();
+    private readonly ConcurrentDictionary<string, int>  exchangeCounts   = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim                      engramLock       = new(1, 1);
     private readonly ConcurrentDictionary<string, byte> sweepingThreads  = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string>                    pendingQueue     = new(StringComparer.OrdinalIgnoreCase);
     private readonly HttpClient                         httpClient       = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+
+    // Per-thread count of exchanges, never reset by a sweep — "every N turns" means N wall-clock turns.
+    internal bool ShouldIntervalSweep(string threadKey)
+    {
+        if (TurnsBeforeSweep <= 0) return false;
+        int count = exchangeCounts.AddOrUpdate(threadKey, 1, (_, c) => c + 1);
+        return count % TurnsBeforeSweep == 0;
+    }
 
     private ConcurrentDictionary<string, Thread> threads = new();
 
@@ -191,7 +199,8 @@ internal class Engram : MemoryAgent, IDisposable
                 return;
             }
 
-            string transcript = BuildTranscript(conversationItems);
+            // recentItems is only what's new since lastHistoryCount — a 2nd+ sweep never re-reads the full transcript.
+            string transcript = transcriptSeen.Length > 0 ? transcriptSeen : BuildTranscript(recentItems);
             if (context is not null) await context.RebuildFromTranscript(threadKey, transcript);
             string contextSummary = context?.GetContext(threadKey) ?? string.Empty;
             string speaker = conversationItems.OfType<Prompt>().Select(p => p.AuthorName)
@@ -256,6 +265,21 @@ internal class Engram : MemoryAgent, IDisposable
             engramLock.Release();
             SweepCompleted?.Invoke(threadKey);
         }
+    }
+
+    // Test-only: runs Classify + Extract like RunEngram, then stops — never touches Save or writes anything.
+    internal async Task<List<(string Entity, bool IsNew, string Excerpt, bool Sensitive)>> DebugExtractOnly(string threadKey)
+    {
+        List<ThreadItem> allItems = threads.TryGetValue(threadKey, out Thread? dialogueThread) ? dialogueThread.History : new List<ThreadItem>();
+        List<ThreadItem> conversationItems = allItems.Where(i => i is LLM.Prompt or Response).ToList();
+        List<ThreadItem> recentItems = conversationItems;   // treat as a fresh, first-ever sweep
+
+        if (!await Classify(recentItems, "debug-extract-only")) return new();
+
+        string transcript = BuildTranscript(recentItems);
+        string contextSummary = context?.GetContext(threadKey) ?? string.Empty;
+        List<ExtractedEntity> entities = await ExtractAsync(transcript, contextSummary);
+        return entities.Select(e => (e.Entity, e.IsNew, e.Excerpt, e.Sensitive)).ToList();
     }
 
     // ── Stage 2: extract ───────────────────────────────────────────────────────────────
@@ -345,54 +369,57 @@ internal class Engram : MemoryAgent, IDisposable
 
     // ── Stage 3: save ──────────────────────────────────────────────────────────────────
 
-    // One resolved entity, ready to hand to the single Save call: its allowed write path(s)/prefix, and
-    // the existing-content block describing what (if anything) is already there.
-    private readonly record struct ResolvedEntity(string Entity, string ExistingBlock, HashSet<string> AllowedPaths, string AllowedPrefix);
+    // One resolved entity ready for the Save call: its allowed write name(s)/prefix and the
+    // existing-content block describing what (if anything) is already there.
+    private readonly record struct ResolvedEntity(string Entity, string ExistingBlock, HashSet<string> AllowedNames, string AllowedPrefix);
 
-    /// <summary>Resolves one entity's note by exact match (title/alias/path for ordinary entities, a
-    /// deterministic Private/{Entity}.md for sensitive ones) — never the fuzzy ranked search used for
-    /// exploratory discovery, which is what let a write land on an unrelated note that merely shared a
-    /// word. This is purely lookup; nothing is written here.</summary>
+    // Resolves one entity's note by exact match, never fuzzy search — a fuzzy match once let a write land on an unrelated note.
     private static ResolvedEntity ResolveEntity(ExtractedEntity entity)
     {
         Note? normalNote = Brain.GetNote(entity.Entity);
-        HashSet<string> allowedPaths = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> allowedNames = new(StringComparer.OrdinalIgnoreCase);
 
         if (entity.Sensitive)
         {
-            // Deterministic, same family every time — Private/{Entity}.md — regardless of how this
-            // conversation happened to phrase the topic. This is the fix for the sprawl bug: resolution
-            // no longer depends on the model reinventing an identical title twice.
-            string privatePath = $"Private/{SanitizeNoteFileName(entity.Entity)}.md";
-            Note?  existing    = Brain.GetNote(privatePath);
-            allowedPaths.Add(privatePath);
-            if (normalNote is not null) allowedPaths.Add(normalNote.Path);   // rare migrate-out-of-normal-note case
+            // The " - Private" suffix avoids a title collision with the entity's own identity note (titles are unique vault-wide).
+            string privateName = $"Private/{SanitizeNoteFileName(entity.Entity)} - Private";
+            Note?  existing    = Brain.GetNote(privateName);
+            allowedNames.Add(privateName);
+            if (normalNote is not null) allowedNames.Add(normalNote.Name);   // rare migrate-out-of-normal-note case
 
             string block = existing is not null
-                ? $"The consolidated private note already exists at '{privatePath}':\n\n{existing.Content}\n\n" +
-                  "Add this under the right topic subheading (or a new one if none fits) — don't create a separate note for it."
-                : $"No private note exists yet for this subject — create it at '{privatePath}'.";
-            return new ResolvedEntity(entity.Entity, block, allowedPaths, privatePath[..^3]);
+                ? $"Already exists — call edit_memory(name: \"{privateName}\"):\n\n{existing.Content}\n\n" +
+                  "Add this under the right topic subheading (or a new one if none fits) — don't create_memory a separate note for it."
+                : $"Does not exist yet — call create_memory(name: \"{privateName}\") and link it out to [[Private]] (the hub).";
+            // Kept to one short line — a longer explanation here measurably slowed Save down.
+            if (normalNote is not null)
+            {
+                block += $" (Plain mentions of {entity.Entity} elsewhere link to \"{normalNote.Name}\", not here.)";
+                // The private note needs an outward link from the profile, or it's unreachable from recall.
+                bool alreadyLinked = normalNote.Content.Contains($"[[{privateName}", StringComparison.OrdinalIgnoreCase);
+                if (!alreadyLinked)
+                {
+                    allowedNames.Add(normalNote.Name);
+                    // old_string is computed here, not left to the model, so there's nothing for Save to mis-copy.
+                    string trailingLine = normalNote.Content.TrimEnd().Split('\n').LastOrDefault() ?? "";
+                    if (trailingLine.Length > 0)
+                        block += $"\n\nMECHANICAL EDIT, no judgement needed: call edit_memory(name: \"{normalNote.Name}\", old_string: \"{EscapeForPrompt(trailingLine)}\", new_string: \"{EscapeForPrompt(trailingLine)}\\nSee [[{privateName}]].\") to add the link under the note's last heading. Do not touch anything else in the note.";
+                }
+            }
+            return new ResolvedEntity(entity.Entity, block, allowedNames, privateName);
         }
         else
         {
-            if (normalNote is not null) allowedPaths.Add(normalNote.Path);
+            if (normalNote is not null) allowedNames.Add(normalNote.Name);
             string block = normalNote is not null
-                ? $"The note already exists at '{normalNote.Path}':\n\n{normalNote.Content}"
-                : "No note exists yet for this entity — create one at an appropriate path per the rulebook above.";
-            // Same family split-note allowance as the sensitive case — lets Save split an oversized
-            // ordinary note into a sibling in the same call, without a separate Refactor pass. A
-            // brand-new entity has no existing path to build a prefix from, so it's simply unscoped
-            // below (nothing to protect yet — at worst a wrongly-placed new note, a normal tidy-up).
-            return new ResolvedEntity(entity.Entity, block, allowedPaths, normalNote is not null ? normalNote.Path[..^3] : "");
+                ? $"Already exists — call edit_memory(name: \"{normalNote.Name}\"):\n\n{normalNote.Content}"
+                : "Does not exist yet — call create_memory with a name/path chosen per the rulebook above (e.g. \"People/Name\").";
+            // Lets Save split an oversized note into a sibling create_memory call in the same turn.
+            return new ResolvedEntity(entity.Entity, block, allowedNames, normalNote?.Name ?? "");
         }
     }
 
-    /// <summary>Saves every entity from this sweep in one call: each is still resolved by exact match
-    /// beforehand (see <see cref="ResolveEntity"/>) and the write tool is confined to the union of every
-    /// entity's own pre-resolved path/prefix, so no entity's write can land on a note it wasn't resolved
-    /// against — the scoping the old per-entity design had, just covering the whole sweep in one turn
-    /// instead of one call per entity.</summary>
+    // Saves every entity in one call; edit_memory is confined to each entity's own pre-resolved name/prefix (see ResolveEntity).
     private async Task<(int Commits, int Blocked)> SaveAllAsync(string threadKey, List<ExtractedEntity> entities, string speaker, string conversationDate)
     {
         if (entities.Count == 0) return (0, 0);
@@ -400,13 +427,13 @@ internal class Engram : MemoryAgent, IDisposable
         Brain.Index();   // pick up any commits made just before this sweep started
         List<ResolvedEntity> resolved = entities.Select(ResolveEntity).ToList();
 
-        HashSet<string> allowedPaths    = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> allowedNames    = new(StringComparer.OrdinalIgnoreCase);
         List<string>    allowedPrefixes = new();
         StringBuilder   entityBlocks    = new();
         for (int i = 0; i < resolved.Count; i++)
         {
             ResolvedEntity r = resolved[i];
-            foreach (string p in r.AllowedPaths) allowedPaths.Add(p);
+            foreach (string n in r.AllowedNames) allowedNames.Add(n);
             if (r.AllowedPrefix.Length > 0) allowedPrefixes.Add(r.AllowedPrefix);
             entityBlocks.Append($"### {r.Entity}\n{r.ExistingBlock}\n\nWhat was said (speaker: {speaker}):\n{entities[i].Excerpt}\n\n");
         }
@@ -415,8 +442,9 @@ internal class Engram : MemoryAgent, IDisposable
         mini.FilesystemRoot = Brain.VaultRoot;
         mini.IsBrainVault   = true;
         mini.Ct             = CancellationToken.None;
-        ServerFileSystem fs = new(Brain.VaultRoot, CancellationToken.None, brainVault: true);
-        new WriteFile(fs, allowedPaths: allowedPaths, allowedPrefixes: allowedPrefixes).Register(mini);
+        // create_memory/edit_memory, never the generic filesystem tools — each commits itself, one note at a time.
+        new CreateMemory().Register(mini);
+        new EditMemory(allowedNames: allowedNames, allowedPrefixes: allowedPrefixes).Register(mini);
         PublishForInspection(mini);
 
         string task = ResolveTemplate("SaveTask", "",
@@ -429,39 +457,33 @@ internal class Engram : MemoryAgent, IDisposable
             OnDelta  = async _ => { Notify?.Invoke(mini.Key); await Task.CompletedTask; },
         });
 
-        // tool_call carries the path attempted (Args); the following tool_result carries whether it
-        // landed or was blocked. Pairing them (by index within the same trace) is what lets one call
-        // covering several entities still report per-write outcomes and name what actually changed.
+        // Pairs each tool_call to its next same-name tool_result so one turn covering several entities still reports per-note outcomes.
         List<TraceStep> trace = mini.History.OfType<Response>().SelectMany(r => r.Trace ?? Enumerable.Empty<TraceStep>()).ToList();
-        List<string> writtenPaths = new();
         int commits = 0, blocked = 0;
         for (int i = 0; i < trace.Count; i++)
         {
-            if (trace[i].Kind != "tool_call" || trace[i].Name != "write_file") continue;
-            string? path = null;
+            if (trace[i].Kind != "tool_call" || trace[i].Name is not ("create_memory" or "edit_memory")) continue;
+            string toolName = trace[i].Name!;
+            string? name = null;
             try
             {
                 using JsonDocument doc = JsonDocument.Parse(trace[i].Args ?? "{}");
-                path = doc.RootElement.TryGetProperty("path", out JsonElement p) ? p.GetString() : null;
+                name = doc.RootElement.TryGetProperty("name", out JsonElement n) ? n.GetString() : null;
             }
             catch { }
 
-            TraceStep? result = trace.Skip(i + 1).FirstOrDefault(s => s.Kind == "tool_result" && s.Name == "write_file");
+            TraceStep? result = trace.Skip(i + 1).FirstOrDefault(s => s.Kind == "tool_result" && s.Name == toolName);
             bool wasBlocked = result?.Text?.StartsWith("[Blocked]", StringComparison.Ordinal) ?? false;
             if (wasBlocked)
             {
                 blocked++;
-                Shared.Logger.LogWarning("[Engram] [{ThreadKey}] write blocked for '{Path}' — scope guard rejected the path.", threadKey, path ?? "(unknown)");
+                Shared.Logger.LogWarning("[Engram] [{ThreadKey}] {Tool} blocked for '{Name}' — scope guard rejected it.", threadKey, toolName, name ?? "(unknown)");
             }
             else
             {
                 commits++;
-                if (path is not null) writtenPaths.Add(path);
             }
         }
-
-        if (writtenPaths.Count > 0)
-            GitCommitBrain($"Engram: update {string.Join(", ", writtenPaths.Distinct())} — {threadKey}");
 
         return (commits, blocked);
     }
@@ -597,15 +619,16 @@ internal class Engram : MemoryAgent, IDisposable
             File.WriteAllText(path, $"# {date}{entry}");
         }
         Brain.Index();
-        GitCommitBrain($"Conversation log: coding session {date}");
+        GitCommitBrain($"Conversation log: {label.ToLowerInvariant()} — {date}", Path.Combine("Conversations", $"{date}.md"));
     }
 
-    private static void GitCommitBrain(string message)
+    // relativePath scopes the commit to exactly the touched file — `git add -A` would sweep in unrelated dirty state.
+    private static void GitCommitBrain(string message, string relativePath)
     {
         try
         {
             string vault = Brain.VaultRoot;
-            RunGit(vault, "add", "-A");
+            RunGit(vault, "add", "--", relativePath);
             RunGit(vault, "commit", "-m", message);
         }
         catch (Exception ex)
@@ -700,6 +723,9 @@ internal class Engram : MemoryAgent, IDisposable
         }
         catch { return null; }
     }
+
+    // For inline display in a prompt instruction, not JSON serialisation — just needs to read unambiguously.
+    private static string EscapeForPrompt(string text) => text.Replace("\"", "\\\"");
 
     private static string BuildTranscript(IEnumerable<ThreadItem> items)
     {

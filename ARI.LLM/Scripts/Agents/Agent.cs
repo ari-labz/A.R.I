@@ -900,6 +900,8 @@ public abstract class Agent
                 turn.StepReasoningChars += thinkDelta.Length;
                 turn.ReasoningBuilder.Append(thinkDelta);
                 thread.streamedReasoning = turn.ReasoningBuilder.ToString();
+                // The DTI reads Reasoning from the Response, so it must be live-updated here too, not just at final commit.
+                if (thread.streamingResponse is { } sr) sr.Reasoning = thread.streamedReasoning;
             }
             if (turn.LiveReasoning is null) { turn.LiveReasoning = new TraceStep { Kind = "reasoning", Text = "" }; turn.Trace.Add(turn.LiveReasoning); }
             turn.LiveReasoning.Text = turn.ReasoningBuilder.ToString(turn.ReasoningStartLen, turn.ReasoningBuilder.Length - turn.ReasoningStartLen);

@@ -155,8 +155,8 @@ internal class Context : Agent
                     new { role = "user",   content =
                         $"TODAY: {DateTime.Now:dddd, d MMMM yyyy}, {DateTime.Now:h:mm tt}\n\n" +
                         $"CURRENT CONTEXT:\n{contextBlock}\n\n" +
-                        $"FULL CONVERSATION:\n{transcript}\n\n" +
-                        "Produce an updated context summary covering this full conversation." }
+                        $"NEW SINCE LAST UPDATE:\n{transcript}\n\n" +
+                        "Fold this into the context summary — carry forward anything from CURRENT CONTEXT that's still relevant, add what's new." }
                 },
                 stream         = false,
                 max_tokens     = CONTEXT_MAX_TOKENS,

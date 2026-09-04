@@ -55,7 +55,35 @@ public static class Brain
 
     // ── Reads ────────────────────────────────────────────────────────────────────────
 
-    public static Note? GetNote(string name) => Database.FindNote(name);
+    // Strips a ".md" extension once, here, so callers never have to get that on-disk detail right.
+    public static Note? GetNote(string name) => Database.FindNote(StripMdExtension(name));
+
+    internal static string StripMdExtension(string name) =>
+        name.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? name[..^3] : name;
+
+    // Strips a model-authored frontmatter block or "# Title" heading from note content — both are
+    // built separately from type/keywords/aliases, so a duplicate here would corrupt the file.
+    public static string StripAccidentalFrontmatter(string content, string name)
+    {
+        string bareTitle = name.Contains('/') ? name[(name.LastIndexOf('/') + 1)..] : name;
+        string text = content.TrimStart();
+
+        if (text.StartsWith("---", StringComparison.Ordinal))
+        {
+            int close = text.IndexOf("\n---", 3, StringComparison.Ordinal);
+            if (close >= 0)
+            {
+                int afterFence = text.IndexOf('\n', close + 1);
+                text = (afterFence >= 0 ? text[(afterFence + 1)..] : string.Empty).TrimStart();
+            }
+        }
+
+        Match heading = Regex.Match(text, @"^#\s+(.+?)\s*\r?\n");
+        if (heading.Success && string.Equals(heading.Groups[1].Value.Trim(), bareTitle, StringComparison.OrdinalIgnoreCase))
+            text = text[heading.Length..].TrimStart();
+
+        return text;
+    }
 
     public static List<string> GetTitles() => Database.AllTitles();
 
@@ -89,12 +117,12 @@ public static class Brain
     // preserving any display alias. Called after a rename or merge so referrers never keep pointing
     // at a name that is now only an alias. Returns the number of files changed. Does not reindex —
     // the caller reindexes once after its structural changes.
-    public static int RepointReferences(string fromTitle, string toTitle)
+    public static List<string> RepointReferences(string fromTitle, string toTitle)
     {
-        if (string.IsNullOrWhiteSpace(fromTitle) || string.IsNullOrWhiteSpace(toTitle)) return 0;
-        if (string.Equals(fromTitle, toTitle, StringComparison.OrdinalIgnoreCase)) return 0;
+        List<string> changed = new();
+        if (string.IsNullOrWhiteSpace(fromTitle) || string.IsNullOrWhiteSpace(toTitle)) return changed;
+        if (string.Equals(fromTitle, toTitle, StringComparison.OrdinalIgnoreCase)) return changed;
         Regex pattern = new(@"\[\[" + Regex.Escape(fromTitle) + @"(\|[^\]]*)?\]\]", RegexOptions.IgnoreCase);
-        int changed = 0;
         foreach (string file in Directory.EnumerateFiles(VaultRoot, "*.md", SearchOption.AllDirectories))
         {
             string relative = Path.GetRelativePath(VaultRoot, file).Replace(Path.DirectorySeparatorChar, '/');
@@ -105,7 +133,7 @@ public static class Brain
             string temp = $"{file}.tmp";
             File.WriteAllText(temp, updated);
             File.Move(temp, file, overwrite: true);
-            changed++;
+            changed.Add(relative);
         }
         return changed;
     }
@@ -263,17 +291,19 @@ public static class Brain
     // Note.Write's "sticky" behaviour. This is the only way a new note should ever be created.
     public static Note AddNote(string name, string content, IReadOnlyList<string> aliases, string? type = null, IReadOnlyList<string>? keywords = null, bool? isSensitive = null)
     {
+        name = StripMdExtension(name);
         WriteNamed(name, content, aliases, type, keywords, isSensitive);
         Index();
         return GetNote(name)!;
     }
 
     // Updates an existing note in place, or renames it when newName names a different, valid title.
-    // A malformed or empty newName (e.g. "People/") is never treated as a rename — that would delete
-    // the note or rename it to an empty title — it's treated as an in-place edit instead, guarding
-    // the vault against bad model output.
-    public static Note EditNote(string name, string content, IReadOnlyList<string> aliases, string? newName = null, string? type = null, IReadOnlyList<string>? keywords = null, bool? isSensitive = null)
+    // A malformed/empty newName is treated as an in-place edit, not a rename, guarding against bad
+    // model output. repointedPaths collects every OTHER note a rename repointed, for the caller to stage.
+    public static Note EditNote(string name, string content, IReadOnlyList<string> aliases, string? newName = null, string? type = null, IReadOnlyList<string>? keywords = null, bool? isSensitive = null, ICollection<string>? repointedPaths = null)
     {
+        name = StripMdExtension(name);
+        if (newName is not null) newName = StripMdExtension(newName);
         string newBareTitle = newName is null ? string.Empty
             : (newName.Contains('/') ? newName[(newName.LastIndexOf('/') + 1)..] : newName).Trim();
         string oldBareTitle = name.Contains('/') ? name[(name.LastIndexOf('/') + 1)..] : name;
@@ -290,19 +320,51 @@ public static class Brain
         List<string> mergedAliases = new(aliases);
         string newContent = content;
         string? renamedFrom = null;
+        string? mergedType = type;
+        IReadOnlyList<string>? mergedKeywords = keywords is { Count: > 0 } ? keywords : null;
+        bool? mergedIsSensitive = isSensitive;
         if (old is not null)
         {
             if (!mergedAliases.Contains(old.Title, StringComparer.OrdinalIgnoreCase)) mergedAliases.Add(old.Title);
             newContent = Note.CarryThoughtsInto(old.Content, newContent);
+            // Same fallback as WriteNamed — a rename shouldn't blank metadata the caller didn't restate.
+            mergedType       ??= old.Type;
+            mergedKeywords   = mergedKeywords is { Count: > 0 } ? mergedKeywords : old.Keywords;
+            mergedIsSensitive ??= old.IsSensitive;
             File.Delete(Path.Combine(VaultRoot, old.Path));
             renamedFrom = old.Title;
         }
-        Note.Write(PathFor(newName!), newContent, mergedAliases, null, type, keywords is { Count: > 0 } ? keywords : null, isSensitive);
+        Note.Write(PathFor(newName!), newContent, mergedAliases, null, mergedType, mergedKeywords, mergedIsSensitive);
         // Rewrite every [[oldTitle]] in other notes to [[newBareTitle]] so a rename never leaves the
         // referrers pointing at the old name (the alias still resolves them, but the text is repointed).
-        if (renamedFrom is not null) RepointReferences(renamedFrom, newBareTitle);
+        if (renamedFrom is not null)
+        {
+            List<string> repointed = RepointReferences(renamedFrom, newBareTitle);
+            if (repointedPaths is not null) foreach (string p in repointed) repointedPaths.Add(p);
+        }
         Index();
         return GetNote(newName!)!;
+    }
+
+    // Replaces one exact, unique occurrence of oldString with newString rather than requiring the whole
+    // note back — avoids the retype cost and the accidental-drop risk of full-content replacement.
+    public static Note PatchNote(string name, string oldString, string newString, IReadOnlyList<string>? aliases = null, string? newName = null, string? type = null, IReadOnlyList<string>? keywords = null, bool? isSensitive = null, ICollection<string>? repointedPaths = null)
+    {
+        name = StripMdExtension(name);
+        Note? note = GetNote(name) ?? throw new InvalidOperationException($"No note named '{name}' found.");
+        string body = note.Content;
+        int firstIndex = body.IndexOf(oldString, StringComparison.Ordinal);
+        if (firstIndex < 0)
+            throw new InvalidOperationException(
+                $"'{oldString}' was not found in '{name}' — it must match the note's current text exactly, including whitespace. " +
+                "Re-check the note's content (search_brain/recall_memory) and try again with the exact text.");
+        int secondIndex = body.IndexOf(oldString, firstIndex + oldString.Length, StringComparison.Ordinal);
+        if (secondIndex >= 0)
+            throw new InvalidOperationException(
+                $"'{oldString}' matches more than once in '{name}' — include more surrounding text so the edit is unambiguous.");
+
+        string patched = string.Concat(body.AsSpan(0, firstIndex), newString, body.AsSpan(firstIndex + oldString.Length));
+        return EditNote(name, patched, aliases ?? note.Aliases, newName, type, keywords, isSensitive, repointedPaths);
     }
 
     public static bool MergeNotes(string fromName, string intoName)
@@ -357,14 +419,31 @@ public static class Brain
 
     // ── Internal ────────────────────────────────────────────────────────────────────
 
+    // Resolves by the FULL given name, not bare title — two notes in different folders sharing a
+    // filename are not the same entity just because their titles collide.
     private static void WriteNamed(string name, string content, IReadOnlyList<string> aliases, string? type = null, IReadOnlyList<string>? keywords = null, bool? isSensitive = null)
     {
-        string bareTitle = name.Contains('/') ? name[(name.LastIndexOf('/') + 1)..] : name;
-        Note? existing = GetNote(bareTitle);
+        Note? existing = GetNote(name);
         if (existing is not null)
-            Note.Write(existing.Path, Note.CarryThoughtsInto(existing.Content, content), MergedAliases(existing, aliases), null, type, keywords, isSensitive);
+        {
+            // Omitted type/keywords/isSensitive fall back to the note's current values, not blank —
+            // a content-only edit must never wipe metadata it wasn't told to change.
+            string?                 mergedType       = type ?? existing.Type;
+            IReadOnlyList<string>   mergedKeywords    = keywords is { Count: > 0 } ? keywords : existing.Keywords;
+            bool?                   mergedIsSensitive = isSensitive ?? existing.IsSensitive;
+            Note.Write(existing.Path, Note.CarryThoughtsInto(existing.Content, content), MergedAliases(existing, aliases), null, mergedType, mergedKeywords, mergedIsSensitive);
+        }
         else
-            Note.Write(PathFor(name), content, aliases, null, type, keywords, isSensitive);
+        {
+            string targetPath = PathFor(name);
+            string targetTitle = Path.GetFileNameWithoutExtension(targetPath);
+            Note? titleClash = GetNote(targetTitle);
+            if (titleClash is not null)
+                throw new InvalidOperationException(
+                    $"Can't create '{name}' — its title '{targetTitle}' is already used by a different note at '{titleClash.Path}'. " +
+                    "Note titles must be unique vault-wide regardless of folder; pick a distinct title.");
+            Note.Write(targetPath, content, aliases, null, type, keywords, isSensitive);
+        }
     }
 
     private static List<string> MergedAliases(Note note, IReadOnlyList<string> incoming)
