@@ -108,7 +108,7 @@ public abstract class Agent
             ? v
             : fallback;
         foreach ((string token, string value) in tokens)
-            text = text.Replace("{" + token + "}", value);
+            text = text.Replace($"{{{token}}}", value);
         return text;
     }
 
