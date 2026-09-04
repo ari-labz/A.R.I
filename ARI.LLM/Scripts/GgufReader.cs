@@ -46,11 +46,6 @@ public static class GgufReader
                 if (nLayers.HasValue && nKvHeads.HasValue && headDim.HasValue)
                     return new(nLayers.Value, nKvHeads.Value, headDim.Value);
             }
-
-            // head_dim fallback: if not present, llama.cpp uses head_dim = embedding / n_heads
-            // We won't have n_heads easily here, so return partial if we have the critical two
-            if (nLayers.HasValue && nKvHeads.HasValue && headDim.HasValue)
-                return new(nLayers.Value, nKvHeads.Value, headDim.Value);
         }
         catch { /* corrupt / truncated file */ }
 
