@@ -38,7 +38,7 @@ internal abstract class Pipeline
         thread.SetLiveCall(liveCall);
 
         string effectivePrompt = thread.History.Count > 0 && thread.History[^1] is Prompt prev
-            ? prev.Text + "\n" + prompt
+            ? $"{prev.Text}\n{prompt}"
             : prompt;
 
         thread.AddItem(new Prompt
