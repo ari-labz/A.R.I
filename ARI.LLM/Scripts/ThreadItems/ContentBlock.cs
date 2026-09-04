@@ -34,6 +34,9 @@ namespace ARI.LLM;
 [JsonDerivedType(typeof(ModeSwitch),   "mode")]
 public abstract class ContentBlock
 {
+    // ── Constants ────────────────────────────────────────────────────────────────
+    protected const int MAX_TITLE_DISPLAY_LENGTH = 90;
+
     /// <summary>Lifecycle of this block. Streaming until finished/flipped; Error on failure.</summary>
     public State State { get; set; } = State.Streaming;
 
@@ -408,7 +411,7 @@ public sealed class Browsing : Card
                 Title = line[2..^2].Trim();
             break;
         }
-        if (Title.Length > 90) Title = Title[..90].TrimEnd() + "…";
+        if (Title.Length > MAX_TITLE_DISPLAY_LENGTH) Title = Title[..MAX_TITLE_DISPLAY_LENGTH].TrimEnd() + "…";
         Title = Title.Replace('|', '-');
         base.Flip();
     }
