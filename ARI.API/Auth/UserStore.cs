@@ -12,6 +12,8 @@ namespace ARI.API.Auth;
 /// </summary>
 public class UserStore
 {
+    private const int FAILED_ATTEMPTS_BLOCK_THRESHOLD = 3;
+
     private readonly string            connStr;
     private readonly ILogger<UserStore> log;
 
@@ -299,7 +301,7 @@ public class UserStore
     {
         using SqliteConnection conn = Open();
         using SqliteCommand cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM IpBlocklist WHERE Ip = $ip AND FailedAttempts >= 3";
+        cmd.CommandText = $"SELECT COUNT(*) FROM IpBlocklist WHERE Ip = $ip AND FailedAttempts >= {FAILED_ATTEMPTS_BLOCK_THRESHOLD}";
         cmd.Parameters.AddWithValue("$ip", ip);
         return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
     }
@@ -343,7 +345,7 @@ public class UserStore
     {
         using SqliteConnection conn = Open();
         using SqliteCommand cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT * FROM IpBlocklist WHERE FailedAttempts >= 3 ORDER BY BlockedAt DESC";
+        cmd.CommandText = $"SELECT * FROM IpBlocklist WHERE FailedAttempts >= {FAILED_ATTEMPTS_BLOCK_THRESHOLD} ORDER BY BlockedAt DESC";
         using SqliteDataReader r = cmd.ExecuteReader();
         List<BlockedIp> list = new List<BlockedIp>();
         while (r.Read())
