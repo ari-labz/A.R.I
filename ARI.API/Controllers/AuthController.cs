@@ -54,7 +54,7 @@ public class AuthController(UserStore users, AuthService auth) : ControllerBase
 
         string      sessionId = Guid.NewGuid().ToString();
         string      hint      = req.DeviceHint ?? (req.IsDesktop ? "ARI Desktop" : "Browser");
-        var (token, session)  = auth.IssueToken(user, sessionId, hint, req.IsDesktop);
+        (string token, UserSession session)  = auth.IssueToken(user, sessionId, hint, req.IsDesktop);
         users.CreateSession(session);
         AuthCookie.Set(Response, token, req.IsDesktop, Request.IsHttps);
 

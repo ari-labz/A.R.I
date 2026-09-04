@@ -324,8 +324,8 @@ public class PersistentData
     {
         lock (_voiceLock)
         {
-            var d = LoadVoice().DefaultModels;
-            return d.TryGetValue(engine, out var m) && !string.IsNullOrWhiteSpace(m) ? m : null;
+            Dictionary<string, string> d = LoadVoice().DefaultModels;
+            return d.TryGetValue(engine, out string m) && !string.IsNullOrWhiteSpace(m) ? m : null;
         }
     }
 
