@@ -1171,7 +1171,7 @@ public class LLMModule : ILLMModule, IDisposable
 
     private void CleanScratchpads()
     {
-        string scratchpadRoot = ARI.Common.Paths.ServerDir("Scratchpad");
+        string scratchpadRoot = Paths.ServerDir("Scratchpad");
         if (!Directory.Exists(scratchpadRoot)) return;
 
         int deleted = 0;
