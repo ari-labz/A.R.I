@@ -284,10 +284,7 @@ internal class Engram : MemoryAgent, IDisposable
 
     // ── Stage 2: extract ───────────────────────────────────────────────────────────────
 
-    // Entity is always the plain subject name (a person or relationship), never an invented compound
-    // title — that's what let two private notes about the same subject drift into two different titles
-    // and never resolve to each other. Sensitive marks it as Private/ content; Save resolves the
-    // deterministic Private/{Entity}.md path itself rather than the model inventing one.
+    // Entity is always the plain subject name, never an invented compound title — that's what let two notes about the same subject drift apart and never resolve to each other.
     private readonly record struct ExtractedEntity(string Entity, bool IsNew, string Excerpt, bool Sensitive);
 
     /// <summary>One tool-free completion over the whole transcript: every entity worth remembering,
@@ -378,45 +375,21 @@ internal class Engram : MemoryAgent, IDisposable
     {
         Note? normalNote = Brain.GetNote(entity.Entity);
         HashSet<string> allowedNames = new(StringComparer.OrdinalIgnoreCase);
+        if (normalNote is not null) allowedNames.Add(normalNote.Name);
 
+        string block = normalNote is not null
+            ? $"Already exists — call edit_memory(name: \"{normalNote.Name}\"):\n\n{normalNote.Content}"
+            : "Does not exist yet — call create_memory with a name/path chosen per the rulebook above (e.g. \"People/Name\"), " +
+              "but only if this is a distinct entity worth its own note per the identity rules — a passing detail is a bullet " +
+              "on the note it actually concerns, not a new note.";
         if (entity.Sensitive)
-        {
-            // The " - Private" suffix avoids a title collision with the entity's own identity note (titles are unique vault-wide).
-            string privateName = $"Private/{SanitizeNoteFileName(entity.Entity)} - Private";
-            Note?  existing    = Brain.GetNote(privateName);
-            allowedNames.Add(privateName);
-            if (normalNote is not null) allowedNames.Add(normalNote.Name);   // rare migrate-out-of-normal-note case
-
-            string block = existing is not null
-                ? $"Already exists — call edit_memory(name: \"{privateName}\"):\n\n{existing.Content}\n\n" +
-                  "Add this under the right topic subheading (or a new one if none fits) — don't create_memory a separate note for it."
-                : $"Does not exist yet — call create_memory(name: \"{privateName}\") and link it out to [[Private]] (the hub).";
-            // Kept to one short line — a longer explanation here measurably slowed Save down.
-            if (normalNote is not null)
-            {
-                block += $" (Plain mentions of {entity.Entity} elsewhere link to \"{normalNote.Name}\", not here.)";
-                // The private note needs an outward link from the profile, or it's unreachable from recall.
-                bool alreadyLinked = normalNote.Content.Contains($"[[{privateName}", StringComparison.OrdinalIgnoreCase);
-                if (!alreadyLinked)
-                {
-                    allowedNames.Add(normalNote.Name);
-                    // old_string is computed here, not left to the model, so there's nothing for Save to mis-copy.
-                    string trailingLine = normalNote.Content.TrimEnd().Split('\n').LastOrDefault() ?? "";
-                    if (trailingLine.Length > 0)
-                        block += $"\n\nMECHANICAL EDIT, no judgement needed: call edit_memory(name: \"{normalNote.Name}\", old_string: \"{EscapeForPrompt(trailingLine)}\", new_string: \"{EscapeForPrompt(trailingLine)}\\nSee [[{privateName}]].\") to add the link under the note's last heading. Do not touch anything else in the note.";
-                }
-            }
-            return new ResolvedEntity(entity.Entity, block, allowedNames, privateName);
-        }
-        else
-        {
-            if (normalNote is not null) allowedNames.Add(normalNote.Name);
-            string block = normalNote is not null
-                ? $"Already exists — call edit_memory(name: \"{normalNote.Name}\"):\n\n{normalNote.Content}"
-                : "Does not exist yet — call create_memory with a name/path chosen per the rulebook above (e.g. \"People/Name\").";
-            // Lets Save split an oversized note into a sibling create_memory call in the same turn.
-            return new ResolvedEntity(entity.Entity, block, allowedNames, normalNote?.Name ?? "");
-        }
+            block += "\n\nThis is information about a user's private life. Keep it on the same note as everything else about " +
+                     "this subject, under its own topic subheading if needed — never a separate Private/ note or file. " +
+                     "Whichever tool call you make for this entity (create_memory or edit_memory), pass is_sensitive: true " +
+                     "in that same call — this is required whenever any sensitive content ends up on the note, not optional, " +
+                     "and applies to the whole note, not just the new part.";
+        // Lets Save split an oversized note into a sibling create_memory call in the same turn.
+        return new ResolvedEntity(entity.Entity, block, allowedNames, normalNote?.Name ?? "");
     }
 
     // Saves every entity in one call; edit_memory is confined to each entity's own pre-resolved name/prefix (see ResolveEntity).
@@ -487,12 +460,6 @@ internal class Engram : MemoryAgent, IDisposable
 
         return (commits, blocked);
     }
-
-    // Filenames can't carry the taxonomy's " — " em-dash convention verbatim if the source has path-
-    // hostile characters (rare, but an entity name is model output) — strip anything a filesystem would
-    // reject rather than let a bad character break the write.
-    private static string SanitizeNoteFileName(string entity) =>
-        string.Concat(entity.Split(Path.GetInvalidFileNameChars())).Trim();
 
     // ── Lightweight code-thread summary ────────────────────────────────────────────────
 
@@ -723,9 +690,6 @@ internal class Engram : MemoryAgent, IDisposable
         }
         catch { return null; }
     }
-
-    // For inline display in a prompt instruction, not JSON serialisation — just needs to read unambiguously.
-    private static string EscapeForPrompt(string text) => text.Replace("\"", "\\\"");
 
     private static string BuildTranscript(IEnumerable<ThreadItem> items)
     {
