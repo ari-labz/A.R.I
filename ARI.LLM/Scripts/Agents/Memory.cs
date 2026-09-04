@@ -21,7 +21,7 @@ internal class Memory : Agent
     private const int SNIPPET_LENGTH    = 160;
     private const int MAX_SEARCH_TERMS  = 15;
 
-    internal override bool SuppressLog() => true;
+    internal override bool SuppressLog => true;
 
     public Memory() { }
 

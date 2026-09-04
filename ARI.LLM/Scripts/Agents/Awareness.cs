@@ -11,7 +11,7 @@ internal class Awareness : Agent
 {
     public Awareness() { }
 
-    internal override bool SuppressLog() => true;
+    internal override bool SuppressLog => true;
 
     /// <summary>Voice gate: is this spoken transcript addressed to Ari?</summary>
     internal async Task<bool> IsAddressed(string transcript, string? context = null, CancellationToken ct = default)

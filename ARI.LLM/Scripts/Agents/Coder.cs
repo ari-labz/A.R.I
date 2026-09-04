@@ -36,7 +36,7 @@ internal sealed class Coder : Agent
     public Coder() { }
 
     // Coding prompts are verbose and already logged by the pipeline; don't double-log them.
-    internal override bool SuppressLog() => true;
+    internal override bool SuppressLog => true;
 
     // ── Per-thread code context ──────────────────────────────────────────────
     // The client sends the project map, the coding-conventions rulebook and any project rules when it
