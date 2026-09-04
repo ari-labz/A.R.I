@@ -89,8 +89,8 @@ internal static class PathScope
         string.Equals(Norm(given), Norm(allowed), StringComparison.OrdinalIgnoreCase);
 
     /// <summary>True if <paramref name="given"/> starts with <paramref name="prefix"/> — lets a scoped write
-    /// create a not-yet-existing sibling note (e.g. a split-off "Private/Xywren - Topic.md" alongside
-    /// "Private/Xywren.md") without knowing its exact name in advance, while still confining the write to
+    /// create a not-yet-existing sibling note (e.g. a split-off "Private/Alex - Topic.md" alongside
+    /// "Private/Alex.md") without knowing its exact name in advance, while still confining the write to
     /// that one entity's family of notes.</summary>
     internal static bool MatchesPrefix(string given, string prefix) =>
         Norm(given).StartsWith(Norm(prefix), StringComparison.OrdinalIgnoreCase);
