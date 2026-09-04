@@ -65,6 +65,7 @@ public abstract class Agent
     private const int    MAX_DEGRADE_EVENTS  = 5;
     private const int    AVERAGE_RESPONSE_WINDOW = 25;
     private const string ATTACHMENT_DIVIDER  = "-------------------";
+    private static readonly TimeSpan SEND_LOCK_TIMEOUT = TimeSpan.FromSeconds(90);
 
     // Sent as a user message when the thinking budget runs out, at the end of the sentence in progress.
     // It must leave acting on the table: the old server-side wording demanded a finished reply, so a turn
@@ -180,7 +181,10 @@ public abstract class Agent
 
     internal async Task<string> Prompt(Thread thread, string prompt, PromptOptions opts)
     {
-        await thread.sendLock.WaitAsync(opts.Ct);
+        // Bounded so a stuck prior turn fails loudly instead of hanging every future message forever.
+        bool acquired = await thread.sendLock.WaitAsync(SEND_LOCK_TIMEOUT, opts.Ct);
+        if (!acquired)
+            throw new TimeoutException("ARI is still finishing a previous message on this thread — please wait a moment and try again.");
         try
         {
             return await Send(thread, prompt, opts);
@@ -1932,37 +1936,28 @@ public abstract class Agent
             if (!hasMsgContent)
             {
                 messages.Add(new { role = "user", content = promptText });
-                if (opts.ModeNudge is not null) messages.Add(new { role = "system", content = opts.ModeNudge });
             }
             else
             {
-                List<object> contentParts = new();
-                bool hasTools = thread.tools.Count > 0;
-
-                if (hasMsgContent)
+                // Images are never inlined as base64 — that cost re-embeds itself into every future turn's prompt.
+                // Idea: move text message attachments to scratchpad too, same as images, and drop this tier entirely.
+                StringBuilder sb = new();
+                sb.AppendLine("[Files attached to this message]");
+                foreach (Attachment a in msgTexts)
                 {
-                    StringBuilder sb = new();
-                    sb.AppendLine("[Files attached to this message]");
-                    foreach (Attachment a in msgTexts)
-                    {
-                        sb.AppendLine($"--- {a.Name} ---");
-                        sb.AppendLine(a.Content);
-                        sb.AppendLine("---");
-                    }
-                    if (msgTexts.Count > 0)
-                    {
-                        if (hasTools) sb.AppendLine("(The above files are already provided inline — do not call read_file for them.)");
-                        sb.AppendLine(ATTACHMENT_DIVIDER);
-                    }
-                    contentParts.Add(new { type = "text", text = sb.ToString().TrimEnd() });
-                    foreach (Attachment a in msgImages)
-                        contentParts.Add(new { type = "image_url", image_url = new { url = $"data:{a.MimeType ?? "image/jpeg"};base64,{a.Content}" } });
+                    sb.AppendLine($"--- {a.Name} ---");
+                    sb.AppendLine(a.Content);
+                    sb.AppendLine("---");
                 }
+                if (msgTexts.Count > 0 && thread.tools.Count > 0)
+                    sb.AppendLine("(The text files above are already provided inline — do not call read_file for them.)");
+                foreach (Attachment a in msgImages)
+                    sb.AppendLine($"- {a.Name} (image) — saved to your workspace; use read_file to view it.");
+                sb.AppendLine(ATTACHMENT_DIVIDER);
 
-                contentParts.Add(new { type = "text", text = promptText });
-                messages.Add(new { role = "user", content = (object)contentParts });
-                if (opts.ModeNudge is not null) messages.Add(new { role = "system", content = opts.ModeNudge });
+                messages.Add(new { role = "user", content = $"{sb.ToString().TrimEnd()}\n\n{promptText}" });
             }
+            if (opts.ModeNudge is not null) messages.Add(new { role = "system", content = opts.ModeNudge });
         }
 
         return messages;
