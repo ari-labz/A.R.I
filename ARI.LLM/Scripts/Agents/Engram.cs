@@ -1,5 +1,6 @@
 using ARI.Common;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -644,7 +645,7 @@ internal class Engram : MemoryAgent, IDisposable
 
     private static void RunGit(string workDir, params string[] args)
     {
-        System.Diagnostics.ProcessStartInfo psi = new()
+        ProcessStartInfo psi = new()
         {
             FileName               = "git",
             WorkingDirectory       = workDir,

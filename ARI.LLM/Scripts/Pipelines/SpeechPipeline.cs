@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using ARI.Common;
 using Microsoft.Extensions.Logging;
 
@@ -73,7 +74,7 @@ internal sealed class SpeechPipeline : Pipeline
         double? recallSeconds = null;
         if (memory is not null)
         {
-            System.Diagnostics.Stopwatch recallSw = System.Diagnostics.Stopwatch.StartNew();
+            Stopwatch recallSw = Stopwatch.StartNew();
             try
             {
                 List<ThreadMessage> chatHistory = thread.GetChatHistory();
