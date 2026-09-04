@@ -11,6 +11,7 @@ public class Dependency
 {
     private static readonly string[] BrewPaths = ["/opt/homebrew/bin", "/usr/local/bin"];
     private static string ConfigPath => Path.Combine(Paths.PersistentData, "llamacpp.json");
+    private const int HEALTH_CHECK_TIMEOUT_SEC = 10;
 
     public static async Task CheckPython()
     {
@@ -471,7 +472,7 @@ public class Dependency
         if (cfg.SuppressUpdatePrompt) return;
         try
         {
-            using HttpClient hc = new() { Timeout = TimeSpan.FromSeconds(10) };
+            using HttpClient hc = new() { Timeout = TimeSpan.FromSeconds(HEALTH_CHECK_TIMEOUT_SEC) };
             hc.DefaultRequestHeaders.UserAgent.ParseAdd("ARI-Server/1.0");
             string json = await hc.GetStringAsync("https://api.github.com/repos/ggml-org/llama.cpp/releases/latest");
             using JsonDocument doc = JsonDocument.Parse(json);
