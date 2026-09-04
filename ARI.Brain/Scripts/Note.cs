@@ -96,7 +96,7 @@ public class Note
 
     public string ToPrompt()
     {
-        var sb = new StringBuilder($"Path: {Name}");
+        StringBuilder sb = new StringBuilder($"Path: {Name}");
         if (Aliases.Count > 0) sb.Append($"\nAliases: {string.Join(", ", Aliases)}");
         if (Keywords.Count > 0) sb.Append($"\nKeywords: {string.Join(", ", Keywords)}");
         sb.Append($"\n\n{Content}");
@@ -109,7 +109,7 @@ public class Note
     public string ToHeader()
     {
         string[] lines = Content.Split('\n');
-        var sb = new StringBuilder();
+        StringBuilder sb = new StringBuilder();
         if (Aliases.Count > 0) sb.AppendLine($"Aliases: {string.Join(", ", Aliases)}");
         if (Keywords.Count > 0) sb.AppendLine($"Keywords: {string.Join(", ", Keywords)}");
         foreach (string line in lines)
