@@ -213,7 +213,7 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
     public IActionResult GetHardware()
     {
         long totalRam = systemInfo.GetTotalPhysicalRamBytes();
-        var gpus = systemInfo.GetGpus();
+        List<SystemInfo.GpuInfo> gpus = systemInfo.GetGpus();
         return Ok(new
         {
             totalRamBytes = totalRam,
@@ -328,7 +328,7 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
     [HttpGet("llamacpp/status")]
     public IActionResult GetLlamaCppStatus()
     {
-        var s = Shared.LlamaCpp;
+        LlamaCppStatus s = Shared.LlamaCpp;
         return Ok(new
         {
             installPath = s.InstallPath,
@@ -380,8 +380,8 @@ public class AgentsApiController(PersistentData persistentData) : ControllerBase
     [HttpGet]
     public IActionResult GetAgents()
     {
-        var agents = persistentData.GetAgents();
-        var shared = persistentData.GetSharedPrompts();
+        IReadOnlyList<AgentDefinition> agents = persistentData.GetAgents();
+        SharedPromptsFile shared = persistentData.GetSharedPrompts();
         var servers = persistentData.GetServers().Select(s => new { name = s.Name, slots = s.Slots });
         return Ok(new { agents, shared, servers });
     }
@@ -561,7 +561,7 @@ public class VoiceController(
 
             job = voiceTraining!.Start(trainer, req.ModelName, lifetime.ApplicationStopping);
 
-            var initialSettings = new TrainingSettings(dataDir, req.ModelName, req.Epochs, req.SaveEveryNEpochs, req.Transcripts);
+            TrainingSettings initialSettings = new TrainingSettings(dataDir, req.ModelName, req.Epochs, req.SaveEveryNEpochs, req.Transcripts);
             System.IO.File.WriteAllText(
                 Path.Combine(voiceDir, "training.json"),
                 JsonSerializer.Serialize(initialSettings));
@@ -607,7 +607,7 @@ public class VoiceController(
         Response.Headers[HeaderNames.CacheControl] = "no-cache";
         Response.Headers["X-Accel-Buffering"]      = "no";
 
-        var job = voiceTraining?.Current;
+        TrainingJob? job = voiceTraining?.Current;
         if (job is null)
         {
             await Response.WriteAsync("data: {\"step\":\"Idle\",\"percent\":0}\n\n", ct);
@@ -620,11 +620,11 @@ public class VoiceController(
 
         while (!ct.IsCancellationRequested)
         {
-            var events = job.Events;
+            IReadOnlyList<TrainingProgressEvent> events = job.Events;
             bool wrote = false;
             while (sent < events.Count)
             {
-                var ev   = events[sent++];
+                TrainingProgressEvent ev   = events[sent++];
                 string j = System.Text.Json.JsonSerializer.Serialize(new
                 {
                     step    = ev.Step,
@@ -658,7 +658,7 @@ public class VoiceController(
     [HttpGet("status")]
     public IActionResult GetStatus()
     {
-        var job = voiceTraining?.Current;
+        TrainingJob? job = voiceTraining?.Current;
         if (job is null)
             return Ok(new { idle = true });
 
@@ -681,7 +681,7 @@ public class VoiceController(
         if (voiceService?.IsReady != true)
             return StatusCode(503, new { error = "Voice module is not running." });
 
-        var engineParams = new Dictionary<string, object>();
+        Dictionary<string, object> engineParams = new Dictionary<string, object>();
         engineParams["diffusionSteps"] = req.DiffusionSteps;
         engineParams["alpha"]          = req.Alpha;
         engineParams["beta"]           = req.Beta;
@@ -731,7 +731,7 @@ public class VoiceController(
         if (!Directory.Exists(modelDir))
             return NotFound(new { error = $"Model '{modelName}' not found." });
 
-        var checkpoints = new List<object>();
+        List<object> checkpoints = new List<object>();
 
         string modelPth = Path.Combine(modelDir, "model.pth");
         if (System.IO.File.Exists(modelPth))
@@ -762,7 +762,7 @@ public class VoiceController(
     {
         if (string.IsNullOrWhiteSpace(req.Text))
             return BadRequest(new { error = "text is required." });
-        var sentences = ARI.Voice.SentenceSplitter.Split(req.Text);
+        IReadOnlyList<string> sentences = ARI.Voice.SentenceSplitter.Split(req.Text);
         return Ok(new { sentences });
     }
 
@@ -838,7 +838,7 @@ public class VoiceController(
         if (string.IsNullOrEmpty(vsConfig.VoicesPath) || !Directory.Exists(vsConfig.VoicesPath))
             return Ok(new { models = Array.Empty<object>() });
 
-        var models = new List<object>();
+        List<object> models = new List<object>();
         foreach (string engineDir in Directory.GetDirectories(vsConfig.VoicesPath))
         {
             string engine = Path.GetFileName(engineDir);
@@ -915,7 +915,7 @@ public class VoiceController(
         try
         {
             using HttpClient http = new();
-            var resp = await http.PostAsync($"http://localhost:{port}/train/pause", null);
+            HttpResponseMessage resp = await http.PostAsync($"http://localhost:{port}/train/pause", null);
             resp.EnsureSuccessStatusCode();
             logger.LogInformation("[Voice] Pause requested for model '{ModelName}' on {Engine}", modelName, engine);
             return Ok(new { stopping = modelName });
@@ -968,13 +968,13 @@ public class VoiceController(
         if (!System.IO.File.Exists(logPath))
             return Ok(new { points = Array.Empty<object>(), pauses = Array.Empty<int>() });
 
-        var points    = new List<object>();
-        var pauses    = new List<int>();
+        List<object> points    = new List<object>();
+        List<int> pauses    = new List<int>();
         int lastEpoch = 0;
         // Epoch [N/total] — tracks current epoch from log lines
-        var epochRe   = new System.Text.RegularExpressions.Regex(@"Epoch \[(\d+)/", System.Text.RegularExpressions.RegexOptions.Compiled);
+        System.Text.RegularExpressions.Regex epochRe   = new System.Text.RegularExpressions.Regex(@"Epoch \[(\d+)/", System.Text.RegularExpressions.RegexOptions.Compiled);
         // Old-format: "Validation loss: X, Dur loss: Y, F0 loss: Z"
-        var oldValRe  = new System.Text.RegularExpressions.Regex(
+        System.Text.RegularExpressions.Regex oldValRe  = new System.Text.RegularExpressions.Regex(
             @"Validation loss:\s*([\d.]+),\s*Dur loss:\s*([\d.]+),\s*F0 loss:\s*([\d.]+)",
             System.Text.RegularExpressions.RegexOptions.Compiled);
 
@@ -991,7 +991,7 @@ public class VoiceController(
                 }
 
                 // Track epoch from step lines
-                var em = epochRe.Match(line);
+                System.Text.RegularExpressions.Match em = epochRe.Match(line);
                 if (em.Success && int.TryParse(em.Groups[1].Value, out int ep))
                     lastEpoch = ep;
 
@@ -999,20 +999,20 @@ public class VoiceController(
                 {
                     try
                     {
-                        using var doc = JsonDocument.Parse(rawLine["LOSS_JSON: ".Length..]);
-                        var root = doc.RootElement;
+                        using JsonDocument doc = JsonDocument.Parse(rawLine["LOSS_JSON: ".Length..]);
+                        JsonElement root = doc.RootElement;
                         int jsonEp = root.GetProperty("epoch").GetInt32();
                         lastEpoch  = jsonEp;
-                        double? sty  = root.TryGetProperty("sty",  out var styEl)  ? styEl.GetDouble()  : (double?)null;
-                        double? diff = root.TryGetProperty("diff", out var diffEl) ? diffEl.GetDouble() : (double?)null;
-                        double? dur  = root.TryGetProperty("dur",  out var durEl)  ? durEl.GetDouble()  : (double?)null;
+                        double? sty  = root.TryGetProperty("sty",  out JsonElement styEl)  ? styEl.GetDouble()  : (double?)null;
+                        double? diff = root.TryGetProperty("diff", out JsonElement diffEl) ? diffEl.GetDouble() : (double?)null;
+                        double? dur  = root.TryGetProperty("dur",  out JsonElement durEl)  ? durEl.GetDouble()  : (double?)null;
                         points.Add(new { epoch = jsonEp, val = root.GetProperty("val").GetDouble(), f0 = root.GetProperty("f0").GetDouble(), sty, diff, dur });
                     }
                     catch { /* skip malformed */ }
                 }
                 else
                 {
-                    var vm = oldValRe.Match(line);
+                    System.Text.RegularExpressions.Match vm = oldValRe.Match(line);
                     if (vm.Success && lastEpoch > 0 && (points.Count == 0 || ((dynamic)points[^1]).epoch != lastEpoch))
                     {
                         points.Add(new
@@ -1155,7 +1155,7 @@ public class VoiceController(
     [HttpGet("transcribe/status")]
     public IActionResult TranscriptionStatus()
     {
-        var t = AudioTranscriber.Current;
+        AudioTranscriber? t = AudioTranscriber.Current;
         if (t is null)
             return Ok(new { step = "Idle", percent = 0, running = false, clips = Array.Empty<object>() });
 
@@ -1173,7 +1173,7 @@ public class VoiceController(
     [HttpGet("transcribe/audio")]
     public IActionResult TranscribeAudio([FromQuery] string name)
     {
-        var t = AudioTranscriber.Current;
+        AudioTranscriber? t = AudioTranscriber.Current;
         if (t is null)
             return NotFound(new { error = "No transcription in progress." });
 
@@ -1253,7 +1253,7 @@ public class VoiceController(
             return BadRequest(new { error = "No completed dataset." });
         try
         {
-            var parts = builder.Split(req.Name);
+            List<DatasetPart> parts = builder.Split(req.Name);
             return Ok(new { parts });
         }
         catch (Exception ex) { return StatusCode(500, new { error = ex.Message }); }
@@ -1267,7 +1267,7 @@ public class VoiceController(
             return BadRequest(new { error = "No completed dataset." });
         try
         {
-            var part = builder.Unsplit(req.Name);
+            DatasetPart? part = builder.Unsplit(req.Name);
             return Ok(new { part });
         }
         catch (Exception ex) { return StatusCode(500, new { error = ex.Message }); }
@@ -1296,11 +1296,11 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
     [HttpGet]
     public IActionResult GetModels()
     {
-        var notes      = persistentData.GetAllNotes();
+        Dictionary<string, string> notes      = persistentData.GetAllNotes();
         string mPath   = ModelsPath;
 
-        var activeModelNames  = llm?.Servers.Select(s => s.ActiveModel?.Name).Where(n => n is not null).ToHashSet() ?? [];
-        var startupModelNames = persistentData.GetServers().Select(s => s.CurrentModelName).Where(n => n is not null).ToHashSet();
+        HashSet<string?> activeModelNames  = llm?.Servers.Select(s => s.ActiveModel?.Name).Where(n => n is not null).ToHashSet() ?? [];
+        HashSet<string?> startupModelNames = persistentData.GetServers().Select(s => s.CurrentModelName).Where(n => n is not null).ToHashSet();
 
         var models = persistentData.GetModels().Select(m =>
         {
@@ -1662,7 +1662,7 @@ public class ModulesApiController(ILogger<ModulesApiController> logger) : Contro
         if (modules is null)
             return StatusCode(500, new { error });
 
-        var result = Catalogue.Select(m => new ModuleInfo(
+        List<ModuleInfo> result = Catalogue.Select(m => new ModuleInfo(
             m.Key, m.Name, m.Description,
             Enabled:  modules[m.Key]?["Enabled"]?.GetValue<bool>() ?? false,
             Running:  IsRunning(m.Key),
@@ -1674,7 +1674,7 @@ public class ModulesApiController(ILogger<ModulesApiController> logger) : Contro
     [HttpPut("{key}")]
     public IActionResult SetEnabled(string key, [FromBody] SetModuleEnabledRequest req)
     {
-        var entry = Catalogue.FirstOrDefault(m => m.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+        (string Key, string Name, string Description, bool Required) entry = Catalogue.FirstOrDefault(m => m.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
         if (entry.Key is null)
             return NotFound(new { error = $"Unknown module '{key}'." });
 

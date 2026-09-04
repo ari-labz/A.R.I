@@ -6,6 +6,7 @@ using System.Text.Json;
 using ARI.LLM;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Primitives;
 
 namespace ARI.API;
 
@@ -69,14 +70,14 @@ public static class ClientWebSocket
     public static async Task HandleAsync(WebSocket ws, HttpContext ctx, LLMModule llm, ILogger log)
     {
         // Use the threadKey from the query string if provided (binds tools to the active web-* thread)
-        string threadKey = ctx.Request.Query.TryGetValue("threadKey", out var tkv) && !string.IsNullOrWhiteSpace(tkv)
+        string threadKey = ctx.Request.Query.TryGetValue("threadKey", out StringValues tkv) && !string.IsNullOrWhiteSpace(tkv)
             ? tkv.ToString()
             : $"client-{Guid.NewGuid():N}";
 
         log.LogInformation("[Client] Incoming WebSocket  threadKey={Key}", threadKey);
 
-        var fileTree = new List<string>();
-        var state    = new ConnectionState();
+        List<string> fileTree = new List<string>();
+        ConnectionState state    = new ConnectionState();
         Guid connId  = Guid.NewGuid();
 
         // Get or create persistent file-tool state for this thread.
@@ -265,7 +266,7 @@ public static class ClientWebSocket
                 string label = EditLabel(argsJson); // extracted leniently so the filename survives any later failure
                 try
                 {
-                    using var doc = JsonDocument.Parse(argsJson);
+                    using JsonDocument doc = JsonDocument.Parse(argsJson);
                     (int added, int removed) = EditCounts(doc.RootElement);
                     return $"<!--ari-tool-start:edit_file:{label}|+{added}|-{removed}-->";
                 }
@@ -276,8 +277,8 @@ public static class ClientWebSocket
                 string label = EditLabel(argsJson);
                 try
                 {
-                    using var doc = JsonDocument.Parse(argsJson);
-                    string newStr  = doc.RootElement.TryGetProperty("new_string", out var ne) ? ne.GetString() ?? "" : "";
+                    using JsonDocument doc = JsonDocument.Parse(argsJson);
+                    string newStr  = doc.RootElement.TryGetProperty("new_string", out JsonElement ne) ? ne.GetString() ?? "" : "";
                     (int added, int removed) = EditCounts(doc.RootElement);
                     string patch   = BuildPatch(newStr);
                     string encoded = patch.Length is > 0 and <= 10_000
@@ -301,9 +302,9 @@ public static class ClientWebSocket
             {
                 try
                 {
-                    using var doc  = JsonDocument.Parse(argsJson);
-                    string path    = doc.RootElement.TryGetProperty("path",    out var pe) ? pe.GetString() ?? "" : "";
-                    string content = doc.RootElement.TryGetProperty("content", out var ce) ? ce.GetString() ?? "" : "";
+                    using JsonDocument doc  = JsonDocument.Parse(argsJson);
+                    string path    = doc.RootElement.TryGetProperty("path",    out JsonElement pe) ? pe.GetString() ?? "" : "";
+                    string content = doc.RootElement.TryGetProperty("content", out JsonElement ce) ? ce.GetString() ?? "" : "";
                     string label   = System.IO.Path.GetFileName(path.Trim('"', '\'', ' ', '\\')).Replace("--", "&#45;&#45;");
                     int added      = content.Split('\n').Length;
                     return $"<!--ari-tool-start:write_file:{label}|+{added}-->";
@@ -314,9 +315,9 @@ public static class ClientWebSocket
             {
                 try
                 {
-                    using var doc = JsonDocument.Parse(argsJson);
-                    string path    = doc.RootElement.TryGetProperty("path",    out var pe) ? pe.GetString() ?? "" : "";
-                    string content = doc.RootElement.TryGetProperty("content", out var ce) ? ce.GetString() ?? "" : "";
+                    using JsonDocument doc = JsonDocument.Parse(argsJson);
+                    string path    = doc.RootElement.TryGetProperty("path",    out JsonElement pe) ? pe.GetString() ?? "" : "";
+                    string content = doc.RootElement.TryGetProperty("content", out JsonElement ce) ? ce.GetString() ?? "" : "";
                     string label   = System.IO.Path.GetFileName(path.Trim('"', '\'', ' ', '\\')).Replace("--", "&#45;&#45;");
                     int added      = content.Split('\n').Length;
                     string patch   = string.Join("\n", content.Split('\n').Select(l => "+" + l));
@@ -375,8 +376,8 @@ public static class ClientWebSocket
     {
         try
         {
-            using var doc = JsonDocument.Parse(argsJson);
-            string cmd = (doc.RootElement.TryGetProperty("command", out var ce) ? ce.GetString() ?? "" : "").Trim();
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            string cmd = (doc.RootElement.TryGetProperty("command", out JsonElement ce) ? ce.GetString() ?? "" : "").Trim();
             if (string.IsNullOrWhiteSpace(cmd)) return null;
 
             string firstToken = cmd.Split(' ', 2)[0].ToLowerInvariant();
@@ -468,8 +469,8 @@ public static class ClientWebSocket
     {
         try
         {
-            using var doc = JsonDocument.Parse(argsJson);
-            return (doc.RootElement.TryGetProperty("path", out var pe) ? pe.GetString() ?? "" : "").Trim();
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            return (doc.RootElement.TryGetProperty("path", out JsonElement pe) ? pe.GetString() ?? "" : "").Trim();
         }
         catch { return ""; }
     }
@@ -562,7 +563,7 @@ public static class ClientWebSocket
         fileState.PreviewedFiles.TryAdd(path, 0);
 
         // Small file → serve the whole-file read directly (no second round-trip, no note to re-issue).
-        var lc = System.Text.RegularExpressions.Regex.Match(outline, @"—\s*(\d+)\s+lines");
+        System.Text.RegularExpressions.Match lc = System.Text.RegularExpressions.Regex.Match(outline, @"—\s*(\d+)\s+lines");
         if (lc.Success && int.TryParse(lc.Groups[1].Value, out int lines))
         {
             fileState.KnownLineCounts[path] = lines;
@@ -591,7 +592,7 @@ public static class ClientWebSocket
         string header  = nl >= 0 ? clientRaw.Substring(0, nl) : clientRaw;
         string content = nl >= 0 ? clientRaw.Substring(nl + 1) : "";
         long   bytes   = 0;
-        var    m       = System.Text.RegularExpressions.Regex.Match(header, @"(\d+)");
+        System.Text.RegularExpressions.Match    m       = System.Text.RegularExpressions.Regex.Match(header, @"(\d+)");
         if (m.Success) long.TryParse(m.Value, out bytes);
 
         string[] lines = content.Split('\n');
@@ -688,12 +689,12 @@ public static class ClientWebSocket
         if (fenceEnd <= bodyStart) return null;
 
         string[] lines = readResult[(bodyStart + 1)..fenceEnd].Split('\n');
-        var sb = new StringBuilder();
-        var numbered = new System.Text.RegularExpressions.Regex(@"^\s{0,7}\d+: ?");
+        System.Text.StringBuilder sb = new StringBuilder();
+        System.Text.RegularExpressions.Regex numbered = new System.Text.RegularExpressions.Regex(@"^\s{0,7}\d+: ?");
         int matched = 0;
         for (int i = 0; i < lines.Length; i++)
         {
-            var m = numbered.Match(lines[i]);
+            System.Text.RegularExpressions.Match m = numbered.Match(lines[i]);
             if (m.Success) matched++;
             if (i > 0) sb.Append('\n');
             sb.Append(m.Success ? lines[i][m.Length..] : lines[i]);
@@ -735,7 +736,7 @@ public static class ClientWebSocket
     {
         if (files.Count == 0) return "";
         const int CAP = 200;
-        var sorted = files.OrderBy(f => f, StringComparer.OrdinalIgnoreCase).Take(CAP);
+        System.Collections.Generic.IEnumerable<string> sorted = files.OrderBy(f => f, StringComparer.OrdinalIgnoreCase).Take(CAP);
         string body = string.Join("\n", sorted);
         if (files.Count > CAP)
             body += $"\n... ({files.Count - CAP} more — use find_files / list_directory to explore)";
@@ -747,8 +748,8 @@ public static class ClientWebSocket
     {
         try
         {
-            using var doc = JsonDocument.Parse(argsJson);
-            string cmd = doc.RootElement.TryGetProperty("command", out var ce) ? ce.GetString() ?? "" : "";
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            string cmd = doc.RootElement.TryGetProperty("command", out JsonElement ce) ? ce.GetString() ?? "" : "";
             cmd = cmd.Replace("\r", " ").Replace("\n", " ").Trim();
             if (cmd.Length > 60) cmd = cmd[..60] + "…";
             // Marker grammar uses ':' '>' '|' '--' as delimiters — neutralise them in the label.
@@ -765,7 +766,7 @@ public static class ClientWebSocket
     /// </summary>
     private static string EditLabel(string argsJson)
     {
-        var m = System.Text.RegularExpressions.Regex.Match(argsJson, "\"path\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
+        System.Text.RegularExpressions.Match m = System.Text.RegularExpressions.Regex.Match(argsJson, "\"path\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
         if (!m.Success) return "file";
         string path = m.Groups[1].Value.Replace("\\\\", "\\").Replace("\\\"", "\"").Replace("\\/", "/");
         try
@@ -784,31 +785,31 @@ public static class ClientWebSocket
     {
         static int Lines(string s) => s.Length == 0 ? 0 : s.Split('\n').Length;
 
-        if (root.TryGetProperty("edits", out var edits) && edits.ValueKind == JsonValueKind.Array)
+        if (root.TryGetProperty("edits", out JsonElement edits) && edits.ValueKind == JsonValueKind.Array)
         {
             int a = 0, r = 0;
-            foreach (var e in edits.EnumerateArray())
+            foreach (JsonElement e in edits.EnumerateArray())
             {
-                a += Lines(e.TryGetProperty("new_string", out var n) ? n.GetString() ?? "" : "");
-                if (e.TryGetProperty("start_line", out var sl) && sl.TryGetInt32(out int s) &&
-                    e.TryGetProperty("end_line",   out var el) && el.TryGetInt32(out int en) && en >= s)
+                a += Lines(e.TryGetProperty("new_string", out JsonElement n) ? n.GetString() ?? "" : "");
+                if (e.TryGetProperty("start_line", out JsonElement sl) && sl.TryGetInt32(out int s) &&
+                    e.TryGetProperty("end_line",   out JsonElement el) && el.TryGetInt32(out int en) && en >= s)
                     r += en - s + 1;
             }
             return (a, r);
         }
 
-        int added = Lines(root.TryGetProperty("new_string", out var ns) ? ns.GetString() ?? "" : "");
+        int added = Lines(root.TryGetProperty("new_string", out JsonElement ns) ? ns.GetString() ?? "" : "");
         int removed = 0;
-        if (root.TryGetProperty("start_line", out var s0) && s0.TryGetInt32(out int start) &&
-            root.TryGetProperty("end_line",   out var e0) && e0.TryGetInt32(out int end) && end >= start)
+        if (root.TryGetProperty("start_line", out JsonElement s0) && s0.TryGetInt32(out int start) &&
+            root.TryGetProperty("end_line",   out JsonElement e0) && e0.TryGetInt32(out int end) && end >= start)
             removed = end - start + 1;
         return (added, removed);
     }
 
     private static string BuildPatch(string newStr)
     {
-        var sb = new System.Text.StringBuilder();
-        foreach (var line in newStr.Split('\n'))
+        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+        foreach (string line in newStr.Split('\n'))
             sb.Append('+').AppendLine(line);
         return sb.ToString();
     }
@@ -835,10 +836,10 @@ public static class ClientWebSocket
         if (!RequiredToolArgs.TryGetValue(name, out string[]? required)) return null;
         try
         {
-            using var doc = JsonDocument.Parse(argsJson);
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
             foreach (string field in required)
             {
-                string? v = doc.RootElement.TryGetProperty(field, out var el) && el.ValueKind == JsonValueKind.String
+                string? v = doc.RootElement.TryGetProperty(field, out JsonElement el) && el.ValueKind == JsonValueKind.String
                     ? el.GetString() : null;
                 if (string.IsNullOrWhiteSpace(v))
                     return $"[Error: {name} requires a non-empty '{field}' argument — the call was not sent to the client. Re-issue the call with '{field}' set.]";
@@ -866,8 +867,8 @@ public static class ClientWebSocket
         {
             try
             {
-                using var doc = JsonDocument.Parse(argsJson);
-                string label = doc.RootElement.TryGetProperty(labelField, out var el) ? el.GetString() ?? "" : "";
+                using JsonDocument doc = JsonDocument.Parse(argsJson);
+                string label = doc.RootElement.TryGetProperty(labelField, out JsonElement el) ? el.GetString() ?? "" : "";
                 label = System.IO.Path.GetFileName(label.Trim('"', '\'', ' ', '\\')).Replace("--", "&#45;&#45;");
                 if (string.IsNullOrWhiteSpace(label)) label = "file";
                 return $"<!--ari-tool-{markerType}:{name}:{label}-->";
@@ -875,8 +876,8 @@ public static class ClientWebSocket
             catch { return $"<!--ari-tool-error:{name}:failed to parse tool args (malformed JSON)-->"; }
         };
 
-        var displayFn     = customDisplay     ?? MakeDisplay(displayVerb,     "start");
-        var displayDoneFn = customDisplayDone ?? MakeDisplay(displayDoneVerb, "end");
+        Func<string, string> displayFn     = customDisplay     ?? MakeDisplay(displayVerb,     "start");
+        Func<string, string> displayDoneFn = customDisplayDone ?? MakeDisplay(displayDoneVerb, "end");
 
         // Streaming display: emits a live start marker during arg streaming so the UI can
         // show and animate line counts as new_string / content arrive token-by-token.
@@ -1011,7 +1012,7 @@ public static class ClientWebSocket
 
         string callId = Guid.NewGuid().ToString("N");
         string label  = ExtractLogLabel(argsJson, labelField);
-        var tcs = new TaskCompletionSource<string>();
+        TaskCompletionSource<string> tcs = new TaskCompletionSource<string>();
         pendingFileCalls[callId]  = (ws, tcs);
         pendingCallLabels[callId] = label;
 
@@ -1026,7 +1027,7 @@ public static class ClientWebSocket
             "write_file" or "edit_file" => 90,
             _                           => 30
         };
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+        using System.Threading.CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
         cts.Token.Register(() => tcs.TrySetCanceled());
         try
         {
@@ -1055,7 +1056,7 @@ public static class ClientWebSocket
     {
         int pos = FindJsonFieldValue(partial, fieldName);
         if (pos < 0) return "";
-        var sb = new System.Text.StringBuilder();
+        System.Text.StringBuilder sb = new System.Text.StringBuilder();
         bool esc = false;
         for (int i = pos; i < partial.Length; i++)
         {
@@ -1110,7 +1111,7 @@ public static class ClientWebSocket
     {
         ARI.LLM.Thread codeThread = initialThread;
         string         threadKey  = initialThreadKey;
-        var buffer = new byte[64 * 1024];
+        byte[] buffer = new byte[64 * 1024];
 
         try { await Inner(); }
         finally
@@ -1123,7 +1124,7 @@ public static class ClientWebSocket
         {
             while (ws.State == WebSocketState.Open)
             {
-                using var ms = new MemoryStream();
+                using System.IO.MemoryStream ms = new MemoryStream();
                 WebSocketReceiveResult result;
                 do
                 {
@@ -1140,25 +1141,25 @@ public static class ClientWebSocket
 
                 using (doc)
                 {
-                    string type = doc.RootElement.TryGetProperty("type", out var typeEl) ? typeEl.GetString() ?? "" : "";
+                    string type = doc.RootElement.TryGetProperty("type", out JsonElement typeEl) ? typeEl.GetString() ?? "" : "";
                     log.LogInformation("[Client] Message type: {Type}", type);
 
                     switch (type)
                     {
                         case "tree":
-                            state.Root = doc.RootElement.TryGetProperty("root", out var rootEl) ? rootEl.GetString() ?? "" : "";
-                            if (doc.RootElement.TryGetProperty("tree", out var treeEl))
+                            state.Root = doc.RootElement.TryGetProperty("root", out JsonElement rootEl) ? rootEl.GetString() ?? "" : "";
+                            if (doc.RootElement.TryGetProperty("tree", out JsonElement treeEl))
                             {
                                 fileTree.Clear();
-                                foreach (var f in treeEl.EnumerateArray())
+                                foreach (JsonElement f in treeEl.EnumerateArray())
                                 {
-                                    var p = f.GetString();
+                                    string? p = f.GetString();
                                     if (p is not null) fileTree.Add(p);
                                 }
                             }
 
                             // If the tree body specifies a different threadKey, rebind tools to that thread
-                            if (doc.RootElement.TryGetProperty("threadKey", out var bindKeyEl))
+                            if (doc.RootElement.TryGetProperty("threadKey", out JsonElement bindKeyEl))
                             {
                                 string bindKey = bindKeyEl.GetString() ?? "";
                                 if (!string.IsNullOrWhiteSpace(bindKey) && bindKey != threadKey)
@@ -1173,7 +1174,7 @@ public static class ClientWebSocket
                             }
 
                             string conventions = ConventionsStore.Get();
-                            string? projectRules = doc.RootElement.TryGetProperty("projectRules", out var prEl) ? prEl.GetString()?.Trim() : null;
+                            string? projectRules = doc.RootElement.TryGetProperty("projectRules", out JsonElement prEl) ? prEl.GetString()?.Trim() : null;
                             // projectMap is omitted — the desktop sends a lazy skeleton via /system-context
                             // instead of the full flat list, saving ~800 tokens per message.
                             llm.SetCodeThreadContext(
@@ -1187,14 +1188,14 @@ public static class ClientWebSocket
                             break;
 
                         case "file_content":
-                            if ((doc.RootElement.TryGetProperty("callId", out var cidEl) || doc.RootElement.TryGetProperty("call_id", out cidEl))
-                                && doc.RootElement.TryGetProperty("content", out var contentEl))
+                            if ((doc.RootElement.TryGetProperty("callId", out JsonElement cidEl) || doc.RootElement.TryGetProperty("call_id", out cidEl))
+                                && doc.RootElement.TryGetProperty("content", out JsonElement contentEl))
                             {
                                 string callId  = cidEl.GetString()     ?? "";
                                 string content = contentEl.GetString() ?? "";
-                                string flabel  = pendingCallLabels.TryGetValue(callId, out var fl) ? fl : "";
+                                string flabel  = pendingCallLabels.TryGetValue(callId, out string? fl) ? fl : "";
                                 log.LogInformation("[Client] ← file_content  {Label}  callId={CallId}  bytes={Bytes}  pending={Pending}", flabel, callId, content.Length, pendingFileCalls.ContainsKey(callId));
-                                if (pendingFileCalls.TryGetValue(callId, out var pending))
+                                if (pendingFileCalls.TryGetValue(callId, out (WebSocket Ws, TaskCompletionSource<string> Tcs) pending))
                                     pending.Tcs.TrySetResult(content);
                                 else
                                     log.LogWarning("[Client] ← file_content  callId={CallId}  NO PENDING CALL", callId);
@@ -1202,14 +1203,14 @@ public static class ClientWebSocket
                             break;
 
                         case "file_error":
-                            if ((doc.RootElement.TryGetProperty("callId", out var ecidEl) || doc.RootElement.TryGetProperty("call_id", out ecidEl))
-                                && doc.RootElement.TryGetProperty("error", out var errEl))
+                            if ((doc.RootElement.TryGetProperty("callId", out JsonElement ecidEl) || doc.RootElement.TryGetProperty("call_id", out ecidEl))
+                                && doc.RootElement.TryGetProperty("error", out JsonElement errEl))
                             {
                                 string callId = ecidEl.GetString() ?? "";
                                 string error  = errEl.GetString()  ?? "";
-                                string elabel = pendingCallLabels.TryGetValue(callId, out var el2) ? el2 : "";
+                                string elabel = pendingCallLabels.TryGetValue(callId, out string? el2) ? el2 : "";
                                 log.LogWarning("[Client] ← file_error  {Label}  callId={CallId}  error={Error}", elabel, callId, error);
-                                if (pendingFileCalls.TryGetValue(callId, out var pending))
+                                if (pendingFileCalls.TryGetValue(callId, out (WebSocket Ws, TaskCompletionSource<string> Tcs) pending))
                                     pending.Tcs.TrySetResult($"[Error: {SanitizeClientError(error)}]");
                             }
                             break;
@@ -1239,15 +1240,15 @@ public static class ClientWebSocket
             if (clean == raw) return argsJson;
 
             // Rebuild JSON with the cleaned path — re-serialize the whole object.
-            var rebuilt = new Dictionary<string, JsonElement>();
+            Dictionary<string, JsonElement> rebuilt = new Dictionary<string, JsonElement>();
             foreach (JsonProperty prop in doc.RootElement.EnumerateObject())
                 rebuilt[prop.Name] = prop.Value;
 
             // Serialize with the clean path value substituted.
-            using var ms = new System.IO.MemoryStream();
-            using var writer = new Utf8JsonWriter(ms);
+            using System.IO.MemoryStream ms = new System.IO.MemoryStream();
+            using Utf8JsonWriter writer = new Utf8JsonWriter(ms);
             writer.WriteStartObject();
-            foreach (var kv in rebuilt)
+            foreach (KeyValuePair<string, JsonElement> kv in rebuilt)
             {
                 if (kv.Key == "path")
                     writer.WriteString("path", clean);
@@ -1287,8 +1288,8 @@ public static class ClientWebSocket
     {
         try
         {
-            using var doc = JsonDocument.Parse(argsJson);
-            string value = doc.RootElement.TryGetProperty(labelField, out var el) ? el.GetString() ?? "" : "";
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            string value = doc.RootElement.TryGetProperty(labelField, out JsonElement el) ? el.GetString() ?? "" : "";
             return string.IsNullOrWhiteSpace(value) ? "" : System.IO.Path.GetFileName(value);
         }
         catch { return ""; }
@@ -1297,7 +1298,7 @@ public static class ClientWebSocket
     private static async Task Send(WebSocket ws, object payload)
     {
         if (ws.State != WebSocketState.Open) return;
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(payload,
+        byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(payload,
             new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
         await ws.SendAsync(bytes, WebSocketMessageType.Text, true, CancellationToken.None);
     }
