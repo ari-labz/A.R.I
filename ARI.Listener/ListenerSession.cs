@@ -27,6 +27,7 @@ internal sealed class ListenerSession
     private const string SpeechContext =
         "You are in a live, spoken voice conversation. Keep replies concise, natural, and easy to say aloud. " +
         "Do not use markdown, lists, headings, or code blocks — plain spoken sentences only.";
+    private const int RECONNECT_DELAY_MS = 750;
 
     public ListenerSession(WebSocket browser, WhisperWorker worker, LLMModule llm, ListenerSessionContext ctx, ILogger? logger)
     {
@@ -56,7 +57,7 @@ internal sealed class ListenerSession
         {
             ClientWebSocket attempt = new();
             try { await attempt.ConnectAsync(new Uri(worker.WebSocketUrl), ct); toWhisper = attempt; }
-            catch { attempt.Dispose(); try { await Task.Delay(750, ct); } catch { break; } }
+            catch { attempt.Dispose(); try { await Task.Delay(RECONNECT_DELAY_MS, ct); } catch { break; } }
         }
 
         if (toWhisper is null)
