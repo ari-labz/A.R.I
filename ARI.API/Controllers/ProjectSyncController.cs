@@ -106,7 +106,7 @@ public class ProjectSyncController(ProjectStore store) : ControllerBase
         string tmp = Path.GetTempFileName();
         try
         {
-            using (var fs = System.IO.File.OpenWrite(tmp))
+            using (FileStream fs = System.IO.File.OpenWrite(tmp))
                 await Request.Body.CopyToAsync(fs);
 
             // Fetch into a scratch ref — git refuses to fetch into the currently checked-out branch.

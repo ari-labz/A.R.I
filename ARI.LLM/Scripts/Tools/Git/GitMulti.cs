@@ -10,11 +10,11 @@ namespace ARI.LLM;
 /// </summary>
 internal sealed class GitMulti : Tool
 {
-    private readonly Dictionary<string, string> _repos;  // display name → absolute path
+    private readonly Dictionary<string, string> repos;  // display name → absolute path
 
     internal override string Name => "git";
 
-    private GitMulti(Dictionary<string, string> repos) => _repos = repos;
+    private GitMulti(Dictionary<string, string> repos) => this.repos = repos;
 
     /// <summary>Scans projectRoot (one level deep) for subdirectories that contain a .git folder.
     /// Returns null if none are found so ToolFactories can skip registration cleanly.</summary>
@@ -22,7 +22,7 @@ internal sealed class GitMulti : Tool
     {
         if (!Directory.Exists(projectRoot)) return null;
 
-        var repos = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, string> repos = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (string subdir in Directory.EnumerateDirectories(projectRoot))
         {
@@ -42,7 +42,7 @@ internal sealed class GitMulti : Tool
         {
             name        = "git",
             description = $"Run a git command against one of the project's repositories. "
-                        + $"Repos: {string.Join(", ", _repos.Keys)}. "
+                        + $"Repos: {string.Join(", ", repos.Keys)}. "
                         + "fetch before pull to preview incoming changes. status before commit. "
                         + "stage with add, then commit with a message, then push.",
             parameters = new
@@ -53,7 +53,7 @@ internal sealed class GitMulti : Tool
                     repo = new
                     {
                         type        = "string",
-                        @enum       = _repos.Keys.Order().ToArray(),
+                        @enum       = repos.Keys.Order().ToArray(),
                         description = "Which repository to target."
                     },
                     command = new
@@ -85,10 +85,10 @@ internal sealed class GitMulti : Tool
         string command = Str(a, "command");
         string extra   = Str(a, "args");
 
-        if (!_repos.TryGetValue(repo, out string? repoPath))
-            return Task.FromResult<ToolResult>($"Unknown repo '{repo}'. Available: {string.Join(", ", _repos.Keys)}");
+        if (!repos.TryGetValue(repo, out string? repoPath))
+            return Task.FromResult<ToolResult>($"Unknown repo '{repo}'. Available: {string.Join(", ", repos.Keys)}");
 
-        var args = new List<string> { command };
+        List<string> args = new List<string> { command };
 
         if (command == "commit")
         {
@@ -104,7 +104,7 @@ internal sealed class GitMulti : Tool
         else if (!string.IsNullOrWhiteSpace(extra))
             args.AddRange(SplitArgs(extra));
 
-        var (code, outp, err) = RunGit(repoPath, args.ToArray());
+        (int code, string outp, string err) = RunGit(repoPath, args.ToArray());
 
         string combined = (outp + "\n" + err).Trim();
         if (string.IsNullOrWhiteSpace(combined))
@@ -128,7 +128,7 @@ internal sealed class GitMulti : Tool
 
     private static (int Code, string Out, string Err) RunGit(string workDir, string[] args)
     {
-        var psi = new ProcessStartInfo
+        ProcessStartInfo psi = new ProcessStartInfo
         {
             FileName               = "git",
             WorkingDirectory       = workDir,

@@ -33,10 +33,13 @@ internal sealed class Refactor : MemoryAgent
             return "Refactor skipped — already running.";
 
         // Pause Engram for the duration: nothing should write to the graph while it is being restructured.
-        bool engramWasEnabled = engram?.IsEnabled ?? false;
-        if (engramWasEnabled)
+        // Engram is nullable here (not just an artifact of this method) — Refactor and Engram are each
+        // independently enabled/disabled via their own entry in Agents.json, so a deployment can run
+        // Refactor without Engram configured at all.
+        Engram? pausedEngram = engram is { IsEnabled: true } e ? e : null;
+        if (pausedEngram is not null)
         {
-            engram!.Disable();
+            pausedEngram.Disable();
             Shared.Logger.LogInformation("[Refactor] Engram paused for refactor.");
         }
 
@@ -56,9 +59,9 @@ internal sealed class Refactor : MemoryAgent
         }
         finally
         {
-            if (engramWasEnabled)
+            if (pausedEngram is not null)
             {
-                engram!.Enable();
+                pausedEngram.Enable();
                 Shared.Logger.LogInformation("[Refactor] Engram restored.");
             }
             runLock.Release();

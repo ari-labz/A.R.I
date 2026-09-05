@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace ARI.LLM;
 
 /// <summary>
@@ -9,7 +11,7 @@ internal class Awareness : Agent
 {
     public Awareness() { }
 
-    internal override bool SuppressLog() => true;
+    internal override bool SuppressLog => true;
 
     /// <summary>Voice gate: is this spoken transcript addressed to Ari?</summary>
     internal async Task<bool> IsAddressed(string transcript, string? context = null, CancellationToken ct = default)
@@ -27,9 +29,9 @@ internal class Awareness : Agent
     {
         Thread ephemeral = new Thread(ThreadPipeline.Dialogue, $"__aware_{Guid.NewGuid():N}") { Internal = true };
 
-        var sb = new System.Text.StringBuilder();
+        StringBuilder sb = new StringBuilder();
         sb.AppendLine("Recent chat:");
-        foreach (var msg in recentMessages)
+        foreach (ThreadMessage msg in recentMessages)
             sb.AppendLine($"  {msg.Username}: {msg.Content}");
         sb.AppendLine();
         sb.AppendLine($"Latest message: {latestMessage}");

@@ -36,7 +36,7 @@ internal sealed class Coder : Agent
     public Coder() { }
 
     // Coding prompts are verbose and already logged by the pipeline; don't double-log them.
-    internal override bool SuppressLog() => true;
+    internal override bool SuppressLog => true;
 
     // ── Per-thread code context ──────────────────────────────────────────────
     // The client sends the project map, the coding-conventions rulebook and any project rules when it
@@ -467,7 +467,7 @@ internal sealed class Coder : Agent
     {
         if (from.ClientToolCloner is not null && from.ClientToolCloner(to)) return;
         foreach (string name in new[] { "preview_file", "read_file", "search_files", "find_files", "edit_file", "write_file", "delete_file", "move_file", "revert_file" })
-            if (from.tools.TryGetValue(name, out var t)) to.tools[name] = t;
+            if (from.tools.TryGetValue(name, out (object Schema, Func<string, Task<ToolResult>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter, Func<string, string?>? StreamingDisplay, Func<string, string?>? StreamingPreCheck, Func<string, string?>? PreCheck, Func<string, ToolResult, ToolResult>? PostRun) t)) to.tools[name] = t;
     }
 
     // True if the child issued a successful mutating tool call (its result isn't an error/refusal marker).
@@ -535,7 +535,7 @@ internal sealed class Coder : Agent
     internal static async Task<string> BuildRemote(Thread parent, HashSet<string> touched, CancellationToken ct)
     {
         if (touched.Count == 0) return "[System: no files have been changed yet — make your edits first.]";
-        if (!parent.tools.TryGetValue("run_command", out var rc))
+        if (!parent.tools.TryGetValue("run_command", out (object Schema, Func<string, Task<ToolResult>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter, Func<string, string?>? StreamingDisplay, Func<string, string?>? StreamingPreCheck, Func<string, string?>? PreCheck, Func<string, ToolResult, ToolResult>? PostRun) rc))
             return "[System: no run_command tool is available to build on the client — skip the build and write your summary.]";
         ToolResult output = await rc.Execute(JsonSerializer.Serialize(new { command = "dotnet build" }));
         return "Build output from the client (`dotnet build`):\n\n" + output.Text;

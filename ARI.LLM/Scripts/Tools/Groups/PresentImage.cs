@@ -10,11 +10,11 @@ namespace ARI.LLM;
 /// bad result, or give up instead of presenting nothing.</summary>
 internal sealed class PresentImage : Tool
 {
-    private readonly Thread _thread;
-    private string? _shownFilename;
-    private string? _shownThreadKey;
+    private readonly Thread boundThread;
+    private string? shownFilename;
+    private string? shownThreadKey;
 
-    internal PresentImage(Thread thread) => _thread = thread;
+    internal PresentImage(Thread thread) => boundThread = thread;
 
     internal override string     Name   => "present_image";
     internal override ToolAccess Access => ToolAccess.Write;
@@ -53,22 +53,22 @@ internal sealed class PresentImage : Tool
         if (string.IsNullOrWhiteSpace(filename))
             return Task.FromResult<ToolResult>("A filename is required.");
 
-        string dir  = Paths.ScratchpadDir(_thread.Key);
+        string dir  = Paths.ScratchpadDir(boundThread.Key);
         string path = Path.Combine(dir, filename);
         if (!File.Exists(path))
             return Task.FromResult<ToolResult>($"No file named '{filename}' found in the scratchpad.");
 
-        _shownFilename  = filename;
-        _shownThreadKey = _thread.Key;
+        shownFilename  = filename;
+        shownThreadKey = boundThread.Key;
 
-        string url = $"/threads/{Uri.EscapeDataString(_thread.Key)}/scratchpad/{Uri.EscapeDataString(filename)}";
-        _thread.RaiseScratchpadFileReady(url);
+        string url = $"/threads/{Uri.EscapeDataString(boundThread.Key)}/scratchpad/{Uri.EscapeDataString(filename)}";
+        boundThread.RaiseScratchpadFileReady(url);
 
         return Task.FromResult<ToolResult>($"'{filename}' has been shown to the user.");
     }
 
     internal override Func<string, string>? DisplayAfter => _ =>
-        _shownFilename is not null && _shownThreadKey is not null
-            ? $"\n<!--ari-image:{_shownThreadKey}:{_shownFilename}-->"
+        shownFilename is not null && shownThreadKey is not null
+            ? $"\n<!--ari-image:{shownThreadKey}:{shownFilename}-->"
             : "";
 }

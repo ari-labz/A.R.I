@@ -18,8 +18,8 @@ namespace ARI.Scheduler;
 /// </summary>
 public sealed class SchedulerModule : IDisposable, ISchedulerModule
 {
-    private readonly SchedulerConfig _config;
-    private readonly ILogger _logger;
+    private readonly SchedulerConfig config;
+    private readonly ILogger logger;
     private readonly string _statePath;
     private readonly string _settingsPath;
     private readonly SchedulerSettings _settings;
@@ -44,8 +44,8 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
 
     public SchedulerModule(SchedulerConfig config, string persistentDataDir, ILogger logger)
     {
-        _config = config;
-        _logger = logger;
+        this.config = config;
+        this.logger = logger;
         _statePath = Path.Combine(persistentDataDir, "Scheduler.json");
         _settingsPath = Path.Combine(persistentDataDir, "Scheduler.Settings.json");
         _settings = SchedulerSettings.Load(_settingsPath);
@@ -58,11 +58,11 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
     {
         string cron =
             _settings.Schedules.TryGetValue(name, out string? s) && IsValidCron(s) ? s
-          : _config.Schedules.TryGetValue(name, out string? c) && !string.IsNullOrWhiteSpace(c) ? c
+          : config.Schedules.TryGetValue(name, out string? c) && !string.IsNullOrWhiteSpace(c) ? c
           : defaultCron;
         DateTime lastRun = _lastRun.TryGetValue(name, out DateTime lr) ? lr : DateTime.UtcNow;
         _tasks.Add(new ScheduledTask(name, cron, handler, lastRun, respectActivity));
-        _logger.LogInformation("[Scheduler] Registered task '{Name}' (cron: {Cron}{Activity}).",
+        logger.LogInformation("[Scheduler] Registered task '{Name}' (cron: {Cron}{Activity}).",
             name, cron, respectActivity ? ", activity-aware" : "");
     }
 
@@ -70,10 +70,12 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
     // dropped and the task falls through to its next cron occurrence.
     private static readonly TimeSpan DeferWindow = TimeSpan.FromMinutes(30);
     private const int MaxDeferrals = 3;
+    private const int MIN_TICK_DELAY_SECONDS = 5;
+    private const int SHUTDOWN_WAIT_TIMEOUT_SECONDS = 3;
 
     // ── ISchedulerModule (control-panel surface) ──────────────────────────────────────
 
-    public bool Enabled => _config.Enabled;
+    public bool Enabled => config.Enabled;
 
     public IReadOnlyList<SchedulerTaskInfo> GetTasks()
     {
@@ -97,7 +99,7 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
             if (_runningTask != name || _jobCts is null) return false;
             _jobCts.Cancel();
         }
-        _logger.LogInformation("[Scheduler] Stop requested for '{Name}'.", name);
+        logger.LogInformation("[Scheduler] Stop requested for '{Name}'.", name);
         return true;
     }
 
@@ -112,7 +114,7 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
             _settings.Schedules[name] = cron.Trim();
             _settings.Save(_settingsPath);
         }
-        _logger.LogInformation("[Scheduler] Task '{Name}' cron updated to '{Cron}'.", name, cron.Trim());
+        logger.LogInformation("[Scheduler] Task '{Name}' cron updated to '{Cron}'.", name, cron.Trim());
         return true;
     }
 
@@ -122,7 +124,7 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
         set
         {
             lock (_settingsLock) { _settings.DreamingEnabled = value; _settings.Save(_settingsPath); }
-            _logger.LogInformation("[Scheduler] Dreaming {State}.", value ? "enabled" : "disabled");
+            logger.LogInformation("[Scheduler] Dreaming {State}.", value ? "enabled" : "disabled");
         }
     }
 
@@ -135,11 +137,11 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
 
     public void Start()
     {
-        if (!_config.Enabled) { _logger.LogInformation("[Scheduler] Disabled."); return; }
-        if (_tasks.Count == 0) { _logger.LogInformation("[Scheduler] No tasks registered — not starting."); return; }
+        if (!config.Enabled) { logger.LogInformation("[Scheduler] Disabled."); return; }
+        if (_tasks.Count == 0) { logger.LogInformation("[Scheduler] No tasks registered — not starting."); return; }
         _loopCts = new CancellationTokenSource();
         _loop = Task.Run(() => RunLoop(_loopCts.Token));
-        _logger.LogInformation("[Scheduler] Started with {Count} task(s), tick {Tick}s.", _tasks.Count, _config.TickSeconds);
+        logger.LogInformation("[Scheduler] Started with {Count} task(s), tick {Tick}s.", _tasks.Count, config.TickSeconds);
     }
 
     private async Task RunLoop(CancellationToken ct)
@@ -161,10 +163,10 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[Scheduler] Loop error.");
+                logger.LogError(ex, "[Scheduler] Loop error.");
             }
 
-            try { await Task.Delay(TimeSpan.FromSeconds(Math.Max(5, _config.TickSeconds)), ct); }
+            try { await Task.Delay(TimeSpan.FromSeconds(Math.Max(MIN_TICK_DELAY_SECONDS, config.TickSeconds)), ct); }
             catch (OperationCanceledException) { break; }
         }
     }
@@ -190,7 +192,7 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
         task.DeferCount++;
         if (task.DeferCount >= MaxDeferrals)
         {
-            _logger.LogInformation("[Scheduler] '{Name}' deferred {Count}× while Ari was in conversation — dropping this slot; waiting for its next scheduled time.",
+            logger.LogInformation("[Scheduler] '{Name}' deferred {Count}× while Ari was in conversation — dropping this slot; waiting for its next scheduled time.",
                 task.Name, task.DeferCount);
             task.DeferredUntil = null;
             task.DeferCount = 0;
@@ -199,14 +201,14 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
         }
 
         task.DeferredUntil = now + DeferWindow;
-        _logger.LogInformation("[Scheduler] '{Name}' deferred {Count}/{Max} — Ari in conversation; re-checking in {Minutes} min.",
+        logger.LogInformation("[Scheduler] '{Name}' deferred {Count}/{Max} — Ari in conversation; re-checking in {Minutes} min.",
             task.Name, task.DeferCount, MaxDeferrals, (int)DeferWindow.TotalMinutes);
         return false;
     }
 
     private async Task RunTask(ScheduledTask task, CancellationToken loopCt)
     {
-        _logger.LogInformation("[Scheduler] Running '{Name}'...", task.Name);
+        logger.LogInformation("[Scheduler] Running '{Name}'...", task.Name);
 
         // Trips on shutdown or a Stop from the control panel — the handler yields on it.
         using CancellationTokenSource jobCts = CancellationTokenSource.CreateLinkedTokenSource(loopCt);
@@ -216,15 +218,15 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
         try
         {
             await task.Handler(jobCts.Token);
-            _logger.LogInformation("[Scheduler] '{Name}' complete.", task.Name);
+            logger.LogInformation("[Scheduler] '{Name}' complete.", task.Name);
         }
         catch (OperationCanceledException)
         {
-            _logger.LogInformation("[Scheduler] '{Name}' stopped; waiting for its next scheduled time.", task.Name);
+            logger.LogInformation("[Scheduler] '{Name}' stopped; waiting for its next scheduled time.", task.Name);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "[Scheduler] '{Name}' failed.", task.Name);
+            logger.LogError(ex, "[Scheduler] '{Name}' failed.", task.Name);
         }
         finally
         {
@@ -253,7 +255,7 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
             if (File.Exists(_statePath))
                 return JsonSerializer.Deserialize<Dictionary<string, DateTime>>(File.ReadAllText(_statePath)) ?? new();
         }
-        catch (Exception ex) { _logger.LogWarning("[Scheduler] Could not read state: {Msg}", ex.Message); }
+        catch (Exception ex) { logger.LogWarning("[Scheduler] Could not read state: {Msg}", ex.Message); }
         return new();
     }
 
@@ -264,13 +266,13 @@ public sealed class SchedulerModule : IDisposable, ISchedulerModule
             Directory.CreateDirectory(Path.GetDirectoryName(_statePath)!);
             File.WriteAllText(_statePath, JsonSerializer.Serialize(_lastRun, new JsonSerializerOptions { WriteIndented = true }));
         }
-        catch (Exception ex) { _logger.LogWarning("[Scheduler] Could not write state: {Msg}", ex.Message); }
+        catch (Exception ex) { logger.LogWarning("[Scheduler] Could not write state: {Msg}", ex.Message); }
     }
 
     public void Dispose()
     {
         _loopCts?.Cancel();
-        try { _loop?.Wait(TimeSpan.FromSeconds(3)); } catch { }
+        try { _loop?.Wait(TimeSpan.FromSeconds(SHUTDOWN_WAIT_TIMEOUT_SECONDS)); } catch { }
         _loopCts?.Dispose();
     }
 }

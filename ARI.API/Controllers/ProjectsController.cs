@@ -16,7 +16,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
         if (IsAdmin())
         {
             // Admins see everything — join owner username so the control panel can display it.
-            var allUsers = users.GetAll().ToDictionary(u => u.Id, u => u.Username);
+            Dictionary<int, string> allUsers = users.GetAll().ToDictionary(u => u.Id, u => u.Username);
             return Ok(store.GetAll().Select(p => new
             {
                 p.Id, p.Name, p.Description, p.Instructions, p.CreatedAt,
@@ -36,7 +36,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest(new { error = "Name is required." });
 
-        var summary = projects.Create(req.Name, req.Category, "ServerFs");
+        ARI.Common.ProjectSummary? summary = projects.Create(req.Name, req.Category, "ServerFs");
         if (summary is null) return BadRequest(new { error = "Failed to create project." });
 
         Project? created = store.Get(summary.Id);

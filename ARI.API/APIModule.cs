@@ -2,8 +2,10 @@ using ARI.API.Auth;
 using ARI.API.Controllers;
 using ARI.API.Data;
 using ARI.Common;
+using ARI.Listener;
 using ARI.LLM;
 using ARI.VoiceSynthesis;
+using System.Net.WebSockets;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
@@ -103,8 +105,8 @@ public class APIModule : IAsyncDisposable
 
         app.UseExceptionHandler(errorApp => errorApp.Run(async ctx =>
         {
-            var ex  = ctx.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
-            var log = ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("ARI.API");
+            Exception? ex  = ctx.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
+            ILogger log = ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("ARI.API");
             log.LogError(ex, "Unhandled exception on {Method} {Path}", ctx.Request.Method, ctx.Request.Path);
 
             ctx.Response.StatusCode  = 500;
@@ -163,8 +165,8 @@ public class APIModule : IAsyncDisposable
                 LLMModule? llmSvc = (LLMModule?)Modules.Llm;
                 if (llmSvc is null) { ctx.Response.StatusCode = 503; return; }
 
-                var ws  = await ctx.WebSockets.AcceptWebSocketAsync();
-                var log = ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("ARI.Client");
+                WebSocket ws  = await ctx.WebSockets.AcceptWebSocketAsync();
+                ILogger log = ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("ARI.Client");
                 await ClientWebSocket.HandleAsync(ws, ctx, llmSvc, log);
                 return;
             }
@@ -178,9 +180,9 @@ public class APIModule : IAsyncDisposable
                 string source    = ctx.Request.Query["source"].ToString() is { Length: > 0 } s ? s : "web";
                 string threadKey = ctx.Request.Query["threadKey"].ToString();
                 string? userId   = ctx.Request.Query["userId"].ToString() is { Length: > 0 } u ? u : null;
-                var context      = new ARI.Listener.ListenerSessionContext(source, threadKey, userId);
+                ListenerSessionContext context      = new ListenerSessionContext(source, threadKey, userId);
 
-                var ws = await ctx.WebSockets.AcceptWebSocketAsync();
+                WebSocket ws = await ctx.WebSockets.AcceptWebSocketAsync();
                 await listener.HandleConnectionAsync(ws, context, ctx.RequestAborted);
                 return;
             }

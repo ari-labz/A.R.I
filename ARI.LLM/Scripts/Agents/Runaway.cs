@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace ARI.LLM;
 
 internal static class Runaway
@@ -6,7 +8,7 @@ internal static class Runaway
     private const int    SAMPLE_CHARS = 600;
     private const double DOMINANCE    = 0.6;
 
-    internal static bool IsSpiral(System.Text.StringBuilder sb, out char domChar, out double ratio)
+    internal static bool IsSpiral(StringBuilder sb, out char domChar, out double ratio)
     {
         domChar = '\0';
         ratio   = 0;

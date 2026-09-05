@@ -46,7 +46,7 @@ public class AudioTranscriber
             string workDir = Path.Combine(dataDir, "transcribe_work");
             if (Directory.Exists(workDir)) Directory.Delete(workDir, recursive: true);
             Directory.CreateDirectory(workDir);
-            var t = new AudioTranscriber(stageDir, workDir, logger);
+            AudioTranscriber t = new AudioTranscriber(stageDir, workDir, logger);
             _current = t;
             _ = Task.Run(() => t.Run(ct), ct);
             return t;
@@ -161,7 +161,7 @@ public class AudioTranscriber
         string scriptPath = Path.Combine(workDir, "whisper_transcribe.py");
         await File.WriteAllTextAsync(scriptPath, script, ct);
 
-        var info = new ProcessStartInfo
+        ProcessStartInfo info = new ProcessStartInfo
         {
             FileName = python,
             Arguments = $"\"{scriptPath}\"",
@@ -169,7 +169,7 @@ public class AudioTranscriber
             RedirectStandardError = true,
             UseShellExecute = false,
         };
-        using var p = Process.Start(info) ?? throw new InvalidOperationException("Failed to start Python");
+        using Process p = Process.Start(info) ?? throw new InvalidOperationException("Failed to start Python");
         string output = await p.StandardOutput.ReadToEndAsync(ct);
         await p.WaitForExitAsync(ct);
         if (p.ExitCode != 0)
@@ -186,7 +186,7 @@ public class AudioTranscriber
         string scriptPath = Path.Combine(workDir, "dur.py");
         await File.WriteAllTextAsync(scriptPath, script, ct);
 
-        var info = new ProcessStartInfo
+        ProcessStartInfo info = new ProcessStartInfo
         {
             FileName = python,
             Arguments = $"\"{scriptPath}\"",
@@ -194,7 +194,7 @@ public class AudioTranscriber
             RedirectStandardError = true,
             UseShellExecute = false,
         };
-        using var p = Process.Start(info) ?? throw new InvalidOperationException("Failed to start Python");
+        using Process p = Process.Start(info) ?? throw new InvalidOperationException("Failed to start Python");
         string output = await p.StandardOutput.ReadToEndAsync(ct);
         await p.WaitForExitAsync(ct);
         return float.TryParse(output.Trim(), out float dur) ? dur : 0f;
@@ -202,7 +202,7 @@ public class AudioTranscriber
 
     private async Task RunProcess(string exe, string args, string? workDir, CancellationToken ct)
     {
-        var info = new ProcessStartInfo
+        ProcessStartInfo info = new ProcessStartInfo
         {
             FileName = exe,
             Arguments = args,
@@ -212,10 +212,10 @@ public class AudioTranscriber
         };
         if (workDir != null) info.WorkingDirectory = workDir;
 
-        using var process = Process.Start(info)
+        using Process process = Process.Start(info)
             ?? throw new InvalidOperationException($"Failed to start {exe}");
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
-        var stderrTask = process.StandardError.ReadToEndAsync(ct);
+        Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
+        Task<string> stderrTask = process.StandardError.ReadToEndAsync(ct);
         await Task.WhenAll(stdoutTask, stderrTask);
         await process.WaitForExitAsync(ct);
         if (process.ExitCode != 0)
