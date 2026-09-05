@@ -1457,7 +1457,8 @@ public abstract class Agent
         }
 
         turn.PendingImages.Add(result);
-        return $"[image: {result.Bytes.Length} bytes, {result.MediaType} — provided to the vision model below]";
+        string note = result.VisionNote.Length > 0 ? $" {result.VisionNote}" : "";
+        return $"[image: {result.Bytes.Length} bytes, {result.MediaType} — provided to the vision model below]{note}";
     }
 
     private async Task ExecuteTools(Turn turn)

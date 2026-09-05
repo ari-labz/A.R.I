@@ -72,6 +72,7 @@ internal static class ToolFactories
 
         // Image generation — only available when the ImageGen module is enabled and ComfyUI is ready.
         ["generate_image"] = t => Modules.ImageGen?.IsReady == true ? new GenerateImage(t) : null,
+        ["present_image"]  = t => Modules.ImageGen?.IsReady == true ? new PresentImage(t)  : null,
     };
 
     private static ServerFileSystem? Fs(Thread t)
