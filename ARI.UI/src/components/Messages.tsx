@@ -574,25 +574,6 @@ function WebSources({ sources }: { sources: { url: string; content?: string }[] 
     )
 }
 
-function AriImage({ item }: { item: ThreadItem }) {
-    const src = item.content ?? ""
-    const filename = src.split("/").pop() ?? src
-    return (
-        <div className="msg-row assistant">
-            <div className="sender">A·R·I</div>
-            <div
-                className="tool-card tool-card--image"
-                data-image-src={src}
-                data-image-name={filename}
-                style={{ cursor: "zoom-in" }}
-            >
-                <img className="tool-card-image-thumb" src={src} alt={filename} />
-                <span>{filename}</span>
-            </div>
-        </div>
-    )
-}
-
 function CommandInput({ item }: { item: ThreadItem }) {
     const t = formatTime(item.timestamp)
     return (
@@ -845,7 +826,6 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
                 if (u.kind === "item") {
                     switch (u.item.type) {
                         case "userMessage":     return <UserMessage key={u.key} item={u.item} activeThread={activeThread} />
-                        case "ariImage":        return <AriImage key={u.key} item={u.item} />
                         case "commandInput":    return <CommandInput key={u.key} item={u.item} />
                         case "commandResponse": return <CommandResponse key={u.key} item={u.item} />
                         case "engramEvent":     return <MemoryEvent key={u.key} item={u.item} />

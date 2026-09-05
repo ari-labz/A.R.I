@@ -7,8 +7,6 @@ namespace ARI.LLM;
 internal sealed class GenerateImage : Tool
 {
     private readonly Thread _thread;
-    private string? _savedFilename;
-    private string? _savedThreadKey;
 
     internal GenerateImage(Thread thread) => _thread = thread;
 
@@ -21,12 +19,28 @@ internal sealed class GenerateImage : Tool
         function = new
         {
             name        = "generate_image",
-            description = "Generate an image from a text prompt using Stable Diffusion via ComfyUI. " +
-                          "Returns the image directly into the conversation. " +
-                          "Include a negative_prompt to exclude common artifacts (e.g. \"blurry, bad anatomy, watermark\"). " +
+            description = "Generate an image from a text prompt using Stable Diffusion via ComfyUI, and save it to " +
+                          "the scratchpad. You will see the result yourself before the user does — it is saved to disk " +
+                          "but NOT shown to them automatically. After generating, judge it against every concrete detail " +
+                          "in your prompt (subject, count, pose, specific features, setting, style) — not just 'does this " +
+                          "vaguely match the vibe'. A wrong detail (wrong gender presentation, wrong number of subjects, " +
+                          "missing a specific feature you asked for, mangled anatomy, a stray artifact) means it is NOT a " +
+                          "match, however close it looks otherwise. Only call present_image with the saved filename once " +
+                          "you can point to specifically why it matches; otherwise call generate_image again with a " +
+                          "revised prompt, or tell the user you're having trouble if repeated attempts fail. Never present " +
+                          "an image you haven't actually looked at, and never present one just because you're tired of " +
+                          "retrying. Include a negative_prompt to exclude common artifacts (e.g. \"blurry, bad anatomy, watermark\"). " +
                           "Only call this when the user explicitly asks for an image to be generated or drawn. " +
                           "If the user attached reference images to their message, pass their filenames via reference_images — they will be used as img2img references. " +
-                          "IMPORTANT: Never write 'Generating image...' or similar text — just call this tool and the image will appear automatically.",
+                          "If you do retry, name the specific detail that was wrong and change ONE thing to fix it — " +
+                          "don't rewrite the whole prompt or fire off a string of near-identical guesses; each call costs " +
+                          "real generation time. If a reference image is being used for a character or scene, keep the " +
+                          "same reference_images and denoise across retries so the identity doesn't drift. " +
+                          "IMPORTANT: Never write 'Generating image...' or similar text before calling this. And never " +
+                          "narrate a rejection or a retry to the user — they never saw the bad image, so 'the mouth was " +
+                          "mangled, let me redo it' means nothing to them and just reads as rambling. Reject and retry " +
+                          "silently: call generate_image again with no reply text in between. Only write a reply once " +
+                          "you present_image or give up — and when you do, talk about the image the user actually sees, not the ones before it.",
             parameters = new
             {
                 type       = "object",
@@ -35,7 +49,10 @@ internal sealed class GenerateImage : Tool
                     prompt = new
                     {
                         type        = "string",
-                        description = "What to draw. Be descriptive — include subject, setting, lighting, and mood."
+                        description = "What to draw. Order matters more than length: lead with the main subject, " +
+                                      "then its pose/action, then the setting, then lighting, then art style, then mood. " +
+                                      "Concrete and specific beats long and vague — name colors, materials, and camera " +
+                                      "framing rather than adjectives like 'beautiful' or 'detailed'."
                     },
                     negative_prompt = new
                     {
@@ -118,37 +135,27 @@ internal sealed class GenerateImage : Tool
                 prompt, negativePrompt,
                 steps: steps, width: width, height: height,
                 referenceImages: referenceImages, denoise: denoise);
-            return ToolResult.AsImage(imageBytes, "image/png");
+
+            string dir = Paths.ScratchpadDir(_thread.Key);
+            Directory.CreateDirectory(dir);
+            string filename = $"ari-{DateTime.UtcNow:yyyyMMdd-HHmmss-fff}.png";
+            File.WriteAllBytes(Path.Combine(dir, filename), imageBytes);
+
+            // Ensure thread cleanup will delete the scratchpad on death.
+            _thread.FilesystemRoot ??= dir;
+
+            string note = $"[saved: {filename}] This has NOT been shown to the user yet. Look at it above and check it " +
+                          $"against every concrete detail in the prompt you just sent — \"{prompt}\" — not just whether it " +
+                          "looks roughly on-theme. If anything specific is wrong (wrong gender presentation, wrong subject " +
+                          "count, a missing or wrong feature, mangled anatomy, an artifact), call generate_image again with " +
+                          "that one thing fixed — no reply text, just the tool call; the user never saw this one so there's " +
+                          $"nothing to explain. Only call present_image with filename=\"{filename}\" once you can name " +
+                          "specifically why it matches what was asked for.";
+            return ToolResult.AsImage(imageBytes, "image/png", visionNote: note);
         }
         catch (Exception ex)
         {
             return $"Image generation failed: {ex.Message}";
         }
     }
-
-    internal override ToolResult PostRun(Thread thread, string argsJson, ToolResult result)
-    {
-        if (result.Kind != ToolResult.ContentKind.Image) return result;
-
-        string dir      = Paths.ScratchpadDir(thread.Key);
-        Directory.CreateDirectory(dir);
-        string filename = $"ari-{DateTime.UtcNow:yyyyMMdd-HHmmss-fff}.png";
-        File.WriteAllBytes(Path.Combine(dir, filename), result.Bytes);
-
-        // Ensure thread cleanup will delete the scratchpad on death.
-        thread.FilesystemRoot ??= dir;
-
-        _savedFilename  = filename;
-        _savedThreadKey = thread.Key;
-
-        string url = $"/threads/{Uri.EscapeDataString(thread.Key)}/scratchpad/{Uri.EscapeDataString(filename)}";
-        thread.RaiseScratchpadFileReady(url);
-
-        return result;
-    }
-
-    internal override Func<string, string>? DisplayAfter => _ =>
-        _savedFilename is not null && _savedThreadKey is not null
-            ? $"\n<!--ari-image:{_savedThreadKey}:{_savedFilename}-->"
-            : "";
 }

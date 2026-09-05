@@ -15,8 +15,9 @@ public readonly struct ToolResult
     internal string      MediaType { get; }   // e.g. "image/png"; empty for text
     internal string      Context   { get; }   // set when Kind is Wake — briefing for the new thread
     internal string      Title     { get; }   // set when Kind is Wake — title for the new thread
+    internal string      VisionNote { get; }  // set when Kind is Image — extra text alongside the image_url part
 
-    private ToolResult(ContentKind kind, string text, byte[] bytes, string mediaType, string context = "", string title = "")
+    private ToolResult(ContentKind kind, string text, byte[] bytes, string mediaType, string context = "", string title = "", string visionNote = "")
     {
         Kind      = kind;
         Text      = text;
@@ -24,13 +25,14 @@ public readonly struct ToolResult
         MediaType = mediaType;
         Context   = context;
         Title     = title;
+        VisionNote = visionNote;
     }
 
     internal static ToolResult AsText(string text)
         => new(ContentKind.Text, text, System.Array.Empty<byte>(), "");
 
-    internal static ToolResult AsImage(byte[] bytes, string mediaType)
-        => new(ContentKind.Image, "", bytes, mediaType);
+    internal static ToolResult AsImage(byte[] bytes, string mediaType, string visionNote = "")
+        => new(ContentKind.Image, "", bytes, mediaType, visionNote: visionNote);
 
     // content = message sent to the user; context = briefing injected into the new thread's system prompt.
     internal static ToolResult AsWake(string content, string context, string title = "")
