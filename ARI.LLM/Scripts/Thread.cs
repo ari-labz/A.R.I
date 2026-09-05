@@ -30,6 +30,7 @@ public class Thread
     private const int INACTIVE_TO_DORMANT_MIN    = 5;   // inactive → dormant
     private const int DORMANT_TO_DELETE_MIN      = 60;  // dormant  → deleted
     private const int DELETE_RETRY_SEC           = 30;  // re-check cadence when Engram hasn't finished at delete time
+    private const int DELETE_GATE_MAX_MIN        = 120; // hard cap on waiting for Engram — past this, delete (and free the scratchpad) anyway
 
     private readonly string threadKey;
 
@@ -176,6 +177,11 @@ public class Thread
     /// sweep completes (or there is nothing to save); reset to false whenever new user input arrives.
     /// A thread may only advance from Dormant to Deleted while this is true.</summary>
     public bool EngramProcessed { get; internal set; }
+
+    /// <summary>When the delete-gate first started waiting on Engram for the current cycle. Null once
+    /// EngramProcessed is true or a new user message resets the cycle. Backs the hard cap in
+    /// <see cref="Delete"/> so a stuck Engram sweep can never strand a thread (and its scratchpad) forever.</summary>
+    private DateTime? engramGateStartedAt;
 
     /// <summary>False for Guest-role threads — blocks Engram sweeps and Brain memory recall so guest
     /// conversations never touch the owner's personal memory. Defaults to true for all other sources
@@ -410,8 +416,9 @@ public class Thread
     {
         if (State == ThreadState.Deleted) return;
         DisposeTimers();
-        State           = ThreadState.Streaming;
-        EngramProcessed = false;
+        State               = ThreadState.Streaming;
+        EngramProcessed     = false;
+        engramGateStartedAt = null;
     }
 
     /// <summary>Generation ended abnormally (cancel/error) before <see cref="OnResponseComplete"/> ran.
@@ -493,12 +500,21 @@ public class Thread
 
         if (!EngramProcessed && HasUserMessages && !Internal)
         {
-            if (State != ThreadState.Dormant) State = ThreadState.Dormant;
-            Shared.Logger.LogInformation("[Thread] ({ThreadKey}) delete gated — running Engram first; retrying in {Sec}s.", threadKey, DELETE_RETRY_SEC);
-            BecameDormant?.Invoke();   // (re)trigger the sweep; handler no-ops if one is already running
-            dormantTimer?.Dispose();
-            dormantTimer = new Timer(_ => Delete(), null, TimeSpan.FromSeconds(DELETE_RETRY_SEC), Timeout.InfiniteTimeSpan);
-            return;
+            engramGateStartedAt ??= DateTime.UtcNow;
+            TimeSpan gated = DateTime.UtcNow - engramGateStartedAt.Value;
+            if (gated < TimeSpan.FromMinutes(DELETE_GATE_MAX_MIN))
+            {
+                if (State != ThreadState.Dormant) State = ThreadState.Dormant;
+                Shared.Logger.LogInformation("[Thread] ({ThreadKey}) delete gated — running Engram first; retrying in {Sec}s.", threadKey, DELETE_RETRY_SEC);
+                BecameDormant?.Invoke();   // (re)trigger the sweep; handler no-ops if one is already running
+                dormantTimer?.Dispose();
+                dormantTimer = new Timer(_ => Delete(), null, TimeSpan.FromSeconds(DELETE_RETRY_SEC), Timeout.InfiniteTimeSpan);
+                return;
+            }
+            // Engram has had DELETE_GATE_MAX_MIN to finish and never has — a stuck sweep must never strand
+            // a thread (and its scratchpad) forever. Delete anyway; whatever Engram would have saved is lost,
+            // but that is preferable to leaking scratchpad disk space indefinitely.
+            Shared.Logger.LogWarning("[Thread] ({ThreadKey}) Engram never completed after {Min}m — deleting anyway.", threadKey, DELETE_GATE_MAX_MIN);
         }
 
         State = ThreadState.Deleted;
