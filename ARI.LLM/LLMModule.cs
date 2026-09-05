@@ -52,6 +52,10 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly Dictionary<string, Agent>                             agentMap            = new();
     private readonly ConcurrentDictionary<string, ThreadPipeline>          forcedPipelines     = new();
     private readonly ConcurrentDictionary<string, ThreadPhase>             threadPhases        = new();
+    // Live count of /watch connections per thread — a client only holds one open while that thread is
+    // its active view (see ARI.UI's attachWatch), so a count of zero means nobody is currently looking.
+    // Backs the "push if unwatched" rule: a completed response only rings the owner's phone when this is 0.
+    private readonly ConcurrentDictionary<string, int>                     threadWatchers      = new();
     private readonly ConcurrentDictionary<string, Thread>                                         threads           = new();
 
     private readonly List<Server>  _servers    = new();
@@ -413,7 +417,11 @@ public class LLMModule : ILLMModule, IDisposable
         thread.Updated           += () => Broadcast(new AppEvent("threadUpdated", threadKey));
         thread.Deleted           += () => { threads.TryRemove(threadKey, out _); Broadcast(new AppEvent("threadDeleted", threadKey)); };
         thread.Streaming         += text => Broadcast(new AppEvent("streaming", threadKey, text));
-        thread.StreamingFinished += () => Broadcast(new AppEvent("streamingFinished", threadKey));
+        thread.StreamingFinished += () =>
+        {
+            Broadcast(new AppEvent("streamingFinished", threadKey));
+            PushIfUnwatched(thread, threadKey);
+        };
         thread.ScratchpadFileReady += url => Broadcast(new AppEvent("imageReady", threadKey, url));
         // Persist a plain-text transcript to ChatHistory after every completed exchange.
         if (type is not ThreadPipeline.Dream)
@@ -950,6 +958,14 @@ public class LLMModule : ILLMModule, IDisposable
 
     public IDisposable WatchThread(string threadKey, Channel<bool?> channel)
     {
+        threadWatchers.AddOrUpdate(threadKey, 1, (_, n) => n + 1);
+        int released = 0;
+        void Release()
+        {
+            if (Interlocked.Exchange(ref released, 1) != 0) return;
+            threadWatchers.AddOrUpdate(threadKey, 0, (_, n) => Math.Max(0, n - 1));
+        }
+
         Channel<AppEvent> appCh = Channel.CreateUnbounded<AppEvent>(new UnboundedChannelOptions { SingleReader = true });
         IDisposable handle = Subscribe(appCh);
         _ = Task.Run(async () =>
@@ -965,8 +981,22 @@ public class LLMModule : ILLMModule, IDisposable
             }
             catch { /* channel completed */ }
             channel.Writer.TryComplete();
+            Release();
         });
-        return handle;
+        return new ActionOnDispose(() => { handle.Dispose(); Release(); });
+    }
+
+    /// <summary>Whether at least one client currently has <paramref name="threadKey"/> open as its active
+    /// view. Used to decide whether a completed response needs a push notification instead.</summary>
+    public bool HasWatchers(string threadKey) => threadWatchers.TryGetValue(threadKey, out int n) && n > 0;
+
+    private sealed class ActionOnDispose(Action onDispose) : IDisposable
+    {
+        private int disposed;
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) == 0) onDispose();
+        }
     }
 
     public bool IsThreadProcessing(string threadKey) => processingThreads.ContainsKey(threadKey);
@@ -1055,6 +1085,20 @@ public class LLMModule : ILLMModule, IDisposable
     {
         try { await (Modules.WebPush?.SendPushNotification(body, url: $"/?thread={threadKey}", title: "Ari") ?? Task.CompletedTask); }
         catch (Exception ex) { _logger.LogWarning("[Push] notification failed for thread '{Key}': {Msg}", threadKey, ex.Message); }
+    }
+
+    /// <summary>A completed response that nobody was watching live is exactly the case a push exists for
+    /// — the owner would otherwise only find out next time they happen to open the app. Internal/guest
+    /// threads never ring the phone; a thread with a watcher already saw the reply stream in, so no push.</summary>
+    private void PushIfUnwatched(Thread thread, string threadKey)
+    {
+        if (thread.Internal || !thread.IsOwnerThread) return;
+        if (HasWatchers(threadKey)) return;
+
+        string? body = thread.History.OfType<Response>().LastOrDefault(r => r.State == State.Complete)?.ContentText;
+        if (string.IsNullOrWhiteSpace(body)) return;
+
+        _ = SendProactivePush(body, threadKey);
     }
 
     public void NotifyTyping(string threadKey)
