@@ -1,5 +1,6 @@
 using ARI.Common;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -10,6 +11,11 @@ namespace ARI.LLM;
 
 internal class Engram : MemoryAgent, IDisposable
 {
+    // ── Constants ────────────────────────────────────────────────────────────────
+    private const int    EXTRACT_MAX_TOKENS   = 1500;
+    private const double EXTRACT_TEMPERATURE = 0.3;
+    private const int    SAVE_MAX_TOKENS      = 300;
+
     // Each Stage-3 call now places exactly one entity in its own short-lived thread, so there's no
     // multi-entity turn left to keep open — this and the ceiling below fall back to MemoryAgent's
     // defaults (single-commit-per-turn, 8-call breaker), which fit a one-note, one-tool call cleanly.
@@ -306,8 +312,8 @@ internal class Engram : MemoryAgent, IDisposable
                 new { role = "user",   content = ResolveTemplate("ExtractTask", "", ("context", context), ("transcript", transcript)) }
             },
             stream      = false,
-            max_tokens  = 1500,
-            temperature = 0.3,
+            max_tokens  = EXTRACT_MAX_TOKENS,
+            temperature = EXTRACT_TEMPERATURE,
             thinking             = false,
             enable_thinking      = false,
             chat_template_kwargs = new { enable_thinking = false }
@@ -533,8 +539,8 @@ internal class Engram : MemoryAgent, IDisposable
                 new { role = "user",   content = $"Summarise this coding session by {speaker}:\n\n{transcript}" }
             },
             stream      = false,
-            max_tokens  = 300,
-            temperature = 0.3,
+            max_tokens  = SAVE_MAX_TOKENS,
+            temperature = EXTRACT_TEMPERATURE,
             thinking             = false,
             enable_thinking      = false,
             chat_template_kwargs = new { enable_thinking = false }
@@ -606,7 +612,7 @@ internal class Engram : MemoryAgent, IDisposable
 
     private static void RunGit(string workDir, params string[] args)
     {
-        System.Diagnostics.ProcessStartInfo psi = new()
+        ProcessStartInfo psi = new()
         {
             FileName               = "git",
             WorkingDirectory       = workDir,

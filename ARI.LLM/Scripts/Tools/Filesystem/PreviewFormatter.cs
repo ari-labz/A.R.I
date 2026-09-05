@@ -16,6 +16,7 @@ public static class PreviewFormatter
     private const int PREVIEW_HEAD_LINES = 8;
     private const int MAX_OUTLINE_ITEMS  = 150;   // raised from 80: signatures produce more items than bare names
     private const int MAX_PARAM_CHARS    = 80;    // truncate long parameter lists in a method signature
+    private const int MAX_PREVIEW_LINE_COUNT = 400;
 
     /// <summary>
     /// Build the full <c>[preview: …]</c> block for a file given its raw lines and byte size.
@@ -60,7 +61,7 @@ public static class PreviewFormatter
         if (ext == ".cs" && landmarks.Count > 0)
             sb.Append("This class-diagram outline lists member types and signatures — for a data class it is usually " +
                       "enough to bind to (field/property/method names + types are exact). read_file only when you need a body.");
-        else if (lines.Count > 400)
+        else if (lines.Count > MAX_PREVIEW_LINE_COUNT)
             sb.Append("Warning: this is a large file. Read ONLY the line ranges you need with read_file (start_line/end_line). Do not read the whole file.");
         else
             sb.Append("Use read_file with start_line/end_line to read a specific section.");

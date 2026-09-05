@@ -6,9 +6,9 @@ namespace ARI.LLM;
 
 internal sealed class GenerateImage : Tool
 {
-    private readonly Thread _thread;
+    private readonly Thread boundThread;
 
-    internal GenerateImage(Thread thread) => _thread = thread;
+    internal GenerateImage(Thread thread) => boundThread = thread;
 
     internal override string     Name   => "generate_image";
     internal override ToolAccess Access => ToolAccess.Write;
@@ -114,7 +114,7 @@ internal sealed class GenerateImage : Tool
         string[] referenceImages = [];
         if (root.TryGetProperty("reference_images", out JsonElement ri) && ri.ValueKind == JsonValueKind.Array)
         {
-            string scratchpad = _thread?.FilesystemRoot ?? "";
+            string scratchpad = boundThread?.FilesystemRoot ?? "";
             referenceImages = ri.EnumerateArray()
                 .Select(e => e.GetString() ?? "")
                 .Where(name => !string.IsNullOrWhiteSpace(name))
@@ -136,13 +136,13 @@ internal sealed class GenerateImage : Tool
                 steps: steps, width: width, height: height,
                 referenceImages: referenceImages, denoise: denoise);
 
-            string dir = Paths.ScratchpadDir(_thread.Key);
+            string dir = Paths.ScratchpadDir(boundThread.Key);
             Directory.CreateDirectory(dir);
             string filename = $"ari-{DateTime.UtcNow:yyyyMMdd-HHmmss-fff}.png";
             File.WriteAllBytes(Path.Combine(dir, filename), imageBytes);
 
             // Ensure thread cleanup will delete the scratchpad on death.
-            _thread.FilesystemRoot ??= dir;
+            boundThread.FilesystemRoot ??= dir;
 
             string note = $"[saved: {filename}] This has NOT been shown to the user yet. Look at it above and check it " +
                           $"against every concrete detail in the prompt you just sent — \"{prompt}\" — not just whether it " +

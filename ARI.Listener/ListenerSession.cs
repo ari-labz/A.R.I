@@ -27,6 +27,10 @@ internal sealed class ListenerSession
     private const string SpeechContext =
         "You are in a live, spoken voice conversation. Keep replies concise, natural, and easy to say aloud. " +
         "Do not use markdown, lists, headings, or code blocks — plain spoken sentences only.";
+    private const int RECONNECT_DELAY_MS = 750;
+    private const int WHISPER_CONNECT_TIMEOUT_SEC = 60;
+    private const int BROWSER_BUFFER_SIZE_BYTES = 16 * 1024;
+    private const int WHISPER_BUFFER_SIZE_BYTES = 64 * 1024;
 
     public ListenerSession(WebSocket browser, WhisperWorker worker, LLMModule llm, ListenerSessionContext ctx, ILogger? logger)
     {
@@ -50,13 +54,13 @@ internal sealed class ListenerSession
         // backoff instead of giving up — a ClientWebSocket can't be reused after a failed connect, so build
         // a fresh one each attempt.
         ClientWebSocket? toWhisper = null;
-        DateTime deadline = DateTime.UtcNow.AddSeconds(60);
+        DateTime deadline = DateTime.UtcNow.AddSeconds(WHISPER_CONNECT_TIMEOUT_SEC);
         await SendJson(new { type = "connecting" }, ct);
         while (toWhisper is null && !ct.IsCancellationRequested && DateTime.UtcNow < deadline && browser.State == WebSocketState.Open)
         {
             ClientWebSocket attempt = new();
             try { await attempt.ConnectAsync(new Uri(worker.WebSocketUrl), ct); toWhisper = attempt; }
-            catch { attempt.Dispose(); try { await Task.Delay(750, ct); } catch { break; } }
+            catch { attempt.Dispose(); try { await Task.Delay(RECONNECT_DELAY_MS, ct); } catch { break; } }
         }
 
         if (toWhisper is null)
@@ -84,7 +88,7 @@ internal sealed class ListenerSession
     // Browser PCM (binary) → Whisper worker. Text frames from the browser are treated as control and forwarded.
     private async Task PumpBrowserToWhisper(ClientWebSocket toWhisper, CancellationToken ct)
     {
-        byte[] buf = new byte[16 * 1024];
+        byte[] buf = new byte[BROWSER_BUFFER_SIZE_BYTES];
         while (browser.State == WebSocketState.Open && !ct.IsCancellationRequested)
         {
             WebSocketReceiveResult r;
@@ -99,7 +103,7 @@ internal sealed class ListenerSession
     // Whisper transcripts (text/JSON) → awareness gate → browser.
     private async Task PumpWhisperToBrowser(ClientWebSocket toWhisper, CancellationToken ct)
     {
-        byte[] buf = new byte[64 * 1024];
+        byte[] buf = new byte[WHISPER_BUFFER_SIZE_BYTES];
         StringBuilder sb = new();
         while (toWhisper.State == WebSocketState.Open && !ct.IsCancellationRequested)
         {
