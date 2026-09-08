@@ -41,7 +41,7 @@ internal sealed class CreateEvent : Tool
         function = new
         {
             name        = "create_event",
-            description = "Add an event to ARI's calendar. Events are pure context — they are never acted on by themselves, just shown to you as background (e.g. working hours, a birthday, a trip). Use create_reminder if you actually need to say something to the owner at a given time.",
+            description = "Add an event to ARI's calendar. Events are pure context — they are never acted on by themselves, just shown to you as background (e.g. working hours, a birthday, a trip). Use create_reminder if you actually need to say something to the owner at a given time. Call get_time first whenever the date is relative (\"today\", \"tomorrow\", \"next Friday\") — never guess the current date.",
             parameters  = new
             {
                 type       = "object",
@@ -89,7 +89,7 @@ internal sealed class CreateReminder : Tool
         function = new
         {
             name        = "create_reminder",
-            description = "Schedule a reminder. When trigger_time arrives, ARI runs `prompt` through a real turn (briefed by `context`) and reaches out to the owner — it is not a canned message, so write `prompt` as an instruction to your future self, not as the final text to say.",
+            description = "Schedule a reminder. When trigger_time arrives, ARI runs `prompt` through a real turn (briefed by `context`) and reaches out to the owner — it is not a canned message, so write `prompt` as an instruction to your future self, not as the final text to say. Call get_time FIRST, always — trigger_time is almost always relative to right now (\"at 6pm\", \"in an hour\", \"tomorrow morning\"), and a wrong date here means the reminder either never fires or fires immediately. A trigger_time in the past is rejected.",
             parameters  = new
             {
                 type       = "object",
@@ -121,6 +121,11 @@ internal sealed class CreateReminder : Tool
         if (title.Length == 0) return Task.FromResult<ToolResult>("Error: 'title' is required.");
         if (prompt.Length == 0) return Task.FromResult<ToolResult>("Error: 'prompt' is required.");
         if (!ToolArgs.TryDateTime(root, "trigger_time", out DateTime triggerTime)) return Task.FromResult<ToolResult>("Error: 'trigger_time' must be a valid ISO date/time.");
+        // A past trigger_time almost always means the date was miscalculated (wrong year, wrong
+        // month) rather than a deliberate choice — reject it instead of silently firing the moment
+        // it's created. Call get_time and recompute rather than retrying with the same value.
+        if (triggerTime <= DateTime.Now)
+            return Task.FromResult<ToolResult>($"Error: trigger_time ({triggerTime:g}) is in the past — the current date/time is {DateTime.Now:g}. Call get_time and recompute.");
         string? context = root.TryGetProperty("context", out JsonElement c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null;
         string? notes = root.TryGetProperty("notes", out JsonElement n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null;
 

@@ -83,11 +83,11 @@ internal static class Database
 
     // Advances a reminder to its next occurrence (or leaves it be for the caller to delete, if
     // recurrence has run out) after firing.
-    internal static void MarkReminderFired(long id, DateTime firedAtUtc, DateTime? nextTriggerTime, int firedCount)
+    internal static void MarkReminderFired(long id, DateTime firedAt, DateTime? nextTriggerTime, int firedCount)
     {
         using SqliteConnection db = Open();
         Run(db, "UPDATE entries SET lastFiredUtc = $fired, firedCount = $count, triggerTime = COALESCE($next, triggerTime) WHERE entryID = $id",
-            ("$fired", Iso(firedAtUtc)), ("$count", firedCount), ("$next", Or(IsoOrNull(nextTriggerTime))), ("$id", id));
+            ("$fired", Iso(firedAt)), ("$count", firedCount), ("$next", Or(IsoOrNull(nextTriggerTime))), ("$id", id));
     }
 
     internal static void UpdateEvent(Event calendarEvent)
@@ -212,7 +212,7 @@ internal static class Database
                 recurrence:  ReadRecurrence(reader))
             {
                 Id           = reader.GetInt64(reader.GetOrdinal("entryID")),
-                LastFiredUtc = NullableIso(reader, "lastFiredUtc"),
+                LastFired = NullableIso(reader, "lastFiredUtc"),
                 FiredCount   = reader.GetInt32(reader.GetOrdinal("firedCount")),
             };
             reminders.Add(reminder);
