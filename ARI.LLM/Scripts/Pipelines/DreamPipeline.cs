@@ -55,6 +55,7 @@ internal sealed class DreamPipeline : Pipeline
         {
             Shared.Logger.LogInformation("[Dream] ({Thread}) Wake called — opening proactive thread.", threadKey);
             onWake(wake.Text, wake.Context, wake.Title);
+            WakeHistory.Record(wake.Topic, wake.Title);
         }
 
         return result;

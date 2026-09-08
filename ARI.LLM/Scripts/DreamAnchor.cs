@@ -18,4 +18,20 @@ internal static class DreamAnchor
     ];
 
     internal static string Pull() => StartingPoints[Rng.Next(StartingPoints.Length)];
+
+    /// <summary>
+    /// Pull() plus grounding context every dream turn should start from: the actual current date/time
+    /// (so nothing has to guess or invent one — see the Sept 2026 incident where a dream fabricated a
+    /// conflicting date header that was never in its prompt) and a digest of what recent dreams have
+    /// already woken the owner about (so a fresh dream doesn't independently re-raise the same thing).
+    /// </summary>
+    internal static string PullWithGrounding()
+    {
+        string time   = $"Right now it's {DateTime.Now:dddd, d MMMM yyyy — HH:mm}.";
+        string digest = WakeHistory.Digest();
+
+        return string.IsNullOrEmpty(digest)
+            ? $"{time}\n\n{Pull()}"
+            : $"{time}\n\n{digest}\n\n{Pull()}";
+    }
 }

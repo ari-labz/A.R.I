@@ -46,12 +46,8 @@
       "CpuThreads": 10,
       "SilenceMs": 300
     },
-    "Scheduler": {
-      "Enabled": true,
-      "TickSeconds": 30,
-      "Schedules": {
-        "Refactor": "0 */6 * * *"
-      }
+    "Calendar": {
+      "Enabled": true
     },
     "ImageGen": {
       "Enabled": false,

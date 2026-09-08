@@ -10,6 +10,7 @@ public class VoiceSynthesisModule : IVoiceSynthesisModule
 
     public bool IsSetupComplete { get; private set; }
     public void MarkSetupComplete() => IsSetupComplete = true;
+    public void MarkSetupIncomplete() => IsSetupComplete = false;
 
     public TrainingJob? Current
     {
