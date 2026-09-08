@@ -101,7 +101,7 @@ public sealed class CalendarModule : ICalendarModule, IDisposable
 
     private static (DateTime Start, DateTime End) TodayWindow(int days)
     {
-        DateTime today = DateTime.UtcNow.Date;
+        DateTime today = DateTime.Now.Date;
         return days >= 0 ? (today, today.AddDays(days)) : (today.AddDays(days), today);
     }
 
@@ -131,7 +131,7 @@ public sealed class CalendarModule : ICalendarModule, IDisposable
         Reminder? existing = Database.ReminderById(id);
         if (existing is null) return false;
         Reminder updated = new(title, triggerTime, prompt, context, notes, RecurrenceRule.FromInfo(recurrence))
-            { Id = id, LastFiredUtc = existing.LastFiredUtc, FiredCount = existing.FiredCount };
+            { Id = id, LastFired = existing.LastFired, FiredCount = existing.FiredCount };
         Database.UpdateReminder(updated);
         return true;
     }
@@ -159,7 +159,7 @@ public sealed class CalendarModule : ICalendarModule, IDisposable
     /// Called from the reminder loop started by Start(); public so it can also be triggered manually.</summary>
     public async Task CheckDueReminders(CancellationToken ct)
     {
-        List<Reminder> due = Database.AllReminders().Where(r => r.IsDue(DateTime.UtcNow)).ToList();
+        List<Reminder> due = Database.AllReminders().Where(r => r.IsDue(DateTime.Now)).ToList();
         foreach (Reminder reminder in due)
         {
             if (ct.IsCancellationRequested) break;
@@ -183,7 +183,7 @@ public sealed class CalendarModule : ICalendarModule, IDisposable
         if (next is null)
             Database.Delete(reminder.Id);
         else
-            Database.MarkReminderFired(reminder.Id, DateTime.UtcNow, next, firedCount);
+            Database.MarkReminderFired(reminder.Id, DateTime.Now, next, firedCount);
 
         logger.LogInformation("[Calendar] Reminder '{Title}' fired{Next}.", reminder.Title,
             next is DateTime n ? $"; next occurrence {n:u}" : " (final occurrence)");

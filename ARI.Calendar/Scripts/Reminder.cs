@@ -9,7 +9,7 @@ public sealed class Reminder : CalendarEntry
     public string? Context { get; set; }
 
     /// <summary>When this reminder's current occurrence last fired. Null if it has never fired.</summary>
-    public DateTime? LastFiredUtc { get; set; }
+    public DateTime? LastFired { get; set; }
 
     /// <summary>How many times this reminder has fired, counting its very first trigger as 1 — the
     /// number RecurrenceRule.Count is measured against.</summary>
@@ -23,5 +23,5 @@ public sealed class Reminder : CalendarEntry
         Context     = context;
     }
 
-    public bool IsDue(DateTime nowUtc) => TriggerTime <= nowUtc;
+    public bool IsDue(DateTime now) => TriggerTime <= now;
 }
