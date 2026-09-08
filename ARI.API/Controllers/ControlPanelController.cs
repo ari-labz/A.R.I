@@ -115,59 +115,148 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
         return Ok(new { ok = true });
     }
 
-    // ── Scheduler ─────────────────────────────────────────────────────────────────────
+    // ── Dreaming ──────────────────────────────────────────────────────────────────────
 
-    [HttpGet("scheduler")]
-    public IActionResult GetScheduler()
+    [HttpGet("dreaming")]
+    public IActionResult GetDreaming()
     {
-        ISchedulerModule? sched = Modules.Scheduler;
-        if (sched is null) return StatusCode(503, "Scheduler is not available.");
+        ILLMModule? llm = Modules.Llm;
+        if (llm is null) return StatusCode(503, "LLM is not available.");
+        return Ok(new { enabled = llm.DreamingEnabled });
+    }
+
+    [HttpPost("dreaming")]
+    public IActionResult SetDreaming([FromBody] DreamingRequest req)
+    {
+        ILLMModule? llm = Modules.Llm;
+        if (llm is null) return StatusCode(503, "LLM is not available.");
+        llm.DreamingEnabled = req.Enabled;
+        return Ok(new { ok = true });
+    }
+
+    // ── Calendar ──────────────────────────────────────────────────────────────────────
+
+    /// <summary>Either pass `from`/`to` to browse an explicit window (what the control panel's
+    /// month/week/day views use), or `days` to look forward/back from today (what a quick glance,
+    /// or nothing at all, defaults to).</summary>
+    [HttpGet("calendar")]
+    public IActionResult GetCalendar([FromQuery] DateTime? from = null, [FromQuery] DateTime? to = null, [FromQuery] int days = 42)
+    {
+        ICalendarModule? calendar = Modules.Calendar;
+        if (calendar is null) return StatusCode(503, "Calendar is not available.");
+
+        if (from is DateTime start && to is DateTime end)
+            return Ok(new
+            {
+                events    = calendar.ListEventsInRange(start, end).Select(ToJson),
+                reminders = calendar.ListRemindersInRange(start, end).Select(ToJson),
+            });
+
         return Ok(new
         {
-            enabled          = sched.Enabled,
-            dreamingEnabled  = sched.DreamingEnabled,
-            tasks = sched.GetTasks().Select(t => new
-            {
-                name       = t.Name,
-                cron       = t.Cron,
-                lastRunUtc = t.LastRunUtc,
-                nextRunUtc = t.NextRunUtc,
-                running    = t.Running,
-            }),
+            events    = calendar.ListEvents(days).Select(ToJson),
+            reminders = calendar.ListReminders(days).Select(ToJson),
         });
     }
 
-    /// <summary>Stops a running background job. The slot is consumed — it waits for its next
-    /// scheduled time rather than resuming.</summary>
-    [HttpPost("scheduler/task/{name}/stop")]
-    public IActionResult StopSchedulerTask(string name)
+    [HttpGet("calendar/event/{id:long}")]
+    public IActionResult GetCalendarEvent(long id)
     {
-        ISchedulerModule? sched = Modules.Scheduler;
-        if (sched is null) return StatusCode(503, "Scheduler is not available.");
-        if (!sched.StopTask(name)) return BadRequest(new { error = $"'{name}' is not currently running." });
-        return Ok(new { ok = true });
+        ICalendarModule? calendar = Modules.Calendar;
+        if (calendar is null) return StatusCode(503, "Calendar is not available.");
+        CalendarEventInfo? found = calendar.GetEvent(id);
+        return found is null ? NotFound() : Ok(ToJson(found));
     }
 
-    [HttpPost("scheduler/task")]
-    public IActionResult SetSchedulerTask([FromBody] SchedulerTaskRequest req)
+    [HttpGet("calendar/reminder/{id:long}")]
+    public IActionResult GetCalendarReminder(long id)
     {
-        ISchedulerModule? sched = Modules.Scheduler;
-        if (sched is null) return StatusCode(503, "Scheduler is not available.");
-        if (string.IsNullOrWhiteSpace(req.Name) || string.IsNullOrWhiteSpace(req.Cron))
-            return BadRequest(new { error = "name and cron are required." });
-        if (!sched.SetTaskCron(req.Name, req.Cron))
-            return BadRequest(new { error = "Invalid cron expression or unknown task." });
-        return Ok(new { ok = true });
+        ICalendarModule? calendar = Modules.Calendar;
+        if (calendar is null) return StatusCode(503, "Calendar is not available.");
+        ReminderInfo? found = calendar.GetReminder(id);
+        return found is null ? NotFound() : Ok(ToJson(found));
     }
 
-    [HttpPost("scheduler/dreaming")]
-    public IActionResult SetDreaming([FromBody] SchedulerDreamingRequest req)
+    [HttpPost("calendar/event")]
+    public IActionResult CreateCalendarEvent([FromBody] CalendarEventRequest req)
     {
-        ISchedulerModule? sched = Modules.Scheduler;
-        if (sched is null) return StatusCode(503, "Scheduler is not available.");
-        sched.DreamingEnabled = req.Enabled;
-        return Ok(new { ok = true });
+        ICalendarModule? calendar = Modules.Calendar;
+        if (calendar is null) return StatusCode(503, "Calendar is not available.");
+        if (string.IsNullOrWhiteSpace(req.Title)) return BadRequest(new { error = "title is required." });
+        long id = calendar.CreateEvent(req.Title, req.Start, req.End, req.IsWholeDay, req.Notes, FromRequest(req.Recurrence));
+        return Ok(new { id });
     }
+
+    [HttpPut("calendar/event/{id:long}")]
+    public IActionResult UpdateCalendarEvent(long id, [FromBody] CalendarEventRequest req)
+    {
+        ICalendarModule? calendar = Modules.Calendar;
+        if (calendar is null) return StatusCode(503, "Calendar is not available.");
+        if (string.IsNullOrWhiteSpace(req.Title)) return BadRequest(new { error = "title is required." });
+        return calendar.UpdateEvent(id, req.Title, req.Start, req.End, req.IsWholeDay, req.Notes, FromRequest(req.Recurrence))
+            ? Ok(new { ok = true }) : NotFound();
+    }
+
+    [HttpPost("calendar/reminder")]
+    public IActionResult CreateCalendarReminder([FromBody] CalendarReminderRequest req)
+    {
+        ICalendarModule? calendar = Modules.Calendar;
+        if (calendar is null) return StatusCode(503, "Calendar is not available.");
+        if (string.IsNullOrWhiteSpace(req.Title))  return BadRequest(new { error = "title is required." });
+        if (string.IsNullOrWhiteSpace(req.Prompt)) return BadRequest(new { error = "prompt is required." });
+        long id = calendar.CreateReminder(req.Title, req.TriggerTime, req.Prompt, req.Context, req.Notes, FromRequest(req.Recurrence));
+        return Ok(new { id });
+    }
+
+    [HttpPut("calendar/reminder/{id:long}")]
+    public IActionResult UpdateCalendarReminder(long id, [FromBody] CalendarReminderRequest req)
+    {
+        ICalendarModule? calendar = Modules.Calendar;
+        if (calendar is null) return StatusCode(503, "Calendar is not available.");
+        if (string.IsNullOrWhiteSpace(req.Title))  return BadRequest(new { error = "title is required." });
+        if (string.IsNullOrWhiteSpace(req.Prompt)) return BadRequest(new { error = "prompt is required." });
+        return calendar.UpdateReminder(id, req.Title, req.TriggerTime, req.Prompt, req.Context, req.Notes, FromRequest(req.Recurrence))
+            ? Ok(new { ok = true }) : NotFound();
+    }
+
+    [HttpDelete("calendar/entry/{id:long}")]
+    public IActionResult DeleteCalendarEntry(long id)
+    {
+        ICalendarModule? calendar = Modules.Calendar;
+        if (calendar is null) return StatusCode(503, "Calendar is not available.");
+        return calendar.DeleteEntry(id) ? Ok(new { ok = true }) : NotFound();
+    }
+
+    private static RecurrenceInfo? FromRequest(RecurrenceRequest? req)
+    {
+        if (req is null || string.Equals(req.Frequency, "none", StringComparison.OrdinalIgnoreCase)) return null;
+        if (!Enum.TryParse(req.Frequency, true, out RecurrenceFrequency frequency)) return null;
+        List<DayOfWeek>? days = req.DaysOfWeek?.Select(d => Enum.Parse<DayOfWeek>(d, true)).ToList();
+        return new RecurrenceInfo(frequency, Math.Max(1, req.Interval), days, req.Until, req.Count);
+    }
+
+    private static object ToJson(RecurrenceInfo? recurrence) => recurrence is null
+        ? new { frequency = "none" }
+        : new
+        {
+            frequency  = recurrence.Frequency.ToString(),
+            interval   = recurrence.Interval,
+            daysOfWeek = recurrence.DaysOfWeek?.Select(d => d.ToString()),
+            until      = recurrence.Until,
+            count      = recurrence.Count,
+        };
+
+    private static object ToJson(CalendarEventInfo e) => new
+    {
+        id = e.Id, title = e.Title, notes = e.Notes, start = e.Start, end = e.End,
+        isWholeDay = e.IsWholeDay, recurrence = ToJson(e.Recurrence),
+    };
+
+    private static object ToJson(ReminderInfo r) => new
+    {
+        id = r.Id, title = r.Title, notes = r.Notes, triggerTime = r.TriggerTime,
+        prompt = r.Prompt, context = r.Context, recurrence = ToJson(r.Recurrence),
+    };
 
     [HttpGet("ram")]
     public IActionResult GetRam()
@@ -1595,8 +1684,11 @@ public record ConventionsRequest(string? Text);
 public record PersonaRequest(string? Text);
 public record UserNameRequest(string? Name);
 public record SafeModePromptRequest(string? Text);
-public record SchedulerTaskRequest(string? Name, string? Cron);
-public record SchedulerDreamingRequest(bool Enabled);
+public record DreamingRequest(bool Enabled);
+
+public record RecurrenceRequest(string Frequency, int Interval = 1, List<string>? DaysOfWeek = null, DateTime? Until = null, int? Count = null);
+public record CalendarEventRequest(string Title, DateTime Start, DateTime End, bool IsWholeDay, string? Notes, RecurrenceRequest? Recurrence);
+public record CalendarReminderRequest(string Title, DateTime TriggerTime, string Prompt, string? Context, string? Notes, RecurrenceRequest? Recurrence);
 
 public record TrainRequest(
     string ModelName,
@@ -1638,19 +1730,21 @@ public class ModulesApiController(ILogger<ModulesApiController> logger) : Contro
          "Stores Ari's long-term memory as an Obsidian vault of notes she can search and add to.", false),
         ("Discord", "Discord",
          "Connects Ari to Discord so she can read and reply to messages and join voice channels.", false),
-        ("Scheduler", "Scheduler",
-         "Runs background jobs on a cron schedule, such as memory upkeep and periodic checks.", false),
+        ("Calendar", "Calendar",
+         "Ari's own calendar of events and reminders — events feed her context, reminders trigger a real message from her at their scheduled time.", false),
     ];
 
     private static bool IsRunning(string key) => key switch
     {
         "LLM"            => Modules.Llm            is not null,
         "Voice"          => Modules.Voice          is not null,
-        "VoiceSynthesis" => Modules.VoiceSynthesis is not null,
+        // VoiceSynthesisModule is always registered (it's also the training-job tracker), so its
+        // presence alone doesn't mean the module is "on" — IsSetupComplete does.
+        "VoiceSynthesis" => Modules.VoiceSynthesis?.IsSetupComplete ?? false,
         "Listener"       => Modules.Listener       is not null,
         "Brain"          => Modules.Brain          is not null,
         "Discord"        => Modules.Discord        is not null,
-        "Scheduler"      => Modules.Scheduler      is not null,
+        "Calendar"       => Modules.Calendar       is not null,
         // Answering this request is itself proof the web panel is up.
         "API"            => true,
         _                => false,
@@ -1663,17 +1757,26 @@ public class ModulesApiController(ILogger<ModulesApiController> logger) : Contro
         if (modules is null)
             return StatusCode(500, new { error });
 
-        List<ModuleInfo> result = Catalogue.Select(m => new ModuleInfo(
-            m.Key, m.Name, m.Description,
-            Enabled:  modules[m.Key]?["Enabled"]?.GetValue<bool>() ?? false,
-            Running:  IsRunning(m.Key),
-            Required: m.Required)).ToList();
+        List<ModuleInfo> result = Catalogue.Select(m =>
+        {
+            // A module added after someone's AriConfig.json was first written (Calendar, say) has no
+            // node in their file at all. ARI.API can't reference ARI.Core's strongly-typed AriConfig
+            // to ask what that module's real default is (that dependency runs the other way), so an
+            // absent node instead trusts whatever is actually running right now — a module that is
+            // live is definitionally enabled, whatever the file does or doesn't say.
+            bool? explicitlySet = modules[m.Key]?["Enabled"]?.GetValue<bool>();
+            bool running = IsRunning(m.Key);
+            return new ModuleInfo(m.Key, m.Name, m.Description,
+                Enabled:  explicitlySet ?? running,
+                Running:  running,
+                Required: m.Required);
+        }).ToList();
 
         return Ok(new { modules = result });
     }
 
     [HttpPut("{key}")]
-    public IActionResult SetEnabled(string key, [FromBody] SetModuleEnabledRequest req)
+    public async Task<IActionResult> SetEnabled(string key, [FromBody] SetModuleEnabledRequest req)
     {
         (string Key, string Name, string Description, bool Required) entry = Catalogue.FirstOrDefault(m => m.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
         if (entry.Key is null)
@@ -1687,8 +1790,14 @@ public class ModulesApiController(ILogger<ModulesApiController> logger) : Contro
         if (modules is null || root is null)
             return StatusCode(500, new { error });
 
+        // A module added to ARI after this file was first written (Calendar, say) has no node here
+        // yet — create one rather than failing, so the very first toggle a user makes on a new
+        // module doesn't error out.
         if (modules[entry.Key] is not JsonObject moduleNode)
-            return StatusCode(500, new { error = $"AriConfig.json has no '{entry.Key}' module to change." });
+        {
+            moduleNode = new JsonObject();
+            modules[entry.Key] = moduleNode;
+        }
 
         moduleNode["Enabled"] = req.Enabled;
 
@@ -1705,10 +1814,18 @@ public class ModulesApiController(ILogger<ModulesApiController> logger) : Contro
             return StatusCode(500, new { error = $"Could not save AriConfig.json: {ex.Message}" });
         }
 
-        logger.LogInformation("[Modules] {Module} set to {State} — takes effect on next restart.",
-            entry.Name, req.Enabled ? "enabled" : "disabled");
+        // Apply it live if the module knows how to start/stop itself — most do. A null result means
+        // it actually happened; any other string is either "can't do this hot" or a genuine failure,
+        // and either way the change is still saved above for next boot.
+        string? lifecycleResult = Modules.Lifecycle is { } lifecycle
+            ? await (req.Enabled ? lifecycle.StartModule(entry.Key) : lifecycle.StopModule(entry.Key))
+            : "No running instance to apply this to.";
+        bool appliedNow = lifecycleResult is null;
 
-        return Ok(new { key = entry.Key, enabled = req.Enabled, restartRequired = true });
+        logger.LogInformation("[Modules] {Module} set to {State} — {Effect}.", entry.Name, req.Enabled ? "enabled" : "disabled",
+            appliedNow ? "applied immediately" : $"takes effect on next restart ({lifecycleResult})");
+
+        return Ok(new { key = entry.Key, enabled = req.Enabled, restartRequired = !appliedNow, message = appliedNow ? null : lifecycleResult });
     }
 
     private static JsonObject? ReadModulesNode(out string? error) => ReadModulesNode(out error, out _);

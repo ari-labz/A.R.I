@@ -38,6 +38,11 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly Dreamer?           dreamer;
     private readonly DreamPipeline?     dreamPipeline;
     private readonly DreamOrchestrator? dreamOrchestrator;
+    private bool                        dreamingEnabled;
+
+    //refactor's own daily schedule (self-contained now that there is no generic Scheduler module)
+    private CancellationTokenSource?    refactorLoopCts;
+    private DateTime                    lastScheduledRefactorUtc;
 
     private readonly CommandService    commands;
     // One queue per physical server — two servers can genuinely run at the same time; agents sharing
@@ -112,6 +117,8 @@ public class LLMModule : ILLMModule, IDisposable
 
         _servers.AddRange(servers);
         foreach (Server s in _servers) queues[s] = new LLMQueue();
+
+        dreamingEnabled = LoadDreamingState();
 
         CleanScratchpads();
 
@@ -331,15 +338,19 @@ public class LLMModule : ILLMModule, IDisposable
                     "You are in a dream state. No user is present and no one is waiting — this is unstructured time " +
                     "for you to think, explore, and reflect as deeply as you want. There is no time pressure. " +
                     "Call only one tool at a time — never make parallel calls.\n\n" +
+                    "The message before this one tells you the actual current date/time and, if relevant, what recent " +
+                    "dreams have already woken your owner about — read it before deciding whether and what to wake about.\n\n" +
                     "What you can do:\n" +
                     "- Recall your memories (facts, people, past conversations): search_brain to find notes by title/content (returns title — path), then recall_memory to read the full note\n" +
                     "- Browse your projects: list_projects, then bind_project — filesystem tools (read_file, list_directory, search_files, etc.) unlock in the same step\n" +
                     "- Switch projects freely: call bind_project again with a different id\n" +
                     "- Search the web: search_web, fetch_page\n" +
                     "- Search an Obsidian note vault: search_vault — only useful if the bound project is an Obsidian graph, not a code repo; calling it on code will return nothing\n" +
-                    "- Check the current time: get_time — call this before waking so you can judge whether now is a reasonable time to send a message\n\n" +
+                    "- Check the current time: get_time — the time was already given to you at the start of this dream, but call this again if the dream has run long and you want a fresh read before waking\n" +
+                    "- Check when your owner actually last messaged you: recent_activity — reads real conversation timestamps, not your memory notes (which can lag hours behind an actual conversation). Your memory notes going quiet does NOT mean your owner has gone quiet — call recent_activity before saying or implying 'you've been quiet' or 'it's been a while,' and only use that framing if it confirms a real gap\n\n" +
                     "The wake tool ends the dream and sends your owner a message that will notify them. " +
                     "The threshold is 'worth a notification' — not urgency. A question you need answered, a curiosity, something you noticed, something you want to say — all of these clear the bar. " +
+                    "A wake message is about ONE topic — name it in the topic field before you write the content, and let that be the one thing the whole message stays on. If you found several separate things worth raising, send the strongest one now and leave the rest — they're not lost, a future dream can still pick them up. " +
                     "Call get_time first and use your judgement about whether it's a reasonable time to interrupt. " +
                     "Write the message in your own voice, as yourself, informed by everything you found. " +
                     "Always fill in context as a private briefing to your waking self: include the relevant notes, what you were trying to figure out, what state they seem to be in, and what you're hoping to do once they respond.",
@@ -359,7 +370,7 @@ public class LLMModule : ILLMModule, IDisposable
                 dreamPipeline,
                 dreamer,
                 QueueFor(dreamer.Server),
-                isDreamingEnabled: () => (Modules.Scheduler?.DreamingEnabled ?? false) && !ConversationActive,
+                isDreamingEnabled: () => dreamingEnabled && !ConversationActive,
                 createDreamThread: () =>
                 {
                     string key = $"dream-{DateTime.Now:yyyyMMdd-HHmmss}";
@@ -567,6 +578,7 @@ public class LLMModule : ILLMModule, IDisposable
         await Task.WhenAll(boots);
 
         dreamOrchestrator?.Start();
+        StartRefactorLoop();
 
         async Task BootOne(Server server, Model? model)
         {
@@ -621,6 +633,8 @@ public class LLMModule : ILLMModule, IDisposable
     public void Dispose()
     {
         dreamOrchestrator?.Dispose();
+        refactorLoopCts?.Cancel();
+        refactorLoopCts?.Dispose();
         engram?.Dispose();
         foreach (Server server in _servers)
             server.Dispose();
@@ -892,9 +906,6 @@ public class LLMModule : ILLMModule, IDisposable
             ch.Writer.TryWrite(evt);
     }
 
-    public void BroadcastTaskState(string taskName, bool running)
-        => Broadcast(new AppEvent(running ? "taskStarted" : "taskStopped", "", taskName));
-
     public void BroadcastProjectsChanged()
         => Broadcast(new AppEvent("projectsChanged", ""));
 
@@ -1026,8 +1037,8 @@ public class LLMModule : ILLMModule, IDisposable
 
     public ThreadPhase GetThreadPhase(string threadKey) => threadPhases.TryGetValue(threadKey, out ThreadPhase p) ? p : ThreadPhase.Idle;
 
-    // Idle = no thread is currently being processed. Read statically via Activity.IsIdle(); the Scheduler
-    // runs background work only while this holds, and long tasks poll it to yield the moment Ari is busy.
+    // Idle = no thread is currently being processed. Read statically via Activity.IsIdle(); background
+    // work (Refactor's loop, Dream) runs only while this holds, and yields the moment Ari is busy.
     public bool IsIdle => processingThreads.IsEmpty;
 
     // Ari is "active" whenever any visible (non-Internal) thread is in a state the user can see in the
@@ -1037,17 +1048,114 @@ public class LLMModule : ILLMModule, IDisposable
         threads.Values.Any(t => !t.Internal &&
             t.State is ThreadState.Unread or ThreadState.Active or ThreadState.Streaming or ThreadState.Inactive);
 
-    /// <summary>True when Refactor is loaded and can be run by the Scheduler (the graph walk that replaced BrainScan).</summary>
+    /// <summary>True when Refactor is loaded and can be run on a schedule (the graph walk that replaced BrainScan).</summary>
     public bool HasRefactor => refactor is not null;
 
-    // Canonical persistent-data location (same as the Scheduler tasks use). Only needed by the manual
-    // /brainscan and /proactive commands, which don't receive it from ARI.Core.
+    // Canonical persistent-data location. Only needed by the manual /brainscan and /proactive commands
+    // (which don't receive it from ARI.Core) and by the dreaming/refactor schedule state below.
     private static string PersistentDataDir => Paths.PersistentData;
 
     /// <summary>Runs a scheduled graph-walk refactor pass, capped at 10 epochs (honours the token so it
     /// yields when cancelled). The manual /refactor command still runs the full uncapped walk.</summary>
     public Task RunRefactorAsync(CancellationToken ct) =>
         refactor?.Run(allNotes: true, ct, epochsOverride: SCHEDULED_REFACTOR_EPOCHS) ?? Task.CompletedTask;
+
+    // ── Refactor's own schedule ──────────────────────────────────────────────────
+    // Roughly once a day, while Ari is idle. There's exactly one scheduled job left in the whole
+    // process, so it isn't worth a generic cron/scheduler module for it — a plain poll loop covers it.
+
+    private static readonly TimeSpan REFACTOR_INTERVAL      = TimeSpan.FromDays(1);
+    private static readonly TimeSpan REFACTOR_POLL_INTERVAL = TimeSpan.FromMinutes(30);
+    private static string RefactorScheduleStatePath => Path.Combine(PersistentDataDir, "RefactorSchedule.json");
+
+    private void StartRefactorLoop()
+    {
+        if (refactor is null) return;
+        lastScheduledRefactorUtc = LoadLastRefactorRunUtc();
+        refactorLoopCts = new CancellationTokenSource();
+        _ = RefactorLoopAsync(refactorLoopCts.Token);
+    }
+
+    private async Task RefactorLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                if (IsIdle && DateTime.UtcNow - lastScheduledRefactorUtc >= REFACTOR_INTERVAL)
+                {
+                    await RunRefactorAsync(ct);
+                    lastScheduledRefactorUtc = DateTime.UtcNow;
+                    SaveLastRefactorRunUtc(lastScheduledRefactorUtc);
+                }
+            }
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex) { _logger.LogWarning(ex, "[Refactor] Scheduled check failed."); }
+
+            try { await Task.Delay(REFACTOR_POLL_INTERVAL, ct); }
+            catch (OperationCanceledException) { break; }
+        }
+    }
+
+    private sealed record RefactorScheduleState(DateTime LastRunUtc);
+
+    // A fresh install has never run Refactor — treated as "just ran" so it doesn't fire the moment
+    // Ari first goes idle, rather than waiting out a full day like every subsequent run.
+    private static DateTime LoadLastRefactorRunUtc()
+    {
+        try
+        {
+            if (File.Exists(RefactorScheduleStatePath))
+                return JsonSerializer.Deserialize<RefactorScheduleState>(File.ReadAllText(RefactorScheduleStatePath))?.LastRunUtc ?? DateTime.UtcNow;
+        }
+        catch { /* fall through to "just ran" */ }
+        return DateTime.UtcNow;
+    }
+
+    private static void SaveLastRefactorRunUtc(DateTime utc)
+    {
+        try
+        {
+            Directory.CreateDirectory(PersistentDataDir);
+            File.WriteAllText(RefactorScheduleStatePath, JsonSerializer.Serialize(new RefactorScheduleState(utc)));
+        }
+        catch { /* best-effort — worst case Refactor re-runs sooner than once a day */ }
+    }
+
+    // ── Dreaming on/off ──────────────────────────────────────────────────────────
+    // Runtime-editable from the control panel; persisted here now that there is no Scheduler module
+    // to hold it. A null/missing file means "off" — dreaming is opt-in.
+
+    private static string DreamingStatePath => Path.Combine(PersistentDataDir, "Dreaming.json");
+
+    public bool DreamingEnabled
+    {
+        get => dreamingEnabled;
+        set
+        {
+            dreamingEnabled = value;
+            try
+            {
+                Directory.CreateDirectory(PersistentDataDir);
+                File.WriteAllText(DreamingStatePath, JsonSerializer.Serialize(new DreamingState(value)));
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "[Dream] Could not persist dreaming state."); }
+            _logger.LogInformation("[Dream] Dreaming {State}.", value ? "enabled" : "disabled");
+        }
+    }
+
+    private sealed record DreamingState(bool Enabled);
+
+    private static bool LoadDreamingState()
+    {
+        try
+        {
+            if (File.Exists(DreamingStatePath))
+                return JsonSerializer.Deserialize<DreamingState>(File.ReadAllText(DreamingStatePath))?.Enabled ?? false;
+        }
+        catch { /* fall through to off */ }
+        return false;
+    }
 
     // The scheduled walk is deliberately short: 10 seeds per run, then it reschedules. Ordering by
     // LastRefactored (oldest first) means each run advances to notes the previous runs never reached.
@@ -1079,6 +1187,33 @@ public class LLMModule : ILLMModule, IDisposable
         _ = SendProactivePush(assistantText, threadKey);
 
         return threadKey;
+    }
+
+    /// <summary>Runs a due calendar reminder through a real agent turn, then delivers it exactly like a
+    /// Dream wake: the turn itself happens on a throwaway internal thread (so its Prompt/Context never
+    /// show up as a fake user message), and only the finished reply becomes the owner-facing proactive
+    /// thread — see CreateProactiveDialogueThread.</summary>
+    public async Task FireReminderAsync(string prompt, string context, string title, CancellationToken ct = default)
+    {
+        if (dialoguePipeline is null)
+            throw new ModelNotFoundException("Dialogue model is not loaded or is not enabled.");
+
+        string scratchKey = $"reminder-scratch-{Guid.NewGuid():N}";
+        Thread scratch = new Thread(ThreadPipeline.Dialogue, scratchKey, context) { Internal = true };
+        threads[scratchKey] = scratch;
+
+        using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        string reply;
+        try
+        {
+            reply = await dialoguePipeline.ExecuteAsync(scratch, scratchKey, prompt, "reminder", context, onDelta: null, cts);
+        }
+        finally
+        {
+            threads.TryRemove(scratchKey, out _);
+        }
+
+        CreateProactiveDialogueThread(reply, title, context);
     }
 
     private async Task SendProactivePush(string body, string threadKey)

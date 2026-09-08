@@ -1,5 +1,4 @@
 using ARI.Common;
-using ARI.Scheduler;
 using System.Diagnostics;
 using CommonModules = ARI.Common.Modules;
 using ARI.Core.Scripts;
@@ -15,12 +14,13 @@ using ARI.Listener;
 using ARI.BrainVault;
 using ARI.ImageGen;
 using ImageGenDependency = ARI.ImageGen.Dependency;
+using ARI.Calendar;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace ARI.Core;
 
-public class ARI : BackgroundService
+public class ARI : BackgroundService, IModuleLifecycle
 {
     public static ARI instance;
 
@@ -33,7 +33,7 @@ public class ARI : BackgroundService
     public VoiceSynthesisModule?  voiceSynthesisModule;
     public ListenerModule?        listenerModule;
     private LLMModule?           llmModule;
-    private SchedulerModule?     schedulerModule;
+    private CalendarModule?      calendarModule;
     private ImageGenModule?      imageGenModule;
 
     private readonly ILoggerFactory loggerFactory;
@@ -42,6 +42,13 @@ public class ARI : BackgroundService
     private SpeechQueue?    speechQueue;
     private bool startupFailed;
     private static Process? clientProcess;
+
+    // Kept from Startup so a hot start/stop (triggered later, from a control-panel request) can reuse
+    // exactly what boot used — same persisted server/model/agent config, same shutdown token.
+    private PersistentData? persistentData;
+    private CancellationToken appStoppingToken;
+    private string modelsPath = "";
+    private string ariPersistentDir = "";
 
     public ARI(ILoggerFactory loggerFactory)
     {
@@ -63,6 +70,7 @@ public class ARI : BackgroundService
 
     private async Task Startup(CancellationToken stoppingToken)
     {
+        appStoppingToken = stoppingToken;
         _logger.LogInformation("ARI is starting...");
 
         // Clear any stale ARI instance (and its child servers) before we bind ports — otherwise a
@@ -110,15 +118,17 @@ public class ARI : BackgroundService
         Shared.LlamaCppEnableUpdates = Dependency.EnableLlamaCppUpdates;
 
         // ── Shared infrastructure ────────────────────────────────────────────────
-        PersistentData persistentData = new();
+        persistentData = new PersistentData();
 
-        string ariPersistentDir = Paths.PersistentData;
+        ariPersistentDir = Paths.PersistentData;
         string agentsPath = Path.Combine(ariPersistentDir, "Agents.json");
+
+        CommonModules.Register(lifecycle: this);
 
         // ── LLM module ───────────────────────────────────────────────────────────
         // Models are large and often already live elsewhere (another app's model library) — an
         // explicit config value wins, otherwise Paths.Models (AppData, or MODELS_PATH if set).
-        string modelsPath = !string.IsNullOrEmpty(config.modules.LLM.ModelsPath)
+        modelsPath = !string.IsNullOrEmpty(config.modules.LLM.ModelsPath)
             ? Paths.ResolveOverride(config.modules.LLM.ModelsPath)
             : Paths.Models;
 
@@ -139,100 +149,14 @@ public class ARI : BackgroundService
         }
 
         // ── Voice setup ──────────────────────────────────────────────────────────
-
         voiceSynthesisModule = new VoiceSynthesisModule();
         CommonModules.Register(voiceSynthesis: voiceSynthesisModule);
 
-        bool voiceSynthReady = false;
         if (config.modules.VoiceSynthesis.Enabled)
-        {
-            try
-            {
-                _logger.LogInformation("VoiceSynthesis module is enabled. Installing dependencies...");
-                await new VoiceSynthesisSetupService(loggerFactory.CreateLogger("ARI.VoiceSynthesis")).Install();
+            await StartVoiceSynthesisAsync();
 
-                voiceSynthesisModule.MarkSetupComplete();
-                _logger.LogInformation("VoiceSynthesis ready.");
-                voiceSynthReady = true;
-            }
-            catch (Exception ex)
-            {
-                // Voice synthesis is optional — a setup failure (e.g. no torch wheel for this
-                // platform) must not abort the whole server. Skip voice/speech and carry on.
-                _logger.LogError("VoiceSynthesis setup failed — continuing without voice. {Error}", ex.Message);
-                if (ex is SetupException { Hint: { } hint }) _logger.LogError("{Hint}", hint);
-            }
-        }
-
-        if (config.modules.Voice.Enabled && voiceSynthReady)
-        {
-            string sttPath    = config.modules.VoiceSynthesis.StyleTtsPath;
-            string sttDataDir = config.modules.VoiceSynthesis.DataDir;
-            string voicesPath = config.modules.VoiceSynthesis.VoicesPath;
-            string engine     = config.modules.Voice.DefaultEngine;
-
-            MigrateVoicesDirectory(voicesPath, _logger);
-
-            ILogger voiceLogger = loggerFactory.CreateLogger("ARI.Voice");
-
-            // Resolve the model to boot: persisted default → config default → first found → none
-            string? ResolveModel(string eng)
-            {
-                string engDir = Path.Combine(voicesPath, eng);
-                if (!Directory.Exists(engDir)) return null;
-
-                string? candidate = persistentData.GetDefaultVoiceModel(eng)
-                    ?? (config.modules.Voice.DefaultModels.TryGetValue(eng, out var cfgModel)
-                        && !string.IsNullOrWhiteSpace(cfgModel) ? cfgModel : null);
-
-                if (candidate is not null && Directory.Exists(Path.Combine(engDir, candidate)))
-                    return candidate;
-
-                if (candidate is not null)
-                    _logger.LogWarning("Default voice '{Model}' for {Engine} not found — picking first available.", candidate, eng);
-
-                return Directory.GetDirectories(engDir).Select(Path.GetFileName).FirstOrDefault(n => n is not null);
-            }
-
-            string? modelName = ResolveModel(engine);
-            if (modelName is null)
-            {
-                _logger.LogWarning("Voice module enabled but no voices found for engine '{Engine}' — skipping.", engine);
-            }
-            else
-            {
-                string modelDir = Path.Combine(voicesPath, engine, modelName);
-
-                async Task<ITtsSynthesiser?> SynthFactory(string eng, string model)
-                {
-                    string dir = Path.Combine(voicesPath, eng, model);
-                    return await CreateModuleSynthesiser(eng, dir, sttDataDir, voiceLogger);
-                }
-
-                ITtsSynthesiser? engineSynthesiser = await SynthFactory(engine, modelName);
-                if (engineSynthesiser is null)
-                    _logger.LogWarning("Voice module enabled but engine '{Engine}' could not be initialised for model '{Model}' — skipping.", engine, modelName);
-                else
-                {
-                    _logger.LogInformation("Voice loading model: {Model} (engine: {Engine})", modelName, engine);
-                    synthesiser = engineSynthesiser;
-                    await synthesiser.Start(stoppingToken);
-                    try { await synthesiser.Warmup(stoppingToken); }
-                    catch (Exception ex) { _logger.LogError("Voice warmup failed (model may have corrupt weights): {Error}", ex.Message); }
-
-                    speechQueue = new SpeechQueue(synthesiser, voiceLogger);
-                    string modulePy = Path.Combine(Paths.VoiceModules, engine, "venv",
-                        OperatingSystem.IsWindows() ? @"Scripts\python.exe" : "bin/python3");
-                    string pythonPath = File.Exists(modulePy) ? modulePy : "python3";
-                    void WireAudio(SpeechQueue q) => q.AudioReady += wav => PlayAudio(wav, pythonPath, voiceLogger);
-                    WireAudio(speechQueue);
-
-                    voiceModule = new VoiceModule(synthesiser, speechQueue, modelName, SynthFactory, WireAudio, voiceLogger);
-                    CommonModules.Register(voice: voiceModule);
-                    _logger.LogInformation("Voice ready.");
-                }
-            }
-        }
+        if (config.modules.Voice.Enabled && (voiceSynthesisModule?.IsSetupComplete ?? false))
+            await StartVoiceAsync();
 
         // ── API ──────────────────────────────────────────────────────────────────
         if (config.modules.API.Enabled)
@@ -264,68 +188,17 @@ public class ARI : BackgroundService
 
         // ── Listener (audio hub) ───────────────────────────────────────────────────
         if (config.modules.Listener.Enabled && llmModule is not null)
-        {
-            try
-            {
-                _logger.LogInformation("Listener module is enabled. Installing Whisper worker environment...");
-                config.modules.Listener.ScriptPath = !string.IsNullOrEmpty(config.modules.Listener.ScriptPath)
-                    ? Paths.ResolveOverride(config.modules.Listener.ScriptPath)
-                    : Paths.ListenerScript;
-
-                // "python3" is ListenerConfig's own default (i.e. "not customized") — provision and use
-                // a dedicated venv unless the user explicitly pointed PythonPath somewhere themselves.
-                if (config.modules.Listener.PythonPath == "python3")
-                {
-                    config.modules.Listener.PythonPath = await new ListenerSetupService(loggerFactory.CreateLogger("ARI.Listener")).Install();
-                }
-
-                _logger.LogInformation("Starting audio hub...");
-                listenerModule = new ListenerModule(llmModule, config.modules.Listener, loggerFactory.CreateLogger("ARI.Listener"));
-                listenerModule.Start();
-                CommonModules.Register(listener: listenerModule);
-                _logger.LogInformation("Listener ready (whisper worker running: {Running}).", listenerModule.IsReady);
-            }
-            catch (Exception ex)
-            {
-                // Listener is optional — a setup failure (e.g. no C++ build tools for webrtcvad) must
-                // not abort the server.
-                _logger.LogError("Listener setup failed — continuing without voice input. {Error}", ex.Message);
-                if (ex is SetupException { Hint: { } hint }) _logger.LogError("{Hint}", hint);
-                listenerModule = null;
-            }
-        }
+            await StartListenerAsync();
 
         // ── ImageGen ─────────────────────────────────────────────────────────────
         if (config.modules.ImageGen.Enabled)
-        {
-            try
-            {
-                _logger.LogInformation("ImageGen module is enabled. Checking ComfyUI...");
-                await ImageGenDependency.Check(config.modules.ImageGen.ComfyUiPath);
-
-                if (string.IsNullOrEmpty(ImageGenDependency.Status))
-                {
-                    imageGenModule = new(config.modules.ImageGen);
-                    CommonModules.Register(imageGen: imageGenModule);
-                    _logger.LogInformation("ImageGen ready.");
-                }
-                else
-                {
-                    _logger.LogWarning("ImageGen unavailable: {Reason}", ImageGenDependency.Status);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError("ImageGen setup failed — continuing without image generation. {Error}", ex.Message);
-            }
-        }
+            await StartImageGenAsync();
 
         // ── Discord ──────────────────────────────────────────────────────────────
-        List<Task> moduleTasks = new();
-
         // Discord.json (app data, control-panel edited) is the source of truth. On first run it is
         // seeded from the AriConfig.json section so existing setups keep working — including a token
-        // still coming from secrets.env, which is copied in and can then be deleted from there.
+        // still coming from secrets.env, which is copied in and can then be deleted from there. Only
+        // needs to happen once, at real boot — a hot start/stop later always reads Discord.json fresh.
         if (!DiscordStore.Exists())
         {
             DiscordConfig seed = config.modules.Discord;
@@ -342,55 +215,15 @@ public class ARI : BackgroundService
             _logger.LogInformation("Discord settings seeded to Discord.json from AriConfig.json.");
         }
 
-        DiscordSettings discord = DiscordStore.Get();
+        if (DiscordStore.Get().Enabled)
+            await StartDiscordAsync();
 
-        if (discord.Enabled)
-        {
-            if (string.IsNullOrWhiteSpace(discord.Token))
-            {
-                _logger.LogWarning("Discord module is enabled but no token is set — add one in the control panel. Skipping Discord.");
-            }
-            else
-            {
-                _logger.LogInformation("Discord module is enabled. Starting...");
-                discordService = new DiscordModule(loggerFactory, llmModule, new DiscordConfig
-                {
-                    Enabled            = discord.Enabled,
-                    Token              = discord.Token,
-                    OwnerId            = discord.OwnerId,
-                    WhitelistedUserIds = discord.WhitelistedUserIds,
-                    WatchedChannelIds  = discord.WatchedChannelIds,
-                    AllowedGuildIds    = discord.AllowedGuildIds,
-                });
-                await discordService.StartAsync(stoppingToken);
-                if (discordService.ExecuteTask is not null)
-                    moduleTasks.Add(discordService.ExecuteTask);
-
-                CommonModules.Register(discord: discordService);
-            }
-        }
-
-        // ── Scheduler ─────────────────────────────────────────────────────────────
-        if (config.modules.Scheduler.Enabled && llmModule is not null)
-        {
-            schedulerModule = new SchedulerModule(config.modules.Scheduler, ariPersistentDir, loggerFactory.CreateLogger("ARI.Scheduler"));
-
-            // Tidy walk: once a day (04:00 UTC), Refactor restructures the graph (hubs, dedup, types),
-            // capped at 10 seeds/run and rotating through the vault least-recently-refactored first.
-            // Activity-aware: if Ari is in conversation at fire time the slot is deferred (30 min ×3) and
-            // then dropped until the next day.
-            if (llmModule.HasRefactor)
-                schedulerModule.AddTask("Refactor", "0 4 * * *", ct => llmModule.RunRefactorAsync(ct), respectActivity: true);
-
-            // Curiosity and ProactiveMessage are retired — Dreaming (see DreamOrchestrator) is their
-            // successor: instead of a scheduled graph-walk queuing questions for a separate scheduled task
-            // to raise later, Ari explores during idle dream time and wakes with a message when something
-            // clears the bar, via the same CreateProactiveDialogueThread + push-notify path.
-
-            schedulerModule.TaskStateChanged += (name, running) => llmModule.BroadcastTaskState(name, running);
-            CommonModules.Register(scheduler: schedulerModule);
-            schedulerModule.Start();
-        }
+        // ── Calendar ──────────────────────────────────────────────────────────────
+        // Refactor's daily walk (see DreamOrchestrator for why Curiosity/ProactiveMessage were retired
+        // in its favour) now schedules itself inside LLMModule — see StartRefactorLoop there. Reminders
+        // schedule themselves the same way inside CalendarModule. Neither needs a shared scheduler.
+        if (config.modules.Calendar.Enabled)
+            StartCalendar();
 
         if (config.modules.API.Enabled)
             LaunchClient(Paths.BuildPath, config.modules.API.Port);
@@ -401,6 +234,289 @@ public class ARI : BackgroundService
             await Task.WhenAny(moduleTasks.Concat(new[] { Task.Delay(Timeout.Infinite, stoppingToken) }));
         else
             await Task.Delay(Timeout.Infinite, stoppingToken);
+    }
+
+    // Discord's long-running receive loop is the one module task worth keeping the host's top-level
+    // wait aware of — everything else runs on its own background threads/processes regardless.
+    private readonly List<Task> moduleTasks = new();
+
+    // ── IModuleLifecycle: hot start/stop from the control panel ─────────────────────────
+    // Each case below is the same method Startup() calls at boot, just reachable on demand too.
+    // LLM, API and Brain aren't here — see IModuleLifecycle's doc comment for why.
+
+    public async Task<string?> StartModule(string key)
+    {
+        switch (key)
+        {
+            case "VoiceSynthesis":
+                await StartVoiceSynthesisAsync();
+                return voiceSynthesisModule!.IsSetupComplete ? null : "Setup failed — check the server log for details.";
+            case "Voice":
+                if (!(voiceSynthesisModule?.IsSetupComplete ?? false))
+                    return "Voice needs VoiceSynthesis running first.";
+                await StartVoiceAsync();
+                return voiceModule is not null ? null : "Could not start — check the server log for details.";
+            case "Listener":
+                if (llmModule is null) return "Listener needs the LLM module, which isn't running.";
+                await StartListenerAsync();
+                return listenerModule is not null ? null : "Could not start — check the server log for details.";
+            case "ImageGen":
+                await StartImageGenAsync();
+                return imageGenModule is not null ? null : "Could not start — check the server log for details.";
+            case "Discord":
+                try { await StartDiscordAsync(); }
+                catch (Exception ex) { return ex.Message; }
+                return discordService is not null ? null : "No Discord token is set — add one in the control panel first.";
+            case "Calendar":
+                StartCalendar();
+                return null;
+            default:
+                return $"{key} requires a restart to start.";
+        }
+    }
+
+    public async Task<string?> StopModule(string key)
+    {
+        switch (key)
+        {
+            case "VoiceSynthesis": StopVoiceSynthesis();     return null;
+            case "Voice":          StopVoice();              return null;
+            case "Listener":       StopListener();           return null;
+            case "ImageGen":       StopImageGen();           return null;
+            case "Discord":        await StopDiscordAsync(); return null;
+            case "Calendar":       StopCalendar();           return null;
+            default:               return $"{key} requires a restart to stop.";
+        }
+    }
+
+    // ── Per-module start/stop ────────────────────────────────────────────────────────
+    // Each pair is the exact logic Startup() used to run inline, extracted so a hot toggle can call
+    // the same code a boot does. Any try/catch already here is original boot-time resilience (an
+    // optional module's setup failure must not take the whole server down) — it applies just as well
+    // to a hot start, which is why it stays inside the method rather than only at the boot call site.
+
+    private async Task StartVoiceSynthesisAsync()
+    {
+        try
+        {
+            _logger.LogInformation("VoiceSynthesis module is enabled. Installing dependencies...");
+            await new VoiceSynthesisSetupService(loggerFactory.CreateLogger("ARI.VoiceSynthesis")).Install();
+            voiceSynthesisModule!.MarkSetupComplete();
+            _logger.LogInformation("VoiceSynthesis ready.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError("VoiceSynthesis setup failed — continuing without voice. {Error}", ex.Message);
+            if (ex is SetupException { Hint: { } hint }) _logger.LogError("{Hint}", hint);
+        }
+    }
+
+    private void StopVoiceSynthesis()
+    {
+        if (voiceModule is not null) StopVoice();   // Voice can't run without it
+        voiceSynthesisModule?.MarkSetupIncomplete();
+        _logger.LogInformation("VoiceSynthesis stopped.");
+    }
+
+    private async Task StartVoiceAsync()
+    {
+        string sttDataDir = config.modules.VoiceSynthesis.DataDir;
+        string voicesPath = config.modules.VoiceSynthesis.VoicesPath;
+        string engine      = config.modules.Voice.DefaultEngine;
+
+        MigrateVoicesDirectory(voicesPath, _logger);
+
+        ILogger voiceLogger = loggerFactory.CreateLogger("ARI.Voice");
+
+        // Resolve the model to boot: persisted default → config default → first found → none
+        string? ResolveModel(string eng)
+        {
+            string engDir = Path.Combine(voicesPath, eng);
+            if (!Directory.Exists(engDir)) return null;
+
+            string? candidate = persistentData!.GetDefaultVoiceModel(eng)
+                ?? (config.modules.Voice.DefaultModels.TryGetValue(eng, out string? cfgModel)
+                    && !string.IsNullOrWhiteSpace(cfgModel) ? cfgModel : null);
+
+            if (candidate is not null && Directory.Exists(Path.Combine(engDir, candidate)))
+                return candidate;
+
+            if (candidate is not null)
+                _logger.LogWarning("Default voice '{Model}' for {Engine} not found — picking first available.", candidate, eng);
+
+            return Directory.GetDirectories(engDir).Select(Path.GetFileName).FirstOrDefault(n => n is not null);
+        }
+
+        string? modelName = ResolveModel(engine);
+        if (modelName is null)
+        {
+            _logger.LogWarning("Voice module enabled but no voices found for engine '{Engine}' — skipping.", engine);
+            return;
+        }
+
+        async Task<ITtsSynthesiser?> SynthFactory(string eng, string model)
+        {
+            string dir = Path.Combine(voicesPath, eng, model);
+            return await CreateModuleSynthesiser(eng, dir, sttDataDir, voiceLogger);
+        }
+
+        ITtsSynthesiser? engineSynthesiser = await SynthFactory(engine, modelName);
+        if (engineSynthesiser is null)
+        {
+            _logger.LogWarning("Voice module enabled but engine '{Engine}' could not be initialised for model '{Model}' — skipping.", engine, modelName);
+            return;
+        }
+
+        _logger.LogInformation("Voice loading model: {Model} (engine: {Engine})", modelName, engine);
+        synthesiser = engineSynthesiser;
+        await synthesiser.Start(appStoppingToken);
+        try { await synthesiser.Warmup(appStoppingToken); }
+        catch (Exception ex) { _logger.LogError("Voice warmup failed (model may have corrupt weights): {Error}", ex.Message); }
+
+        speechQueue = new SpeechQueue(synthesiser, voiceLogger);
+        string modulePy = Path.Combine(Paths.VoiceModules, engine, "venv",
+            OperatingSystem.IsWindows() ? @"Scripts\python.exe" : "bin/python3");
+        string pythonPath = File.Exists(modulePy) ? modulePy : "python3";
+        void WireAudio(SpeechQueue q) => q.AudioReady += wav => PlayAudio(wav, pythonPath, voiceLogger);
+        WireAudio(speechQueue);
+
+        voiceModule = new VoiceModule(synthesiser, speechQueue, modelName, SynthFactory, WireAudio, voiceLogger);
+        CommonModules.Register(voice: voiceModule);
+        _logger.LogInformation("Voice ready.");
+    }
+
+    private void StopVoice()
+    {
+        speechQueue?.Dispose();
+        synthesiser?.Dispose();
+        speechQueue = null;
+        synthesiser = null;
+        voiceModule = null;
+        CommonModules.ClearVoice();
+        _logger.LogInformation("Voice stopped.");
+    }
+
+    private async Task StartListenerAsync()
+    {
+        if (llmModule is null) throw new InvalidOperationException("Listener needs the LLM module, which isn't running.");
+        try
+        {
+            _logger.LogInformation("Listener module is enabled. Installing Whisper worker environment...");
+            config.modules.Listener.ScriptPath = !string.IsNullOrEmpty(config.modules.Listener.ScriptPath)
+                ? Paths.ResolveOverride(config.modules.Listener.ScriptPath)
+                : Paths.ListenerScript;
+
+            // "python3" is ListenerConfig's own default (i.e. "not customized") — provision and use
+            // a dedicated venv unless the user explicitly pointed PythonPath somewhere themselves.
+            if (config.modules.Listener.PythonPath == "python3")
+                config.modules.Listener.PythonPath = await new ListenerSetupService(loggerFactory.CreateLogger("ARI.Listener")).Install();
+
+            _logger.LogInformation("Starting audio hub...");
+            listenerModule = new ListenerModule(llmModule, config.modules.Listener, loggerFactory.CreateLogger("ARI.Listener"));
+            listenerModule.Start();
+            CommonModules.Register(listener: listenerModule);
+            _logger.LogInformation("Listener ready (whisper worker running: {Running}).", listenerModule.IsReady);
+        }
+        catch (Exception ex)
+        {
+            // Listener is optional — a setup failure (e.g. no C++ build tools for webrtcvad) must
+            // not abort the server.
+            _logger.LogError("Listener setup failed — continuing without voice input. {Error}", ex.Message);
+            if (ex is SetupException { Hint: { } hint }) _logger.LogError("{Hint}", hint);
+            listenerModule = null;
+        }
+    }
+
+    private void StopListener()
+    {
+        listenerModule?.Dispose();
+        listenerModule = null;
+        CommonModules.ClearListener();
+        _logger.LogInformation("Listener stopped.");
+    }
+
+    private async Task StartImageGenAsync()
+    {
+        try
+        {
+            _logger.LogInformation("ImageGen module is enabled. Checking ComfyUI...");
+            await ImageGenDependency.Check(config.modules.ImageGen.ComfyUiPath);
+
+            if (string.IsNullOrEmpty(ImageGenDependency.Status))
+            {
+                imageGenModule = new ImageGenModule(config.modules.ImageGen);
+                CommonModules.Register(imageGen: imageGenModule);
+                _logger.LogInformation("ImageGen ready.");
+            }
+            else
+            {
+                _logger.LogWarning("ImageGen unavailable: {Reason}", ImageGenDependency.Status);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError("ImageGen setup failed — continuing without image generation. {Error}", ex.Message);
+        }
+    }
+
+    private void StopImageGen()
+    {
+        imageGenModule?.Shutdown();
+        imageGenModule = null;
+        CommonModules.ClearImageGen();
+        _logger.LogInformation("ImageGen stopped.");
+    }
+
+    private async Task StartDiscordAsync()
+    {
+        DiscordSettings discord = DiscordStore.Get();
+        if (string.IsNullOrWhiteSpace(discord.Token))
+        {
+            _logger.LogWarning("Discord module is enabled but no token is set — add one in the control panel. Skipping Discord.");
+            return;
+        }
+
+        _logger.LogInformation("Discord module is enabled. Starting...");
+        discordService = new DiscordModule(loggerFactory, llmModule, new DiscordConfig
+        {
+            Enabled            = discord.Enabled,
+            Token              = discord.Token,
+            OwnerId            = discord.OwnerId,
+            WhitelistedUserIds = discord.WhitelistedUserIds,
+            WatchedChannelIds  = discord.WatchedChannelIds,
+            AllowedGuildIds    = discord.AllowedGuildIds,
+        });
+        await discordService.StartAsync(appStoppingToken);
+        if (discordService.ExecuteTask is not null)
+            moduleTasks.Add(discordService.ExecuteTask);
+
+        CommonModules.Register(discord: discordService);
+    }
+
+    private async Task StopDiscordAsync()
+    {
+        if (discordService is null) return;
+        await discordService.NotifyOffline();
+        await discordService.StopAsync(appStoppingToken);
+        discordService.Dispose();
+        discordService = null;
+        CommonModules.ClearDiscord();
+        _logger.LogInformation("Discord stopped.");
+    }
+
+    private void StartCalendar()
+    {
+        calendarModule = new CalendarModule(config.modules.Calendar, ariPersistentDir, loggerFactory.CreateLogger("ARI.Calendar"));
+        CommonModules.Register(calendar: calendarModule);
+        calendarModule.Start();
+    }
+
+    private void StopCalendar()
+    {
+        calendarModule?.Dispose();
+        calendarModule = null;
+        CommonModules.ClearCalendar();
+        _logger.LogInformation("Calendar stopped.");
     }
 
     private static readonly string[] KnownEngines = ["StyleTTS2", "IndexTTS"];
@@ -584,7 +700,7 @@ public class ARI : BackgroundService
         speechQueue?.Dispose();
         synthesiser?.Dispose();
 
-        schedulerModule?.Dispose();
+        calendarModule?.Dispose();
 
         llmModule?.StopAllServersAsync();
         llmModule?.Dispose();

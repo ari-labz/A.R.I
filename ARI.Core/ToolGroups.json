@@ -32,6 +32,10 @@
       "Description": "List, create, rename, and bind projects — the workspaces (code repos or note vaults) a conversation can be scoped to. Use this for any request to start/open/make a new project, workspace, or \"project file\" — that phrase means a new project, not a file inside one.",
       "Tools": ["list_projects", "create_project", "rename_project", "bind_project"]
     },
+    "calendar_tools": {
+      "Description": "ARI's own calendar. create_event adds context (working hours, a birthday, a trip) that is never acted on by itself. create_reminder schedules a real turn to fire later — write its prompt as an instruction to your future self, not the final wording. Both support repeat (daily/weekly/monthly/yearly, optionally an end date or count). list_events looks forward or backward from today by a signed day count. delete_entry removes either kind by id.",
+      "Tools": ["create_event", "create_reminder", "list_events", "delete_entry"]
+    },
     "persona_tools": {
       "Description": "Propose a change to your own persona. Load this when the user criticises HOW you replied — your tone, a verbal tic, a habit they find annoying — since promising to change does nothing on its own; your persona is what actually drives your behaviour.",
       "Tools": ["propose_persona_edit"]

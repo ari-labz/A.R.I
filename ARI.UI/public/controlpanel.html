@@ -509,7 +509,7 @@ html, body {
         <div class="cp-nav-item" data-tab="users-manage" data-group="users">User Management</div>
         <div class="cp-nav-group" data-group-id="system">System<span class="nav-chevron">▾</span></div>
         <div class="cp-nav-item" data-tab="modules" data-group="system">Modules</div>
-        <div class="cp-nav-item" data-tab="scheduler" data-group="system">Scheduler</div>
+        <div class="cp-nav-item" data-tab="calendar" data-group="system" id="nav-calendar">Calendar</div>
         <div class="cp-nav-item" data-tab="dreaming" data-group="system">Dreaming</div>
         <div class="cp-nav-group" data-group-id="llm">LLM<span class="nav-chevron">▾</span></div>
         <div class="cp-nav-item" data-tab="servers" data-group="llm">Servers</div>
@@ -524,8 +524,8 @@ html, body {
         <div class="cp-nav-item" data-tab="voicesettings" data-group="voice" id="nav-voicesettings">Voice Settings</div>
         <div class="cp-nav-item" data-tab="voice" data-group="voice" id="nav-voice">Voice Synthesis</div>
         <div class="cp-nav-item" data-tab="dataset" data-group="voice" id="nav-dataset">Dataset Builder</div>
-        <div class="cp-nav-group" data-group-id="memory">Memory<span class="nav-chevron">▾</span></div>
-        <div class="cp-nav-item" data-tab="brain" data-group="memory">Brain</div>
+        <div class="cp-nav-group" id="nav-group-memory" data-group-id="memory">Memory<span class="nav-chevron">▾</span></div>
+        <div class="cp-nav-item" data-tab="brain" data-group="memory" id="nav-brain">Brain</div>
         <div class="cp-nav-group" id="nav-group-integrations" data-group-id="integrations">Integrations<span class="nav-chevron">▾</span></div>
         <div class="cp-nav-item" data-tab="discord" data-group="integrations" id="nav-discord">Discord</div>
         <div class="cp-nav-group" id="nav-group-imagegen" data-group-id="imagegen">Image Generation<span class="nav-chevron">▾</span></div>
@@ -936,18 +936,130 @@ html, body {
       </div>
     </div>
 
-    <!-- Scheduler tab -->
-    <div id="tab-scheduler" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+    <!-- Calendar tab -->
+    <div id="tab-calendar" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
-        <div class="vs-section-title">Schedules</div>
-        <p style="color:var(--text-dim);font-size:13px;margin:0 0 16px;">
-          How often each background job runs, in
-          <a href="https://crontab.guru/" target="_blank" rel="noopener" style="color:var(--accent,#6ea8fe);">cron notation</a>
-          (minute · hour · day-of-month · month · day-of-week). Edits apply live — no restart needed.
-        </p>
-        <div id="sch-task-list" style="display:flex;flex-direction:column;gap:14px;">
-          <span style="font-size:12px;color:var(--text-dim);">Loading…</span>
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <button id="cal-prev" class="vs-btn-outline" type="button" style="padding:5px 12px;">‹</button>
+            <button id="cal-today" class="vs-btn-outline" type="button" style="padding:5px 12px;">Today</button>
+            <button id="cal-next" class="vs-btn-outline" type="button" style="padding:5px 12px;">›</button>
+            <div id="cal-title" style="font-size:16px;font-weight:600;margin-left:8px;"></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div id="cal-view-switch" style="display:flex;gap:4px;border:1px solid var(--border,#2a2a2a);border-radius:8px;padding:2px;">
+              <button class="cal-view-btn" data-view="month" type="button" style="padding:4px 12px;border:none;border-radius:6px;background:transparent;color:var(--text,#ddd);font-family:inherit;font-size:12px;cursor:pointer;">Month</button>
+              <button class="cal-view-btn" data-view="week" type="button" style="padding:4px 12px;border:none;border-radius:6px;background:transparent;color:var(--text,#ddd);font-family:inherit;font-size:12px;cursor:pointer;">Week</button>
+              <button class="cal-view-btn" data-view="day" type="button" style="padding:4px 12px;border:none;border-radius:6px;background:transparent;color:var(--text,#ddd);font-family:inherit;font-size:12px;cursor:pointer;">Day</button>
+            </div>
+            <button id="cal-new-event" class="vs-btn-outline" type="button" style="padding:7px 16px;">+ Event</button>
+            <button id="cal-new-reminder" class="vs-btn-primary" type="button" style="padding:7px 16px;">+ Reminder</button>
+          </div>
         </div>
+        <div id="cal-body"><span style="font-size:12px;color:var(--text-dim);">Loading…</span></div>
+      </div>
+    </div>
+
+    <!-- Calendar entry modal -->
+    <div id="cal-modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1000;align-items:center;justify-content:center;">
+      <div id="cal-modal" style="background:#fff;border:1px solid var(--border,#2a2a2a);border-radius:12px;padding:22px;width:460px;max-width:92vw;max-height:86vh;overflow-y:auto;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+          <div id="cal-modal-title" style="font-size:15px;font-weight:600;"></div>
+          <button id="cal-modal-close" type="button" style="background:none;border:none;color:var(--text-dim);font-size:18px;cursor:pointer;line-height:1;">×</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:12px;">
+          <label style="font-size:12px;color:var(--text-dim);">Title
+            <input id="cal-f-title" class="vs-input" type="text" style="width:100%;margin-top:4px;">
+          </label>
+
+          <!-- Event-only fields -->
+          <div id="cal-f-event-fields">
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;user-select:none;margin-bottom:10px;">
+              <input id="cal-f-wholeday" type="checkbox" style="width:15px;height:15px;">
+              All day
+            </label>
+            <div style="display:flex;gap:10px;">
+              <label style="font-size:12px;color:var(--text-dim);flex:1;"><span id="cal-f-start-label">Start</span>
+                <input id="cal-f-start" class="vs-input" type="text" readonly style="width:100%;margin-top:4px;cursor:pointer;">
+              </label>
+              <label style="font-size:12px;color:var(--text-dim);flex:1;"><span id="cal-f-end-label">End</span>
+                <input id="cal-f-end" class="vs-input" type="text" readonly style="width:100%;margin-top:4px;cursor:pointer;">
+              </label>
+            </div>
+          </div>
+
+          <!-- Reminder-only fields -->
+          <div id="cal-f-reminder-fields">
+            <label style="font-size:12px;color:var(--text-dim);">Trigger time
+              <input id="cal-f-trigger" class="vs-input" type="text" readonly style="width:100%;margin-top:4px;cursor:pointer;">
+            </label>
+            <label style="font-size:12px;color:var(--text-dim);display:block;margin-top:10px;">Prompt <span style="color:var(--text-dim);font-weight:400;">— instruction to ARI for what to say when this fires</span>
+              <textarea id="cal-f-prompt" class="vs-input" rows="2" style="width:100%;margin-top:4px;resize:vertical;"></textarea>
+            </label>
+            <label style="font-size:12px;color:var(--text-dim);display:block;margin-top:10px;">Context <span style="color:var(--text-dim);font-weight:400;">(optional briefing, not shown to you verbatim)</span>
+              <textarea id="cal-f-context" class="vs-input" rows="2" style="width:100%;margin-top:4px;resize:vertical;"></textarea>
+            </label>
+          </div>
+
+          <label style="font-size:12px;color:var(--text-dim);">Notes
+            <textarea id="cal-f-notes" class="vs-input" rows="2" style="width:100%;margin-top:4px;resize:vertical;"></textarea>
+          </label>
+
+          <div style="border-top:1px solid var(--border,#2a2a2a);padding-top:12px;margin-top:2px;">
+            <label style="font-size:12px;color:var(--text-dim);">Repeat
+              <select id="cal-f-repeat" class="vs-input" style="width:100%;margin-top:4px;">
+                <option value="none">Does not repeat</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
+                <option value="yearly">Yearly</option>
+              </select>
+            </label>
+            <div id="cal-f-repeat-details" style="display:none;margin-top:10px;">
+              <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-dim);">
+                Every
+                <input id="cal-f-repeat-interval" class="vs-input" type="number" min="1" value="1" style="width:60px;">
+                <span id="cal-f-repeat-unit"></span>
+              </div>
+              <div id="cal-f-repeat-days" style="display:none;flex-wrap:wrap;gap:6px;margin-top:10px;"></div>
+              <div style="display:flex;gap:10px;margin-top:10px;">
+                <label style="font-size:12px;color:var(--text-dim);flex:1;">Ends on (optional)
+                  <input id="cal-f-repeat-until" class="vs-input" type="text" readonly style="width:100%;margin-top:4px;cursor:pointer;">
+                </label>
+                <label style="font-size:12px;color:var(--text-dim);flex:1;">Ends after N occurrences (optional)
+                  <input id="cal-f-repeat-count" class="vs-input" type="number" min="1" style="width:100%;margin-top:4px;">
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div id="cal-modal-status" style="font-size:12px;color:var(--text-dim);min-height:16px;"></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">
+            <button id="cal-f-delete" class="vs-btn-outline" type="button" style="display:none;color:#e5484d;border-color:#e5484d;">Delete</button>
+            <div style="display:flex;gap:8px;margin-left:auto;">
+              <button id="cal-f-cancel" class="vs-btn-outline" type="button">Cancel</button>
+              <button id="cal-f-save" class="vs-btn-primary" type="button">Save</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Date/time picker popup (Android-style: drill-down calendar + analog clock) -->
+    <div id="dtp-overlay" style="display:none;position:fixed;inset:0;z-index:2000;"></div>
+    <div id="dtp-popup" style="display:none;position:fixed;z-index:2001;background:#fff;border-radius:16px;box-shadow:0 8px 30px rgba(0,0,0,.28);width:300px;overflow:hidden;">
+      <div style="background:var(--accent,#223742);color:#fff;padding:16px 20px;">
+        <div id="dtp-header-sub" style="font-size:12px;opacity:.75;letter-spacing:.02em;"></div>
+        <div id="dtp-header-main" style="font-size:21px;font-weight:600;margin-top:4px;line-height:1.3;"></div>
+      </div>
+      <div id="dtp-tabs" style="display:none;border-bottom:1px solid var(--border,#e5e7eb);">
+        <button id="dtp-tab-date" type="button" style="flex:1;padding:9px;border:none;background:none;font-size:12px;font-weight:600;cursor:pointer;color:var(--text-dim);">DATE</button>
+        <button id="dtp-tab-time" type="button" style="flex:1;padding:9px;border:none;background:none;font-size:12px;font-weight:600;cursor:pointer;color:var(--text-dim);">TIME</button>
+      </div>
+      <div id="dtp-body" style="padding:14px 16px 6px;min-height:260px;"></div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;padding:10px 16px 16px;">
+        <button id="dtp-cancel" class="vs-btn-outline" type="button" style="padding:6px 14px;">Cancel</button>
+        <button id="dtp-ok" class="vs-btn-primary" type="button" style="padding:6px 14px;">OK</button>
       </div>
     </div>
 
@@ -989,7 +1101,7 @@ html, body {
       <div class="vs-section">
         <div class="vs-section-title">Configurations</div>
         <p style="color:var(--text-dim);font-size:13px;margin:0 0 16px;">
-          Save a full snapshot of your A·R·I setup — servers, models, agents, persona, voice settings, scheduler, coding conventions and more. Restoring a config stops all running servers, applies the snapshot, then boots any server with Auto-start on. Credentials and voice training data are never included — configs are safe to share.
+          Save a full snapshot of your A·R·I setup — servers, models, agents, persona, voice settings, calendar, coding conventions and more. Restoring a config stops all running servers, applies the snapshot, then boots any server with Auto-start on. Credentials and voice training data are never included — configs are safe to share.
         </p>
         <div style="display:flex;gap:10px;margin-bottom:24px;">
           <input id="lcfg-name" class="vs-input" type="text" placeholder="Config name" style="flex:1;font-size:13px;">
@@ -1254,8 +1366,8 @@ cpFetch('/admin/username').then(r => r.json()).then(d => { if (d.name) window._a
 
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), scheduler: document.getElementById('tab-scheduler'), dreaming: document.getElementById('tab-dreaming'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), 'users-new': document.getElementById('tab-users-new'), 'users-manage': document.getElementById('tab-users-manage'), modules: document.getElementById('tab-modules'), 'imagegen-model': document.getElementById('tab-imagegen-model'), 'imagegen-settings': document.getElementById('tab-imagegen-settings') };
-const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', scheduler: 'Scheduler', dreaming: 'Dreaming', llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', 'users-new': 'New User', 'users-manage': 'User Management', modules: 'Modules', 'imagegen-model': 'Image Generation — Model', 'imagegen-settings': 'Image Generation — Settings' };
+const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), dreaming: document.getElementById('tab-dreaming'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), 'users-new': document.getElementById('tab-users-new'), 'users-manage': document.getElementById('tab-users-manage'), modules: document.getElementById('tab-modules'), 'imagegen-model': document.getElementById('tab-imagegen-model'), 'imagegen-settings': document.getElementById('tab-imagegen-settings'), calendar: document.getElementById('tab-calendar') };
+const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', dreaming: 'Dreaming', llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', 'users-new': 'New User', 'users-manage': 'User Management', modules: 'Modules', 'imagegen-model': 'Image Generation — Model', 'imagegen-settings': 'Image Generation — Settings', calendar: 'Calendar' };
 
 let srvPollTimer = null;
 function switchTab(name) {
@@ -1266,7 +1378,6 @@ function switchTab(name) {
     if (gw) gw.style.display = name === 'overview' ? '' : 'none';
     if (name !== 'servers') { clearTimeout(srvPollTimer); srvPollTimer = null; }
     if (name !== 'debug') dbgCloseWatch();
-    if (name !== 'scheduler') schStopPoll();
     if (name === 'conventions') loadConventions();
     if (name === 'persona') loadPersona();
     if (name === 'feedback') loadFeedback();
@@ -1275,7 +1386,7 @@ function switchTab(name) {
     if (name === 'servers') loadServers();
     if (name === 'agents') loadAgents();
     if (name === 'llmconfigs') loadLLMConfigs();
-    if (name === 'scheduler') loadScheduler();
+    if (name === 'calendar') loadCalendar();
     if (name === 'dreaming') loadDreaming();
     if (name === 'discord') loadDiscord();
     if (name === 'debug') loadDebugThreads();
@@ -1295,35 +1406,48 @@ switchTab('overview');
 // says so rather than pretending the change already happened.
 const modList = document.getElementById('mod-list');
 
-// Hide sidebar nav items for disabled modules
+// Hide sidebar nav items (and their group header, once every item under it is hidden) for disabled
+// modules — one module can gate several tabs (Voice Settings needs Voice; Voices needs either Voice
+// or VoiceSynthesis), so each nav item lists every module key that would make it visible.
+const NAV_ITEM_MODULES = {
+    'nav-voices':            ['Voice', 'VoiceSynthesis'],
+    'nav-voicesettings':     ['Voice'],
+    'nav-voice':             ['VoiceSynthesis'],
+    'nav-dataset':           ['VoiceSynthesis'],
+    'nav-discord':           ['Discord'],
+    'nav-brain':             ['Brain'],
+    'nav-calendar':          ['Calendar'],
+    'nav-imagegen-model':    ['ImageGen'],
+    'nav-imagegen-settings': ['ImageGen'],
+};
+const NAV_GROUP_ITEMS = {
+    'nav-group-voice':        ['nav-voices', 'nav-voicesettings', 'nav-voice', 'nav-dataset'],
+    'nav-group-integrations': ['nav-discord'],
+    'nav-group-memory':       ['nav-brain'],
+    'nav-group-imagegen':     ['nav-imagegen-model', 'nav-imagegen-settings'],
+};
+
 async function applyModuleVisibility() {
     try {
         const r = await cpFetch('/modules');
         if (!r.ok) return;
         const { modules } = await r.json();
         const isEnabled = key => modules.find(m => m.key === key)?.enabled ?? false;
-        const voiceOn = isEnabled('Voice');
-        const synthOn = isEnabled('VoiceSynthesis');
-        const discordOn = isEnabled('Discord');
-        const navVoiceGroup = document.getElementById('nav-group-voice');
-        const navVoices = document.getElementById('nav-voices');
-        const navDataset = document.getElementById('nav-dataset');
-        const navVoice = document.getElementById('nav-voice');
-        const navVoicesettings = document.getElementById('nav-voicesettings');
-        const navIntegrations = document.getElementById('nav-group-integrations');
-        const navDiscord = document.getElementById('nav-discord');
-        // Voices tab visible when either voice or synthesis is on
-        if (navVoices) navVoices.style.display = (voiceOn || synthOn) ? '' : 'none';
-        // VoiceSynthesis disabled → hide Dataset Builder & Voice Synthesis tabs
-        if (navDataset) navDataset.style.display = synthOn ? '' : 'none';
-        if (navVoice) navVoice.style.display = synthOn ? '' : 'none';
-        // Voice disabled → hide Voice Settings tab
-        if (navVoicesettings) navVoicesettings.style.display = voiceOn ? '' : 'none';
-        // All disabled → hide Voice group header
-        if (navVoiceGroup) navVoiceGroup.style.display = (voiceOn || synthOn) ? '' : 'none';
-        // Discord disabled → hide Integrations header + Discord tab
-        if (navDiscord) navDiscord.style.display = discordOn ? '' : 'none';
-        if (navIntegrations) navIntegrations.style.display = discordOn ? '' : 'none';
+
+        for (const [itemId, moduleKeys] of Object.entries(NAV_ITEM_MODULES)) {
+            const el = document.getElementById(itemId);
+            if (el) el.style.display = moduleKeys.some(isEnabled) ? '' : 'none';
+        }
+        for (const [groupId, itemIds] of Object.entries(NAV_GROUP_ITEMS)) {
+            const el = document.getElementById(groupId);
+            if (!el) continue;
+            const anyVisible = itemIds.some(id => document.getElementById(id)?.style.display !== 'none');
+            el.style.display = anyVisible ? '' : 'none';
+        }
+
+        // A now-hidden tab shouldn't stay the active one — fall back to Overview.
+        const activeTab = document.querySelector('.cp-nav-item.active[data-tab]');
+        if (activeTab && activeTab.style.display === 'none') switchTab('overview');
     } catch {}
 }
 applyModuleVisibility();
@@ -1386,11 +1510,15 @@ function renderModules(modules) {
                     });
                     const data = await resp.json().catch(() => ({}));
                     if (!resp.ok) throw new Error(data.error || resp.statusText);
-                    m.enabled = enabled;
-                    pending.style.display = (m.enabled !== m.running) ? '' : 'none';
-                    status.textContent = enabled === m.running
+                    status.textContent = !data.restartRequired
                         ? (enabled ? 'On.' : 'Off.')
-                        : `Saved — ${enabled ? 'starts' : 'stops'} when Ari next restarts.`;
+                        : data.message
+                            ? `Saved — ${data.message}`
+                            : `Saved — ${enabled ? 'starts' : 'stops'} when Ari next restarts.`;
+                    // Re-fetch rather than patch in place — running/pending badges, and every other
+                    // row (a Voice stop cascades to VoiceSynthesis, say), all need fresh truth. Give
+                    // the status line a moment on screen first, or the rebuild wipes it instantly.
+                    setTimeout(loadModules, 900);
                     applyModuleVisibility();
                 } catch (err) {
                     status.textContent = 'Could not save: ' + err.message;
@@ -1405,185 +1533,826 @@ function renderModules(modules) {
     }
 }
 
-// ── scheduler ─────────────────────────────────────────────
-const CRON_PRESETS = [
-    { label: 'Hourly',        cron: '0 * * * *'    },
-    { label: 'Every 2 hours', cron: '0 */2 * * *'  },
-    { label: 'Every 3 hours', cron: '0 */3 * * *'  },
-    { label: 'Every 6 hours', cron: '0 */6 * * *'  },
-    { label: 'Every 12 hours',cron: '0 */12 * * *' },
-    { label: 'Daily 9am',     cron: '0 9 * * *'    },
-];
-// Best-effort plain-English description of common cron shapes (server does the authoritative parse).
-function describeCron(c) {
-    if (!c) return '';
-    const p = c.trim().split(/\s+/);
-    if (p.length !== 5) return 'custom schedule';
-    const [min, hr, dom, mon, dow] = p;
-    const at = (h, m) => `${((+h % 24) + 24) % 24}:${String(+m || 0).padStart(2, '0')}`;
-    if (dom === '*' && mon === '*' && dow === '*') {
-        if (/^\*\/\d+$/.test(hr) && /^\d+$/.test(min)) return `every ${hr.slice(2)} hours`;
-        if (hr === '*' && /^\d+$/.test(min)) return `every hour at :${String(min).padStart(2, '0')}`;
-        if (hr === '*' && min === '*') return 'every minute';
-        if (/^\d+$/.test(hr) && /^\d+$/.test(min)) return `daily at ${at(hr, min)}`;
-        if (/^[\d,]+$/.test(hr) && /^\d+$/.test(min)) return `daily at ${hr.split(',').map(h => at(h, min)).join(', ')}`;
+// ── calendar ──────────────────────────────────────────────
+const CAL_DOW_NAMES  = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const CAL_DOW_SHORT  = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+let calView    = 'month';
+let calAnchor  = new Date();
+let calItems   = { events: [], reminders: [] };
+let calWired   = false;
+let calModalKind = 'event';
+let calModalId   = null;
+
+// The API hands back plain wall-clock ISO text (no timezone offset) — parsed field-by-field so a
+// browser's lenient-but-inconsistent handling of odd fractional-second lengths never gets a vote.
+function calParseDate(s) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/.exec(s || '');
+    return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : new Date(s);
+}
+function calInputValue(d) {
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function calSameDay(a, b) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
+function calAddDays(d, n) { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
+function calStartOfWeek(d) { const r = new Date(d); r.setDate(r.getDate() - r.getDay()); r.setHours(0, 0, 0, 0); return r; }
+function calFmtTime(d) { return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }); }
+
+function calRangeForView() {
+    if (calView === 'month') {
+        const start = calStartOfWeek(new Date(calAnchor.getFullYear(), calAnchor.getMonth(), 1));
+        return { start, end: calAddDays(start, 42) };   // 6 full weeks, always covers the month
     }
-    return 'custom schedule';
-}
-// Running state changes without any user action, so the scheduler tab polls while it is open.
-// var, not let: switchTab('overview') runs above this line on load and calls schStopPoll().
-var schPollTimer = null;
-function schStopPoll() { if (schPollTimer) { clearInterval(schPollTimer); schPollTimer = null; } }
-
-function schSetRunningState(card, t) {
-    const badge = card.querySelector('.sch-running');
-    const stop  = card.querySelector('.sch-stop');
-    const next  = card.querySelector('.sch-next');
-    if (badge) badge.style.display = t.running ? '' : 'none';
-    if (stop)  stop.style.display  = t.running ? '' : 'none';
-    if (next)  next.textContent    = t.nextRunUtc ? `next: ${fmtDate(t.nextRunUtc)}` : '';
+    if (calView === 'week') {
+        const start = calStartOfWeek(calAnchor);
+        return { start, end: calAddDays(start, 7) };
+    }
+    const start = new Date(calAnchor.getFullYear(), calAnchor.getMonth(), calAnchor.getDate());
+    return { start, end: calAddDays(start, 1) };
 }
 
-// Updates the existing rows in place — a full rebuild would wipe whatever cron edit is mid-flight.
-async function schRefreshRunning() {
+function calTitleText() {
+    if (calView === 'month') return calAnchor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    if (calView === 'week') {
+        const { start, end } = calRangeForView();
+        return `${start.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${calAddDays(end, -1).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+    }
+    return calAnchor.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+}
+
+function calStep(dir) {
+    if (calView === 'month') calAnchor = new Date(calAnchor.getFullYear(), calAnchor.getMonth() + dir, 1);
+    else if (calView === 'week') calAnchor = calAddDays(calAnchor, 7 * dir);
+    else calAnchor = calAddDays(calAnchor, dir);
+    renderCalendar();
+}
+
+function calUpdateViewButtons() {
+    document.querySelectorAll('.cal-view-btn').forEach(b => {
+        const active = b.dataset.view === calView;
+        b.style.background = active ? 'var(--accent,#6ea8fe)' : 'transparent';
+        b.style.color      = active ? '#fff' : 'var(--text)';
+    });
+}
+
+// ── week/day time grid: click-and-drag to create an event ──
+// One shared drag state + one pair of document-level listeners, wired once — the grid's day columns
+// are rebuilt on every render, so per-column document listeners would pile up (and leak) across
+// however many times the user pages through weeks in a session.
+const CAL_HOUR_HEIGHT = 48;      // px per hour
+const CAL_GRID_HEIGHT = CAL_HOUR_HEIGHT * 24;
+const CAL_DEFAULT_SCROLL_HOUR = 7;
+const CAL_SNAP_MINUTES = 15;
+let calDragCol = null, calDragDay = null, calDragStartY = null, calDragSelectionEl = null;
+
+function calMinutesFromY(y) {
+    const raw = (y / CAL_HOUR_HEIGHT) * 60;
+    return Math.max(0, Math.min(24 * 60, Math.round(raw / CAL_SNAP_MINUTES) * CAL_SNAP_MINUTES));
+}
+function calUpdateDragSelection(y) {
+    if (!calDragSelectionEl) return;
+    const top = Math.min(calDragStartY, y);
+    const height = Math.max(6, Math.abs(y - calDragStartY));
+    calDragSelectionEl.style.top = top + 'px';
+    calDragSelectionEl.style.height = height + 'px';
+}
+function calStartDrag(col, day, y) {
+    calDragCol = col; calDragDay = day; calDragStartY = y;
+    calDragSelectionEl = document.createElement('div');
+    calDragSelectionEl.style.cssText = 'position:absolute;left:2px;right:2px;background:rgba(110,168,254,.35);border:1px solid var(--accent,#6ea8fe);border-radius:5px;pointer-events:none;z-index:4;';
+    col.appendChild(calDragSelectionEl);
+    calUpdateDragSelection(y);
+}
+function calEndDrag(y) {
+    if (calDragCol === null) return;
+    const startMin = calMinutesFromY(Math.min(calDragStartY, y));
+    let endMin = calMinutesFromY(Math.max(calDragStartY, y));
+    if (endMin <= startMin) endMin = Math.min(24 * 60, startMin + 60);   // a plain click, no real drag — default 1 hour
+    const day = calDragDay;
+    calDragSelectionEl.remove();
+    calDragCol = null; calDragDay = null; calDragStartY = null; calDragSelectionEl = null;
+
+    const eventStart = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, startMin);
+    const eventEnd   = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, endMin);
+    openCalModal('event', null, day, { start: eventStart, end: eventEnd });
+}
+function calWireDayColumnDrag(col, day) {
+    col.addEventListener('mousedown', e => {
+        if (e.button !== 0 || e.target !== col) return;   // clicking an existing block starts an edit, not a drag
+        const rect = col.getBoundingClientRect();
+        calStartDrag(col, day, Math.max(0, Math.min(CAL_GRID_HEIGHT, e.clientY - rect.top)));
+        e.preventDefault();
+    });
+}
+function calFmtHourLabel(hour) {
+    return new Date(2000, 0, 1, hour, 0).toLocaleTimeString(undefined, { hour: 'numeric' });
+}
+
+function wireCalendarOnce() {
+    if (calWired) return;
+    calWired = true;
+    document.getElementById('cal-prev').addEventListener('click', () => calStep(-1));
+    document.getElementById('cal-next').addEventListener('click', () => calStep(1));
+    document.getElementById('cal-today').addEventListener('click', () => { calAnchor = new Date(); renderCalendar(); });
+    document.querySelectorAll('.cal-view-btn').forEach(b => b.addEventListener('click', () => {
+        calView = b.dataset.view; calUpdateViewButtons(); renderCalendar();
+    }));
+    document.getElementById('cal-new-event').addEventListener('click', () => openCalModal('event', null, new Date()));
+    document.getElementById('cal-new-reminder').addEventListener('click', () => openCalModal('reminder', null, new Date()));
+    document.getElementById('cal-modal-close').addEventListener('click', closeCalModal);
+    document.getElementById('cal-f-cancel').addEventListener('click', closeCalModal);
+    document.getElementById('cal-modal-overlay').addEventListener('click', e => { if (e.target.id === 'cal-modal-overlay') closeCalModal(); });
+    document.getElementById('cal-f-repeat').addEventListener('change', calUpdateRepeatVisibility);
+    document.getElementById('cal-f-wholeday').addEventListener('change', calUpdateWholeDayFields);
+    dtpInit();
+    document.getElementById('cal-f-start').addEventListener('click', () => dtpOpen(document.getElementById('cal-f-start')));
+    document.getElementById('cal-f-end').addEventListener('click', () => dtpOpen(document.getElementById('cal-f-end')));
+    document.getElementById('cal-f-trigger').addEventListener('click', () => dtpOpen(document.getElementById('cal-f-trigger')));
+    document.getElementById('cal-f-repeat-until').addEventListener('click', () => dtpOpen(document.getElementById('cal-f-repeat-until')));
+    document.getElementById('cal-f-save').addEventListener('click', saveCalModal);
+    document.getElementById('cal-f-delete').addEventListener('click', deleteCalModal);
+    CAL_DOW_SHORT.forEach((name, i) => {
+        const chip = document.createElement('label');
+        chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--text-dim);border:1px solid var(--border,#2a2a2a);border-radius:6px;padding:3px 7px;cursor:pointer;user-select:none;';
+        chip.innerHTML = `<input type="checkbox" data-dow="${i}" style="width:12px;height:12px;">${name}`;
+        document.getElementById('cal-f-repeat-days').appendChild(chip);
+    });
+    document.addEventListener('mousemove', e => {
+        if (!calDragCol) return;
+        const rect = calDragCol.getBoundingClientRect();
+        calUpdateDragSelection(Math.max(0, Math.min(CAL_GRID_HEIGHT, e.clientY - rect.top)));
+    });
+    document.addEventListener('mouseup', e => {
+        if (!calDragCol) return;
+        const rect = calDragCol.getBoundingClientRect();
+        calEndDrag(Math.max(0, Math.min(CAL_GRID_HEIGHT, e.clientY - rect.top)));
+    });
+    calUpdateViewButtons();
+}
+
+async function loadCalendar() {
+    wireCalendarOnce();
+    renderCalendar();
+}
+
+async function renderCalendar() {
+    document.getElementById('cal-title').textContent = calTitleText();
+    const body = document.getElementById('cal-body');
+    body.innerHTML = '<span style="font-size:12px;color:var(--text-dim);">Loading…</span>';
+    const { start, end } = calRangeForView();
     try {
-        const r = await cpFetch('/admin/scheduler');
-        if (!r.ok) return;
-        const d = await r.json();
-        (d.tasks || []).forEach(t => {
-            const card = document.querySelector(`[data-sch-task="${CSS.escape(t.name)}"]`);
-            if (card) schSetRunningState(card, t);
-        });
-    } catch {}
-}
-
-async function loadScheduler() {
-    const listEl = document.getElementById('sch-task-list');
-    listEl.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Loading…</span>';
-    try {
-        const r = await cpFetch('/admin/scheduler');
+        const r = await cpFetch(`/admin/calendar?from=${encodeURIComponent(calInputValue(start) + ':00')}&to=${encodeURIComponent(calInputValue(end) + ':00')}`);
         if (!r.ok) throw new Error();
         const d = await r.json();
-
-        listEl.innerHTML = '';
-        (d.tasks || []).forEach(t => listEl.appendChild(buildTaskRow(t)));
-        if (!d.tasks || d.tasks.length === 0)
-            listEl.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">No scheduled jobs.</span>';
-
-        schStopPoll();
-        schPollTimer = setInterval(schRefreshRunning, 3000);
+        calItems = {
+            events:    (d.events    || []).map(e => Object.assign({}, e, { _start: calParseDate(e.start), _end: calParseDate(e.end) })),
+            reminders: (d.reminders || []).map(x => Object.assign({}, x, { _trigger: calParseDate(x.triggerTime) })),
+        };
+        if (calView === 'month') calRenderMonth(body, start);
+        else calRenderWeekOrDay(body, start, calView === 'week' ? 7 : 1);
     } catch {
-        listEl.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Failed to load scheduler.</span>';
+        body.innerHTML = '<span style="font-size:12px;color:var(--text-dim);">Failed to load calendar.</span>';
     }
 }
-function buildTaskRow(t) {
-    const card = document.createElement('div');
-    card.style.cssText = 'border:1px solid var(--border,#2a2a2a);border-radius:10px;padding:14px 16px;';
-    card.dataset.schTask = t.name;
 
-    const head = document.createElement('div');
-    head.style.cssText = 'display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:10px;';
+function calItemsForDay(day) {
+    const dayEnd = calAddDays(day, 1);
+    return {
+        events:    calItems.events.filter(e => e._start < dayEnd && e._end >= day),
+        reminders: calItems.reminders.filter(r => calSameDay(r._trigger, day)),
+    };
+}
 
-    const left = document.createElement('div');
-    left.style.cssText = 'display:flex;align-items:center;gap:8px;';
-    const name = document.createElement('div');
-    name.style.cssText = 'font-size:14px;font-weight:600;';
-    name.textContent = t.name;
-    const badge = document.createElement('span');
-    badge.className = 'sch-running';
-    badge.style.cssText = 'font-size:10px;font-weight:600;padding:2px 7px;border-radius:999px;background:#dcfce7;color:#166534;';
-    badge.textContent = 'Running';
-    left.append(name, badge);
+function calChip(text, kind, onClick) {
+    const chip = document.createElement('div');
+    chip.textContent = text;
+    chip.style.cssText = `font-size:11px;padding:2px 6px;border-radius:5px;margin-bottom:2px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:${kind === 'reminder' ? '#fef3c7' : '#dbeafe'};color:${kind === 'reminder' ? '#92400e' : '#1d4ed8'};`;
+    chip.addEventListener('click', ev => { ev.stopPropagation(); onClick(); });
+    return chip;
+}
 
-    const right = document.createElement('div');
-    right.style.cssText = 'display:flex;align-items:center;gap:8px;';
-    const next = document.createElement('div');
-    next.className = 'sch-next';
-    next.style.cssText = 'font-size:11px;color:var(--text-dim);';
-    next.textContent = t.nextRunUtc ? `next: ${fmtDate(t.nextRunUtc)}` : '';
-    const stop = document.createElement('button');
-    stop.type = 'button';
-    stop.className = 'sch-stop';
-    stop.style.cssText = 'font-size:11px;padding:3px 10px;border:1px solid var(--border,#2a2a2a);border-radius:6px;background:transparent;color:var(--text,#ddd);cursor:pointer;';
-    stop.textContent = 'Stop';
-    stop.addEventListener('click', async () => {
-        stop.disabled = true;
-        // The slot is consumed server-side, so a stopped job waits for its next scheduled time.
-        try { await cpFetch(`/admin/scheduler/task/${encodeURIComponent(t.name)}/stop`, { method: 'POST' }); } catch {}
-        setTimeout(() => { stop.disabled = false; schRefreshRunning(); }, 400);
+function calRenderMonth(body, gridStart) {
+    body.innerHTML = '';
+    const table = document.createElement('div');
+    table.style.cssText = 'display:grid;grid-template-columns:repeat(7,1fr);border:1px solid var(--border,#2a2a2a);border-radius:10px;overflow:hidden;';
+    CAL_DOW_SHORT.forEach(name => {
+        const h = document.createElement('div');
+        h.textContent = name;
+        h.style.cssText = 'padding:8px;font-size:11px;font-weight:600;color:var(--text-dim);text-align:center;border-bottom:1px solid var(--border,#2a2a2a);background:var(--user-bubble,#f3f4f6);';
+        table.appendChild(h);
     });
-    right.append(next, stop);
+    const today = new Date();
+    for (let i = 0; i < 42; i++) {
+        const day = calAddDays(gridStart, i);
+        const inMonth = day.getMonth() === calAnchor.getMonth();
+        const isToday = calSameDay(day, today);
+        const cell = document.createElement('div');
+        cell.style.cssText = `min-height:96px;padding:6px;border-right:1px solid var(--border,#2a2a2a);border-bottom:1px solid var(--border,#2a2a2a);cursor:pointer;background:${inMonth ? 'transparent' : 'rgba(128,128,128,0.06)'};`
+            + (isToday ? 'box-shadow:inset 0 0 0 2px #e5484d;position:relative;z-index:1;' : '');
+        cell.addEventListener('click', () => openCalModal('event', null, day));
 
-    head.append(left, right);
-    schSetRunningState(card, t);
+        const num = document.createElement('div');
+        num.textContent = day.getDate();
+        num.style.cssText = `font-size:12px;margin-bottom:4px;color:${inMonth ? 'var(--text,#ddd)' : 'var(--text-dim)'};${calSameDay(day, today) ? 'font-weight:700;color:var(--accent,#6ea8fe);' : ''}`;
+        cell.appendChild(num);
 
-    const presets = document.createElement('div');
-    presets.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;';
-    CRON_PRESETS.forEach(p => {
+        const { events, reminders } = calItemsForDay(day);
+        const combined = events.map(e => ({ item: e, kind: 'event' })).concat(reminders.map(r => ({ item: r, kind: 'reminder' })));
+        combined.slice(0, 3).forEach(({ item, kind }) => {
+            const label = kind === 'reminder' ? `⏰ ${item.title}` : (item.isWholeDay ? item.title : `${calFmtTime(item._start)} ${item.title}`);
+            cell.appendChild(calChip(label, kind, () => openCalModal(kind, item, day)));
+        });
+        if (combined.length > 3) {
+            const more = document.createElement('div');
+            more.textContent = `+${combined.length - 3} more`;
+            more.style.cssText = 'font-size:10px;color:var(--text-dim);';
+            more.addEventListener('click', ev => { ev.stopPropagation(); calView = 'day'; calAnchor = day; calUpdateViewButtons(); renderCalendar(); });
+            cell.appendChild(more);
+        }
+        table.appendChild(cell);
+    }
+    body.appendChild(table);
+}
+
+// A real time grid, like Google Calendar's week/day views: hours run top-to-bottom, timed items are
+// positioned by their actual start/end, all-day items sit in their own row above the grid, and
+// dragging over a span of time (or a plain click, which just falls back to a 1-hour default) opens
+// the new-event modal prefilled with that range — see calWireDayColumnDrag.
+function calRenderWeekOrDay(body, start, numDays) {
+    body.innerHTML = '';
+    const today = new Date();
+    const days = Array.from({ length: numDays }, (_, i) => calAddDays(start, i));
+
+    const container = document.createElement('div');
+    container.style.cssText = 'border:1px solid var(--border,#2a2a2a);border-radius:10px;overflow:hidden;';
+
+    const headerRow = document.createElement('div');
+    headerRow.style.cssText = `display:grid;grid-template-columns:52px repeat(${numDays},1fr);border-bottom:1px solid var(--border,#2a2a2a);background:var(--user-bubble,#f3f4f6);`;
+    headerRow.appendChild(document.createElement('div'));
+
+    const allDayRow = document.createElement('div');
+    allDayRow.style.cssText = `display:grid;grid-template-columns:52px repeat(${numDays},1fr);border-bottom:1px solid var(--border,#2a2a2a);`;
+    const allDayGutter = document.createElement('div');
+    allDayGutter.textContent = 'All day';
+    allDayGutter.style.cssText = 'padding:6px 4px;font-size:9px;color:var(--text-dim);text-align:right;';
+    allDayRow.appendChild(allDayGutter);
+
+    days.forEach(day => {
+        const h = document.createElement('div');
+        h.textContent = numDays === 1
+            ? day.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })
+            : day.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' });
+        h.style.cssText = `padding:8px 4px;text-align:center;font-size:12px;font-weight:600;border-left:1px solid var(--border,#2a2a2a);${calSameDay(day, today) ? 'color:var(--accent,#6ea8fe);' : ''}`;
+        headerRow.appendChild(h);
+
+        const allDayCell = document.createElement('div');
+        allDayCell.style.cssText = 'padding:4px;border-left:1px solid var(--border,#2a2a2a);min-height:22px;';
+        calItemsForDay(day).events.filter(e => e.isWholeDay)
+            .forEach(e => allDayCell.appendChild(calChip(e.title, 'event', () => openCalModal('event', e, day))));
+        allDayRow.appendChild(allDayCell);
+    });
+
+    const scrollWrap = document.createElement('div');
+    scrollWrap.style.cssText = 'max-height:560px;overflow-y:auto;';
+    const grid = document.createElement('div');
+    grid.style.cssText = `display:grid;grid-template-columns:52px repeat(${numDays},1fr);`;
+
+    const gutter = document.createElement('div');
+    gutter.style.cssText = `position:relative;height:${CAL_GRID_HEIGHT}px;`;
+    for (let hr = 1; hr < 24; hr++) {
+        const label = document.createElement('div');
+        label.textContent = calFmtHourLabel(hr);
+        label.style.cssText = `position:absolute;top:${hr * CAL_HOUR_HEIGHT - 7}px;right:6px;font-size:10px;color:var(--text-dim);`;
+        gutter.appendChild(label);
+    }
+    grid.appendChild(gutter);
+
+    days.forEach(day => {
+        const col = document.createElement('div');
+        col.style.cssText = `position:relative;height:${CAL_GRID_HEIGHT}px;border-left:1px solid var(--border,#2a2a2a);cursor:pointer;`;
+        for (let hr = 0; hr < 24; hr++) {
+            const line = document.createElement('div');
+            line.style.cssText = `position:absolute;top:${hr * CAL_HOUR_HEIGHT}px;left:0;right:0;border-top:1px solid var(--border,#2a2a2a);opacity:.5;pointer-events:none;`;
+            col.appendChild(line);
+        }
+        if (calSameDay(day, today)) {
+            const nowLine = document.createElement('div');
+            const y = (today.getHours() * 60 + today.getMinutes()) / 60 * CAL_HOUR_HEIGHT;
+            nowLine.style.cssText = `position:absolute;top:${y}px;left:0;right:0;height:2px;background:#e5484d;z-index:3;pointer-events:none;`;
+            col.appendChild(nowLine);
+        }
+
+        const dayEnd = calAddDays(day, 1);
+        const { events, reminders } = calItemsForDay(day);
+        const timed = events.filter(e => !e.isWholeDay).map(e => ({ item: e, kind: 'event' }))
+            .concat(reminders.map(r => ({ item: r, kind: 'reminder' })));
+        timed.forEach(({ item, kind }) => {
+            let startMin, endMin;
+            if (kind === 'reminder') {
+                startMin = item._trigger.getHours() * 60 + item._trigger.getMinutes();
+                endMin = startMin + 30;
+            } else {
+                startMin = item._start < day ? 0 : item._start.getHours() * 60 + item._start.getMinutes();
+                endMin = item._end > dayEnd ? 24 * 60 : item._end.getHours() * 60 + item._end.getMinutes();
+            }
+            const top = startMin / 60 * CAL_HOUR_HEIGHT;
+            const height = Math.max(18, (endMin - startMin) / 60 * CAL_HOUR_HEIGHT);
+            const block = document.createElement('div');
+            block.style.cssText = `position:absolute;top:${top}px;left:2px;right:2px;height:${height}px;padding:2px 6px;border-radius:5px;overflow:hidden;cursor:pointer;font-size:11px;line-height:1.3;z-index:2;background:${kind === 'reminder' ? '#fef3c7' : '#dbeafe'};color:${kind === 'reminder' ? '#92400e' : '#1d4ed8'};`;
+            block.innerHTML = `<div style="font-weight:600;">${kind === 'reminder' ? '⏰ ' : ''}${escHtml(item.title)}</div>`;
+            block.addEventListener('mousedown', ev => ev.stopPropagation());   // don't let a click-to-edit also start a drag-create
+            block.addEventListener('click', ev => { ev.stopPropagation(); openCalModal(kind, item, day); });
+            col.appendChild(block);
+        });
+
+        calWireDayColumnDrag(col, day);
+        grid.appendChild(col);
+    });
+
+    scrollWrap.appendChild(grid);
+    container.append(headerRow, allDayRow, scrollWrap);
+    body.appendChild(container);
+    scrollWrap.scrollTop = CAL_DEFAULT_SCROLL_HOUR * CAL_HOUR_HEIGHT;
+}
+
+function openCalModal(kind, item, defaultDate, timeRange) {
+    calModalKind = kind;
+    calModalId   = item ? item.id : null;
+
+    document.getElementById('cal-modal-title').textContent   = (item ? 'Edit ' : 'New ') + (kind === 'reminder' ? 'Reminder' : 'Event');
+    document.getElementById('cal-f-event-fields').style.display    = kind === 'event'    ? '' : 'none';
+    document.getElementById('cal-f-reminder-fields').style.display = kind === 'reminder' ? '' : 'none';
+    document.getElementById('cal-f-delete').style.display = item ? '' : 'none';
+    document.getElementById('cal-modal-status').textContent = '';
+
+    document.getElementById('cal-f-title').value = item ? item.title : '';
+    document.getElementById('cal-f-notes').value = (item && item.notes) || '';
+
+    const base = new Date(defaultDate);
+    base.setHours(9, 0, 0, 0);
+    if (kind === 'event') {
+        document.getElementById('cal-f-wholeday').checked = item ? !!item.isWholeDay : false;
+        const rangeStart = item ? item._start : (timeRange ? timeRange.start : base);
+        const rangeEnd   = item ? item._end   : (timeRange ? timeRange.end   : new Date(base.getTime() + 60 * 60 * 1000));
+        // Always populate as datetime first — calUpdateWholeDayFields() below switches the fields to
+        // plain dates (and re-slices these values) when the event is all-day.
+        dtpSetValue(document.getElementById('cal-f-start'), calInputValue(rangeStart), 'datetime');
+        dtpSetValue(document.getElementById('cal-f-end'),   calInputValue(rangeEnd),   'datetime');
+        calUpdateWholeDayFields();
+    } else {
+        dtpSetValue(document.getElementById('cal-f-trigger'), calInputValue(item ? item._trigger : base), 'datetime');
+        document.getElementById('cal-f-prompt').value  = (item && item.prompt)  || '';
+        document.getElementById('cal-f-context').value = (item && item.context) || '';
+    }
+
+    const recurrence = (item && item.recurrence) || { frequency: 'none' };
+    document.getElementById('cal-f-repeat').value          = (recurrence.frequency || 'none').toLowerCase();
+    document.getElementById('cal-f-repeat-interval').value = recurrence.interval || 1;
+    dtpSetValue(document.getElementById('cal-f-repeat-until'), recurrence.until ? calInputValue(calParseDate(recurrence.until)).slice(0, 10) : '', 'date');
+    document.getElementById('cal-f-repeat-count').value    = recurrence.count || '';
+    const activeDays = new Set((recurrence.daysOfWeek || []).map(name => CAL_DOW_NAMES.indexOf(name)));
+    document.querySelectorAll('#cal-f-repeat-days input').forEach(cb => { cb.checked = activeDays.has(+cb.dataset.dow); });
+    calUpdateRepeatVisibility();
+
+    document.getElementById('cal-modal-overlay').style.display = 'flex';
+}
+function closeCalModal() { document.getElementById('cal-modal-overlay').style.display = 'none'; }
+
+// ── Date/time picker (Android-style: drill-down calendar + analog clock) ──
+// Replaces native date/datetime-local inputs, which render wildly inconsistently across browsers.
+// The target input stays a plain readonly text field: dataset.raw holds the canonical value
+// ("YYYY-MM-DD" or "YYYY-MM-DDTHH:mm", same shape the rest of the calendar code already expects)
+// and .value holds a human-readable rendering of it — dtpGetValue/dtpSetValue are the only things
+// that ever need to know that split.
+const DTP_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+let dtpState = null;
+let dtpWired = false;
+
+function dtpFormatDisplay(raw, mode) {
+    if (!raw) return '';
+    const d = calParseDate(mode === 'date' ? raw + 'T00:00:00' : raw + ':00');
+    const datePart = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    return mode === 'date' ? datePart : `${datePart}, ${calFmtTime(d)}`;
+}
+function dtpSetValue(el, raw, mode) {
+    el.dataset.mode = mode;
+    el.dataset.raw  = raw || '';
+    el.value = dtpFormatDisplay(raw, mode);
+}
+function dtpGetValue(el) { return el.dataset.raw || ''; }
+
+function dtpInit() {
+    if (dtpWired) return;
+    dtpWired = true;
+    document.getElementById('dtp-overlay').addEventListener('click', dtpClose);
+    document.getElementById('dtp-cancel').addEventListener('click', dtpClose);
+    document.getElementById('dtp-ok').addEventListener('click', dtpConfirm);
+    document.getElementById('dtp-tab-date').addEventListener('click', () => { dtpState.tab = 'date'; dtpRender(); });
+    document.getElementById('dtp-tab-time').addEventListener('click', () => { dtpState.tab = 'time'; dtpRender(); });
+    const header = document.getElementById('dtp-header-main');
+    header.style.cursor = 'pointer';
+    header.addEventListener('click', () => {
+        if (dtpState && dtpState.tab === 'time') { dtpState.clockStep = 'hour'; dtpRender(); }
+    });
+}
+
+function dtpOpen(targetEl) {
+    const mode = targetEl.dataset.mode || 'date';
+    const raw  = dtpGetValue(targetEl);
+    const initial = raw ? calParseDate(mode === 'date' ? raw + 'T00:00:00' : raw + ':00') : new Date();
+    dtpState = { mode, targetEl, value: new Date(initial.getTime()), tab: 'date', dateView: 'day', clockStep: 'hour' };
+
+    document.getElementById('dtp-tabs').style.display = mode === 'datetime' ? 'flex' : 'none';
+    dtpRender();
+
+    const rect  = targetEl.getBoundingClientRect();
+    const popup = document.getElementById('dtp-popup');
+    popup.style.display = 'block';
+    document.getElementById('dtp-overlay').style.display = 'block';
+    popup.style.top  = `${Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 420))}px`;
+    popup.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 316))}px`;
+}
+function dtpClose() {
+    document.getElementById('dtp-popup').style.display   = 'none';
+    document.getElementById('dtp-overlay').style.display = 'none';
+    dtpState = null;
+}
+function dtpConfirm() {
+    if (!dtpState) return;
+    const d = dtpState.value;
+    const p = n => String(n).padStart(2, '0');
+    const raw = dtpState.mode === 'date'
+        ? `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+        : `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+    dtpSetValue(dtpState.targetEl, raw, dtpState.mode);
+    dtpState.targetEl.dispatchEvent(new Event('change'));
+    dtpClose();
+}
+
+function dtpRender() {
+    const d = dtpState.value;
+    const dateTabStyle = active => 'flex:1;padding:9px;border:none;background:none;font-size:12px;font-weight:700;cursor:pointer;'
+        + (active ? 'color:var(--accent,#223742);border-bottom:2px solid var(--accent,#223742);' : 'color:var(--text-dim);');
+    document.getElementById('dtp-tab-date').style.cssText = dateTabStyle(dtpState.tab === 'date');
+    document.getElementById('dtp-tab-time').style.cssText = dateTabStyle(dtpState.tab === 'time');
+
+    document.getElementById('dtp-header-sub').textContent = d.toLocaleDateString(undefined, { year: 'numeric' });
+    document.getElementById('dtp-header-main').textContent = dtpState.tab === 'date'
+        ? d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+        : calFmtTime(d);
+
+    const body = document.getElementById('dtp-body');
+    body.innerHTML = '';
+    if (dtpState.tab === 'date') body.appendChild(dtpState.dateView === 'year' ? dtpBuildYearGrid() : dtpBuildDayGrid());
+    else body.appendChild(dtpBuildClock());
+}
+
+function dtpNavBtn(label, onClick) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    b.style.cssText = 'width:26px;height:26px;border:none;background:none;font-size:15px;cursor:pointer;color:var(--text-dim);border-radius:50%;';
+    b.addEventListener('click', onClick);
+    return b;
+}
+
+function dtpBuildDayGrid() {
+    const d = dtpState.value;
+    const wrap = document.createElement('div');
+
+    const nav = document.createElement('div');
+    nav.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;';
+    const monthLabel = document.createElement('button');
+    monthLabel.type = 'button';
+    monthLabel.textContent = `${DTP_MONTH_NAMES[d.getMonth()]} ${d.getFullYear()} ▾`;
+    monthLabel.style.cssText = 'background:none;border:none;font-size:13px;font-weight:600;cursor:pointer;color:var(--text);';
+    monthLabel.addEventListener('click', () => { dtpState.dateView = 'year'; dtpRender(); });
+    const navBtns = document.createElement('div');
+    navBtns.style.cssText = 'display:flex;gap:4px;';
+    navBtns.append(
+        dtpNavBtn('‹', () => { dtpState.value = new Date(d.getFullYear(), d.getMonth() - 1, d.getDate(), d.getHours(), d.getMinutes()); dtpRender(); }),
+        dtpNavBtn('›', () => { dtpState.value = new Date(d.getFullYear(), d.getMonth() + 1, d.getDate(), d.getHours(), d.getMinutes()); dtpRender(); }),
+    );
+    nav.append(monthLabel, navBtns);
+    wrap.appendChild(nav);
+
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(7,1fr);gap:2px;';
+    ['S', 'M', 'T', 'W', 'T', 'F', 'S'].forEach(l => {
+        const h = document.createElement('div');
+        h.textContent = l;
+        h.style.cssText = 'text-align:center;font-size:10px;color:var(--text-dim);padding:4px 0;';
+        grid.appendChild(h);
+    });
+    const start = calStartOfWeek(new Date(d.getFullYear(), d.getMonth(), 1));
+    const today = new Date();
+    for (let i = 0; i < 42; i++) {
+        const day = calAddDays(start, i);
+        const inMonth   = day.getMonth() === d.getMonth();
+        const isSelected = calSameDay(day, d);
+        const isToday    = calSameDay(day, today);
+        const cell = document.createElement('button');
+        cell.type = 'button';
+        cell.textContent = day.getDate();
+        cell.style.cssText = `width:32px;height:32px;border-radius:50%;font-size:12px;cursor:pointer;`
+            + `border:${isToday && !isSelected ? '1px solid var(--accent,#223742)' : 'none'};`
+            + `background:${isSelected ? 'var(--accent,#223742)' : 'none'};`
+            + `color:${isSelected ? '#fff' : inMonth ? 'var(--text)' : 'var(--text-dim)'};`;
+        cell.addEventListener('click', () => {
+            dtpState.value = new Date(day.getFullYear(), day.getMonth(), day.getDate(), d.getHours(), d.getMinutes());
+            dtpRender();
+        });
+        grid.appendChild(cell);
+    }
+    wrap.appendChild(grid);
+    return wrap;
+}
+
+function dtpBuildYearGrid() {
+    const d = dtpState.value;
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'max-height:230px;overflow-y:auto;';
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(3,1fr);gap:6px;';
+    const centerYear = d.getFullYear();
+    for (let y = centerYear - 9; y <= centerYear + 10; y++) {
+        const selected = y === centerYear;
         const b = document.createElement('button');
         b.type = 'button';
-        b.className = 'vs-btn';
-        b.style.cssText = 'font-size:11px;padding:4px 10px;border:1px solid var(--border,#2a2a2a);border-radius:6px;background:transparent;color:var(--text,#ddd);cursor:pointer;';
-        b.textContent = p.label;
-        b.addEventListener('click', () => { input.value = p.cron; onInput(); });
-        presets.appendChild(b);
-    });
-
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;gap:10px;';
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'vs-input';
-    input.value = t.cron;
-    input.spellcheck = false;
-    input.style.cssText = 'flex:1;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;';
-    const save = document.createElement('button');
-    save.type = 'button';
-    save.className = 'vs-btn-primary';
-    save.style.cssText = 'font-size:12px;padding:6px 16px;';
-    save.textContent = 'Save';
-    const status = document.createElement('span');
-    status.style.cssText = 'font-size:12px;color:var(--text-dim);min-width:90px;';
-    row.append(input, save, status);
-
-    const desc = document.createElement('div');
-    desc.style.cssText = 'font-size:12px;color:var(--text-dim);margin-top:8px;';
-    function onInput() { desc.textContent = describeCron(input.value); }
-    onInput();
-    input.addEventListener('input', onInput);
-
-    save.addEventListener('click', async () => {
-        status.textContent = 'Saving…';
-        try {
-            const r = await cpFetch('/admin/scheduler/task', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: t.name, cron: input.value.trim() }),
-            });
-            if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || 'failed'); }
-            status.textContent = 'Saved.';
-            setTimeout(() => { status.textContent = ''; }, 2000);
-            loadScheduler();
-        } catch (e) { status.textContent = e.message === 'failed' ? 'Save failed.' : (e.message || 'Invalid cron.'); }
-    });
-
-    card.append(head, presets, row, desc);
-    return card;
+        b.textContent = y;
+        b.style.cssText = `padding:8px 0;border:none;border-radius:20px;font-size:13px;cursor:pointer;`
+            + `background:${selected ? 'var(--accent,#223742)' : 'none'};color:${selected ? '#fff' : 'var(--text)'};`;
+        b.addEventListener('click', () => {
+            dtpState.value = new Date(y, d.getMonth(), d.getDate(), d.getHours(), d.getMinutes());
+            dtpState.dateView = 'day';
+            dtpRender();
+        });
+        grid.appendChild(b);
+    }
+    wrap.appendChild(grid);
+    return wrap;
 }
+
+// Clock refs kept outside dtpBuildClock so a drag in progress can update the hand/highlight in
+// place (dtpRefreshClockVisual) instead of tearing down and rebuilding the DOM on every pointermove
+// — a full dtpRender() mid-drag would destroy the element that has pointer capture and kill the drag.
+let dtpClockRefs = null;
+let dtpDragging   = false;
+
+const DTP_CLOCK_RADIUS = 80;
+
+function dtpAngleFromPointer(e) {
+    const rect = dtpClockRefs.face.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+    let deg = Math.atan2(e.clientX - cx, -(e.clientY - cy)) * 180 / Math.PI;
+    if (deg < 0) deg += 360;
+    return deg;
+}
+function dtpApplyClockAngle(deg) {
+    const d = dtpState.value;
+    if (dtpState.clockStep === 'hour') {
+        let h12 = Math.round(deg / 30) % 12;
+        if (h12 === 0) h12 = 12;
+        const isPM = d.getHours() >= 12;
+        dtpState.value = new Date(d.getFullYear(), d.getMonth(), d.getDate(), (h12 % 12) + (isPM ? 12 : 0), d.getMinutes());
+    } else {
+        const minute = Math.round(deg / 6) % 60;
+        dtpState.value = new Date(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), minute);
+    }
+}
+function dtpRefreshClockVisual() {
+    if (!dtpClockRefs) return;
+    const d = dtpState.value;
+    const isHourStep = dtpState.clockStep === 'hour';
+    const h12 = d.getHours() % 12 === 0 ? 12 : d.getHours() % 12;
+    const angleDeg = isHourStep ? (h12 % 12) * 30 : d.getMinutes() * 6;
+    const selectedValue = isHourStep ? h12 : d.getMinutes();
+
+    dtpClockRefs.hand.style.transform = `translateX(-50%) rotate(${angleDeg}deg)`;
+    dtpClockRefs.buttons.forEach(({ el, num }) => {
+        const selected = num === selectedValue;
+        el.style.background = selected ? 'var(--accent,#223742)' : 'transparent';
+        el.style.color      = selected ? '#fff' : 'var(--text)';
+    });
+    document.getElementById('dtp-header-main').textContent = calFmtTime(d);
+}
+function dtpEndClockDrag() {
+    if (!dtpDragging) return;
+    dtpDragging = false;
+    // A drag on the hour ring hands straight off to minute selection, same as a tap does — only the
+    // minute ring needs an explicit way back, via the Back button dtpBuildClock adds for that step.
+    if (dtpState.clockStep === 'hour') { dtpState.clockStep = 'minute'; dtpRender(); }
+}
+
+function dtpBuildClock() {
+    const d = dtpState.value;
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:14px;width:100%;';
+
+    const isHourStep = dtpState.clockStep === 'hour';
+    if (!isHourStep) {
+        const back = document.createElement('button');
+        back.type = 'button';
+        back.textContent = '‹ Back';
+        back.style.cssText = 'align-self:flex-start;background:none;border:none;color:var(--text-dim);font-size:12px;font-weight:600;cursor:pointer;padding:2px 4px;';
+        back.addEventListener('click', () => { dtpState.clockStep = 'hour'; dtpRender(); });
+        wrap.appendChild(back);
+    }
+
+    const face = document.createElement('div');
+    face.style.cssText = 'position:relative;width:220px;height:220px;border-radius:50%;background:var(--user-bubble,#f3f4f6);touch-action:none;';
+    const center = document.createElement('div');
+    center.style.cssText = 'position:absolute;width:8px;height:8px;border-radius:50%;background:var(--accent,#223742);top:50%;left:50%;transform:translate(-50%,-50%);z-index:3;';
+    face.appendChild(center);
+
+    const radius = DTP_CLOCK_RADIUS;
+    const h12 = d.getHours() % 12 === 0 ? 12 : d.getHours() % 12;
+    const angleDeg = isHourStep ? (h12 % 12) * 30 : d.getMinutes() * 6;
+    const selectedValue = isHourStep ? h12 : d.getMinutes();
+
+    const hand = document.createElement('div');
+    hand.style.cssText = `position:absolute;width:2px;height:${radius}px;background:var(--accent,#223742);bottom:50%;left:50%;`
+        + `transform-origin:bottom center;transform:translateX(-50%) rotate(${angleDeg}deg);z-index:1;pointer-events:none;`;
+    face.appendChild(hand);
+
+    dtpClockRefs = { face, hand, buttons: [] };
+
+    const numbers = isHourStep ? Array.from({ length: 12 }, (_, i) => i + 1) : Array.from({ length: 12 }, (_, i) => i * 5);
+    numbers.forEach(num => {
+        const a   = isHourStep ? (num % 12) * 30 : num * 6;
+        const rad = (a - 90) * Math.PI / 180;
+        const x   = 110 + radius * Math.cos(rad);
+        const y   = 110 + radius * Math.sin(rad);
+        const selected = num === selectedValue;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = isHourStep ? num : String(num).padStart(2, '0');
+        btn.style.cssText = `position:absolute;width:34px;height:34px;border-radius:50%;border:none;left:${x}px;top:${y}px;`
+            + `transform:translate(-50%,-50%);font-size:12.5px;cursor:pointer;z-index:2;pointer-events:none;`
+            + `background:${selected ? 'var(--accent,#223742)' : 'transparent'};color:${selected ? '#fff' : 'var(--text)'};`;
+        // Selection happens through the face's own pointer handlers (tap = a drag that never moves),
+        // so the numbers are purely visual — pointer-events:none keeps them from stealing the event
+        // and makes tap-vs-drag behave identically everywhere on the dial.
+        dtpClockRefs.buttons.push({ el: btn, num });
+        face.appendChild(btn);
+    });
+    wrap.appendChild(face);
+
+    face.addEventListener('pointerdown', e => {
+        dtpDragging = true;
+        face.setPointerCapture(e.pointerId);
+        dtpApplyClockAngle(dtpAngleFromPointer(e));
+        dtpRefreshClockVisual();
+        e.preventDefault();
+    });
+    face.addEventListener('pointermove', e => {
+        if (!dtpDragging) return;
+        dtpApplyClockAngle(dtpAngleFromPointer(e));
+        dtpRefreshClockVisual();
+    });
+    face.addEventListener('pointerup', dtpEndClockDrag);
+    face.addEventListener('pointercancel', dtpEndClockDrag);
+
+    const ampm = document.createElement('div');
+    ampm.style.cssText = 'display:flex;gap:8px;';
+    ['AM', 'PM'].forEach(label => {
+        const isPM   = label === 'PM';
+        const active = (d.getHours() >= 12) === isPM;
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = label;
+        b.style.cssText = `padding:6px 16px;border-radius:16px;border:1px solid var(--border,#e5e7eb);font-size:12px;font-weight:600;cursor:pointer;`
+            + `background:${active ? 'var(--accent,#223742)' : 'none'};color:${active ? '#fff' : 'var(--text)'};`;
+        b.addEventListener('click', () => {
+            let h = d.getHours() % 12;
+            if (isPM) h += 12;
+            dtpState.value = new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, d.getMinutes());
+            dtpRender();
+        });
+        ampm.appendChild(b);
+    });
+    wrap.appendChild(ampm);
+
+    return wrap;
+}
+
+// All day drops the time-of-day entirely: the pickers switch from datetime to plain date mode and
+// the labels read "From"/"To" instead of "Start"/"End", matching how the fields are actually used
+// once time-of-day is irrelevant.
+function calUpdateWholeDayFields() {
+    const wholeDay = document.getElementById('cal-f-wholeday').checked;
+    const startEl  = document.getElementById('cal-f-start');
+    const endEl    = document.getElementById('cal-f-end');
+    const newMode  = wholeDay ? 'date' : 'datetime';
+
+    document.getElementById('cal-f-start-label').textContent = wholeDay ? 'From' : 'Start';
+    document.getElementById('cal-f-end-label').textContent   = wholeDay ? 'To'   : 'End';
+
+    if (startEl.dataset.mode === newMode) return;
+    const startDate = dtpGetValue(startEl) ? dtpGetValue(startEl).slice(0, 10) : '';
+    const endDate   = dtpGetValue(endEl)   ? dtpGetValue(endEl).slice(0, 10)   : '';
+    dtpSetValue(startEl, wholeDay ? startDate : (startDate ? `${startDate}T09:00` : ''), newMode);
+    dtpSetValue(endEl,   wholeDay ? endDate   : (endDate   ? `${endDate}T10:00`   : ''), newMode);
+}
+
+function calUpdateRepeatVisibility() {
+    const freq = document.getElementById('cal-f-repeat').value;
+    document.getElementById('cal-f-repeat-details').style.display = freq === 'none' ? 'none' : '';
+    document.getElementById('cal-f-repeat-unit').textContent =
+        ({ daily: 'day(s)', weekly: 'week(s)', monthly: 'month(s)', yearly: 'year(s)' })[freq] || '';
+    document.getElementById('cal-f-repeat-days').style.display = freq === 'weekly' ? 'flex' : 'none';
+}
+
+function calBuildRecurrencePayload() {
+    const freq = document.getElementById('cal-f-repeat').value;
+    if (freq === 'none') return null;
+    const days = freq === 'weekly'
+        ? Array.from(document.querySelectorAll('#cal-f-repeat-days input:checked')).map(cb => CAL_DOW_NAMES[+cb.dataset.dow])
+        : null;
+    const until = dtpGetValue(document.getElementById('cal-f-repeat-until'));
+    const count = document.getElementById('cal-f-repeat-count').value;
+    return {
+        frequency:  freq,
+        interval:   Math.max(1, parseInt(document.getElementById('cal-f-repeat-interval').value, 10) || 1),
+        daysOfWeek: days && days.length ? days : null,
+        until:      until ? `${until}T00:00:00` : null,
+        count:      count ? parseInt(count, 10) : null,
+    };
+}
+
+async function saveCalModal() {
+    const status = document.getElementById('cal-modal-status');
+    const title = document.getElementById('cal-f-title').value.trim();
+    if (!title) { status.textContent = 'Title is required.'; return; }
+
+    let body, url;
+    if (calModalKind === 'event') {
+        const wholeDay = document.getElementById('cal-f-wholeday').checked;
+        const start = dtpGetValue(document.getElementById('cal-f-start'));
+        const end   = dtpGetValue(document.getElementById('cal-f-end'));
+        if (!start || !end) { status.textContent = wholeDay ? 'From and to are required.' : 'Start and end are required.'; return; }
+        // A whole-day field holds a bare date ("2026-09-08"); a timed one already has ":00" to add.
+        body = {
+            title, notes: document.getElementById('cal-f-notes').value.trim() || null,
+            start: wholeDay ? `${start}T00:00:00` : start + ':00',
+            end:   wholeDay ? `${end}T00:00:00`   : end + ':00',
+            isWholeDay: wholeDay,
+            recurrence: calBuildRecurrencePayload(),
+        };
+        url = calModalId ? `/admin/calendar/event/${calModalId}` : '/admin/calendar/event';
+    } else {
+        const trigger = dtpGetValue(document.getElementById('cal-f-trigger'));
+        const prompt  = document.getElementById('cal-f-prompt').value.trim();
+        if (!trigger) { status.textContent = 'Trigger time is required.'; return; }
+        if (!prompt)  { status.textContent = 'Prompt is required.'; return; }
+        body = {
+            title, notes: document.getElementById('cal-f-notes').value.trim() || null,
+            triggerTime: trigger + ':00', prompt,
+            context: document.getElementById('cal-f-context').value.trim() || null,
+            recurrence: calBuildRecurrencePayload(),
+        };
+        url = calModalId ? `/admin/calendar/reminder/${calModalId}` : '/admin/calendar/reminder';
+    }
+
+    status.textContent = 'Saving…';
+    try {
+        const r = await cpFetch(url, {
+            method: calModalId ? 'PUT' : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || 'Save failed.'); }
+        closeCalModal();
+        renderCalendar();
+    } catch (e) { status.textContent = e.message || 'Save failed.'; }
+}
+
+async function deleteCalModal() {
+    if (!calModalId) return;
+    if (!confirm(`Delete this ${calModalKind}? This cannot be undone.`)) return;
+    try {
+        const r = await cpFetch(`/admin/calendar/entry/${calModalId}`, { method: 'DELETE' });
+        if (!r.ok) throw new Error();
+        closeCalModal();
+        renderCalendar();
+    } catch { document.getElementById('cal-modal-status').textContent = 'Delete failed.'; }
+}
+
 // ── dreaming ──────────────────────────────────────────────
 async function loadDreaming() {
     const cb  = document.getElementById('dream-enabled');
     const st  = document.getElementById('dream-status');
     try {
-        const r = await cpFetch('/admin/scheduler');
+        const r = await cpFetch('/admin/dreaming');
         if (!r.ok) throw new Error();
         const d = await r.json();
-        cb.checked = d.dreamingEnabled ?? false;
+        cb.checked = d.enabled ?? false;
     } catch { st.textContent = 'Failed to load settings.'; return; }
 
     cb.onchange = async () => {
         st.textContent = 'Saving…';
         try {
-            const r = await cpFetch('/admin/scheduler/dreaming', {
+            const r = await cpFetch('/admin/dreaming', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ enabled: cb.checked }),
             });

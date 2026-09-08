@@ -15,9 +15,10 @@ public readonly struct ToolResult
     internal string      MediaType { get; }   // e.g. "image/png"; empty for text
     internal string      Context   { get; }   // set when Kind is Wake — briefing for the new thread
     internal string      Title     { get; }   // set when Kind is Wake — title for the new thread
+    internal string      Topic     { get; }   // set when Kind is Wake — the one thing this wake is about
     internal string      VisionNote { get; }  // set when Kind is Image — extra text alongside the image_url part
 
-    private ToolResult(ContentKind kind, string text, byte[] bytes, string mediaType, string context = "", string title = "", string visionNote = "")
+    private ToolResult(ContentKind kind, string text, byte[] bytes, string mediaType, string context = "", string title = "", string topic = "", string visionNote = "")
     {
         Kind      = kind;
         Text      = text;
@@ -25,6 +26,7 @@ public readonly struct ToolResult
         MediaType = mediaType;
         Context   = context;
         Title     = title;
+        Topic     = topic;
         VisionNote = visionNote;
     }
 
@@ -34,9 +36,10 @@ public readonly struct ToolResult
     internal static ToolResult AsImage(byte[] bytes, string mediaType, string visionNote = "")
         => new(ContentKind.Image, "", bytes, mediaType, visionNote: visionNote);
 
-    // content = message sent to the user; context = briefing injected into the new thread's system prompt.
-    internal static ToolResult AsWake(string content, string context, string title = "")
-        => new(ContentKind.Wake, content, System.Array.Empty<byte>(), "", context, title);
+    // content = message sent to the user; context = briefing injected into the new thread's system prompt;
+    // topic = the one short thing this wake is about, logged so future dreams don't repeat it.
+    internal static ToolResult AsWake(string content, string context, string title = "", string topic = "")
+        => new(ContentKind.Wake, content, System.Array.Empty<byte>(), "", context, title, topic);
 
     public static implicit operator ToolResult(string text) => AsText(text);
 }

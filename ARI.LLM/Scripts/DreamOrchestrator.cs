@@ -102,7 +102,7 @@ internal sealed class DreamOrchestrator : IDisposable
                 dreamThread!.Key,
                 prompt:          "",
                 username:        "dream",
-                platformContext: DreamAnchor.Pull(),
+                platformContext: DreamAnchor.PullWithGrounding(),
                 onDelta:         null,
                 cts:             cts);
         }

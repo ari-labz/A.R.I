@@ -36,9 +36,9 @@ Beyond the core pipelines, A·R·I can reach you on **Discord** (servers or DMs)
 
 The web interface runs anywhere the server does, but there's also a native **[desktop app](https://github.com/ari-labz/A.R.I-Desktop)** that wraps the same interface and connects to your server.
 
-## Multiple models at once *(in development)*
+## Multiple models at once
 
-Each agent can be pointed at its own model server, so — if your hardware can handle it — A·R·I can run several LLMs concurrently and give each agent the model best suited to its job: a strong coding model for the Code pipeline, a small fast one for classification, and so on, instead of forcing a single model to do everything. This is still in development and not adequately tested yet, so treat it as experimental.
+Each agent can be pointed at its own model server, so — if your hardware can handle it — A·R·I can run several LLMs concurrently and give each agent the model best suited to its job: a small fast model for memory recall and classification, a larger model for main tasks like dialogue and coding, and so on, instead of forcing a single model to do everything.
 
 ## Limitations
 

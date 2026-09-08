@@ -558,31 +558,42 @@ public abstract class Agent
                     ? await Queue.AcquireAsync((InferencePriority)Priority, turn.Ct)
                     : null;
 
-                // ── Prepare step ──────────────────────────────────────────────
-                // Refresh system message, rebuild tool list (may be exhausted),
-                // compact if context is full, inject dynamic context, serialise.
-                PrepareStep(turn);
-                string json = BuildRequest(turn);
-
-                // ── Stream ────────────────────────────────────────────────────
-                using Step? step = await OpenStep(turn, json);
-                if (step is null) { slot?.Dispose(); continue; }   // HTTP error recovery; hint injected, retry
-
-                while (await step.IsStreaming(turn.Ct))
+                // The slot must be released no matter how this step ends — a thrown or cancelled
+                // step (e.g. a dream turn interrupted by user activity) must never leak the queue's
+                // single running slot, or every later caller on this server hangs forever waiting
+                // for a slot that's already been abandoned.
+                try
                 {
-                    await ProcessDelta(turn, step);
-                    if (turn.ContentRunaway)           break;
-                    if (turn.ReplyBudgetHit)           break;
-                    if (turn.SteeringRedirect)         break;
-                    if (turn.ThinkingRedirect)         break;
-                    if (turn.EarlyAbort is not null)   break;
-                    if (turn.RunawayCall  is not null)  break;
-                    if (turn.TextToolLeak)             break;
+                    // ── Prepare step ──────────────────────────────────────────
+                    // Refresh system message, rebuild tool list (may be exhausted),
+                    // compact if context is full, inject dynamic context, serialise.
+                    PrepareStep(turn);
+                    string json = BuildRequest(turn);
+
+                    // ── Stream ────────────────────────────────────────────────
+                    using Step? step = await OpenStep(turn, json);
+                    if (step is null) continue;   // HTTP error recovery; hint injected, retry
+
+                    while (await step.IsStreaming(turn.Ct))
+                    {
+                        await ProcessDelta(turn, step);
+                        if (turn.ContentRunaway)           break;
+                        if (turn.ReplyBudgetHit)           break;
+                        if (turn.SteeringRedirect)         break;
+                        if (turn.ThinkingRedirect)         break;
+                        if (turn.EarlyAbort is not null)   break;
+                        if (turn.RunawayCall  is not null)  break;
+                        if (turn.TextToolLeak)             break;
+                    }
+
+                    // ── Process result ──────────────────────────────────────────
+                    await ProcessStep(turn);
+                }
+                finally
+                {
+                    slot?.Dispose();
                 }
 
-                // ── Process result & execute tools ────────────────────────────
-                await ProcessStep(turn);
-                slot?.Dispose();
                 if (turn.IsStreaming && turn.PendingCalls.Count > 0)
                     await ExecuteTools(turn);
             }

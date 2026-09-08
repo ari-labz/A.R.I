@@ -3,7 +3,7 @@ using ARI.Common;
 namespace ARI.LLM;
 
 /// <summary>
-/// Static gate for "is Ari busy right now". Background work (the Scheduler, brain scans) runs only
+/// Static gate for "is Ari busy right now". Background work (Refactor, brain scans) runs only
 /// while this returns true, and long-running tasks poll it to yield the moment a live thread starts —
 /// so nothing Ari does in the background ever competes with a response.
 /// </summary>

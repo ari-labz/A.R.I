@@ -51,6 +51,13 @@ internal static class ToolFactories
         ["rename_project"] = _ => Modules.Projects is not null ? new RenameProject() : null,
         ["bind_project"]   = t => Modules.Projects is not null ? new BindProject(t)  : null,
 
+        // calendar_tools — reach the calendar only through ICalendarModule (ARI.Common), never a
+        // direct reference to ARI.Calendar's domain classes. Always available once the module is up.
+        ["create_event"]    = _ => Modules.Calendar is not null ? new CreateEvent()    : null,
+        ["create_reminder"] = _ => Modules.Calendar is not null ? new CreateReminder() : null,
+        ["list_events"]     = _ => Modules.Calendar is not null ? new ListEvents()     : null,
+        ["delete_entry"]    = _ => Modules.Calendar is not null ? new DeleteEntry()    : null,
+
         // Available on any thread — the persona is global, not project-bound.
         ["propose_persona_edit"] = t => new ProposePersonaEdit(t),
 
@@ -61,6 +68,7 @@ internal static class ToolFactories
         ["edit_memory"]    = _ => Brain.Ready ? new EditMemory() : null,
         ["delete_memory"]  = _ => Brain.Ready ? new DeleteMemory() : null,
         ["get_time"]       = _ => new GetTime(),
+        ["recent_activity"] = _ => new RecentActivity(),
 
         // Web tools — always available regardless of project/vault context.
         ["search_web"]  = _ => new SearchWeb(),
