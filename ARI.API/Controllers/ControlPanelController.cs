@@ -842,6 +842,17 @@ public class VoiceController(
                 .OrderByDescending(e => e!.epoch)
                 .ToList();
             checkpoints.AddRange(epochEntries!);
+
+            var looseEntries = Directory.GetFiles(checkpointsDir, "epoch_2nd_*.pth")
+                .Select(f => {
+                    string num = Path.GetFileNameWithoutExtension(f).Split('_').Last();
+                    if (!int.TryParse(num, out int epoch)) return null;
+                    return new { label = $"epoch {epoch}", epoch = (int?)epoch, path = f };
+                })
+                .Where(e => e is not null)
+                .OrderByDescending(e => e!.epoch)
+                .ToList();
+            checkpoints.AddRange(looseEntries!);
         }
 
         return Ok(new { checkpoints });
@@ -1035,18 +1046,27 @@ public class VoiceController(
                 .OrderByDescending(n => n)
                 .FirstOrDefault();
             if (fromFolders is not null) return fromFolders;
+
+            // Current layout: loose epoch_2nd_NNNNN.pth files inside Checkpoints/ (mid-training)
+            int? fromCheckpointsDir = LatestEpochFromLooseFiles(checkpointsDir);
+            if (fromCheckpointsDir is not null) return fromCheckpointsDir;
         }
 
-        // Fall back to loose epoch_2nd_NNNNN.pth files (mid-training)
-        return Directory.GetFiles(modelDir, "epoch_2nd_*.pth")
-            .Select(f => {
-                string num = Path.GetFileNameWithoutExtension(f).Split('_').Last();
-                return int.TryParse(num, out int n) ? (int?)(n + 1) : null;
-            })
-            .Where(n => n is not null)
-            .OrderByDescending(n => n)
-            .FirstOrDefault();
+        // Legacy layout: loose epoch_2nd_NNNNN.pth files directly in the model dir
+        return LatestEpochFromLooseFiles(modelDir);
     }
+
+    private static int? LatestEpochFromLooseFiles(string dir) =>
+        Directory.Exists(dir)
+            ? Directory.GetFiles(dir, "epoch_2nd_*.pth")
+                .Select(f => {
+                    string num = Path.GetFileNameWithoutExtension(f).Split('_').Last();
+                    return int.TryParse(num, out int n) ? (int?)(n + 1) : null;
+                })
+                .Where(n => n is not null)
+                .OrderByDescending(n => n)
+                .FirstOrDefault()
+            : null;
 
     [HttpGet("{engine}/{modelName}/loss-history")]
     public IActionResult GetLossHistory(string engine, string modelName)
@@ -1163,9 +1183,13 @@ public class VoiceController(
             string modelDir = Path.Combine(vsConfig.VoicesPath, engine, req.ModelName);
             string modelPth = Path.Combine(modelDir, "model.pth");
             string checkpointsDir = Path.Combine(modelDir, "Checkpoints");
+            string trainLog = Path.Combine(modelDir, "train.log");
+            string tensorboardDir = Path.Combine(modelDir, "tensorboard");
             if (System.IO.File.Exists(modelPth)) System.IO.File.Delete(modelPth);
             if (Directory.Exists(checkpointsDir)) Directory.Delete(checkpointsDir, recursive: true);
-            logger.LogInformation("[Voice] Retrain requested — cleared checkpoints for '{ModelName}'", req.ModelName);
+            if (System.IO.File.Exists(trainLog)) System.IO.File.Delete(trainLog);
+            if (Directory.Exists(tensorboardDir)) Directory.Delete(tensorboardDir, recursive: true);
+            logger.LogInformation("[Voice] Retrain requested — cleared checkpoints, train log, and tensorboard history for '{ModelName}' (dataset and epoch target retained)", req.ModelName);
         }
 
         TrainingJob job;
