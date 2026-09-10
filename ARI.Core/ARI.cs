@@ -368,8 +368,13 @@ public class ARI : BackgroundService, IModuleLifecycle
         }
 
         _logger.LogInformation("Voice loading model: {Model} (engine: {Engine})", modelName, engine);
+        try { await engineSynthesiser.Start(appStoppingToken); }
+        catch (Exception ex)
+        {
+            _logger.LogError("Voice module failed to start for model '{Model}' (engine: {Engine}) — falling back to no voice model. Error: {Error}", modelName, engine, ex.Message);
+            return;
+        }
         synthesiser = engineSynthesiser;
-        await synthesiser.Start(appStoppingToken);
         try { await synthesiser.Warmup(appStoppingToken); }
         catch (Exception ex) { _logger.LogError("Voice warmup failed (model may have corrupt weights): {Error}", ex.Message); }
 

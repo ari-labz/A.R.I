@@ -5816,17 +5816,17 @@ async function loadVoicesList() {
         const [mr, ar] = await Promise.all([cpFetch('/voice/models'), cpFetch('/voice/active')]);
         const { models } = await mr.json();
         const { model: activeModel, engine: activeEngine, defaultModel } = await ar.json();
-        const trained = models.filter(m => m.hasModel);
+        const trained = models.filter(m => m.hasModel || m.hasResume);
         if (!trained.length) {
             container.innerHTML = '<div style="font-size:13px;color:var(--text-dim);padding:12px 0;">No trained voices yet. Use Voice Synthesis to train one.</div>';
             return;
         }
         container.innerHTML = trained.map(m => {
-            const isActive = activeModel
+            const isActive = m.hasModel && (activeModel
                 ? (m.name === activeModel && m.engine === activeEngine)
-                : (m.name === defaultModel);
+                : (m.name === defaultModel));
             const isDefault = m.name === defaultModel;
-            const epochInfo = m.latestEpoch != null ? `${m.latestEpoch} epochs` : '';
+            const epochInfo = m.hasModel ? (m.latestEpoch != null ? `${m.latestEpoch} epochs` : '') : '0 epochs';
             const badges = [
                 isDefault ? '<span style="background:var(--accent,#223742)44;color:var(--text);font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--accent,#223742)">default</span>' : '',
             ].filter(Boolean).join(' ');
@@ -5840,7 +5840,7 @@ async function loadVoicesList() {
                 <div style="font-size:11px;color:var(--text-dim);margin-top:3px;">${escHtml(m.engine)}${epochInfo ? ' · ' + epochInfo : ''}</div>
               </div>
               <div style="display:flex;gap:8px;flex-shrink:0;">
-                ${!isActive ? `<button class="voices-setactive-btn" data-model="${escHtml(m.name)}" data-engine="${escHtml(m.engine)}" style="font-size:12px;padding:5px 14px;background:#3b82f6;border:none;border-radius:6px;color:#fff;cursor:pointer;">Set Active</button>` : ''}
+                ${m.hasModel && !isActive ? `<button class="voices-setactive-btn" data-model="${escHtml(m.name)}" data-engine="${escHtml(m.engine)}" style="font-size:12px;padding:5px 14px;background:#3b82f6;border:none;border-radius:6px;color:#fff;cursor:pointer;">Set Active</button>` : ''}
                 ${m.hasResume ? `<button class="vs-btn-outline voices-resume-btn" data-model="${escHtml(m.name)}" data-engine="${escHtml(m.engine)}" style="font-size:12px;padding:5px 14px;">Resume</button>` : ''}
                 ${m.hasResume ? `<button class="vs-btn-outline voices-retrain-btn" data-model="${escHtml(m.name)}" data-engine="${escHtml(m.engine)}" style="font-size:12px;padding:5px 14px;">Retrain</button>` : ''}
                 <button class="voices-delete-btn" style="font-size:12px;padding:5px 12px;background:none;border:1px solid var(--border);border-radius:6px;color:#c05050;cursor:pointer;" data-model="${escHtml(m.name)}" data-engine="${escHtml(m.engine)}">Delete</button>
