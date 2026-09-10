@@ -5822,15 +5822,16 @@ async function loadVoicesList() {
             return;
         }
         container.innerHTML = trained.map(m => {
-            const isActive = m.name === activeModel && m.engine === activeEngine;
+            const isActive = activeModel
+                ? (m.name === activeModel && m.engine === activeEngine)
+                : (m.name === defaultModel);
             const isDefault = m.name === defaultModel;
             const epochInfo = m.latestEpoch != null ? `${m.latestEpoch} epochs` : '';
             const badges = [
-                isActive ? '<span style="background:var(--accent,#223742);color:#fff;font-size:10px;padding:2px 8px;border-radius:10px;">active</span>' : '',
                 isDefault ? '<span style="background:var(--accent,#223742)44;color:var(--text);font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--accent,#223742)">default</span>' : '',
             ].filter(Boolean).join(' ');
             return `
-            <div style="padding:12px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+            <div style="padding:12px 14px;margin-bottom:8px;border-radius:8px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;${isActive ? 'background:#CADDE233;border:1.5px solid #CADDE2;' : 'border:1px solid var(--border);'}">
               <div style="flex:1;min-width:0">
                 <div style="display:flex;align-items:center;gap:8px;">
                   <span style="font-size:14px;font-weight:600;color:var(--text)">${escHtml(m.name)}</span>
@@ -5839,12 +5840,16 @@ async function loadVoicesList() {
                 <div style="font-size:11px;color:var(--text-dim);margin-top:3px;">${escHtml(m.engine)}${epochInfo ? ' · ' + epochInfo : ''}</div>
               </div>
               <div style="display:flex;gap:8px;flex-shrink:0;">
+                ${!isActive ? `<button class="voices-setactive-btn" data-model="${escHtml(m.name)}" data-engine="${escHtml(m.engine)}" style="font-size:12px;padding:5px 14px;background:#3b82f6;border:none;border-radius:6px;color:#fff;cursor:pointer;">Set Active</button>` : ''}
                 ${m.hasResume ? `<button class="vs-btn-outline voices-resume-btn" data-model="${escHtml(m.name)}" data-engine="${escHtml(m.engine)}" style="font-size:12px;padding:5px 14px;">Resume</button>` : ''}
                 ${m.hasResume ? `<button class="vs-btn-outline voices-retrain-btn" data-model="${escHtml(m.name)}" data-engine="${escHtml(m.engine)}" style="font-size:12px;padding:5px 14px;">Retrain</button>` : ''}
                 <button class="voices-delete-btn" style="font-size:12px;padding:5px 12px;background:none;border:1px solid var(--border);border-radius:6px;color:#c05050;cursor:pointer;" data-model="${escHtml(m.name)}" data-engine="${escHtml(m.engine)}">Delete</button>
               </div>
             </div>`;
         }).join('');
+        container.querySelectorAll('.voices-setactive-btn').forEach(btn => {
+            btn.addEventListener('click', () => voicesSetActive(btn.dataset.model, btn.dataset.engine));
+        });
         container.querySelectorAll('.voices-resume-btn').forEach(btn => {
             btn.addEventListener('click', () => { switchTab('voice'); vsStartResume(btn.dataset.model); });
         });
@@ -5855,6 +5860,19 @@ async function loadVoicesList() {
             btn.addEventListener('click', () => voicesDeleteModel(btn.dataset.model, btn.dataset.engine));
         });
     } catch(err) { container.innerHTML = `<div style="color:#c05050;font-size:13px;">Failed to load voices: ${escHtml(err.message)}</div>`; }
+}
+
+async function voicesSetActive(modelName, engine) {
+    try {
+        const r = await cpFetch('/voice/switch', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ engine, modelName })
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'Switch failed');
+        await loadVoicesList();
+        await loadVoiceModels();
+    } catch(err) { alert('Failed to set active voice: ' + err.message); }
 }
 
 async function voicesDeleteModel(modelName, engine) {
