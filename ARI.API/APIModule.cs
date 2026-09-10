@@ -90,9 +90,9 @@ public class APIModule : IAsyncDisposable
         builder.Services.AddControllers()
             .AddApplicationPart(typeof(ThreadsController).Assembly);
 
-        // ARI has no built-in auth. It binds to localhost/LAN and expects any public exposure to be
-        // gated by a reverse proxy in front of it (e.g. Cloudflare Access, Authentik, an nginx
-        // basic-auth layer). Keeping auth out of ARI keeps it identity-provider-agnostic.
+        // ARI gates every route (REST and WebSocket) behind its own JWT+session auth — see
+        // AuthMiddleware and the explicit checks around the WebSocket upgrades below. A reverse proxy
+        // in front is still good defense-in-depth for WAN exposure, but is no longer load-bearing.
 
         app = builder.Build();
 
@@ -158,6 +158,21 @@ public class APIModule : IAsyncDisposable
         app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(15) });
         app.Use(async (ctx, next) =>
         {
+            if (ctx.Request.Path == "/api/client" || ctx.Request.Path == "/api/listener/stream")
+            {
+                // These sockets are accepted before UseMiddleware<AuthMiddleware>() runs (WebSocket
+                // upgrades can't carry the normal pipeline's response), so authenticate here explicitly —
+                // same JWT+session check as every REST endpoint. Unauthenticated requests never reach
+                // AcceptWebSocketAsync.
+                UserStore   store = ctx.RequestServices.GetRequiredService<UserStore>();
+                AuthService auth  = ctx.RequestServices.GetRequiredService<AuthService>();
+                if (AuthMiddleware.Authenticate(ctx, store, auth) is null)
+                {
+                    ctx.Response.StatusCode = 401;
+                    return;
+                }
+            }
+
             if (ctx.Request.Path == "/api/client")
             {
                 if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
