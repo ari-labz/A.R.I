@@ -5002,7 +5002,6 @@ function vsLossMarkPause(epoch) { vsLossPauseAt.push(epoch); vsLossDraw(); }
 
 function vsLossDraw() {
     const pts = vsLossPoints;
-    if (!pts.length) return;
     const wrap = vsLossCanvas.parentElement;
     const W = wrap.clientWidth, H = wrap.clientHeight;
     if (!W || !H) return;
@@ -5011,6 +5010,7 @@ function vsLossDraw() {
     vsLossCanvas.style.width = W + 'px'; vsLossCanvas.style.height = H + 'px';
     const ctx = vsLossCanvas.getContext('2d');
     ctx.scale(dpr, dpr);
+    if (!pts.length) return;   // canvas resize above already cleared any previous drawing
 
     const PAD = { top: 16, right: 44, bottom: 22, left: 10 };
     const cW = W - PAD.left - PAD.right;
