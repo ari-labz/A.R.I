@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react"
 import type { Project } from "../hooks/useThreads"
 import { apiFetch, getToken } from "../auth"
 import { env } from "../env"
+import ProjectFileExplorer from "./ProjectFileExplorer"
 
 type SyncState = "idle" | "checking" | "up-to-date" | "ahead" | "behind" | "conflict" | "dirty" | "syncing" | "error" | "no-local-path" | "uninitialized"
 interface SyncStatus { state: SyncState; ahead?: number; behind?: number; message?: string }
@@ -217,6 +218,17 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                         </div>
                     </form>
                 </div>
+
+                {/* ── Files (server filesystem attached to this project) ── */}
+                {selected.backend === "ServerFs" && (
+                    <div className="project-section">
+                        <div className="project-section-header">
+                            <h2>Files</h2>
+                            <span className="field-optional">The scratchpad/filesystem attached to this project on the server</span>
+                        </div>
+                        <ProjectFileExplorer projectId={selected.id} />
+                    </div>
+                )}
 
                 {/* ── App settings (Electron only — local path preferred over server path) ── */}
                 {isElectron && (

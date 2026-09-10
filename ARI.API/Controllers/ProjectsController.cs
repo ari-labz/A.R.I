@@ -3,6 +3,7 @@ using ARI.API;
 using ARI.API.Auth;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.StaticFiles;
 
 namespace ARI.API.Controllers;
 
@@ -90,6 +91,126 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
         if (!CanAccess(project)) return Forbid();
         store.Delete(id);
         return Ok();
+    }
+
+    // ── Files (ServerFs projects only) ──────────────────────────────────────────
+
+    private static readonly HashSet<string> HiddenEntries = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".ariproject", ".ariignore", ".git",
+    };
+
+    [HttpGet("{id}/files")]
+    public IActionResult ListFiles(string id, [FromQuery] string path = "")
+    {
+        (Project? project, string? dir, IActionResult? error) = ResolveDir(id, path);
+        if (error is not null) return error;
+
+        var entries = Directory.EnumerateFileSystemEntries(dir!)
+            .Where(p => !HiddenEntries.Contains(Path.GetFileName(p)))
+            .Select(p =>
+            {
+                bool isDir = Directory.Exists(p);
+                FileSystemInfo info = isDir ? new DirectoryInfo(p) : new FileInfo(p);
+                return new
+                {
+                    name = info.Name,
+                    isDir,
+                    size = isDir ? (long?)null : ((FileInfo)info).Length,
+                    modifiedAt = info.LastWriteTimeUtc,
+                };
+            })
+            .OrderByDescending(e => e.isDir).ThenBy(e => e.name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return Ok(new { path, entries });
+    }
+
+    [HttpGet("{id}/files/content")]
+    public IActionResult DownloadFile(string id, [FromQuery] string path)
+    {
+        Project? project = store.Get(id);
+        if (project is null) return NotFound();
+        if (!CanAccess(project)) return Forbid();
+        if (project.Backend != StorageBackend.ServerFs || project.RootPath is null)
+            return BadRequest(new { error = "This project has no server filesystem." });
+
+        string? abs = ResolvePath(project.RootPath, path);
+        if (abs is null) return BadRequest(new { error = "Invalid path." });
+        if (!System.IO.File.Exists(abs)) return NotFound();
+
+        string contentType = "application/octet-stream";
+        new FileExtensionContentTypeProvider().TryGetContentType(abs, out string? ct);
+        return PhysicalFile(abs, ct ?? contentType, Path.GetFileName(abs));
+    }
+
+    [HttpPost("{id}/files")]
+    [DisableRequestSizeLimit]
+    public async Task<IActionResult> UploadFiles(string id, [FromQuery] string path = "")
+    {
+        (Project? project, string? dir, IActionResult? error) = ResolveDir(id, path);
+        if (error is not null) return error;
+
+        if (Request.Form.Files.Count == 0)
+            return BadRequest(new { error = "No files in request." });
+
+        List<string> saved = new();
+        foreach (IFormFile file in Request.Form.Files)
+        {
+            string safeName = Path.GetFileName(file.FileName);
+            if (string.IsNullOrWhiteSpace(safeName)) continue;
+            string dest = Path.Combine(dir!, safeName);
+            await using FileStream fs = System.IO.File.Create(dest);
+            await file.CopyToAsync(fs);
+            saved.Add(safeName);
+        }
+        return Ok(new { saved });
+    }
+
+    [HttpDelete("{id}/files")]
+    public IActionResult DeleteFile(string id, [FromQuery] string path)
+    {
+        Project? project = store.Get(id);
+        if (project is null) return NotFound();
+        if (!CanAccess(project)) return Forbid();
+        if (project.Backend != StorageBackend.ServerFs || project.RootPath is null)
+            return BadRequest(new { error = "This project has no server filesystem." });
+        if (string.IsNullOrWhiteSpace(path))
+            return BadRequest(new { error = "Refusing to delete the project root." });
+
+        string? abs = ResolvePath(project.RootPath, path);
+        if (abs is null) return BadRequest(new { error = "Invalid path." });
+
+        if (Directory.Exists(abs)) Directory.Delete(abs, recursive: true);
+        else if (System.IO.File.Exists(abs)) System.IO.File.Delete(abs);
+        else return NotFound();
+
+        return Ok();
+    }
+
+    /// <summary>Resolves and validates a project + subdirectory for the file-browsing endpoints.</summary>
+    private (Project?, string?, IActionResult?) ResolveDir(string id, string path)
+    {
+        Project? project = store.Get(id);
+        if (project is null) return (null, null, NotFound());
+        if (!CanAccess(project)) return (null, null, Forbid());
+        if (project.Backend != StorageBackend.ServerFs || project.RootPath is null)
+            return (null, null, BadRequest(new { error = "This project has no server filesystem." }));
+
+        string? abs = ResolvePath(project.RootPath, path);
+        if (abs is null) return (null, null, BadRequest(new { error = "Invalid path." }));
+        if (!Directory.Exists(abs)) return (null, null, NotFound(new { error = "Directory not found." }));
+
+        return (project, abs, null);
+    }
+
+    /// <summary>Resolves a project-relative path to an absolute one, refusing traversal outside root.</summary>
+    private static string? ResolvePath(string root, string relPath)
+    {
+        string abs = Path.GetFullPath(Path.Combine(root, relPath ?? ""));
+        string rootFull = Path.GetFullPath(root);
+        return abs == rootFull || abs.StartsWith(rootFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            ? abs : null;
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────────
