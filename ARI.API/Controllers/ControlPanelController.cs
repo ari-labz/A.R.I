@@ -1183,11 +1183,13 @@ public class VoiceController(
             string modelDir = Path.Combine(vsConfig.VoicesPath, engine, req.ModelName);
             string modelPth = Path.Combine(modelDir, "model.pth");
             string checkpointsDir = Path.Combine(modelDir, "Checkpoints");
-            string trainLog = Path.Combine(modelDir, "train.log");
+            string statsLog = Path.Combine(modelDir, "Train.log");
+            string debugLog = Path.Combine(modelDir, "train_debug.log");
             string tensorboardDir = Path.Combine(modelDir, "tensorboard");
             if (System.IO.File.Exists(modelPth)) System.IO.File.Delete(modelPth);
             if (Directory.Exists(checkpointsDir)) Directory.Delete(checkpointsDir, recursive: true);
-            if (System.IO.File.Exists(trainLog)) System.IO.File.Delete(trainLog);
+            if (System.IO.File.Exists(statsLog)) System.IO.File.Delete(statsLog);
+            if (System.IO.File.Exists(debugLog)) System.IO.File.Delete(debugLog);
             if (Directory.Exists(tensorboardDir)) Directory.Delete(tensorboardDir, recursive: true);
             logger.LogInformation("[Voice] Retrain requested — cleared checkpoints, train log, and tensorboard history for '{ModelName}' (dataset and epoch target retained)", req.ModelName);
         }
