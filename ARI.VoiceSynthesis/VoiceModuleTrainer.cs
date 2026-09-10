@@ -62,6 +62,7 @@ public class VoiceModuleTrainer : IVoiceTrainer
 
         progress?.Report(new TrainingProgress("Training", 5, "Training started"));
 
+        int forwardedLogLines = 0;
         try
         {
             while (!ct.IsCancellationRequested)
@@ -88,15 +89,23 @@ public class VoiceModuleTrainer : IVoiceTrainer
 
                     if (root.TryGetProperty("log", out JsonElement logs))
                     {
+                        // /train/status returns the module's full accumulated log every call, not just
+                        // new lines since the last poll — only forward what we haven't already sent,
+                        // otherwise every line (including LOSS_JSON graph points) gets re-reported and
+                        // re-drawn on every poll tick for the rest of the run.
+                        int lineIndex = 0;
                         foreach (JsonElement line in logs.EnumerateArray())
                         {
+                            lineIndex++;
+                            if (lineIndex <= forwardedLogLines) continue;
                             string? text = line.GetString();
                             if (text == null) continue;
                             logger?.LogInformation("[Training] {Line}", text);
-                            // Forward every log line to the UI so the graph and log widget stay live.
+                            // Forward every new log line to the UI so the graph and log widget stay live.
                             // LOSS_JSON lines are parsed by the control panel JS.
                             progress?.Report(new TrainingProgress("Training", -1, text));
                         }
+                        forwardedLogLines = lineIndex;
                     }
 
                     switch (status)
