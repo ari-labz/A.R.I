@@ -104,4 +104,36 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
             return cookieToken;
         return null;
     }
+
+    /// <summary>
+    /// Same JWT+session check as InvokeAsync, exposed for callers that run before this middleware in the
+    /// pipeline (the raw WebSocket handlers in APIModule, which must authenticate before accepting the
+    /// upgrade). Returns the validated principal, or null if the request is not authenticated.
+    /// </summary>
+    public static ClaimsPrincipal? Authenticate(HttpContext ctx, UserStore store, AuthService auth)
+    {
+        string ip = ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        if (store.IsBlocked(ip))
+            return null;
+
+        string? token = ExtractBearer(ctx);
+        if (token is null)
+            return null;
+
+        ClaimsPrincipal? principal = auth.ValidateToken(token);
+        if (principal is null)
+            return null;
+
+        string? sessionId = principal.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Jti);
+        if (sessionId is null || store.GetSession(sessionId) is null)
+            return null;
+
+        store.TouchSession(sessionId);
+
+        string? subStr = principal.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (int.TryParse(subStr, out int userId))
+            store.TouchLastActive(userId);
+
+        return principal;
+    }
 }
