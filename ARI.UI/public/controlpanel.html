@@ -5161,8 +5161,15 @@ function vsAttachProgress(modelName, onDone) {
 
 // Re-attach to a run that is already in progress. Training lives on the server, so leaving this
 // tab (or reloading the page) only ever loses the view of it — this puts the view back.
+let vsRestoreInFlight = false;
 async function vsRestoreTraining() {
-    if (vsProgressEs || vsActiveModelName) return;   // already showing it
+    // Guard synchronously — vsActiveModelName isn't set until after the awaited fetch below,
+    // so two near-simultaneous calls (page load + an initial switchTab('voice')) could otherwise
+    // both pass the old check-then-act guard and each attach their own SSE stream, duplicating
+    // every replayed event into the same log panel.
+    if (vsRestoreInFlight || vsProgressEs || vsActiveModelName) return;
+    vsRestoreInFlight = true;
+    try {
     let status;
     try {
         const r = await cpFetch('/voice/status');
@@ -5193,6 +5200,7 @@ async function vsRestoreTraining() {
         }
     } catch { /* non-fatal */ }
     vsAttachProgress(status.modelName, () => {});
+    } finally { vsRestoreInFlight = false; }
 }
 
 // A run may already be going when the panel loads — show it without waiting for a tab click.
