@@ -71,7 +71,11 @@ public class VoiceModuleTrainer : IVoiceTrainer
 
                 try
                 {
-                    HttpResponseMessage statusResp = await http.GetAsync($"{baseUrl}/train/status", ct);
+                    // ?since=<count already received> — the module returns only lines past that
+                    // cursor, not a fixed trailing window. A last-N window can silently drop a rare
+                    // line (LOSS_JSON, once per epoch) if more than N lines arrive between polls,
+                    // since it would never appear in any single response.
+                    HttpResponseMessage statusResp = await http.GetAsync($"{baseUrl}/train/status?since={forwardedLogLines}", ct);
                     statusResp.EnsureSuccessStatusCode();
                     string statusJson = await statusResp.Content.ReadAsStringAsync(ct);
                     using JsonDocument doc = JsonDocument.Parse(statusJson);
@@ -89,15 +93,10 @@ public class VoiceModuleTrainer : IVoiceTrainer
 
                     if (root.TryGetProperty("log", out JsonElement logs))
                     {
-                        // /train/status returns the module's full accumulated log every call, not just
-                        // new lines since the last poll — only forward what we haven't already sent,
-                        // otherwise every line (including LOSS_JSON graph points) gets re-reported and
-                        // re-drawn on every poll tick for the rest of the run.
-                        int lineIndex = 0;
+                        int newLines = 0;
                         foreach (JsonElement line in logs.EnumerateArray())
                         {
-                            lineIndex++;
-                            if (lineIndex <= forwardedLogLines) continue;
+                            newLines++;
                             string? text = line.GetString();
                             if (text == null) continue;
                             logger?.LogInformation("[Training] {Line}", text);
@@ -105,7 +104,7 @@ public class VoiceModuleTrainer : IVoiceTrainer
                             // LOSS_JSON lines are parsed by the control panel JS.
                             progress?.Report(new TrainingProgress("Training", -1, text));
                         }
-                        forwardedLogLines = lineIndex;
+                        forwardedLogLines += newLines;
                     }
 
                     switch (status)
