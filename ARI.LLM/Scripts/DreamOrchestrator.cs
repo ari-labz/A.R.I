@@ -12,6 +12,7 @@ internal sealed class DreamOrchestrator : IDisposable
 {
     private const int IDLE_GRACE_SECONDS  = 120;  // wait this long after last activity before dreaming
     private const int POLL_INTERVAL_MS    = 10_000;
+    private const int MAX_BACKOFF_SECONDS = 300;   // cap the retry delay after repeated failures (e.g. LLM servers down)
 
     private readonly DreamPipeline                                         pipeline;
     private readonly Dreamer                                               dreamer;
@@ -25,6 +26,8 @@ internal sealed class DreamOrchestrator : IDisposable
     private CancellationTokenSource?  dreamCts;
     private Task?                     dreamTask;
     private DateTime                  lastUserActivity = DateTime.MinValue;
+    private int                       consecutiveFailures = 0;
+    private DateTime                  nextRetryAt = DateTime.MinValue;
     private readonly CancellationTokenSource shutdownCts = new();
 
     internal DreamOrchestrator(
@@ -70,6 +73,10 @@ internal sealed class DreamOrchestrator : IDisposable
 
             if (dreamTask is { IsCompleted: false }) continue;
 
+            // Back off after repeated failures (e.g. the LLM servers are stopped) instead of
+            // retrying every poll tick forever, spamming the log with the same connection error.
+            if (DateTime.Now < nextRetryAt) continue;
+
             TimeSpan idleFor = DateTime.Now - lastUserActivity;
             if (idleFor.TotalSeconds < IDLE_GRACE_SECONDS) continue;
 
@@ -105,6 +112,8 @@ internal sealed class DreamOrchestrator : IDisposable
                 platformContext: DreamAnchor.PullWithGrounding(),
                 onDelta:         null,
                 cts:             cts);
+            consecutiveFailures = 0;
+            nextRetryAt         = DateTime.MinValue;
         }
         catch (OperationCanceledException)
         {
@@ -112,7 +121,16 @@ internal sealed class DreamOrchestrator : IDisposable
         }
         catch (Exception ex)
         {
-            Shared.Logger.LogWarning(ex, "[Dream] Turn failed.");
+            consecutiveFailures++;
+            int backoffSeconds = Math.Min(POLL_INTERVAL_MS / 1000 * consecutiveFailures, MAX_BACKOFF_SECONDS);
+            nextRetryAt = DateTime.Now.AddSeconds(backoffSeconds);
+            // Full stack trace on the first failure of a streak only — after that it's almost
+            // certainly the same cause (e.g. the LLM servers are stopped), so log a terse line.
+            if (consecutiveFailures == 1)
+                Shared.Logger.LogWarning(ex, "[Dream] Turn failed. Backing off for {Seconds}s.", backoffSeconds);
+            else
+                Shared.Logger.LogWarning("[Dream] Turn failed again ({Count} in a row): {Error}. Backing off for {Seconds}s.",
+                    consecutiveFailures, ex.Message, backoffSeconds);
         }
         finally
         {
