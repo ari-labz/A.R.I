@@ -4984,6 +4984,11 @@ let vsLossPauseAt = []; // epoch numbers where a pause marker should appear
 
 function vsLossReset(showEmpty = false) { vsLossPoints = []; vsLossPauseAt = []; vsLossWrap.style.display = showEmpty ? '' : 'none'; vsLossStatus.textContent = ''; vsLossLiveDot.style.display = 'none'; if (showEmpty) vsLossDraw(); }
 
+// vsLossDraw() only re-renders when new data arrives — it never re-fires on a pure container
+// resize (e.g. toggling fullscreen), so the canvas stayed locked at whatever pixel size it last
+// drew at instead of stretching to fill. Redraw whenever the wrapper's own size actually changes.
+new ResizeObserver(() => vsLossDraw()).observe(vsLossCanvas.parentElement);
+
 function vsLossPush(point) {
     vsLossPoints.push(point);
     vsLossWrap.style.display = '';
