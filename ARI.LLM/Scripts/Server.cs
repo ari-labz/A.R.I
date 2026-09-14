@@ -139,6 +139,11 @@ public class Server : IDisposable
 
     [JsonIgnore] public string FullEndpoint => $"{Endpoint}:{Port}";
 
+    /// <summary>True while this server's llama-server process is alive. False after Stop() or if it
+    /// was never started — used to avoid attempting work (e.g. a dream turn) against a server the
+    /// user has deliberately stopped instead of failing with a connection error and retrying.</summary>
+    [JsonIgnore] public bool IsRunning => _process is not null && !_process.HasExited;
+
     // ── Internals ────────────────────────────────────────────────────────────────
 
     private ILogger? _logger;
