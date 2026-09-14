@@ -370,7 +370,10 @@ public class LLMModule : ILLMModule, IDisposable
                 dreamPipeline,
                 dreamer,
                 QueueFor(dreamer.Server),
-                isDreamingEnabled: () => dreamingEnabled && !ConversationActive,
+                // Also require the Dreamer's bound server to actually be running — otherwise a
+                // deliberately-stopped server (e.g. via the control panel) just meant every dream
+                // turn attempt failed with a connection error and retried instead of skipping cleanly.
+                isDreamingEnabled: () => dreamingEnabled && !ConversationActive && (dreamer.Server?.IsRunning ?? false),
                 createDreamThread: () =>
                 {
                     string key = $"dream-{DateTime.Now:yyyyMMdd-HHmmss}";
