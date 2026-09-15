@@ -21,7 +21,13 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
             return Ok(store.GetAll().Select(p => new
             {
                 p.Id, p.Name, p.Description, p.Instructions, p.CreatedAt,
-                p.Category, p.Backend, p.RootPath, p.OwnerId,
+                p.Category,
+                // Anonymous-type properties don't inherit the [JsonConverter(JsonStringEnumConverter)]
+                // attribute from Project.Backend, and there's no global string-enum converter
+                // registered — left as p.Backend this serialized as a raw integer (0) instead of
+                // "ServerFs", so the client's `backend === "ServerFs"` checks always failed for admins.
+                Backend = p.Backend.ToString(),
+                p.RootPath, p.OwnerId,
                 OwnerUsername = p.OwnerId == 0 ? "admin" : (allUsers.TryGetValue(p.OwnerId, out string? n) ? n : "unknown"),
             }));
         }
