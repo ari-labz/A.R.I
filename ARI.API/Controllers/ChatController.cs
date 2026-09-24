@@ -708,18 +708,18 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
             await System.IO.File.WriteAllBytesAsync(Path.Combine(scratchDir, file.FileName), imgBytes);
         }
 
-        Attachment attachment = new Attachment { Name = file.FileName, Content = content, IsImage = isImage, MimeType = mime };
+        Attachment attachment = new Attachment { Id = Guid.NewGuid().ToString("N"), Name = file.FileName, Content = content, IsImage = isImage, MimeType = mime };
         List<Attachment> msgList = pendingMessageAttachments.GetOrAdd(threadKey, _ => new());
         msgList.RemoveAll(a => a.Name == attachment.Name);
         msgList.Add(attachment);
-        return Ok(new { name = file.FileName, isImage, mimeType = mime, promoted = false });
+        return Ok(new { id = attachment.Id, name = file.FileName, isImage, mimeType = mime, content, promoted = false });
     }
 
-    [HttpDelete("{threadKey}/message-attachments/{name}")]
-    public IActionResult RemoveMessageAttachment(string threadKey, string name)
+    [HttpDelete("{threadKey}/message-attachments/{id}")]
+    public IActionResult RemoveMessageAttachment(string threadKey, string id)
     {
         if (pendingMessageAttachments.TryGetValue(threadKey, out List<Attachment>? list))
-            list.RemoveAll(a => a.Name == name);
+            list.RemoveAll(a => a.Id == id);
         return Ok();
     }
 
@@ -727,35 +727,33 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     public IActionResult GetMessageAttachments(string threadKey)
     {
         List<Attachment> staged = pendingMessageAttachments.TryGetValue(threadKey, out List<Attachment>? list) ? list : new();
-        return Ok(staged.Select(a => new { a.Name, a.IsImage, a.MimeType, a.Content }));
+        return Ok(staged.Select(a => new { a.Id, a.Name, a.IsImage, a.MimeType, a.Content }));
     }
 
     /// <summary>
     /// Serves the raw content of an attachment that was sent with a message.
     /// Images are returned as their native mime type; text files as plain text.
-    /// Identified by the message timestamp and filename since content is stripped from history JSON.
+    /// Identified by Id, not name — two messages can attach a same-named file (every
+    /// clipboard-pasted image used to be called "image.png") and name alone would always resolve to
+    /// whichever message happened to appear first in the thread.
     /// </summary>
     [HttpGet("{threadKey}/msg-attachment")]
-    public IActionResult GetMessageAttachmentContent(string threadKey, [FromQuery] string name)
+    public IActionResult GetMessageAttachmentContent(string threadKey, [FromQuery] string id)
     {
         if (Llm is null) return StatusCode(503);
 
         List<ThreadItem> items = FindThread(threadKey)?.History ?? new();
-        foreach (ThreadItem item in items)
+        Attachment? att = items.OfType<Prompt>()
+            .SelectMany(i => i.Attachments ?? Enumerable.Empty<Attachment>())
+            .FirstOrDefault(a => a.Id == id);
+        if (att is null) return NotFound();
+
+        if (att.IsImage)
         {
-            if (item is not Prompt msg || msg.Attachments is null) continue;
-            Attachment? att = msg.Attachments.FirstOrDefault(a => a.Name == name);
-            if (att is null) continue;
-
-            if (att.IsImage)
-            {
-                byte[] bytes = Convert.FromBase64String(att.Content);
-                return File(bytes, att.MimeType ?? "image/jpeg");
-            }
-            return Content(att.Content, "text/plain");
+            byte[] bytes = Convert.FromBase64String(att.Content);
+            return File(bytes, att.MimeType ?? "image/jpeg");
         }
-
-        return NotFound();
+        return Content(att.Content, "text/plain");
     }
 
     /// <summary>

@@ -8,6 +8,9 @@ namespace ARI.LLM;
 /// </summary>
 public class Attachment
 {
+    /// <summary>Server-generated, unique per attachment. Two messages can carry a same-named file
+    /// (every clipboard-pasted image is called "image.png") — lookups must key off this, not Name.</summary>
+    public required string  Id       { get; init; }
     public required string  Name     { get; init; }
     public required bool    IsImage  { get; init; }
     public string?          MimeType { get; init; }

@@ -352,7 +352,7 @@ function UserMessage({ item, activeThread }: { item: ThreadItem; activeThread: s
                             <img className="msg-image" src={
                                 a.content
                                     ? `data:${a.mimeType ?? "image/jpeg"};base64,${a.content}`
-                                    : `/threads/${activeThread}/msg-attachment?name=${encodeURIComponent(a.name)}`
+                                    : `/threads/${activeThread}/msg-attachment?id=${encodeURIComponent(a.id ?? "")}`
                             } alt={a.name} />
                         ) : (
                             <div className="file-card">
