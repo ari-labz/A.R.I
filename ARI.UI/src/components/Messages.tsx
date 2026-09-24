@@ -477,6 +477,9 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
                 </div>
             )}
             {thoughtEl}
+            {!streaming && item.truncated && (
+                <div className="truncated-notice">Reply hit the length limit and was cut off here.</div>
+            )}
             {!streaming && !item.continued && (
                 <div className="msg-footer">
                     <div className="msg-time">{t}</div>

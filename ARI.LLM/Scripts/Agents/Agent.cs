@@ -611,7 +611,7 @@ public abstract class Agent
                 turn.Clock, turn.Stopwatch.Elapsed.TotalSeconds,
                 turn.CompletionTokens, turn.PromptTokens, turn.PrefilledTokens, turn.PrefillTokPerSec,
                 turn.MaxTokens, turn.EstimatedTextTokens, turn.HadImages, trace, turn.ResponseBuilder,
-                turn.ToolCallCount);
+                turn.ToolCallCount, turn.FinishReason);
         }
         catch (Exception ex)
         {
@@ -2135,7 +2135,7 @@ public abstract class Agent
         TurnClock clock, double elapsed,
         int completionTokens, int promptTokens, int prefilledTokens, double prefillTokPerSec,
         int maxTokens, int estimatedTextTokens, bool hadImages,
-        List<TraceStep> trace, StringBuilder responseBuilder, int toolCallCount = 0)
+        List<TraceStep> trace, StringBuilder responseBuilder, int toolCallCount = 0, string? finishReason = null)
     {
         if (string.IsNullOrWhiteSpace(responseText))
             throw new LlmRequestFailedException("LLM response was empty.");
@@ -2201,6 +2201,7 @@ public abstract class Agent
         ariResponse.Data.EstimatedTextPromptTokens = estimatedTextTokens;
         ariResponse.Data.ImageTokenLimit           = 0;
         ariResponse.Data.PrefillTokPerSec          = prefillTokPerSec;
+        ariResponse.Truncated                      = finishReason == "length";
         ariResponse.State                          = State.Complete;
         ariResponse.StreamText                     = null;
         thread.streamingResponse                   = null;

@@ -30,7 +30,7 @@
         "PresencePenalty": 0.0
       },
       "ShortTermMemoryLimit": 25,
-      "BudgetResponse": 800,
+      "BudgetResponse": 3000,
       "BudgetContext": 20000,
       "SupportsCompaction": true,
       "CompactHighPct": 80,

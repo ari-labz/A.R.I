@@ -1071,6 +1071,10 @@ button, a, input, select, textarea, label, [role="button"] {
 #main.code-mode .thought-content h4 { color: var(--cm-text-dim); }
 .thought-content h4:not(:first-child) { margin-top: 12px; }
 
+/* Shown under a reply that was cut off because it hit its token budget — same amber as
+   #no-server-warning, kept as plain text (no box) so it doesn't compete with the message itself. */
+.truncated-notice { font-size: 12px; color: #92400e; margin-top: 6px; }
+
 /* ── tool-use blocks ────────────────────────────────────── */
 .bubble .tool-use {
     display: flex; align-items: center; gap: 6px; width: fit-content;

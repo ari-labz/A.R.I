@@ -100,6 +100,7 @@ export interface ThreadItem {
     name?:           string
     isStreaming?:    boolean
     continued?:      boolean
+    truncated?:      boolean
 }
 
 export interface MemoryChange {
