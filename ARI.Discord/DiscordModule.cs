@@ -445,7 +445,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
             byte[] bytes   = await httpClient.GetByteArrayAsync(att.Url);
             string content = isImage ? Convert.ToBase64String(bytes) : Encoding.UTF8.GetString(bytes);
 
-            result.Add(new LlmAttachment { Name = att.Filename, Content = content, IsImage = isImage, MimeType = mime });
+            result.Add(new LlmAttachment { Id = Guid.NewGuid().ToString("N"), Name = att.Filename, Content = content, IsImage = isImage, MimeType = mime });
             _logger.LogDebug("Loaded Discord attachment: {Filename} ({Mime})", att.Filename, mime);
         }
         return result;
