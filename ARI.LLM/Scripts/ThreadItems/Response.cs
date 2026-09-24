@@ -73,6 +73,12 @@ public class Response : ThreadItem
     [JsonPropertyName("continued")]
     public bool Continued { get; set; }
 
+    /// <summary>True when the reply hit its token budget and generation was ended mid-answer rather than
+    /// finishing naturally — so the client can show that this was cut off, not that the model chose to stop
+    /// there.</summary>
+    [JsonPropertyName("truncated")]
+    public bool Truncated { get; set; }
+
     /// <summary>Wall-clock split of this turn (see Agent.TurnClock). ThinkingSeconds counts ONLY time spent
     /// receiving reasoning deltas; PrefillSeconds is the server reading the prompt (request sent → first
     /// delta, summed per request); TypingSeconds is time receiving answer/tool-call deltas. TotalSeconds is
