@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
+using System.IO;
 using System.Linq;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using ARI.Common;
 using ARI.LLM;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
@@ -932,6 +934,29 @@ public static class ClientWebSocket
                 if (preForward is not null) await preForward(argsJson);
 
                 string result = await Forward(ws, log, name, argsJson, labelField);
+
+                // A pasted/attached image lives in this thread's server-side scratchpad, never in the
+                // client's project folder, so the client always reports it missing — check the scratchpad
+                // for a matching filename before giving up. See issue #208.
+                bool wasNotFound = result.StartsWith("[Error: File not found", StringComparison.OrdinalIgnoreCase);
+                if (name == "read_file" && wasNotFound)
+                {
+                    string scratchPath = Path.Combine(Paths.ScratchpadDir(thread.Key), Path.GetFileName(ExtractToolPath(argsJson)));
+                    if (File.Exists(scratchPath))
+                    {
+                        byte[] bytes = await File.ReadAllBytesAsync(scratchPath);
+                        string mime = Path.GetExtension(scratchPath).TrimStart('.').ToLowerInvariant() switch
+                        {
+                            "png"           => "image/png",
+                            "jpg" or "jpeg" => "image/jpeg",
+                            "gif"           => "image/gif",
+                            "webp"          => "image/webp",
+                            "bmp"           => "image/bmp",
+                            _               => ""
+                        };
+                        return mime.Length > 0 ? ToolResult.AsImage(bytes, mime) : ToolResult.AsText(Encoding.UTF8.GetString(bytes));
+                    }
+                }
 
                 // Post-hook: may modify or augment the result (e.g. appending a block warning).
                 if (postHook is not null)
