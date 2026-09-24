@@ -15,6 +15,7 @@ internal class Engram : MemoryAgent, IDisposable
     private const int    EXTRACT_MAX_TOKENS   = 1500;
     private const double EXTRACT_TEMPERATURE = 0.3;
     private const int    SAVE_MAX_TOKENS      = 300;
+    private const int    OVERSIZED_BLOCK_CHARS = 600;
 
     // Each Stage-3 call now places exactly one entity in its own short-lived thread, so there's no
     // multi-entity turn left to keep open — this and the ceiling below fall back to MemoryAgent's
@@ -233,11 +234,17 @@ internal class Engram : MemoryAgent, IDisposable
             //     one call per entity, but no entity can still reach a note it wasn't resolved against. ---
             (int commits, int blocked) = await SaveAllAsync(threadKey, entities, speaker, conversationDate);
 
-            // Deterministic, code-built log line — no extra LLM round trip just to summarise what the
-            // extraction step already told us.
+            // A short linked summary of what was concluded; falls back to a linked entity list if the summary call fails.
             if (entities.Count > 0)
             {
-                string logLine = "Discussed: " + string.Join(", ", entities.Select(e => e.Entity).Distinct()) + ".";
+                string logLine = await GenerateConversationSummary(transcript, speaker);
+                if (string.IsNullOrWhiteSpace(logLine))
+                {
+                    IEnumerable<string> linked = entities.Select(e => e.Entity).Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Where(e => !e.Equals(speaker, StringComparison.OrdinalIgnoreCase))
+                        .Select(e => $"[[{e}]]");
+                    logLine = "Discussed: " + string.Join(", ", linked) + ".";
+                }
                 AppendToConversationLog(DateTime.Now.ToString("yyyy-MM-dd"), logLine, logStart, logEnd);
             }
 
@@ -388,6 +395,18 @@ internal class Engram : MemoryAgent, IDisposable
             : "Does not exist yet — call create_memory with a name/path chosen per the rulebook above (e.g. \"People/Name\"), " +
               "but only if this is a distinct entity worth its own note per the identity rules — a passing detail is a bullet " +
               "on the note it actually concerns, not a new note.";
+        if (normalNote is not null)
+        {
+            // One bullet/paragraph that keeps absorbing updates is a separate idea — the line count limit never catches it.
+            string? oversized = normalNote.Content.Split('\n')
+                .Where(l => l.Length > OVERSIZED_BLOCK_CHARS)
+                .OrderByDescending(l => l.Length)
+                .FirstOrDefault();
+            if (oversized is not null)
+                block += $"\n\nOne line of this note is over {OVERSIZED_BLOCK_CHARS} characters (it starts \"{oversized.TrimStart()[..Math.Min(80, oversized.TrimStart().Length)]}…\"). " +
+                         $"If this conversation adds to it, move that whole line into its own sibling note with create_memory " +
+                         $"(\"{normalNote.Name}/<Topic>\") and replace it here with a one-line summary linking to the new note — don't make it longer.";
+        }
         if (entity.Sensitive)
             block += "\n\nThis is information about a user's private life. Keep it on the same note as everything else about " +
                      "this subject, under its own topic subheading if needed — never a separate Private/ note or file. Mark it " +
@@ -409,12 +428,18 @@ internal class Engram : MemoryAgent, IDisposable
         HashSet<string> allowedNames    = new(StringComparer.OrdinalIgnoreCase);
         List<string>    allowedPrefixes = new();
         StringBuilder   entityBlocks    = new();
-        for (int i = 0; i < resolved.Count; i++)
+        // Entities resolving to the same note share one block, so the note gets one combined edit and one commit.
+        IEnumerable<IGrouping<string, int>> byNote = Enumerable.Range(0, resolved.Count)
+            .GroupBy(i => resolved[i].AllowedPrefix.Length > 0 ? resolved[i].AllowedPrefix : resolved[i].Entity, StringComparer.OrdinalIgnoreCase);
+        foreach (IGrouping<string, int> group in byNote)
         {
-            ResolvedEntity r = resolved[i];
+            // Prefer a sensitive member's block so its marking instruction isn't lost in the merge.
+            ResolvedEntity r = resolved[group.OrderByDescending(i => entities[i].Sensitive).First()];
             foreach (string n in r.AllowedNames) allowedNames.Add(n);
             if (r.AllowedPrefix.Length > 0) allowedPrefixes.Add(r.AllowedPrefix);
-            entityBlocks.Append($"### {r.Entity}\n{r.ExistingBlock}\n\nWhat was said (speaker: {speaker}):\n{entities[i].Excerpt}\n\n");
+            string excerpts = string.Join("\n\n", group.Select(i => entities[i].Excerpt).Distinct());
+            string header   = string.Join(" / ", group.Select(i => entities[i].Entity).Distinct(StringComparer.OrdinalIgnoreCase));
+            entityBlocks.Append($"### {header}\n{r.ExistingBlock}\n\nWhat was said (speaker: {speaker}):\n{excerpts}\n\n");
         }
 
         Thread mini = new(ThreadPipeline.Dialogue, $"engram:{threadKey}:{Guid.NewGuid():N}") { Internal = true };
@@ -528,15 +553,27 @@ internal class Engram : MemoryAgent, IDisposable
         }
     }
 
-    private async Task<string> GenerateCodeSummary(string transcript, string speaker)
+    private Task<string> GenerateCodeSummary(string transcript, string speaker) =>
+        CompleteSummary(
+            "You summarise coding sessions. Write 1-2 short paragraphs describing what was worked on: the project, features implemented, bugs fixed, and any notable decisions. Write in past tense, third person (refer to the user by name). No bullet points, no code snippets. Be concise.\n\nWrap every named entity (person, project, tool, service, library, feature) in [[wikilinks]] so the memory graph can link them. Examples: [[Xywren]], [[ARI.UI]], [[PureBill]], [[Engram]], [[pipeline selector]]. If unsure whether something deserves a link, link it.",
+            $"Summarise this coding session by {speaker}:\n\n{transcript}");
+
+    private Task<string> GenerateConversationSummary(string transcript, string speaker) =>
+        CompleteSummary(
+            ResolveTemplate("LogSummarySystem",
+                "You write one entry in a daily conversation log. In 1-3 sentences, past tense, third person (refer to the user by name), say what the conversation was about and what was decided, learned, or planned — not just who or what came up. Wrap every named person, place, project, or organisation in [[wikilinks]]. Never mention the assistant. No bullet points, no preamble."),
+            ResolveTemplate("LogSummaryTask", "Summarise this conversation with {speaker}:\n\n{transcript}",
+                ("speaker", speaker), ("transcript", transcript)));
+
+    private async Task<string> CompleteSummary(string system, string user)
     {
         object requestBody = new
         {
             model    = "local",
             messages = new[]
             {
-                new { role = "system", content = "You summarise coding sessions. Write 1-2 short paragraphs describing what was worked on: the project, features implemented, bugs fixed, and any notable decisions. Write in past tense, third person (refer to the user by name). No bullet points, no code snippets. Be concise.\n\nWrap every named entity (person, project, tool, service, library, feature) in [[wikilinks]] so the memory graph can link them. Examples: [[Xywren]], [[ARI.UI]], [[PureBill]], [[Engram]], [[pipeline selector]]. If unsure whether something deserves a link, link it.\n<|think_off|>" },
-                new { role = "user",   content = $"Summarise this coding session by {speaker}:\n\n{transcript}" }
+                new { role = "system", content = system + "\n<|think_off|>" },
+                new { role = "user",   content = user }
             },
             stream      = false,
             max_tokens  = SAVE_MAX_TOKENS,
@@ -565,7 +602,7 @@ internal class Engram : MemoryAgent, IDisposable
         }
         catch (Exception ex)
         {
-            Shared.Logger.LogWarning("[Engram] Code summary generation failed: {Err}", ex.Message);
+            Shared.Logger.LogWarning("[Engram] Summary generation failed: {Err}", ex.Message);
             return "";
         }
     }
