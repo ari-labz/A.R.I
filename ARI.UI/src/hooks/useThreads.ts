@@ -111,6 +111,7 @@ export interface MemoryChange {
 }
 
 export interface Attachment {
+    id?:      string   // absent for promoted (non-image) scratchpad text files, which never fall back to msg-attachment
     name:     string
     isImage:  boolean
     mimeType: string | null

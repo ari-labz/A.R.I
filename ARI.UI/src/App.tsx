@@ -36,6 +36,7 @@ function buildSafetyDiff(newStr: string, startLine?: number, endLine?: number): 
 }
 
 export interface PendingAttachment {
+    id?:       string   // absent while uploading; also absent for promoted (non-image) text files
     name:      string
     isImage:   boolean
     mimeType:  string | null
@@ -1282,7 +1283,7 @@ export default function App() {
                 const data = await res.json()
                 setPendingAttach(prev => [
                     ...prev.filter(a => a.name !== data.name),
-                    { name: data.name, isImage: data.isImage, mimeType: data.mimeType, content: data.content, uploading: false },
+                    { id: data.id, name: data.name, isImage: data.isImage, mimeType: data.mimeType, content: data.content, uploading: false },
                 ])
             } else {
                 setPendingAttach(prev => prev.filter(a => a.name !== file.name))
@@ -1292,10 +1293,12 @@ export default function App() {
         }
     }, [showToast])
 
-    const removeMessageAttachment = useCallback(async (name: string) => {
+    // idOrName: attachments carry a server Id once uploaded; a still-promoted (non-image) text file
+    // never gets one and is never staged server-side either, so falling back to name-match is safe.
+    const removeMessageAttachment = useCallback(async (idOrName: string) => {
         if (!activeThreadRef.current) return
-        await apiFetch(`/threads/${activeThreadRef.current}/message-attachments/${encodeURIComponent(name)}`, { method: "DELETE" })
-        setPendingAttach(prev => prev.filter(a => a.name !== name))
+        await apiFetch(`/threads/${activeThreadRef.current}/message-attachments/${encodeURIComponent(idOrName)}`, { method: "DELETE" })
+        setPendingAttach(prev => prev.filter(a => (a.id ?? a.name) !== idOrName))
     }, [])
 
     const isWin32 = window.electronBridge?.platform === "win32"

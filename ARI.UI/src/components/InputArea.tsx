@@ -24,7 +24,7 @@ interface Props {
     serverReady:      boolean
     onSend:           (text: string) => void
     onUploadFiles:    (files: File[]) => void
-    onRemoveAttach:   (name: string) => void
+    onRemoveAttach:   (idOrName: string) => void
     onHeartbeatStart: () => void
     onHeartbeatStop:  () => void
     codeMode:         boolean
@@ -112,7 +112,14 @@ export default function InputArea({
         if (imageItems.length) {
             e.preventDefault()
             const files = imageItems.map(i => i.getAsFile()).filter(Boolean) as File[]
-            if (files.length) onUploadFiles(files)
+            // Browsers hand every clipboard-pasted image the same generic name (e.g. "image.png"),
+            // so give each paste a unique name — collisions overwrite the scratchpad copy on disk
+            // and make same-named attachments impossible to tell apart later.
+            const renamed = files.map((f, i) => {
+                const ext = f.name.includes(".") ? f.name.slice(f.name.lastIndexOf(".")) : ".png"
+                return new File([f], `paste-${Date.now()}-${i}${ext}`, { type: f.type })
+            })
+            if (renamed.length) onUploadFiles(renamed)
             return
         }
         const text = e.clipboardData?.getData("text/plain") ?? ""
@@ -183,14 +190,14 @@ export default function InputArea({
                 {/* pre-send attachment chips */}
                 <div id="msg-attach-preview">
                     {pendingAttach.map(a => (
-                        <div key={a.name} className={`msg-attach-chip${a.uploading ? " uploading" : ""}`}>
+                        <div key={a.id ?? a.name} className={`msg-attach-chip${a.uploading ? " uploading" : ""}`}>
                             {a.uploading
                                 ? <div className="chip-file-icon chip-uploading-icon">…</div>
                                 : a.isImage && a.content
                                     ? <img src={`data:${a.mimeType};base64,${a.content}`} alt={a.name} />
                                     : <div className="chip-file-icon">{fileExtLabel(a.name)}</div>}
                             <span className="chip-name" title={a.name}>{a.uploading ? "Uploading…" : a.name}</span>
-                            {!a.uploading && <button className="chip-remove" onClick={e => { e.stopPropagation(); onRemoveAttach(a.name) }}>×</button>}
+                            {!a.uploading && <button className="chip-remove" onClick={e => { e.stopPropagation(); onRemoveAttach(a.id ?? a.name) }}>×</button>}
                         </div>
                     ))}
                 </div>
