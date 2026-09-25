@@ -352,7 +352,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 
     /// <summary>
     /// Global SSE event stream — one connection per client, covers all threads.
-    /// Event types: newThread | streaming | streamingFinished | threadDeleted | threadUpdated
+    /// Event types: newThread | streaming | streamingFinished | threadDeleted | threadUpdated | threadBound
     /// </summary>
     [HttpGet("~/events")]
     public async Task Events(CancellationToken cancellationToken)

@@ -912,6 +912,13 @@ public class LLMModule : ILLMModule, IDisposable
     public void BroadcastProjectsChanged()
         => Broadcast(new AppEvent("projectsChanged", ""));
 
+    /// <summary>Fired when a thread is bound to a project — including a server-initiated bind via the
+    /// bind_project tool, not just the UI's own click-to-open path. Lets a client that already has this
+    /// thread open converge onto the same state a manual project-select would have produced (dropdown,
+    /// file tree, tool socket) without the user needing to reopen the thread.</summary>
+    public void BroadcastThreadBound(string threadKey, string projectId)
+        => Broadcast(new AppEvent("threadBound", threadKey, projectId));
+
     /// <summary>Subscribe to the global event stream. Dispose the returned handle to unsubscribe.</summary>
     public IDisposable Subscribe(Channel<AppEvent> channel)
     {

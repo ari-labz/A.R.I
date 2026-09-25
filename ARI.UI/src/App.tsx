@@ -347,6 +347,22 @@ export default function App() {
                     case "projectsChanged":
                         loadProjects()
                         break
+                    case "threadBound":
+                        // A thread got bound to a project server-side (e.g. Ari called bind_project
+                        // mid-conversation) — converge this client onto the same state a manual
+                        // project-select would have produced, without the user reopening the thread.
+                        void (async () => {
+                            await loadProjects()
+                            loadThreads()
+                            const projectId = data.text
+                            if (data.threadKey === activeThreadRef.current && projectId) {
+                                activeProjectRef.current = projectId
+                                setSelectedProject(projectId)
+                                await injectFileTree(data.threadKey, projectId)
+                                await openToolSocket(data.threadKey, projectId)
+                            }
+                        })()
+                        break
                     case "threadUpdated":
                         loadThreads()
                         // Refresh active thread content when it changes (new message, etc.)
@@ -531,7 +547,7 @@ export default function App() {
     const injectFileTree = useCallback(async (threadKey: string, projectId: string) => {
         if (!window.electronBridge) return
         if (treeInjectedRef.current.has(threadKey)) return
-        const project = projects.find(p => p.id === projectId)
+        const project = projectsRef.current.find(p => p.id === projectId)
         if (!project) return
         const localPath = await env.getLocalPath(projectId)
         if (!localPath) return
@@ -549,7 +565,7 @@ export default function App() {
             })
             if (res.ok) treeInjectedRef.current.add(threadKey)
         } catch (e) { console.error("[FileTree] Error:", e) }
-    }, [projects])
+    }, [])
 
     // Open a WebSocket to /api/client?threadKey=... so the server registers file tools
     // on the active thread. Handles all incoming tool-call messages from the server.

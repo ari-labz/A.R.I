@@ -111,6 +111,18 @@ public class ProjectStore
         return path;
     }
 
+    /// <summary>Binds a ServerFs project directly to a caller-given absolute path instead of the
+    /// auto-managed Projects/&lt;name&gt; folder — creates the directory (and any missing parents) if
+    /// it doesn't exist, then initialises it exactly like CreateServerFolder. Only reached after the
+    /// path has been explicitly confirmed with the user in chat — see create_project/set_project_path.</summary>
+    public static string CreateServerFolderAt(string path)
+    {
+        string full = Path.GetFullPath(path);
+        Directory.CreateDirectory(full);
+        InitAriProject(full);
+        return full;
+    }
+
     /// <summary>Initialises a .ariproject hidden git repo (ARI Project Sync) in the given folder.
     /// Uses --git-dir=.ariproject so standard git tools never detect this as a repository.
     /// Safe to call on an already-initialised folder.</summary>

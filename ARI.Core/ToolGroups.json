@@ -5,11 +5,11 @@
       "Tools": ["git_status", "git_diff", "git_log", "git_commit"]
     },
     "project_git_tools": {
-      "Description": "Git operations (status, fetch, pull, log, diff, add, commit, push, branch, checkout, stash, restore) across the project's repositories. Repos are auto-discovered — use this when working with a project that contains multiple git repos.",
-      "Tools": ["git"]
+      "Description": "Git operations (status, fetch, pull, log, diff, add, commit, push, branch, checkout, stash, restore) across the project's repositories, plus cloning a new GitHub repo into the project with git_clone. Repos are auto-discovered — use this when working with a project that contains multiple git repos.",
+      "Tools": ["git", "git_clone"]
     },
     "github_tools": {
-      "Description": "Read GitHub over the REST API: view a repo, list/view issues and pull requests, list Actions runs. Prompts for and stores a token when a repo is private.",
+      "Description": "Full GitHub access over the REST API: view a repo, list/view issues and pull requests, list Actions runs, list repos you or an org have, create a new repo (public or private), or fork one. Reading public repos always works; private repos, creating, and forking need a GitHub account connected in the control panel (Integrations → GitHub) first — this can't be set up from chat. Pair with git_clone (project_git_tools) to bring a repo onto disk after finding/creating/forking it.",
       "Tools": ["github"]
     },
     "filesystem_tools": {
@@ -29,8 +29,8 @@
       "Tools": ["search_vault"]
     },
     "project_tools": {
-      "Description": "List, create, rename, and bind projects — the workspaces (code repos or note vaults) a conversation can be scoped to. Use this for any request to start/open/make a new project, workspace, or \"project file\" — that phrase means a new project, not a file inside one.",
-      "Tools": ["list_projects", "create_project", "rename_project", "bind_project"]
+      "Description": "List, create, rename, bind, and set the filesystem path of projects — the workspaces (code repos or note vaults) a conversation can be scoped to. Use this for any request to start/open/make a new project, workspace, or \"project file\" — that phrase means a new project, not a file inside one. If the user names a specific directory on their machine, confirm the exact path with them, then pass it to create_project (new project) or set_project_path (existing project) — never RemoteFs, which needs a connected desktop app and can't be pointed anywhere from chat.",
+      "Tools": ["list_projects", "create_project", "rename_project", "bind_project", "set_project_path"]
     },
     "calendar_tools": {
       "Description": "ARI's own calendar. create_event adds context (working hours, a birthday, a trip) that is never acted on by itself. create_reminder schedules a real turn to fire later — write its prompt as an instruction to your future self, not the final wording. Both support repeat (daily/weekly/monthly/yearly, optionally an end date or count). list_events looks forward or backward from today by a signed day count. delete_entry removes either kind by id.",
