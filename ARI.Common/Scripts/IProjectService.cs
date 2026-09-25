@@ -16,10 +16,18 @@ public interface IProjectService
 
     /// <summary>category is free text. backend must be "ServerFs" or "RemoteFs" (case-insensitive);
     /// null defaults to ServerFs. Project capabilities (git, vault, etc.) are detected from directory
-    /// contents at bind time — no type declaration needed.</summary>
-    ProjectSummary? Create(string name, string? category, string? backend = null);
+    /// contents at bind time — no type declaration needed. If path is given, it overrides backend:
+    /// the project is bound directly to that absolute directory on this server's disk (created if
+    /// missing), same as SetPath below.</summary>
+    ProjectSummary? Create(string name, string? category, string? backend = null, string? path = null);
 
     bool Rename(string id, string newName);
+
+    /// <summary>Points an existing project directly at an absolute directory on this server's disk,
+    /// creating it if it doesn't exist yet. Forces the project onto ServerFs — the server reads/writes
+    /// that path directly, no desktop app or per-device config involved. Returns false if the project
+    /// doesn't exist.</summary>
+    bool SetPath(string id, string path);
 
     /// <summary>Binds a thread to a project: persists the thread→project mapping and, for a ServerFs
     /// project, immediately makes filesystem tools and vault_tools resolve on that thread — the model

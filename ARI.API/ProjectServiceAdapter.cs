@@ -15,16 +15,28 @@ public class ProjectServiceAdapter(ProjectStore store) : IProjectService
 {
     public IReadOnlyList<ProjectSummary> List() => store.GetAll().Select(ToSummary).ToList();
 
-    public ProjectSummary? Create(string name, string? category, string? backend = null)
+    public ProjectSummary? Create(string name, string? category, string? backend = null, string? path = null)
     {
         if (string.IsNullOrWhiteSpace(name)) return null;
 
         string id = Guid.NewGuid().ToString("N");
-        StorageBackend resolvedBackend = Enum.TryParse(backend, ignoreCase: true, out StorageBackend explicitBackend)
-            ? explicitBackend
-            : StorageBackend.ServerFs;
         string trimmedName = name.Trim();
-        string? rootPath = resolvedBackend == StorageBackend.ServerFs ? ProjectStore.CreateServerFolder(id, trimmedName) : null;
+        StorageBackend resolvedBackend;
+        string? rootPath;
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            // An explicit path always means direct server-side disk access — no desktop app involved,
+            // regardless of what backend the caller also passed.
+            resolvedBackend = StorageBackend.ServerFs;
+            rootPath        = ProjectStore.CreateServerFolderAt(path);
+        }
+        else
+        {
+            resolvedBackend = Enum.TryParse(backend, ignoreCase: true, out StorageBackend explicitBackend)
+                ? explicitBackend
+                : StorageBackend.ServerFs;
+            rootPath = resolvedBackend == StorageBackend.ServerFs ? ProjectStore.CreateServerFolder(id, trimmedName) : null;
+        }
 
         Project project = new(
             Id:           id,
@@ -55,6 +67,18 @@ public class ProjectServiceAdapter(ProjectStore store) : IProjectService
         return true;
     }
 
+    public bool SetPath(string id, string path)
+    {
+        Project? existing = store.Get(id);
+        if (existing is null || string.IsNullOrWhiteSpace(path)) return false;
+
+        string rootPath = ProjectStore.CreateServerFolderAt(path);
+        store.Update(existing with { Backend = StorageBackend.ServerFs, RootPath = rootPath });
+        if (Modules.Llm is LLMModule llm)
+            llm.BroadcastProjectsChanged();
+        return true;
+    }
+
     public bool BindThread(string threadKey, string projectId)
     {
         Project? project = store.Get(projectId);
@@ -65,6 +89,7 @@ public class ProjectServiceAdapter(ProjectStore store) : IProjectService
         {
             bool isVault = project.RootPath is { } rp && Directory.Exists(Path.Combine(rp, ".obsidian"));
             llm.BindProjectContext(threadKey, project.RootPath, isVault);
+            llm.BroadcastThreadBound(threadKey, projectId);
         }
         return true;
     }

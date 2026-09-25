@@ -23,8 +23,12 @@ internal static class ToolFactories
         // Multi-repo git tool: auto-discovers repos inside the project folder so ARI never constructs paths.
         ["git"] = t => t.FilesystemRoot is { } r ? GitMulti.Discover(r) : null,
 
-        // GitHub over the REST API — no gh binary. projectRoot lets it use a project-scoped token.
-        ["github"] = t => new GitHubTool(t.FilesystemRoot),
+        // Clones a new repo into the project — the one thing GitMulti can't do, since it only discovers
+        // repos that already exist on disk.
+        ["git_clone"] = t => t.FilesystemRoot is { } r ? new GitClone(r) : null,
+
+        // GitHub over the REST API — no gh binary. Token comes from GitHubStore (control panel connection).
+        ["github"] = _ => new GitHubTool(),
 
         ["deliver_file"]      = t => new DeliverFile(t.Key),
         ["create_scratchpad"] = t => new CreateScratchpad(t),
@@ -46,10 +50,11 @@ internal static class ToolFactories
         // IProjectService), never a direct ARI.API reference. Unavailable if nothing's registered it
         // yet (shouldn't happen post-startup, but the null-check keeps this consistent with every
         // other "not available in this context" factory here).
-        ["list_projects"]  = _ => Modules.Projects is not null ? new ListProjects()  : null,
-        ["create_project"] = _ => Modules.Projects is not null ? new CreateProject() : null,
-        ["rename_project"] = _ => Modules.Projects is not null ? new RenameProject() : null,
-        ["bind_project"]   = t => Modules.Projects is not null ? new BindProject(t)  : null,
+        ["list_projects"]     = _ => Modules.Projects is not null ? new ListProjects()     : null,
+        ["create_project"]    = _ => Modules.Projects is not null ? new CreateProject()    : null,
+        ["rename_project"]    = _ => Modules.Projects is not null ? new RenameProject()    : null,
+        ["bind_project"]      = t => Modules.Projects is not null ? new BindProject(t)     : null,
+        ["set_project_path"]  = _ => Modules.Projects is not null ? new SetProjectPath()   : null,
 
         // calendar_tools — reach the calendar only through ICalendarModule (ARI.Common), never a
         // direct reference to ARI.Calendar's domain classes. Always available once the module is up.
