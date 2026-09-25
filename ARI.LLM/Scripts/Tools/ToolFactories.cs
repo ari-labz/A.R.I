@@ -18,7 +18,7 @@ internal static class ToolFactories
         ["git_status"] = t => t.FilesystemRoot is { } r ? new GitStatus(r) : null,
         ["git_diff"]   = t => t.FilesystemRoot is { } r ? new GitDiff(r)   : null,
         ["git_log"]    = t => t.FilesystemRoot is { } r ? new GitLog(r)    : null,
-        ["git_commit"] = t => t.FilesystemRoot is { } r ? new GitCommit(r, "A.R.I <ari@ari.local>") : null,
+        ["git_commit"] = t => t.FilesystemRoot is { } r ? new GitCommit(r, "A.R.I <ari@xywren.net>") : null,
 
         // Multi-repo git tool: auto-discovers repos inside the project folder so ARI never constructs paths.
         ["git"] = t => t.FilesystemRoot is { } r ? GitMulti.Discover(r) : null,
