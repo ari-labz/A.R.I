@@ -68,6 +68,16 @@ public abstract class Agent
     private static readonly TimeSpan SEND_LOCK_TIMEOUT = TimeSpan.FromSeconds(90);
     private const double CONTEXT_CHAR_MULTIPLIER = 3.5;
 
+    // TEMPORARILY OFF (2026-09-26) — thinking budgets (ARI's steer/hard-cut AND the server-side
+    // thinking_budget_tokens cap) were added to stop "no wait, actually…" overthinking loops. Since Qwen 3.8's
+    // reasoning_effort dial, that job looks covered: the Coder runs with no budget and never ran away (max ~1.2k
+    // thinking tokens over 5 days), while Dialogue's 512-token cap cut 1 in 3 replies short and once looped ~35
+    // times over 24 minutes (every cutoff restarted the thought) until the context window filled. Testing: run
+    // with budgets off across low/medium/high effort, then check DTI for the longest thinking lengths. If none
+    // spiral, remove budgets for good; if some do, re-enable as a large safety net set just above normal max.
+    // static readonly rather than const so the disabled branches don't raise unreachable-code warnings.
+    private static readonly bool THINKING_LIMITS_ENABLED = false;
+
     // Sent as a user message when the thinking budget runs out, at the end of the sentence in progress.
     // It must leave acting on the table: the old server-side wording demanded a finished reply, so a turn
     // that still needed a tool answered "..." instead of calling it.
@@ -508,7 +518,7 @@ public abstract class Agent
         // The whole dial — multiplier and wire field — only touches models that support reasoning_effort,
         // so a stale "High" can't inflate a non-supporting model's cap with no steering to match it.
         double effortMult = Server?.ActiveModel?.SupportsReasoningEffort == true ? ReasoningEffortStore.Multiplier : 1.0;
-        turn.ThinkBudget = Think ? (int)Math.Round(baseThinkBudget * effortMult) : 0;
+        turn.ThinkBudget = Think && THINKING_LIMITS_ENABLED ? (int)Math.Round(baseThinkBudget * effortMult) : 0;
         turn.RespBudget  = opts.MaxTokensOverride != 0 ? opts.MaxTokensOverride : BudgetResponse;
         // The two budgets are deliberately NOT summed into a single wire limit. Thinking is capped
         // server-side by thinking_budget_tokens; the reply then gets its own full RespBudget, counted
@@ -2039,7 +2049,7 @@ public abstract class Agent
             body["thinking"]        = false;
             enableThinking          = false;
         }
-        else if (BudgetThinking > 0 || thinkingBudgetOverride > 0)
+        else if (THINKING_LIMITS_ENABLED && (BudgetThinking > 0 || thinkingBudgetOverride > 0))
         {
             // thinkBudget is already scaled by the reasoning-effort multiplier (see StartTurn); use it so the
             // server cap matches ARI's own steer/cut. Fall back to raw budgets only if it wasn't threaded.
