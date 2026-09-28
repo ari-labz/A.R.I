@@ -125,7 +125,7 @@ internal sealed class GitMulti : Tool
         else if (command == "add" && string.IsNullOrWhiteSpace(extra))
             args.Add("-A");   // stage everything when no path is given
         else if (!string.IsNullOrWhiteSpace(extra))
-            args.AddRange(SplitArgs(extra));
+            args.AddRange(CommandSafety.Split(extra));
 
         // GitHub auth (github.com only) is added by AriGit.Run.
         (int code, string outp, string err) = AriGit.Run(repoPath, args.ToArray());
@@ -160,18 +160,13 @@ internal sealed class GitMulti : Tool
         bool amending = extra.Contains("--amend", StringComparison.Ordinal);
         if (anyStaged == 0 && !amending) return "Nothing to commit — working tree clean.";
 
-        (int code, string outp, string err) = AriGit.Commit(repoPath, message, SplitArgs(extra));
+        (int code, string outp, string err) = AriGit.Commit(repoPath, message, CommandSafety.Split(extra));
         if (code != 0) return $"git commit exited {code}:\n{(outp + "\n" + err).Trim()}";
 
         (int _, string head, string _) = AriGit.Run(repoPath, ["log", "-1", "--format=%h %s"]);
         return $"Committed {head}";
     }
 
-    // Space-separated, but a "double-quoted" or 'single-quoted' run stays one argument (paths with spaces).
-    private static string[] SplitArgs(string extra)
-        => System.Text.RegularExpressions.Regex.Matches(extra, "\"([^\"]*)\"|'([^']*)'|(\\S+)")
-            .Select(m => m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Success ? m.Groups[2].Value : m.Groups[3].Value)
-            .ToArray();
 
     private static JsonElement Parse(string json)
     {

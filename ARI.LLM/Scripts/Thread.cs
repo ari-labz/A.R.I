@@ -188,6 +188,11 @@ public class Thread
     /// (Discord, proactive, internal) so existing behaviour is preserved.</summary>
     public bool IsOwnerThread { get; set; } = true;
 
+    /// <summary>True only for a chat the admin is having in the app (web/desktop), set on each message by the
+    /// chat API. Gates tools that act with the admin's own accounts (the github tool) — off by default, so
+    /// Discord, guest, proactive and internal threads never get them.</summary>
+    public bool IsAdminChat { get; set; }
+
     /// <summary>The user ID (from the JWT NameIdentifier claim) that created this thread.
     /// Null for system-created threads (proactive, Discord, internal).</summary>
     public string? OwnerId { get; set; }

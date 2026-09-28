@@ -1086,6 +1086,10 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                 && projectStore.Get(boundProjectId) is { RootPath: { } rootPath })
                 effectiveLocalPath = rootPath;
 
+            // Re-evaluated every message from the caller's own login, so the flag can't outlive a role change.
+            if (FindThread(threadKey) is { } chatThread)
+                chatThread.IsAdminChat = User.IsInRole(ARI.API.Auth.Roles.Admin);
+
             await Llm.PromptStreaming(threadKey, prompt, username, platformContext, async accumulated =>
             {
                 string escaped = accumulated.Replace("\n", "\\n").Replace("\r", "");

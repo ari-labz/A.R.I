@@ -24,8 +24,10 @@ internal static class ToolFactories
         // git_tools for commits, and nothing should ever clone into the Brain.
         ["git_clone"] = t => t.FilesystemRoot is { } r && !IsVault(t, r) ? new GitClone(r) : null,
 
-        // GitHub over the REST API — no gh binary. Token comes from GitHubStore (control panel connection).
-        ["github"] = _ => new GitHubTool(),
+        // GitHub through gh, as the account connected in the control panel. Only in the admin's own app
+        // chats — never Discord, guests or background agents — and only once gh has been provisioned.
+        ["github"] = t => t.IsAdminChat && GitHubStore.ResolveToken() is not null && GhCli.ExecutablePath is { } gh
+            ? new GitHubTool(gh, t.FilesystemRoot) : null,
 
         ["deliver_file"]      = t => new DeliverFile(t.Key),
         ["create_scratchpad"] = t => new CreateScratchpad(t),
@@ -120,7 +122,15 @@ internal static class ToolFactories
 
     /// <summary>Why a known tool didn't resolve for this thread — the real reason, so ARI doesn't blame a
     /// missing project binding for everything (e.g. git fails on a bound project with no repos in it).</summary>
-    internal static string UnavailableReason(string toolName, Thread thread) => thread.FilesystemRoot switch
+    internal static string UnavailableReason(string toolName, Thread thread) => toolName.ToLowerInvariant() switch
+    {
+        "github" when !thread.IsAdminChat              => "it's only available in the owner's own chats in the app",
+        "github" when GitHubStore.ResolveToken() is null => "no GitHub account is connected — the user can connect one on the control panel's GitHub page",
+        "github"                                         => "GitHub's CLI is still being installed — try again in a minute",
+        _ => FilesystemReason(toolName, thread),
+    };
+
+    private static string FilesystemReason(string toolName, Thread thread) => thread.FilesystemRoot switch
     {
         null => "this conversation has no project bound on the server — call bind_project first",
         { } root when toolName.Equals("git", StringComparison.OrdinalIgnoreCase) => $"no git repositories were found in {root}",
