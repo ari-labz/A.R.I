@@ -404,7 +404,14 @@ public class LLMModule : ILLMModule, IDisposable
 
     private Thread GetOrCreateThread(ThreadPipeline type, string threadKey, string? platformContext = null)
     {
-        if (threads.TryGetValue(threadKey, out Thread? existing)) return existing;
+        if (threads.TryGetValue(threadKey, out Thread? existing))
+        {
+            // The app creates a thread before its first message, so the context that message carries (the
+            // project, its folder overview) arrives after creation — take it then. Kept for the rest of the
+            // thread so the system prompt's cached prefix stays stable.
+            existing.PlatformContext ??= platformContext;
+            return existing;
+        }
         Thread thread = new Thread(type, threadKey, platformContext);
         threads[threadKey] = thread;
         // list_tools/request_tools are always warm (issue #126) and universal — no agent-identity gate.

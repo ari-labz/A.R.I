@@ -264,7 +264,7 @@ public class Thread
     // ── Attachments ────────────────────────────────────────────────────────────
     private readonly List<Attachment> pendingMessageAtts = new();
 
-    internal string? PlatformContext { get; init; }
+    internal string? PlatformContext { get; set; }
     public   string  Key             => threadKey;
 
     internal event Action? Updated;
