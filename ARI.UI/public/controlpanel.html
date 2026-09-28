@@ -1244,6 +1244,21 @@ html, body {
           <div id="gh-user-code" style="font-size:24px;font-weight:700;letter-spacing:.08em;"></div>
         </div>
       </div>
+
+      <div class="vs-section">
+        <div class="vs-section-title">Commits made by A.R.I</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
+          How ARI signs every commit she makes — in projects and in the Brain — so you can tell hers from yours at a glance.
+          Works with or without a GitHub connection.
+        </p>
+        <div style="display:flex;align-items:center;gap:12px;">
+          <select id="gh-commit-as" class="vs-input" style="width:auto;">
+            <option value="Author">Author — A.R.I is the commit's author</option>
+            <option value="CoAuthor">Co-author — you're the author, A.R.I is credited as co-author</option>
+          </select>
+          <span id="gh-commit-as-status" style="font-size:12px;color:var(--text-dim);"></span>
+        </div>
+      </div>
     </div>
 
     <!-- Image Generation — Model tab -->
@@ -2677,10 +2692,24 @@ async function loadGitHub() {
         document.getElementById('gh-connected-box').style.display = d.connected ? '' : 'none';
         document.getElementById('gh-connect-box').style.display = d.connected ? 'none' : 'flex';
         document.getElementById('gh-login').textContent = d.login || '';
+        document.getElementById('gh-commit-as').value = d.commitAs || 'Author';
     } catch {
         ghSetStatus('Failed to load GitHub settings.', true);
     }
 }
+
+// Saves on change — takes effect on ARI's next commit, no restart.
+document.getElementById('gh-commit-as').addEventListener('change', async e => {
+    const status = document.getElementById('gh-commit-as-status');
+    status.textContent = 'Saving…';
+    try {
+        const r = await cpFetch('/admin/github/commit-as', {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ commitAs: e.currentTarget.value }),
+        });
+        status.textContent = r.ok ? 'Saved.' : 'Save failed.';
+    } catch { status.textContent = 'Save failed.'; }
+});
 
 function ghSetStatus(text, isError) {
     const s = document.getElementById('gh-status');

@@ -1,5 +1,3 @@
-using System.Diagnostics;
-
 namespace ARI.LLM;
 
 // Shared git plumbing for the brain-note tools. Every note write is its own commit — one commit per
@@ -13,37 +11,14 @@ internal static class BrainGit
     // any tool call) and silently misattribute it to this note's commit.
     internal static string Commit(string vaultRoot, string message, params string[] relativePaths)
     {
-        (int _, string status, string _) = Run(vaultRoot, "status", "--porcelain");
+        (int _, string status, string _) = AriGit.Run(vaultRoot, ["status", "--porcelain"]);
         if (string.IsNullOrWhiteSpace(status)) return "(No git changes detected.)";
 
-        foreach (string path in relativePaths) Run(vaultRoot, "add", "--", path);
-        (int code, string _, string err) = RunInput(vaultRoot, message, "commit", "-F", "-");
-        if (code != 0) return $"Commit failed: {err.Trim()}";
+        foreach (string path in relativePaths) AriGit.Run(vaultRoot, ["add", "--", path]);
+        (int code, string _, string err) = AriGit.Commit(vaultRoot, message);
+        if (code != 0) return $"Commit failed: {err}";
 
-        (int _, string head, string _) = Run(vaultRoot, "log", "-1", "--format=%h %s");
-        return $"Committed to brain: {head.Trim()}";
+        (int _, string head, string _) = AriGit.Run(vaultRoot, ["log", "-1", "--format=%h %s"]);
+        return $"Committed to brain: {head}";
     }
-
-    private static (int Code, string Out, string Err) RunInput(string workDir, string? stdin, params string[] args)
-    {
-        ProcessStartInfo psi = new()
-        {
-            FileName               = "git",
-            WorkingDirectory       = workDir,
-            RedirectStandardOutput = true,
-            RedirectStandardError  = true,
-            RedirectStandardInput  = stdin is not null,
-            UseShellExecute        = false,
-        };
-        foreach (string arg in args) psi.ArgumentList.Add(arg);
-        using Process process = Process.Start(psi)!;
-        if (stdin is not null) { process.StandardInput.Write(stdin); process.StandardInput.Close(); }
-        string outp = process.StandardOutput.ReadToEnd();
-        string err  = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        return (process.ExitCode, outp, err);
-    }
-
-    private static (int Code, string Out, string Err) Run(string workDir, params string[] args)
-        => RunInput(workDir, null, args);
 }

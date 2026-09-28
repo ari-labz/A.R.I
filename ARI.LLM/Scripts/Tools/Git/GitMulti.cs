@@ -110,29 +110,34 @@ internal sealed class GitMulti : Tool
         if (!repos.TryGetValue(repo, out string? repoPath))
             return Task.FromResult<ToolResult>($"Unknown repo '{repo}'. Available: {string.Join(", ", repos.Keys)}");
 
-        List<string> args = new List<string>();
-        // Only fetch/pull/push touch the network, but a stored token adds nothing harmful to the others —
-        // git ignores an unused http.extraheader — so it's simpler to always inject it than to special-case
-        // which commands need it. Per-invocation, never written to this repo's .git/config.
-        if (GitHubStore.ResolveToken() is { Length: > 0 } token)
-            args.AddRange(["-c", $"http.extraheader=AUTHORIZATION: bearer {token}"]);
-        args.Add(command);
-
+        int code; string outp, err;
         if (command == "commit")
         {
-            // Message goes through as a single -m argument so spaces/quotes survive the arg split below.
+            // Commits go through AriGit so they're signed per the user's setting, like every other ARI commit.
             string message = Str(a, "message");
-            if (!string.IsNullOrWhiteSpace(message)) args.AddRange(["-m", message]);
-            else if (!string.IsNullOrWhiteSpace(extra)) args.AddRange(SplitArgs(extra));
+            if (string.IsNullOrWhiteSpace(message))
+                return Task.FromResult<ToolResult>("commit needs a 'message'.");
+            (code, outp, err) = AriGit.Commit(repoPath, message, SplitArgs(extra));
         }
-        else if (command == "log" && string.IsNullOrWhiteSpace(extra))
-            args.AddRange(["-n15", "--oneline"]);
-        else if (command == "add" && string.IsNullOrWhiteSpace(extra))
-            args.Add("-A");   // stage everything when no path is given
-        else if (!string.IsNullOrWhiteSpace(extra))
-            args.AddRange(SplitArgs(extra));
+        else
+        {
+            List<string> args = new List<string>();
+            // Only fetch/pull/push touch the network, but a stored token adds nothing harmful to the others —
+            // git ignores an unused http.extraheader — so it's simpler to always inject it than to special-case
+            // which commands need it. Per-invocation, never written to this repo's .git/config.
+            if (GitHubStore.ResolveToken() is { Length: > 0 } token)
+                args.AddRange(["-c", $"http.extraheader=AUTHORIZATION: bearer {token}"]);
+            args.Add(command);
 
-        (int code, string outp, string err) = RunGit(repoPath, args.ToArray());
+            if (command == "log" && string.IsNullOrWhiteSpace(extra))
+                args.AddRange(["-n15", "--oneline"]);
+            else if (command == "add" && string.IsNullOrWhiteSpace(extra))
+                args.Add("-A");   // stage everything when no path is given
+            else if (!string.IsNullOrWhiteSpace(extra))
+                args.AddRange(SplitArgs(extra));
+
+            (code, outp, err) = RunGit(repoPath, args.ToArray());
+        }
 
         string combined = (outp + "\n" + err).Trim();
         if (string.IsNullOrWhiteSpace(combined))

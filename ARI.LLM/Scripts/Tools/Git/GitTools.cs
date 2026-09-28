@@ -110,8 +110,7 @@ internal sealed class GitLog : GitTool
 
 internal sealed class GitCommit : GitTool
 {
-    private readonly string? coAuthor;   // e.g. "A.R.I <ari@xywren.net>" → appended as a Co-Authored-By trailer
-    internal GitCommit(string root, string? coAuthor = null) : base(root) => this.coAuthor = coAuthor;
+    internal GitCommit(string root) : base(root) { }
     internal override string Name => "git_commit";
     internal override object Schema => new
     {
@@ -145,8 +144,7 @@ internal sealed class GitCommit : GitTool
         if (string.IsNullOrWhiteSpace(status)) return Task.FromResult<ToolResult>("Nothing to commit — working tree clean.");
 
         Run("add", "-A");
-        if (!string.IsNullOrWhiteSpace(coAuthor)) message += $"\n\nCo-Authored-By: {coAuthor}";
-        (int code, string _, string err) = RunInput(message, "commit", "-F", "-");
+        (int code, string _, string err) = AriGit.Commit(root, message);
         if (code != 0) return Task.FromResult<ToolResult>($"Commit failed: {err.Trim()}");
 
         (int _, string head, string _) = Run("log", "-1", "--format=%h %s");

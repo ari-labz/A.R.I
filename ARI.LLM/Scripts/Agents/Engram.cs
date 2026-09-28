@@ -638,28 +638,13 @@ internal class Engram : MemoryAgent, IDisposable
         try
         {
             string vault = Brain.VaultRoot;
-            RunGit(vault, "add", "--", relativePath);
-            RunGit(vault, "commit", "-m", message);
+            AriGit.Run(vault, ["add", "--", relativePath]);
+            AriGit.Commit(vault, message);
         }
         catch (Exception ex)
         {
             Shared.Logger.LogWarning("[Engram] Git commit for code summary failed: {Err}", ex.Message);
         }
-    }
-
-    private static void RunGit(string workDir, params string[] args)
-    {
-        ProcessStartInfo psi = new()
-        {
-            FileName               = "git",
-            WorkingDirectory       = workDir,
-            RedirectStandardOutput = true,
-            RedirectStandardError  = true,
-            UseShellExecute        = false,
-        };
-        foreach (string arg in args) psi.ArgumentList.Add(arg);
-        using System.Diagnostics.Process process = System.Diagnostics.Process.Start(psi)!;
-        process.WaitForExit();
     }
 
     // ── Classify (unchanged) ─────────────────────────────────────────────────────────
