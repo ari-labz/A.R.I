@@ -988,6 +988,10 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                     ctx.AppendLine().AppendLine(systemContextBlock);
                     ctx.AppendLine("Use list_directory to explore subdirectories and read_file to read files.");
                 }
+                // No tree from the desktop app (a server-side project, or the web/phone UI) — build it here, so
+                // every project thread starts knowing what's in the folder.
+                else if (project.RootPath is { } overviewRoot && Directory.Exists(overviewRoot))
+                    ctx.AppendLine().AppendLine(ARI.LLM.ProjectOverview.Build(overviewRoot));
 
                 // If the project folder is or contains git repos, tell ARI to pull before working.
                 // Path.Exists rather than Directory.Exists: a submodule's .git is a file.
