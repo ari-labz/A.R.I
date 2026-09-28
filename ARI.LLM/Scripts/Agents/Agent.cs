@@ -1936,7 +1936,8 @@ public abstract class Agent
         List<ThreadMessage> collapsed = new();
         foreach (ThreadMessage m in chatHistory)
         {
-            if (collapsed.Count > 0 && collapsed[^1].Role == m.Role)
+            // A turn with tool calls is kept whole — merging would lose which prose followed which calls.
+            if (collapsed.Count > 0 && collapsed[^1].Role == m.Role && collapsed[^1].ToolBatches is null && m.ToolBatches is null)
                 collapsed[^1] = collapsed[^1] with { Content = collapsed[^1].Content + "\n" + m.Content };
             else
                 collapsed.Add(m);
@@ -1950,6 +1951,20 @@ public abstract class Agent
         for (int i = 0; i < collapsed.Count - 1; i++)
         {
             ThreadMessage m = collapsed[i];
+            // Replay the turn's real tool calls (results stubbed) ahead of its prose, in the same shape as a
+            // live turn's calls — see ToolHistory for why.
+            for (int b = 0; b < (m.ToolBatches?.Count ?? 0); b++)
+            {
+                IReadOnlyList<HistoryToolCall> batch = m.ToolBatches![b];
+                string IdOf(int c) => $"hist_{i}_{b}_{c}";
+                messages.Add(new
+                {
+                    role       = "assistant",
+                    tool_calls = batch.Select((c, k) => new { id = IdOf(k), type = "function", function = new { name = c.Name, arguments = c.Args } }).ToArray(),
+                });
+                for (int k = 0; k < batch.Count; k++)
+                    messages.Add(new { role = "tool", tool_call_id = IdOf(k), name = batch[k].Name, content = batch[k].Result });
+            }
             messages.Add(new { role = m.Role, content = $"{m.Username}: {m.Content}" });
         }
 
