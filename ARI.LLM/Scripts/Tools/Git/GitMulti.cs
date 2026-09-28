@@ -14,10 +14,11 @@ internal sealed class GitMulti : Tool
     private static readonly HashSet<string> SkippedDirs = new(StringComparer.OrdinalIgnoreCase) { "node_modules", "bin", "obj" };
 
     private readonly Dictionary<string, string> repos;  // display name → absolute path
+    private readonly string? rootRepo;                  // the project folder's own repo, when it is one
 
     internal override string Name => "git";
 
-    private GitMulti(Dictionary<string, string> repos) => this.repos = repos;
+    private GitMulti(Dictionary<string, string> repos, string? rootRepo) { this.repos = repos; this.rootRepo = rootRepo; }
 
     /// <summary>Finds every repo in the project: the root folder when it is one (named after the folder),
     /// and nested repos keyed by their path relative to the root. Returns null if none are found so
@@ -28,11 +29,11 @@ internal sealed class GitMulti : Tool
 
         Dictionary<string, string> repos = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-        if (IsRepo(projectRoot))
-            repos[Path.GetFileName(Path.TrimEndingDirectorySeparator(projectRoot))] = projectRoot;
+        string? rootRepo = IsRepo(projectRoot) ? Path.GetFileName(Path.TrimEndingDirectorySeparator(projectRoot)) : null;
+        if (rootRepo is not null) repos[rootRepo] = projectRoot;
         ScanForRepos(projectRoot, projectRoot, 1, repos);
 
-        return repos.Count == 0 ? null : new GitMulti(repos);
+        return repos.Count == 0 ? null : new GitMulti(repos, rootRepo);
     }
 
     private static void ScanForRepos(string dir, string projectRoot, int depth, Dictionary<string, string> repos)
@@ -55,16 +56,22 @@ internal sealed class GitMulti : Tool
     // .git is a folder in a normal clone but a file in a submodule or worktree — both are repos.
     private static bool IsRepo(string dir) => Path.Exists(Path.Combine(dir, ".git"));
 
+    // The repo a call targets when it doesn't name one: the project folder itself if it's a repo, else the
+    // only repo there is. Lets single-repo callers (the memory agents over the Brain) skip the parameter.
+    private string? DefaultRepo => rootRepo ?? (repos.Count == 1 ? repos.Keys.First() : null);
+
     internal override object Schema => new
     {
         type = "function",
         function = new
         {
             name        = "git",
-            description = $"Run a git command against one of the project's repositories. "
-                        + $"Repos: {string.Join(", ", repos.Keys)}. "
-                        + "fetch before pull to preview incoming changes. status before commit. "
-                        + "stage with add, then commit with a message, then push.",
+            description = $"Run git against one of the project's repositories. Repos: {string.Join(", ", repos.Keys)}"
+                        + (DefaultRepo is { } d ? $" (default: {d})" : "") + ". "
+                        + "Works with any host (GitHub, GitLab, a company server). "
+                        + "fetch before pull to preview incoming changes; diff to review before committing. "
+                        + "commit stages everything first if nothing is staged yet. Commit message: first line "
+                        + "= what changed, then a blank line, then why. One commit per logical change.",
             parameters = new
             {
                 type       = "object",
@@ -74,7 +81,7 @@ internal sealed class GitMulti : Tool
                     {
                         type        = "string",
                         @enum       = repos.Keys.Order().ToArray(),
-                        description = "Which repository to target."
+                        description = "Which repository to target. Optional when there's a default."
                     },
                     command = new
                     {
@@ -85,15 +92,15 @@ internal sealed class GitMulti : Tool
                     message = new
                     {
                         type        = "string",
-                        description = "Commit message. Only used by commit — passed as -m so spaces and quotes are safe."
+                        description = "Commit message — required for commit. First line = what changed; blank line; then why."
                     },
                     args = new
                     {
                         type        = "string",
-                        description = "Optional extra arguments (e.g. a file path for add/diff/log, a branch name for checkout, 'origin main' for push, '--oneline' for log). add with no args stages everything."
+                        description = "Optional extra arguments (e.g. a file path for add/diff/log, a branch name for checkout, 'origin main' for push). Quote paths with spaces. add with no args stages everything; log with no args shows the last 15 commits in one line each."
                     }
                 },
-                required = new[] { "repo", "command" }
+                required = new[] { "command" }
             }
         }
     };
@@ -105,32 +112,23 @@ internal sealed class GitMulti : Tool
         string command = Str(a, "command");
         string extra   = Str(a, "args");
 
+        if (repo.Length == 0) repo = DefaultRepo ?? "";
         if (!repos.TryGetValue(repo, out string? repoPath))
             return Task.FromResult<ToolResult>($"Unknown repo '{repo}'. Available: {string.Join(", ", repos.Keys)}");
 
-        int code; string outp, err;
         if (command == "commit")
-        {
-            // Commits go through AriGit so they're signed per the user's setting, like every other ARI commit.
-            string message = Str(a, "message");
-            if (string.IsNullOrWhiteSpace(message))
-                return Task.FromResult<ToolResult>("commit needs a 'message'.");
-            (code, outp, err) = AriGit.Commit(repoPath, message, SplitArgs(extra));
-        }
-        else
-        {
-            // GitHub auth (github.com only) is added by AriGit.Run.
-            List<string> args = new List<string> { command };
+            return Task.FromResult<ToolResult>(Commit(repoPath, Str(a, "message"), extra));
 
-            if (command == "log" && string.IsNullOrWhiteSpace(extra))
-                args.AddRange(["-n15", "--oneline"]);
-            else if (command == "add" && string.IsNullOrWhiteSpace(extra))
-                args.Add("-A");   // stage everything when no path is given
-            else if (!string.IsNullOrWhiteSpace(extra))
-                args.AddRange(SplitArgs(extra));
+        List<string> args = new List<string> { command };
+        if (command == "log" && string.IsNullOrWhiteSpace(extra))
+            args.AddRange(["-n15", "--oneline"]);
+        else if (command == "add" && string.IsNullOrWhiteSpace(extra))
+            args.Add("-A");   // stage everything when no path is given
+        else if (!string.IsNullOrWhiteSpace(extra))
+            args.AddRange(SplitArgs(extra));
 
-            (code, outp, err) = AriGit.Run(repoPath, args.ToArray());
-        }
+        // GitHub auth (github.com only) is added by AriGit.Run.
+        (int code, string outp, string err) = AriGit.Run(repoPath, args.ToArray());
 
         string combined = (outp + "\n" + err).Trim();
         if (string.IsNullOrWhiteSpace(combined))
@@ -149,8 +147,31 @@ internal sealed class GitMulti : Tool
 
     // ── Helpers ──────────────────────────────────────────────────────────────────
 
+    // Stages everything when nothing is staged yet (a deliberate partial stage is left alone), then commits
+    // through AriGit so it's signed per the user's setting. "Committed <hash> <subject>" is the success
+    // shape the memory agents key on.
+    private static string Commit(string repoPath, string message, string extra)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return "commit needs a 'message'.";
+
+        (int stagedCode, string _, string _) = AriGit.Run(repoPath, ["diff", "--cached", "--quiet"]);
+        if (stagedCode == 0) AriGit.Run(repoPath, ["add", "-A"]);
+        (int anyStaged, string _, string _) = AriGit.Run(repoPath, ["diff", "--cached", "--quiet"]);
+        bool amending = extra.Contains("--amend", StringComparison.Ordinal);
+        if (anyStaged == 0 && !amending) return "Nothing to commit — working tree clean.";
+
+        (int code, string outp, string err) = AriGit.Commit(repoPath, message, SplitArgs(extra));
+        if (code != 0) return $"git commit exited {code}:\n{(outp + "\n" + err).Trim()}";
+
+        (int _, string head, string _) = AriGit.Run(repoPath, ["log", "-1", "--format=%h %s"]);
+        return $"Committed {head}";
+    }
+
+    // Space-separated, but a "double-quoted" or 'single-quoted' run stays one argument (paths with spaces).
     private static string[] SplitArgs(string extra)
-        => extra.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        => System.Text.RegularExpressions.Regex.Matches(extra, "\"([^\"]*)\"|'([^']*)'|(\\S+)")
+            .Select(m => m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Success ? m.Groups[2].Value : m.Groups[3].Value)
+            .ToArray();
 
     private static JsonElement Parse(string json)
     {

@@ -15,17 +15,14 @@ internal static class ToolFactories
 {
     private static readonly Dictionary<string, Func<Thread, Tool?>> _factories = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["git_status"] = t => t.FilesystemRoot is { } r ? new GitStatus(r) : null,
-        ["git_diff"]   = t => t.FilesystemRoot is { } r ? new GitDiff(r)   : null,
-        ["git_log"]    = t => t.FilesystemRoot is { } r ? new GitLog(r)    : null,
-        ["git_commit"] = t => t.FilesystemRoot is { } r ? new GitCommit(r) : null,
-
-        // Multi-repo git tool: auto-discovers repos inside the project folder so ARI never constructs paths.
+        // The one git tool: auto-discovers the repos in the bound folder (project or Brain vault) so ARI
+        // never constructs paths. Every commit it makes is signed via AriGit.
         ["git"] = t => t.FilesystemRoot is { } r ? GitMulti.Discover(r) : null,
 
-        // Clones a new repo into the project — the one thing GitMulti can't do, since it only discovers
-        // repos that already exist on disk.
-        ["git_clone"] = t => t.FilesystemRoot is { } r ? new GitClone(r) : null,
+        // Clones a repo from any host into the project — the one thing GitMulti can't do, since it only
+        // discovers repos that already exist on disk. Never in the Brain vault: the memory agents preload
+        // git_tools for commits, and nothing should ever clone into the Brain.
+        ["git_clone"] = t => t.FilesystemRoot is { } r && !IsVault(t, r) ? new GitClone(r) : null,
 
         // GitHub over the REST API — no gh binary. Token comes from GitHubStore (control panel connection).
         ["github"] = _ => new GitHubTool(),
@@ -87,6 +84,8 @@ internal static class ToolFactories
         ["generate_image"] = t => Modules.ImageGen?.IsReady == true ? new GenerateImage(t) : null,
         ["present_image"]  = t => Modules.ImageGen?.IsReady == true ? new PresentImage(t)  : null,
     };
+
+    private static bool IsVault(Thread t, string root) => t.IsBrainVault || Directory.Exists(Path.Combine(root, ".obsidian"));
 
     private static ServerFileSystem? Fs(Thread t)
     {

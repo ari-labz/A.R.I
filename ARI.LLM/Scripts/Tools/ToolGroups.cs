@@ -14,7 +14,7 @@ internal sealed record ToolGroupDef(
 /// <summary>
 /// The global catalog of deferred tool groups (issue #126). Loaded once from ToolGroups.json at
 /// startup. This class only knows NAMES — a group's actual Tool instances are constructed by whichever
-/// agent registers a matching RequestTools factory, since a tool like git_status needs a root path that
+/// agent registers a matching RequestTools factory, since a tool like git needs a root path that
 /// only the owning agent has (see MemoryAgent.RegisterTools). ToolGroups itself stays context-free so
 /// list_tools can be registered once, globally, for every thread.
 /// </summary>
