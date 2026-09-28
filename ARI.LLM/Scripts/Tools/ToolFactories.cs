@@ -17,7 +17,7 @@ internal static class ToolFactories
     {
         // The one git tool: auto-discovers the repos in the bound folder (project or Brain vault) so ARI
         // never constructs paths. Every commit it makes is signed via AriGit.
-        ["git"] = t => t.FilesystemRoot is { } r ? GitMulti.Discover(r) : null,
+        ["git"] = t => t.FilesystemRoot is { } r ? GitMulti.Discover(r, t) : null,
 
         // Clones a repo from any host into the project — the one thing GitMulti can't do, since it only
         // discovers repos that already exist on disk. Never in the Brain vault: the memory agents preload
@@ -27,7 +27,7 @@ internal static class ToolFactories
         // GitHub through gh, as the account connected in the control panel. Only in the admin's own app
         // chats — never Discord, guests or background agents — and only once gh has been provisioned.
         ["github"] = t => t.IsAdminChat && GitHubStore.ResolveToken() is not null && GhCli.ExecutablePath is { } gh
-            ? new GitHubTool(gh, t.FilesystemRoot) : null,
+            ? new GitHubTool(gh, t.FilesystemRoot, t) : null,
 
         ["deliver_file"]      = t => new DeliverFile(t.Key),
         ["create_scratchpad"] = t => new CreateScratchpad(t),

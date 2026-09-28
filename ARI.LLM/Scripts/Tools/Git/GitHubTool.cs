@@ -18,8 +18,14 @@ internal sealed class GitHubTool : Tool
 
     private readonly string  ghPath;
     private readonly string? workDir;   // the bound project, so repo-relative commands (`pr create`) find its repo
+    private readonly Thread  thread;    // for approval prompts on destructive commands
 
-    internal GitHubTool(string ghPath, string? workDir) { this.ghPath = ghPath; this.workDir = workDir; }
+    internal GitHubTool(string ghPath, string? workDir, Thread thread)
+    {
+        this.ghPath  = ghPath;
+        this.workDir = workDir;
+        this.thread  = thread;
+    }
 
     internal override string Name => "github";
 
@@ -56,7 +62,11 @@ internal sealed class GitHubTool : Tool
         if (CommandSafety.GhIsBlocked(args))
             return $"'gh {args[0]}' isn't available to ARI — it manages gh's own login, config or plugins. The GitHub connection is managed from the control panel's GitHub page.";
         if (CommandSafety.GhApprovalReason(args) is { } reason)
-            return $"Not run: this {reason}, which needs the user's approval. Tell them the exact command so they can run it: gh {string.Join(' ', args)}";
+        {
+            string shown = $"gh {string.Join(' ', args)}";
+            if (!await ToolApprovals.RequestAsync(thread, $"ARI wants to run a GitHub command that {reason}.", shown))
+                return $"Not run: this {reason}, and the user didn't approve it. If it's still needed, tell them the exact command so they can run it: {shown}";
+        }
 
         if (Str(a, "body") is { Length: > 0 } body) args.AddRange(["--body", body]);
 

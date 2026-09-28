@@ -205,6 +205,8 @@ export interface WatchEvent {
     deleted?:    boolean
     status?:     ThreadStatus
     isCodeMode?: boolean
+    // A server-side tool waiting on the user's OK (a destructive git/gh command); null once answered or expired.
+    approval?:   { id: string; title: string; command: string } | null
 }
 
 export interface AppEvent {

@@ -273,7 +273,9 @@ export default function App() {
 
     // run_command confirmation: pending prompt awaiting a deny/allow/whitelist decision, plus the
     // in-memory allowlist (loaded from the persisted store, extended live by "Whitelist").
-    const [pendingCommand, setPendingCommand] = useState<{ command: string; resolve: (d: CommandDecision) => void } | null>(null)
+    // title is set for a server-side tool's approval request (git/github) — one-off, so no "Always allow".
+    const [pendingCommand, setPendingCommand] = useState<{ command: string; title?: string; resolve: (d: CommandDecision) => void } | null>(null)
+    const shownApprovalRef = useRef<string | null>(null)
     const commandAllowlistRef = useRef<string[]>([])
     // Generic yes/no confirmation (used for destructive file deletes).
     const [pendingConfirm, setPendingConfirm] = useState<{ title: string; body: string; resolve: (ok: boolean) => void } | null>(null)
@@ -864,6 +866,25 @@ export default function App() {
                 setIsRemembering(e.status === "remembering")
             }
             if (e.isCodeMode !== undefined) setCodeMode(e.isCodeMode)
+            // A server tool is waiting on approval — reuse the run_command prompt. When the request goes away
+            // (answered on another device, or timed out) close the prompt if it's still showing.
+            if (e.approval && e.approval.id !== shownApprovalRef.current) {
+                const { id, title, command } = e.approval
+                shownApprovalRef.current = id
+                setPendingCommand({
+                    command, title,
+                    resolve: d => {
+                        shownApprovalRef.current = null
+                        apiFetch(`/threads/${key}/approvals/${id}`, {
+                            method: "POST", headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ allow: d !== "deny" }),
+                        }).catch(() => {})
+                    },
+                })
+            } else if (e.approval === null && shownApprovalRef.current) {
+                shownApprovalRef.current = null
+                setPendingCommand(null)
+            }
         }, () => { /* ignore reconnect errors */ })
     }, [])
 
@@ -1445,9 +1466,10 @@ export default function App() {
                     <div style={cmdModalStyle} onClick={e => e.stopPropagation()}>
                         <div style={cmdTitleStyle}>Run this command?</div>
                         <div style={cmdSubStyle}>
-                            {isDestructiveGitCommand(pendingCommand.command)
-                                ? "ARI wants to run a git command that modifies history. This always requires your approval."
-                                : "ARI wants to run a command that isn't on the allow list."}
+                            {pendingCommand.title
+                                ?? (isDestructiveGitCommand(pendingCommand.command)
+                                    ? "ARI wants to run a git command that modifies history. This always requires your approval."
+                                    : "ARI wants to run a command that isn't on the allow list.")}
                         </div>
                         <pre style={cmdCodeStyle}>{pendingCommand.command}</pre>
                         <div style={cmdActionsStyle}>
@@ -1455,7 +1477,7 @@ export default function App() {
                                     onClick={() => { pendingCommand.resolve("deny"); setPendingCommand(null) }}>Deny</button>
                             <button style={{ ...cmdBtnBase, background: "#2d6cdf", color: "#fff" }}
                                     onClick={() => { pendingCommand.resolve("allow"); setPendingCommand(null) }}>Allow once</button>
-                            {!isDestructiveGitCommand(pendingCommand.command) && (() => {
+                            {!pendingCommand.title && !isDestructiveGitCommand(pendingCommand.command) && (() => {
                                 const progs = commandWhitelistKeys(pendingCommand.command)
                                 if (!progs || progs.length === 0) return null  // command substitution — allow-once only
                                 return (

@@ -289,6 +289,8 @@ public class LLMModule : ILLMModule, IDisposable
                 _logger.LogInformation("Engram is active. Brain connected.");
             }
 
+            ToolApprovals.Notify = NotifyWatchers;   // approval prompts ride the thread's watch stream
+
             if (rawAgents.TryGetValue("Refactor", out JsonElement refactorEl))
             {
                 refactor = Deserialize<Refactor>(refactorEl);
