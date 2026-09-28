@@ -323,6 +323,8 @@ public class Thread
 
         List<(ThreadMessage Msg, int HistoryIndex, int Chars, bool EndsTurn)> kept = new();
         int charCount = 0;
+        // An interjection splits one turn into two Responses that share a single trace — replay its calls once.
+        HashSet<List<TraceStep>> replayedTraces = new(ReferenceEqualityComparer.Instance);
 
         for (int i = contextStartIndex; i < History.Count; i++)
         {
@@ -333,11 +335,26 @@ public class Thread
             string author  = item.AuthorName ?? string.Empty;
             int    itemLen = author.Length + 2 + content.Length;
 
+            // Past tool calls stay in context for conversations people are having, so whether ARI checked
+            // something is visible rather than inferred. Internal/background threads keep prose only —
+            // they run to a tight context budget.
+            IReadOnlyList<IReadOnlyList<HistoryToolCall>>? toolBatches = null;
+            if (!Internal && item is Response { Trace: { } trace } && replayedTraces.Add(trace))
+            {
+                List<IReadOnlyList<HistoryToolCall>> batches = ToolHistory.Batches(trace);
+                if (batches.Count > 0)
+                {
+                    toolBatches = batches;
+                    itemLen += batches.Sum(b => b.Sum(c => c.Name.Length + c.Args.Length + c.Result.Length));
+                }
+            }
+
             charCount += itemLen;
             kept.Add((new ThreadMessage(
-                Role:     author == "ARI" ? "assistant" : "user",
-                Username: author,
-                Content:  content), i, itemLen,
+                Role:        author == "ARI" ? "assistant" : "user",
+                Username:    author,
+                Content:     content,
+                ToolBatches: toolBatches), i, itemLen,
                 // A turn is complete when an ariResponse closes. A Response only contributes
                 // ContextText once it is Complete, so any Response seen here is a closed one.
                 EndsTurn: item is Response));
