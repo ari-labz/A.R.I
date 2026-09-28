@@ -15,15 +15,21 @@ internal sealed class GitMulti : Tool
 
     private readonly Dictionary<string, string> repos;  // display name → absolute path
     private readonly string? rootRepo;                  // the project folder's own repo, when it is one
+    private readonly Thread  thread;                    // for approval prompts on destructive commands
 
     internal override string Name => "git";
 
-    private GitMulti(Dictionary<string, string> repos, string? rootRepo) { this.repos = repos; this.rootRepo = rootRepo; }
+    private GitMulti(Dictionary<string, string> repos, string? rootRepo, Thread thread)
+    {
+        this.repos    = repos;
+        this.rootRepo = rootRepo;
+        this.thread   = thread;
+    }
 
     /// <summary>Finds every repo in the project: the root folder when it is one (named after the folder),
     /// and nested repos keyed by their path relative to the root. Returns null if none are found so
     /// ToolFactories can skip registration cleanly.</summary>
-    internal static GitMulti? Discover(string projectRoot)
+    internal static GitMulti? Discover(string projectRoot, Thread thread)
     {
         if (!Directory.Exists(projectRoot)) return null;
 
@@ -33,7 +39,7 @@ internal sealed class GitMulti : Tool
         if (rootRepo is not null) repos[rootRepo] = projectRoot;
         ScanForRepos(projectRoot, projectRoot, 1, repos);
 
-        return repos.Count == 0 ? null : new GitMulti(repos, rootRepo);
+        return repos.Count == 0 ? null : new GitMulti(repos, rootRepo, thread);
     }
 
     private static void ScanForRepos(string dir, string projectRoot, int depth, Dictionary<string, string> repos)
@@ -105,7 +111,7 @@ internal sealed class GitMulti : Tool
         }
     };
 
-    internal override Task<ToolResult> Execute(string argsJson)
+    internal override async Task<ToolResult> Execute(string argsJson)
     {
         JsonElement a = Parse(argsJson);
         string repo    = Str(a, "repo");
@@ -114,10 +120,18 @@ internal sealed class GitMulti : Tool
 
         if (repo.Length == 0) repo = DefaultRepo ?? "";
         if (!repos.TryGetValue(repo, out string? repoPath))
-            return Task.FromResult<ToolResult>($"Unknown repo '{repo}'. Available: {string.Join(", ", repos.Keys)}");
+            return $"Unknown repo '{repo}'. Available: {string.Join(", ", repos.Keys)}";
 
         if (command == "commit")
-            return Task.FromResult<ToolResult>(Commit(repoPath, Str(a, "message"), extra));
+            return Commit(repoPath, Str(a, "message"), extra);
+
+        string[] extraArgs = CommandSafety.Split(extra);
+        if (CommandSafety.GitApprovalReason(command, extraArgs) is { } reason)
+        {
+            string shown = $"git {command} {extra}".Trim();
+            if (!await ToolApprovals.RequestAsync(thread, $"ARI wants to run a git command in {repo} that {reason}.", shown))
+                return $"Not run: this {reason}, and the user didn't approve it. If it's still needed, tell them the exact command so they can run it: {shown}";
+        }
 
         List<string> args = new List<string> { command };
         if (command == "log" && string.IsNullOrWhiteSpace(extra))
@@ -125,7 +139,7 @@ internal sealed class GitMulti : Tool
         else if (command == "add" && string.IsNullOrWhiteSpace(extra))
             args.Add("-A");   // stage everything when no path is given
         else if (!string.IsNullOrWhiteSpace(extra))
-            args.AddRange(CommandSafety.Split(extra));
+            args.AddRange(extraArgs);
 
         // GitHub auth (github.com only) is added by AriGit.Run.
         (int code, string outp, string err) = AriGit.Run(repoPath, args.ToArray());
@@ -142,7 +156,7 @@ internal sealed class GitMulti : Tool
                 _        => "(no output)"
             };
 
-        return Task.FromResult<ToolResult>(code != 0 ? $"git {command} exited {code}:\n{combined}" : combined);
+        return code != 0 ? $"git {command} exited {code}:\n{combined}" : combined;
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────────

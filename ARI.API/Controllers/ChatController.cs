@@ -471,9 +471,21 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                             _                              => (Llm?.IsThreadProcessing(threadKey) ?? false) ? "prefilling" : "idle",
                         };
         bool isCodeMode = Llm?.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? wt) == true && wt?.Pipeline == ARI.LLM.ThreadPipeline.Code;
-        string payload  = JsonSerializer.Serialize(new { status, isCodeMode });
+        // A tool waiting on the user's OK (a destructive git/gh command) — the app shows its Allow/Deny prompt.
+        object? approval = ARI.LLM.ToolApprovals.Get(threadKey) is { } pending
+            ? new { id = pending.Id, title = pending.Title, command = pending.Command }
+            : null;
+        string payload  = JsonSerializer.Serialize(new { status, isCodeMode, approval });
         await Response.WriteAsync($"data: {payload}\n\n", ct);
         await Response.Body.FlushAsync(ct);
+    }
+
+    /// <summary>The user's answer to a tool's approval prompt (see ToolApprovals). 404 if it's no longer waiting.</summary>
+    [HttpPost("{threadKey}/approvals/{id}")]
+    public IActionResult AnswerApproval(string threadKey, string id, [FromBody] ApprovalAnswer body)
+    {
+        if (!User.IsInRole(ARI.API.Auth.Roles.Admin)) return Forbid();
+        return ARI.LLM.ToolApprovals.Resolve(threadKey, id, body?.Allow == true) ? Ok() : NotFound();
     }
 
     [HttpPost("~/commands")]
@@ -1120,6 +1132,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
 
 public record StreamRequest(string Prompt, string? LocalPath = null, bool SafeMode = false);
 public record InterjectRequest(string? Text);
+public record ApprovalAnswer(bool Allow);
 public record PromoteToProjectRequest(string Name, string? Category = null);
 public record CommandRequest(string? ThreadKey, string Input);
 public record NewThreadRequest(string? ProjectId, bool Desktop = false, string? Pipeline = null);
