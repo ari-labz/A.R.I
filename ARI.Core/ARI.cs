@@ -112,6 +112,9 @@ public class ARI : BackgroundService, IModuleLifecycle
         await Dependency.CheckEspeakNg();
         await Dependency.CheckLibDave();
         await Dependency.CheckLlamaCpp();
+        // gh backs the github tool — only needed once an account is connected, so it's fetched in the
+        // background rather than holding up startup.
+        if (GitHubStore.ResolveToken() is not null) _ = GhCli.EnsureInstalledAsync();
         Shared.LlamaCppUpdate = Dependency.UpdateLlamaCpp;
         Shared.LlamaCppSetPath = Dependency.SetLlamaCppPath;
         Shared.LlamaCppSuppressUpdates = Dependency.SuppressLlamaCppUpdates;

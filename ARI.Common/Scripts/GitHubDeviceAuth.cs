@@ -115,6 +115,7 @@ public static class GitHubDeviceAuth
                 s.Login       = login;
                 GitHubStore.Set(s);
                 SetStatus(new GitHubConnectStatus(GitHubConnectState.Connected, Login: login));
+                _ = GhCli.EnsureInstalledAsync();   // gh backs the github tool
                 return;
             }
 

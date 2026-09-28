@@ -36,9 +36,18 @@ internal static class AriGit
     }
 
     /// <summary>Runs git in <paramref name="workDir"/>. Optional stdin is written then closed (commit messages go
-    /// through `-F -` so quotes and newlines survive intact).</summary>
+    /// through `-F -` so quotes and newlines survive intact). A connected GitHub account authenticates requests
+    /// to https://github.com only — the header is URL-scoped, so any other remote (GitLab, a company server)
+    /// never sees the token and falls back to the machine's own git credentials. Per invocation, never written
+    /// to a repo's .git/config.</summary>
     internal static (int Code, string Out, string Err) Run(string workDir, string[] args, string? stdin = null)
     {
+        if (GitHubStore.ResolveToken() is { Length: > 0 } token)
+        {
+            string basic = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"x-access-token:{token}"));
+            args = ["-c", $"http.https://github.com/.extraheader=AUTHORIZATION: basic {basic}", .. args];
+        }
+
         ProcessStartInfo psi = new()
         {
             FileName               = "git",
