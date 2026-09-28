@@ -119,6 +119,15 @@ internal static class ToolFactories
 
     internal static IEnumerable<string> AllNames() => _factories.Keys;
 
+    /// <summary>Why a known tool didn't resolve for this thread — the real reason, so ARI doesn't blame a
+    /// missing project binding for everything (e.g. git fails on a bound project with no repos in it).</summary>
+    internal static string UnavailableReason(string toolName, Thread thread) => thread.FilesystemRoot switch
+    {
+        null => "this conversation has no project bound on the server — call bind_project first",
+        { } root when toolName.Equals("git", StringComparison.OrdinalIgnoreCase) => $"no git repositories were found in {root}",
+        _ => "it needs a module or connection that isn't available right now",
+    };
+
     internal static bool TryBuild(string toolName, Thread thread, out Tool tool)
     {
         tool = null!;
