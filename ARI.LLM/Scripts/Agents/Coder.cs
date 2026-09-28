@@ -192,10 +192,14 @@ internal sealed class Coder : Agent
         //
         // Bind this turn's project context onto the thread. ToolFactories (global, agent-agnostic) reads
         // this to construct filesystem_tools/coding_tools for request_tools — there is no per-agent
-        // allowlist; a group resolves for whichever thread actually has a project bound, local only (a
-        // remote project's files live on the client's disk, not this server's, so FilesystemRoot stays null
-        // and those groups correctly report unavailable — the client's forwarded tools cover that case).
-        parent.FilesystemRoot     = remote ? null : root;
+        // allowlist; a group resolves for whichever thread actually has a project bound. Remote: the client's
+        // forwarded tools cover the files, but a server-side binding already on the thread (the project's
+        // server path, or bind_project) is kept when this server can reach that folder — wiping it every
+        // turn left git and other server-side tools permanently "unbound" on a desktop chat whose project
+        // lives on this machine. An unreachable folder (a genuinely remote machine) is still cleared.
+        parent.FilesystemRoot     = remote
+            ? (parent.FilesystemRoot is { } bound && Directory.Exists(bound) ? bound : null)
+            : root;
         parent.Snapshots       = remote ? null : snapshots;
         parent.IsRemoteProject = remote;
         parent.Ct              = cts.Token;
@@ -227,8 +231,8 @@ internal sealed class Coder : Agent
         // tool layer by BeforeTool alongside the Planning-mode edit block.
         bool editsForbidden = UserForbadeEdits(prompt);
 
-        // Remote: build_project isn't behind the group system above (FilesystemRoot is null for a remote project,
-        // by design — see comment above) — the client's forwarded tools already put its equivalents on
+        // Remote: build_project isn't behind the group system above (its factory skips remote projects even
+        // when a server-side root is kept — see comment above) — the client's forwarded tools already put its equivalents on
         // `parent`, so this is registered directly the same way, outside ToolFactories.
         if (remote)
             parent.RegisterTool("build_project", BuildProjectSchema,
