@@ -1,6 +1,4 @@
-using System.Diagnostics;
 using System.Text.Json;
-using ARI.Common;
 
 namespace ARI.LLM;
 
@@ -121,13 +119,8 @@ internal sealed class GitMulti : Tool
         }
         else
         {
-            List<string> args = new List<string>();
-            // Only fetch/pull/push touch the network, but a stored token adds nothing harmful to the others —
-            // git ignores an unused http.extraheader — so it's simpler to always inject it than to special-case
-            // which commands need it. Per-invocation, never written to this repo's .git/config.
-            if (GitHubStore.ResolveToken() is { Length: > 0 } token)
-                args.AddRange(["-c", $"http.extraheader=AUTHORIZATION: bearer {token}"]);
-            args.Add(command);
+            // GitHub auth (github.com only) is added by AriGit.Run.
+            List<string> args = new List<string> { command };
 
             if (command == "log" && string.IsNullOrWhiteSpace(extra))
                 args.AddRange(["-n15", "--oneline"]);
@@ -136,7 +129,7 @@ internal sealed class GitMulti : Tool
             else if (!string.IsNullOrWhiteSpace(extra))
                 args.AddRange(SplitArgs(extra));
 
-            (code, outp, err) = RunGit(repoPath, args.ToArray());
+            (code, outp, err) = AriGit.Run(repoPath, args.ToArray());
         }
 
         string combined = (outp + "\n" + err).Trim();
@@ -158,24 +151,6 @@ internal sealed class GitMulti : Tool
 
     private static string[] SplitArgs(string extra)
         => extra.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-    private static (int Code, string Out, string Err) RunGit(string workDir, string[] args)
-    {
-        ProcessStartInfo psi = new ProcessStartInfo
-        {
-            FileName               = "git",
-            WorkingDirectory       = workDir,
-            RedirectStandardOutput = true,
-            RedirectStandardError  = true,
-            UseShellExecute        = false,
-        };
-        foreach (string arg in args) psi.ArgumentList.Add(arg);
-        using Process proc = Process.Start(psi)!;
-        string outp = proc.StandardOutput.ReadToEnd();
-        string err  = proc.StandardError.ReadToEnd();
-        proc.WaitForExit();
-        return (proc.ExitCode, outp.Trim(), err.Trim());
-    }
 
     private static JsonElement Parse(string json)
     {

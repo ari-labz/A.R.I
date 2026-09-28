@@ -1,6 +1,4 @@
-using System.Diagnostics;
 using System.Text.Json;
-using ARI.Common;
 
 namespace ARI.LLM;
 
@@ -47,35 +45,15 @@ internal sealed class GitClone : Tool
         if (Directory.Exists(dest))
             return $"'{name}' already exists in this project.";
 
-        List<string> args = new();
-        if (GitHubStore.ResolveToken() is { Length: > 0 } token)
-            args.AddRange(["-c", $"http.extraheader=AUTHORIZATION: bearer {token}"]);
-        args.AddRange(["clone", $"https://github.com/{owner}/{name}.git", dest]);
-
-        (int code, string outp, string err) = await RunGit(args.ToArray());
+        // GitHub auth (github.com only) is added by AriGit.Run.
+        (int code, string outp, string err) = await Task.Run(() =>
+            AriGit.Run(projectRoot, ["clone", $"https://github.com/{owner}/{name}.git", dest]));
         if (code != 0)
             return $"git clone exited {code}:\n{Truncate((outp + "\n" + err).Trim(), 1500)}";
 
         return $"Cloned {owner}/{name} into {name}/. Use the git tool to pull, push, or commit against it.";
     }
 
-    private static async Task<(int Code, string Out, string Err)> RunGit(string[] args)
-    {
-        ProcessStartInfo psi = new()
-        {
-            FileName               = "git",
-            RedirectStandardOutput = true,
-            RedirectStandardError  = true,
-            UseShellExecute        = false,
-        };
-        foreach (string arg in args) psi.ArgumentList.Add(arg);
-
-        using Process proc = Process.Start(psi)!;
-        string outp = await proc.StandardOutput.ReadToEndAsync();
-        string err  = await proc.StandardError.ReadToEndAsync();
-        await proc.WaitForExitAsync();
-        return (proc.ExitCode, outp.Trim(), err.Trim());
-    }
 
     private static JsonElement Parse(string json)
     {
