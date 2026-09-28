@@ -18,6 +18,13 @@ public class Prompt : ThreadItem
     [JsonIgnore]
     public override string? Message => Text;
 
+    // An attachment-only message has no text, and chat history skips empty items — so without this it
+    // vanished and the previous message (sometimes ARI's own) was answered as if it were the latest.
+    [JsonIgnore]
+    public override string? ContextText => string.IsNullOrWhiteSpace(Text) && Attachments is { Count: > 0 }
+        ? $"[sent with no message text — attachments: {string.Join(", ", Attachments.Select(a => a.Name))}]"
+        : Text;
+
     public override string ToString() =>
         $"[{Timestamp:HH:mm}] {AuthorName}: {Text}";
 }
