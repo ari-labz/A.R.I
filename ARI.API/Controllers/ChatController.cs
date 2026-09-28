@@ -934,6 +934,16 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         pendingFileNotes.TryRemove(threadKey, out List<string>? fileNotes);
         pendingSystemContext.TryRemove(threadKey, out string? systemContextBlock);
 
+        // Nothing to answer: an empty prompt vanishes from chat history, so a turn started here would
+        // answer the previous message instead (sometimes ARI's own). Checks the raw prompt, since safe
+        // mode fills an empty one with its own instructions.
+        if (string.IsNullOrWhiteSpace(body?.Prompt) && (msgAtts is null || msgAtts.Count == 0) && (fileNotes is null || fileNotes.Count == 0))
+        {
+            await Response.WriteAsync("data: [DONE]\n\n", cancellationToken);
+            await Response.Body.FlushAsync(cancellationToken);
+            return;
+        }
+
         // ── Scratchpad wiring ─────────────────────────────────────────────────────
         // If files have been written to this thread's scratchpad, bind it as the
         // FilesystemRoot (if no project is already bound) and inject a file listing so
