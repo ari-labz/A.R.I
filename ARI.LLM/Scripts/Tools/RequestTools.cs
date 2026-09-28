@@ -44,7 +44,8 @@ internal sealed class RequestTools : Tool
         if (ToolGroups.TryGet(name, out ToolGroupDef groupDef))
         {
             (List<Tool> loaded, List<string> unavailable) = ToolFactories.LoadGroup(name, thread);
-            if (loaded.Count == 0) return Task.FromResult<ToolResult>($"'{name}' isn't available in this context (no project/vault is bound here).");
+            if (loaded.Count == 0)
+                return Task.FromResult<ToolResult>($"'{name}' isn't available: {ToolFactories.UnavailableReason(unavailable.FirstOrDefault() ?? name, thread)}.");
 
             StringBuilder sb = new StringBuilder();
             sb.AppendLine($"Group: {name} — {groupDef.Description}");
@@ -52,7 +53,7 @@ internal sealed class RequestTools : Tool
             foreach (Tool tool in loaded)
                 sb.AppendLine($"  • {tool.Name} — {tool.SchemaDescription}");
             if (unavailable.Count > 0)
-                sb.AppendLine($"Not available here: {string.Join(", ", unavailable)}.");
+                sb.AppendLine($"Not available here: {string.Join(", ", unavailable.Select(n => $"{n} ({ToolFactories.UnavailableReason(n, thread)})"))}.");
             return Task.FromResult<ToolResult>(sb.ToString().TrimEnd());
         }
 
@@ -64,7 +65,7 @@ internal sealed class RequestTools : Tool
 
         return Task.FromResult<ToolResult>(
             ToolFactories.AllNames().Contains(name, StringComparer.OrdinalIgnoreCase)
-                ? $"'{name}' isn't available in this context (no project/vault is bound here)."
+                ? $"'{name}' isn't available: {ToolFactories.UnavailableReason(name, thread)}."
                 : $"Unknown tool or group '{name}'. Call list_tools to see what's available.");
     }
 }
