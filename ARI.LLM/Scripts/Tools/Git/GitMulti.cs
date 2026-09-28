@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using ARI.Common;
 
 namespace ARI.LLM;
 
@@ -109,7 +110,13 @@ internal sealed class GitMulti : Tool
         if (!repos.TryGetValue(repo, out string? repoPath))
             return Task.FromResult<ToolResult>($"Unknown repo '{repo}'. Available: {string.Join(", ", repos.Keys)}");
 
-        List<string> args = new List<string> { command };
+        List<string> args = new List<string>();
+        // Only fetch/pull/push touch the network, but a stored token adds nothing harmful to the others —
+        // git ignores an unused http.extraheader — so it's simpler to always inject it than to special-case
+        // which commands need it. Per-invocation, never written to this repo's .git/config.
+        if (GitHubStore.ResolveToken() is { Length: > 0 } token)
+            args.AddRange(["-c", $"http.extraheader=AUTHORIZATION: bearer {token}"]);
+        args.Add(command);
 
         if (command == "commit")
         {

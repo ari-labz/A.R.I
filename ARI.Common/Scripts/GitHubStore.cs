@@ -2,70 +2,73 @@ using System.Text.Json;
 
 namespace ARI.Common;
 
-/// <summary>GitHub tokens ARI has been given, persisted to AppData/Server/GitHub.json. A token can be
-/// scoped to one project (keyed by its root path) or to the whole user; a read falls back from the
-/// project token to the user token. The file holds tokens in plain text, so it is written owner-only —
-/// it lives in app data, never in a project folder or the repo.</summary>
+/// <summary>GitHub connection settings as configured from the control panel via the OAuth device-authorization
+/// flow (see GitHubDeviceAuth). Nobody ever types or pastes a token — a device-flow run writes it here once
+/// approved, and disconnecting clears it again.</summary>
 public sealed class GitHubSettings
 {
-    public string UserToken { get; set; } = "";
-    public Dictionary<string, string> ProjectTokens { get; set; } = new();
+    /// <summary>The connected OAuth App's Client ID. Not secret — safe to keep saved and reuse across reconnects.</summary>
+    public string ClientId { get; set; } = "";
+
+    /// <summary>OAuth access token. Secret — never returned to the browser; the API reports only whether an account is connected.</summary>
+    public string AccessToken { get; set; } = "";
+
+    /// <summary>Cached GitHub login for display in the control panel only — never used for auth.</summary>
+    public string Login { get; set; } = "";
 }
 
+/// <summary>
+/// Persists the GitHub connection to AppDataRoot/Server/GitHub.json. The file holds the access token in
+/// plain text, so it is written 0600 (owner-only), same as Discord.json. Read on demand — connecting or
+/// disconnecting takes effect immediately, since the github/git tools resolve the token fresh on every
+/// call rather than caching it at startup.
+/// </summary>
 public static class GitHubStore
 {
     private static readonly string FilePath = Path.Combine(Paths.PersistentData, "GitHub.json");
     private static readonly object Lock = new();
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 
-    private static GitHubSettings Load()
-    {
-        try
-        {
-            if (!File.Exists(FilePath)) return new GitHubSettings();
-            return JsonSerializer.Deserialize<GitHubSettings>(File.ReadAllText(FilePath)) ?? new GitHubSettings();
-        }
-        catch { return new GitHubSettings(); }
-    }
-
-    private static void Save(GitHubSettings settings)
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-        File.WriteAllText(FilePath, JsonSerializer.Serialize(settings, Options));
-        if (!OperatingSystem.IsWindows())
-            try { File.SetUnixFileMode(FilePath, UnixFileMode.UserRead | UnixFileMode.UserWrite); } catch { }
-    }
-
-    /// <summary>The token to use for a call: this project's token if it has one, else the user token,
-    /// else null (call unauthenticated).</summary>
-    public static string? Resolve(string? projectRoot)
+    public static GitHubSettings Get()
     {
         lock (Lock)
         {
-            GitHubSettings s = Load();
-            if (projectRoot is { Length: > 0 } && s.ProjectTokens.TryGetValue(projectRoot, out string? t) && t.Length > 0)
-                return t;
-            return s.UserToken.Length > 0 ? s.UserToken : null;
+            try
+            {
+                if (!File.Exists(FilePath)) return new GitHubSettings();
+                return JsonSerializer.Deserialize<GitHubSettings>(File.ReadAllText(FilePath), Options) ?? new GitHubSettings();
+            }
+            catch { return new GitHubSettings(); }
         }
     }
 
-    public static void SetUserToken(string token)
+    public static void Set(GitHubSettings settings)
     {
         lock (Lock)
         {
-            GitHubSettings s = Load();
-            s.UserToken = token;
-            Save(s);
+            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+            File.WriteAllText(FilePath, JsonSerializer.Serialize(settings, Options));
+            Protect();
         }
     }
 
-    public static void SetProjectToken(string projectRoot, string token)
+    /// <summary>Clears the connection but keeps the Client ID — that's app registration, not a per-connection secret.</summary>
+    public static void Disconnect()
     {
-        lock (Lock)
-        {
-            GitHubSettings s = Load();
-            s.ProjectTokens[projectRoot] = token;
-            Save(s);
-        }
+        GitHubSettings s = Get();
+        s.AccessToken = "";
+        s.Login = "";
+        Set(s);
+    }
+
+    /// <summary>The token to authenticate GitHub calls with, or null to call unauthenticated (public repos only).</summary>
+    public static string? ResolveToken() => Get().AccessToken is { Length: > 0 } t ? t : null;
+
+    // Owner-only: the access token is in here. No-op on Windows, where the file inherits the user's ACL.
+    private static void Protect()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        try { File.SetUnixFileMode(FilePath, UnixFileMode.UserRead | UnixFileMode.UserWrite); }
+        catch { }
     }
 }
