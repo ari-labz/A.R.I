@@ -1,6 +1,11 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace ARI.Common;
+
+/// <summary>How ARI signs the commits she makes: as their author (the user stays committer), or as a
+/// Co-Authored-By trailer on a commit authored by the user.</summary>
+public enum CommitIdentity { Author, CoAuthor }
 
 /// <summary>GitHub connection settings as configured from the control panel via the OAuth device-authorization
 /// flow (see GitHubDeviceAuth). Nobody ever types or pastes a token — a device-flow run writes it here once
@@ -15,6 +20,11 @@ public sealed class GitHubSettings
 
     /// <summary>Cached GitHub login for display in the control panel only — never used for auth.</summary>
     public string Login { get; set; } = "";
+
+    /// <summary>How ARI signs every commit she makes, in any repo (projects and the Brain). Not GitHub-specific
+    /// — it lives here because the GitHub page is where the user manages git. Kept across disconnects.</summary>
+    [JsonConverter(typeof(JsonStringEnumConverter<CommitIdentity>))]
+    public CommitIdentity CommitAs { get; set; } = CommitIdentity.Author;
 }
 
 /// <summary>

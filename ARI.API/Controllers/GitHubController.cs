@@ -23,7 +23,20 @@ public class GitHubController : ControllerBase
             clientId  = s.ClientId,
             connected = !string.IsNullOrWhiteSpace(s.AccessToken),
             login     = s.Login,
+            commitAs  = s.CommitAs.ToString(),
         });
+    }
+
+    /// <summary>How ARI signs the commits she makes (Author or CoAuthor). Applies to every repo, connected or not.</summary>
+    [HttpPut("commit-as")]
+    public IActionResult SetCommitAs([FromBody] GitHubCommitAsRequest req)
+    {
+        if (!Enum.TryParse(req.CommitAs, ignoreCase: true, out CommitIdentity identity))
+            return BadRequest(new { error = "commitAs must be Author or CoAuthor." });
+        GitHubSettings s = GitHubStore.Get();
+        s.CommitAs = identity;
+        GitHubStore.Set(s);
+        return Ok(new { ok = true });
     }
 
     /// <summary>Saves the OAuth App's Client ID — the one manual setup step, done once per app registration.</summary>
@@ -73,4 +86,9 @@ public class GitHubController : ControllerBase
 public sealed class GitHubClientIdRequest
 {
     public string? ClientId { get; set; }
+}
+
+public sealed class GitHubCommitAsRequest
+{
+    public string? CommitAs { get; set; }
 }

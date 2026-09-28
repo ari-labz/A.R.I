@@ -108,7 +108,12 @@ public static class GitHubDeviceAuth
             if (root.TryGetProperty("access_token", out JsonElement tok) && tok.GetString() is { Length: > 0 } token)
             {
                 string login = await FetchLoginAsync(token, ct);
-                GitHubStore.Set(new GitHubSettings { ClientId = clientId, AccessToken = token, Login = login });
+                // Update in place — a fresh GitHubSettings would reset the other saved preferences (commit identity).
+                GitHubSettings s = GitHubStore.Get();
+                s.ClientId    = clientId;
+                s.AccessToken = token;
+                s.Login       = login;
+                GitHubStore.Set(s);
                 SetStatus(new GitHubConnectStatus(GitHubConnectState.Connected, Login: login));
                 return;
             }
