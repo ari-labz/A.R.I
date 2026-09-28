@@ -4,36 +4,57 @@ using System.Text.Json;
 namespace ARI.LLM;
 
 /// <summary>
-/// Multi-repo git tool. Scans one level deep under the project root at construction time for
-/// directories that contain a .git folder, then exposes them as a named enum. ARI never constructs
-/// paths — she just picks a repo name and a command; the tool resolves the path itself.
+/// Multi-repo git tool. Discovers the project's repositories at construction time — the project folder
+/// itself, plus any repos (including submodules) up to MAX_SCAN_DEPTH levels below it — and exposes them
+/// as a named enum. ARI never constructs paths — she just picks a repo name and a command; the tool
+/// resolves the path itself.
 /// </summary>
 internal sealed class GitMulti : Tool
 {
+    private const int MAX_SCAN_DEPTH = 2;
+    private static readonly HashSet<string> SkippedDirs = new(StringComparer.OrdinalIgnoreCase) { "node_modules", "bin", "obj" };
+
     private readonly Dictionary<string, string> repos;  // display name → absolute path
 
     internal override string Name => "git";
 
     private GitMulti(Dictionary<string, string> repos) => this.repos = repos;
 
-    /// <summary>Scans projectRoot (one level deep) for subdirectories that contain a .git folder.
-    /// Returns null if none are found so ToolFactories can skip registration cleanly.</summary>
+    /// <summary>Finds every repo in the project: the root folder when it is one (named after the folder),
+    /// and nested repos keyed by their path relative to the root. Returns null if none are found so
+    /// ToolFactories can skip registration cleanly.</summary>
     internal static GitMulti? Discover(string projectRoot)
     {
         if (!Directory.Exists(projectRoot)) return null;
 
         Dictionary<string, string> repos = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (string subdir in Directory.EnumerateDirectories(projectRoot))
-        {
-            string name = Path.GetFileName(subdir);
-            if (name.StartsWith('.')) continue;
-            if (Directory.Exists(Path.Combine(subdir, ".git")))
-                repos[name] = subdir;
-        }
+        if (IsRepo(projectRoot))
+            repos[Path.GetFileName(Path.TrimEndingDirectorySeparator(projectRoot))] = projectRoot;
+        ScanForRepos(projectRoot, projectRoot, 1, repos);
 
         return repos.Count == 0 ? null : new GitMulti(repos);
     }
+
+    private static void ScanForRepos(string dir, string projectRoot, int depth, Dictionary<string, string> repos)
+    {
+        IEnumerable<string> subdirs;
+        try { subdirs = Directory.EnumerateDirectories(dir).ToList(); }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException) { return; }
+
+        foreach (string subdir in subdirs)
+        {
+            string name = Path.GetFileName(subdir);
+            if (name.StartsWith('.') || SkippedDirs.Contains(name)) continue;
+            if (IsRepo(subdir))
+                repos[Path.GetRelativePath(projectRoot, subdir).Replace('\\', '/')] = subdir;
+            else if (depth < MAX_SCAN_DEPTH)
+                ScanForRepos(subdir, projectRoot, depth + 1, repos);
+        }
+    }
+
+    // .git is a folder in a normal clone but a file in a submodule or worktree — both are repos.
+    private static bool IsRepo(string dir) => Path.Exists(Path.Combine(dir, ".git"));
 
     internal override object Schema => new
     {

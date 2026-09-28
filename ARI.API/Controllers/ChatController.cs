@@ -979,12 +979,13 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                     ctx.AppendLine("Use list_directory to explore subdirectories and read_file to read files.");
                 }
 
-                // If the project folder contains inner git repos, tell ARI to pull before working.
+                // If the project folder is or contains git repos, tell ARI to pull before working.
+                // Path.Exists rather than Directory.Exists: a submodule's .git is a file.
                 if (project.RootPath is { } root && Directory.Exists(root))
                 {
-                    bool hasInnerRepos = Directory.EnumerateDirectories(root)
-                        .Any(d => Directory.Exists(Path.Combine(d, ".git")));
-                    if (hasInnerRepos)
+                    bool hasRepos = Path.Exists(Path.Combine(root, ".git"))
+                        || Directory.EnumerateDirectories(root).Any(d => Path.Exists(Path.Combine(d, ".git")));
+                    if (hasRepos)
                         ctx.AppendLine()
                            .AppendLine("This project contains git repositories. Load project_git_tools to get the `git` tool, which lists the available repos automatically. Before working in any repo, run git({repo}, \"fetch\") then git({repo}, \"status\") to check for upstream changes, and git({repo}, \"pull\") to update. Always work on up-to-date code.");
                 }
