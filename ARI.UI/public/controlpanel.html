@@ -528,6 +528,7 @@ html, body {
         <div class="cp-nav-item" data-tab="brain" data-group="memory" id="nav-brain">Brain</div>
         <div class="cp-nav-group" id="nav-group-integrations" data-group-id="integrations">Integrations<span class="nav-chevron">▾</span></div>
         <div class="cp-nav-item" data-tab="discord" data-group="integrations" id="nav-discord">Discord</div>
+        <div class="cp-nav-item" data-tab="github" data-group="integrations" id="nav-github">GitHub</div>
         <div class="cp-nav-group" id="nav-group-imagegen" data-group-id="imagegen">Image Generation<span class="nav-chevron">▾</span></div>
         <div class="cp-nav-item" data-tab="imagegen-model" data-group="imagegen" id="nav-imagegen-model">Model</div>
         <div class="cp-nav-item" data-tab="imagegen-settings" data-group="imagegen" id="nav-imagegen-settings">Settings</div>
@@ -1206,6 +1207,45 @@ html, body {
       </div>
     </div>
 
+    <div id="tab-github" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div class="vs-section">
+        <div class="vs-section-title">Connection</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
+          ARI never sees a token you type — you approve a short code on GitHub's own site and she's connected.
+          This gives her the same repo access your GitHub account has, so only connect an account you're
+          comfortable with her using.
+        </p>
+
+        <label class="vs-label" style="display:block;font-size:12px;margin-bottom:4px;">OAuth App Client ID</label>
+        <p style="color:var(--text-dim);font-size:11px;margin:0 0 6px;">
+          From a GitHub OAuth App with "Enable Device Flow" checked, created at
+          <a href="https://github.com/settings/developers" target="_blank" rel="noopener">github.com/settings/developers</a>.
+          Not secret — safe to leave saved.
+        </p>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:20px;">
+          <input type="text" id="gh-client-id" class="vs-input" style="flex:1;max-width:420px;" placeholder="Iv1.xxxxxxxxxxxxxxxx" autocomplete="off">
+          <button class="vs-btn-primary" id="gh-client-id-save" type="button">Save</button>
+        </div>
+
+        <div id="gh-connected-box" style="display:none;margin-bottom:16px;">
+          <span style="font-size:13px;">Connected as <strong id="gh-login"></strong></span>
+          <button type="button" id="gh-disconnect" class="vs-btn" style="margin-left:12px;font-size:11px;padding:5px 10px;border:1px solid var(--border,#2a2a2a);border-radius:6px;background:transparent;color:var(--text-dim);cursor:pointer;">Disconnect</button>
+        </div>
+
+        <div id="gh-connect-box" style="display:flex;align-items:center;gap:12px;">
+          <button class="vs-btn-primary" id="gh-connect-btn" type="button">Connect GitHub</button>
+          <span id="gh-status" style="font-size:12px;color:var(--text-dim);"></span>
+        </div>
+
+        <div id="gh-code-box" style="display:none;margin-top:16px;padding:14px 16px;border:1px solid var(--border,#2a2a2a);border-radius:10px;background:var(--user-bubble,#fafafa);max-width:420px;">
+          <div style="font-size:12px;color:var(--text-dim);margin-bottom:6px;">
+            Go to <a id="gh-verify-link" href="#" target="_blank" rel="noopener"></a> and enter:
+          </div>
+          <div id="gh-user-code" style="font-size:24px;font-weight:700;letter-spacing:.08em;"></div>
+        </div>
+      </div>
+    </div>
+
     <!-- Image Generation — Model tab -->
     <div id="tab-imagegen-model" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
@@ -1366,10 +1406,15 @@ cpFetch('/admin/username').then(r => r.json()).then(d => { if (d.name) window._a
 
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), dreaming: document.getElementById('tab-dreaming'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), 'users-new': document.getElementById('tab-users-new'), 'users-manage': document.getElementById('tab-users-manage'), modules: document.getElementById('tab-modules'), 'imagegen-model': document.getElementById('tab-imagegen-model'), 'imagegen-settings': document.getElementById('tab-imagegen-settings'), calendar: document.getElementById('tab-calendar') };
-const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', dreaming: 'Dreaming', llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', 'users-new': 'New User', 'users-manage': 'User Management', modules: 'Modules', 'imagegen-model': 'Image Generation — Model', 'imagegen-settings': 'Image Generation — Settings', calendar: 'Calendar' };
+const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), github: document.getElementById('tab-github'), dreaming: document.getElementById('tab-dreaming'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), 'users-new': document.getElementById('tab-users-new'), 'users-manage': document.getElementById('tab-users-manage'), modules: document.getElementById('tab-modules'), 'imagegen-model': document.getElementById('tab-imagegen-model'), 'imagegen-settings': document.getElementById('tab-imagegen-settings'), calendar: document.getElementById('tab-calendar') };
+const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', discord: 'Discord', github: 'GitHub', dreaming: 'Dreaming', llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', 'users-new': 'New User', 'users-manage': 'User Management', modules: 'Modules', 'imagegen-model': 'Image Generation — Model', 'imagegen-settings': 'Image Generation — Settings', calendar: 'Calendar' };
 
 let srvPollTimer = null;
+// Declared here (not down in the GitHub section) because switchTab('overview') below calls stopGhPoll()
+// at load time — a `let` declared later would still be in its temporal dead zone at that point and throw,
+// which silently aborts every script statement after it, including every other tab's event listeners.
+let ghPollTimer = null;
+function stopGhPoll() { if (ghPollTimer) { clearInterval(ghPollTimer); ghPollTimer = null; } }
 function switchTab(name) {
     navItems.forEach(n => n.classList.toggle('active', n.dataset.tab === name));
     Object.entries(tabs).forEach(([k, el]) => { if (el) el.style.display = k === name ? '' : 'none'; });
@@ -1389,6 +1434,8 @@ function switchTab(name) {
     if (name === 'calendar') loadCalendar();
     if (name === 'dreaming') loadDreaming();
     if (name === 'discord') loadDiscord();
+    if (name === 'github') loadGitHub();
+    if (name !== 'github') stopGhPoll();
     if (name === 'debug') loadDebugThreads();
     if (name === 'users-manage') loadUserManagement();
     if (name === 'modules') loadModules();
@@ -1422,7 +1469,7 @@ const NAV_ITEM_MODULES = {
 };
 const NAV_GROUP_ITEMS = {
     'nav-group-voice':        ['nav-voices', 'nav-voicesettings', 'nav-voice', 'nav-dataset'],
-    'nav-group-integrations': ['nav-discord'],
+    'nav-group-integrations': ['nav-discord', 'nav-github'],
     'nav-group-memory':       ['nav-brain'],
     'nav-group-imagegen':     ['nav-imagegen-model', 'nav-imagegen-settings'],
 };
@@ -2613,6 +2660,116 @@ document.getElementById('dc-save').addEventListener('click', async e => {
             'A token is saved. Leave blank to keep it, or paste a new one to replace it.';
     } catch { s.textContent = 'Save failed.'; }
     finally { btn.disabled = false; }
+});
+
+// ── github integration ─────────────────────────────────────
+// ghPollTimer / stopGhPoll are declared up near srvPollTimer — see the comment there.
+
+async function loadGitHub() {
+    stopGhPoll();
+    document.getElementById('gh-code-box').style.display = 'none';
+    ghSetStatus('', false);
+    try {
+        const r = await cpFetch('/admin/github/config');
+        if (!r.ok) throw new Error();
+        const d = await r.json();
+        document.getElementById('gh-client-id').value = d.clientId || '';
+        document.getElementById('gh-connected-box').style.display = d.connected ? '' : 'none';
+        document.getElementById('gh-connect-box').style.display = d.connected ? 'none' : 'flex';
+        document.getElementById('gh-login').textContent = d.login || '';
+    } catch {
+        ghSetStatus('Failed to load GitHub settings.', true);
+    }
+}
+
+function ghSetStatus(text, isError) {
+    const s = document.getElementById('gh-status');
+    s.textContent = text;
+    s.style.color = isError ? '#b45309' : 'var(--text-dim)';
+    s.style.fontWeight = isError ? '600' : 'normal';
+}
+
+async function ghSaveClientId(clientId) {
+    const r = await cpFetch('/admin/github/client-id', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId }),
+    });
+    const d = await r.json().catch(() => ({}));
+    return { ok: r.ok, error: d.error };
+}
+
+document.getElementById('gh-client-id-save').addEventListener('click', async e => {
+    const btn = e.currentTarget;
+    const clientId = document.getElementById('gh-client-id').value.trim();
+    if (!clientId) { ghSetStatus('Enter a Client ID first.', true); return; }
+    btn.disabled = true; ghSetStatus('Saving…', false);
+    try {
+        const { ok, error } = await ghSaveClientId(clientId);
+        ghSetStatus(ok ? 'Saved.' : (error || 'Save failed.'), !ok);
+    } catch { ghSetStatus('Save failed.', true); }
+    finally { btn.disabled = false; }
+});
+
+// Connect always saves whatever's currently in the field first, so pasting an ID and clicking
+// Connect works in one step — it doesn't silently depend on a separate Save click having happened.
+document.getElementById('gh-connect-btn').addEventListener('click', async e => {
+    const btn = e.currentTarget;
+    const clientId = document.getElementById('gh-client-id').value.trim();
+    if (!clientId) { ghSetStatus('Enter a Client ID first.', true); return; }
+    btn.disabled = true; ghSetStatus('Saving Client ID…', false);
+    try {
+        const { ok, error } = await ghSaveClientId(clientId);
+        if (!ok) { ghSetStatus(error || 'Failed to save Client ID.', true); return; }
+
+        ghSetStatus('Starting…', false);
+        const r = await cpFetch('/admin/github/connect', { method: 'POST' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { ghSetStatus(d.error || 'Failed to start.', true); return; }
+        ghSetStatus('', false);
+        const link = document.getElementById('gh-verify-link');
+        link.href = d.verificationUri; link.textContent = d.verificationUri;
+        document.getElementById('gh-user-code').textContent = d.userCode;
+        document.getElementById('gh-code-box').style.display = '';
+        stopGhPoll();
+        ghPollTimer = setInterval(pollGhConnect, 3000);
+    } catch { ghSetStatus('Failed to start.', true); }
+    finally { btn.disabled = false; }
+});
+
+async function pollGhConnect() {
+    let d;
+    try {
+        const r = await cpFetch('/admin/github/connect/status');
+        if (!r.ok) return;
+        d = await r.json();
+    } catch { return; }
+
+    if (d.state === 'connected') {
+        stopGhPoll();
+        await loadGitHub();
+    } else if (d.state === 'expired') {
+        stopGhPoll();
+        document.getElementById('gh-code-box').style.display = 'none';
+        ghSetStatus('Code expired — click Connect to try again.', true);
+    } else if (d.state === 'denied') {
+        stopGhPoll();
+        document.getElementById('gh-code-box').style.display = 'none';
+        ghSetStatus('Authorization was denied.', true);
+    } else if (d.state === 'error') {
+        stopGhPoll();
+        document.getElementById('gh-code-box').style.display = 'none';
+        ghSetStatus(d.error || 'Something went wrong.', true);
+    }
+}
+
+document.getElementById('gh-disconnect').addEventListener('click', async e => {
+    if (!confirm("Disconnect ARI's GitHub account? She will lose access to private repos until reconnected.")) return;
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+        await cpFetch('/admin/github/disconnect', { method: 'POST' });
+        await loadGitHub();
+    } finally { btn.disabled = false; }
 });
 
 async function restoreBackup(file, count) {
