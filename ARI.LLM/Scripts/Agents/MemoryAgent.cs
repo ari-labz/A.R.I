@@ -65,8 +65,8 @@ internal abstract class MemoryAgent : Agent
     internal sealed class MemoryTurnState : ToolTurnState
     {
         public bool Cancelled;                                                     // set after commit when StopAfterCommit; withdraws tools for the rest of the turn
-        public bool DiffViewedSinceWrite;                                         // a git_diff since the last mutation
-        public bool Committed;                                                     // a git_commit landed this epoch
+        public bool DiffViewedSinceWrite;                                         // a git diff since the last mutation
+        public bool Committed;                                                     // a git commit landed this epoch
         public int  ToolCalls;                                                     // total tool calls this epoch (logging)
         public int  WorkCalls;                                                     // read/mutation/search calls — drives the breaker
         public readonly HashSet<string> ReadPaths = new(StringComparer.OrdinalIgnoreCase);  // notes read this epoch
@@ -105,6 +105,15 @@ internal abstract class MemoryAgent : Agent
         catch { return null; }
     }
 
+    /// <summary>The git subcommand of a `git` tool call (status/diff/log/commit/…), or null for any other tool.</summary>
+    protected static string? GitCommand(string toolName, string argsJson)
+    {
+        if (toolName != "git") return null;
+        try { using JsonDocument d = JsonDocument.Parse(argsJson);
+              return d.RootElement.TryGetProperty("command", out JsonElement c) ? c.GetString()?.Trim() : null; }
+        catch { return null; }
+    }
+
     // The walk (Refactor) ends a turn after one committed change — one logical change per epoch. Engram
     // seeds a turn with a whole conversation and places several memories, so it overrides this to false.
     internal virtual bool StopAfterCommit => true;
@@ -131,8 +140,8 @@ internal abstract class MemoryAgent : Agent
     {
         if (state is not MemoryTurnState m) return null;
 
-        if (toolName == "git_commit" && !m.DiffViewedSinceWrite)
-            return "[System: review the change with git_diff before committing so you commit exactly what you intended.]";
+        if (GitCommand(toolName, argsJson) == "commit" && !m.DiffViewedSinceWrite)
+            return "[System: review the change with git diff before committing so you commit exactly what you intended.]";
 
         // Block wholesale rewrites of an EXISTING note — write_file over a live note repeatedly destroyed its
         // YAML frontmatter/structure (the model then burned its whole epoch trying to repair the damage).
@@ -165,7 +174,7 @@ internal abstract class MemoryAgent : Agent
             if (m.ReadPaths.Count >= ReadCeiling)
             {
                 Shared.Logger.LogInformation("[{Agent}] read guard: ceiling hit ({N} reads) — forcing action.", Name, m.ReadPaths.Count);
-                return $"[System: you have read {m.ReadPaths.Count} notes — enough context. Make the ONE change now (edit_file/write_file/move_file/delete_file/merge_notes), then git_diff and git_commit; or reply 'no change'. Do not read more.]";
+                return $"[System: you have read {m.ReadPaths.Count} notes — enough context. Make the ONE change now (edit_file/write_file/move_file/delete_file/merge_notes), then git diff and git commit; or reply 'no change'. Do not read more.]";
             }
         }
         return null;
@@ -177,8 +186,9 @@ internal abstract class MemoryAgent : Agent
         {
             m.ToolCalls++;
             // The git ritual (status/diff/log/commit) is FREE — it must never trip the breaker, or a clean
-            // read→edit→git_diff→git_commit epoch gets killed before it can commit (throwing away good work).
-            bool gitRitual = toolName is "git_status" or "git_diff" or "git_log" or "git_commit";
+            // read→edit→git diff→git commit epoch gets killed before it can commit (throwing away good work).
+            string? gitCommand = GitCommand(toolName, argsJson);
+            bool gitRitual = gitCommand is "status" or "diff" or "log" or "commit";
             if (!gitRitual) m.WorkCalls++;
             string snip = result.Length > 90 ? result[..90].Replace("\n", " ") : result.Replace("\n", " ");
             Shared.Logger.LogInformation("[{Agent}] tool #{N} {Tool} → {Result}", Name, m.ToolCalls, toolName, snip);
@@ -201,9 +211,9 @@ internal abstract class MemoryAgent : Agent
                 if (path is not null && result.TrimStart().StartsWith("[file:", StringComparison.Ordinal))
                     m.ReadPaths.Add(path);
             }
-            else if (toolName == "git_diff")
+            else if (gitCommand == "diff")
                 m.DiffViewedSinceWrite = true;
-            else if (toolName == "git_commit" && result.StartsWith("Committed", StringComparison.Ordinal))
+            else if (gitCommand == "commit" && result.StartsWith("Committed", StringComparison.Ordinal))
             {
                 m.Committed = true;
                 if (StopAfterCommit) m.Cancelled = true;
@@ -349,7 +359,7 @@ internal abstract class MemoryAgent : Agent
 
     protected enum EpochOutcome { Committed, NoChange, Stalled }
 
-    // Classify how an epoch ended: a successful git_commit ⇒ Committed; an explicit "no change" reply ⇒
+    // Classify how an epoch ended: a successful git commit ⇒ Committed; an explicit "no change" reply ⇒
     // NoChange (genuine no-op, counts toward convergence); anything else (an error, or the model thinking
     // itself into an empty turn without acting) ⇒ Stalled, which must NOT count as the graph being clean.
     // Virtual so a read-only walker (Curiosity) can treat "added a curiosity" as the productive outcome.
@@ -357,8 +367,8 @@ internal abstract class MemoryAgent : Agent
     {
         bool committed = thread.History.OfType<Response>()
             .SelectMany(r => r.Trace ?? Enumerable.Empty<TraceStep>())
-            .Any(s => s.Kind == "tool_result" && s.Name == "git_commit"
-                      && (s.Text?.StartsWith("Committed", StringComparison.Ordinal) ?? false));
+            .Any(s => s.Kind == "tool_result" && s.Name == "git"
+                      && (s.Text?.StartsWith("Committed", StringComparison.Ordinal) ?? false));   // only a commit returns this
         if (committed) return EpochOutcome.Committed;
 
         string finalText = thread.History.OfType<Response>().LastOrDefault()?.ContentText ?? string.Empty;

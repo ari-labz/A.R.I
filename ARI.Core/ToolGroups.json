@@ -1,11 +1,7 @@
 {
   "Groups": {
     "git_tools": {
-      "Description": "Git status, diff, log, and commit for the current vault/repo.",
-      "Tools": ["git_status", "git_diff", "git_log", "git_commit"]
-    },
-    "project_git_tools": {
-      "Description": "Git operations (status, fetch, pull, log, diff, add, commit, push, branch, checkout, stash, restore) across the project's repositories, plus cloning a new GitHub repo into the project with git_clone. Repos are auto-discovered — use this when working with a project that contains multiple git repos.",
+      "Description": "Git on the bound project or vault, with any host (GitHub, GitLab, a company server): status, fetch, pull, log, diff, add, commit, push, branch, checkout, stash, restore across its repos (auto-discovered), plus git_clone to clone a repo into the project.",
       "Tools": ["git", "git_clone"]
     },
     "github_tools": {
