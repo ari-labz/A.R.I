@@ -1699,6 +1699,12 @@ public abstract class Agent
                 productiveBatch = true;
                 if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
             }
+            else if (call.Name == "start_build")
+            {
+                // Its result is a "[System: building now…]" steer, which the branch below would render as a tool error.
+                turn.ContentBuilder.Append("<!--ari-tool-mode:start_build:Building directly-->");
+                if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
+            }
             else if (result.StartsWith("[System:", StringComparison.Ordinal) || ToolCallParser.IsError(result))
             {
                 string label = "";
