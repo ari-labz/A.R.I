@@ -5,7 +5,7 @@
       "Tools": ["git", "git_clone"]
     },
     "github_tools": {
-      "Description": "Full GitHub access over the REST API: view a repo, list/view issues and pull requests, list Actions runs, list repos you or an org have, create a new repo (public or private), or fork one. Reading public repos always works; private repos, creating, and forking need a GitHub account connected in the control panel (Integrations → GitHub) first — this can't be set up from chat. Pair with git_clone (project_git_tools) to bring a repo onto disk after finding/creating/forking it.",
+      "Description": "GitHub through its CLI (gh), as the connected account: issues, pull requests, repos, releases, Actions runs, or gh api for anything else. Needs a GitHub account connected in the control panel. For putting a repo on disk use git_clone (git_tools).",
       "Tools": ["github"]
     },
     "filesystem_tools": {
