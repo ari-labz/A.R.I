@@ -27,7 +27,7 @@ internal sealed class ListDirectory : Tool
                 type       = "object",
                 properties = new
                 {
-                    path  = new { type = "string",  description = "Directory path relative to project root. Omit for project root." },
+                    path  = new { type = "string",  description = "Directory path relative to project root. Omit for project root. Or an absolute path to list a directory OUTSIDE the project — only when the user gave you that path or asked you to look outside the project." },
                     depth = new { type = "integer",  description = "How many levels to recurse. 1 = immediate contents only (default), 2+ = nested. Files are only shown at the deepest level." }
                 },
                 required = Array.Empty<string>()

@@ -40,7 +40,7 @@ internal class Read : Tool
                 type       = "object",
                 properties = new
                 {
-                    path       = new { type = "string",  description = "Path to the file relative to the project root." },
+                    path       = new { type = "string",  description = "Path to the file, relative to the project root. You can also pass an absolute path to read a file OUTSIDE the project — but only when the user actually gave you that path or asked you to look outside the project; don't go wandering off the bound project on your own." },
                     start_line = new { type = "integer", description = "First line to return (1-indexed, inclusive). Use this whenever you know roughly where the content is." },
                     end_line   = new { type = "integer", description = "Last line to return (1-indexed, inclusive). Pair with start_line — read a window, not the whole file." }
                 },
