@@ -200,7 +200,9 @@ internal sealed class Coder : Agent
         parent.FilesystemRoot     = remote
             ? (parent.FilesystemRoot is { } bound && Directory.Exists(bound) ? bound : null)
             : root;
-        parent.Snapshots       = remote ? null : snapshots;
+        // Always a real ledger, remote or not: server file tools can still be on a remote thread (a kept
+        // server-side binding, request_tools), and a null ledger makes edit_file refuse every file.
+        parent.Snapshots       = snapshots;
         parent.IsRemoteProject = remote;
         parent.Ct              = cts.Token;
 

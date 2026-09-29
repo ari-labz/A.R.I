@@ -28,7 +28,7 @@ internal sealed class ServerFileSystem : FileSystem
 
     private readonly string            root;
     private readonly CancellationToken ct;
-    private readonly FileSnapshots?    gate;   // preview-before-read + edit/revert snapshots
+    private FileSnapshots? gate => Snapshots;   // preview-before-read + edit/revert snapshots, looked up per use
     private readonly bool              brainVault; // vault root: redirect content/name search to search_brain
     private readonly bool              allowOutsideProject; // interactive thread: an absolute path may escape root
 
@@ -44,14 +44,18 @@ internal sealed class ServerFileSystem : FileSystem
     /// invoke by handing ARI a path, the same way Claude Code's own Read tool works. Reserved for threads a
     /// person is actively talking to; false for the brain vault and for autonomous/read-only threads (the
     /// Dreamer) so unsupervised exploration never wanders off the bound project on its own.</param>
-    public ServerFileSystem(string root, CancellationToken ct, FileSnapshots? gate = null, bool brainVault = false, bool allowOutsideProject = false)
+    /// <param name="snapshotSource">Where to find the current snapshots on each use. Pass this for a
+    /// FileSystem that outlives a turn (tools registered on a thread); a fixed <paramref name="gate"/> goes
+    /// stale once the thread moves on to the next turn's snapshots.</param>
+    public ServerFileSystem(string root, CancellationToken ct, FileSnapshots? gate = null, bool brainVault = false,
+                            bool allowOutsideProject = false, Func<FileSnapshots?>? snapshotSource = null)
     {
         this.root                = root;
         this.ct                  = ct;
-        this.gate                = gate;
         this.brainVault          = brainVault;
         this.allowOutsideProject = allowOutsideProject;
-        Snapshots                = gate;
+        if (snapshotSource is not null) SnapshotSource = snapshotSource;
+        else                            Snapshots      = gate;
     }
 
     /// <summary>Raw bytes off the server's disk, path-traversal checked. The Read tool decodes them.</summary>
