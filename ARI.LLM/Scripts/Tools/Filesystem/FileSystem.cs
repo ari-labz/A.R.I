@@ -38,6 +38,14 @@ internal abstract class FileSystem
 
     internal bool WasRead(string path) => Snapshots?.WasRead(path) ?? false;
 
+    /// <summary>True when write_file may only create files here, not replace existing ones. Off by default and
+    /// for the brain vault, whose memory agents replace notes deliberately.</summary>
+    internal virtual bool GuardsOverwrites => false;
+
+    /// <summary>The absolute path a write to <paramref name="path"/> would land on, or null if unknown or outside
+    /// the project. Lets write_file check whether it would replace an existing file.</summary>
+    internal virtual string? WriteTarget(string path) => null;
+
 
     public virtual Task<string> Read(string argsJson)    => Unavailable("read_file");
 

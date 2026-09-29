@@ -58,6 +58,9 @@ internal sealed class ServerFileSystem : FileSystem
         else                            Snapshots      = gate;
     }
 
+    internal override bool    GuardsOverwrites        => !brainVault;
+    internal override string? WriteTarget(string path) => Resolve(path.Trim('"', '\'', ' '));
+
     /// <summary>Raw bytes off the server's disk, path-traversal checked. The Read tool decodes them.</summary>
     public override async Task<byte[]> ReadBytes(string path)
     {
