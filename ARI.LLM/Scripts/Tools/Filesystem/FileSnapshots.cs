@@ -68,9 +68,17 @@ internal sealed class FileSnapshots
 
     // Paths (relative, as the model sees them) that have been successfully read or previewed this session.
     // Stored here rather than on FileSystem so it survives across tool calls (FileSystem is recreated each call).
+    // Keyed on a normalised path so "./Kraken/X.cs", "Kraken\X.cs" and "Kraken/X.cs" count as the same file.
     private readonly HashSet<string> readLedger = new(StringComparer.OrdinalIgnoreCase);
-    internal void MarkRead(string path)  => readLedger.Add(path);
-    internal bool WasRead(string path)   => readLedger.Contains(path);
+    internal void MarkRead(string path)  => readLedger.Add(LedgerKey(path));
+    internal bool WasRead(string path)   => readLedger.Contains(LedgerKey(path));
+
+    private static string LedgerKey(string path)
+    {
+        string key = path.Trim('"', '\'', ' ').Replace('\\', '/');
+        while (key.StartsWith("./", StringComparison.Ordinal)) key = key[2..];
+        return key;
+    }
 
     /// <summary>Saves <paramref name="content"/> as the pre-edit snapshot for <paramref name="absPath"/>.
     /// Always overwrites so revert_file always targets the most recent edit.</summary>

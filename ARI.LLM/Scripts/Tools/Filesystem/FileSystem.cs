@@ -16,9 +16,13 @@ namespace ARI.LLM;
 /// </summary>
 internal abstract class FileSystem
 {
-    // The persistent ledger lives on FileSnapshots (which is kept on the Thread across tool calls).
-    // FileSystem is recreated on every tool call, so a HashSet here would be wiped between read and edit.
-    internal FileSnapshots? Snapshots { get; init; }
+    // The read ledger lives on FileSnapshots, which the Thread holds and replaces each turn. Tools keep the
+    // FileSystem they were built with, often across turns, so a captured FileSnapshots goes stale: a tool
+    // rebuilt mid-session (request_tools) then checks a different ledger from the one reads were recorded in,
+    // and edit_file refuses files that were just read. SnapshotSource looks the current one up on every use.
+    private Func<FileSnapshots?> snapshotSource = () => null;
+    internal FileSnapshots? Snapshots { get => snapshotSource(); init => snapshotSource = () => value; }
+    internal Func<FileSnapshots?> SnapshotSource { init => snapshotSource = value; }
 
     internal void MarkRead(string argsJson)
     {
