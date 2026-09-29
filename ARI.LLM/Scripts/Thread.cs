@@ -152,6 +152,10 @@ public class Thread
     /// layer. Don't infer this from the tool list: a project on this server's disk has read_file too.</summary>
     internal bool HasClientTools => ClientToolCloner is not null;
 
+    /// <summary>Absolute paths of files write_file created in this thread. write_file won't replace an existing
+    /// file, except one ARI created here herself: rewriting her own draft can't wipe anyone else's code.</summary>
+    internal readonly HashSet<string> CreatedFiles = new(StringComparer.OrdinalIgnoreCase);
+
     public readonly List<ThreadItem> History = new();
 
     /// <summary>The flattened display blocks for this thread — every visible <see cref="Response"/>'s blocks in

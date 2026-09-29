@@ -31,7 +31,7 @@ internal sealed class WriteFile : Tool
         function = new
         {
             name        = "write_file",
-            description = "Create a NEW file, or deliberately replace an entire existing file's contents. Overwrites the whole file and creates missing parent directories. Do NOT use write_file to change an existing file — adding a method, editing lines, or fixing call sites is always edit_file. In particular, if edit_file feels stuck (line numbers shifted, an edit didn't seem to land), the fix is to re-read the file for fresh line numbers and use search_files to find exact call sites — NOT to fall back to write_file. Rewriting a whole existing file from memory reliably drops or duplicates code and is never the right escape hatch.",
+            description = "Create a new file, including any missing parent directories. It can't replace an existing file (change those with edit_file), except one you created earlier in this conversation.",
             parameters  = new
             {
                 type       = "object",
@@ -47,12 +47,18 @@ internal sealed class WriteFile : Tool
 
     internal override string? PreCheck(Thread thread, string argsJson)
     {
-        if (allowedPaths is null && allowedPrefixes is null) return null;
         try
         {
             using JsonDocument doc = JsonDocument.Parse(argsJson);
             if (doc.RootElement.TryGetProperty("path", out JsonElement p) && p.GetString() is { } path)
             {
+                // Enforced here rather than asked for in the description: a model stuck on edit_file used to
+                // rewrite whole existing files from memory, silently dropping code.
+                if (fs.GuardsOverwrites && fs.WriteTarget(path) is { } target
+                    && File.Exists(target) && !thread.CreatedFiles.Contains(target))
+                    return $"[Blocked] '{path}' already exists. Change it with edit_file; write_file only creates new files.";
+
+                if (allowedPaths is null && allowedPrefixes is null) return null;
                 bool ok = (allowedPaths?.Any(a => PathScope.Matches(path, a)) ?? false)
                        || (allowedPrefixes?.Any(pre => PathScope.MatchesPrefix(path, pre)) ?? false);
                 if (!ok)
@@ -68,6 +74,21 @@ internal sealed class WriteFile : Tool
     }
 
     internal override Task<ToolResult> Execute(string argsJson) => fs.Write(argsJson).AsToolResult();
+
+    // Remember files created here so PreCheck lets ARI rewrite her own drafts later in the conversation.
+    internal override ToolResult PostRun(Thread thread, string argsJson, ToolResult result)
+    {
+        if (!result.Text.StartsWith("Successfully wrote", StringComparison.Ordinal) || !result.Text.Contains("(created")) return result;
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            if (doc.RootElement.TryGetProperty("path", out JsonElement p) && p.GetString() is { } path
+                && fs.WriteTarget(path) is { } target)
+                thread.CreatedFiles.Add(target);
+        }
+        catch { }
+        return result;
+    }
 
     // Enriched tool-start marker (with the +added diff from args) so the card keeps its badge and flips Writing→Wrote.
     internal override Func<string, string>? Display => args =>
