@@ -30,6 +30,7 @@ internal sealed class ServerFileSystem : FileSystem
     private readonly CancellationToken ct;
     private readonly FileSnapshots?    gate;   // preview-before-read + edit/revert snapshots
     private readonly bool              brainVault; // vault root: redirect content/name search to search_brain
+    private readonly bool              allowOutsideProject; // interactive thread: an absolute path may escape root
 
     // Redirect returned when a memory agent reaches for a raw-file search over the vault. The filesystem
     // search (regex over text / glob over filenames) can't see a note's aliases; search_brain resolves by
@@ -38,19 +39,25 @@ internal sealed class ServerFileSystem : FileSystem
         "To search the brain, use the search_brain tool instead — it searches note titles, aliases, and " +
         "content through the memory index. Give it plain words (a name or phrase), not a regex or glob.";
 
-    public ServerFileSystem(string root, CancellationToken ct, FileSnapshots? gate = null, bool brainVault = false)
+    /// <param name="allowOutsideProject">Lets the read-only ops (read/preview/list/search/find) resolve an
+    /// absolute path outside <paramref name="root"/> instead of rejecting it — the escape hatch a user can
+    /// invoke by handing ARI a path, the same way Claude Code's own Read tool works. Reserved for threads a
+    /// person is actively talking to; false for the brain vault and for autonomous/read-only threads (the
+    /// Dreamer) so unsupervised exploration never wanders off the bound project on its own.</param>
+    public ServerFileSystem(string root, CancellationToken ct, FileSnapshots? gate = null, bool brainVault = false, bool allowOutsideProject = false)
     {
-        this.root       = root;
-        this.ct         = ct;
-        this.gate       = gate;
-        this.brainVault = brainVault;
-        Snapshots       = gate;
+        this.root                = root;
+        this.ct                  = ct;
+        this.gate                = gate;
+        this.brainVault          = brainVault;
+        this.allowOutsideProject = allowOutsideProject;
+        Snapshots                = gate;
     }
 
     /// <summary>Raw bytes off the server's disk, path-traversal checked. The Read tool decodes them.</summary>
     public override async Task<byte[]> ReadBytes(string path)
     {
-        string? absPath = Resolve(path);
+        string? absPath = ResolveRead(path);
         if (absPath is null)
             throw new UnauthorizedAccessException("Access denied: path traversal is not allowed.");
         if (!File.Exists(absPath))
@@ -58,12 +65,35 @@ internal sealed class ServerFileSystem : FileSystem
         return await File.ReadAllBytesAsync(absPath, ct);
     }
 
-    /// <summary>Resolves a project-relative path to an absolute one, or null if it escapes the root.</summary>
+    /// <summary>Resolves a project-relative path to an absolute one, or null if it escapes the root. Used by the
+    /// mutating operations (edit/write/delete/move) — those stay sandboxed to the project no matter what path
+    /// the model passes.</summary>
     private string? Resolve(string relPath)
     {
         string absPath = Path.GetFullPath(Path.Combine(root, relPath));
         return absPath.StartsWith(root, StringComparison.OrdinalIgnoreCase) ? absPath : null;
     }
+
+    /// <summary>Same as <see cref="Resolve"/> for a relative path, but an absolute path is honoured as-is —
+    /// letting the read-only operations (read/preview/list/search/find) reach anywhere on the server's disk,
+    /// the same escape hatch Claude Code's own Read tool has. A relative path is still sandboxed to the
+    /// project root; only a path the model deliberately passed as absolute (i.e. the user gave it, or asked
+    /// to look outside the project) breaks out. Mutating operations never call this — see <see cref="Resolve"/>.</summary>
+    private static string? ResolveAnywhere(string path)
+    {
+        if (Path.IsPathRooted(path))
+        {
+            try { return Path.GetFullPath(path); }
+            catch { return null; }
+        }
+        return null;
+    }
+
+    /// <summary>Resolves a path for a read-only op. When <see cref="allowOutsideProject"/> is set, an absolute
+    /// path escapes the sandbox (see <see cref="ResolveAnywhere"/>); otherwise — and for any relative path —
+    /// it stays rooted at the project (see <see cref="Resolve"/>).</summary>
+    private string? ResolveRead(string relPath) =>
+        (allowOutsideProject ? ResolveAnywhere(relPath) : null) ?? Resolve(relPath);
 
     /// <summary>True if the text is one of ARI's history-redaction placeholders.</summary>
     private static bool IsRedactionPlaceholder(string? s)
@@ -89,7 +119,7 @@ internal sealed class ServerFileSystem : FileSystem
         {
             using JsonDocument doc     = JsonDocument.Parse(argsJson);
             string             relPath = (doc.RootElement.GetProperty("path").GetString() ?? string.Empty).Trim('"', '\'', ' ');
-            string?            absPath = Resolve(relPath);
+            string?            absPath = ResolveRead(relPath);
 
             if (absPath is null)        return "Access denied: path traversal is not allowed.";
             if (!File.Exists(absPath))  return $"File not found: {relPath}";
@@ -183,7 +213,7 @@ internal sealed class ServerFileSystem : FileSystem
         {
             using JsonDocument doc     = JsonDocument.Parse(argsJson);
             string             relPath = (doc.RootElement.GetProperty("path").GetString() ?? "").Trim('"', '\'', ' ');
-            string?            absPath = Resolve(relPath);
+            string?            absPath = ResolveRead(relPath);
 
             if (absPath is null)       return "Access denied: path traversal is not allowed.";
             if (!File.Exists(absPath)) return $"File not found: {relPath}";
@@ -212,7 +242,7 @@ internal sealed class ServerFileSystem : FileSystem
             string relDir     = doc.RootElement.TryGetProperty("path",  out JsonElement pathEl) ? (pathEl.GetString() ?? ".").Trim('"', '\'', ' ') : ".";
             string glob       = doc.RootElement.TryGetProperty("glob",  out JsonElement globEl) ? globEl.GetString() ?? "*" : "*";
             bool   ignoreCase = doc.RootElement.TryGetProperty("ignore_case", out JsonElement icEl) && icEl.ValueKind == JsonValueKind.True;
-            string? absDir = Resolve(relDir);
+            string? absDir = ResolveRead(relDir);
             if (absDir is null)
                 return "Access denied: path traversal is not allowed.";
             if (!Directory.Exists(absDir))
@@ -234,8 +264,8 @@ internal sealed class ServerFileSystem : FileSystem
             int          totalChars = 0;
             foreach (string file in Directory.EnumerateFiles(absDir, glob, SearchOption.AllDirectories))
             {
-                if (!file.StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;
-                if (IsIgnored(file)) continue;
+                if (!file.StartsWith(absDir, StringComparison.OrdinalIgnoreCase)) continue;
+                if (IsIgnored(file, absDir)) continue;
                 try
                 {
                     string[] lines = await File.ReadAllLinesAsync(file, ct);
@@ -243,7 +273,7 @@ internal sealed class ServerFileSystem : FileSystem
                     {
                         if (regex.IsMatch(lines[i]))
                         {
-                            string rel  = Path.GetRelativePath(root, file);
+                            string rel  = DisplayPath(file);
                             string line = $"{rel}:{i + 1}: {lines[i].Trim()}";
                             results.Add(line);
                             totalChars += line.Length + 1;
@@ -261,14 +291,20 @@ internal sealed class ServerFileSystem : FileSystem
         catch (Exception ex) { return $"Error searching files: {ex.Message}"; }
     }
 
-    /// <summary>True if any path segment below the project root is an ignored directory.</summary>
-    private bool IsIgnored(string absFile)
+    /// <summary>True if any path segment below <paramref name="baseDir"/> is an ignored directory.</summary>
+    private static bool IsIgnored(string absFile, string baseDir)
     {
-        string rel = Path.GetRelativePath(root, absFile);
+        string rel = Path.GetRelativePath(baseDir, absFile);
         foreach (string seg in rel.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
             if (IgnoredDirs.Contains(seg)) return true;
         return false;
     }
+
+    /// <summary>Project-relative when the file is inside the project root (the familiar, short form the model
+    /// already expects); the full absolute path when it's outside — an out-of-project result must round-trip
+    /// straight back into read_file, and "relative to a root it isn't under" wouldn't resolve.</summary>
+    private string DisplayPath(string absFile) =>
+        absFile.StartsWith(root, StringComparison.OrdinalIgnoreCase) ? Path.GetRelativePath(root, absFile) : absFile;
 
     // ── find_files (from FindFiles.cs) ─────────────────────────────────────────────────────────────
     public override Task<string> Find(string argsJson)
@@ -280,7 +316,7 @@ internal sealed class ServerFileSystem : FileSystem
             string pattern = (doc.RootElement.GetProperty("pattern").GetString() ?? "").Trim();
             string relDir  = doc.RootElement.TryGetProperty("path", out JsonElement pe) ? (pe.GetString() ?? ".").Trim('"', '\'', ' ') : ".";
             if (pattern.Length == 0) return Task.FromResult("No pattern provided.");
-            string? absDir = Resolve(relDir);
+            string? absDir = ResolveRead(relDir);
             if (absDir is null)            return Task.FromResult("Access denied: path traversal is not allowed.");
             if (!Directory.Exists(absDir)) return Task.FromResult($"Directory not found: {relDir}");
 
@@ -289,12 +325,12 @@ internal sealed class ServerFileSystem : FileSystem
             bool truncated = false;
             foreach (string file in Directory.EnumerateFiles(absDir, "*", SearchOption.AllDirectories))
             {
-                if (!file.StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;
-                string rel = Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/');
-                if (rel.Split('/').Any(seg => IgnoredDirs.Contains(seg))) continue;
-                if (rx.IsMatch(rel) || rx.IsMatch(Path.GetFileName(rel)))
+                if (!file.StartsWith(absDir, StringComparison.OrdinalIgnoreCase)) continue;
+                string matchRel = Path.GetRelativePath(absDir, file).Replace(Path.DirectorySeparatorChar, '/');
+                if (matchRel.Split('/').Any(seg => IgnoredDirs.Contains(seg))) continue;
+                if (rx.IsMatch(matchRel) || rx.IsMatch(Path.GetFileName(matchRel)))
                 {
-                    results.Add(rel);
+                    results.Add(DisplayPath(file).Replace(Path.DirectorySeparatorChar, '/'));
                     if (results.Count >= MAX_RESULTS) { truncated = true; break; }
                 }
             }
@@ -658,7 +694,7 @@ internal sealed class ServerFileSystem : FileSystem
                 depth = 999;
             }
 
-            string? absPath = Resolve(relPath);
+            string? absPath = ResolveRead(relPath);
             if (absPath is null)            return Task.FromResult("Access denied: path traversal is not allowed.");
             if (!Directory.Exists(absPath)) return Task.FromResult($"Directory not found: {relPath}");
 
@@ -667,7 +703,7 @@ internal sealed class ServerFileSystem : FileSystem
             bool          truncated = false;
 
             sb.AppendLine($"[directory: \"{relPath}\"]");
-            BuildTree(sb, absPath, "", 1, depth, ref count, ref truncated);
+            BuildTree(sb, absPath, absPath, "", 1, depth, ref count, ref truncated);
 
             if (truncated)
                 sb.AppendLine($"... (truncated at {MAX_ENTRIES} entries — narrow with path or use search_files)");
@@ -677,7 +713,7 @@ internal sealed class ServerFileSystem : FileSystem
         catch (Exception ex) { return Task.FromResult($"Error listing directory: {ex.Message}"); }
     }
 
-    private void BuildTree(StringBuilder sb, string absDir, string indent, int currentDepth, int maxDepth, ref int count, ref bool truncated)
+    private void BuildTree(StringBuilder sb, string absDir, string baseDir, string indent, int currentDepth, int maxDepth, ref int count, ref bool truncated)
     {
         if (truncated) return;
 
@@ -688,7 +724,7 @@ internal sealed class ServerFileSystem : FileSystem
         List<string> files = new();
         foreach (string entry in entries)
         {
-            if (!entry.StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!entry.StartsWith(baseDir, StringComparison.OrdinalIgnoreCase)) continue;
             if (Directory.Exists(entry)) dirs.Add(entry);
             else files.Add(entry);
         }
@@ -707,7 +743,7 @@ internal sealed class ServerFileSystem : FileSystem
                 string hint = fc > 0 ? $"  ({fc} file{(fc == 1 ? "" : "s")})" : "";
                 sb.AppendLine($"{indent}{name}/{hint}");
                 count++;
-                BuildTree(sb, entry, indent + "  ", currentDepth + 1, maxDepth, ref count, ref truncated);
+                BuildTree(sb, entry, baseDir, indent + "  ", currentDepth + 1, maxDepth, ref count, ref truncated);
             }
             else
             {

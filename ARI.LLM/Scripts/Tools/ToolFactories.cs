@@ -92,8 +92,12 @@ internal static class ToolFactories
     private static ServerFileSystem? Fs(Thread t)
     {
         if (t.FilesystemRoot is not { } r) return null;
-        bool isVault = t.IsBrainVault || Directory.Exists(Path.Combine(r, ".obsidian"));
-        return new ServerFileSystem(r, t.Ct, t.Snapshots, isVault);
+        bool isVault    = t.IsBrainVault || Directory.Exists(Path.Combine(r, ".obsidian"));
+        bool isDreaming = t.tools.ContainsKey("wake"); // dream thread marker — same one ProjectTools uses
+        // Outside-the-project reads are a person handing ARI a path in the moment — never the vault (fixed,
+        // known root) and never an autonomous/read-only thread (the Dreamer), which must stay inside what it
+        // was bound to since nobody is there to have "asked" it for anything else.
+        return new ServerFileSystem(r, t.Ct, t.Snapshots, isVault, allowOutsideProject: !isVault && !isDreaming);
     }
 
     // Filesystem tool names that unlock when a FilesystemRoot is set.

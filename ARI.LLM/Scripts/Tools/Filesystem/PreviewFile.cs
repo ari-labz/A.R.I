@@ -33,7 +33,7 @@ internal sealed class PreviewFile : Tool
                 type       = "object",
                 properties = new
                 {
-                    path = new { type = "string", description = "Path to the file relative to the project root." }
+                    path = new { type = "string", description = "Path to the file, relative to the project root. Or an absolute path to preview a file OUTSIDE the project, if the user gave you that path." }
                 },
                 required = new[] { "path" }
             }
