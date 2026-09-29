@@ -147,6 +147,11 @@ public class Thread
     /// forces it to edit blind. Null when the project is local (ServerFileSystem is bound instead).</summary>
     public Func<Thread, bool>? ClientToolCloner;
 
+    /// <summary>True while a connected desktop client's forwarded file tools are attached to this thread, meaning
+    /// the project lives on the client's machine. Set and cleared with ClientToolCloner by the client WebSocket
+    /// layer. Don't infer this from the tool list: a project on this server's disk has read_file too.</summary>
+    internal bool HasClientTools => ClientToolCloner is not null;
+
     public readonly List<ThreadItem> History = new();
 
     /// <summary>The flattened display blocks for this thread — every visible <see cref="Response"/>'s blocks in
