@@ -44,6 +44,8 @@ internal sealed class CodePipeline : Pipeline
         //     so the Coder drives those forwarded tools; `root` stays the raw client path
         //     (used only to build commands sent back to the client — never touched on this disk).
         //   • Local (eval / co-located): the project is on this server's disk; the Coder binds ServerFileSystem.
+        // Remote is decided by whether the client's tools are actually attached (Thread.HasClientTools). A project
+        // on this disk also has read_file, so its presence is no signal.
         // New user turn: bump the serial so client-side per-turn guardrails (read dedup) reset their scope.
         thread.TurnSerial++;
 
@@ -68,7 +70,7 @@ internal sealed class CodePipeline : Pipeline
         }
         else thread.Phase = CodePhase.Planning;
 
-        bool remote = thread.tools.ContainsKey("read_file");
+        bool remote = thread.HasClientTools;
 
         // No disk fallback, ever — a local Code thread with nothing bound and no client-sent path
         // used to default to Path.GetFullPath("."), the SERVER's own working directory (a real
@@ -80,12 +82,22 @@ internal sealed class CodePipeline : Pipeline
         // genuinely needs to see one it doesn't have, instead of reaching for a tool that isn't there.
         string? resolvedRoot = remote
             ? (localPath ?? "")
-            : (string.IsNullOrWhiteSpace(localPath) ? null : Path.GetFullPath(localPath));
+            : LocalRoot(localPath, thread.FilesystemRoot);
         FileSnapshots snapshots = new();
 
         if (coder is null)
             throw new InvalidOperationException("Coder is not configured — the code pipeline cannot run.");
 
         return coder.RunLoop(thread, threadKey, effectivePrompt, username, resolvedRoot, snapshots, cts, onDelta, remote);
+    }
+
+    /// <summary>Root for a project on this server's disk: the path the client sent if it exists here, otherwise
+    /// the folder the thread is already bound to (a server-side project binding). Null when neither exists here.
+    /// Falling back to the binding is what stops a turn with no client path wiping it.</summary>
+    private static string? LocalRoot(string? localPath, string? boundRoot)
+    {
+        if (!string.IsNullOrWhiteSpace(localPath) && Directory.Exists(localPath))
+            return Path.GetFullPath(localPath);
+        return boundRoot is { } bound && Directory.Exists(bound) ? bound : null;
     }
 }
