@@ -195,7 +195,7 @@ public static class ClientWebSocket
         RegisterTool(thread, ws, log,
             name: "preview_file",
             description: "Get a class-diagram outline of a file — its types with base/interfaces, and every field, property and method SIGNATURE with types and line numbers. This answers \"how do I USE this?\" and for most files it is ALL you need: to bind to a data class, call a method, or place a control, the outline gives you the exact names — no read required. Prefer this over read_file by default; only read_file (a narrow range) when you must see how a specific method behaves inside because you are copying it.",
-            parameters: new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root." } }, required = new[] { "path" } },
+            parameters: new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root, or an absolute path anywhere on the user's machine." } }, required = new[] { "path" } },
             displayVerb: "Previewing", displayDoneVerb: "Previewed",
             labelField: "path",
             // No end marker: Agent.cs defers this card's flip (present tense held until the next batch or the
@@ -216,7 +216,7 @@ public static class ClientWebSocket
             name: "read_file",
             description: "Read a SPECIFIC RANGE of a file — use this sparingly. Most of the time preview_file is enough: it gives the exact members to USE a type, so you do NOT need to read it. Only read when you must see how a specific method BEHAVES inside because you are copying/imitating it — and then read just THAT method's lines (preview gave you its line number), not the whole file. Lines come back numbered so you can edit_file by line number afterwards. HARD LIMIT: at most 100 lines per call — wider requests are rejected without being read. ALWAYS preview_file first, then pass start_line and end_line for the exact range. Reading a whole file, or reading 'to be sure', bloats your context and is the main reason this pipeline runs out of room. You never need to re-read a file you already have (edit_file returns the updated lines around your change).",
             parameters: new { type = "object", properties = new {
-                path       = new { type = "string",  description = "File path relative to project root" },
+                path       = new { type = "string",  description = "File path relative to project root, or an absolute path anywhere on the user's machine" },
                 start_line = new { type = "integer", description = "First line to read (1-based, inclusive). Omit to read from the start." },
                 end_line   = new { type = "integer", description = "Last line to read (1-based, inclusive). Omit to read to the end." }
             }, required = new[] { "path" } },
@@ -238,7 +238,7 @@ public static class ClientWebSocket
             RegisterTool(thread, ws, log,
                 name: "list_directory",
                 description: "List files and subdirectories at a path within the project.",
-                parameters: new { type = "object", properties = new { path = new { type = "string", description = "Directory path relative to project root. Defaults to root." } }, required = Array.Empty<string>() },
+                parameters: new { type = "object", properties = new { path = new { type = "string", description = "Directory path relative to project root, or an absolute path anywhere on the user's machine. Defaults to root." } }, required = Array.Empty<string>() },
                 displayVerb: "Listing directory", displayDoneVerb: "Listed directory",
                 labelField: "path");
 
@@ -248,7 +248,7 @@ public static class ClientWebSocket
         RegisterTool(thread, ws, log,
             name: "search_files",
             description: "Search file contents with a regular expression. Returns each match as 'path:line: text' — the line numbers let you edit_file directly WITHOUT reading the whole file. Case-sensitive by default; set ignore_case for a case-insensitive search. Use this to find every call site / definition before changing a symbol.",
-            parameters: new { type = "object", properties = new { pattern = new { type = "string", description = "Regular expression to search for, e.g. 'GrantAccess\\(' or 'class\\s+Token'." }, path = new { type = "string", description = "Directory to search in, relative to project root." }, glob = new { type = "string", description = "File filter e.g. '*.cs'. Defaults to all files." }, ignore_case = new { type = "boolean", description = "Set true for a case-insensitive match. Defaults to false." } }, required = new[] { "pattern" } },
+            parameters: new { type = "object", properties = new { pattern = new { type = "string", description = "Regular expression to search for, e.g. 'GrantAccess\\(' or 'class\\s+Token'." }, path = new { type = "string", description = "Directory to search in, relative to project root, or an absolute path anywhere on the user's machine." }, glob = new { type = "string", description = "File filter e.g. '*.cs'. Defaults to all files." }, ignore_case = new { type = "boolean", description = "Set true for a case-insensitive match. Defaults to false." } }, required = new[] { "pattern" } },
             displayVerb: "Searching", displayDoneVerb: "Searched",
             labelField: "pattern");
 
@@ -340,7 +340,7 @@ public static class ClientWebSocket
         RegisterTool(thread, ws, log,
                 name: "find_files",
                 description: "Find files by name with a glob pattern, e.g. '*.cs', 'Token*.cs', or '**/Security/*.cs'. Returns paths relative to the project root. Use search_files to match file contents.",
-                parameters: new { type = "object", properties = new { pattern = new { type = "string", description = "Glob pattern, e.g. '*.cs' or '**/Token*.cs'." }, path = new { type = "string", description = "Directory to search under, relative to project root. Defaults to root." } }, required = new[] { "pattern" } },
+                parameters: new { type = "object", properties = new { pattern = new { type = "string", description = "Glob pattern, e.g. '*.cs' or '**/Token*.cs'." }, path = new { type = "string", description = "Directory to search under, relative to project root, or an absolute path anywhere on the user's machine. Defaults to root." } }, required = new[] { "pattern" } },
                 displayVerb: "Finding", displayDoneVerb: "Found",
                 labelField: "pattern");
 

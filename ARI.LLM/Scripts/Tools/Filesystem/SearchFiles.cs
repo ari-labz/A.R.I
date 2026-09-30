@@ -24,7 +24,7 @@ internal sealed class SearchFiles : Tool
                 properties = new
                 {
                     pattern     = new { type = "string",  description = "Regular expression to search for, e.g. 'public .* MethodName\\('." },
-                    path        = new { type = "string",  description = "Directory to search in, relative to project root. Defaults to project root. Or an absolute path to search OUTSIDE the project — only when the user gave you that path or asked you to look outside the project." },
+                    path        = new { type = "string",  description = "Directory to search in, relative to project root. Defaults to project root." },
                     glob        = new { type = "string",  description = "File filter pattern e.g. '*.cs', '*.json'. Defaults to all files." },
                     ignore_case = new { type = "boolean", description = "Case-insensitive match. Defaults to false." }
                 },

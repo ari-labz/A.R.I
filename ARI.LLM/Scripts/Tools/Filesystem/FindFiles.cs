@@ -24,7 +24,7 @@ internal sealed class FindFiles : Tool
                 properties = new
                 {
                     pattern = new { type = "string", description = "Glob pattern, e.g. '*.cs' or '**/User*.cs'." },
-                    path    = new { type = "string", description = "Directory to search under, relative to project root. Defaults to root. Or an absolute path to search OUTSIDE the project — only when the user gave you that path or asked you to look outside the project." }
+                    path    = new { type = "string", description = "Directory to search under, relative to project root. Defaults to root." }
                 },
                 required = new[] { "pattern" }
             }
