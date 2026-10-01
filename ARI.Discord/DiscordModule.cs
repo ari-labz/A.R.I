@@ -41,7 +41,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
     // Channels ARI intends to be in. Populated by JoinVoiceChannelAsync, cleared by LeaveVoiceChannelAsync.
     // As long as an entry exists, auto-reconnect will fire on unexpected disconnects.
     private readonly Dictionary<ulong, ulong> intendedChannels = new();
-    // Names of people ARI has DMed or been DMed by, for when the client cache doesn't hold them.
+    // Names of the owner and of anyone ARI has messaged or heard from, for when the client cache doesn't hold them.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, string> knownNames = new();
 
     // 20ms of silence at 48kHz stereo 16-bit PCM — the minimum heartbeat to keep a voice connection alive.
@@ -288,6 +288,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
         try
         {
             IUser owner = await client.GetUserAsync(config.OwnerId);
+            knownNames[owner.Id] = owner.GlobalName ?? owner.Username;
             IDMChannel dm = await owner.CreateDMChannelAsync();
             await dm.SendMessageAsync(AsBlockQuote("A·R·I is online."));
             _logger.LogInformation("Sent online notification to owner {OwnerId}", config.OwnerId);
@@ -392,6 +393,8 @@ public class DiscordModule : BackgroundService, IDiscordModule
             return;
         }
 
+        knownNames[message.Author.Id] = message.Author.GlobalName ?? message.Author.Username;
+
         if (message.Channel is IDMChannel)
             await HandleDM(message);
         else if (message.Channel is SocketGuildChannel guildChannel)
@@ -401,7 +404,6 @@ public class DiscordModule : BackgroundService, IDiscordModule
     private async Task HandleDM(SocketMessage message)
     {
         bool isOwner = message.Author.Id == config.OwnerId;
-        knownNames[message.Author.Id] = message.Author.GlobalName ?? message.Author.Username;
         // A conversation ARI started with discord_dm_user: every DM from that person goes into it until she closes it.
         DiscordConversations.Conversation? convo = DiscordConversations.OpenFor(message.Author.Id);
         if (!isOwner && convo is null)
