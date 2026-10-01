@@ -250,6 +250,17 @@ public class LLMModule : ILLMModule, IDisposable
             _logger.LogInformation("Coder agent is active. MaxContext: {Ctx} tokens.", codeArchitect.BudgetContext);
         }
 
+        // Subagents (spawn_agent). An Agents.json entry pins its server/slot; without one it falls back like any
+        // unbound agent and uses its built-in prompt. An entry with Enabled false switches subagents off.
+        if (rawAgents.TryGetValue("Subagent", out JsonElement subagentEl))
+        {
+            Subagent sub = Deserialize<Subagent>(subagentEl);
+            SubagentManager.Agent = sub.Enabled ? sub : null;
+            if (sub.Enabled) agentMap["Subagent"] = sub;
+        }
+        else if (_servers.Count > 0)
+            SubagentManager.Agent = Deserialize<Subagent>(JsonDocument.Parse("{\"name\":\"Subagent\"}").RootElement);
+
         // Speech conversational-awareness gate. Uses its own Agents.json entry if present, otherwise
         // gets the same server/slot-fallback treatment as any other unbound agent (Deserialize on an
         // empty definition), so it still works out of the box with no system prompt.
