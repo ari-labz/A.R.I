@@ -313,7 +313,7 @@ interface Props {
     isInternal:    boolean
     agentName:     string | null
     processing?:   boolean
-    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing" | "generating"
+    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing" | "generating" | "waiting" | "working"
 }
 
 function fileExtLabel(name: string) {
@@ -405,7 +405,7 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
     isInternal: boolean
     agentName: string | null
     msgIndex: number
-    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing" | "generating"
+    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing" | "generating" | "waiting" | "working"
     activeThread: string | null
     feedback?: Feedback
     onFeedbackChange: (timestamp: string, feedback: Feedback | null) => void
@@ -466,31 +466,26 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
         }
     }
 
-    // Phase: prefer server-reported status, fall back to content heuristic.
-    let streamPhase: "reading" | "thinking" | "typing" | "researching" | "generating" | "waiting" = "reading"
-    // Holding the reply open for subagents or a Discord reply: nothing is generating, so say so.
-    const holding = streaming && (
-        (item.blocks ?? []).some(b => b.state === 0 && (b.type === "waitingOnAgent" || (b.type === "messagingUser" && b.wait)))
-        || /<!--ari-tool-start:(wait_for_agent:|discord_dm_user:[^>]*\|wait)/.test(item.content ?? ""))
-    if (holding) streamPhase = "waiting"
-    else if (streaming) {
-        if (threadStatus === "thinking")         streamPhase = "thinking"
-        else if (threadStatus === "typing")      streamPhase = "typing"
-        else if (threadStatus === "prefilling")  streamPhase = "reading"
-        else if (threadStatus === "researching") streamPhase = "researching"
-        else if (threadStatus === "generating")  streamPhase = "generating"
+    // Phase: the server reports what she is doing right now; the content heuristic only covers the moment before
+    // its first status arrives.
+    const PHASE_WORDS: Record<string, string> = {
+        prefilling: "Reading", thinking: "Thinking", typing: "Typing", researching: "Researching",
+        generating: "Generating", waiting: "Waiting", working: "Working",
+    }
+    let phaseWord = "Reading"
+    if (streaming) {
+        if (threadStatus && PHASE_WORDS[threadStatus]) phaseWord = PHASE_WORDS[threadStatus]
         else {
-            // Heuristic fallback when no server status has arrived yet. Tool markers are NOT prose: a turn
-            // that has only called tools has written nothing to the user, and counting markers as text is
-            // what used to show "Typing" through an entire run of searches.
+            // Tool markers are NOT prose: a turn that has only called tools has written nothing to the user, and
+            // counting markers as text is what used to show "Typing" through an entire run of searches.
             const bare = (item.content ?? "").replace(/<!--ari-[^>]*?-->/g, "").trim()
             const cards = item.blocks ?? []
             const searching = cards.some(b => (b.type === "webSearching" || b.type === "browsing"))
                 || /<!--ari-tool-(start|done):(search_web|fetch_page):/.test(item.content ?? "")
             const thinkingNow = cards.some(b => b.type === "thinking" && b.state === 0)
-            if (bare.length > 0)   streamPhase = "typing"
-            else if (searching)    streamPhase = "researching"
-            else if (thinkingNow || cards.length > 0) streamPhase = "thinking"
+            if (bare.length > 0)   phaseWord = "Typing"
+            else if (searching)    phaseWord = "Researching"
+            else if (thinkingNow || cards.length > 0) phaseWord = "Thinking"
         }
     }
     return (
@@ -501,7 +496,7 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
             {streaming && (
                 <div className="typing-indicator">
                     <span className="typing-prefix">A·R·I is</span>
-                    <span className="phase-word">{streamPhase === "reading" ? "Reading" : streamPhase === "thinking" ? "Thinking" : streamPhase === "researching" ? "Researching" : streamPhase === "generating" ? "Generating" : streamPhase === "waiting" ? "Waiting" : "Typing"}</span>
+                    <span className="phase-word">{phaseWord}</span>
                     <div className="typing-dots"><b /><b /><b /></div>
                 </div>
             )}

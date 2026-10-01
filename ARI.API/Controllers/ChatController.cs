@@ -468,6 +468,8 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                             ARI.LLM.ThreadPhase.Typing      => "typing",
                             ARI.LLM.ThreadPhase.Researching => "researching",
                             ARI.LLM.ThreadPhase.Generating  => "generating",
+                            ARI.LLM.ThreadPhase.Waiting     => "waiting",
+                            ARI.LLM.ThreadPhase.Working     => "working",
                             _                              => (Llm?.IsThreadProcessing(threadKey) ?? false) ? "prefilling" : "idle",
                         };
         bool isCodeMode = Llm?.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? wt) == true && wt?.Pipeline == ARI.LLM.ThreadPipeline.Code;
