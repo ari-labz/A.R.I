@@ -95,7 +95,7 @@ internal sealed class WaitForAgent(Thread parent) : Tool
     }
 
     internal override Func<string, string>? Display => args =>
-        $"<!--ari-tool-start:wait_for_agent:{SubagentLabels.Ids(args)}-->";
+        $"<!--ari-tool-start:wait_for_agent:{SubagentLabels.Titles(parent, args)}-->";
 }
 
 /// <summary>cancel_agent: stop a running subagent.</summary>
@@ -143,15 +143,21 @@ internal static class SubagentLabels
         return ToolCallParser.EscapeLabel(title.Length > 0 ? title : "agent");
     }
 
-    internal static string Ids(string argsJson)
+    /// <summary>The titles of the agents a wait covers, as "Go version, Python version|n=2".</summary>
+    internal static string Titles(Thread parent, string argsJson)
     {
+        List<int>? ids = null;
         try
         {
             using JsonDocument doc = JsonDocument.Parse(argsJson);
-            if (doc.RootElement.TryGetProperty("ids", out JsonElement i) && i.ValueKind == JsonValueKind.Array && i.GetArrayLength() > 0)
-                return "agent " + string.Join(", ", i.EnumerateArray().Select(e => e.ToString()));
+            if (doc.RootElement.TryGetProperty("ids", out JsonElement i) && i.ValueKind == JsonValueKind.Array)
+                ids = i.EnumerateArray().Where(e => e.TryGetInt32(out _)).Select(e => e.GetInt32()).ToList();
         }
         catch (JsonException) { }
-        return "agents";
+        List<string> titles = SubagentManager.Titles(parent, ids)
+            .Select(t => t.Replace("\n", " ").Replace("\r", " ").Replace(":", " ").Replace("|", " ").Trim()).ToList();
+        string joined = titles.Count > 0 ? string.Join(", ", titles) : "agents";
+        if (joined.Length > 80) joined = joined[..77].TrimEnd() + "…";
+        return ToolCallParser.EscapeLabel(joined) + $"|n={Math.Max(titles.Count, 1)}";
     }
 }

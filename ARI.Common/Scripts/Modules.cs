@@ -10,6 +10,9 @@ public interface IDiscordModule
     /// <summary>Sends a direct message to a Discord user. Returns null on success, otherwise why it failed.</summary>
     Task<string?> SendDirectMessageAsync(ulong userId, string message);
 
+    /// <summary>A user's display name if ARI has seen them, otherwise null. Cache only, so it never blocks.</summary>
+    string? GetUserName(ulong userId);
+
     Task NotifyOwner(string message);
     Task NotifyOffline();
 

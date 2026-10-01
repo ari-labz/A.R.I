@@ -1310,6 +1310,17 @@ details.tool-card summary {
     list-style: none; cursor: pointer;
 }
 details.tool-card summary::-webkit-details-marker { display: none; }
+/* A finished subagent card opens to show what the agents reported. */
+details.tool-card--report summary::after { content: "▸"; font-size: 10px; opacity: .6; }
+details.tool-card--report[open] summary::after { content: "▾"; }
+details.tool-card--report[open] { width: 100%; box-sizing: border-box; }
+.tool-card-report {
+    margin-top: 6px; padding: 6px 10px; border-radius: 5px; cursor: auto;
+    border: 1px solid rgba(255,255,255,.1); max-height: 360px; overflow-y: auto;
+    font-style: normal; font-size: 13px; line-height: 1.5; white-space: normal;
+}
+.tool-card-report > :first-child { margin-top: 0; }
+.tool-card-report > :last-child { margin-bottom: 0; }
 .tool-card-diff {
     margin-top: 6px; border-radius: 5px; overflow: hidden;
     font-family: monospace; font-size: 11px; font-style: normal;

@@ -101,8 +101,8 @@ const TOOL_VERBS: Record<string, { active: string; done: string }> = {
     move_file:      { active: "Moving",     done: "Moved" },
     revert_file:    { active: "Reverting",  done: "Reverted" },
     spawn_coder:    { active: "Delegating", done: "Delegated" },
-    spawn_agent:    { active: "Starting agent", done: "Started agent" },
-    wait_for_agent: { active: "Waiting on agents", done: "Agents reported" },
+    spawn_agent:    { active: "Spawning Agent:", done: "Spawned Agent:" },
+    discord_close_dm: { active: "Closing DM with", done: "Closed DM with" },
     build_project:  { active: "Building",   done: "Built" },
 }
 
@@ -179,6 +179,8 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
     out = out.replace(TOOL_DONE_RE, (_, name, rawLabel) => {
         const web = webCardFromMarker(name, rawLabel, true)
         if (web) return web
+        const held = heldCardFromMarker(name, rawLabel, "done")
+        if (held) return held
         const verbs = TOOL_VERBS[name] ?? { active: name, done: name }
         const label = decodeMarkerLabel(rawLabel)
         return `\n\n<div class="tool-card tool-card--done"><span>${verbs.done} ${escHtml(label)}</span></div>\n\n`
@@ -206,6 +208,8 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
     out = out.replace(TOOL_ERROR_RE, (_, name, rawFile, rawMsg) => {
         const web = webCardFromMarker(name, rawFile, true, true)
         if (web) return web
+        const held = heldCardFromMarker(name, rawFile, "error")
+        if (held) return held
         const verbs = TOOL_VERBS[name] ?? { active: name, done: name }
         const file  = decodeMarkerLabel(rawFile)
         const msg   = decodeMarkerLabel(rawMsg)
@@ -229,6 +233,8 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
             errorCount.set(key, errRemaining - 1)
             return ""
         }
+        const held = heldCardFromMarker(name, label, "active")
+        if (held) return held
         const remaining = doneCount.get(key) ?? 0
         if (remaining > 0) {
             doneCount.set(key, remaining - 1)
@@ -276,8 +282,8 @@ const CARD_VERBS: Record<string, { active: string; done: string }> = {
     deleting:   { active: "Deleting",   done: "Deleted" },
     moving:     { active: "Moving",     done: "Moved" },
     delegating: { active: "Delegating", done: "Delegated" },
-    startingAgent:  { active: "Starting agent", done: "Started agent" },
-    waitingOnAgent: { active: "Waiting on agents", done: "Agents reported" },
+    startingAgent:  { active: "Spawning Agent:", done: "Spawned Agent:" },
+    closingDm:      { active: "Closing DM with", done: "Closed DM with" },
     building:   { active: "Building",   done: "Built" },
     editing:    { active: "Editing",    done: "Edited" },
     writing:    { active: "Writing",    done: "Written" },
@@ -292,6 +298,7 @@ type BlockLike = {
     proposalId?: string; reason?: string; oldText?: string; newText?: string; status?: string
     query?: string; results?: number; enginesDown?: number; nothingRelevant?: boolean
     url?: string; title?: string
+    name?: string; wait?: boolean; replied?: boolean; count?: number; partial?: boolean; report?: string
 }
 
 function hostOf(url: string): string {
@@ -361,6 +368,46 @@ function webCardFromMarker(name: string, rawLabel: string, done: boolean, err = 
         : browsingCardHtml(p.head, p.title, done, err)
 }
 
+
+// The cards for tools that hold a reply open (wait_for_agent, discord_dm_user with a wait) read as sentences
+// rather than "verb label", so both render paths build them here. A finished agent card opens to show the
+// agents' reports.
+type CardState = "active" | "done" | "error"
+const DOTS = `<div class="typing-dots"><b></b><b></b><b></b></div>`
+
+function decodeB64Utf8(s: string): string {
+    if (!s) return ""
+    try { return new TextDecoder().decode(Uint8Array.from(atob(s), c => c.charCodeAt(0))) } catch { return "" }
+}
+
+function agentWaitCardHtml(titles: string, count: number, state: CardState, partial: boolean, report: string): string {
+    const t = escHtml(titles)
+    if (state === "active") return `<div class="tool-card tool-card--active"><span>Waiting For: ${t}</span>${DOTS}</div>`
+    if (state === "error")  return `<div class="tool-card tool-card--error"><span>Waiting For: ${t}</span></div>`
+    const text = partial ? `Stopped waiting for ${t}` : `${count > 1 ? "Agents" : "Agent"} ${t} complete`
+    if (!report) return `<div class="tool-card tool-card--done"><span>${text}</span></div>`
+    const body = marked.parse(report, { async: false }) as string
+    return `<details class="tool-card tool-card--done tool-card--report"><summary><span>${text}</span></summary><div class="tool-card-report">${body}</div></details>`
+}
+
+function dmCardHtml(rawName: string, wait: boolean, replied: boolean, state: CardState): string {
+    const n = escHtml(rawName)
+    if (state === "active") return `<div class="tool-card tool-card--active"><span>${wait ? `Waiting For: ${n}'s reply` : `Messaging ${n}`}</span>${DOTS}</div>`
+    if (state === "error")  return `<div class="tool-card tool-card--error"><span>Couldn't message ${n}</span></div>`
+    const text = !wait ? `Messaged ${n}` : replied ? `${n} replied` : `Messaged ${n} · no reply yet`
+    return `<div class="tool-card tool-card--done"><span>${text}</span></div>`
+}
+
+function heldCardFromMarker(name: string, rawLabel: string, state: CardState): string | null {
+    if (name !== "wait_for_agent" && name !== "discord_dm_user") return null
+    const parts = rawLabel.split("|")
+    const head  = decodeMarkerLabel(parts[0] ?? "")
+    if (name === "discord_dm_user")
+        return `\n\n${dmCardHtml(head, parts.includes("wait"), parts.includes("replied"), state)}\n\n`
+    const n = parts.find(p => p.startsWith("n="))
+    const r = parts.find(p => p.startsWith("r="))
+    return `\n\n${agentWaitCardHtml(head, n ? parseInt(n.slice(2)) || 1 : 1, state, parts.includes("p"), decodeB64Utf8(r?.slice(2) ?? ""))}\n\n`
+}
 
 function diffBadges(added = 0, removed = 0): string {
     const a = added   > 0 ? `<span class="diff-badge diff-badge--add" data-target="${added}" data-dir="up" data-static="1">+<span class="badge-digits">${added}</span></span>`   : ""
@@ -485,8 +532,14 @@ export function renderBlockHtml(block: BlockLike): string {
     if (block.type === "browsing")
         return browsingCardHtml(block.url ?? "", block.title ?? "", done, err)
 
+    const state: CardState = err ? "error" : done ? "done" : "active"
+    if (block.type === "waitingOnAgent")
+        return agentWaitCardHtml(decodeMarkerLabel(block.task ?? ""), block.count ?? 1, state, block.partial ?? false, decodeB64Utf8(block.report ?? ""))
+    if (block.type === "messagingUser")
+        return dmCardHtml(decodeMarkerLabel(block.name ?? ""), block.wait ?? false, block.replied ?? false, state)
+
     const verbs = CARD_VERBS[block.type] ?? { active: block.type, done: block.type }
-    const label = decodeMarkerLabel(block.fileName ?? block.path ?? block.pattern ?? block.command ?? block.task ?? block.project ?? "")
+    const label = decodeMarkerLabel(block.fileName ?? block.path ?? block.pattern ?? block.command ?? block.task ?? block.project ?? block.name ?? "")
 
     if (block.type === "editing" || block.type === "writing") {
         const badges = diffBadges(block.added, block.removed)

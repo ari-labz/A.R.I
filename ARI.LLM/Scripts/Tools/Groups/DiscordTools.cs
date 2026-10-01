@@ -213,7 +213,7 @@ internal sealed class DiscordDmUser(Thread parent) : Tool
     }
 
     internal override Func<string, string>? Display => args =>
-        $"<!--ari-tool-start:discord_dm_user:{ToolCallParser.EscapeLabel(ToolCallParser.TryExtractJsonString(args, "user_id") ?? "user")}-->";
+        $"<!--ari-tool-start:discord_dm_user:{DmLabels.Name(args)}{(DmLabels.Waits(args) ? "|wait" : "")}-->";
 }
 
 /// <summary>discord_close_dm: end the conversation discord_dm_user opened; the person's next DM starts a new thread.</summary>
@@ -252,5 +252,36 @@ internal sealed class DiscordCloseDm : Tool
             return Task.FromResult<ToolResult>("There's no open conversation with them.");
         if (Modules.Llm is LLMModule llm) _ = llm.CloseThreadAsync(threadKey);
         return Task.FromResult<ToolResult>("Closed. Their next DM starts a new conversation.");
+    }
+
+    internal override Func<string, string>? Display => args =>
+        $"<!--ari-tool-start:discord_close_dm:{DmLabels.Name(args)}-->";
+}
+
+/// <summary>Chip labels for the DM tools: the person's name rather than their raw ID.</summary>
+internal static class DmLabels
+{
+    internal static string Name(string argsJson)
+    {
+        string? name = null;
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            if (doc.RootElement.TryGetProperty("user_id", out JsonElement idEl) && ulong.TryParse(idEl.ToString(), out ulong id))
+                name = Modules.Discord?.GetUserName(id);
+        }
+        catch (JsonException) { }
+        name = (name ?? "Discord user").Replace("|", " ").Replace(":", " ").Replace("\n", " ").Trim();
+        return ToolCallParser.EscapeLabel(name);
+    }
+
+    internal static bool Waits(string argsJson)
+    {
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            return doc.RootElement.TryGetProperty("wait_for_reply", out JsonElement w) && w.ValueKind == JsonValueKind.True;
+        }
+        catch (JsonException) { return false; }
     }
 }
