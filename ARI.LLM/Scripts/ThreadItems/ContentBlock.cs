@@ -25,6 +25,8 @@ namespace ARI.LLM;
 [JsonDerivedType(typeof(Finding),   "finding")]
 [JsonDerivedType(typeof(Running),    "running")]
 [JsonDerivedType(typeof(Delegating), "delegating")]
+[JsonDerivedType(typeof(StartingAgent), "startingAgent")]
+[JsonDerivedType(typeof(WaitingOnAgent), "waitingOnAgent")]
 [JsonDerivedType(typeof(Building),   "building")]
 [JsonDerivedType(typeof(Editing),   "editing")]
 [JsonDerivedType(typeof(Writing),   "writing")]
@@ -195,6 +197,8 @@ public abstract class ContentBlock
         "revert_file"    => new Reverting(),
         "spawn_coder"    => new Delegating(),
         "build_project"  => new Building(),
+        "spawn_agent"    => new StartingAgent(),
+        "wait_for_agent" => new WaitingOnAgent(),
         _                => null
     };
 
@@ -215,6 +219,8 @@ public abstract class ContentBlock
         "Reverting"  => new Reverting(),
         "Delegating" => new Delegating(),
         "Building"   => new Building(),
+        "Starting agent"    => new StartingAgent(),
+        "Waiting on agents" => new WaitingOnAgent(),
         _            => null
     };
 }
@@ -440,6 +446,26 @@ public sealed class Delegating : Card
     protected override string Label => Task;
     protected override string ToolName => "spawn_coder";
     protected override (string, string) Verbs => ("Delegating", "Delegated");
+    protected internal override void Fill(string label) => Task = label;
+}
+
+/// <summary>A subagent launch (spawn_agent), labelled with its title. Flips Starting agent → Started agent.</summary>
+public sealed class StartingAgent : Card
+{
+    public string Task { get; set; } = "";   // the title; named Task so the UI reads it like Delegating's
+    protected override string Label => Task;
+    protected override string ToolName => "spawn_agent";
+    protected override (string, string) Verbs => ("Starting agent", "Started agent");
+    protected internal override void Fill(string label) => Task = label;
+}
+
+/// <summary>The holding pattern (wait_for_agent). Flips Waiting on agents → Agents reported.</summary>
+public sealed class WaitingOnAgent : Card
+{
+    public string Task { get; set; } = "";   // which agents; named Task so the UI reads it like Delegating's
+    protected override string Label => Task;
+    protected override string ToolName => "wait_for_agent";
+    protected override (string, string) Verbs => ("Waiting on agents", "Agents reported");
     protected internal override void Fill(string label) => Task = label;
 }
 

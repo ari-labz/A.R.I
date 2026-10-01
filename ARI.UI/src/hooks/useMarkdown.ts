@@ -101,6 +101,8 @@ const TOOL_VERBS: Record<string, { active: string; done: string }> = {
     move_file:      { active: "Moving",     done: "Moved" },
     revert_file:    { active: "Reverting",  done: "Reverted" },
     spawn_coder:    { active: "Delegating", done: "Delegated" },
+    spawn_agent:    { active: "Starting agent", done: "Started agent" },
+    wait_for_agent: { active: "Waiting on agents", done: "Agents reported" },
     build_project:  { active: "Building",   done: "Built" },
 }
 
@@ -274,6 +276,8 @@ const CARD_VERBS: Record<string, { active: string; done: string }> = {
     deleting:   { active: "Deleting",   done: "Deleted" },
     moving:     { active: "Moving",     done: "Moved" },
     delegating: { active: "Delegating", done: "Delegated" },
+    startingAgent:  { active: "Starting agent", done: "Started agent" },
+    waitingOnAgent: { active: "Waiting on agents", done: "Agents reported" },
     building:   { active: "Building",   done: "Built" },
     editing:    { active: "Editing",    done: "Edited" },
     writing:    { active: "Writing",    done: "Written" },
