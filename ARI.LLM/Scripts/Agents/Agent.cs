@@ -257,7 +257,7 @@ public abstract class Agent
         public void RequestSent() { sent = DateTime.UtcNow; lastDelta = null; }
 
         // Timing only. The user-facing phase indicator is NOT derived from here — it is driven by
-        // semantic events (see AdvancePhase), because a content delta can carry stripped special
+        // semantic events (see SetPhase), because a content delta can carry stripped special
         // tokens or leaked tool-call text that never reaches the user and must not read as Typing.
         public void Mark(bool reasoning, bool isContent)
         {
@@ -275,25 +275,26 @@ public abstract class Agent
         }
     }
 
-    /// <summary>Advances the user-facing status indicator. The machine is strictly one-way:
-    /// Reading → Thinking → Researching → Typing. A lower-ranked phase is ignored, so a late
-    /// reasoning delta can never drag the label back from Researching, a second request after a
-    /// tool call can never return to Reading, and tool-call JSON can never look like Typing.</summary>
-    private static int PhaseRank(ThreadPhase p) => p switch
+    /// <summary>Sets the user-facing status indicator to what she is doing right now: Reading while a request
+    /// prefills (Researching when it's reading web results), Thinking on reasoning or while writing a tool call,
+    /// Typing only once real reply text reaches the user, and Researching / Generating / Waiting / Working while a
+    /// tool runs. It moves in any direction; only an actual change is sent.</summary>
+    private void SetPhase(Turn turn, ThreadPhase phase)
     {
-        ThreadPhase.Prefilling  => 0,   // "Reading"
-        ThreadPhase.Thinking    => 1,
-        ThreadPhase.Researching => 2,
-        ThreadPhase.Typing      => 3,
-        _                       => -1,  // Idle — turn not started
-    };
-
-    private void AdvancePhase(Turn turn, ThreadPhase phase)
-    {
-        if (PhaseRank(phase) <= PhaseRank(turn.LastPhase)) return;
+        if (phase == turn.LastPhase) return;
         turn.LastPhase = phase;
         OnPhaseChange?.Invoke(turn.Thread.Key, phase);
     }
+
+    /// <summary>The phase while a tool runs.</summary>
+    private static ThreadPhase ToolPhase(string name, string argsJson) => name switch
+    {
+        "search_web" or "fetch_page" => ThreadPhase.Researching,
+        "generate_image"             => ThreadPhase.Generating,
+        "wait_for_agent"             => ThreadPhase.Waiting,
+        "discord_dm_user" when DmLabels.Waits(argsJson) => ThreadPhase.Waiting,
+        _                            => ThreadPhase.Working,
+    };
 
     // ── Per-turn state ────────────────────────────────────────────────────────
     // Holds all mutable state for one Prompt() call so it can be passed between
@@ -413,6 +414,8 @@ public abstract class Agent
 
         // ── Phase tracking ───────────────────────────────────────────────────
         internal ThreadPhase LastPhase = ThreadPhase.Idle;
+        // The last tool batch fetched web results, so the next request's prefill is reading them.
+        internal bool ReadingWebResults;
 
         // ── Loop control ─────────────────────────────────────────────────────
         // True while the outer turn loop should keep running (more steps needed).
@@ -807,7 +810,7 @@ public abstract class Agent
         };
 
         turn.Clock.RequestSent();
-        AdvancePhase(turn, ThreadPhase.Prefilling);  // "Reading" — only lands on the turn's first request
+        SetPhase(turn, turn.ReadingWebResults ? ThreadPhase.Researching : ThreadPhase.Prefilling);
         Server?.BeginRequest(Name);
         HttpResponseMessage response;
         try   { response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, turn.Ct); }
@@ -898,7 +901,7 @@ public abstract class Agent
         turn.Clock.Mark(reasoningDelta, contentDelta);
 
         // Any reasoning token means she is Thinking, immediately.
-        if (reasoningDelta) AdvancePhase(turn, ThreadPhase.Thinking);
+        if (reasoningDelta) SetPhase(turn, ThreadPhase.Thinking);
 
         if (!SuppressLog)
         {
@@ -1054,7 +1057,7 @@ public abstract class Agent
             }
 
             // Emitting a tool call is thinking, not typing — the JSON never reaches the user.
-            AdvancePhase(turn, ThreadPhase.Thinking);
+            SetPhase(turn, ThreadPhase.Thinking);
 
             foreach (JsonElement tc in toolCallsEl.EnumerateArray())
             {
@@ -1081,8 +1084,6 @@ public abstract class Agent
                         if (resolved.Length > 0) turn.PendingCalls[index] = (named.Id, resolved, named.Args);
                         named = turn.PendingCalls[index];
                     }
-                    if (named.Name is "search_web" or "fetch_page")
-                        AdvancePhase(turn, ThreadPhase.Researching);
                 }
 
                 if (tc.TryGetProperty("function", out JsonElement funcEl) &&
@@ -1229,7 +1230,7 @@ public abstract class Agent
             if (turn.LiveText is null && visible.Trim().Length > 0) { turn.LiveText = new TraceStep { Kind = "text", Text = "" }; turn.Trace.Add(turn.LiveText); }
             if (turn.LiveText is not null) turn.LiveText.Text = visible;
             // Typing fires only here: the moment real response text is actually sent to the user.
-            if (visible.Trim().Length > 0) AdvancePhase(turn, ThreadPhase.Typing);
+            if (visible.Trim().Length > 0) SetPhase(turn, ThreadPhase.Typing);
             if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString() + visible);
             if (turn.OnTextDelta is not null && visible.Length > 0)
                 await turn.OnTextDelta(turn.TextOnlyBuilder.ToString() + visible);
@@ -1527,6 +1528,7 @@ public abstract class Agent
 
         bool productiveBatch   = false;
         bool batchRevealedCard = false;
+        turn.ReadingWebResults = turn.PendingCalls.Values.Any(c => c.Name is "search_web" or "fetch_page");
 
         foreach ((int callIndex, (string Id, string Name, StringBuilder Args) call) in turn.PendingCalls)
         {
@@ -1580,10 +1582,7 @@ public abstract class Agent
                     if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
                 };
 
-                bool isWebTool      = call.Name is "search_web" or "fetch_page";
-                bool isImageGenTool = call.Name is "generate_image";
-                if (isWebTool)      AdvancePhase(turn, ThreadPhase.Researching);
-                if (isImageGenTool) AdvancePhase(turn, ThreadPhase.Generating);
+                SetPhase(turn, ToolPhase(call.Name, argsJson));
                 try
                 {
                     ToolResult toolResult = prelaunched.TryGetValue(callIndex, out Task<ToolResult>? pre)
@@ -1599,7 +1598,7 @@ public abstract class Agent
                 }
 
                 // Collect web sources for DTI display.
-                if (isWebTool)
+                if (call.Name is "search_web" or "fetch_page")
                 {
                     string? sourceUrl = null;
                     string? sourceContent = null;
