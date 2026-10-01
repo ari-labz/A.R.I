@@ -41,8 +41,8 @@
       "Tools": ["generate_image", "present_image"]
     },
     "discord_tools": {
-      "Description": "Discord voice-channel control: find which VC a user is in, join a voice channel, or leave one.",
-      "Tools": ["discord_list_voice_channels", "discord_join_voice_channel", "discord_leave_voice_channel"]
+      "Description": "Discord: DM anyone (and wait for their reply), close a DM conversation, find which voice channel a user is in, join a voice channel, or leave one.",
+      "Tools": ["discord_dm_user", "discord_close_dm", "discord_list_voice_channels", "discord_join_voice_channel", "discord_leave_voice_channel"]
     },
     "web_tools": {
       "Description": "Search the web and read web pages. Use for current events, factual lookups, or anything time-sensitive.",

@@ -1198,6 +1198,31 @@ public class LLMModule : ILLMModule, IDisposable
     /// the opener in history. Every call rings the owner's phone with a Web Push notification — an
     /// agent-initiated message the owner never prompted for is exactly the case a push exists for.
     /// </summary>
+    /// <summary>Records a message ARI sent outside a normal reply (discord_dm_user) as a finished response in a
+    /// conversation's thread, creating the thread if needed. <paramref name="platformContext"/> only applies to a
+    /// new thread.</summary>
+    public void RecordAriMessage(string threadKey, string text, string? platformContext = null)
+    {
+        Thread thread = GetOrCreateThread(ThreadPipeline.Dialogue, threadKey, platformContext);
+        thread.AddItem(new Response
+        {
+            Content   = ContentBlock.Parse(text),
+            Timestamp = DateTime.Now,
+            State     = State.Complete,
+            IsVisible = true,
+        });
+        thread.RaiseUpdated();
+    }
+
+    /// <summary>Records a user's message in a thread without starting a reply, for a DM that went straight to a
+    /// pending wait_for_reply so the conversation still reads in order.</summary>
+    public void RecordUserMessage(string threadKey, string username, string text)
+    {
+        if (!threads.TryGetValue(threadKey, out Thread? thread)) return;
+        thread.AddItem(new Prompt { AuthorName = username, Text = text, Timestamp = DateTime.Now, IsVisible = true });
+        thread.RaiseUpdated();
+    }
+
     public string CreateProactiveDialogueThread(string assistantText, string? title = null, string? dreamContext = null)
     {
         string threadKey = $"web-{Guid.NewGuid():N}";

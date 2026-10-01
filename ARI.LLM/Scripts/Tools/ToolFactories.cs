@@ -81,6 +81,8 @@ internal static class ToolFactories
         ["discord_list_voice_channels"] = _ => Modules.Discord is not null ? new DiscordListVoiceChannels() : null,
         ["discord_join_voice_channel"]  = _ => Modules.Discord is not null ? new DiscordJoinVoiceChannel()  : null,
         ["discord_leave_voice_channel"] = _ => Modules.Discord is not null ? new DiscordLeaveVoiceChannel() : null,
+        ["discord_dm_user"]             = t => Modules.Discord is not null ? new DiscordDmUser(t)          : null,
+        ["discord_close_dm"]            = _ => Modules.Discord is not null ? new DiscordCloseDm()          : null,
 
         // Image generation — only available when the ImageGen module is enabled and ComfyUI is ready.
         // subagent_tools — conversations only: never on internal threads (no nesting) or Discord server channels.

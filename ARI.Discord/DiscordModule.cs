@@ -48,6 +48,14 @@ public class DiscordModule : BackgroundService, IDiscordModule
     
     private const string PassToken = "[PASS]";
 
+    private static string BuildDmPlatformContext(ulong ownerId, string username)
+    {
+        string privacyPolicy = PrivacyPolicyStore.Get();
+        return $"You are in a Discord DM with {username}, who is NOT your owner (your owner's Discord user ID is {ownerId}). " +
+               "You started this conversation. Reason carefully about what is appropriate to share." +
+               (string.IsNullOrWhiteSpace(privacyPolicy) ? "" : $"\n\n{privacyPolicy}");
+    }
+
     private static string BuildServerPlatformContext(ulong ownerId)
     {
         string privacyPolicy = PrivacyPolicyStore.Get();
@@ -105,6 +113,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
         {
             await client.LoginAsync(TokenType.Bot, config.Token);
             await client.StartAsync();
+            _ = CloseIdleConversations(linked.Token);
         }
         catch (Exception ex)
         {
@@ -120,6 +129,24 @@ public class DiscordModule : BackgroundService, IDiscordModule
             _logger.LogError("Discord authentication failed (401 Unauthorized) - module disabled, will not retry.");
             try { await client.StopAsync(); await client.LogoutAsync(); } catch { /* best-effort */ }
         }
+    }
+
+    // A DM conversation ARI opened (discord_dm_user) that sits idle with no reply pending closes itself, so one she
+    // forgot to close can't swallow that person's DMs forever.
+    private async Task CloseIdleConversations(CancellationToken ct)
+    {
+        using PeriodicTimer timer = new(TimeSpan.FromMinutes(1));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+                foreach (ulong userId in DiscordConversations.Idle())
+                    if (DiscordConversations.Close(userId) is { } threadKey)
+                    {
+                        _logger.LogInformation("Closed idle DM conversation [{ThreadKey}]", threadKey);
+                        await llmModule.CloseThreadAsync(threadKey);
+                    }
+        }
+        catch (OperationCanceledException) { }
     }
 
     // Discord.Net auto-reconnects on every drop. When the drop is an auth failure (bad/revoked token),
@@ -143,6 +170,29 @@ public class DiscordModule : BackgroundService, IDiscordModule
         authFailedCts.Cancel();
     }
 
+
+    public ulong OwnerId => config.OwnerId;
+
+    public async Task<string?> SendDirectMessageAsync(ulong userId, string message)
+    {
+        try
+        {
+            IUser? user = await client.GetUserAsync(userId);
+            if (user is null) return "no Discord user with that ID is reachable from ARI's servers";
+            IDMChannel dm = await user.CreateDMChannelAsync();
+            foreach (string chunk in SplitIntoChunks(message))
+            {
+                await dm.SendMessageAsync(chunk);
+                await Task.Delay(MESSAGE_SEND_DELAY_MS);
+            }
+            return null;
+        }
+        catch (HttpException ex) when (ex.DiscordCode == DiscordErrorCode.CannotSendMessageToUser)
+        {
+            return "they don't accept DMs from ARI (no shared server, or DMs are switched off)";
+        }
+        catch (Exception ex) { return ex.Message; }
+    }
 
     public async Task NotifyOwner(string message)
     {
@@ -343,7 +393,10 @@ public class DiscordModule : BackgroundService, IDiscordModule
 
     private async Task HandleDM(SocketMessage message)
     {
-        if (message.Author.Id != config.OwnerId)
+        bool isOwner = message.Author.Id == config.OwnerId;
+        // A conversation ARI started with discord_dm_user: every DM from that person goes into it until she closes it.
+        DiscordConversations.Conversation? convo = DiscordConversations.OpenFor(message.Author.Id);
+        if (!isOwner && convo is null)
         {
             _logger.LogDebug("Ignored DM from non-owner user {UserId}", message.Author.Id);
             return;
@@ -352,7 +405,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
         // Slash commands are the primary path (OnSlashCommand).
         // Plain-text /commands in DMs are kept as a fallback — useful before global slash
         // commands have propagated, or if the interaction system fails.
-        if (message.Content.StartsWith("/", StringComparison.OrdinalIgnoreCase))
+        if (isOwner && message.Content.StartsWith("/", StringComparison.OrdinalIgnoreCase))
         {
             string? result = await llmModule.HandleCommand(null, message.Content);
             if (result is not null)
@@ -363,7 +416,16 @@ public class DiscordModule : BackgroundService, IDiscordModule
             return;
         }
 
-        string conversationKey = $"dm:{message.Author.Id}";
+        // ARI is waiting for this reply (wait_for_reply): it goes straight to her, recorded in the conversation
+        // without starting a separate reply.
+        if (convo is not null && DiscordConversations.TryDeliverReply(message.Author.Id, message.Content))
+        {
+            llmModule.RecordUserMessage(convo.ThreadKey, message.Author.Username, message.Content);
+            _logger.LogInformation("DM from {Username} delivered to ARI's wait [{ThreadKey}]", message.Author.Username, convo.ThreadKey);
+            return;
+        }
+
+        string conversationKey = convo?.ThreadKey ?? $"dm:{message.Author.Id}";
         string timestamp = message.Timestamp.LocalDateTime.ToString("dd/MM/yyyy HH:mm");
         string prompt = $"[{timestamp}] [{message.Author.Username} via DM]: {message.Content}";
 
@@ -373,7 +435,9 @@ public class DiscordModule : BackgroundService, IDiscordModule
         List<LlmAttachment>? attachments = message.Attachments.Count > 0
             ? await UploadDiscordAttachments(message.Attachments)
             : null;
-        await SendLlmReply(message, conversationKey, prompt, message.Author.Username, attachments: attachments);
+        // Someone other than the owner only reaches ARI through a conversation she opened; it's guarded like a server.
+        string? platformContext = isOwner ? null : BuildDmPlatformContext(config.OwnerId, message.Author.Username);
+        await SendLlmReply(message, conversationKey, prompt, message.Author.Username, platformContext, attachments);
     }
 
     private async Task HandleServerMessage(SocketMessage message, SocketGuildChannel guildChannel)

@@ -4,6 +4,12 @@ public record VoiceChannelInfo(ulong ChannelId, string ChannelName, ulong GuildI
 
 public interface IDiscordModule
 {
+    /// <summary>The owner's Discord user ID.</summary>
+    ulong OwnerId { get; }
+
+    /// <summary>Sends a direct message to a Discord user. Returns null on success, otherwise why it failed.</summary>
+    Task<string?> SendDirectMessageAsync(ulong userId, string message);
+
     Task NotifyOwner(string message);
     Task NotifyOffline();
 
