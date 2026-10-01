@@ -153,6 +153,7 @@ internal static class ToolFactories
     {
         "search_brain", "recall_memory", "create_memory", "edit_memory", "delete_memory", "neighbours",
         "create_event", "create_reminder", "list_events", "delete_entry", "propose_persona_edit",
+        "list_projects", "create_project", "rename_project", "bind_project", "set_project_path",
     };
 
     internal static bool TryBuild(string toolName, Thread thread, out Tool tool)
