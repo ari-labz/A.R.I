@@ -97,6 +97,33 @@ public class DiscordModule : BackgroundService, IDiscordModule
         client.MessageReceived     += message => { _ = Task.Run(() => OnMessageReceived(message)); return Task.CompletedTask; };
         client.SlashCommandExecuted += cmd => { _ = Task.Run(() => OnSlashCommand(cmd)); return Task.CompletedTask; };
         client.UserVoiceStateUpdated += OnUserVoiceStateUpdated;
+        llmModule.ThreadWoke         += (key, reply) => _ = DeliverWokenReply(key, reply);
+    }
+
+    // A Discord thread that a sub-thread's report woke: its reply goes where the conversation is, the server's
+    // last active text channel or the person's DMs.
+    private async Task DeliverWokenReply(string threadKey, string reply)
+    {
+        reply = reply.Replace("<!--ari-batch-end-->", "").Trim();
+        if (reply.Length == 0 || reply.Equals(PassToken, StringComparison.OrdinalIgnoreCase)) return;
+        string[] parts = threadKey.Split(':');
+        if (parts.Length < 2 || !ulong.TryParse(parts[1], out ulong id)) return;
+        try
+        {
+            if (parts[0] == "guild" && lastTextChannels.TryGetValue(id, out ISocketMessageChannel? channel))
+            {
+                foreach (string chunk in SplitIntoChunks(reply))
+                {
+                    await channel.SendMessageAsync(chunk);
+                    await Task.Delay(MESSAGE_SEND_DELAY_MS);
+                }
+            }
+            else if (parts[0] == "dm" && await SendDirectMessageAsync(id, reply) is { } failure)
+                _logger.LogWarning("Couldn't deliver woken reply [{ThreadKey}]: {Failure}", threadKey, failure);
+            else if (parts[0] is "guild" or "dm")
+                _logger.LogInformation("Delivered woken reply [{ThreadKey}]", threadKey);
+        }
+        catch (Exception ex) { _logger.LogWarning("Couldn't deliver woken reply [{ThreadKey}]: {Error}", threadKey, ex.Message); }
     }
 
     // Tripped when Discord rejects our credentials (401 / invalid token). Discord.Net would otherwise
@@ -133,7 +160,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
         }
     }
 
-    // A DM conversation ARI opened (discord_dm_user) that sits idle with no reply pending closes itself, so one she
+    // A DM conversation ARI opened (discord_dm_user) that sits idle closes itself (telling the thread that opened it), so one she
     // forgot to close can't swallow that person's DMs forever.
     private async Task CloseIdleConversations(CancellationToken ct)
     {
@@ -142,7 +169,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
         {
             while (await timer.WaitForNextTickAsync(ct))
                 foreach (ulong userId in DiscordConversations.Idle())
-                    if (DiscordConversations.Close(userId) is { } threadKey)
+                    if (DiscordConversations.CloseIdle(userId) is { } threadKey)
                     {
                         _logger.LogInformation("Closed idle DM conversation [{ThreadKey}]", threadKey);
                         await llmModule.CloseThreadAsync(threadKey);
@@ -426,15 +453,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
             return;
         }
 
-        // ARI is waiting for this reply (wait_for_reply): it goes straight to her, recorded in the conversation
-        // without starting a separate reply.
-        if (convo is not null && DiscordConversations.TryDeliverReply(message.Author.Id, message.Content))
-        {
-            llmModule.RecordUserMessage(convo.ThreadKey, message.Author.Username, message.Content);
-            _logger.LogInformation("DM from {Username} delivered to ARI's wait [{ThreadKey}]", message.Author.Username, convo.ThreadKey);
-            return;
-        }
-
+        DiscordConversations.Touch(message.Author.Id);
         string conversationKey = convo?.ThreadKey ?? $"dm:{message.Author.Id}";
         string timestamp = message.Timestamp.LocalDateTime.ToString("dd/MM/yyyy HH:mm");
         string prompt = $"[{timestamp}] [{message.Author.Username} via DM]: {message.Content}";

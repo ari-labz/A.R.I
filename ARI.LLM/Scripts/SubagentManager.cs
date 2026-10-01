@@ -105,6 +105,8 @@ internal static class SubagentManager
             Task    = System.Threading.Tasks.Task.Run(() => agent.RunTask(child, title, task, context, cts.Token)),
         };
         lock (state) state.Runs.Add(run);
+        // A result nobody is waiting for wakes the parent if it's idle by then.
+        run.Task.ContinueWith(_ => ParentReports.Nudge?.Invoke(parent.Key), TaskScheduler.Default);
 
         Shared.Logger.LogInformation("[Subagents] ({Thread}) started agent {Id} \"{Title}\" with [{Tools}]: {Task}",
             parent.Key, id, title, string.Join(", ", given), task);
@@ -155,6 +157,7 @@ internal static class SubagentManager
         while (!all.IsCompleted)
         {
             if (parent.HasInterjections) { stoppedBecause = "The user sent a message while you were waiting. Read it; you can wait again afterwards."; break; }
+            if (ParentReports.HasAny(parent.Key)) { stoppedBecause = "A conversation you opened reported back while you were waiting. Read it; you can wait again afterwards."; break; }
             if (DateTime.Now >= until)   { stoppedBecause = $"Stopped waiting after {seconds}s. Wait again, or carry on and the results will reach you when they're ready."; break; }
             if (ct.IsCancellationRequested) { stoppedBecause = "Your turn was stopped."; break; }
             try { await System.Threading.Tasks.Task.WhenAny(all, System.Threading.Tasks.Task.Delay(WaitPoll, ct)); }
@@ -197,6 +200,12 @@ internal static class SubagentManager
             r.Cts.Cancel();
             return $"Agent {id} \"{r.Title}\" cancelled.";
         }
+    }
+
+    internal static bool HasUnwaited(Thread parent)
+    {
+        if (!byThread.TryGetValue(parent.Key, out ThreadRuns? state)) return false;
+        lock (state) return state.Runs.Any(r => r.Finished && !r.Delivered);
     }
 
     /// <summary>Results that finished without anyone waiting, marked delivered as they're taken. Folded into

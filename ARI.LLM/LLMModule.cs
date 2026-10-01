@@ -260,6 +260,7 @@ public class LLMModule : ILLMModule, IDisposable
         }
         else if (_servers.Count > 0)
             SubagentManager.Agent = Deserialize<Subagent>(JsonDocument.Parse("{\"name\":\"Subagent\"}").RootElement);
+        ParentReports.Nudge = WakeIfPending;
 
         // Speech conversational-awareness gate. Uses its own Agents.json entry if present, otherwise
         // gets the same server/slot-fallback treatment as any other unbound agent (Deserialize on an
@@ -811,10 +812,76 @@ public class LLMModule : ILLMModule, IDisposable
     }
 
     public Task<string> Prompt(string threadKey, string prompt, string username, string? platformContext = null, List<Attachment>? messageAttachments = null, InferencePriority priority = InferencePriority.Normal)
-        => Route(threadKey, prompt, username, platformContext, null, CancellationToken.None, messageAttachments, priority: priority);
+    {
+        wakeStreak.TryRemove(threadKey, out _);
+        return RouteThenWake(threadKey, prompt, username, platformContext, null, CancellationToken.None, messageAttachments, priority: priority);
+    }
 
     public Task<string> PromptStreaming(string threadKey, string prompt, string username, string? platformContext, Func<string, Task> onDelta, CancellationToken ct = default, List<Attachment>? messageAttachments = null, string? localPath = null, InferencePriority priority = InferencePriority.Normal, SpeechSteeringContext? steering = null, Func<string, Task>? onTextDelta = null)
-        => Route(threadKey, prompt, username, platformContext, onDelta, ct, messageAttachments, localPath, priority, steering, onTextDelta);
+    {
+        wakeStreak.TryRemove(threadKey, out _);
+        return RouteThenWake(threadKey, prompt, username, platformContext, onDelta, ct, messageAttachments, localPath, priority, steering, onTextDelta);
+    }
+
+    // A report can land in the gap between a turn's last step and its end; checking once the turn is over means it
+    // still wakes the thread instead of waiting for the next message.
+    private async Task<string> RouteThenWake(string threadKey, string prompt, string username, string? platformContext, Func<string, Task>? onDelta, CancellationToken externalCt, List<Attachment>? messageAttachments = null, string? localPath = null, InferencePriority priority = InferencePriority.Normal, SpeechSteeringContext? steering = null, Func<string, Task>? onTextDelta = null)
+    {
+        try { return await Route(threadKey, prompt, username, platformContext, onDelta, externalCt, messageAttachments, localPath, priority, steering, onTextDelta); }
+        finally { WakeIfPending(threadKey); }
+    }
+
+    // ── Waking a parent thread ──────────────────────────────────────────────────
+
+    /// <summary>A woken thread's reply, for its platform to deliver (the Discord module posts it in the channel or
+    /// DM; the app already shows it). Args: thread key, reply.</summary>
+    public event Action<string, string>? ThreadWoke;
+
+    /// <summary>Author of the message a woken turn answers. The app draws these as a report chip, not a user message.</summary>
+    public const string ReportAuthor = "Report";
+
+    private const int MaxWakesWithoutUser = 5;
+    private readonly ConcurrentDictionary<string, int>  wakeStreak = new();
+    private readonly ConcurrentDictionary<string, byte> waking     = new();
+
+    /// <summary>Starts a turn on an idle thread that has reports from its sub-threads or subagent results waiting.
+    /// Capped at <see cref="MaxWakesWithoutUser"/> in a row without a user message, so a woken turn can't keep
+    /// starting work that wakes it again.</summary>
+    internal void WakeIfPending(string threadKey)
+    {
+        if (IsThreadProcessing(threadKey) || waking.ContainsKey(threadKey)) return;
+        if (!threads.TryGetValue(threadKey, out Thread? thread) || thread.State == ThreadState.Deleted) return;
+        if (!ParentReports.HasAny(threadKey) && !SubagentManager.HasUnwaited(thread)) return;
+        if (!waking.TryAdd(threadKey, 0)) return;
+
+        if (wakeStreak.AddOrUpdate(threadKey, 1, (_, n) => n + 1) > MaxWakesWithoutUser)
+        {
+            waking.TryRemove(threadKey, out _);
+            _logger.LogWarning("[Wake] ({Thread}) not woken: {Max} wakes in a row without a user message. Reports wait for the next one.", threadKey, MaxWakesWithoutUser);
+            return;
+        }
+        _ = Task.Run(() => WakeAsync(threadKey, thread));
+    }
+
+    private async Task WakeAsync(string threadKey, Thread thread)
+    {
+        string reply;
+        try
+        {
+            string prompt = string.Join("\n\n", new[] { ParentReports.TakeAll(threadKey), SubagentManager.TakeUnwaitedResults(thread) }
+                .Where(s => s is not null));
+            if (prompt.Length == 0) return;
+            _logger.LogInformation("[Wake] ({Thread}) woken by sub-thread reports.", threadKey);
+            // The thread's own platform context keeps its privacy as it was (a non-owner DM stays guarded).
+            reply = await Route(threadKey, prompt, ReportAuthor, thread.PlatformContext, null, CancellationToken.None);
+        }
+        catch (OperationCanceledException) { return; }   // the user sent a message mid-wake; it carries on from there
+        catch (Exception ex) { _logger.LogWarning(ex, "[Wake] ({Thread}) failed: {Err}", threadKey, ex.Message); return; }
+        finally { waking.TryRemove(threadKey, out _); }
+
+        ThreadWoke?.Invoke(threadKey, reply);
+        WakeIfPending(threadKey);
+    }
 
     private async Task<string> Route(string threadKey, string prompt, string username, string? platformContext, Func<string, Task>? onDelta, CancellationToken externalCt, List<Attachment>? messageAttachments = null, string? localPath = null, InferencePriority priority = InferencePriority.Normal, SpeechSteeringContext? steering = null, Func<string, Task>? onTextDelta = null)
     {
@@ -1214,14 +1281,18 @@ public class LLMModule : ILLMModule, IDisposable
         thread.RaiseUpdated();
     }
 
-    /// <summary>Records a user's message in a thread without starting a reply, for a DM that went straight to a
-    /// pending wait_for_reply so the conversation still reads in order.</summary>
-    public void RecordUserMessage(string threadKey, string username, string text)
+    /// <summary>The thread for a conversation another thread opened (discord_dm_user), creating it if needed.</summary>
+    internal Thread ConversationThread(string threadKey) => GetOrCreateThread(ThreadPipeline.Dialogue, threadKey);
+
+    internal bool HasThread(string threadKey) =>
+        threads.TryGetValue(threadKey, out Thread? t) && t.State != ThreadState.Deleted;
+
+    /// <summary>Closes a thread once its current turn has finished, for a conversation that closes itself.</summary>
+    internal void CloseThreadWhenIdle(string threadKey) => _ = Task.Run(async () =>
     {
-        if (!threads.TryGetValue(threadKey, out Thread? thread)) return;
-        thread.AddItem(new Prompt { AuthorName = username, Text = text, Timestamp = DateTime.Now, IsVisible = true });
-        thread.RaiseUpdated();
-    }
+        while (IsThreadProcessing(threadKey)) await Task.Delay(500);
+        await CloseThreadAsync(threadKey);
+    });
 
     public string CreateProactiveDialogueThread(string assistantText, string? title = null, string? dreamContext = null)
     {

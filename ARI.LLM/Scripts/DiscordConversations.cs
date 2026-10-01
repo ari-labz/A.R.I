@@ -1,16 +1,18 @@
 using System.Collections.Concurrent;
+using ARI.Common;
 
 namespace ARI.LLM;
 
 /// <summary>
-/// DM conversations ARI started with discord_dm_user. Each is its own thread; while one is open, every DM from
-/// that person goes into it (or, when ARI is waiting for a reply, straight to her wait) until she closes it with
-/// discord_close_dm, or it sits idle past <see cref="IdleTimeout"/>. The Discord module routes incoming DMs here.
+/// DM conversations ARI started with discord_dm_user. Each is its own thread with a brief from the thread that
+/// opened it; while one is open, every DM from that person goes into it, and ARI talks it through there and sends
+/// the result back to the opener with report_to_parent (see <see cref="ParentReports"/>). It ends when she closes
+/// it, or when it sits idle past <see cref="IdleTimeout"/>. The Discord module routes incoming DMs here.
 /// </summary>
 public static class DiscordConversations
 {
-    /// <summary>An open conversation with no reply pending closes itself after this long without activity, so a
-    /// forgotten one can't swallow the person's later DMs.</summary>
+    /// <summary>An open conversation closes itself after this long without activity, so a forgotten one can't
+    /// swallow the person's later DMs.</summary>
     public static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(30);
 
     public sealed class Conversation
@@ -18,8 +20,8 @@ public static class DiscordConversations
         public required ulong  UserId    { get; init; }
         public required string ThreadKey { get; init; }
         public DateTime        LastActivity { get; internal set; } = DateTime.Now;
-        internal TaskCompletionSource<string>? Waiter;
-        public bool AwaitingReply => Waiter is { Task.IsCompleted: false };
+        /// <summary>The thread that last messaged this person through discord_dm_user, which gets the reports.</summary>
+        internal string?       ParentKey;
     }
 
     private static readonly ConcurrentDictionary<ulong, Conversation> open = new();
@@ -40,41 +42,31 @@ public static class DiscordConversations
         return (c, created);
     }
 
-    /// <summary>Hands an incoming DM to a pending wait. False when nothing is waiting, so it should go to the
-    /// conversation's thread as a normal message instead.</summary>
-    public static bool TryDeliverReply(ulong userId, string text)
-    {
-        if (OpenFor(userId) is not { } c) return false;
-        c.LastActivity = DateTime.Now;
-        return c.Waiter?.TrySetResult(text) == true;
-    }
+    /// <summary>The open conversation whose thread this is, if any.</summary>
+    internal static Conversation? ForThread(string threadKey) => open.Values.FirstOrDefault(c => c.ThreadKey == threadKey);
 
     public static void Touch(ulong userId)
     {
         if (OpenFor(userId) is { } c) c.LastActivity = DateTime.Now;
     }
 
-    /// <summary>Starts waiting for this person's next DM. The returned task completes with its text.</summary>
-    internal static Task<string> AwaitReply(Conversation c)
-    {
-        TaskCompletionSource<string> tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        c.Waiter = tcs;
-        return tcs.Task;
-    }
-
-    /// <summary>Stops waiting without a reply (timeout, stop, interjection).</summary>
-    internal static void StopWaiting(Conversation c) => c.Waiter?.TrySetCanceled();
-
     /// <summary>Closes the conversation; the person's next DM starts a new thread. Returns its thread key.</summary>
-    public static string? Close(ulong userId)
+    public static string? Close(ulong userId) => open.TryRemove(userId, out Conversation? c) ? c.ThreadKey : null;
+
+    /// <summary>Closes a conversation that went idle and tells the thread that opened it. Returns its thread key.</summary>
+    public static string? CloseIdle(ulong userId)
     {
         if (!open.TryRemove(userId, out Conversation? c)) return null;
-        c.Waiter?.TrySetCanceled();
+        if (c.ParentKey is { } parent)
+        {
+            string name = Modules.Discord?.GetUserName(userId) ?? $"Discord user {userId}";
+            ParentReports.Send(parent, c.ThreadKey,
+                $"[Your DM conversation with {name} closed after {IdleTimeout.TotalMinutes:0} minutes without a result.]");
+        }
         return c.ThreadKey;
     }
 
-    /// <summary>Conversations idle past <see cref="IdleTimeout"/> with no reply pending.</summary>
+    /// <summary>Conversations idle past <see cref="IdleTimeout"/>.</summary>
     public static IReadOnlyList<ulong> Idle() =>
-        open.Values.Where(c => !c.AwaitingReply && DateTime.Now - c.LastActivity > IdleTimeout)
-                   .Select(c => c.UserId).ToList();
+        open.Values.Where(c => DateTime.Now - c.LastActivity > IdleTimeout).Select(c => c.UserId).ToList();
 }

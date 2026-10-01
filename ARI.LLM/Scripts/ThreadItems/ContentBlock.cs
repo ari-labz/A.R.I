@@ -532,7 +532,7 @@ public sealed class MessagingUser : Card
 
     public override void Flip(string result)
     {
-        Replied = Wait && result.Contains("\nTheir reply: ", StringComparison.Ordinal);
+        Replied = Wait && result.Contains("\n" + DiscordDmUser.ReportPrefix, StringComparison.Ordinal);
         base.Flip();
     }
 

@@ -340,7 +340,31 @@ function MdBubble({ content, baseClass = "bubble", msgIndex = 0, blocks }: { con
     return <div ref={ref} />
 }
 
+// A woken turn answers reports from sub-threads (subagents, DM conversations). They're for ARI, so they show as a
+// chip naming who reported, opening to the full text, rather than as something the user said.
+const REPORT_AUTHOR = "Report"
+function reportLabel(text: string): string {
+    const parts: string[] = []
+    for (const m of text.matchAll(/Agent \d+ "(.+?)" (finished|failed|was cancelled)/g))
+        parts.push(m[2] === "finished" ? `Agent ${m[1]} reported back` : `Agent ${m[1]} ${m[2]}`)
+    for (const m of text.matchAll(/\[Report from your DM conversation with (.+?)(?:; it has closed itself)?\]/g)) parts.push(`${m[1]} replied via DM`)
+    for (const m of text.matchAll(/\[Your DM conversation with (.+?) closed/g)) parts.push(`DM with ${m[1]} timed out`)
+    return parts.length > 0 ? parts.join(" · ") : "Reports came back"
+}
+
+function ReportMessage({ item }: { item: ThreadItem }) {
+    return (
+        <div className="msg-row report">
+            <details className="tool-card tool-card--done tool-card--report">
+                <summary><span>{reportLabel(item.content ?? "")}</span></summary>
+                <div className="tool-card-report"><MdBubble content={item.content ?? ""} baseClass="report-body" /></div>
+            </details>
+        </div>
+    )
+}
+
 function UserMessage({ item, activeThread }: { item: ThreadItem; activeThread: string | null }) {
+    if (item.username === REPORT_AUTHOR) return <ReportMessage item={item} />
     const t = formatTime(item.timestamp)
     const attachments = (item.attachments ?? []) as Attachment[]
     return (
