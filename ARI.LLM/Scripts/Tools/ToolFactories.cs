@@ -131,6 +131,7 @@ internal static class ToolFactories
     /// missing project binding for everything (e.g. git fails on a bound project with no repos in it).</summary>
     internal static string UnavailableReason(string toolName, Thread thread) => toolName.ToLowerInvariant() switch
     {
+        _ when thread.IsGuarded && OWNER_ONLY_TOOLS.Contains(toolName) => "it's only available in the owner's own conversations",
         "github" when !thread.IsAdminChat              => "it's only available in the owner's own chats in the app",
         "github" when GitHubStore.ResolveToken() is null => "no GitHub account is connected — the user can connect one on the control panel's GitHub page",
         "github"                                         => "GitHub's CLI is still being installed — try again in a minute",
@@ -147,9 +148,17 @@ internal static class ToolFactories
         _ => "it needs a module or connection that isn't available right now",
     };
 
+    // Tools that reach the owner's own life, so anyone else she talks to never gets them.
+    private static readonly HashSet<string> OWNER_ONLY_TOOLS = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "search_brain", "recall_memory", "create_memory", "edit_memory", "delete_memory", "neighbours",
+        "create_event", "create_reminder", "list_events", "delete_entry", "propose_persona_edit",
+    };
+
     internal static bool TryBuild(string toolName, Thread thread, out Tool tool)
     {
         tool = null!;
+        if (thread.IsGuarded && OWNER_ONLY_TOOLS.Contains(toolName)) return false;
         if (!_factories.TryGetValue(toolName, out Func<Thread, Tool?>? factory)) return false;
         if (factory(thread) is not { } built) return false;
         tool = built;
