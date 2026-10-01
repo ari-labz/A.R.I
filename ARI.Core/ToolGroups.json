@@ -47,6 +47,10 @@
     "web_tools": {
       "Description": "Search the web and read web pages. Use for current events, factual lookups, or anything time-sensitive.",
       "Tools": ["search_web", "fetch_page"]
+    },
+    "subagent_tools": {
+      "Description": "Run subagents: spawn_agent starts one on a goal in the background with a subset of your loaded tools, wait_for_agent holds your reply open until they report back, cancel_agent stops one. Use for side tasks that need several tool calls, or to work on two things at once.",
+      "Tools": ["spawn_agent", "wait_for_agent", "cancel_agent"]
     }
   }
 }

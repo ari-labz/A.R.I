@@ -197,6 +197,8 @@ public abstract class Agent
         bool acquired = await thread.sendLock.WaitAsync(SEND_LOCK_TIMEOUT, opts.Ct);
         if (!acquired)
             throw new TimeoutException("ARI is still finishing a previous message on this thread — please wait a moment and try again.");
+        // Tools that block (wait_for_agent) watch thread.Ct, so it must be this turn's token for stop to reach them.
+        if (opts.Ct.CanBeCanceled) thread.Ct = opts.Ct;
         try
         {
             return await Send(thread, prompt, opts);
@@ -715,6 +717,14 @@ public abstract class Agent
             SplitResponse(turn, inj.User, inj.Raw);
             turn.Messages.Add(new { role = "user", content = inj.Model });
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) folded in a user interjection at step boundary.", Name, thread.Key);
+        }
+
+        // Subagent results nobody waited for arrive here: mid-turn if one finishes between tool rounds, or at the
+        // first step of the next turn.
+        if (!thread.Internal && SubagentManager.TakeUnwaitedResults(thread) is { } agentResults)
+        {
+            turn.Messages.Add(new { role = "user", content = agentResults });
+            Shared.Logger.LogInformation("[{Agent}] ({Thread}) folded in subagent results at step boundary.", Name, thread.Key);
         }
 
         // Refresh system message so per-turn budget numbers are current.

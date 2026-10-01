@@ -83,6 +83,11 @@ internal static class ToolFactories
         ["discord_leave_voice_channel"] = _ => Modules.Discord is not null ? new DiscordLeaveVoiceChannel() : null,
 
         // Image generation — only available when the ImageGen module is enabled and ComfyUI is ready.
+        // subagent_tools — conversations only: never on internal threads (no nesting) or Discord server channels.
+        ["spawn_agent"]    = t => SubagentManager.AvailableFor(t) ? new SpawnAgent(t)   : null,
+        ["wait_for_agent"] = t => SubagentManager.AvailableFor(t) ? new WaitForAgent(t) : null,
+        ["cancel_agent"]   = t => SubagentManager.AvailableFor(t) ? new CancelAgent(t)  : null,
+
         ["generate_image"] = t => Modules.ImageGen?.IsReady == true ? new GenerateImage(t) : null,
         ["present_image"]  = t => Modules.ImageGen?.IsReady == true ? new PresentImage(t)  : null,
     };
@@ -127,6 +132,9 @@ internal static class ToolFactories
         "github" when !thread.IsAdminChat              => "it's only available in the owner's own chats in the app",
         "github" when GitHubStore.ResolveToken() is null => "no GitHub account is connected — the user can connect one on the control panel's GitHub page",
         "github"                                         => "GitHub's CLI is still being installed — try again in a minute",
+        "spawn_agent" or "wait_for_agent" or "cancel_agent" when SubagentManager.Agent is null
+                                                         => "subagents aren't configured on this server",
+        "spawn_agent" or "wait_for_agent" or "cancel_agent" => "subagents aren't available here (only in direct conversations, not Discord server channels or agent threads)",
         _ => FilesystemReason(toolName, thread),
     };
 
