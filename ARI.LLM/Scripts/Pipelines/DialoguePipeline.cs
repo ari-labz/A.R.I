@@ -44,8 +44,10 @@ internal sealed class DialoguePipeline : Pipeline
     {
         if (threadKey.StartsWith("guild:", StringComparison.OrdinalIgnoreCase))
             return PrivacyMode.Guarded;
-        if (threadKey.StartsWith("dm:", StringComparison.OrdinalIgnoreCase) && platformContext is null)
-            return PrivacyMode.Unrestricted;
+        // A DM carries a platform context only when it's with someone other than the owner (a conversation ARI
+        // opened with discord_dm_user), which gets the same guarded recall as a server.
+        if (threadKey.StartsWith("dm:", StringComparison.OrdinalIgnoreCase))
+            return platformContext is null ? PrivacyMode.Unrestricted : PrivacyMode.Guarded;
         return PrivacyMode.Unrestricted;
     }
 
