@@ -719,8 +719,13 @@ public abstract class Agent
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) folded in a user interjection at step boundary.", Name, thread.Key);
         }
 
-        // Subagent results nobody waited for arrive here: mid-turn if one finishes between tool rounds, or at the
+        // Subagent results and sub-thread reports nobody waited for arrive here: mid-turn if one finishes between tool rounds, or at the
         // first step of the next turn.
+        if (!thread.Internal && ParentReports.TakeAll(thread.Key) is { } reports)
+        {
+            turn.Messages.Add(new { role = "user", content = reports });
+            Shared.Logger.LogInformation("[{Agent}] ({Thread}) folded in sub-thread reports at step boundary.", Name, thread.Key);
+        }
         if (!thread.Internal && SubagentManager.TakeUnwaitedResults(thread) is { } agentResults)
         {
             turn.Messages.Add(new { role = "user", content = agentResults });
@@ -1906,6 +1911,8 @@ public abstract class Agent
         string systemBlock = thread.PlatformContext is null
             ? systemFull
             : $"{systemFull}\n\n{thread.PlatformContext}";
+        if (thread.Brief is { } brief)
+            systemBlock += $"\n\n{brief}";
 
         List<string> sections = new()
         {

@@ -274,6 +274,14 @@ public class Thread
     private readonly List<Attachment> pendingMessageAtts = new();
 
     internal string? PlatformContext { get; set; }
+
+    /// <summary>The thread this one reports to (see <see cref="ParentReports"/>), for a conversation another thread
+    /// opened, like a Discord DM from discord_dm_user. Null for a top-level thread.</summary>
+    internal string? ReportsTo { get; set; }
+
+    /// <summary>Why the parent opened this conversation and what it needs back, shown to the agent in the system
+    /// prompt so it can handle follow-up questions on its own.</summary>
+    internal string? Brief { get; set; }
     public   string  Key             => threadKey;
 
     internal event Action? Updated;
