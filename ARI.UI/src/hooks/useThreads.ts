@@ -66,6 +66,13 @@ export interface ContentBlock {
     nothingRelevant?: boolean
     url?:             string
     title?:           string
+    // held cards: wait_for_agent (titles in task) and discord_dm_user
+    count?:     number
+    partial?:   boolean
+    report?:    string
+    name?:      string
+    wait?:      boolean
+    replied?:   boolean
     // subthread anchor: a labelled, inline child thread whose blocks render nested here
     label?:     string
     blocks?:    ContentBlock[]

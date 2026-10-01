@@ -27,6 +27,8 @@ namespace ARI.LLM;
 [JsonDerivedType(typeof(Delegating), "delegating")]
 [JsonDerivedType(typeof(StartingAgent), "startingAgent")]
 [JsonDerivedType(typeof(WaitingOnAgent), "waitingOnAgent")]
+[JsonDerivedType(typeof(MessagingUser),  "messagingUser")]
+[JsonDerivedType(typeof(ClosingDm),      "closingDm")]
 [JsonDerivedType(typeof(Building),   "building")]
 [JsonDerivedType(typeof(Editing),   "editing")]
 [JsonDerivedType(typeof(Writing),   "writing")]
@@ -199,6 +201,8 @@ public abstract class ContentBlock
         "build_project"  => new Building(),
         "spawn_agent"    => new StartingAgent(),
         "wait_for_agent" => new WaitingOnAgent(),
+        "discord_dm_user"  => new MessagingUser(),
+        "discord_close_dm" => new ClosingDm(),
         _                => null
     };
 
@@ -219,8 +223,8 @@ public abstract class ContentBlock
         "Reverting"  => new Reverting(),
         "Delegating" => new Delegating(),
         "Building"   => new Building(),
-        "Starting agent"    => new StartingAgent(),
-        "Waiting on agents" => new WaitingOnAgent(),
+        "Spawning Agent:"   => new StartingAgent(),
+        "Waiting For:"      => new WaitingOnAgent(),
         _            => null
     };
 }
@@ -449,24 +453,104 @@ public sealed class Delegating : Card
     protected internal override void Fill(string label) => Task = label;
 }
 
-/// <summary>A subagent launch (spawn_agent), labelled with its title. Flips Starting agent → Started agent.</summary>
+/// <summary>A subagent launch (spawn_agent), labelled with its title: "Spawning Agent: X" → "Spawned Agent: X".</summary>
 public sealed class StartingAgent : Card
 {
     public string Task { get; set; } = "";   // the title; named Task so the UI reads it like Delegating's
     protected override string Label => Task;
     protected override string ToolName => "spawn_agent";
-    protected override (string, string) Verbs => ("Starting agent", "Started agent");
+    protected override (string, string) Verbs => ("Spawning Agent:", "Spawned Agent:");
     protected internal override void Fill(string label) => Task = label;
 }
 
-/// <summary>The holding pattern (wait_for_agent). Flips Waiting on agents → Agents reported.</summary>
+/// <summary>The holding pattern (wait_for_agent): "Waiting For: X" → "Agent X complete". The done card carries
+/// the agents' reports so the user can open it and read them. Label: "titles|n=2|p|r=&lt;base64 report&gt;"
+/// (p = stopped before every agent finished).</summary>
 public sealed class WaitingOnAgent : Card
 {
-    public string Task { get; set; } = "";   // which agents; named Task so the UI reads it like Delegating's
+    private const int MAX_REPORT_CHARS = 20_000;
+
+    public string  Task    { get; set; } = "";   // the agents' titles; named Task so the UI reads it like Delegating's
+    public int     Count   { get; set; } = 1;
+    public bool    Partial { get; set; }
+    public string? Report  { get; set; }         // base64 UTF-8, like a diff card's patch
+
     protected override string Label => Task;
     protected override string ToolName => "wait_for_agent";
-    protected override (string, string) Verbs => ("Waiting on agents", "Agents reported");
-    protected internal override void Fill(string label) => Task = label;
+    protected override (string, string) Verbs => ("Waiting For:", "complete");
+
+    protected internal override void Fill(string label)
+    {
+        string[] parts = label.Split('|');
+        Task = parts[0];
+        for (int i = 1; i < parts.Length; i++)
+        {
+            string p = parts[i];
+            if      (p.StartsWith("n=", StringComparison.Ordinal) && int.TryParse(p[2..], out int n)) Count = n;
+            else if (p == "p") Partial = true;
+            else if (p.StartsWith("r=", StringComparison.Ordinal)) Report = p[2..];
+        }
+    }
+
+    public override void Flip(string result)
+    {
+        string report = result.Trim();
+        Partial = report.Contains(" is still running.", StringComparison.Ordinal);
+        if (report.Length > MAX_REPORT_CHARS) report = report[..MAX_REPORT_CHARS] + "\n…";
+        Report = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(report));
+        base.Flip();
+    }
+
+    public override string Render()
+    {
+        string head = $"{MarkerEsc(Task)}|n={Count}";
+        if (State != State.Complete) return $"<!--ari-tool-start:{ToolName}:{head}-->";
+        string extra = (Partial ? "|p" : "") + (Report is { Length: > 0 } ? $"|r={Report}" : "");
+        return $"<!--ari-tool-done:{ToolName}:{head}{extra}-->";
+    }
+}
+
+/// <summary>A Discord DM (discord_dm_user), labelled with the person's name: "Messaging X" → "Messaged X", or when
+/// it waits for a reply, "Waiting For: X's reply" → "X replied". Label: "name|wait|replied".</summary>
+public sealed class MessagingUser : Card
+{
+    public string Name    { get; set; } = "";
+    public bool   Wait    { get; set; }
+    public bool   Replied { get; set; }
+
+    protected override string Label => Name;
+    protected override string ToolName => "discord_dm_user";
+    protected override (string, string) Verbs => ("Messaging", "Messaged");
+
+    protected internal override void Fill(string label)
+    {
+        string[] parts = label.Split('|');
+        Name = parts[0];
+        Wait    = parts.Contains("wait");
+        Replied = parts.Contains("replied");
+    }
+
+    public override void Flip(string result)
+    {
+        Replied = Wait && result.Contains("\nTheir reply: ", StringComparison.Ordinal);
+        base.Flip();
+    }
+
+    public override string Render()
+    {
+        string flags = (Wait ? "|wait" : "") + (State == State.Complete && Replied ? "|replied" : "");
+        return $"<!--ari-tool-{(State == State.Complete ? "done" : "start")}:{ToolName}:{MarkerEsc(Name)}{flags}-->";
+    }
+}
+
+/// <summary>Closing a Discord DM conversation (discord_close_dm): "Closing DM with X" → "Closed DM with X".</summary>
+public sealed class ClosingDm : Card
+{
+    public string Name { get; set; } = "";
+    protected override string Label => Name;
+    protected override string ToolName => "discord_close_dm";
+    protected override (string, string) Verbs => ("Closing DM with", "Closed DM with");
+    protected internal override void Fill(string label) => Name = label;
 }
 
 /// <summary>A project build (build_project). Flips Building → Built.</summary>

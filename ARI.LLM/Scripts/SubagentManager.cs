@@ -175,6 +175,15 @@ internal static class SubagentManager
         return sb.ToString().TrimEnd();
     }
 
+    /// <summary>Titles of the agents a wait with these ids would cover (all undelivered when ids is empty).</summary>
+    internal static List<string> Titles(Thread parent, IReadOnlyList<int>? ids)
+    {
+        if (!byThread.TryGetValue(parent.Key, out ThreadRuns? state)) return new();
+        lock (state)
+            return (ids is { Count: > 0 } ? state.Runs.Where(r => ids.Contains(r.Id)) : state.Runs.Where(r => !r.Delivered))
+                .Select(r => r.Title).ToList();
+    }
+
     internal static string Cancel(Thread parent, int id)
     {
         if (!byThread.TryGetValue(parent.Key, out ThreadRuns? state)) return $"No agent {id} here.";

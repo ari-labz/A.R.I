@@ -443,8 +443,13 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
     }
 
     // Phase: prefer server-reported status, fall back to content heuristic.
-    let streamPhase: "reading" | "thinking" | "typing" | "researching" | "generating" = "reading"
-    if (streaming) {
+    let streamPhase: "reading" | "thinking" | "typing" | "researching" | "generating" | "waiting" = "reading"
+    // Holding the reply open for subagents or a Discord reply: nothing is generating, so say so.
+    const holding = streaming && (
+        (item.blocks ?? []).some(b => b.state === 0 && (b.type === "waitingOnAgent" || (b.type === "messagingUser" && b.wait)))
+        || /<!--ari-tool-start:(wait_for_agent:|discord_dm_user:[^>]*\|wait)/.test(item.content ?? ""))
+    if (holding) streamPhase = "waiting"
+    else if (streaming) {
         if (threadStatus === "thinking")         streamPhase = "thinking"
         else if (threadStatus === "typing")      streamPhase = "typing"
         else if (threadStatus === "prefilling")  streamPhase = "reading"
@@ -472,7 +477,7 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
             {streaming && (
                 <div className="typing-indicator">
                     <span className="typing-prefix">A·R·I is</span>
-                    <span className="phase-word">{streamPhase === "reading" ? "Reading" : streamPhase === "thinking" ? "Thinking" : streamPhase === "researching" ? "Researching" : streamPhase === "generating" ? "Generating" : "Typing"}</span>
+                    <span className="phase-word">{streamPhase === "reading" ? "Reading" : streamPhase === "thinking" ? "Thinking" : streamPhase === "researching" ? "Researching" : streamPhase === "generating" ? "Generating" : streamPhase === "waiting" ? "Waiting" : "Typing"}</span>
                     <div className="typing-dots"><b /><b /><b /></div>
                 </div>
             )}
