@@ -197,6 +197,13 @@ public class Thread
     /// (Discord, proactive, internal) so existing behaviour is preserved.</summary>
     public bool IsOwnerThread { get; set; } = true;
 
+    /// <summary>True when she's talking to someone other than the owner: a guest's chat, a server channel, or a DM she
+    /// opened with someone else. Such conversations get filtered recall and none of the owner's own tools.</summary>
+    internal bool IsGuarded =>
+        !IsOwnerThread
+        || Key.StartsWith("guild:", StringComparison.OrdinalIgnoreCase)
+        || (Key.StartsWith("dm:", StringComparison.OrdinalIgnoreCase) && PlatformContext is not null);
+
     /// <summary>True only for a chat the admin is having in the app (web/desktop), set on each message by the
     /// chat API. Gates tools that act with the admin's own accounts (the github tool) — off by default, so
     /// Discord, guest, proactive and internal threads never get them.</summary>

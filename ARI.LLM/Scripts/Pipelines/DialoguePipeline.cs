@@ -40,17 +40,6 @@ internal sealed class DialoguePipeline : Pipeline
     protected override LiveCallInfo BuildLiveCall(string threadKey) =>
         new("Dialogue", threadKey, 0, textingAgent.BudgetResponse, textingAgent.BudgetContext, textingAgent.BudgetImage);
 
-    private static PrivacyMode ResolvePrivacyMode(string threadKey, string? platformContext)
-    {
-        if (threadKey.StartsWith("guild:", StringComparison.OrdinalIgnoreCase))
-            return PrivacyMode.Guarded;
-        // A DM carries a platform context only when it's with someone other than the owner (a conversation ARI
-        // opened with discord_dm_user), which gets the same guarded recall as a server.
-        if (threadKey.StartsWith("dm:", StringComparison.OrdinalIgnoreCase))
-            return platformContext is null ? PrivacyMode.Unrestricted : PrivacyMode.Guarded;
-        return PrivacyMode.Unrestricted;
-    }
-
     protected override async Task<string> RunAsync(
         Thread               thread,
         string               threadKey,
@@ -71,7 +60,7 @@ internal sealed class DialoguePipeline : Pipeline
         Shared.Logger.LogInformation("[Dialogue] ({Thread}) prompt\n\"{Prompt}\"", threadKey, effectivePrompt);
 
         string? contextSummary = context?.GetContext(threadKey);
-        PrivacyMode privacyMode = ResolvePrivacyMode(threadKey, platformContext);
+        PrivacyMode privacyMode = thread.IsGuarded ? PrivacyMode.Guarded : PrivacyMode.Unrestricted;
 
         string? recallBlock = null;
         double? recallSeconds = null;

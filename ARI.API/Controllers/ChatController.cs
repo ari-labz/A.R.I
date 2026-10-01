@@ -1105,8 +1105,9 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                 effectiveLocalPath = rootPath;
 
             // Re-evaluated every message from the caller's own login, so the flag can't outlive a role change.
-            if (FindThread(threadKey) is { } chatThread)
-                chatThread.IsAdminChat = User.IsInRole(ARI.API.Auth.Roles.Admin);
+            // Also marks whose thread it is, so a guest's chat never gets the owner's memories or push notifications.
+            ARI.LLM.Thread chatThread = GetOrCreateThread(threadKey);
+            chatThread.IsAdminChat = User.IsInRole(ARI.API.Auth.Roles.Admin);
 
             await Llm.PromptStreaming(threadKey, prompt, username, platformContext, async accumulated =>
             {
