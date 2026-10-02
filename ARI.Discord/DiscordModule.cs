@@ -52,19 +52,12 @@ public class DiscordModule : BackgroundService, IDiscordModule
 
     private static string BuildDmPlatformContext(ulong ownerId, string username)
     {
-        string privacyPolicy = PrivacyPolicyStore.Get();
         return $"You are in a Discord DM with {username}, who is NOT your owner (your owner's Discord user ID is {ownerId}). " +
-               "You started this conversation. Reason carefully about what is appropriate to share." +
-               (string.IsNullOrWhiteSpace(privacyPolicy) ? "" : $"\n\n{privacyPolicy}");
+               "You started this conversation. Reason carefully about what is appropriate to share.";
     }
 
     private static string BuildServerPlatformContext(ulong ownerId)
     {
-        string privacyPolicy = PrivacyPolicyStore.Get();
-        string privacyBlock = string.IsNullOrWhiteSpace(privacyPolicy)
-            ? ""
-            : $"\n\n{privacyPolicy}";
-
         return
             "You are present in a Discord server. Each message shows who is speaking and in which channel. " +
             $"Your owner's Discord user ID is {ownerId}. Messages from other users are NOT from your owner — reason carefully about what is appropriate to share. " +
@@ -72,8 +65,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
             "NEVER state that you cannot do something in Discord without first loading discord_tools and attempting it — your capabilities come from those tools, not from assumptions. " +
             "IMPORTANT: When calling tools, write NO text whatsoever — not before, not after, not between calls. " +
             "Do not narrate, explain, or acknowledge what you are doing. Execute silently. " +
-            "Only write a text reply if the user asked a direct question or an action explicitly failed." +
-            privacyBlock;
+            "Only write a text reply if the user asked a direct question or an action explicitly failed.";
     }
 
     public DiscordModule(ILoggerFactory loggerFactory, LLMModule llmModule, DiscordConfig config)
