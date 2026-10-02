@@ -1452,8 +1452,8 @@ public class LLMModule : ILLMModule, IDisposable
 
     /// <summary>The user jumped in mid-turn ("stop and read this, then continue"). Unlike Interrupt, the turn
     /// is NOT cancelled — the message is queued and the running agent loop folds it into its current chain of
-    /// thought (mid-think, or at the next tool-round boundary). The message is added to history immediately so
-    /// it shows in the transcript and survives a reload; returns false if the thread isn't currently streaming
+    /// thought (mid-think, or at the next tool-round boundary). The agent adds it to the history when it folds it in,
+    /// so the transcript shows what she'd done by then; returns false if the thread isn't currently streaming
     /// (nothing to interject into — the caller should send a normal message instead).</summary>
     public bool Interject(string threadKey, string username, string text, List<Attachment> attachments)
     {
@@ -1461,14 +1461,8 @@ public class LLMModule : ILLMModule, IDisposable
         if (!threads.TryGetValue(threadKey, out Thread? thread)) return false;
         if (thread.State != ThreadState.Streaming) return false;
 
-        // Insert the visible message just before the in-flight response so the transcript reads in order:
-        // prior prompt → this interjection → the response that continues after it.
-        int at = thread.streamingResponse is { } sr ? thread.History.IndexOf(sr) : -1;
-        Prompt msg = new Prompt { AuthorName = username, Text = text, Timestamp = DateTime.Now, IsVisible = true, Attachments = attachments.Count > 0 ? attachments : null };
-        if (at >= 0) thread.History.Insert(at, msg); else thread.History.Add(msg);
-
+        // The message reaches the chat when the agent folds it in, at the point in her reply where it landed.
         thread.Interject(username, text, attachments);
-        thread.RaiseUpdated();
         return true;
     }
 
