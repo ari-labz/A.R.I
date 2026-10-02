@@ -1013,11 +1013,12 @@ export default function App() {
         // the running turn instead of aborting — she keeps her chain of thought and incorporates the new info.
         if (isStreaming && activeThreadRef.current && prompt && !prompt.startsWith("/")) {
             const key = activeThreadRef.current
+            const interjectAttach = pendingAttach.length ? [...pendingAttach] : undefined
             setPendingAttach([])
             // Show the interjection immediately, appended AFTER the streaming bubble (which keeps streaming
             // above it). When the server folds it in, a [SPLIT] event finalizes that bubble and opens the
             // continuation below this message; the [SPLIT]/[DONE] handlers dedupe against this optimistic copy.
-            setItems(prev => [...prev, { type: "userMessage", content: prompt, timestamp: new Date().toISOString() }])
+            setItems(prev => [...prev, { type: "userMessage", content: prompt, timestamp: new Date().toISOString(), attachments: interjectAttach as Attachment[] | undefined }])
             const res = await apiFetch(`/threads/${key}/interject`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ text: prompt }),
