@@ -192,6 +192,9 @@ internal sealed class DiscordDmUser(Thread parent) : Tool
         }
         catch (JsonException) { return "[Error: arguments weren't valid JSON.]"; }
 
+        if (parent.IsGuarded && userId != discord.OwnerId)
+            return "[Error: in this conversation you can only DM your owner.]";
+
         (DiscordConversations.Conversation convo, bool isNew) = DiscordConversations.GetOrOpen(userId);
         if (await discord.SendDirectMessageAsync(userId, message) is { } failure)
         {
