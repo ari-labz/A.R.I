@@ -864,7 +864,9 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
     public IActionResult Interject(string threadKey, [FromBody] InterjectRequest body)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
-        bool folded = Llm.Interject(threadKey, GetUsername(), body?.Text ?? "");
+        pendingMessageAttachments.TryGetValue(threadKey, out List<Attachment>? staged);
+        bool folded = Llm.Interject(threadKey, GetUsername(), body?.Text ?? "", staged?.ToList() ?? new());
+        if (folded) pendingMessageAttachments.TryRemove(threadKey, out _);
         return folded ? Ok() : Conflict("Thread is not streaming.");
     }
 

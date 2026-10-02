@@ -65,6 +65,7 @@ public abstract class Agent
     private const int    MAX_DEGRADE_EVENTS  = 5;
     private const int    AVERAGE_RESPONSE_WINDOW = 25;
     private const string ATTACHMENT_DIVIDER  = "-------------------";
+    private const int    MAX_IMAGES_SHOWN    = 4;
     private static readonly TimeSpan SEND_LOCK_TIMEOUT = TimeSpan.FromSeconds(90);
     private const double CONTEXT_CHAR_MULTIPLIER = 3.5;
 
@@ -649,20 +650,59 @@ public abstract class Agent
     // than treating it as a brand-new request. Reused by both drain points (step boundary + mid-stream).
     /// <summary>Drains pending interjections into both the model-facing steer text and the raw user text +
     /// username for the visible split. Returns null when the queue is empty.</summary>
-    private static (string Model, string Raw, string User)? TakeInterjections(Thread thread)
+    private (object Model, string Raw, string User)? TakeInterjections(Thread thread)
     {
         if (thread.Interjections.IsEmpty) return null;
-        List<string> parts = new(); List<string> raw = new(); string user = "";
-        while (thread.Interjections.TryDequeue(out (string User, string Text) m))
+        List<string> parts = new(); List<string> raw = new(); List<Attachment> attachments = new(); string user = "";
+        while (thread.Interjections.TryDequeue(out (string User, string Text, List<Attachment> Attachments) m))
         {
             parts.Add(string.IsNullOrWhiteSpace(m.User) ? m.Text : $"{m.User}: {m.Text}");
             raw.Add(m.Text);
+            attachments.AddRange(m.Attachments);
             if (user.Length == 0) user = m.User;
         }
         if (parts.Count == 0) return null;
         string model = "[The user jumped in mid-response — read this, then continue what you were doing, "
                      + "folding in the new information. Do not restart from scratch.]\n" + string.Join("\n", parts);
-        return (model, string.Join("\n", raw), user);
+        return (WithAttachments(thread, model, attachments), string.Join("\n", raw), user);
+    }
+
+    /// <summary>The content of a user message with its attachments: text files inline, and images shown to the model
+    /// when this server has vision (otherwise, or past <see cref="MAX_IMAGES_SHOWN"/>, a note to read_file them). Images
+    /// are only ever shown on the turn they arrive; replayed history carries just the text, so they're paid for once.
+    /// A plain string when there are no attachments.</summary>
+    private object WithAttachments(Thread thread, string text, IReadOnlyList<Attachment> attachments)
+    {
+        if (attachments.Count == 0) return text;
+
+        bool hasVision = Server?.VisionEnabled == true && Server.ActiveModel?.MmprojPath is { Length: > 0 };
+        List<Attachment> texts  = attachments.Where(a => !a.IsImage).ToList();
+        List<Attachment> images = attachments.Where(a => a.IsImage).ToList();
+        List<Attachment> shown  = hasVision ? images.Take(MAX_IMAGES_SHOWN).ToList() : new();
+
+        StringBuilder sb = new();
+        sb.AppendLine("[Files attached to this message]");
+        foreach (Attachment a in texts)
+        {
+            sb.AppendLine($"--- {a.Name} ---");
+            sb.AppendLine(a.Content);
+            sb.AppendLine("---");
+        }
+        if (texts.Count > 0 && thread.tools.Count > 0)
+            sb.AppendLine("(The text files above are already provided inline — do not call read_file for them.)");
+        foreach (Attachment a in images)
+            sb.AppendLine(shown.Contains(a)
+                ? $"- {a.Name} (image) — attached below."
+                : $"- {a.Name} (image) — saved to your workspace; use read_file to view it.");
+        sb.AppendLine(ATTACHMENT_DIVIDER);
+
+        string withNotes = $"{sb.ToString().TrimEnd()}\n\n{text}";
+        if (shown.Count == 0) return withNotes;
+
+        List<object> parts = new() { new { type = "text", text = withNotes } };
+        foreach (Attachment a in shown)
+            parts.Add(new { type = "image_url", image_url = new { url = $"data:{a.MimeType};base64,{a.Content}" } });
+        return parts;
     }
 
     /// <summary>A mid-turn interjection is a boundary in the visible thread: finalize the response so far as
@@ -1998,40 +2038,7 @@ public abstract class Agent
             ThreadMessage current   = collapsed[^1];
             string        promptText = $"{memoryBlock}# Prompt:\n\n{current.Username}: {current.Content}";
 
-            List<Attachment> msgImages = new List<Attachment>();
-            List<Attachment> msgTexts  = new List<Attachment>();
-            foreach (Attachment a in msgAtts)
-            {
-                if (a.IsImage) msgImages.Add(a);
-                else           msgTexts.Add(a);
-            }
-
-            bool hasMsgContent = msgImages.Count > 0 || msgTexts.Count > 0;
-
-            if (!hasMsgContent)
-            {
-                messages.Add(new { role = "user", content = promptText });
-            }
-            else
-            {
-                // Images are never inlined as base64 — that cost re-embeds itself into every future turn's prompt.
-                // Idea: move text message attachments to scratchpad too, same as images, and drop this tier entirely.
-                StringBuilder sb = new();
-                sb.AppendLine("[Files attached to this message]");
-                foreach (Attachment a in msgTexts)
-                {
-                    sb.AppendLine($"--- {a.Name} ---");
-                    sb.AppendLine(a.Content);
-                    sb.AppendLine("---");
-                }
-                if (msgTexts.Count > 0 && thread.tools.Count > 0)
-                    sb.AppendLine("(The text files above are already provided inline — do not call read_file for them.)");
-                foreach (Attachment a in msgImages)
-                    sb.AppendLine($"- {a.Name} (image) — saved to your workspace; use read_file to view it.");
-                sb.AppendLine(ATTACHMENT_DIVIDER);
-
-                messages.Add(new { role = "user", content = $"{sb.ToString().TrimEnd()}\n\n{promptText}" });
-            }
+            messages.Add(new { role = "user", content = WithAttachments(thread, promptText, msgAtts) });
             if (opts.ModeNudge is not null) messages.Add(new { role = "system", content = opts.ModeNudge });
         }
 

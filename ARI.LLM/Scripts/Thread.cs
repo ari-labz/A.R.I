@@ -252,7 +252,7 @@ public class Thread
     /// continue"). Drained by the agent loop — mid-think via the steering redirect, or at the top of the
     /// next step (between tool rounds) — and fed back into the model with the reasoning preserved, so Ari
     /// folds the new information into her existing chain of thought rather than starting over.</summary>
-    internal readonly ConcurrentQueue<(string User, string Text)> Interjections = new();
+    internal readonly ConcurrentQueue<(string User, string Text, List<Attachment> Attachments)> Interjections = new();
 
     /// <summary>Set by Agent.SplitResponse when a mid-turn interjection splits the turn: "{user}{text}".
     /// The streaming callback emits it to the client as a [SPLIT] control line before the continuation's
@@ -264,7 +264,7 @@ public class Thread
     internal bool HasInterjections => !Interjections.IsEmpty;
 
     /// <summary>Queue a mid-turn user message for the agent loop to fold into the current response.</summary>
-    internal void Interject(string user, string text) => Interjections.Enqueue((user, text));
+    internal void Interject(string user, string text, List<Attachment> attachments) => Interjections.Enqueue((user, text, attachments));
 
     /// <summary>Set by the agent loop only while a tool is executing: lets a long-running tool (e.g. spawn_coder)
     /// append rendered display content into the agent's in-progress response, so a sub-agent's work shows inline
