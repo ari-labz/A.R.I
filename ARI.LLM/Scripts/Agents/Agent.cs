@@ -1912,6 +1912,8 @@ public abstract class Agent
             : $"{systemFull}\n\n{thread.PlatformContext}";
         if (thread.Brief is { } brief)
             systemBlock += $"\n\n{brief}";
+        if (thread.IsGuarded)
+            systemBlock += $"\n\n{PrivacyPolicyStore.Get()}";
 
         List<string> sections = new()
         {

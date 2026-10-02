@@ -131,7 +131,7 @@ internal static class ToolFactories
     /// missing project binding for everything (e.g. git fails on a bound project with no repos in it).</summary>
     internal static string UnavailableReason(string toolName, Thread thread) => toolName.ToLowerInvariant() switch
     {
-        _ when thread.IsGuarded && OWNER_ONLY_TOOLS.Contains(toolName) => "it's only available in the owner's own conversations",
+        _ when thread.IsGuarded && OWNER_ONLY_TOOLS.Contains(toolName) => "it isn't available in this conversation",
         "github" when !thread.IsAdminChat              => "it's only available in the owner's own chats in the app",
         "github" when GitHubStore.ResolveToken() is null => "no GitHub account is connected — the user can connect one on the control panel's GitHub page",
         "github"                                         => "GitHub's CLI is still being installed — try again in a minute",
