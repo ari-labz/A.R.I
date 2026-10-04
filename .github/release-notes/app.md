@@ -1,14 +1,15 @@
-Changes since v0.7.0:
+Changes since v0.8.0:
 
-- ARI now has its own calendar in place of the generic scheduler, and modules can be started/stopped live from the control panel instead of requiring a restart.
-- Voice training (StyleTTS2): checkpoints now save into an organised Checkpoints/ folder, the learning-rate schedule and the diffusion/joint-training phase boundaries now correctly persist across pause/resume instead of resetting, and a rare per-epoch validation line no longer gets silently dropped from the training graph. Retrain now genuinely starts from a blank slate (checkpoints, log, and TensorBoard history all cleared) while keeping the dataset and epoch target.
-- ARI no longer crashes entirely if a voice model fails to load — it now falls back to running with no voice loaded, same as the existing "no voices found" case.
-- Voices tab: the active voice is now highlighted directly instead of a plain badge, and a voice with a saved training run but no trained model yet stays visible instead of disappearing.
-- Restored a file explorer for a project's server-side folder — browse, open, upload (including drag-and-drop), and delete files directly from the Projects screen.
-- Ari's background dreaming no longer hammers a stopped LLM server with connection-refused retries every few seconds — it backs off after repeated failures and skips entirely while its server is deliberately turned off.
-- WebSocket endpoints for the client and listener now require authentication.
-- Fixed reminder timing bugs and reminder creation now rejects invalid dates instead of silently accepting them.
-- Ari now sends a push notification when she replies to a thread nobody is currently watching.
-- Capped Engram's delete-gate so a stuck sweep can no longer leak scratchpads indefinitely.
-- Image generation is now gated behind a vision review pass before the result is shown to you.
-- Sensitive content is now marked in place with a callout on the ordinary note instead of being split into a separate note.
+- ARI can now start subagents: small background helpers that work on a side task with a chosen set of her tools while she carries on, or while she holds her reply open until they report back. Their results show as chips you can open.
+- ARI can DM anyone on Discord, wait for the answer, and close the conversation when it's done. The DM conversation gets a brief so it can answer follow-up questions, reports back to the chat that started it, and wakes that chat if it has gone quiet. If nobody replies for 30 minutes it closes itself and tells her.
+- Tighter privacy. Guests on the web and people in server channels no longer get your memories, the memory, calendar, persona, project, git or GitHub tools, or push notifications on your phone. Her refusals are one short line in her own voice, and when someone says you've OK'd something she DMs you to check instead of saying she can't verify it.
+- The status line follows what she is doing right now: Reading, Thinking, Researching, Typing, Generating, Waiting or Working.
+- Images you attach are shown to her on the turn you send them (up to four, on a vision-enabled server), and attachments sent while she is replying arrive with the message. A message sent while she is replying now appears once, at the point you sent it.
+- Git calls show as chips in the chat, and a failed one shows as an error. A rejected GitHub token is now reported with what to do, instead of "Invalid username or token", and public repos still work.
+- GitHub connects from the control panel, commits ARI makes are signed as Author or Co-author per your setting, and destructive git commands ask for approval first.
+- File safety: write_file only creates new files, edit_file no longer refuses a file she has just read, and the server's file tools stay inside the project. Reading anywhere on your machine is for the desktop app only and needs desktop 0.4.1.
+- Project fixes: server-side projects are no longer treated as remote, desktop chats keep their project binding, and a project can be bound straight to an absolute server path.
+- She no longer announces a step and stops, only says she did something when she can see she did it, and the Coder stops drafting code inside its thinking.
+- Engram writes conversation log entries and one commit per note, with tighter prompts.
+- Truncated replies are flagged in the UI, reasoning is kept when she is redirected, and pasted images with the same name no longer collide.
+- Thinking budgets are switched off for now, while we test whether reasoning effort alone stops overthinking.
