@@ -24,6 +24,7 @@ namespace ARI.LLM;
 [JsonDerivedType(typeof(Browsing),     "browsing")]
 [JsonDerivedType(typeof(Finding),   "finding")]
 [JsonDerivedType(typeof(Running),    "running")]
+[JsonDerivedType(typeof(RunningGit), "git")]
 [JsonDerivedType(typeof(Delegating), "delegating")]
 [JsonDerivedType(typeof(StartingAgent), "startingAgent")]
 [JsonDerivedType(typeof(WaitingOnAgent), "waitingOnAgent")]
@@ -193,6 +194,7 @@ public abstract class ContentBlock
         "edit_file"      => new Editing(),
         "write_file"     => new Writing(),
         "run_command"    => new Running(),
+        "git"            => new RunningGit(),
         "find_files"     => new Finding(),
         "delete_file"    => new Deleting(),
         "move_file"      => new Moving(),
@@ -217,6 +219,7 @@ public abstract class ContentBlock
         "Editing"    => new Editing(),
         "Writing"    => new Writing(),
         "Running"    => new Running(),
+        "Running git" => new RunningGit(),
         "Finding"    => new Finding(),
         "Deleting"   => new Deleting(),
         "Moving"     => new Moving(),
@@ -441,6 +444,38 @@ public sealed class Running : Card
     protected override string ToolName => "run_command";
     protected override (string, string) Verbs => ("Running", "Ran");
     protected internal override void Fill(string label) => Command = label;
+}
+
+/// <summary>A git call (the git tool): "Running git push origin main" → "Ran git push origin main". A call that
+/// failed ("git push exited 128: …") becomes an error chip carrying the first line of git's message, so a push that
+/// didn't happen can't read as one that did.</summary>
+public sealed class RunningGit : Card
+{
+    private const int MAX_FAILURE_CHARS = 120;
+    private string failure = "";
+
+    public string Command { get; set; } = "";
+    protected override string Label => Command;
+    protected override string ToolName => "git";
+    protected override (string, string) Verbs => ("Running git", "Ran git");
+    protected internal override void Fill(string label) => Command = label;
+
+    public override void Flip(string result)
+    {
+        if (!Regex.IsMatch(result, @"^git \w+ exited \d+"))
+        {
+            base.Flip();
+            return;
+        }
+        State = State.Error;
+        string firstLine = result.Split('\n').Skip(1).FirstOrDefault(line => line.Trim().Length > 0) ?? "";
+        failure = firstLine.Trim().Length > MAX_FAILURE_CHARS ? $"{firstLine.Trim()[..MAX_FAILURE_CHARS]}…" : firstLine.Trim();
+    }
+
+    public override string Render() =>
+        State == State.Error
+            ? $"<!--ari-tool-error:git:{MarkerEsc(Command)}:{MarkerEsc(failure)}-->"
+            : base.Render();
 }
 
 /// <summary>Delegation to a Coder sub-agent (spawn_coder). Flips Delegating → Delegated.</summary>

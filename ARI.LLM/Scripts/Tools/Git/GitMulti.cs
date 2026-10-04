@@ -11,6 +11,7 @@ namespace ARI.LLM;
 internal sealed class GitMulti : Tool
 {
     private const int MAX_SCAN_DEPTH = 2;
+    private const int MAX_LABEL_CHARS = 60;
     private static readonly HashSet<string> SkippedDirs = new(StringComparer.OrdinalIgnoreCase) { "node_modules", "bin", "obj" };
 
     private readonly Dictionary<string, string> repos;  // display name → absolute path
@@ -109,6 +110,15 @@ internal sealed class GitMulti : Tool
                 required = new[] { "command" }
             }
         }
+    };
+
+    internal override Func<string, string>? Display => argsJson =>
+    {
+        JsonElement a = Parse(argsJson);
+        string label = $"{Str(a, "command")} {Str(a, "args")}".Replace("\r", " ").Replace("\n", " ").Trim();
+        if (label.Length > MAX_LABEL_CHARS) label = $"{label[..MAX_LABEL_CHARS]}…";
+        // The marker grammar uses ':' '>' '|' and '--' as delimiters, so neutralise them in the label.
+        return $"<!--ari-tool-start:git:{label.Replace("--", "&#45;&#45;").Replace(":", "∶").Replace(">", "&gt;").Replace("|", "¦")}-->";
     };
 
     internal override async Task<ToolResult> Execute(string argsJson)
