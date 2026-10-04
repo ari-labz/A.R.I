@@ -10,6 +10,8 @@ namespace ARI.LLM;
 /// </summary>
 internal static class AriGit
 {
+    private const string REJECTED_TOKEN = "Invalid username or token";
+
     internal const string Name  = "A.R.I";
     internal const string Email = "ari@xywren.net";
     internal static string Identity => $"{Name} <{Email}>";
@@ -42,12 +44,23 @@ internal static class AriGit
     /// to a repo's .git/config.</summary>
     internal static (int Code, string Out, string Err) Run(string workDir, string[] args, string? stdin = null)
     {
-        if (GitHubStore.ResolveToken() is { Length: > 0 } token)
-        {
-            string basic = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"x-access-token:{token}"));
-            args = ["-c", $"http.https://github.com/.extraheader=AUTHORIZATION: basic {basic}", .. args];
-        }
+        if (GitHubStore.ResolveToken() is not { Length: > 0 } token)
+            return Start(workDir, args, stdin);
 
+        string basic = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"x-access-token:{token}"));
+        (int code, string output, string error) = Start(workDir, ["-c", $"http.https://github.com/.extraheader=AUTHORIZATION: basic {basic}", .. args], stdin);
+        if (code == 0 || !error.Contains(REJECTED_TOKEN, StringComparison.Ordinal))
+            return (code, output, error);
+
+        // GitHub turns away a revoked or expired token even for a public repo, so try again without it: public
+        // repos still work, and a private one fails with a message that says what to do.
+        (int retryCode, string retryOutput, string retryError) = Start(workDir, args, stdin);
+        if (retryCode == 0) return (retryCode, retryOutput, retryError);
+        return (code, output, $"{error}\nThe GitHub token ARI has was rejected (it may have been revoked or have expired). Reconnect GitHub on the control panel's GitHub page.");
+    }
+
+    private static (int Code, string Out, string Err) Start(string workDir, string[] args, string? stdin)
+    {
         ProcessStartInfo psi = new()
         {
             FileName               = "git",
