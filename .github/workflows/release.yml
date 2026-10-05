@@ -1,18 +1,15 @@
 name: Release
 
-# Push a tag to build and publish ONE artifact:
-#   ARI_Server_v<ver>            -> builds the server app, published as a pre-release
-#   ARI_Server_Installer_v<ver>  -> builds the installer,  published as Latest
-# Pushing an app tag never rebuilds the installer, and vice versa.
+# Push a tag ARI_Server_v<ver> to build the server app and publish it as a pre-release.
+# (The installer lives in its own repo: https://github.com/ari-labz/Installer)
 #
-# Before tagging, edit the matching notes file under .github/release-notes/ — its contents become
+# Before tagging, edit .github/release-notes/app.md — its contents become
 # the release changelog verbatim (no # headings; the release title is the heading).
 
 on:
   push:
     tags:
       - "ARI_Server_v*"
-      - "ARI_Server_Installer_v*"
 
 permissions:
   contents: write
@@ -33,27 +30,15 @@ jobs:
       - id: meta
         run: |
           TAG="${GITHUB_REF_NAME}"
-          if [[ "$TAG" == ARI_Server_Installer_v* ]]; then
-            V="${TAG#ARI_Server_Installer_v}"
-            {
-              echo "target=installer"; echo "version=$V"
-              echo "title=A·R·I Server Installer v$V"
-              echo "prerelease=false"; echo "latest=true"
-              echo "notes=.github/release-notes/installer.md"
-              echo "pattern=ARI_Server_Installer_v*"
-              echo "vfile=ARI.Installer/package.json"
-            } >> "$GITHUB_OUTPUT"
-          else
-            V="${TAG#ARI_Server_v}"
-            {
-              echo "target=app"; echo "version=$V"
-              echo "title=A·R·I Server v$V"
-              echo "prerelease=true"; echo "latest=false"
-              echo "notes=.github/release-notes/app.md"
-              echo "pattern=ARI_Server_v*"
-              echo "vfile=manifest.json"
-            } >> "$GITHUB_OUTPUT"
-          fi
+          V="${TAG#ARI_Server_v}"
+          {
+            echo "target=app"; echo "version=$V"
+            echo "title=A·R·I Server v$V"
+            echo "prerelease=true"; echo "latest=false"
+            echo "notes=.github/release-notes/app.md"
+            echo "pattern=ARI_Server_v*"
+            echo "vfile=manifest.json"
+          } >> "$GITHUB_OUTPUT"
 
   build:
     needs: setup
@@ -79,8 +64,7 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
-      # electron-builder runs rcedit via wine to stamp any Windows .exe (app console + portable
-      # installer), so wine is needed for every Windows build on the Linux runner.
+      # electron-builder runs rcedit via wine to stamp any Windows .exe (app console), so wine is needed for every Windows build on the Linux runner.
       - name: Install wine (Linux — needed to stamp Windows .exe)
         if: runner.os == 'Linux'
         run: |
@@ -90,17 +74,12 @@ jobs:
 
       - name: Install dependencies
         run: |
-          if [[ "${{ needs.setup.outputs.target }}" == "app" ]]; then
-            (cd ARI.Orb && bun install)   # provides "three" for the UI build (file: dep of ARI.UI)
-            (cd ARI.UI && bun install)
-            (cd ARI.Console && bun install)
-          else
-            (cd ARI.Installer && bun install)
-          fi
+          (cd ARI.Orb && bun install)   # provides "three" for the UI build (file: dep of ARI.UI)
+          (cd ARI.UI && bun install)
+          (cd ARI.Console && bun install)
 
       - name: Build
         env:
-          BUILD_TARGET: ${{ needs.setup.outputs.target }}
           BUILD_PLATFORM: ${{ matrix.plats }}
         run: bun build-release.js
 
