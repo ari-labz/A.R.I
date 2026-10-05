@@ -114,11 +114,16 @@ internal sealed class GenerateImage : Tool
         string[] referenceImages = [];
         if (root.TryGetProperty("reference_images", out JsonElement ri) && ri.ValueKind == JsonValueKind.Array)
         {
-            string scratchpad = boundThread?.FilesystemRoot ?? "";
+            // Attached images land in the thread's scratchpad dir even when the thread has no filesystem root yet
+            // (a fresh Discord thread), so look there too.
+            string fsRoot     = boundThread?.FilesystemRoot ?? "";
+            string scratchpad = Paths.ScratchpadDir(boundThread!.Key);
             referenceImages = ri.EnumerateArray()
                 .Select(e => e.GetString() ?? "")
                 .Where(name => !string.IsNullOrWhiteSpace(name))
-                .Select(name => Path.IsPathRooted(name) ? name : Path.Combine(scratchpad, name))
+                .Select(name => Path.IsPathRooted(name) ? name
+                              : File.Exists(Path.Combine(fsRoot, name)) ? Path.Combine(fsRoot, name)
+                              : Path.Combine(scratchpad, name))
                 .Where(File.Exists)
                 .ToArray();
         }

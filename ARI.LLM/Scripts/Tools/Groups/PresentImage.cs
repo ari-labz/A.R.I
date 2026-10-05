@@ -43,7 +43,9 @@ internal sealed class PresentImage : Tool
         }
     };
 
-    internal override Task<ToolResult> Execute(string args)
+    private const long DiscordMaxFileBytes = 10 * 1024 * 1024;
+
+    internal override async Task<ToolResult> Execute(string args)
     {
         using JsonDocument doc  = JsonDocument.Parse(string.IsNullOrWhiteSpace(args) ? "{}" : args);
         JsonElement        root = doc.RootElement;
@@ -51,12 +53,26 @@ internal sealed class PresentImage : Tool
         filename = Path.GetFileName(filename.Trim());
 
         if (string.IsNullOrWhiteSpace(filename))
-            return Task.FromResult<ToolResult>("A filename is required.");
+            return "A filename is required.";
 
         string dir  = Paths.ScratchpadDir(boundThread.Key);
         string path = Path.Combine(dir, filename);
         if (!File.Exists(path))
-            return Task.FromResult<ToolResult>($"No file named '{filename}' found in the scratchpad.");
+            return $"No file named '{filename}' found in the scratchpad.";
+
+        // On Discord there's no app to raise an image event to — send the image as a message attachment instead.
+        if (boundThread.Medium == ThreadMedium.Discord)
+        {
+            if (Modules.Discord is null || boundThread.DiscordChannelId == 0)
+                return "Couldn't send the image — this Discord conversation has no channel to send it to.";
+            if (new FileInfo(path).Length > DiscordMaxFileBytes)
+                return $"'{filename}' is too large to send on Discord (over 10 MB). Tell the user, or generate a smaller image.";
+
+            string? failure = await Modules.Discord.SendFileAsync(boundThread.DiscordChannelId, path);
+            return failure is null
+                ? $"'{filename}' has been sent to the user as a Discord attachment."
+                : $"Couldn't send the image on Discord: {failure}";
+        }
 
         shownFilename  = filename;
         shownThreadKey = boundThread.Key;
@@ -64,7 +80,7 @@ internal sealed class PresentImage : Tool
         string url = $"/threads/{Uri.EscapeDataString(boundThread.Key)}/scratchpad/{Uri.EscapeDataString(filename)}";
         boundThread.RaiseScratchpadFileReady(url);
 
-        return Task.FromResult<ToolResult>($"'{filename}' has been shown to the user.");
+        return $"'{filename}' has been shown to the user.";
     }
 
     internal override Func<string, string>? DisplayAfter => _ =>
