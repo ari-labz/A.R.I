@@ -1,6 +1,6 @@
 name: Release
 
-# Push a tag ARI_Server_v<ver> to build the server app and publish it (a pre-release while the version is 0.x).
+# Push a tag v<ver> (e.g. v0.8.3) to build the server app and publish it (a pre-release while the version is 0.x).
 # (The installer lives in its own repo: https://github.com/ari-labz/Installer)
 #
 # Before tagging, edit .github/release-notes/app.md — its contents become
@@ -9,7 +9,7 @@ name: Release
 on:
   push:
     tags:
-      - "ARI_Server_v*"
+      - "v[0-9]*.[0-9]*.[0-9]*"
 
 permissions:
   contents: write
@@ -30,7 +30,7 @@ jobs:
       - id: meta
         run: |
           TAG="${GITHUB_REF_NAME}"
-          V="${TAG#ARI_Server_v}"
+          V="${TAG#v}"
           # 0.x versions are pre-releases; v1 and later are normal releases and become Latest.
           if [[ "$V" == 0.* ]]; then P=true; LATEST=false; else P=false; LATEST=true; fi
           {
