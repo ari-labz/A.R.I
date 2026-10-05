@@ -220,6 +220,26 @@ public class DiscordModule : BackgroundService, IDiscordModule
         catch (Exception ex) { return ex.Message; }
     }
 
+    public async Task<string?> SendFileAsync(ulong channelId, string filePath, string? text = null)
+    {
+        try
+        {
+            if (client.GetChannel(channelId) is not IMessageChannel channel)
+                return "that Discord channel isn't reachable";
+            await channel.SendFileAsync(filePath, text);
+            return null;
+        }
+        catch (Exception ex) { return ex.Message; }
+    }
+
+    // Tells the thread it's a Discord conversation and where to send files back, so present_image can attach to a message.
+    private void BindThreadToChannel(string conversationKey, ISocketMessageChannel channel)
+    {
+        ARI.LLM.Thread thread = llmModule.GetOrCreateDialogueThread(conversationKey);
+        thread.Medium           = ThreadMedium.Discord;
+        thread.DiscordChannelId = channel.Id;
+    }
+
     public async Task NotifyOwner(string message)
     {
         IUser owner = await client.GetUserAsync(config.OwnerId);
@@ -453,8 +473,9 @@ public class DiscordModule : BackgroundService, IDiscordModule
         _logger.LogInformation("DM from {Username} ({UserId}): {Content}",
             message.Author.Username, message.Author.Id, message.Content);
 
+        BindThreadToChannel(conversationKey, message.Channel);
         List<LlmAttachment>? attachments = message.Attachments.Count > 0
-            ? await UploadDiscordAttachments(message.Attachments)
+            ? await UploadDiscordAttachments(message.Attachments, conversationKey)
             : null;
         // Someone other than the owner only reaches ARI through a conversation she opened; it's guarded like a server.
         string? platformContext = isOwner ? null : BuildDmPlatformContext(config.OwnerId, message.Author.Username);
@@ -506,13 +527,14 @@ public class DiscordModule : BackgroundService, IDiscordModule
             }
         }
 
+        BindThreadToChannel(conversationKey, message.Channel);
         List<LlmAttachment>? attachments = message.Attachments.Count > 0
-            ? await UploadDiscordAttachments(message.Attachments)
+            ? await UploadDiscordAttachments(message.Attachments, conversationKey)
             : null;
         await SendLlmReply(message, conversationKey, prompt, displayName, BuildServerPlatformContext(config.OwnerId), attachments);
     }
 
-    private async Task<List<LlmAttachment>> UploadDiscordAttachments(IReadOnlyCollection<DiscordAttachment> attachments)
+    private async Task<List<LlmAttachment>> UploadDiscordAttachments(IReadOnlyCollection<DiscordAttachment> attachments, string threadKey)
     {
         List<LlmAttachment> result = new();
         foreach (DiscordAttachment att in attachments)
@@ -530,7 +552,19 @@ public class DiscordModule : BackgroundService, IDiscordModule
             byte[] bytes   = await httpClient.GetByteArrayAsync(att.Url);
             string content = isImage ? Convert.ToBase64String(bytes) : Encoding.UTF8.GetString(bytes);
 
-            result.Add(new LlmAttachment { Id = Guid.NewGuid().ToString("N"), Name = att.Filename, Content = content, IsImage = isImage, MimeType = mime });
+            // Images are also saved to the thread's scratchpad (as in the app) so generate_image can use them as
+            // references. Discord filenames repeat ("image.png"), so the saved name gets a unique suffix.
+            string name = att.Filename;
+            if (isImage)
+            {
+                string safe = Path.GetFileName(att.Filename);
+                name = $"{Path.GetFileNameWithoutExtension(safe)}-{Guid.NewGuid().ToString("N")[..6]}{Path.GetExtension(safe)}";
+                string scratchDir = Paths.ScratchpadDir(threadKey);
+                Directory.CreateDirectory(scratchDir);
+                await File.WriteAllBytesAsync(Path.Combine(scratchDir, name), bytes);
+            }
+
+            result.Add(new LlmAttachment { Id = Guid.NewGuid().ToString("N"), Name = name, Content = content, IsImage = isImage, MimeType = mime });
             _logger.LogDebug("Loaded Discord attachment: {Filename} ({Mime})", att.Filename, mime);
         }
         return result;

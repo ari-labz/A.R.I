@@ -16,6 +16,11 @@ public enum ThreadState { Unread, Active, Streaming, Inactive, Dormant, Deleted 
 /// <summary>The pipeline a thread belongs to. Determines how its prompts are processed.</summary>
 public enum ThreadPipeline { Dialogue, Code, Speech, Dream }
 
+/// <summary>Where a thread's conversation lives, which decides how things reach the user (e.g. present_image
+/// attaches the image to a Discord message instead of raising the app's image event). Set by whatever creates
+/// the thread; defaults to Web.</summary>
+public enum ThreadMedium { Web, Desktop, Discord }
+
 /// <summary>Coding-pipeline state. Planning = explore/infer/propose (no edits); Development = execute the
 /// approved plan (no exploration). Each phase feeds the agent a different system prompt and sampling.</summary>
 public enum CodePhase { Planning, Development }
@@ -281,6 +286,13 @@ public class Thread
     private readonly List<Attachment> pendingMessageAtts = new();
 
     internal string? PlatformContext { get; set; }
+
+    /// <summary>Where this conversation lives. The Discord module sets it to Discord on each incoming message.</summary>
+    public ThreadMedium Medium { get; set; } = ThreadMedium.Web;
+
+    /// <summary>The Discord channel (server channel or DM) of the latest message, so files ARI presents can be sent
+    /// back to it. 0 until the Discord module sets it; only meaningful when <see cref="Medium"/> is Discord.</summary>
+    public ulong DiscordChannelId { get; set; }
 
     /// <summary>The thread this one reports to (see <see cref="ParentReports"/>), for a conversation another thread
     /// opened, like a Discord DM from discord_dm_user. Null for a top-level thread.</summary>

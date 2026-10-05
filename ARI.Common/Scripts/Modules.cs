@@ -10,6 +10,9 @@ public interface IDiscordModule
     /// <summary>Sends a direct message to a Discord user. Returns null on success, otherwise why it failed.</summary>
     Task<string?> SendDirectMessageAsync(ulong userId, string message);
 
+    /// <summary>Sends a file to a Discord channel as a message attachment, with optional text. Returns null on success, otherwise why it failed.</summary>
+    Task<string?> SendFileAsync(ulong channelId, string filePath, string? text = null);
+
     /// <summary>A user's display name if ARI has seen them, otherwise null. Cache only, so it never blocks.</summary>
     string? GetUserName(ulong userId);
 

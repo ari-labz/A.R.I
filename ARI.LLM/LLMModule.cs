@@ -512,7 +512,11 @@ public class LLMModule : ILLMModule, IDisposable
         if (!threads.TryGetValue(threadKey, out Thread? existing))
             return GetOrCreateThread(type, threadKey, platformContext);
         if (existing.Pipeline == type)
+        {
+            // Same rule as GetOrCreateThread: a thread pre-registered by ForcePipeline has no context yet.
+            existing.PlatformContext ??= platformContext;
             return existing;
+        }
 
         threads.TryRemove(threadKey, out _);
         Thread converted = GetOrCreateThread(type, threadKey, platformContext);
