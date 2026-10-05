@@ -46,7 +46,7 @@ A·R·I is a personal project, and the rough edges show. She's only as good as t
 
 ## Requirements & setup
 
-Download the latest installer for your platform from the [Releases page](https://github.com/ari-labz/A.R.I/releases) and run it — it fetches and installs the server for you.
+Download the latest installer for your platform from the [Installer releases page](https://github.com/ari-labz/Installer/releases) and run it — choose **Server** and it fetches and installs the server for you.
 
 ### Getting past the "unverified app" warning
 
@@ -54,7 +54,7 @@ The installers are **not** signed with a paid Apple/Windows certificate, so your
 
 - **macOS** — if you see *"A·R·I … can't be opened because Apple cannot check it for malicious software"* (or *"is damaged"*), **right-click (Control-click) the app → Open → Open**. You only need to do this once. (Do not double-click — that offers no bypass.)
 - **Windows** — if SmartScreen shows *"Windows protected your PC"*, click **More info → Run anyway**.
-- **Linux** — the installer is an AppImage; mark it executable (`chmod +x ARI_Server_Installer_*.AppImage`, or right-click → Properties → allow executing) and run it.
+- **Linux** — the installer is an AppImage; mark it executable (`chmod +x ARIInstaller-linux.AppImage`, or right-click → Properties → allow executing) and run it.
 
 ## Third-party components
 

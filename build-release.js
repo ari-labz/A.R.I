@@ -1,7 +1,6 @@
 // Builds the A·R·I server release artifacts, per platform:
 //   ARI_Server_v{appVer}_{plat}.zip            — the server app: self-contained ARI.Core
 //                                                 (bundled .NET runtime) + the ARI.Console window.
-//   ARI_Server_Installer_v{instVer}_{plat}.zip — the installer app.
 // The csproj copies wwwroot, External/StyleTTS2, the Listener scripts and manifest.json into the
 // Core output. Python venvs are provisioned on first run, not bundled.
 //
@@ -12,23 +11,17 @@ const fs   = require("fs")
 const path = require("path")
 
 const appVersion       = JSON.parse(fs.readFileSync(path.join(__dirname, "manifest.json"), "utf8")).version
-const installerVersion = require(path.join(__dirname, "ARI.Installer", "package.json")).version
 const buildsDir    = path.join(__dirname, "Builds")
 const versionDir   = path.join(buildsDir, `v${appVersion}`)
 const csproj       = path.join(__dirname, "ARI.Core", "ARI.Core.csproj")
 const consoleDir   = path.join(__dirname, "ARI.Console")
-const installerDir = path.join(__dirname, "ARI.Installer")
 
 fs.mkdirSync(versionDir, { recursive: true })
-
-// BUILD_TARGET lets CI build just the app or just the installer, so pushing an app tag never
-// rebuilds the installer (and vice versa). Unset / "all" = both (local default).
-const buildTarget = process.env.BUILD_TARGET || "all"   // app | installer | all
 
 // bun on PATH for the csproj BuildUI target and bunx electron-builder.
 const env = { ...process.env, PATH: `${path.join(process.env.HOME || "", ".bun", "bin")}:${process.env.PATH}` }
 
-for (const d of [consoleDir, installerDir]) {
+for (const d of [consoleDir]) {
     if (!fs.existsSync(path.join(d, "node_modules", ".bin", "electron-builder"))) {
         console.log(`\n── Installing deps in ${path.basename(d)}\n`)
         execSync("bun install", { stdio: "inherit", cwd: d, env })
@@ -77,7 +70,6 @@ function bundleConsole(target, pubDir) {
 }
 
 // ── 1. Server app: Core + Console ────────────────────────────────────────────────
-if (buildTarget !== "installer")
 for (const target of targets) {
     const zip      = `ARI_Server_v${appVersion}_${target.plat}.zip`
     const stage    = path.join(versionDir, `.stage-${target.rid}`)
@@ -116,25 +108,6 @@ for (const target of targets) {
     // -y preserves symlinks (the .app bundle contains them).
     execSync(`zip -r -y -q "${outZip}" .`, { stdio: "inherit", cwd: pubDir })
     fs.rmSync(stage, { recursive: true, force: true })
-}
-
-// ── 2. Server installer ──────────────────────────────────────────────────────────
-if (buildTarget !== "app")
-for (const target of targets) {
-    const out = path.join(versionDir, `.inst-${target.rid}`)
-    fs.rmSync(out, { recursive: true, force: true })
-
-    console.log(`\n══ Server installer ${target.plat} ══\n`)
-    execSync(`bunx electron-builder ${target.eb} --config.directories.output="${out}"`,
-        { stdio: "inherit", cwd: installerDir, env })
-    // mac ships a .dmg, win a portable .exe, linux an .AppImage (.zip kept as a fallback).
-    const built = fs.readdirSync(out).find(f =>
-        f.endsWith(".dmg") || f.endsWith(".exe") || f.endsWith(".AppImage") || f.endsWith(".zip"))
-    if (!built) throw new Error(`Installer build produced no artifact for ${target.plat}`)
-    const outFile = path.join(versionDir, `ARI_Server_Installer_v${installerVersion}_${target.plat}${path.extname(built)}`)
-    fs.rmSync(outFile, { force: true })
-    fs.renameSync(path.join(out, built), outFile)
-    fs.rmSync(out, { recursive: true, force: true })
 }
 
 console.log(`\n✓ Server builds → Builds/v${appVersion}/`)
