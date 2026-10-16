@@ -243,7 +243,7 @@ export default function UserPreferences({ user, onClose, onLogout, onUserUpdated
 const overlay: React.CSSProperties = {
     position:       "fixed",
     inset:          0,
-    background:     "rgba(16,22,24,0.35)",
+    background:     "var(--col-user-preferences-line-294-background)",
     zIndex:         9000,
     display:        "flex",
     alignItems:     "center",
@@ -251,9 +251,9 @@ const overlay: React.CSSProperties = {
 }
 
 const panel: React.CSSProperties = {
-    background:    "#ffffff",
+    background:    "var(--col-user-preferences-line-302-background)",
     borderRadius:  16,
-    boxShadow:     "0 8px 48px rgba(16,22,24,0.14)",
+    boxShadow:     "0 8px 48px var(--col-user-preferences-line-304-shadow)",
     width:         420,
     maxWidth:      "calc(100vw - 32px)",
     maxHeight:     "calc(100vh - 48px)",
@@ -267,20 +267,20 @@ const header: React.CSSProperties = {
     alignItems:     "center",
     justifyContent: "space-between",
     padding:        "20px 24px 16px",
-    borderBottom:   "1px solid #edf0f1",
+    borderBottom:   "1px solid var(--col-user-preferences-line-318-border)",
 }
 
 const headerTitle: React.CSSProperties = {
     fontSize:   16,
     fontWeight: 600,
-    color:      "#101618",
+    color:      "var(--col-user-preferences-line-477-text)",
 }
 
 const closeBtn: React.CSSProperties = {
     background: "none",
     border:     "none",
     cursor:     "pointer",
-    color:      "#8a9598",
+    color:      "var(--col-user-preferences-line-331-text)",
     display:    "flex",
     padding:    4,
     borderRadius: 6,
@@ -294,7 +294,7 @@ const body: React.CSSProperties = {
 
 const footer: React.CSSProperties = {
     padding:    "12px 24px 20px",
-    borderTop:  "1px solid #edf0f1",
+    borderTop:  "1px solid var(--col-user-preferences-line-345-border)",
 }
 
 const section: React.CSSProperties = {
@@ -307,7 +307,7 @@ const sectionLabel: React.CSSProperties = {
     fontSize:     11,
     fontWeight:   600,
     letterSpacing: "0.08em",
-    color:        "#8a9598",
+    color:        "var(--col-user-preferences-line-358-text)",
 }
 
 const accountLine: React.CSSProperties = {
@@ -320,7 +320,7 @@ const accountLine: React.CSSProperties = {
 const accountUsername: React.CSSProperties = {
     fontSize:   15,
     fontWeight: 500,
-    color:      "#101618",
+    color:      "var(--col-user-preferences-line-324-text)",
 }
 
 function rolePill(role: string): React.CSSProperties {
@@ -330,8 +330,8 @@ function rolePill(role: string): React.CSSProperties {
         borderRadius: 100,
         fontSize:     11,
         fontWeight:   600,
-        background:   isAdmin ? "#101618" : "#edf0f1",
-        color:        isAdmin ? "#cadde2" : "#6b7a80",
+        background:   isAdmin ? "var(--col-user-preferences-line-381-background)" : "var(--col-user-preferences-line-381-colour)",
+        color:        isAdmin ? "var(--col-user-preferences-line-382-text)" : "var(--col-user-preferences-line-382-colour)",
     }
 }
 
@@ -339,11 +339,11 @@ const inputStyle: React.CSSProperties = {
     flex:         1,
     padding:      "9px 12px",
     borderRadius: 8,
-    border:       "1.5px solid #dde3e6",
+    border:       "1.5px solid var(--col-user-preferences-line-390-border)",
     fontSize:     14,
     outline:      "none",
-    background:   "#f9fafb",
-    color:        "#101618",
+    background:   "var(--col-user-preferences-line-393-background)",
+    color:        "var(--col-user-preferences-line-394-text)",
     minWidth:     0,
     boxSizing:    "border-box",
     width:        "100%",
@@ -355,8 +355,8 @@ function saveBtn(disabled: boolean): React.CSSProperties {
         padding:      "9px 16px",
         borderRadius: 8,
         border:       "none",
-        background:   disabled ? "#8a9598" : "#101618",
-        color:        "#cadde2",
+        background:   disabled ? "var(--col-user-preferences-line-406-background)" : "var(--col-user-preferences-line-406-colour)",
+        color:        "var(--col-user-preferences-line-407-text)",
         fontSize:     13,
         fontWeight:   600,
         cursor:       disabled ? "not-allowed" : "pointer",
@@ -371,9 +371,9 @@ const accordionBtn: React.CSSProperties = {
     width:          "100%",
     padding:        "10px 14px",
     borderRadius:   8,
-    border:         "1.5px solid #dde3e6",
-    background:     "#f9fafb",
-    color:          "#101618",
+    border:         "1.5px solid var(--col-user-preferences-line-422-border)",
+    background:     "var(--col-user-preferences-line-423-background)",
+    color:          "var(--col-user-preferences-line-424-text)",
     fontSize:       14,
     cursor:         "pointer",
     textAlign:      "left",
@@ -390,9 +390,9 @@ const errorStyle: React.CSSProperties = {
     margin:     0,
     padding:    "8px 12px",
     borderRadius: 6,
-    background: "#fff1f0",
-    border:     "1px solid #ffccc7",
-    color:      "#cf1322",
+    background: "var(--col-user-preferences-line-441-background)",
+    border:     "1px solid var(--col-user-preferences-line-442-border)",
+    color:      "var(--col-user-preferences-line-443-text)",
     fontSize:   13,
 }
 
@@ -400,9 +400,9 @@ const successStyle: React.CSSProperties = {
     margin:     0,
     padding:    "8px 12px",
     borderRadius: 6,
-    background: "#f6ffed",
-    border:     "1px solid #b7eb8f",
-    color:      "#389e0d",
+    background: "var(--col-user-preferences-line-451-background)",
+    border:     "1px solid var(--col-user-preferences-line-452-border)",
+    color:      "var(--col-user-preferences-line-453-text)",
     fontSize:   13,
 }
 
@@ -418,30 +418,30 @@ const sessionRow: React.CSSProperties = {
     justifyContent: "space-between",
     padding:        "10px 14px",
     borderRadius:   8,
-    background:     "#f9fafb",
-    border:         "1px solid #edf0f1",
+    background:     "var(--col-user-preferences-line-469-background)",
+    border:         "1px solid var(--col-user-preferences-line-470-border)",
 }
 
 const sessionDevice: React.CSSProperties = {
     display:    "block",
     fontSize:   13,
     fontWeight: 500,
-    color:      "#101618",
+    color:      "var(--col-user-preferences-line-371-text)",
 }
 
 const sessionDate: React.CSSProperties = {
     display:  "block",
     fontSize: 12,
-    color:    "#8a9598",
+    color:    "var(--col-user-preferences-line-500-text)",
     marginTop: 2,
 }
 
 const revokeBtn: React.CSSProperties = {
     padding:      "5px 10px",
     borderRadius: 6,
-    border:       "1px solid #ffccc7",
-    background:   "#fff1f0",
-    color:        "#cf1322",
+    border:       "1px solid var(--col-user-preferences-line-490-border)",
+    background:   "var(--col-user-preferences-line-491-background)",
+    color:        "var(--col-user-preferences-line-492-text)",
     fontSize:     12,
     cursor:       "pointer",
 }
@@ -449,16 +449,16 @@ const revokeBtn: React.CSSProperties = {
 const mutedText: React.CSSProperties = {
     margin:   0,
     fontSize: 13,
-    color:    "#8a9598",
+    color:    "var(--col-user-preferences-line-483-text)",
 }
 
 const logoutBtn: React.CSSProperties = {
     width:        "100%",
     padding:      "11px 0",
     borderRadius: 8,
-    border:       "1.5px solid #dde3e6",
+    border:       "1.5px solid var(--col-user-preferences-line-507-border)",
     background:   "transparent",
-    color:        "#6b7a80",
+    color:        "var(--col-user-preferences-line-509-text)",
     fontSize:     14,
     fontWeight:   500,
     cursor:       "pointer",

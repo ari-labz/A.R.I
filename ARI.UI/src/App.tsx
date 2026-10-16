@@ -178,11 +178,11 @@ function formatCommandResult(command: string, res: { code: number; stdout: strin
     return parts.join("\n\n")
 }
 
-const cmdOverlayStyle: CSSProperties = { position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000 }
-const cmdModalStyle:   CSSProperties = { background: "#1e1e22", border: "1px solid #3a3a40", borderRadius: 10, padding: "20px 22px", width: "min(560px, 90vw)", boxShadow: "0 12px 40px rgba(0,0,0,0.5)", color: "#e8e8ea" }
+const cmdOverlayStyle: CSSProperties = { position: "fixed", inset: 0, background: "var(--col-app-line-107-background)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000 }
+const cmdModalStyle:   CSSProperties = { background: "var(--col-app-line-108-background)", border: "1px solid var(--col-app-line-108-border)", borderRadius: 10, padding: "20px 22px", width: "min(560px, 90vw)", boxShadow: "0 12px 40px var(--col-app-line-108-shadow)", color: "var(--col-app-line-108-text)" }
 const cmdTitleStyle:   CSSProperties = { fontSize: 15, fontWeight: 600, marginBottom: 4 }
 const cmdSubStyle:     CSSProperties = { fontSize: 12.5, opacity: 0.7, marginBottom: 12 }
-const cmdCodeStyle:    CSSProperties = { background: "#111114", border: "1px solid #34343a", borderRadius: 6, padding: "10px 12px", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-all", margin: 0, marginBottom: 16 }
+const cmdCodeStyle:    CSSProperties = { background: "var(--col-app-line-111-background)", border: "1px solid var(--col-app-line-111-border)", borderRadius: 6, padding: "10px 12px", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-all", margin: 0, marginBottom: 16 }
 const cmdActionsStyle: CSSProperties = { display: "flex", gap: 8, justifyContent: "flex-end" }
 const cmdBtnBase:      CSSProperties = { padding: "7px 14px", borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: "pointer", border: "1px solid transparent" }
 
@@ -1474,7 +1474,7 @@ export default function App() {
                         </div>
                         <pre style={cmdCodeStyle}>{pendingCommand.command}</pre>
                         <div style={cmdActionsStyle}>
-                            <button style={{ ...cmdBtnBase, background: "transparent", borderColor: "#5a5a62", color: "#e8e8ea" }}
+                            <button style={{ ...cmdBtnBase, background: "transparent", borderColor: "var(--col-app-line-1406-border)", color: "var(--col-app-line-1406-text)" }}
                                     onClick={() => { pendingCommand.resolve("deny"); setPendingCommand(null) }}>Deny</button>
                             <button style={{ ...cmdBtnBase, background: "#2d6cdf", color: "#fff" }}
                                     onClick={() => { pendingCommand.resolve("allow"); setPendingCommand(null) }}>Allow once</button>
@@ -1499,7 +1499,7 @@ export default function App() {
                         <div style={cmdTitleStyle}>{pendingConfirm.title}</div>
                         <pre style={cmdCodeStyle}>{pendingConfirm.body}</pre>
                         <div style={cmdActionsStyle}>
-                            <button style={{ ...cmdBtnBase, background: "transparent", borderColor: "#5a5a62", color: "#e8e8ea" }}
+                            <button style={{ ...cmdBtnBase, background: "transparent", borderColor: "var(--col-app-line-1429-border)", color: "var(--col-app-line-1429-text)" }}
                                     onClick={() => { pendingConfirm.resolve(false); setPendingConfirm(null) }}>Cancel</button>
                             <button style={{ ...cmdBtnBase, background: "#c0392b", color: "#fff" }}
                                     onClick={() => { pendingConfirm.resolve(true); setPendingConfirm(null) }}>Delete</button>

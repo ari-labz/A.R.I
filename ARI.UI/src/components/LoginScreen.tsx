@@ -78,7 +78,7 @@ export default function LoginScreen({ onLoginSuccess }: Props) {
         <div style={overlay}>
             <div style={card}>
                 <div style={logoRow}>
-                    <img src="/images/logo-black.png" alt="A·R·I" style={logoImg} />
+                    <img src="/images/logo-black.png?v=2" alt="A·R·I" style={logoImg} />
                 </div>
 
                 {screen === "login" ? (
@@ -155,14 +155,14 @@ const overlay: React.CSSProperties = {
     display:        "flex",
     alignItems:     "center",
     justifyContent: "center",
-    background:     "#f4f6f7",
+    background:     "var(--col-login-screen-line-158-background)",
     zIndex:         9999,
 }
 
 const card: React.CSSProperties = {
-    background:   "#ffffff",
+    background:   "var(--col-login-screen-line-163-background)",
     borderRadius: 16,
-    boxShadow:    "0 4px 32px rgba(16,22,24,0.10)",
+    boxShadow:    "0 4px 32px var(--col-login-screen-line-165-shadow)",
     padding:      "40px 40px 36px",
     width:        360,
     maxWidth:     "calc(100vw - 32px)",
@@ -173,7 +173,7 @@ const logoRow: React.CSSProperties = {
     justifyContent:  "center",
     alignItems:      "center",
     marginBottom:    28,
-    background:      "#ffffff",
+    background:      "var(--col-login-screen-line-176-background)",
     borderRadius:    10,
     padding:         "18px 24px",
 }
@@ -181,20 +181,22 @@ const logoRow: React.CSSProperties = {
 const logoImg: React.CSSProperties = {
     height:   40,
     width:    "auto",
+    maxWidth: 220,
+    objectFit: "contain",
     display:  "block",
 }
 
 const subtitle: React.CSSProperties = {
     margin:     "0 0 20px",
     fontSize:   14,
-    color:      "#6b7a80",
+    color:      "var(--col-login-screen-line-190-text)",
     textAlign:  "center",
 }
 
 const hintText: React.CSSProperties = {
     margin:     "-8px 0 20px",
     fontSize:   13,
-    color:      "#8a9598",
+    color:      "var(--col-login-screen-line-197-text)",
     textAlign:  "center",
     lineHeight: 1.5,
 }
@@ -208,11 +210,11 @@ const form: React.CSSProperties = {
 const inputStyle: React.CSSProperties = {
     padding:      "11px 14px",
     borderRadius: 8,
-    border:       "1.5px solid #dde3e6",
+    border:       "1.5px solid var(--col-login-screen-line-211-border)",
     fontSize:     14,
     outline:      "none",
-    background:   "#f9fafb",
-    color:        "#101618",
+    background:   "var(--col-login-screen-line-214-background)",
+    color:        "var(--col-login-screen-line-215-text)",
     transition:   "border-color 0.15s",
     width:        "100%",
     boxSizing:    "border-box",
@@ -224,8 +226,8 @@ function btn(disabled: boolean): React.CSSProperties {
         padding:      "12px 0",
         borderRadius: 8,
         border:       "none",
-        background:   disabled ? "#8a9598" : "#223742",
-        color:        "#cadde2",
+        background:   disabled ? "var(--col-login-screen-line-227-background)" : "var(--col-login-screen-line-227-colour)",
+        color:        "var(--col-login-screen-line-228-text)",
         fontSize:     14,
         fontWeight:   600,
         cursor:       disabled ? "not-allowed" : "pointer",
@@ -237,9 +239,9 @@ function btn(disabled: boolean): React.CSSProperties {
 const backBtn: React.CSSProperties = {
     padding:      "10px 0",
     borderRadius: 8,
-    border:       "1.5px solid #dde3e6",
+    border:       "1.5px solid var(--col-login-screen-line-240-border)",
     background:   "transparent",
-    color:        "#6b7a80",
+    color:        "var(--col-login-screen-line-242-text)",
     fontSize:     13,
     cursor:       "pointer",
 }
@@ -248,8 +250,8 @@ const errorStyle: React.CSSProperties = {
     margin:     "0",
     padding:    "10px 12px",
     borderRadius: 6,
-    background: "#fff1f0",
-    border:     "1px solid #ffccc7",
-    color:      "#cf1322",
+    background: "var(--col-login-screen-line-251-background)",
+    border:     "1px solid var(--col-login-screen-line-252-border)",
+    color:      "var(--col-login-screen-line-253-text)",
     fontSize:   13,
 }

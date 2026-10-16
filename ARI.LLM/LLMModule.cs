@@ -125,6 +125,9 @@ public class LLMModule : ILLMModule, IDisposable
         Dictionary<string, Server> serverByName = servers.ToDictionary(s => s.Name, s => s);
 
         Dictionary<string, JsonElement> rawAgents = new(StringComparer.OrdinalIgnoreCase);
+        // Agents switched off with "Enabled": false. They're absent from rawAgents, and this set stops the
+        // built-in fallbacks (Awareness, Subagent) from quietly reviving them.
+        HashSet<string> disabledAgents = new(StringComparer.OrdinalIgnoreCase);
         if (File.Exists(agentsJsonPath))
         {
             using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(agentsJsonPath), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
@@ -146,8 +149,12 @@ public class LLMModule : ILLMModule, IDisposable
             if (TryGetPropCI(doc.RootElement, "Agents", out JsonElement arr) && arr.ValueKind == JsonValueKind.Array)
                 foreach (JsonElement el in arr.EnumerateArray())
                     if (TryGetPropCI(el, "name", out JsonElement nameEl) && nameEl.GetString() is string name)
+                    {
                         if (TryGetPropCI(el, "enabled", out JsonElement en) && en.GetBoolean())
                             rawAgents[name] = el.Clone();   // Clone: JsonElements must outlive the using-disposed JsonDocument
+                        else
+                            disabledAgents.Add(name);
+                    }
         }
 
         T Deserialize<T>(JsonElement el) where T : Agent
@@ -255,10 +262,10 @@ public class LLMModule : ILLMModule, IDisposable
         if (rawAgents.TryGetValue("Subagent", out JsonElement subagentEl))
         {
             Subagent sub = Deserialize<Subagent>(subagentEl);
-            SubagentManager.Agent = sub.Enabled ? sub : null;
-            if (sub.Enabled) agentMap["Subagent"] = sub;
+            SubagentManager.Agent = sub;
+            agentMap["Subagent"] = sub;
         }
-        else if (_servers.Count > 0)
+        else if (_servers.Count > 0 && !disabledAgents.Contains("Subagent"))
             SubagentManager.Agent = Deserialize<Subagent>(JsonDocument.Parse("{\"name\":\"Subagent\"}").RootElement);
         ParentReports.Nudge = WakeIfPending;
 
@@ -270,7 +277,7 @@ public class LLMModule : ILLMModule, IDisposable
             awareness = Deserialize<Awareness>(awarenessEl);
             _logger.LogInformation("Awareness is active.");
         }
-        else if (_servers.Count > 0)
+        else if (_servers.Count > 0 && !disabledAgents.Contains("Awareness"))
         {
             awareness = Deserialize<Awareness>(JsonDocument.Parse("{\"name\":\"Awareness\"}").RootElement);
             _logger.LogWarning("No Awareness entry in Agents.json — using default server/slot with no system prompt. Add an Awareness entry to configure it.");

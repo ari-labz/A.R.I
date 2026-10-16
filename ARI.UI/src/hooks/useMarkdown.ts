@@ -53,9 +53,9 @@ export function ensureImageLightbox() {
     _lightboxSetup = true
     const overlay = document.createElement("div")
     overlay.id = "ari-lightbox"
-    overlay.style.cssText = "display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;cursor:zoom-out;align-items:center;justify-content:center;"
+    overlay.style.cssText = "display:none;position:fixed;inset:0;background:var(--col-markdown-viewer-line-56-background);z-index:9999;cursor:zoom-out;align-items:center;justify-content:center;"
     const img = document.createElement("img")
-    img.style.cssText = "max-width:90vw;max-height:90vh;border-radius:6px;box-shadow:0 8px 40px #000a;"
+    img.style.cssText = "max-width:90vw;max-height:90vh;border-radius:6px;box-shadow:0 8px 40px var(--col-markdown-viewer-line-58-shadow);"
     overlay.appendChild(img)
     overlay.addEventListener("click", () => { overlay.style.display = "none" })
     document.body.appendChild(overlay)

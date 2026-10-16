@@ -166,8 +166,8 @@ export default function Main({
                 {/* animated logo header */}
                 <div id="main-header">
                     <div id="header-logos">
-                        <img id="main-logo" src="/images/logo-black.png" alt="A·R·I" />
-                        <img id="code-logo" src="/images/BlackCode.png" alt="Code" />
+                        <img id="main-logo" src="/images/logo-black.png?v=2" alt="A·R·I" />
+                        <img id="code-logo" src="/images/BlackCode.png?v=2" alt="Code" />
                     </div>
                 </div>
 

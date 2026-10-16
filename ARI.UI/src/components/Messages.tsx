@@ -446,7 +446,7 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
                     <summary>A·R·I thought for {secs}s</summary>
                     <div className="thought-content">
                         {rows.length > 0 && (
-                            <div className="thought-times" style={{ fontSize: "12px", color: "#8e8ea0", width: "fit-content", minWidth: "200px", marginBottom: "8px" }}>
+                            <div className="thought-times" style={{ fontSize: "12px", color: "var(--col-messages-line-449-text)", width: "fit-content", minWidth: "200px", marginBottom: "8px" }}>
                                 {rows.map(r => (
                                     <div key={r.label} style={{ display: "flex", justifyContent: "space-between", gap: "14px" }}>
                                         <span>{r.label}</span>
@@ -462,7 +462,7 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
                 </details>
             )
         } else {
-            thoughtEl = <div style={{ fontSize: "12px", color: "#8e8ea0", marginTop: "6px", userSelect: "none" }}>A·R·I thought for {secs}s</div>
+            thoughtEl = <div style={{ fontSize: "12px", color: "var(--col-messages-line-465-text)", marginTop: "6px", userSelect: "none" }}>A·R·I thought for {secs}s</div>
         }
     }
 
