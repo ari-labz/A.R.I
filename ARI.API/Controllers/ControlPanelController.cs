@@ -471,7 +471,7 @@ public class AgentsApiController(PersistentData persistentData) : ControllerBase
     public IActionResult GetAgents()
     {
         IReadOnlyList<AgentDefinition> agents = persistentData.GetAgents();
-        SharedPromptsFile shared = persistentData.GetSharedPrompts();
+        JsonObject shared = persistentData.GetSharedForUi();
         var servers = persistentData.GetServers().Select(s => new { name = s.Name, slots = s.Slots });
         return Ok(new { agents, shared, servers });
     }
@@ -479,24 +479,24 @@ public class AgentsApiController(PersistentData persistentData) : ControllerBase
     /// <summary>Saves the prompts owned by no single agent (the MemoryAgent block, the Budgets footer).
     /// Read at startup, so it takes effect on restart.</summary>
     [HttpPut("shared")]
-    public IActionResult UpdateShared([FromBody] SharedPromptsFile req)
+    public IActionResult UpdateShared([FromBody] JsonObject req)
     {
-        persistentData.UpdateSharedPrompts(req);
+        persistentData.MergeShared(req);
         return Ok(new { ok = true, restartRequired = true });
     }
 
     [HttpPut("{name}")]
-    public IActionResult UpdateAgent(string name, [FromBody] AgentDefinition req)
+    public IActionResult UpdateAgent(string name, [FromBody] JsonObject req)
     {
-        req.Name = name;
-
-        if (!persistentData.UpdateAgent(req))
+        // Merged into the file rather than replacing the agent, so fields the panel doesn't know about survive.
+        if (!persistentData.MergeAgent(name, req))
             return NotFound(new { error = $"Agent '{name}' not found." });
 
         if (Llm is not null)
         {
-            Llm.AssignAgentServer(name, req.ServerName);
-            if (req.SlotName is { Length: > 0 }) Llm.AssignAgentSlot(name, req.SlotName);
+            string? server = req["serverName"]?.GetValue<string>(), slot = req["slotName"]?.GetValue<string>();
+            if (server is not null) Llm.AssignAgentServer(name, server);
+            if (slot is { Length: > 0 }) Llm.AssignAgentSlot(name, slot);
         }
 
         return NoContent();
