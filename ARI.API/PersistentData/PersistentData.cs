@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 using ARI.Common;
 using ARI.LLM;
@@ -248,13 +249,20 @@ public class PersistentData
         lock (_agentsLock) return LoadAgents().Shared ?? new SharedPromptsFile();
     }
 
-    public void UpdateSharedPrompts(SharedPromptsFile updated)
+    public void UpdateSharedPrompts(SharedPromptsFile updated) =>
+        MergeShared(JsonSerializer.SerializeToNode(updated, JsonOpts)!.AsObject());
+
+    /// <summary>The Shared section exactly as it is in the file (Budgets and ToolSystem included, which the typed
+    /// model does not carry), with top-level keys in camelCase for the control panel.</summary>
+    public JsonObject GetSharedForUi()
     {
         lock (_agentsLock)
         {
-            AgentsFile data = LoadAgents();
-            data.Shared = updated;
-            Save(_agentsPath, data);
+            JsonObject result = new();
+            if (LoadAgentsRaw()["Shared"] is JsonObject shared)
+                foreach ((string k, JsonNode? v) in shared)
+                    result[char.ToLowerInvariant(k[0]) + k[1..]] = v?.DeepClone();
+            return result;
         }
     }
 
@@ -264,16 +272,77 @@ public class PersistentData
             .FirstOrDefault(a => a.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
     }
 
-    public bool UpdateAgent(AgentDefinition updated)
+    public bool UpdateAgent(AgentDefinition updated) =>
+        MergeAgent(updated.Name, JsonSerializer.SerializeToNode(updated, JsonOpts)!.AsObject());
+
+    // ── Non-destructive edits ───────────────────────────────────────────────────
+    // Agents.json carries more than AgentDefinition models (sampler values, Priority, PreloadedTools, budgets,
+    // Shared.Budgets/ToolSystem …). Rewriting it from the typed model silently deleted all of that, so edits are
+    // merged into the file's own JSON instead and everything they don't mention is left exactly as it was.
+
+    private static readonly JsonDocumentOptions DocOpts = new() { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
+
+    private JsonObject LoadAgentsRaw() =>
+        File.Exists(_agentsPath) ? JsonNode.Parse(File.ReadAllText(_agentsPath), documentOptions: DocOpts)?.AsObject() ?? new() : new();
+
+    private static string? KeyFor(JsonObject o, string name) =>
+        o.Select(kv => kv.Key).FirstOrDefault(k => string.Equals(k, name, StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsDefault(JsonNode? v) => v switch
+    {
+        null => true,
+        JsonObject o => o.Count == 0,
+        JsonArray a => a.Count == 0,
+        JsonValue jv => (jv.TryGetValue(out bool b) && !b) || (jv.TryGetValue(out int i) && i == 0) || (jv.TryGetValue(out string? s) && string.IsNullOrEmpty(s)),
+        _ => false,
+    };
+
+    /// <summary>Objects merge key by key (names matched case-insensitively); anything else replaces. A key the file
+    /// does not have yet is only added when it carries a real value, so saving never litters it with defaults.</summary>
+    private static void MergeInto(JsonObject target, JsonObject patch)
+    {
+        foreach ((string k, JsonNode? v) in patch)
+        {
+            string? existing = KeyFor(target, k);
+            if (existing is null)
+            {
+                if (!IsDefault(v)) target[char.ToUpperInvariant(k[0]) + k[1..]] = v?.DeepClone();
+                continue;
+            }
+            if (v is JsonObject po && target[existing] is JsonObject to) MergeInto(to, po);
+            else target[existing] = v?.DeepClone();
+        }
+    }
+
+    /// <summary>Applies the given fields to one agent in Agents.json. The agent's name is never changed.</summary>
+    public bool MergeAgent(string name, JsonObject patch)
     {
         lock (_agentsLock)
         {
-            AgentsFile data = LoadAgents();
-            int idx = data.Agents.FindIndex(a => a.Name.Equals(updated.Name, StringComparison.OrdinalIgnoreCase));
-            if (idx < 0) return false;
-            data.Agents[idx] = updated;
-            Save(_agentsPath, data);
+            JsonObject root = LoadAgentsRaw();
+            if (root[KeyFor(root, "Agents") ?? "Agents"] is not JsonArray agents) return false;
+            JsonObject? target = agents.OfType<JsonObject>().FirstOrDefault(a =>
+                string.Equals(a[KeyFor(a, "Name") ?? "Name"]?.GetValue<string>(), name, StringComparison.OrdinalIgnoreCase));
+            if (target is null) return false;
+
+            JsonObject copy = (JsonObject)patch.DeepClone();
+            if (KeyFor(copy, "Name") is { } nameKey) copy.Remove(nameKey);
+            MergeInto(target, copy);
+            File.WriteAllText(_agentsPath, root.ToJsonString(JsonOpts));
             return true;
+        }
+    }
+
+    /// <summary>Applies the given fields to the Shared section of Agents.json (creating it if missing).</summary>
+    public void MergeShared(JsonObject patch)
+    {
+        lock (_agentsLock)
+        {
+            JsonObject root = LoadAgentsRaw();
+            string key = KeyFor(root, "Shared") ?? "Shared";
+            if (root[key] is not JsonObject shared) root[key] = shared = new JsonObject();
+            MergeInto(shared, (JsonObject)patch.DeepClone());
+            File.WriteAllText(_agentsPath, root.ToJsonString(JsonOpts));
         }
     }
 
