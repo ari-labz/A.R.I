@@ -21,6 +21,8 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
         "/auth/login",
         "/api/theme",
         "/api/branding",
+        "/setup/status",
+        "/setup/account",
     ];
 
     private static readonly string[] AdminPrefixes =

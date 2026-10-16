@@ -227,6 +227,7 @@ public static class Modules
     // Register(...) only ever sets a slot — a stopped module needs to actually disappear (every
     // "is not null" check across the app is how the rest of ARI knows a module is live), which a
     // no-op null argument can't express. One explicit clear method per hot-stoppable module.
+    public static void ClearLlm()            => Llm            = null;
     public static void ClearVoice()          => Voice          = null;
     public static void ClearVoiceSynthesis() => VoiceSynthesis = null;
     public static void ClearListener()       => Listener       = null;

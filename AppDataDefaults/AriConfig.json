@@ -12,26 +12,26 @@
       "Port": 5074
     },
     "LLM": {
-      "Enabled": true,
+      "Enabled": false,
       "ModelsPath": ""
     },
     "VoiceSynthesis": {
-      "Enabled": true,
+      "Enabled": false,
       "StyleTtsPath": "",
       "VoicesPath": ""
     },
     "Voice": {
-      "Enabled": true,
+      "Enabled": false,
       "ModelName": ""
     },
     "Brain": {
-      "Enabled": true,
+      "Enabled": false,
       "VaultPath": "",
       "BackupPath": "./Backups",
       "MaxBackups": 5
     },
     "Discord": {
-      "Enabled": true,
+      "Enabled": false,
       "Token": "",
       "OwnerId": 0,
       "WhitelistedUserIds": [],
@@ -39,7 +39,7 @@
       "AllowedGuildIds": []
     },
     "Listener": {
-      "Enabled": true,
+      "Enabled": false,
       "WhisperPort": 8123,
       "ScriptPath": "",
       "Model": "base.en",
@@ -47,7 +47,7 @@
       "SilenceMs": 300
     },
     "Calendar": {
-      "Enabled": true
+      "Enabled": false
     },
     "ImageGen": {
       "Enabled": false,

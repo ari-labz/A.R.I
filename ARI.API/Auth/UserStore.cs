@@ -7,8 +7,7 @@ namespace ARI.API.Auth;
 /// <summary>
 /// SQLite-backed store for users, sessions, and the IP blocklist.
 /// Lives at Paths.UsersDb — never exposed to the network; ARI owns all access.
-/// On startup: if no users exist, creates an admin account with a random 8-char password
-/// printed to the log.
+/// On startup: if no users exist, logs a SetupToken the setup wizard needs to create the first account.
 /// </summary>
 public class UserStore
 {
@@ -21,8 +20,12 @@ public class UserStore
     {
         this.log = log;
         connStr  = $"Data Source={Paths.UsersDb}";
+        // Must run before InitSchema creates the (empty) users file, so an existing install can be told apart.
+        ARI.API.Setup.SetupState.Init(log);
         InitSchema();
-        EnsureAdminExists();
+        // A fresh install has no account until someone claims it through the setup wizard with the logged
+        // SetupToken — no more auto-created "admin" with a random password.
+        if (CountUsers() == 0) ARI.API.Setup.SetupState.AnnounceToken(log);
         LogPendingAdminPassword();
     }
 
@@ -61,27 +64,6 @@ public class UserStore
         cmd.ExecuteNonQuery();
     }
 
-    private void EnsureAdminExists()
-    {
-        if (CountUsers() > 0) return;
-
-        string password = AuthService.GenerateRandomPassword(8);
-        string hash     = BCrypt.Net.BCrypt.HashPassword(password);
-        long   now      = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-
-        using SqliteConnection conn = Open();
-        using SqliteCommand cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            INSERT INTO Users (Username, PasswordHash, Role, DisplayName, MustChangePassword, CreatedAt)
-            VALUES ('admin', $hash, 'Admin', 'Admin', 1, $now)
-            """;
-        cmd.Parameters.AddWithValue("$hash", hash);
-        cmd.Parameters.AddWithValue("$now",  now);
-        cmd.ExecuteNonQuery();
-
-        log.LogWarning("No users found. Created admin account. Password: {Password}", password);
-    }
-
     /// <summary>If the admin account still requires a password change, resets it to a fresh random
     /// password and logs it at Warning level. Runs on every boot so a missed log line is never fatal.</summary>
     private void LogPendingAdminPassword()
@@ -96,7 +78,7 @@ public class UserStore
         log.LogWarning("Admin password has not been changed. Temporary password: {Password}", password);
     }
 
-    private int CountUsers()
+    public int CountUsers()
     {
         using SqliteConnection conn = Open();
         using SqliteCommand cmd = conn.CreateCommand();
