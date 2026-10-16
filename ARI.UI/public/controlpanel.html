@@ -1421,7 +1421,7 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
               <div class="cp-widget-header"><span class="cp-widget-title">RAM</span><span class="cp-widget-badge" id="ram-badge">—</span></div>
               <div class="cp-widget-body ram-dual-body">
                 <div class="ram-line-wrap"><canvas id="ram-chart"></canvas></div>
-                <div class="ram-pie-wrap">
+                <div class="ram-pie-wrap" style="display:none">
                   <div class="ram-pie-canvas-wrap"><canvas id="ram-pie-chart"></canvas></div>
                   <div id="ram-pie-legend"></div>
                 </div>
@@ -1487,6 +1487,7 @@ function switchTab(name) {
     cpTitle.textContent = TAB_TITLES[name] || 'Overview';
     const gw = document.getElementById('cp-grid-wrap');
     if (gw) gw.style.display = name === 'overview' ? '' : 'none';
+    if (name === 'overview') requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
     if (name !== 'servers') { clearTimeout(srvPollTimer); srvPollTimer = null; }
     if (name !== 'debug') dbgCloseWatch();
     if (name === 'customisation') { loadBranding(); loadCustomisation(); }
@@ -3367,61 +3368,62 @@ floatBtn.addEventListener('click', () => setSidebarCollapsed(false));
 // ── gridstack ─────────────────────────────────────────────
 // Cells are fixed CELL_SIZE×CELL_SIZE px. Column count is derived from
 // container width so the grid always fills the window at every aspect ratio.
-const LAYOUT_KEY    = 'ari-cp-layout-v10';
-const CELL_SIZE     = 50;
+const LAYOUT_KEY    = 'ari-cp-layout-v11';
 const MARGIN        = 3;   // gap per side (3+3 = 6px between items)
-const MARGIN_H      = 3;
 const MARGIN_STR    = `${MARGIN}px`;
+const COLS          = 12;  // fixed column count: items scale with the window instead of the grid gaining columns
+const NARROW_PX     = 900; // below this (e.g. half a screen) everything stacks full-width
+const WIDE_ROWS     = 14;  // the wide layout is sized to fill the window height with this many rows
 const REQUIRED_WIDGETS = ['widget-log', 'widget-context', 'widget-tokens', 'widget-ram'];
 
 const gridWrap = document.getElementById('cp-grid-wrap');
+const isNarrow = () => gridWrap.clientWidth < NARROW_PX;
+const modeKey  = () => LAYOUT_KEY + (isNarrow() ? '-narrow' : '-wide');
 
-function getDims() {
-    const w = gridWrap.clientWidth  || window.innerWidth;
-    const h = gridWrap.clientHeight || window.innerHeight;
-    return {
-        cols: Math.max(4, Math.floor((w - MARGIN_H) / (CELL_SIZE + MARGIN_H * 2))),
-        rows: Math.max(4, Math.floor((h - MARGIN)   / (CELL_SIZE + MARGIN   * 2))),
-    };
+function rowHeight() {
+    if (isNarrow()) return 50;
+    return Math.max(34, Math.floor((gridWrap.clientHeight - 12) / WIDE_ROWS) - MARGIN * 2);
 }
 
-function makeDefaultLayout(cols, rows) {
-    const hw = Math.floor(cols / 2), hr = Math.floor(rows / 2);
+function makeDefaultLayout() {
+    if (isNarrow()) return [
+        { id: 'widget-ram',     x: 0, y: 0,  w: 12, h: 6 },
+        { id: 'widget-context', x: 0, y: 6,  w: 12, h: 4 },
+        { id: 'widget-tokens',  x: 0, y: 10, w: 12, h: 5 },
+        { id: 'widget-log',     x: 0, y: 15, w: 12, h: 9 },
+    ];
     return [
-        { id: 'widget-ram',     x: 0,  y: 0,  w: hw,        h: hr        },
-        { id: 'widget-log',     x: 0,  y: hr, w: hw,        h: rows - hr },
-        { id: 'widget-context', x: hw, y: 0,  w: cols - hw, h: hr        },
-        { id: 'widget-tokens',  x: hw, y: hr, w: cols - hw, h: rows - hr },
+        { id: 'widget-ram',     x: 0, y: 0, w: 12, h: 5 },
+        { id: 'widget-log',     x: 0, y: 5, w: 7,  h: 9 },
+        { id: 'widget-context', x: 7, y: 5, w: 5,  h: 4 },
+        { id: 'widget-tokens',  x: 7, y: 9, w: 5,  h: 5 },
     ];
 }
 
-let savedLayout = null;
-try {
-    const raw = JSON.parse(localStorage.getItem(LAYOUT_KEY));
-    if (raw && REQUIRED_WIDGETS.every(id => raw.some(w => w.id === id))) savedLayout = raw;
-} catch {}
+function layoutForMode() {
+    try {
+        const raw = JSON.parse(localStorage.getItem(modeKey()));
+        if (raw && REQUIRED_WIDGETS.every(id => raw.some(w => w.id === id))) return raw;
+    } catch {}
+    return makeDefaultLayout();
+}
 
-let { cols } = getDims();
-const grid = GridStack.init({ column: cols, cellHeight: CELL_SIZE, margin: MARGIN_STR, float: false, animate: false, disableOneColumnMode: true });
+const grid = GridStack.init({ column: COLS, cellHeight: rowHeight(), margin: MARGIN_STR, float: false, animate: false, disableOneColumnMode: true });
+let currentMode = isNarrow();
+grid.load(layoutForMode(), false);
 
-if (savedLayout) grid.load(savedLayout, false);
-else grid.load(makeDefaultLayout(cols, getDims().rows), false);
-
-function saveLayout() { localStorage.setItem(LAYOUT_KEY, JSON.stringify(grid.save(false))); }
+function saveLayout() { localStorage.setItem(modeKey(), JSON.stringify(grid.save(false))); }
 grid.on('dragstop resizestop', saveLayout);
+// The page is still laying out at first paint, so fit the row height again once it has settled.
+[100, 500, 1500].forEach(ms => setTimeout(() => window.dispatchEvent(new Event('resize')), ms));
 
 let resizeTimer;
-let suppressSave = false;
 window.addEventListener('resize', () => {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
-        const { cols: newCols } = getDims();
-        if (newCols !== cols) {
-            suppressSave = true;
-            grid.column(newCols);
-            cols = newCols;
-            suppressSave = false;
-        }
+        grid.cellHeight(rowHeight());
+        setTimeout(() => { if (typeof ramChart !== 'undefined') { ramChart.resize(); ramPieChart.resize(); } }, 50);
+        if (isNarrow() !== currentMode) { currentMode = isNarrow(); grid.load(layoutForMode(), false); }
     }, 80);
 });
 
@@ -3460,7 +3462,7 @@ function appendLogLine(text) {
 
 // ── RAM line chart ────────────────────────────────────────
 const RAM_HISTORY = 1800;
-const RAM_LIMIT_MB = 48 * 1024;
+let RAM_LIMIT_MB = 0;   // usable AI memory, filled in from /setup/hardware below
 const ramLabels = [], ramData = [], swapData = [];
 const ramBadge = document.getElementById('ram-badge');
 const ramCtx = document.getElementById('ram-chart').getContext('2d');
@@ -3481,7 +3483,7 @@ const ramChart = new Chart(ramCtx, {
             annotation: {
                 annotations: {
                     ramLimit: {
-                        type: 'line', yMin: RAM_LIMIT_MB, yMax: RAM_LIMIT_MB,
+                        type: 'line', yMin: 0, yMax: 0, display: false,
                         borderColor: cv('--col-control-panel-line-3396-border'), borderWidth: 1.5,
                         borderDash: [6, 4],
                         label: { display: false }
@@ -3495,6 +3497,21 @@ const ramChart = new Chart(ramCtx, {
         }
     }
 });
+
+// The dashed line marks the memory the AI can actually use: the container's limit, the GPU's VRAM, or unified memory
+// minus a reserve (same figure the setup wizard fits models against) — not a fixed number.
+(async () => {
+    try {
+        const r = await cpFetch('/setup/hardware');
+        if (!r.ok) return;
+        const d = await r.json();
+        RAM_LIMIT_MB = Math.round(d.usableBytes / 1048576);
+        const a = ramChart.options.plugins.annotation.annotations.ramLimit;
+        a.yMin = a.yMax = RAM_LIMIT_MB; a.display = true;
+        ramChart.options.scales.y.suggestedMax = RAM_LIMIT_MB * 1.05;
+        ramChart.update('none');
+    } catch {}
+})();
 
 // ── RAM pie chart ─────────────────────────────────────────
 // ARI base hue: ~190° (teal). All servers including StyleTTS2 share the rotation.
@@ -3536,6 +3553,7 @@ const ramPieChart = new Chart(ramPieCtx, {
 const ramPieLegend = document.getElementById('ram-pie-legend');
 let lastBreakdownJson = '';
 function updateRamPie(breakdown) {
+    document.querySelector('.ram-pie-wrap').style.display = breakdown.length ? '' : 'none';   // nothing to show until a server is loaded
     const json = JSON.stringify(breakdown);
     if (json === lastBreakdownJson) return;
     lastBreakdownJson = json;
