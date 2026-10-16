@@ -24,7 +24,7 @@ export default function Sidebar({ threads, activeThread, activeView, onNewChat, 
             <div id="sidebar-inner">
                 <div id="sidebar-header">
                     <div id="sidebar-header-left">
-                        <img id="sidebar-wordmark" src="/images/logo-white.png" alt="A·R·I" />
+                        <img id="sidebar-wordmark" src="/images/logo-white.png?v=2" alt="A·R·I" />
                         {clientVersion && <span id="sidebar-version">{`v${clientVersion}`}</span>}
                     </div>
                     <button id="btn-toggle-sidebar" title="Close sidebar" onClick={onToggleCollapse}>

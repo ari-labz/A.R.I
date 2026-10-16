@@ -23,17 +23,17 @@ function formatSize(bytes: number | null): string {
 function FileIcon({ isDir, name }: { isDir: boolean; name: string }) {
     if (isDir) {
         return (
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#7abacc" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" fill="#e8f2f5" />
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--col-project-file-explorer-line-26-icon)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" fill="var(--col-project-file-explorer-line-27-icon)" />
             </svg>
         )
     }
     const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : ""
     return (
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" fill="#f3f4f6" />
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--col-project-file-explorer-line-33-icon)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" fill="var(--col-project-file-explorer-line-34-icon)" />
             <polyline points="14 2 14 8 20 8" />
-            {ext && <text x="12" y="17" fontSize="6" textAnchor="middle" fill="#6b7280" stroke="none" fontFamily="ui-monospace,monospace">{ext.slice(0, 4)}</text>}
+            {ext && <text x="12" y="17" fontSize="6" textAnchor="middle" fill="var(--col-project-file-explorer-line-36-icon)" stroke="none" fontFamily="ui-monospace,monospace">{ext.slice(0, 4)}</text>}
         </svg>
     )
 }

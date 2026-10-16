@@ -125,7 +125,10 @@ public class APIModule : IAsyncDisposable
         Action<StaticFileResponseContext> cacheHeaders = ctx =>
         {
             string file = ctx.File.Name;
-            if (file == "index.html" || file == "sw.js" || file == "controlpanel.html")
+            // The logo images, colours and theme script are changed from the control panel (BrandingStore, ThemeStore),
+            // so they revalidate instead of being cached for a year.
+            if (file is "index.html" or "sw.js" or "controlpanel.html" or "logo-black.png" or "logo-white.png" or "BlackCode.png"
+                or "theme.js" or "colours.css" or "colours.json")
             {
                 ctx.Context.Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
                 ctx.Context.Response.Headers["Pragma"]        = "no-cache";
@@ -138,6 +141,9 @@ public class APIModule : IAsyncDisposable
         };
 
         // Rewrite bare "/" to "/index.html" before the auth middleware runs, so the browser can
+        // Uploaded logos replace the built-in image URLs (see BrandingStore); must run before the static files.
+        app.Use(BrandingStore.Middleware);
+
         // fetch the SPA shell without a token (the JS inside handles auth state itself).
         app.UseDefaultFiles(new DefaultFilesOptions
         {
