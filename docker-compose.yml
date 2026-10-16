@@ -1,0 +1,71 @@
+# A·R·I — default Docker Compose stack (NVIDIA GPU, e.g. DGX Spark or any Linux box with the NVIDIA Container Toolkit).
+#
+#   docker compose up -d            start / update
+#   docker compose logs -f ari      follow the log (the first-run admin password is printed here)
+#
+# In Portainer: Stacks → Add stack → paste this file, and set the variables from docker/.env.example
+# in the "Environment variables" box (or just leave the defaults).
+#
+# Native apps exist for Windows, macOS and Linux; this stack is the recommended way to run A·R·I everywhere
+# except macOS (Docker on a Mac can't use the GPU, so the native app is much faster there).
+
+name: ari
+
+services:
+  # The A·R·I server: web UI, API, Discord, scheduler, and the llama.cpp model servers it starts and
+  # manages itself (model switching, slots and sampler settings all stay in the control panel).
+  ari:
+    image: ghcr.io/ari-labz/ari:${ARI_TAG:-latest}
+    container_name: ari
+    restart: unless-stopped
+    pull_policy: always
+    ports:
+      - "${ARI_PORT:-5074}:5074"
+    environment:
+      TZ: ${TZ:-UTC}
+      # Run as this user on the host (matters when /data is a bind mount instead of the named volume).
+      PUID: ${PUID:-10001}
+      PGID: ${PGID:-10001}
+    volumes:
+      # Everything A·R·I keeps: configs, the brain, models, logs, keys. Named volume by default;
+      # use a path like /srv/ari:/data to keep it somewhere you can browse and back up.
+      - ${ARI_DATA:-ari-data}:/data
+      # Projects A·R·I may work on (Code mode). Create the folder first, or remove this line.
+      # - ${ARI_PROJECTS:-/srv/ari-projects}:/projects
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ulimits:
+      memlock: -1          # lets llama.cpp pin memory
+    stop_grace_period: 45s # time for the model servers to shut down cleanly
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5074/api/theme >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+
+  # Optional auto-update: checks the registry and restarts `ari` on its newer image. Remove this service
+  # (or run `docker compose pull && docker compose up -d` yourself) if you prefer to update by hand.
+  # Portainer Business can do the same from its own stack settings instead.
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: ari-watchtower
+    restart: unless-stopped
+    environment:
+      WATCHTOWER_LABEL_ENABLE: "true"        # only touch containers that opt in (ari above)
+      WATCHTOWER_CLEANUP: "true"             # delete the old image after updating
+      WATCHTOWER_POLL_INTERVAL: ${UPDATE_INTERVAL_SECONDS:-3600}
+      WATCHTOWER_INCLUDE_RESTARTING: "true"
+      TZ: ${TZ:-UTC}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  ari-data:

@@ -15,7 +15,7 @@ public class VoiceSynthesisSetupService(ILogger? logger = null)
     private const string MARKER_FILE = ".deps-installed";
     private const int    DEPS_VERSION = 1;
 
-    private static string Python => OperatingSystem.IsWindows() ? "python" : "/opt/homebrew/bin/python3.11";
+    private static string Python => ARI.Common.PythonLocator.Find();
 
     private static readonly string[] Packages =
     [
