@@ -14,7 +14,7 @@ namespace ARI.Listener;
 public class ListenerSetupService(ILogger? logger = null)
 {
     private const string VENV_SUBDIR = "venv";
-    private static string Python => OperatingSystem.IsWindows() ? "python" : "/opt/homebrew/bin/python3.11";
+    private static string Python => ARI.Common.PythonLocator.Find();
 
     /// <summary>Returns the venv's python interpreter path, provisioning the venv first if needed.</summary>
     public async Task<string> Install()

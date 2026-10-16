@@ -1,0 +1,29 @@
+# A·R·I — throwaway test stack. Everything (accounts, models, chats) lives inside the container and is
+# deleted with the stack. Use this to try the first-run setup over and over.
+#
+# Want to keep something real? Uncomment a bind mount below (create the folder first). Mount only what you
+# need: e.g. just Models, so big downloads survive a stack delete while everything else resets.
+#
+# Run several at once by giving each its own ARI_PORT and a different stack name.
+
+services:
+  ari:
+    image: ${ARI_IMAGE:-ghcr.io/ari-labz/ari:latest}
+    restart: unless-stopped
+    ports:
+      - "${ARI_PORT:-9000}:5074"          # left = port on this machine, right = ARI's own port (always 5074)
+    environment:
+      TZ: ${TZ:-UTC}
+    # volumes:
+    #   - /srv/ari/models:/data/Models      # downloaded models
+    #   - /srv/ari/brain:/data/Brain        # ARI's memory notes
+    #   - /srv/ari/server:/data/Server      # configs, agents, accounts database
+    #   - /srv/ari/projects:/projects       # folders ARI may work on
+    #   - /srv/ari:/data                    # or: everything in one place
+    # NVIDIA GPU (needs the NVIDIA Container Toolkit; leave out on Docker Desktop):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - { driver: nvidia, count: all, capabilities: [gpu] }
+    stop_grace_period: 45s
