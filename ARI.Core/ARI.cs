@@ -136,20 +136,7 @@ public class ARI : BackgroundService, IModuleLifecycle
             : Paths.Models;
 
         if (config.modules.LLM.Enabled)
-        {
-            LLMDependency.StartSearXng();
-
-            BrainConfig? brainConfig = config.modules.Brain?.Enabled == true ? config.modules.Brain : null;
-
-            _logger.LogInformation("Loading agents...");
-            llmModule = new LLMModule(
-                servers:        persistentData.GetServers().ToList(),
-                agentsJsonPath: agentsPath,
-                brainConfig:    brainConfig,
-                loggerFactory:  loggerFactory);
-            CommonModules.Register(llm: llmModule);
-            _logger.LogInformation("Agents loaded.");
-        }
+            CreateLlmModule();
 
         // ── Voice setup ──────────────────────────────────────────────────────────
         voiceSynthesisModule = new VoiceSynthesisModule();
@@ -178,16 +165,7 @@ public class ARI : BackgroundService, IModuleLifecycle
 
         // ── Start LLM servers (after API is up so status is visible) ────────────
         if (llmModule is not null)
-        {
-            _logger.LogInformation("Starting LLM servers...");
-            await llmModule.StartServersAsync(persistentData.GetModels().ToList(), modelsPath);
-
-            foreach (var agent in persistentData.GetAgents())
-            {
-                llmModule.AssignAgentServer(agent.Name, agent.ServerName);
-                if (agent.SlotName is { Length: > 0 }) llmModule.AssignAgentSlot(agent.Name, agent.SlotName);
-            }
-        }
+            await StartLlmServersAsync();
 
         // ── Listener (audio hub) ───────────────────────────────────────────────────
         if (config.modules.Listener.Enabled && llmModule is not null)
@@ -247,10 +225,45 @@ public class ARI : BackgroundService, IModuleLifecycle
     // Each case below is the same method Startup() calls at boot, just reachable on demand too.
     // LLM, API and Brain aren't here — see IModuleLifecycle's doc comment for why.
 
+    private void CreateLlmModule()
+    {
+        LLMDependency.StartSearXng();
+
+        BrainConfig? brainConfig = config.modules.Brain?.Enabled == true ? config.modules.Brain : null;
+
+        _logger.LogInformation("Loading agents...");
+        llmModule = new LLMModule(
+            servers:        persistentData!.GetServers().ToList(),
+            agentsJsonPath: Path.Combine(Paths.PersistentData, "Agents.json"),
+            brainConfig:    brainConfig,
+            loggerFactory:  loggerFactory);
+        CommonModules.Register(llm: llmModule);
+        _logger.LogInformation("Agents loaded.");
+    }
+
+    private async Task StartLlmServersAsync()
+    {
+        _logger.LogInformation("Starting LLM servers...");
+        await llmModule!.StartServersAsync(persistentData!.GetModels().ToList(), modelsPath);
+
+        foreach (var agent in persistentData.GetAgents())
+        {
+            llmModule.AssignAgentServer(agent.Name, agent.ServerName);
+            if (agent.SlotName is { Length: > 0 }) llmModule.AssignAgentSlot(agent.Name, agent.SlotName);
+        }
+    }
+
     public async Task<string?> StartModule(string key)
     {
         switch (key)
         {
+            case "LLM":
+                // Only start-from-nothing is hot: the setup wizard / first toggle. Stopping needs a restart.
+                if (llmModule is not null) return null;
+                if (persistentData is null) return "ARI has not finished starting.";
+                try { CreateLlmModule(); await StartLlmServersAsync(); }
+                catch (Exception ex) { _logger.LogError(ex, "LLM module failed to start."); llmModule = null; CommonModules.ClearLlm(); return ex.Message; }
+                return null;
             case "VoiceSynthesis":
                 await StartVoiceSynthesisAsync();
                 return voiceSynthesisModule!.IsSetupComplete ? null : "Setup failed — check the server log for details.";

@@ -224,6 +224,9 @@ public class APIModule : IAsyncDisposable
         });
 
         await app.StartAsync(cancellationToken);
+        // Build the user store now (not on the first request) so a fresh install's Setup Token is in the log at boot.
+        app.Services.GetRequiredService<UserStore>();
+
 
         loggerFactory.CreateLogger("ARI.API").LogInformation("ARI.API is ready. Listening on http://0.0.0.0:{Port}", config.Port);
     }

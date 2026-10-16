@@ -501,6 +501,7 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 </style>
 <link rel="stylesheet" href="/css/colours.css?v=3">
 <script src="/js/theme.js?v=3"></script>
+    <script src="/js/tour.js?v=3" defer></script>
 </head>
 <body>
 <div id="shell">
@@ -1748,7 +1749,7 @@ function renderModules(modules) {
             `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
                <span style="font-size:14px;font-weight:600;">${escHtml(m.name)}</span>
                <span class="mdl-badge ${m.running ? 'active' : 'inactive'}">${m.running ? 'Running' : 'Stopped'}</span>
-               ${m.required ? '<span class="mdl-badge startup">Always on</span>' : ''}
+               ${m.required && m.running ? '<span class="mdl-badge startup">Always on</span>' : ''}
                <span class="mdl-badge notdl" data-role="pending" style="display:none;">Restart to apply</span>
              </div>
              <div style="font-size:13px;color:var(--text-dim);line-height:1.45;">${escHtml(m.description)}</div>
@@ -1762,7 +1763,8 @@ function renderModules(modules) {
         const right = document.createElement('div');
         right.style.cssText = 'display:flex;align-items:center;padding-top:2px;';
 
-        if (m.required) {
+        // Required modules can't be turned OFF, but on a fresh install LLM starts stopped and must be turned on.
+        if (m.required && m.running) {
             const locked = document.createElement('span');
             locked.className = 'cp-toggle on';
             locked.style.cssText = 'opacity:.45;cursor:not-allowed;';

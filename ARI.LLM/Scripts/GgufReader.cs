@@ -19,6 +19,17 @@ public static class GgufReader
         try
         {
             using FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            return TryRead(fs);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Same as the path overload, over any stream positioned at the start of a GGUF header —
+    /// lets the setup wizard size a model from just the first few MB fetched over HTTP.</summary>
+    public static KvArchParams? TryRead(Stream fs)
+    {
+        try
+        {
             using BinaryReader br = new BinaryReader(fs, Encoding.UTF8, leaveOpen: true);
 
             if (br.ReadUInt32() != MagicGGUF) return null;

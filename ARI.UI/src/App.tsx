@@ -13,6 +13,8 @@ import { env } from "./env"
 import TaskBanner from "./components/TaskBanner"
 import { playResponseChime } from "./notify"
 import LoginScreen from "./components/LoginScreen"
+import SetupWizard from "./components/SetupWizard"
+import { startTour } from "./tour"
 import UserPreferences from "./components/UserPreferences"
 import { apiFetch, fetchMe, setToken, getToken, type AuthUser } from "./auth"
 import "./styles/app.css"
@@ -233,13 +235,19 @@ export default function App() {
     const pipelines = usePipelines()
 
     // ── Auth ──────────────────────────────────────────────────────────────────────
-    const [authState,       setAuthState]       = useState<"loading" | "needsLogin" | "authed">("loading")
+    const [authState,       setAuthState]       = useState<"loading" | "needsLogin" | "needsSetup" | "authed">("loading")
+    const [setupStart,      setSetupStart]      = useState<"account" | "model">("account")
     const [authUser,        setAuthUser]        = useState<AuthUser | null>(null)
     const [showPreferences, setShowPreferences] = useState(false)
 
     useEffect(() => {
-        fetchMe().then(user => {
-            if (user) { setAuthUser(user); setAuthState("authed") }
+        Promise.all([
+            fetchMe(),
+            fetch("/setup/status").then(r => r.json()).catch(() => null) as Promise<{ needsAccount: boolean; setupComplete: boolean; tutorialComplete: boolean } | null>,
+        ]).then(([user, setup]) => {
+            if (setup?.needsAccount)                                { setSetupStart("account"); setAuthState("needsSetup") }
+            else if (user && setup && !setup.setupComplete && user.role === "Admin") { setAuthUser(user); setSetupStart("model"); setAuthState("needsSetup") }
+            else if (user) { setAuthUser(user); setAuthState("authed"); if (setup && !setup.tutorialComplete && user.role === "Admin") startTour() }
             else       setAuthState("needsLogin")
             // Signal Desktop that the renderer has something to display — dismiss the splash
             // regardless of whether auth succeeded. Without this, the 15-second fallback fires
@@ -1266,6 +1274,11 @@ export default function App() {
                         if (!detail) return loadHistory(keyForStream).then(hist => { if (activeThreadRef.current === keyForStream) setItems(dedupeRecentUserMessages(hist)) }).catch(() => {})
                         if (activeThreadRef.current === keyForStream) setItems(dedupeRecentUserMessages(detail.history))
                     }).catch(() => {})
+    if (authState === "needsSetup") return (
+        <SetupWizard startStep={setupStart} existingUser={authUser}
+            onFinished={(user) => { setAuthUser(user); setAuthState("authed"); startTour() }} />
+    )
+
                 }
             }
         }
