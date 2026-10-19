@@ -38,6 +38,7 @@ public class FeedbackController : ControllerBase
         if (string.IsNullOrWhiteSpace(req.ThreadKey) ||
             !Llm.Threads.TryGetValue(req.ThreadKey, out ARI.LLM.Thread? thread))
             return NotFound("No such thread.");
+        if (!CanAccess(thread)) return StatusCode(403);
 
         // The same filter GET /threads/{key} applies, so the client's index lines up with this list.
         List<ThreadItem> visible = thread.History
@@ -74,6 +75,7 @@ public class FeedbackController : ControllerBase
     /// <summary>Ratings already recorded in a thread, so the chat UI can light up the right thumb on load.</summary>
     [HttpGet("thread/{threadKey}")]
     public IActionResult ForThread(string threadKey) =>
+        Llm is not null && Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? t) && !CanAccess(t) ? StatusCode(403) :
         Ok(FeedbackStore.ForThread(threadKey).Select(f => new
         {
             id                = f.Id,
@@ -81,6 +83,19 @@ public class FeedbackController : ControllerBase
             note              = f.Note,
             responseTimestamp = f.ResponseTimestamp,
         }));
+
+    /// <summary>Admins can rate anything; everyone else only threads they own.</summary>
+    private bool CanAccess(ARI.LLM.Thread thread) =>
+        User.IsInRole(ARI.API.Auth.Roles.Admin)
+        || thread.OwnerId == User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
+    /// <summary>A rating can be changed or withdrawn by an admin, or by someone who owns the thread it was left in.</summary>
+    private bool CanTouchRating(string id)
+    {
+        if (User.IsInRole(ARI.API.Auth.Roles.Admin)) return true;
+        ResponseFeedback? f = FeedbackStore.Load().FirstOrDefault(x => x.Id == id);
+        return f is not null && Llm is not null && Llm.Threads.TryGetValue(f.ThreadKey, out ARI.LLM.Thread? t) && CanAccess(t);
+    }
 
     // ── Control panel ─────────────────────────────────────────────────────────────
 
@@ -111,12 +126,14 @@ public class FeedbackController : ControllerBase
         string? vote = req.Vote?.Trim().ToLowerInvariant();
         if (vote is not null && vote != "up" && vote != "down") return BadRequest("vote must be 'up' or 'down'.");
 
+        if (!CanTouchRating(id)) return StatusCode(403);
         ResponseFeedback? updated = FeedbackStore.Update(id, vote, req.Note);
         return updated is null ? NotFound() : Ok(updated);
     }
 
     [HttpDelete("{id}")]
     public IActionResult Delete(string id) =>
+        !CanTouchRating(id) ? StatusCode(403) :
         FeedbackStore.Remove(id) ? Ok(new { ok = true }) : NotFound();
 
     /// <summary>Every rating as JSONL — the raw dataset, ready to be reshaped into training pairs.</summary>

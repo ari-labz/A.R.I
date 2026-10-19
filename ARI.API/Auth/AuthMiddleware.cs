@@ -31,6 +31,38 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
         "/controlpanel.html",
     ];
 
+    // Control-panel controllers whose routes don't live under /admin/. Every path under these is admin-only,
+    // except the few things the chat UI itself needs and so are listed as exceptions in IsAdminOnly.
+    private static readonly string[] AdminOnlyAreas =
+    [
+        "/agents", "/servers", "/modules", "/imagegen", "/persona/proposals", "/models", "/voice", "/feedback",
+    ];
+
+    /// <summary>True if a guest must be refused. A path is matched on whole segments ("/models" but not "/modelsX").</summary>
+    internal static bool IsAdminOnly(string path, string method)
+    {
+        if (Array.Exists(AdminPrefixes, p => path.StartsWith(p, StringComparison.OrdinalIgnoreCase))) return true;
+
+        bool inArea = Array.Exists(AdminOnlyAreas, a =>
+            path.Equals(a, StringComparison.OrdinalIgnoreCase) || path.StartsWith(a + "/", StringComparison.OrdinalIgnoreCase));
+        if (!inArea) return false;
+
+        bool post = method.Equals("POST", StringComparison.OrdinalIgnoreCase);
+        bool get  = method.Equals("GET",  StringComparison.OrdinalIgnoreCase);
+
+        // What an ordinary signed-in user's chat page uses: reading the reasoning dial, speaking a reply aloud,
+        // and thumbs up/down on a response in a thread they can open (the controller checks the thread).
+        if (get  && path.Equals("/models/reasoning-effort", StringComparison.OrdinalIgnoreCase)) return false;
+        if (post && (path.Equals("/voice/speak", StringComparison.OrdinalIgnoreCase)
+                  || path.Equals("/voice/split-sentences", StringComparison.OrdinalIgnoreCase))) return false;
+        if (post && path.Equals("/feedback", StringComparison.OrdinalIgnoreCase)) return false;
+        if (get  && path.StartsWith("/feedback/thread/", StringComparison.OrdinalIgnoreCase)) return false;
+        // Changing or withdrawing a rating (the controller checks the rating's thread is theirs).
+        if ((method.Equals("PATCH", StringComparison.OrdinalIgnoreCase) || method.Equals("DELETE", StringComparison.OrdinalIgnoreCase))
+            && path.StartsWith("/feedback/", StringComparison.OrdinalIgnoreCase)) return false;
+        return true;
+    }
+
     public async Task InvokeAsync(HttpContext ctx)
     {
         UserStore store   = ctx.RequestServices.GetRequiredService<UserStore>();
@@ -79,7 +111,7 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
 
             // Admin-only paths — guests get a flat 403
             string path = ctx.Request.Path.Value ?? "";
-            if (Array.Exists(AdminPrefixes, p => path.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+            if (IsAdminOnly(path, ctx.Request.Method))
             {
                 if (principal.FindFirstValue(ClaimTypes.Role) != Roles.Admin)
                 {
