@@ -13,6 +13,8 @@ export interface ThreadEntry {
     projectName?: string | null
     projectId?:   string | null
     title?:       string | null
+    /** Set only for admins, on threads that belong to another user. */
+    ownerName?:   string | null
 }
 
 export type StorageBackend = "ServerFs" | "RemoteFs"
