@@ -11,9 +11,12 @@ public sealed class DiscordSettings
     /// <summary>Bot token. Secret — never returned to the browser; the API reports only whether one is set.</summary>
     public string Token { get; set; } = "";
 
-    /// <summary>The Master's Discord user ID. Stored under the original "OwnerId" key so existing Discord.json files still load.</summary>
-    [JsonPropertyName("OwnerId")]
+    /// <summary>The Master's Discord user ID.</summary>
     public ulong MasterDiscordId { get; set; }
+
+    /// <summary>Reads the key this setting had before it was renamed, so an older Discord.json still loads. Never written back.</summary>
+    [JsonPropertyName("OwnerId")]
+    public ulong LegacyOwnerId { set { if (value != 0 && MasterDiscordId == 0) MasterDiscordId = value; } }
     public List<ulong> WhitelistedUserIds { get; set; } = [];
     public List<ulong> WatchedChannelIds { get; set; } = [];
     public List<ulong> AllowedGuildIds { get; set; } = [];
