@@ -1311,6 +1311,8 @@ public class LLMModule : ILLMModule, IDisposable
         Thread thread = GetOrCreateThread(ThreadPipeline.Dialogue, threadKey,
             platformContext: string.IsNullOrWhiteSpace(dreamContext) ? null : dreamContext);
         if (!string.IsNullOrWhiteSpace(title)) thread.Title = title;
+        // A dream or reminder is Ari reaching out to her Master, so the thread is theirs — and so is the push.
+        thread.OwnerId = Shared.MasterUserId;
         thread.AddItem(new Response
         {
             Content   = ContentBlock.Parse(assistantText),
@@ -1341,8 +1343,6 @@ public class LLMModule : ILLMModule, IDisposable
 
         using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         string reply;
-        // A dream or reminder is Ari reaching out to her Master, so the thread is theirs — and so is the push.
-        thread.OwnerId = Shared.MasterUserId;
         try
         {
             reply = await dialoguePipeline.ExecuteAsync(scratch, scratchKey, prompt, "reminder", context, onDelta: null, cts);
