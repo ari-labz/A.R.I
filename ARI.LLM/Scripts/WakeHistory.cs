@@ -4,7 +4,7 @@ using ARI.Common;
 namespace ARI.LLM;
 
 /// <summary>
-/// Short-term record of what recent dreams have already woken the owner about. Purely a same-week
+/// Short-term record of what recent dreams have already woken the master about. Purely a same-week
 /// dedup aid — not a durable record. A hard "don't bring this up" belongs in the Brain as a normal
 /// memory note (Engram's job), not here; this only stops a *different* dream from independently
 /// re-raising something a *recent* one already said, before anyone's had a chance to reply.
@@ -43,7 +43,7 @@ internal static class WakeHistory
             .OrderByDescending(e => e.Timestamp)
             .Select(e => $"- \"{e.Topic}\" ({DaysAgo(e.Timestamp)})");
 
-        return "Topics you've already woken your owner about recently — don't re-raise any of these " +
+        return "Topics you've already woken your master about recently — don't re-raise any of these " +
                "in a new guise unless something genuinely new has happened since:\n" + string.Join("\n", lines);
     }
 

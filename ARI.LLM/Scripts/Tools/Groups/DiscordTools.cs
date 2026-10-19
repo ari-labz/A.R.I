@@ -156,7 +156,7 @@ internal sealed class DiscordDmUser(Thread parent) : Tool
             description = "Send a Discord DM to anyone by user ID. It opens a conversation with them that gets all their DMs; you handle it there, " +
                           "using the brief, and report the result back here. Set wait_for_reply to hold your reply open until that report arrives; " +
                           "if it comes later, it wakes this conversation. " +
-                          $"Your owner's Discord user ID is {Modules.Discord?.OwnerId}.",
+                          $"Your master's Discord user ID is {Modules.Discord?.OwnerId}.",
             parameters  = new
             {
                 type       = "object",
@@ -193,7 +193,7 @@ internal sealed class DiscordDmUser(Thread parent) : Tool
         catch (JsonException) { return "[Error: arguments weren't valid JSON.]"; }
 
         if (parent.IsGuarded && userId != discord.OwnerId)
-            return "[Error: in this conversation you can only DM your owner.]";
+            return "[Error: in this conversation you can only DM your master.]";
 
         (DiscordConversations.Conversation convo, bool isNew) = DiscordConversations.GetOrOpen(userId);
         if (await discord.SendDirectMessageAsync(userId, message) is { } failure)
