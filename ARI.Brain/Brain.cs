@@ -31,7 +31,12 @@ public static class Brain
             : Paths.Brain;
         VaultName = Path.GetFileName(VaultRoot);
         Database.Path = Path.Combine(VaultRoot, ".ari", "index.db");
-        BrainBackup.Path_ = config.BackupPath;
+        // A relative path (the default "./Backups") is kept with the rest of the Master's data rather than wherever the
+        // process happened to start: that was "/" in Docker (not writable, so backups always failed) and a build folder
+        // that is wiped on rebuild on a dev machine.
+        BrainBackup.Path_ = Path.IsPathRooted(config.BackupPath)
+            ? config.BackupPath
+            : Path.GetFullPath(Path.Combine(Paths.AppData, "Server", config.BackupPath));
         BrainBackup.MaxBackups = config.MaxBackups;
         Directory.CreateDirectory(VaultRoot);
         Directory.CreateDirectory(Path.GetDirectoryName(Database.Path)!);

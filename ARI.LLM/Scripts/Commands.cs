@@ -89,8 +89,24 @@ internal class CommandService
     {
         if (!Brain.Ready) return "Brain is not available.";
         Shared.Logger.LogInformation("[Commands] Brain purge requested.");
+
+        // A purge can't be undone, so back up first and refuse to purge if that fails. An already-empty brain is left
+        // alone: backing it up would push a real backup out of the rotation.
+        string backup = "";
+        if (BrainBackup.NoteCount() > 0)
+        {
+            try { backup = BrainBackup.Backup() + " "; }
+            catch (Exception ex)
+            {
+                Shared.Logger.LogError(ex, "[Commands] Brain purge cancelled: the backup failed.");
+                return $"Purge cancelled — the backup failed ({ex.Message}), so nothing was deleted.";
+            }
+        }
+
         int deleted = Brain.PurgeAllNotes();
-        return $"Purged {deleted} note(s) from the brain.";
+        return backup.Length > 0
+            ? $"{backup}Purged {deleted} note(s) from the brain. Restore the backup from the control panel's Brain tab if that was a mistake."
+            : $"Purged {deleted} note(s) from the brain.";
     }
 
     private static string HandleBackup()
