@@ -117,9 +117,9 @@ internal class Memory : Agent
         // Pure SQL, no LLM yet — see Brain.Recall.
         RecallResult recall = Brain.Recall(terms, HopLimit, SEED_NEAR_LIMIT, TOP_CANDIDATES);
 
-        // Guarded mode (talking to someone other than the owner): Private/ notes are never even offered
+        // Guarded mode (talking to someone other than the Master): Private/ notes are never even offered
         // to the selection model, not just filtered afterward. This is deliberately a hard path check
-        // rather than another judgment call — "never discuss the owner's private life with a third
+        // rather than another judgment call — "never discuss the Master's private life with a third
         // party" should not depend on an LLM getting a borderline case right every single time.
         List<SearchResult> candidates = privacyMode == PrivacyMode.Guarded
             ? recall.Candidates.Where(c => !c.Note.Path.StartsWith("Private/", StringComparison.OrdinalIgnoreCase)).ToList()
@@ -284,10 +284,10 @@ internal class Memory : Agent
     }
 
     private const string PrivacyFilterFallback =
-        "You are ARI's privacy filter. You are in a GUARDED context — the person you are talking to is NOT your owner.\n\n" +
+        "You are ARI's privacy filter. You are in a GUARDED context — the person you are talking to is NOT your master.\n\n" +
         "Below are memories recalled for this conversation. Review each one and decide:\n" +
         "- KEEP: the memory is safe to share (general knowledge, shared projects, non-sensitive facts)\n" +
-        "- OMIT: the memory contains private, sensitive, or intimate information about the owner\n\n" +
+        "- OMIT: the memory contains private, sensitive, or intimate information about the master\n\n" +
         "For each memory you keep, reproduce it exactly as-is. For memories you omit, do not include them.\n" +
         "At the end, add a line: \"[Privacy: N memory/memories omitted — not appropriate to share in this context]\"\n" +
         "If all memories are safe, reproduce them all with no privacy line.\n\n" +

@@ -23,7 +23,7 @@ internal static class DreamAnchor
     /// Pull() plus grounding context every dream turn should start from: the actual current date/time
     /// (so nothing has to guess or invent one — see the Sept 2026 incident where a dream fabricated a
     /// conflicting date header that was never in its prompt) and a digest of what recent dreams have
-    /// already woken the owner about (so a fresh dream doesn't independently re-raise the same thing).
+    /// already woken the master about (so a fresh dream doesn't independently re-raise the same thing).
     /// </summary>
     internal static string PullWithGrounding()
     {

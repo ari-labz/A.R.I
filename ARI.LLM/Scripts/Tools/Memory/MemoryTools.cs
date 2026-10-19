@@ -165,7 +165,7 @@ internal sealed class MergeNotesTool : Tool
 // ── recall_memory ──────────────────────────────────────────────────────────────────────
 
 // Reads a brain note's full content. Sensitive content is fine to read in any conversation — the
-// restriction is on repeating it to someone other than the owner, not on reading it.
+// restriction is on repeating it to someone other than the master, not on reading it.
 internal sealed class RecallMemory : Tool
 {
     internal override string     Name   => "recall_memory";

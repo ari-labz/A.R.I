@@ -59,7 +59,7 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly ConcurrentDictionary<string, ThreadPhase>             threadPhases        = new();
     // Live count of /watch connections per thread — a client only holds one open while that thread is
     // its active view (see ARI.UI's attachWatch), so a count of zero means nobody is currently looking.
-    // Backs the "push if unwatched" rule: a completed response only rings the owner's phone when this is 0.
+    // Backs the "push if unwatched" rule: a completed response only rings the thread owner's phone when this is 0.
     private readonly ConcurrentDictionary<string, int>                     threadWatchers      = new();
     private readonly ConcurrentDictionary<string, Thread>                                         threads           = new();
 
@@ -495,7 +495,7 @@ public class LLMModule : ILLMModule, IDisposable
             if (engram is not null)
                 thread.ExchangeCompleted += (_, _) =>
                 {
-                    if (thread.Internal || !thread.HasUserMessages || !thread.IsOwnerThread || thread.OwnerId is null) return;
+                    if (thread.Internal || !thread.HasUserMessages || !thread.HasMemoryAccess || thread.OwnerId is null) return;
                     if (!engram.ShouldIntervalSweep(threadKey)) return;
                     _ = Task.Run(async () =>
                     {
@@ -726,7 +726,7 @@ public class LLMModule : ILLMModule, IDisposable
     /// delete-retry poll tries again.</summary>
     private void OnThreadDormant(Thread thread)
     {
-        bool canSweep = engram is not null && !thread.Internal && thread.HasUserMessages && !thread.EngramProcessed && thread.IsOwnerThread && thread.OwnerId is not null;
+        bool canSweep = engram is not null && !thread.Internal && thread.HasUserMessages && !thread.EngramProcessed && thread.HasMemoryAccess && thread.OwnerId is not null;
         if (!canSweep) { thread.EngramProcessed = true; return; }
 
         if (thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech)
@@ -883,7 +883,7 @@ public class LLMModule : ILLMModule, IDisposable
                 .Where(s => s is not null));
             if (prompt.Length == 0) return;
             _logger.LogInformation("[Wake] ({Thread}) woken by sub-thread reports.", threadKey);
-            // The thread's own platform context keeps its privacy as it was (a non-owner DM stays guarded).
+            // The thread's own platform context keeps its privacy as it was (a non-Master DM stays guarded).
             reply = await Route(threadKey, prompt, ReportAuthor, thread.PlatformContext, null, CancellationToken.None);
         }
         catch (OperationCanceledException) { return; }   // the user sent a message mid-wake; it carries on from there
@@ -1270,11 +1270,11 @@ public class LLMModule : ILLMModule, IDisposable
     private const int SCHEDULED_REFACTOR_EPOCHS = 10;
 
     /// <summary>
-    /// Creates a fresh, owner-facing Dialogue thread whose history is a single assistant message — Ari
+    /// Creates a fresh, Master-facing Dialogue thread whose history is a single assistant message — Ari
     /// speaking first (e.g. a Dream wake). Returns the thread key. The thread is registered like any web
-    /// thread (fires the newThread event), so it appears in the sidebar and the owner's reply lands with
-    /// the opener in history. Every call rings the owner's phone with a Web Push notification — an
-    /// agent-initiated message the owner never prompted for is exactly the case a push exists for.
+    /// thread (fires the newThread event), so it appears in the sidebar and the Master's reply lands with
+    /// the opener in history. Every call rings the Master's phone with a Web Push notification — an
+    /// agent-initiated message the Master never prompted for is exactly the case a push exists for.
     /// </summary>
     /// <summary>Records a message ARI sent outside a normal reply (discord_dm_user) as a finished response in a
     /// conversation's thread, creating the thread if needed. <paramref name="platformContext"/> only applies to a
@@ -1330,7 +1330,7 @@ public class LLMModule : ILLMModule, IDisposable
 
     /// <summary>Runs a due calendar reminder through a real agent turn, then delivers it exactly like a
     /// Dream wake: the turn itself happens on a throwaway internal thread (so its Prompt/Context never
-    /// show up as a fake user message), and only the finished reply becomes the owner-facing proactive
+    /// show up as a fake user message), and only the finished reply becomes the Master-facing proactive
     /// thread — see CreateProactiveDialogueThread.</summary>
     public async Task FireReminderAsync(string prompt, string context, string title, CancellationToken ct = default)
     {
@@ -1362,7 +1362,7 @@ public class LLMModule : ILLMModule, IDisposable
     }
 
     /// <summary>A completed response that nobody was watching live is exactly the case a push exists for
-    /// — the owner would otherwise only find out next time they happen to open the app. Internal/guest
+    /// — the thread's owner would otherwise only find out next time they happen to open the app. Internal/guest
     /// threads never ring the phone; a thread with a watcher already saw the reply stream in, so no push.</summary>
     private void PushIfUnwatched(Thread thread, string threadKey)
     {

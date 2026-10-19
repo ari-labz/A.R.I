@@ -678,7 +678,7 @@ public class VoiceController(
                 catch { /* best-effort */ }
                 logger.LogInformation("[Voice] Voice Synthesis of {ModelName} complete", modelName);
                 if (Modules.Discord is not null)
-                    await Modules.Discord.NotifyOwner($"> Voice Synthesis of {modelName} complete");
+                    await Modules.Discord.NotifyMaster($"> Voice Synthesis of {modelName} complete");
             }
             else
             {
@@ -1229,7 +1229,7 @@ public class VoiceController(
             {
                 logger.LogInformation("[Voice] Voice Synthesis of {ModelName} complete", modelName);
                 if (Modules.Discord is not null)
-                    await Modules.Discord.NotifyOwner($"> Voice Synthesis of {modelName} complete");
+                    await Modules.Discord.NotifyMaster($"> Voice Synthesis of {modelName} complete");
             }
             else
             {

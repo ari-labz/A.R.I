@@ -21,13 +21,13 @@ internal sealed partial class RecentActivity : Tool
         function = new
         {
             name        = "recent_activity",
-            description = "Returns when your owner actually last messaged you, plus how many of the last 7 days had any conversation at all — read straight from the real chat log timestamps, not your memory notes (which can lag behind by hours). Call this before saying or implying 'you've been quiet' or 'it's been a while' — don't infer silence from an empty search_brain result alone. Returns timestamps only, no message content.",
+            description = "Returns when your master actually last messaged you, plus how many of the last 7 days had any conversation at all — read straight from the real chat log timestamps, not your memory notes (which can lag behind by hours). Call this before saying or implying 'you've been quiet' or 'it's been a while' — don't infer silence from an empty search_brain result alone. Returns timestamps only, no message content.",
             parameters  = new { type = "object", properties = new { } }
         }
     };
 
     [GeneratedRegex(@"^\[(\d{2}:\d{2}:\d{2})\]\s*Xywren:", RegexOptions.Multiline)]
-    private static partial Regex OwnerLine();
+    private static partial Regex MasterLine();
 
     internal override Task<ToolResult> Execute(string argsJson)
     {
@@ -55,7 +55,7 @@ internal sealed partial class RecentActivity : Tool
                 string text;
                 try { text = File.ReadAllText(file); } catch { continue; }
 
-                MatchCollection matches = OwnerLine().Matches(text);
+                MatchCollection matches = MasterLine().Matches(text);
                 if (matches.Count == 0) continue;
 
                 DateTime dayStart = day.ToDateTime(TimeOnly.MinValue);
@@ -71,7 +71,7 @@ internal sealed partial class RecentActivity : Tool
         }
 
         if (lastMessage is null)
-            return Task.FromResult<ToolResult>("No recorded messages from your owner in the logs — treat this as genuinely unknown, not as 'they've never talked to you'; the log retention window may simply not go back far enough.");
+            return Task.FromResult<ToolResult>("No recorded messages from your master in the logs — treat this as genuinely unknown, not as 'they've never talked to you'; the log retention window may simply not go back far enough.");
 
         TimeSpan gap = DateTime.Now - lastMessage.Value;
         string gapText = gap.TotalHours < 1  ? $"{(int)gap.TotalMinutes} minutes ago"
@@ -79,7 +79,7 @@ internal sealed partial class RecentActivity : Tool
                         : $"{(int)gap.TotalDays} days ago";
 
         return Task.FromResult<ToolResult>(
-            $"Last message from your owner: {lastMessage.Value:dddd, d MMMM yyyy — HH:mm} ({gapText}). " +
+            $"Last message from your master: {lastMessage.Value:dddd, d MMMM yyyy — HH:mm} ({gapText}). " +
             $"Days with any conversation in the last 7: {activeDays.Count}/7.");
     }
 }

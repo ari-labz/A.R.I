@@ -26,7 +26,7 @@ public class DiscordController : ControllerBase
         {
             enabled            = s.Enabled,
             tokenConfigured    = !string.IsNullOrWhiteSpace(s.Token),
-            ownerId            = s.OwnerId.ToString(),
+            masterDiscordId    = s.MasterDiscordId.ToString(),
             whitelistedUserIds = s.WhitelistedUserIds.Select(x => x.ToString()),
             watchedChannelIds  = s.WatchedChannelIds.Select(x => x.ToString()),
             allowedGuildIds    = s.AllowedGuildIds.Select(x => x.ToString()),
@@ -44,15 +44,15 @@ public class DiscordController : ControllerBase
         if (!TryIds(req.WatchedChannelIds,  out List<ulong> channels)) return BadRequest(new { error = "Watched channel IDs must be numeric." });
         if (!TryIds(req.AllowedGuildIds,    out List<ulong> guilds))   return BadRequest(new { error = "Guild IDs must be numeric." });
 
-        ulong ownerId = 0;
-        if (!string.IsNullOrWhiteSpace(req.OwnerId) && !ulong.TryParse(req.OwnerId.Trim(), out ownerId))
-            return BadRequest(new { error = "Owner ID must be numeric." });
+        ulong masterDiscordId = 0;
+        if (!string.IsNullOrWhiteSpace(req.MasterDiscordId) && !ulong.TryParse(req.MasterDiscordId.Trim(), out masterDiscordId))
+            return BadRequest(new { error = "Master's Discord ID must be numeric." });
 
         DiscordStore.Set(new DiscordSettings
         {
             Enabled            = req.Enabled,
             Token              = string.IsNullOrWhiteSpace(req.Token) ? current.Token : req.Token.Trim(),
-            OwnerId            = ownerId,
+            MasterDiscordId    = masterDiscordId,
             WhitelistedUserIds = users,
             WatchedChannelIds  = channels,
             AllowedGuildIds    = guilds,
@@ -79,7 +79,7 @@ public sealed class DiscordConfigRequest
 {
     public bool Enabled { get; set; }
     public string? Token { get; set; }
-    public string? OwnerId { get; set; }
+    public string? MasterDiscordId { get; set; }
     public List<string>? WhitelistedUserIds { get; set; }
     public List<string>? WatchedChannelIds { get; set; }
     public List<string>? AllowedGuildIds { get; set; }

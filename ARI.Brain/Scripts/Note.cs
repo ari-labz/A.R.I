@@ -55,7 +55,7 @@ public class Note
     // note otherwise carries no visible sign of that when read — this puts the flag back in view, in the
     // same place a [!sensitive] callout on one line would put it.
     public string SensitivityNotice => IsSensitive
-        ? "> [!sensitive] This entire note is private — never share it with anyone but the owner.\n\n"
+        ? "> [!sensitive] This entire note is private — never share it with anyone but the master.\n\n"
         : "";
 
     public string Url => $"obsidian://open?vault={Uri.EscapeDataString(Brain.VaultName)}&file={Uri.EscapeDataString(Name)}";
