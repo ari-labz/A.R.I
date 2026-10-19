@@ -104,7 +104,7 @@ public static class ClientWebSocket
         try
         {
             log.LogInformation("[Client] Entering receive loop");
-            await ReceiveLoop(ws, llm, codeThread, threadKey, fileTree, state, fileState, log, connId);
+            await ReceiveLoop(ws, llm, codeThread, threadKey, fileTree, state, fileState, log, connId, ctx.User);
         }
         catch (Exception ex)
         {
@@ -1133,7 +1133,7 @@ public static class ClientWebSocket
     private static async Task ReceiveLoop(
         WebSocket ws, LLMModule llm, ARI.LLM.Thread initialThread,
         string initialThreadKey, List<string> fileTree, ConnectionState state,
-        FileToolState fileState, ILogger log, Guid connId)
+        FileToolState fileState, ILogger log, Guid connId, System.Security.Claims.ClaimsPrincipal user)
     {
         ARI.LLM.Thread codeThread = initialThread;
         string         threadKey  = initialThreadKey;
@@ -1188,7 +1188,9 @@ public static class ClientWebSocket
                             if (doc.RootElement.TryGetProperty("threadKey", out JsonElement bindKeyEl))
                             {
                                 string bindKey = bindKeyEl.GetString() ?? "";
-                                if (!string.IsNullOrWhiteSpace(bindKey) && bindKey != threadKey)
+                                if (!string.IsNullOrWhiteSpace(bindKey) && bindKey != threadKey && !ARI.API.Auth.ThreadAccess.CanUse(user, llm, bindKey))
+                                    log.LogWarning("[Client] Refused rebinding to thread {New}: it belongs to someone else.", bindKey);
+                                else if (!string.IsNullOrWhiteSpace(bindKey) && bindKey != threadKey)
                                 {
                                     log.LogInformation("[Client] Rebinding tools from {Old} → {New}", threadKey, bindKey);
                                     UnregisterIfOwner(codeThread, connId, log);
