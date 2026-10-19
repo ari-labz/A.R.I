@@ -155,7 +155,7 @@ public interface IWebPushModule
 
     /// <summary>Sends a push notification to every registered device. <paramref name="url"/> deep-links the
     /// notification click (e.g. a thread); <paramref name="title"/> overrides the default notification title.
-    /// <paramref name="ownerUserId"/> limits it to that user's devices; null means the admin(s) only.</summary>
+    /// <paramref name="ownerUserId"/> limits it to that user's devices; null sends nothing (an ownerless thread has nobody to notify).</summary>
     Task SendPushNotification(string text, string? url = null, string? title = null, string? ownerUserId = null);
 }
 

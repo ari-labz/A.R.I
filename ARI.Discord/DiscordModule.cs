@@ -474,6 +474,9 @@ public class DiscordModule : BackgroundService, IDiscordModule
             message.Author.Username, message.Author.Id, message.Content);
 
         BindThreadToChannel(conversationKey, message.Channel);
+        // The Master's own DM is theirs (so it shows in their list and can push to their devices). Everyone else's has no owner.
+        if (isOwner && ARI.Common.Shared.MasterUserId is { } masterId)
+            llmModule.GetOrCreateDialogueThread(conversationKey).OwnerId ??= masterId;
         List<LlmAttachment>? attachments = message.Attachments.Count > 0
             ? await UploadDiscordAttachments(message.Attachments, conversationKey)
             : null;

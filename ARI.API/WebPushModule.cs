@@ -68,11 +68,11 @@ public sealed class WebPushModule : IWebPushModule
 
     public async Task SendPushNotification(string text, string? url = null, string? title = null, string? ownerUserId = null)
     {
-        // A thread's owner gets pushes about their own thread. With no owner (a dream, a reminder) it is the
-        // household's admin(s) that Ari is talking to — never a guest's device.
+        // A push goes to the devices of the person it is for: a thread's owner. A thread with no owner (a public Discord
+        // chat, an integration) has nobody to ring, so it sends nothing.
         StoredSubscription[] targets = int.TryParse(ownerUserId, out int owner)
             ? _subs.Values.Where(s => s.UserId == owner).ToArray()
-            : _subs.Values.Where(s => s.IsAdmin).ToArray();
+            : [];
         if (targets.Length == 0) { log.LogInformation("[WebPush] no matching subscription — nothing to notify."); return; }
 
         string payload = JsonSerializer.Serialize(new

@@ -495,7 +495,7 @@ public class LLMModule : ILLMModule, IDisposable
             if (engram is not null)
                 thread.ExchangeCompleted += (_, _) =>
                 {
-                    if (thread.Internal || !thread.HasUserMessages || !thread.IsOwnerThread) return;
+                    if (thread.Internal || !thread.HasUserMessages || !thread.IsOwnerThread || thread.OwnerId is null) return;
                     if (!engram.ShouldIntervalSweep(threadKey)) return;
                     _ = Task.Run(async () =>
                     {
@@ -726,7 +726,7 @@ public class LLMModule : ILLMModule, IDisposable
     /// delete-retry poll tries again.</summary>
     private void OnThreadDormant(Thread thread)
     {
-        bool canSweep = engram is not null && !thread.Internal && thread.HasUserMessages && !thread.EngramProcessed && thread.IsOwnerThread;
+        bool canSweep = engram is not null && !thread.Internal && thread.HasUserMessages && !thread.EngramProcessed && thread.IsOwnerThread && thread.OwnerId is not null;
         if (!canSweep) { thread.EngramProcessed = true; return; }
 
         if (thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech)
@@ -1321,7 +1321,7 @@ public class LLMModule : ILLMModule, IDisposable
         thread.StartUnread();   // proactive opener: await the user's reply, else unread → dormant → deleted
 
         // Best-effort — a missing/failed push must not lose the thread, which is already created either way.
-        _ = SendProactivePush(assistantText, threadKey, ownerId: null);
+        _ = SendProactivePush(assistantText, threadKey, thread.OwnerId);
 
         return threadKey;
     }
@@ -1341,6 +1341,8 @@ public class LLMModule : ILLMModule, IDisposable
 
         using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         string reply;
+        // A dream or reminder is Ari reaching out to her Master, so the thread is theirs — and so is the push.
+        thread.OwnerId = Shared.MasterUserId;
         try
         {
             reply = await dialoguePipeline.ExecuteAsync(scratch, scratchKey, prompt, "reminder", context, onDelta: null, cts);
@@ -1364,7 +1366,7 @@ public class LLMModule : ILLMModule, IDisposable
     /// threads never ring the phone; a thread with a watcher already saw the reply stream in, so no push.</summary>
     private void PushIfUnwatched(Thread thread, string threadKey)
     {
-        if (thread.Internal || !thread.IsOwnerThread) return;
+        if (thread.Internal || thread.OwnerId is null) return;   // no owner, nobody to ring
         if (HasWatchers(threadKey)) return;
 
         string? body = thread.History.OfType<Response>().LastOrDefault(r => r.State == State.Complete)?.ContentText;
