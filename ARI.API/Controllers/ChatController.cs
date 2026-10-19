@@ -536,7 +536,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
             return StatusCode(403);
         if (string.IsNullOrWhiteSpace(req.Input)) return BadRequest("Input is required.");
 
-        string? result = await Llm.HandleCommand(req.ThreadKey, req.Input);
+        bool isMaster = User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier) == ARI.Common.Shared.MasterUserId;
+        string? result = await Llm.HandleCommand(req.ThreadKey, req.Input, isMaster);
         if (result is null) return BadRequest(new { error = $"Unknown command: {req.Input}" });
         return Ok(new { result });
     }

@@ -970,8 +970,17 @@ public class LLMModule : ILLMModule, IDisposable
 
     // ── Commands ────────────────────────────────────────────────────────────────
 
-    public async Task<string?> HandleCommand(string? threadKey, string input)
+    /// <summary>Commands anyone signed in may run. Everything else reaches the Master's brain or the whole system
+    /// (/purge notes, /engram, /refactor, /brain backup), so a command is Master-only unless it is listed here.</summary>
+    private static readonly string[] CommandsForAnyone = ["/code", "/uncode"];
+
+    /// <param name="isMaster">Whether the caller is the Master. Callers decide that from their own login (the chat API)
+    /// or identity (Discord); the gate is here so no entry point can forget it.</param>
+    public async Task<string?> HandleCommand(string? threadKey, string input, bool isMaster)
     {
+        if (!isMaster && !CommandsForAnyone.Contains(input.Trim().ToLowerInvariant()))
+            return "That command is only for the Master.";
+
         // Show the input straight away to acknowledge the command, then run it.
         if (threadKey is not null && threads.TryGetValue(threadKey, out Thread? cmdThreadPre))
             cmdThreadPre.AddItem(new CommandInput { Input = input, Timestamp = DateTime.Now });

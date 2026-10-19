@@ -416,7 +416,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
 
         // Defer immediately — sweep/refactor/backup can take well over 3 seconds.
         await cmd.DeferAsync(ephemeral: true);
-        string result = await llmModule.HandleCommand(null, commandText) ?? $"Unknown command: {commandText}";
+        string result = await llmModule.HandleCommand(null, commandText, isMaster: true) ?? $"Unknown command: {commandText}";
         await cmd.FollowupAsync(AsBlockQuote(result), ephemeral: true);
     }
 
@@ -456,7 +456,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
         // commands have propagated, or if the interaction system fails.
         if (isMaster && message.Content.StartsWith("/", StringComparison.OrdinalIgnoreCase))
         {
-            string? result = await llmModule.HandleCommand(null, message.Content);
+            string? result = await llmModule.HandleCommand(null, message.Content, isMaster: true);
             if (result is not null)
             {
                 _logger.LogInformation("Command [{Input}] → {Result}", message.Content, result);
