@@ -129,7 +129,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         Dictionary<string, string?> ownerNames = new();
         string? OwnerNameFor(string? ownerId)
         {
-            if (!callerIsAdmin || ownerId is null || ownerId == selfId) return null;
+            if (!callerIsAdmin || ownerId == selfId) return null;
+            if (ownerId is null) return "No owner";   // public Discord chats, integrations
             if (!ownerNames.TryGetValue(ownerId, out string? name))
             {
                 ARI.API.Auth.User? u = int.TryParse(ownerId, out int id) ? users.GetById(id) : null;
