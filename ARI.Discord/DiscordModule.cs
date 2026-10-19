@@ -514,7 +514,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
         string displayName = message.Author is SocketGuildUser guildUser
             ? guildUser.Nickname ?? guildUser.DisplayName ?? guildUser.Username
             : message.Author.Username;
-        string masterTag   = isMaster ? " [OWNER]" : "";
+        string masterTag   = isMaster ? " [MASTER]" : "";
         string prompt      = $"[{timestamp}] [{displayName}{masterTag} in #{guildChannel.Name}]: {content}";
 
         _logger.LogInformation("Server message from {DisplayName} ({UserId}) in #{ChannelName}: {Content}",

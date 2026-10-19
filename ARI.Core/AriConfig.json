@@ -27,7 +27,7 @@
     "Discord": {
       "Enabled": true,
       "Token": "",
-      "OwnerId": 0,
+      "MasterDiscordId": 0,
       "WhitelistedUserIds": [],
       "WatchedChannelIds": [],
       "AllowedGuildIds": []
