@@ -53,9 +53,9 @@ export default function Sidebar({ threads, activeThread, activeView, onNewChat, 
                 </button>
 
                 <div id="sidebar-section-label">Recents</div>
-                <ul id="thread-list">
-                    {threads.map(t => {
-                        const baseName = t.isInternal
+                <div className="thread-scroll">{(() => {
+                    const renderThread = (t: ThreadEntry) => {
+const baseName = t.isInternal
                             ? (t.agentName ?? "Internal")
                             : t.key.startsWith("client-") ? "Desktop"
                             : t.key.startsWith("web-")    ? "Web chat" : "Discord"
@@ -96,8 +96,23 @@ export default function Sidebar({ threads, activeThread, activeView, onNewChat, 
                                 </span>
                             </li>
                         )
-                    })}
-                </ul>
+                    
+                    }
+                    const mine   = threads.filter(t => !t.ownerName)
+                    const others = new Map<string, ThreadEntry[]>()
+                    threads.filter(t => t.ownerName).forEach(t => others.set(t.ownerName!, [...(others.get(t.ownerName!) ?? []), t]))
+                    return (
+                        <>
+                            <ul id="thread-list">{mine.map(renderThread)}</ul>
+                            {[...others.entries()].map(([name, list]) => (
+                                <div key={name} className="thread-owner-group">
+                                    <div className="sidebar-section-label thread-owner-label" title="Only you, as admin, can see these. They can't see your chats.">{name}</div>
+                                    <ul className="thread-list">{list.map(renderThread)}</ul>
+                                </div>
+                            ))}
+                        </>
+                    )
+                })()}</div>
 
                 <div id="sidebar-footer">
                     {userDisplayName && (

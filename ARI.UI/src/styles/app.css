@@ -114,32 +114,35 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 
 .thread-project { color: var(--sidebar-dim); }
 
-#sidebar-section-label {
+:is(#sidebar-section-label, .sidebar-section-label) {
     font-size: 11px; font-weight: 600; letter-spacing: .07em;
     text-transform: uppercase; color: var(--sidebar-dim);
     padding: 0 16px 6px;
 }
 
-#thread-list {
+.thread-scroll { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.thread-owner-group { margin-top: 10px; }
+.thread-owner-label { text-transform: none !important; font-size: 12px !important; }
+:is(#thread-list, .thread-list) {
     list-style: none; overflow-y: auto; flex: 1;
     padding: 0 8px 16px;
     scrollbar-width: thin;
     scrollbar-color: var(--col-thread-list-colour) transparent;
 }
 
-#thread-list li {
+:is(#thread-list, .thread-list) li {
     padding: 9px 12px; border-radius: 7px;
     cursor: pointer; font-size: 14px; color: var(--sidebar-text);
     overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
     transition: background .1s;
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
-#thread-list li:hover  { background: var(--sidebar-hover); }
-#thread-list li.active { background: var(--sidebar-active); color: var(--col-thread-list-li-active-colour); }
-#thread-list li.internal-thread { color: var(--sidebar-dim); font-style: italic; }
-#thread-list li.internal-thread.active { color: var(--col-thread-list-li-internal-thread-active-colour); }
-#thread-list li.pending  { opacity: 0.6; font-style: italic; }
-#thread-list li.inactive { opacity: 0.45; font-style: italic; }
+:is(#thread-list, .thread-list) li:hover  { background: var(--sidebar-hover); }
+:is(#thread-list, .thread-list) li.active { background: var(--sidebar-active); color: var(--col-thread-list-li-active-colour); }
+:is(#thread-list, .thread-list) li.internal-thread { color: var(--sidebar-dim); font-style: italic; }
+:is(#thread-list, .thread-list) li.internal-thread.active { color: var(--col-thread-list-li-internal-thread-active-colour); }
+:is(#thread-list, .thread-list) li.pending  { opacity: 0.6; font-style: italic; }
+:is(#thread-list, .thread-list) li.inactive { opacity: 0.45; font-style: italic; }
 
 .thread-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .thread-meta { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
@@ -152,8 +155,8 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
     background: transparent; color: var(--sidebar-dim); cursor: pointer;
 }
 .thread-close:hover { background: var(--col-thread-close-hover-colour); color: var(--col-thread-close-hover-colour-2); }
-#thread-list li:hover .thread-close { display: flex; }
-#thread-list li:hover .thread-time { display: none; }
+:is(#thread-list, .thread-list) li:hover .thread-close { display: flex; }
+:is(#thread-list, .thread-list) li:hover .thread-time { display: none; }
 
 /* Connection-error overlay (issue #68) */
 #conn-error-overlay {
@@ -175,7 +178,7 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 }
 #conn-error-retry:hover { background: var(--col-conn-error-retry-hover-colour); }
 .thread-code-icon { color: var(--sidebar-dim); opacity: 0.55; flex-shrink: 0; }
-#thread-list li.active .thread-code-icon { opacity: 0.8; }
+:is(#thread-list, .thread-list) li.active .thread-code-icon { opacity: 0.8; }
 
 #sidebar-footer {
     padding: 10px 10px 14px;

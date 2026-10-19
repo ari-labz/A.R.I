@@ -17,7 +17,7 @@ namespace ARI.API.Controllers;
 
 [Route("threads")]
 [ApiController]
-public class ThreadsController(ProjectStore projectStore) : ControllerBase
+public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore users) : ControllerBase
 {
     private LLMModule? Llm => (LLMModule?)Modules.Llm;
 
@@ -106,7 +106,22 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
         IReadOnlyDictionary<string, ARI.LLM.Thread> allThreads = Llm.Threads;
 
         bool   callerIsAdmin = User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
-        string? callerId     = callerIsAdmin ? null : User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
+        string? selfId       = User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
+        string? callerId     = callerIsAdmin ? null : selfId;
+
+        // An admin sees everyone's threads, so each one that belongs to somebody else carries that person's
+        // name and the sidebar groups it under them — otherwise it reads as if the admin's list were shared.
+        Dictionary<string, string?> ownerNames = new();
+        string? OwnerNameFor(string? ownerId)
+        {
+            if (!callerIsAdmin || ownerId is null || ownerId == selfId) return null;
+            if (!ownerNames.TryGetValue(ownerId, out string? name))
+            {
+                ARI.API.Auth.User? u = int.TryParse(ownerId, out int id) ? users.GetById(id) : null;
+                ownerNames[ownerId] = name = u is null ? null : (string.IsNullOrWhiteSpace(u.DisplayName) ? u.Username : u.DisplayName);
+            }
+            return name;
+        }
 
         List<ThreadEntry> threads = allThreads
             .Where(kvp => kvp.Value.Pipeline is ARI.LLM.ThreadPipeline.Dialogue or ARI.LLM.ThreadPipeline.Code or ARI.LLM.ThreadPipeline.Speech
@@ -123,7 +138,7 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
                     IsCodeMode: kvp.Value.Pipeline == ARI.LLM.ThreadPipeline.Code,
                     ProjectName: projectName, ProjectId: projectId,
                     Pipeline: kvp.Value.Pipeline.ToString().ToLowerInvariant(),
-                    Title: kvp.Value.Title);
+                    Title: kvp.Value.Title, OwnerName: OwnerNameFor(kvp.Value.OwnerId));
             })
             .ToList();
 
@@ -158,6 +173,13 @@ public class ThreadsController(ProjectStore projectStore) : ControllerBase
             Llm.ForceCodeThread(key);
         else
             Llm.GetOrCreateDialogueThread(key);
+        // Stamp the creator now, not on the first message — otherwise a brand-new thread belongs to nobody, so a
+        // guest's own empty thread isn't in their list and an admin can't tell whose it is.
+        if (Llm.Threads.TryGetValue(key, out ARI.LLM.Thread? created))
+        {
+            created.IsOwnerThread = User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
+            created.OwnerId ??= User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
+        }
         return Ok(new { key });
     }
 
@@ -1142,4 +1164,4 @@ public record PromoteToProjectRequest(string Name, string? Category = null);
 public record CommandRequest(string? ThreadKey, string Input);
 public record NewThreadRequest(string? ProjectId, bool Desktop = false, string? Pipeline = null);
 public record InjectContextRequest(string Name, string Content);
-public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active", bool IsCodeMode = false, string? ProjectName = null, string? ProjectId = null, string Pipeline = "dialogue", string? Title = null);
+public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active", bool IsCodeMode = false, string? ProjectName = null, string? ProjectId = null, string Pipeline = "dialogue", string? Title = null, string? OwnerName = null);
