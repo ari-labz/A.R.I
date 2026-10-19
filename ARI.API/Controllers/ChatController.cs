@@ -17,7 +17,7 @@ namespace ARI.API.Controllers;
 
 [Route("threads")]
 [ApiController]
-public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore users) : ControllerBase
+public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore users) : ControllerBase, Microsoft.AspNetCore.Mvc.Filters.IActionFilter
 {
     private LLMModule? Llm => (LLMModule?)Modules.Llm;
 
@@ -59,6 +59,18 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
     // ── Thread navigation helpers ───────────────────────────────────────────────
 
+    /// <summary>Every action with a {threadKey} in its route passes through here first, so no endpoint can forget the
+    /// ownership check: a guest can only touch their own threads. A key with no thread yet is let through — creating
+    /// it (stream) stamps the caller as its owner.</summary>
+    void Microsoft.AspNetCore.Mvc.Filters.IActionFilter.OnActionExecuting(Microsoft.AspNetCore.Mvc.Filters.ActionExecutingContext context)
+    {
+        if (context.RouteData.Values["threadKey"] is not string key || Llm is null) return;
+        if (Llm.Threads.TryGetValue(key, out ARI.LLM.Thread? thread) && !CanAccessThread(thread))
+            context.Result = new StatusCodeResult(403);
+    }
+
+    void Microsoft.AspNetCore.Mvc.Filters.IActionFilter.OnActionExecuted(Microsoft.AspNetCore.Mvc.Filters.ActionExecutedContext context) { }
+
     /// <summary>True if the current caller may read/write this thread.</summary>
     private bool CanAccessThread(ARI.LLM.Thread thread)
     {
@@ -90,9 +102,12 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
                       && existing.Pipeline == ARI.LLM.ThreadPipeline.Code;
         ARI.LLM.Thread thread = isCode ? Llm.GetOrCreateCodeThread(threadKey) : Llm.GetOrCreateDialogueThread(threadKey);
         bool isAdmin = User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
-        thread.IsOwnerThread = isAdmin;
         // Track who created the thread so guests only see their own.
-        thread.OwnerId ??= User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
+        string? callerId = User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
+        thread.OwnerId ??= callerId;
+        // Memory, Engram and push belong to the owner's own chats. An admin replying inside someone else's thread
+        // must not turn it into one of theirs.
+        thread.IsOwnerThread = isAdmin && thread.OwnerId == callerId;
         return thread;
     }
 
@@ -516,6 +531,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     public async Task<IActionResult> RunCommand([FromBody] CommandRequest req)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        if (req.ThreadKey is not null && Llm.Threads.TryGetValue(req.ThreadKey, out ARI.LLM.Thread? target) && !CanAccessThread(target))
+            return StatusCode(403);
         if (string.IsNullOrWhiteSpace(req.Input)) return BadRequest("Input is required.");
 
         string? result = await Llm.HandleCommand(req.ThreadKey, req.Input);
