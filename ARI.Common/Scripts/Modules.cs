@@ -148,14 +148,15 @@ public interface IWebPushModule
     string VapidPublicKey { get; }
 
     /// <summary>Stores (or refreshes) a browser push subscription so it receives future notifications.</summary>
-    void AddSubscription(string endpoint, string p256dh, string auth);
+    void AddSubscription(string endpoint, string p256dh, string auth, int userId, bool isAdmin);
 
     /// <summary>Removes a push subscription (e.g. on unsubscribe or when the endpoint is gone).</summary>
-    void RemoveSubscription(string endpoint);
+    void RemoveSubscription(string endpoint, int userId);
 
     /// <summary>Sends a push notification to every registered device. <paramref name="url"/> deep-links the
-    /// notification click (e.g. a thread); <paramref name="title"/> overrides the default notification title.</summary>
-    Task SendPushNotification(string text, string? url = null, string? title = null);
+    /// notification click (e.g. a thread); <paramref name="title"/> overrides the default notification title.
+    /// <paramref name="ownerUserId"/> limits it to that user's devices; null means the admin(s) only.</summary>
+    Task SendPushNotification(string text, string? url = null, string? title = null, string? ownerUserId = null);
 }
 
 public interface IListenerModule

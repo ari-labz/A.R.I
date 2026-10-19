@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using ARI.Common;
 using Microsoft.AspNetCore.Mvc;
 
@@ -33,7 +34,8 @@ public class PushController : ControllerBase
             || string.IsNullOrWhiteSpace(req.Keys.P256dh) || string.IsNullOrWhiteSpace(req.Keys.Auth))
             return BadRequest("Missing endpoint or keys.");
 
-        Push.AddSubscription(req.Endpoint, req.Keys.P256dh, req.Keys.Auth);
+        if (!int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out int userId)) return Unauthorized();
+        Push.AddSubscription(req.Endpoint, req.Keys.P256dh, req.Keys.Auth, userId, User.IsInRole(ARI.API.Auth.Roles.Admin));
         return Ok(new { ok = true });
     }
 
@@ -41,7 +43,8 @@ public class PushController : ControllerBase
     public IActionResult Unsubscribe([FromBody] UnsubscribeRequest req)
     {
         if (Push is null) return StatusCode(503, "Push is not ready yet.");
-        if (!string.IsNullOrWhiteSpace(req.Endpoint)) Push.RemoveSubscription(req.Endpoint);
+        if (int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out int userId) && !string.IsNullOrWhiteSpace(req.Endpoint))
+            Push.RemoveSubscription(req.Endpoint, userId);
         return Ok(new { ok = true });
     }
 }

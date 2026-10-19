@@ -15,6 +15,7 @@ import { playResponseChime } from "./notify"
 import LoginScreen from "./components/LoginScreen"
 import SetupWizard from "./components/SetupWizard"
 import { startTour } from "./tour"
+import { initPush } from "./push"
 import UserPreferences from "./components/UserPreferences"
 import { apiFetch, fetchMe, setToken, getToken, type AuthUser } from "./auth"
 import "./styles/app.css"
@@ -182,6 +183,9 @@ function formatCommandResult(command: string, res: { code: number; stdout: strin
 
 const cmdOverlayStyle: CSSProperties = { position: "fixed", inset: 0, background: "var(--col-app-line-107-background)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000 }
 const cmdModalStyle:   CSSProperties = { background: "var(--col-app-line-108-background)", border: "1px solid var(--col-app-line-108-border)", borderRadius: 10, padding: "20px 22px", width: "min(560px, 90vw)", boxShadow: "0 12px 40px var(--col-app-line-108-shadow)", color: "var(--col-app-line-108-text)" }
+    // Ask about notifications only once someone is signed in, so the server knows whose device it is.
+    useEffect(() => { if (authState === "authed") void initPush() }, [authState])
+
 const cmdTitleStyle:   CSSProperties = { fontSize: 15, fontWeight: 600, marginBottom: 4 }
 const cmdSubStyle:     CSSProperties = { fontSize: 12.5, opacity: 0.7, marginBottom: 12 }
 const cmdCodeStyle:    CSSProperties = { background: "var(--col-app-line-111-background)", border: "1px solid var(--col-app-line-111-border)", borderRadius: 6, padding: "10px 12px", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-all", margin: 0, marginBottom: 16 }

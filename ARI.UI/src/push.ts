@@ -11,6 +11,27 @@ function urlBase64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
     return out
 }
 
+/** Tells the server this device no longer belongs to the signed-in user. Call before signing out, while the session is still valid. */
+export async function unregisterPush(): Promise<void> {
+    try {
+        if (!("serviceWorker" in navigator)) return
+        const reg = await navigator.serviceWorker.getRegistration("/sw.js")
+        const sub = await reg?.pushManager.getSubscription()
+        if (!sub) return
+        await fetch("/push/unsubscribe", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...bearer() },
+            body: JSON.stringify({ endpoint: sub.endpoint }),
+        })
+    } catch { /* best-effort */ }
+}
+
+function bearer(): Record<string, string> {
+    const t = sessionStorage.getItem("ari_token")
+    return t ? { Authorization: `Bearer ${t}` } : {}
+}
+
+/** Call only once someone is signed in: the server files each device under the user who registered it. */
 export async function initPush(): Promise<void> {
     if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return
 
@@ -43,7 +64,7 @@ export async function initPush(): Promise<void> {
 
         await fetch("/push/subscribe", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...bearer() },
             body: JSON.stringify(sub.toJSON()),
         })
     } catch (e) {

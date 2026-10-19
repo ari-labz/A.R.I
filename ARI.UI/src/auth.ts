@@ -1,3 +1,4 @@
+import { unregisterPush } from "./push"
 const TOKEN_KEY = "ari_token"
 
 export interface AuthUser {
@@ -105,6 +106,7 @@ export async function fetchMe(): Promise<AuthUser | null> {
 }
 
 export async function logout(): Promise<void> {
+    await unregisterPush()   // while the session is still valid
     await apiFetch("/auth/logout", { method: "POST" }).catch(() => {})
     clearToken()
 }

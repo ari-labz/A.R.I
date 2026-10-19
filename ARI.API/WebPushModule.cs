@@ -13,7 +13,9 @@ namespace ARI.API;
 /// </summary>
 public sealed class WebPushModule : IWebPushModule
 {
-    private sealed record StoredSubscription(string Endpoint, string P256dh, string Auth);
+    // UserId/IsAdmin say whose device this is, so a push only goes to the person it is for. A record saved before
+    // these existed has UserId 0 and is dropped on load: nobody can tell whose it was.
+    private sealed record StoredSubscription(string Endpoint, string P256dh, string Auth, int UserId = 0, bool IsAdmin = false);
     private sealed record VapidKeys(string PublicKey, string PrivateKey);
 
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
@@ -38,27 +40,40 @@ public sealed class WebPushModule : IWebPushModule
         VapidKeys keys = LoadOrCreateVapidKeys(Path.Combine(storageDir, "VapidKeys.json"));
         _vapid = new VapidDetails(subject, keys.PublicKey, keys.PrivateKey);
 
-        foreach (StoredSubscription s in LoadSubscriptions())
+        List<StoredSubscription> loaded = LoadSubscriptions();
+        foreach (StoredSubscription s in loaded.Where(x => x.UserId > 0))
             _subs[s.Endpoint] = s;
+        if (loaded.Count != _subs.Count)
+        {
+            log.LogWarning("[WebPush] dropped {Count} subscription(s) with no owner — those devices re-subscribe the next time their user signs in.", loaded.Count - _subs.Count);
+            Save();
+        }
         log.LogInformation("[WebPush] ready — {Count} subscription(s) loaded.", _subs.Count);
     }
 
-    public void AddSubscription(string endpoint, string p256dh, string auth)
+    public void AddSubscription(string endpoint, string p256dh, string auth, int userId, bool isAdmin)
     {
-        if (string.IsNullOrWhiteSpace(endpoint)) return;
-        _subs[endpoint] = new StoredSubscription(endpoint, p256dh, auth);
+        if (string.IsNullOrWhiteSpace(endpoint) || userId <= 0) return;
+        // Keyed by endpoint, so a different user signing in on the same browser takes the device over.
+        _subs[endpoint] = new StoredSubscription(endpoint, p256dh, auth, userId, isAdmin);
         Save();
         log.LogInformation("[WebPush] subscription registered ({Count} total).", _subs.Count);
     }
 
-    public void RemoveSubscription(string endpoint)
+    public void RemoveSubscription(string endpoint, int userId)
     {
-        if (_subs.TryRemove(endpoint, out _)) { Save(); log.LogInformation("[WebPush] subscription removed ({Count} left).", _subs.Count); }
+        // Only the device's current owner can remove it.
+        if (_subs.TryGetValue(endpoint, out StoredSubscription? sub) && sub.UserId == userId && _subs.TryRemove(endpoint, out _)) { Save(); log.LogInformation("[WebPush] subscription removed ({Count} left).", _subs.Count); }
     }
 
-    public async Task SendPushNotification(string text, string? url = null, string? title = null)
+    public async Task SendPushNotification(string text, string? url = null, string? title = null, string? ownerUserId = null)
     {
-        if (_subs.IsEmpty) { log.LogInformation("[WebPush] no subscriptions — nothing to notify."); return; }
+        // A thread's owner gets pushes about their own thread. With no owner (a dream, a reminder) it is the
+        // household's admin(s) that Ari is talking to — never a guest's device.
+        StoredSubscription[] targets = int.TryParse(ownerUserId, out int owner)
+            ? _subs.Values.Where(s => s.UserId == owner).ToArray()
+            : _subs.Values.Where(s => s.IsAdmin).ToArray();
+        if (targets.Length == 0) { log.LogInformation("[WebPush] no matching subscription — nothing to notify."); return; }
 
         string payload = JsonSerializer.Serialize(new
         {
@@ -67,9 +82,9 @@ public sealed class WebPushModule : IWebPushModule
             url,
         });
 
-        log.LogInformation("[WebPush] sending to {Count} subscription(s)…", _subs.Count);
+        log.LogInformation("[WebPush] sending to {Count} subscription(s)…", targets.Length);
         List<string> dead = new();
-        foreach (StoredSubscription s in _subs.Values.ToArray())
+        foreach (StoredSubscription s in targets)
         {
             // Last path segment (the token) is enough to tell subscriptions apart in the log without
             // dumping the full endpoint URL every time.
