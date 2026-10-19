@@ -2,7 +2,7 @@ namespace ARI.LLM;
 
 /// <summary>
 /// Returns the current local date and time. Useful before deciding to wake — check the time
-/// so you don't interrupt your owner in the middle of the night.
+/// so you don't interrupt your master in the middle of the night.
 /// </summary>
 internal sealed class GetTime : Tool
 {

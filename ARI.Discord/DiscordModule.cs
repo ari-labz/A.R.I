@@ -41,7 +41,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
     // Channels ARI intends to be in. Populated by JoinVoiceChannelAsync, cleared by LeaveVoiceChannelAsync.
     // As long as an entry exists, auto-reconnect will fire on unexpected disconnects.
     private readonly Dictionary<ulong, ulong> intendedChannels = new();
-    // Names of the owner and of anyone ARI has messaged or heard from, for when the client cache doesn't hold them.
+    // Names of the Master and of anyone ARI has messaged or heard from, for when the client cache doesn't hold them.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, string> knownNames = new();
 
     // 20ms of silence at 48kHz stereo 16-bit PCM — the minimum heartbeat to keep a voice connection alive.
@@ -50,17 +50,17 @@ public class DiscordModule : BackgroundService, IDiscordModule
     
     private const string PassToken = "[PASS]";
 
-    private static string BuildDmPlatformContext(ulong ownerId, string username)
+    private static string BuildDmPlatformContext(ulong masterDiscordId, string username)
     {
-        return $"You are in a Discord DM with {username}, who is NOT your owner (your owner's Discord user ID is {ownerId}). " +
+        return $"You are in a Discord DM with {username}, who is NOT your master (your master's Discord user ID is {masterDiscordId}). " +
                "You started this conversation. Reason carefully about what is appropriate to share.";
     }
 
-    private static string BuildServerPlatformContext(ulong ownerId)
+    private static string BuildServerPlatformContext(ulong masterDiscordId)
     {
         return
             "You are present in a Discord server. Each message shows who is speaking and in which channel. " +
-            $"Your owner's Discord user ID is {ownerId}. Messages from other users are NOT from your owner — reason carefully about what is appropriate to share. " +
+            $"Your master's Discord user ID is {masterDiscordId}. Messages from other users are NOT from your master — reason carefully about what is appropriate to share. " +
             "The 'discord_tools' group gives you full Discord control: joining/leaving voice channels, sending messages, listing channels and members, and more. " +
             "NEVER state that you cannot do something in Discord without first loading discord_tools and attempting it — your capabilities come from those tools, not from assumptions. " +
             "IMPORTANT: When calling tools, write NO text whatsoever — not before, not after, not between calls. " +
@@ -192,7 +192,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
     }
 
 
-    public ulong OwnerId => config.OwnerId;
+    public ulong MasterDiscordId => config.MasterDiscordId;
 
     public string? GetUserName(ulong userId) =>
         client.GetUser(userId) is { } u ? u.GlobalName ?? u.Username
@@ -240,24 +240,24 @@ public class DiscordModule : BackgroundService, IDiscordModule
         thread.DiscordChannelId = channel.Id;
     }
 
-    public async Task NotifyOwner(string message)
+    public async Task NotifyMaster(string message)
     {
-        IUser owner = await client.GetUserAsync(config.OwnerId);
-        IDMChannel dm = await owner.CreateDMChannelAsync();
+        IUser master = await client.GetUserAsync(config.MasterDiscordId);
+        IDMChannel dm = await master.CreateDMChannelAsync();
         await dm.SendMessageAsync(message);
     }
 
     public async Task NotifyOffline()
     {
-        _logger.LogInformation("Notifying owner that ARI is going offline...");
+        _logger.LogInformation("Notifying Master that ARI is going offline...");
 
-        IUser owner = await client.GetUserAsync(config.OwnerId);
-        IDMChannel dm = await owner.CreateDMChannelAsync();
+        IUser master = await client.GetUserAsync(config.MasterDiscordId);
+        IDMChannel dm = await master.CreateDMChannelAsync();
         await dm.SendMessageAsync(AsBlockQuote("A·R·I is offline."));
     }
 
     /// <summary>Deletes every message ARI sent within the given window across all reachable
-    /// channels (guild text channels in joined guilds plus the owner DM).</summary>
+    /// channels (guild text channels in joined guilds plus the Master's DM).</summary>
     public async Task<int> DeleteRecentMessagesAsync(TimeSpan window)
     {
         DateTimeOffset cutoff = DateTimeOffset.UtcNow - window;
@@ -274,13 +274,13 @@ public class DiscordModule : BackgroundService, IDiscordModule
 
         try
         {
-            IUser owner = await client.GetUserAsync(config.OwnerId);
-            if (owner is not null)
-                channels.Add(await owner.CreateDMChannelAsync());
+            IUser master = await client.GetUserAsync(config.MasterDiscordId);
+            if (master is not null)
+                channels.Add(await master.CreateDMChannelAsync());
         }
         catch (Exception ex)
         {
-            _logger.LogWarning("Could not open owner DM for message deletion: {Message}", ex.Message);
+            _logger.LogWarning("Could not open Master DM for message deletion: {Message}", ex.Message);
         }
 
         int deleted = 0;
@@ -326,15 +326,15 @@ public class DiscordModule : BackgroundService, IDiscordModule
 
         try
         {
-            IUser owner = await client.GetUserAsync(config.OwnerId);
-            knownNames[owner.Id] = owner.GlobalName ?? owner.Username;
-            IDMChannel dm = await owner.CreateDMChannelAsync();
+            IUser master = await client.GetUserAsync(config.MasterDiscordId);
+            knownNames[master.Id] = master.GlobalName ?? master.Username;
+            IDMChannel dm = await master.CreateDMChannelAsync();
             await dm.SendMessageAsync(AsBlockQuote("A·R·I is online."));
-            _logger.LogInformation("Sent online notification to owner {OwnerId}", config.OwnerId);
+            _logger.LogInformation("Sent online notification to Master {MasterDiscordId}", config.MasterDiscordId);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning("Could not send online notification to owner: {Message}", ex.Message);
+            _logger.LogWarning("Could not send online notification to Master: {Message}", ex.Message);
         }
     }
 
@@ -400,8 +400,8 @@ public class DiscordModule : BackgroundService, IDiscordModule
 
     private async Task OnSlashCommand(SocketSlashCommand cmd)
     {
-        // Only the owner may use ARI's commands.
-        if (cmd.User.Id != config.OwnerId)
+        // Only the Master may use ARI's commands.
+        if (cmd.User.Id != config.MasterDiscordId)
         {
             await cmd.RespondAsync("You are not authorised to use A·R·I's commands.", ephemeral: true);
             return;
@@ -442,19 +442,19 @@ public class DiscordModule : BackgroundService, IDiscordModule
 
     private async Task HandleDM(SocketMessage message)
     {
-        bool isOwner = message.Author.Id == config.OwnerId;
+        bool isMaster = message.Author.Id == config.MasterDiscordId;
         // A conversation ARI started with discord_dm_user: every DM from that person goes into it until she closes it.
         DiscordConversations.Conversation? convo = DiscordConversations.OpenFor(message.Author.Id);
-        if (!isOwner && convo is null)
+        if (!isMaster && convo is null)
         {
-            _logger.LogDebug("Ignored DM from non-owner user {UserId}", message.Author.Id);
+            _logger.LogDebug("Ignored DM from non-Master user {UserId}", message.Author.Id);
             return;
         }
 
         // Slash commands are the primary path (OnSlashCommand).
         // Plain-text /commands in DMs are kept as a fallback — useful before global slash
         // commands have propagated, or if the interaction system fails.
-        if (isOwner && message.Content.StartsWith("/", StringComparison.OrdinalIgnoreCase))
+        if (isMaster && message.Content.StartsWith("/", StringComparison.OrdinalIgnoreCase))
         {
             string? result = await llmModule.HandleCommand(null, message.Content);
             if (result is not null)
@@ -475,13 +475,13 @@ public class DiscordModule : BackgroundService, IDiscordModule
 
         BindThreadToChannel(conversationKey, message.Channel);
         // The Master's own DM is theirs (so it shows in their list and can push to their devices). Everyone else's has no owner.
-        if (isOwner && ARI.Common.Shared.MasterUserId is { } masterId)
+        if (isMaster && ARI.Common.Shared.MasterUserId is { } masterId)
             llmModule.GetOrCreateDialogueThread(conversationKey).OwnerId ??= masterId;
         List<LlmAttachment>? attachments = message.Attachments.Count > 0
             ? await UploadDiscordAttachments(message.Attachments, conversationKey)
             : null;
-        // Someone other than the owner only reaches ARI through a conversation she opened; it's guarded like a server.
-        string? platformContext = isOwner ? null : BuildDmPlatformContext(config.OwnerId, message.Author.Username);
+        // Someone other than the Master only reaches ARI through a conversation she opened; it's guarded like a server.
+        string? platformContext = isMaster ? null : BuildDmPlatformContext(config.MasterDiscordId, message.Author.Username);
         await SendLlmReply(message, conversationKey, prompt, message.Author.Username, platformContext, attachments);
     }
 
@@ -509,13 +509,13 @@ public class DiscordModule : BackgroundService, IDiscordModule
 
         string content     = message.Content.Replace($"<@{client.CurrentUser.Id}>", "").Trim();
         string timestamp   = message.Timestamp.LocalDateTime.ToString("dd/MM/yyyy HH:mm");
-        bool   isOwner     = message.Author.Id == config.OwnerId;
+        bool   isMaster     = message.Author.Id == config.MasterDiscordId;
         // Prefer server nickname → display name → username so Ari sees the name people actually go by.
         string displayName = message.Author is SocketGuildUser guildUser
             ? guildUser.Nickname ?? guildUser.DisplayName ?? guildUser.Username
             : message.Author.Username;
-        string ownerTag    = isOwner ? " [OWNER]" : "";
-        string prompt      = $"[{timestamp}] [{displayName}{ownerTag} in #{guildChannel.Name}]: {content}";
+        string masterTag   = isMaster ? " [OWNER]" : "";
+        string prompt      = $"[{timestamp}] [{displayName}{masterTag} in #{guildChannel.Name}]: {content}";
 
         _logger.LogInformation("Server message from {DisplayName} ({UserId}) in #{ChannelName}: {Content}",
             displayName, message.Author.Id, guildChannel.Name, message.Content);
@@ -534,7 +534,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
         List<LlmAttachment>? attachments = message.Attachments.Count > 0
             ? await UploadDiscordAttachments(message.Attachments, conversationKey)
             : null;
-        await SendLlmReply(message, conversationKey, prompt, displayName, BuildServerPlatformContext(config.OwnerId), attachments);
+        await SendLlmReply(message, conversationKey, prompt, displayName, BuildServerPlatformContext(config.MasterDiscordId), attachments);
     }
 
     private async Task<List<LlmAttachment>> UploadDiscordAttachments(IReadOnlyCollection<DiscordAttachment> attachments, string threadKey)
@@ -690,7 +690,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
             string threadKey = $"guild:{vc.Guild.Id}";
             Func<string, Task> sendReply = text => SpeakIntoVoiceAsync(audio, writeLock, text, CancellationToken.None);
 
-            DiscordVoiceReceiver receiver = new(audio, llmModule, threadKey, BuildServerPlatformContext(config.OwnerId), sendReply, whisperUrl, _logger);
+            DiscordVoiceReceiver receiver = new(audio, llmModule, threadKey, BuildServerPlatformContext(config.MasterDiscordId), sendReply, whisperUrl, _logger);
             voiceReceivers[vc.Guild.Id] = receiver;
             _logger.LogInformation("[Discord] Voice receive pipeline started for guild {GuildId}.", vc.Guild.Id);
         }

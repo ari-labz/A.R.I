@@ -156,7 +156,7 @@ internal sealed class DiscordDmUser(Thread parent) : Tool
             description = "Send a Discord DM to anyone by user ID. It opens a conversation with them that gets all their DMs; you handle it there, " +
                           "using the brief, and report the result back here. Set wait_for_reply to hold your reply open until that report arrives; " +
                           "if it comes later, it wakes this conversation. " +
-                          $"Your master's Discord user ID is {Modules.Discord?.OwnerId}.",
+                          $"Your master's Discord user ID is {Modules.Discord?.MasterDiscordId}.",
             parameters  = new
             {
                 type       = "object",
@@ -192,7 +192,7 @@ internal sealed class DiscordDmUser(Thread parent) : Tool
         }
         catch (JsonException) { return "[Error: arguments weren't valid JSON.]"; }
 
-        if (parent.IsGuarded && userId != discord.OwnerId)
+        if (parent.IsGuarded && userId != discord.MasterDiscordId)
             return "[Error: in this conversation you can only DM your master.]";
 
         (DiscordConversations.Conversation convo, bool isNew) = DiscordConversations.GetOrOpen(userId);
@@ -203,14 +203,14 @@ internal sealed class DiscordDmUser(Thread parent) : Tool
         }
         llm.RecordAriMessage(convo.ThreadKey, message);
 
-        // Point the conversation at this thread, and give it the brief. The owner's DM also gets this thread's recent
+        // Point the conversation at this thread, and give it the brief. The Master's DM also gets this thread's recent
         // messages, so it can answer whatever they ask; anyone else gets the written brief only.
         convo.ParentKey = parent.Key;
         if (convo.ThreadKey != parent.Key)
         {
             Thread child = llm.ConversationThread(convo.ThreadKey);
             child.ReportsTo = parent.Key;
-            child.Brief     = BuildBrief(brief, userId == discord.OwnerId);
+            child.Brief     = BuildBrief(brief, userId == discord.MasterDiscordId);
             if (!child.tools.ContainsKey("report_to_parent")) new ReportToParent(child).Register(child);
         }
 
@@ -234,7 +234,7 @@ internal sealed class DiscordDmUser(Thread parent) : Tool
         return $"{opened}\n{stopped} The conversation stays open; its report will wake this conversation when it comes.";
     }
 
-    private string BuildBrief(string brief, bool toOwner)
+    private string BuildBrief(string brief, bool toMaster)
     {
         string where = parent.Key.StartsWith("guild:", StringComparison.OrdinalIgnoreCase) ? "a Discord server channel"
                      : parent.Key.StartsWith("dm:", StringComparison.OrdinalIgnoreCase)    ? "another Discord DM"
@@ -245,7 +245,7 @@ internal sealed class DiscordDmUser(Thread parent) : Tool
                       "Once it's settled, call report_to_parent with what that conversation needs and done=true, which closes this DM; " +
                       "use done=false only if more is still to come.");
         if (brief.Trim().Length > 0) sb.AppendLine().AppendLine($"Brief: {brief.Trim()}");
-        if (toOwner)
+        if (toMaster)
         {
             List<ThreadMessage> recent = parent.GetChatHistory(maxMessages: TranscriptMessages, maxChars: TranscriptChars);
             if (recent.Count > 0)

@@ -105,9 +105,9 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         // Track who created the thread so guests only see their own.
         string? callerId = User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
         thread.OwnerId ??= callerId;
-        // Memory, Engram and push belong to the owner's own chats. An admin replying inside someone else's thread
+        // Memory and Engram belong to the Master's and admins' own chats. An admin replying inside someone else's thread
         // must not turn it into one of theirs.
-        thread.IsOwnerThread = isAdmin && thread.OwnerId == callerId;
+        thread.HasMemoryAccess = isAdmin && thread.OwnerId == callerId;
         return thread;
     }
 
@@ -193,7 +193,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         // guest's own empty thread isn't in their list and an admin can't tell whose it is.
         if (Llm.Threads.TryGetValue(key, out ARI.LLM.Thread? created))
         {
-            created.IsOwnerThread = User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
+            created.HasMemoryAccess = User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
             created.OwnerId ??= User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
         }
         return Ok(new { key });
@@ -1147,7 +1147,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
                 effectiveLocalPath = rootPath;
 
             // Re-evaluated every message from the caller's own login, so the flag can't outlive a role change.
-            // Also marks whose thread it is, so a guest's chat never gets the owner's memories or push notifications.
+            // Also marks whose thread it is, so a guest's chat never gets the Master's memories.
             ARI.LLM.Thread chatThread = GetOrCreateThread(threadKey);
             chatThread.IsAdminChat = User.IsInRole(ARI.API.Auth.Roles.Admin);
 

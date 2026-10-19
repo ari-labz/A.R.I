@@ -147,8 +147,8 @@ internal class Engram : MemoryAgent, IDisposable
         // Guild threads never reach the brain. A Discord server is multi-party: anyone whitelisted can
         // speak into the transcript, and a sweep treats every line as material to store — so a guest's
         // provocation becomes a durable note about a third party, and guarded mode cannot help because it
-        // filters recall, not writes. Owner-only filtering is not a substitute: the misfiled note that
-        // prompted this gate was built from the OWNER's own messages, misread by pronoun resolution.
+        // filters recall, not writes. Master-only filtering is not a substitute: the misfiled note that
+        // prompted this gate was built from the Master's own messages, misread by pronoun resolution.
         // Force-proof like the DevMode gate above — a manual close must not be a way around it either.
         if (threadKey.StartsWith("guild:", StringComparison.Ordinal))
         {
@@ -157,13 +157,13 @@ internal class Engram : MemoryAgent, IDisposable
             return;
         }
 
-        // Same for a DM conversation ARI opened with someone other than the owner (discord_dm_user): what they say
-        // is theirs, not material for the owner's brain. Keys are dm:{userId} or dm:{userId}:{opened}.
+        // Same for a DM conversation ARI opened with someone other than the Master (discord_dm_user): what they say
+        // is theirs, not material for the Master's brain. Keys are dm:{userId} or dm:{userId}:{opened}.
         if (threadKey.StartsWith("dm:", StringComparison.Ordinal) && Modules.Discord is { } discord
-            && ulong.TryParse(threadKey.Split(':')[1], out ulong dmUser) && dmUser != discord.OwnerId)
+            && ulong.TryParse(threadKey.Split(':')[1], out ulong dmUser) && dmUser != discord.MasterDiscordId)
         {
             if (threads.TryGetValue(threadKey, out Thread? dmThread)) dmThread.EngramProcessed = true;
-            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] skipped — DMs with people other than the owner are never swept into the brain.", threadKey);
+            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] skipped — DMs with people other than the Master are never swept into the brain.", threadKey);
             return;
         }
 

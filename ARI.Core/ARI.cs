@@ -188,7 +188,7 @@ public class ARI : BackgroundService, IModuleLifecycle
             {
                 Enabled            = seed.Enabled,
                 Token              = seedToken,
-                OwnerId            = seed.OwnerId,
+                MasterDiscordId    = seed.MasterDiscordId,
                 WhitelistedUserIds = seed.WhitelistedUserIds ?? [],
                 WatchedChannelIds  = seed.WatchedChannelIds,
                 AllowedGuildIds    = seed.AllowedGuildIds,
@@ -502,7 +502,7 @@ public class ARI : BackgroundService, IModuleLifecycle
         {
             Enabled            = discord.Enabled,
             Token              = discord.Token,
-            OwnerId            = discord.OwnerId,
+            MasterDiscordId    = discord.MasterDiscordId,
             WhitelistedUserIds = discord.WhitelistedUserIds,
             WatchedChannelIds  = discord.WatchedChannelIds,
             AllowedGuildIds    = discord.AllowedGuildIds,

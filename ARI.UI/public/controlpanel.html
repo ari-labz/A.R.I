@@ -1229,7 +1229,7 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
         <p id="dc-token-state" style="color:var(--text-dim);font-size:11px;margin:0 0 16px;"></p>
 
         <label class="vs-label" style="display:block;font-size:12px;margin-bottom:4px;">Master's Discord ID</label>
-        <input type="text" id="dc-owner" class="vs-input" style="max-width:280px;margin-bottom:16px;" placeholder="e.g. 171691421407903744" inputmode="numeric">
+        <input type="text" id="dc-master" class="vs-input" style="max-width:280px;margin-bottom:16px;" placeholder="e.g. 171691421407903744" inputmode="numeric">
 
         <div id="dc-lists"></div>
 
@@ -2767,7 +2767,7 @@ async function loadDiscord() {
         return;
     }
     document.getElementById('dc-enabled').checked = !!dcState.enabled;
-    document.getElementById('dc-owner').value = dcState.ownerId && dcState.ownerId !== '0' ? dcState.ownerId : '';
+    document.getElementById('dc-master').value = dcState.masterDiscordId && dcState.masterDiscordId !== '0' ? dcState.masterDiscordId : '';
     document.getElementById('dc-token').value = '';
     document.getElementById('dc-token-state').textContent = dcState.tokenConfigured
         ? 'A token is saved. Leave blank to keep it, or paste a new one to replace it.'
@@ -2863,7 +2863,7 @@ document.getElementById('dc-save').addEventListener('click', async e => {
         enabled: document.getElementById('dc-enabled').checked,
         // Blank means "keep the saved token" — the panel never holds it, so it cannot round-trip it.
         token:   document.getElementById('dc-token').value.trim(),
-        ownerId: document.getElementById('dc-owner').value.trim(),
+        masterDiscordId: document.getElementById('dc-master').value.trim(),
     };
     DC_LISTS.forEach(spec => {
         const wrap = document.querySelector(`[data-dc-list="${spec.key}"]`);

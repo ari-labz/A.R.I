@@ -9,7 +9,7 @@ namespace ARI.API;
 /// <summary>
 /// Web Push delivery for the PWA. Owns the VAPID keypair and the set of browser push subscriptions,
 /// both persisted under ~/.ari/Server. Ari's proactive path calls <see cref="SendPushNotification"/> to
-/// ring the owner's phone; the notification body carries the message and (optionally) a deep-link URL.
+/// ring the phone of the person a thread belongs to; the notification body carries the message and (optionally) a deep-link URL.
 /// </summary>
 public sealed class WebPushModule : IWebPushModule
 {

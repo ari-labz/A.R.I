@@ -132,6 +132,6 @@ public class AuthController(UserStore users, AuthService auth) : ControllerBase
     {
         // Trigger a Discord DM / push notification that an IP has been locked.
         // Routed through Modules so we don't need a direct Discord dependency here.
-        _ = Modules.Discord?.NotifyOwner($"ARI security: IP {ip} locked out after {attempts} failed login attempts.");
+        _ = Modules.Discord?.NotifyMaster($"ARI security: IP {ip} locked out after {attempts} failed login attempts.");
     }
 }

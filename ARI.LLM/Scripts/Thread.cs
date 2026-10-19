@@ -198,14 +198,14 @@ public class Thread
     private DateTime? engramGateStartedAt;
 
     /// <summary>False for Guest-role threads — blocks Engram sweeps and Brain memory recall so guest
-    /// conversations never touch the owner's personal memory. Defaults to true for all other sources
+    /// conversations never touch the Master's personal memory. Defaults to true for all other sources
     /// (Discord, proactive, internal) so existing behaviour is preserved.</summary>
-    public bool IsOwnerThread { get; set; } = true;
+    public bool HasMemoryAccess { get; set; } = true;
 
-    /// <summary>True when she's talking to someone other than the owner: a guest's chat, a server channel, or a DM she
-    /// opened with someone else. Such conversations get filtered recall and none of the owner's own tools.</summary>
+    /// <summary>True when she's talking to someone other than the Master: a guest's chat, a server channel, or a DM she
+    /// opened with someone else. Such conversations get filtered recall and none of the Master's own tools.</summary>
     internal bool IsGuarded =>
-        !IsOwnerThread
+        !HasMemoryAccess
         || Key.StartsWith("guild:", StringComparison.OrdinalIgnoreCase)
         || (Key.StartsWith("dm:", StringComparison.OrdinalIgnoreCase) && PlatformContext is not null);
 

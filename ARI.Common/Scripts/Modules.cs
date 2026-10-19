@@ -4,8 +4,8 @@ public record VoiceChannelInfo(ulong ChannelId, string ChannelName, ulong GuildI
 
 public interface IDiscordModule
 {
-    /// <summary>The owner's Discord user ID.</summary>
-    ulong OwnerId { get; }
+    /// <summary>The Master's Discord user ID.</summary>
+    ulong MasterDiscordId { get; }
 
     /// <summary>Sends a direct message to a Discord user. Returns null on success, otherwise why it failed.</summary>
     Task<string?> SendDirectMessageAsync(ulong userId, string message);
@@ -16,11 +16,11 @@ public interface IDiscordModule
     /// <summary>A user's display name if ARI has seen them, otherwise null. Cache only, so it never blocks.</summary>
     string? GetUserName(ulong userId);
 
-    Task NotifyOwner(string message);
+    Task NotifyMaster(string message);
     Task NotifyOffline();
 
     /// <summary>Deletes every message ARI sent within the given window, across all reachable
-    /// channels (guild text channels and the owner DM). Returns the number of messages deleted.</summary>
+    /// channels (guild text channels and the Master's DM). Returns the number of messages deleted.</summary>
     Task<int> DeleteRecentMessagesAsync(TimeSpan window);
 
     /// <summary>Returns all voice channels across all guilds that the given user (by username) is currently in.</summary>
