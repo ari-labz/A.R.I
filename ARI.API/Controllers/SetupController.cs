@@ -51,6 +51,7 @@ public class SetupController(UserStore users, AuthService auth, PersistentData p
         user = users.GetById(user.Id)!;
         users.ClearFailedAttempts(ip);
         SetupState.ClearToken();
+        SetupState.SetMaster(user.Id);   // the account made here is the Master, for good
         log.LogInformation("[Setup] Admin account '{User}' created.", name);
 
         string sessionId = Guid.NewGuid().ToString();

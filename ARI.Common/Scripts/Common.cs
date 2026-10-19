@@ -12,6 +12,11 @@ public static class Shared
 
     public static string LogPath { get; set; } = "";
 
+    /// <summary>The user id (as the JWT carries it) of the Master: the account the setup wizard created, or on an install
+    /// that predates the wizard its first admin. Dreams, reminders and the Master's own Discord DMs belong to this account.
+    /// Set by the API's user store at startup; null before it has run.</summary>
+    public static string? MasterUserId { get; set; }
+
     // Global kill switch for memory writes. When DevMode is ON, Engram never runs, so no autonomous
     // run can ever mutate the brain vault. Resolved once at startup via ResolveDevMode.
     //

@@ -25,6 +25,7 @@ public class AdminUsersController(UserStore users) : ControllerBase
             u.Role,
             u.DisplayName,
             u.MustChangePassword,
+            IsMaster     = u.Id.ToString() == ARI.Common.Shared.MasterUserId,
             CreatedAt    = DateTimeOffset.FromUnixTimeSeconds(u.CreatedAt).ToString("o"),
             LastActiveAt = u.LastActiveAt == 0 ? null : (string?)DateTimeOffset.FromUnixTimeSeconds(u.LastActiveAt).ToString("o"),
         }));
@@ -64,6 +65,9 @@ public class AdminUsersController(UserStore users) : ControllerBase
 
         User? user = users.GetById(id);
         if (user is null) return NotFound();
+        // Resetting the Master's password would hand over the account that owns the brain, dreams and Discord link.
+        if (id.ToString() == ARI.Common.Shared.MasterUserId && User.FindFirstValue(ClaimTypes.NameIdentifier) != id.ToString())
+            return BadRequest(new { error = "Only the Master can change the Master's password." });
 
         if (req.NewPassword.Length < 5)
             return BadRequest(new { error = "Password must be at least 5 characters." });
@@ -87,6 +91,8 @@ public class AdminUsersController(UserStore users) : ControllerBase
 
         User? user = users.GetById(id);
         if (user is null) return NotFound();
+        if (id.ToString() == ARI.Common.Shared.MasterUserId)
+            return BadRequest(new { error = "The Master account cannot be deleted." });
 
         users.RevokeAllSessionsForUser(id);
         users.DeleteUser(id);
