@@ -178,8 +178,8 @@ public class APIModule : IAsyncDisposable
                     ctx.Response.StatusCode = 401;
                     return;
                 }
-            }
                 ctx.User = principal;
+            }
 
             if (ctx.Request.Path == "/api/client")
             {
@@ -188,7 +188,6 @@ public class APIModule : IAsyncDisposable
                 LLMModule? llmSvc = (LLMModule?)Modules.Llm;
                 if (llmSvc is null) { ctx.Response.StatusCode = 503; return; }
 
-                WebSocket ws  = await ctx.WebSockets.AcceptWebSocketAsync();
                 // Binding tools to a thread is using that thread: only its owner (or an admin) may.
                 if (ctx.Request.Query["threadKey"].ToString() is { Length: > 0 } wanted && !ThreadAccess.CanUse(ctx.User, llmSvc, wanted))
                 {
@@ -196,6 +195,7 @@ public class APIModule : IAsyncDisposable
                     return;
                 }
 
+                WebSocket ws  = await ctx.WebSockets.AcceptWebSocketAsync();
                 ILogger log = ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("ARI.Client");
                 await ClientWebSocket.HandleAsync(ws, ctx, llmSvc, log);
                 return;
@@ -232,10 +232,10 @@ public class APIModule : IAsyncDisposable
             OnPrepareResponse = cacheHeaders,
         });
 
-        await app.StartAsync(cancellationToken);
         // Build the user store now (not on the first request) so a fresh install's Setup Token is in the log at boot.
         app.Services.GetRequiredService<UserStore>();
 
+        await app.StartAsync(cancellationToken);
 
         loggerFactory.CreateLogger("ARI.API").LogInformation("ARI.API is ready. Listening on http://0.0.0.0:{Port}", config.Port);
     }
