@@ -172,12 +172,14 @@ public class APIModule : IAsyncDisposable
                 // AcceptWebSocketAsync.
                 UserStore   store = ctx.RequestServices.GetRequiredService<UserStore>();
                 AuthService auth  = ctx.RequestServices.GetRequiredService<AuthService>();
-                if (AuthMiddleware.Authenticate(ctx, store, auth) is null)
+                System.Security.Claims.ClaimsPrincipal? principal = AuthMiddleware.Authenticate(ctx, store, auth);
+                if (principal is null)
                 {
                     ctx.Response.StatusCode = 401;
                     return;
                 }
             }
+                ctx.User = principal;
 
             if (ctx.Request.Path == "/api/client")
             {
@@ -187,6 +189,13 @@ public class APIModule : IAsyncDisposable
                 if (llmSvc is null) { ctx.Response.StatusCode = 503; return; }
 
                 WebSocket ws  = await ctx.WebSockets.AcceptWebSocketAsync();
+                // Binding tools to a thread is using that thread: only its owner (or an admin) may.
+                if (ctx.Request.Query["threadKey"].ToString() is { Length: > 0 } wanted && !ThreadAccess.CanUse(ctx.User, llmSvc, wanted))
+                {
+                    ctx.Response.StatusCode = 403;
+                    return;
+                }
+
                 ILogger log = ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("ARI.Client");
                 await ClientWebSocket.HandleAsync(ws, ctx, llmSvc, log);
                 return;
