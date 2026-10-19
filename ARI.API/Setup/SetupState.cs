@@ -22,6 +22,8 @@ public static class SetupState
     public static bool SetupComplete    { get; private set; }
     public static bool TutorialComplete { get; private set; }
     public static string? Token         { get; private set; }
+    /// <summary>Id of the Master account (the one the wizard created). Null until chosen.</summary>
+    public static int?    MasterUserId  { get; private set; }
 
     public static void Init(ILogger log)
     {
@@ -34,6 +36,7 @@ public static class SetupState
                     JsonNode? n = JsonNode.Parse(File.ReadAllText(FilePath));
                     SetupComplete    = n?["setupComplete"]?.GetValue<bool>()    ?? false;
                     TutorialComplete = n?["tutorialComplete"]?.GetValue<bool>() ?? false;
+                    MasterUserId     = n?["masterUserId"]?.GetValue<int>();
                 }
                 catch { /* unreadable → treat as not done */ }
             }
@@ -64,6 +67,12 @@ public static class SetupState
 
     public static void ClearToken() => Token = null;
 
+    public static void SetMaster(int userId)
+    {
+        lock (gate) { MasterUserId = userId; Save(); }
+        ARI.Common.Shared.MasterUserId = userId.ToString();
+    }
+
     public static bool TokenMatches(string? given)
     {
         if (Token is null || string.IsNullOrWhiteSpace(given)) return false;
@@ -86,7 +95,7 @@ public static class SetupState
     {
         Directory.CreateDirectory(Paths.PersistentData);
         File.WriteAllText(FilePath, JsonSerializer.Serialize(
-            new { setupComplete = SetupComplete, tutorialComplete = TutorialComplete },
+            new { setupComplete = SetupComplete, tutorialComplete = TutorialComplete, masterUserId = MasterUserId },
             new JsonSerializerOptions { WriteIndented = true }));
     }
 

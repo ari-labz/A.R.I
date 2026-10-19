@@ -27,6 +27,21 @@ public class UserStore
         // SetupToken — no more auto-created "admin" with a random password.
         if (CountUsers() == 0) ARI.API.Setup.SetupState.AnnounceToken(log);
         LogPendingAdminPassword();
+        ResolveMaster();
+    }
+
+    /// <summary>The Master is the account the setup wizard created. An install that predates the wizard has none recorded,
+    /// so its first admin (the original account) becomes the Master.</summary>
+    private void ResolveMaster()
+    {
+        if (ARI.API.Setup.SetupState.MasterUserId is null)
+        {
+            User? first = GetAll().FirstOrDefault(u => u.Role == Roles.Admin);
+            if (first is null) return;
+            ARI.API.Setup.SetupState.SetMaster(first.Id);
+            log.LogInformation("[Setup] Existing install: '{User}' is the Master account.", first.Username);
+        }
+        else ARI.Common.Shared.MasterUserId = ARI.API.Setup.SetupState.MasterUserId.Value.ToString();
     }
 
     // ── Schema ──────────────────────────────────────────────────────────────────
