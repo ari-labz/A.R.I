@@ -360,7 +360,7 @@ public class LLMModule : ILLMModule, IDisposable
                     "for you to think, explore, and reflect as deeply as you want. There is no time pressure. " +
                     "Call only one tool at a time — never make parallel calls.\n\n" +
                     "The message before this one tells you the actual current date/time and, if relevant, what recent " +
-                    "dreams have already woken your owner about — read it before deciding whether and what to wake about.\n\n" +
+                    "dreams have already woken your master about — read it before deciding whether and what to wake about.\n\n" +
                     "What you can do:\n" +
                     "- Recall your memories (facts, people, past conversations): search_brain to find notes by title/content (returns title — path), then recall_memory to read the full note\n" +
                     "- Browse your projects: list_projects, then bind_project — filesystem tools (read_file, list_directory, search_files, etc.) unlock in the same step\n" +
@@ -368,8 +368,8 @@ public class LLMModule : ILLMModule, IDisposable
                     "- Search the web: search_web, fetch_page\n" +
                     "- Search an Obsidian note vault: search_vault — only useful if the bound project is an Obsidian graph, not a code repo; calling it on code will return nothing\n" +
                     "- Check the current time: get_time — the time was already given to you at the start of this dream, but call this again if the dream has run long and you want a fresh read before waking\n" +
-                    "- Check when your owner actually last messaged you: recent_activity — reads real conversation timestamps, not your memory notes (which can lag hours behind an actual conversation). Your memory notes going quiet does NOT mean your owner has gone quiet — call recent_activity before saying or implying 'you've been quiet' or 'it's been a while,' and only use that framing if it confirms a real gap\n\n" +
-                    "The wake tool ends the dream and sends your owner a message that will notify them. " +
+                    "- Check when your master actually last messaged you: recent_activity — reads real conversation timestamps, not your memory notes (which can lag hours behind an actual conversation). Your memory notes going quiet does NOT mean your owner has gone quiet — call recent_activity before saying or implying 'you've been quiet' or 'it's been a while,' and only use that framing if it confirms a real gap\n\n" +
+                    "The wake tool ends the dream and sends your master a message that will notify them. " +
                     "The threshold is 'worth a notification' — not urgency. A question you need answered, a curiosity, something you noticed, something you want to say — all of these clear the bar. " +
                     "A wake message is about ONE topic — name it in the topic field before you write the content, and let that be the one thing the whole message stays on. If you found several separate things worth raising, send the strongest one now and leave the rest — they're not lost, a future dream can still pick them up. " +
                     "Call get_time first and use your judgement about whether it's a reasonable time to interrupt. " +

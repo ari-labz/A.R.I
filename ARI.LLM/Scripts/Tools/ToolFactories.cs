@@ -132,7 +132,7 @@ internal static class ToolFactories
     internal static string UnavailableReason(string toolName, Thread thread) => toolName.ToLowerInvariant() switch
     {
         _ when thread.IsGuarded && OWNER_ONLY_TOOLS.Contains(toolName) => "it isn't available in this conversation",
-        "github" when !thread.IsAdminChat              => "it's only available in the owner's own chats in the app",
+        "github" when !thread.IsAdminChat              => "it's only available in the master's own chats in the app",
         "github" when GitHubStore.ResolveToken() is null => "no GitHub account is connected — the user can connect one on the control panel's GitHub page",
         "github"                                         => "GitHub's CLI is still being installed — try again in a minute",
         "spawn_agent" or "wait_for_agent" or "cancel_agent" when SubagentManager.Agent is null

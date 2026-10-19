@@ -18,7 +18,7 @@ internal sealed class Wake : Tool
         function = new
         {
             name        = "wake",
-            description = "End the dream and send your owner a message that will notify them. Use this when you have something worth their attention: a question you need answered, a genuine curiosity, something you noticed that you want to raise, or something you want to say. The threshold is 'worth a notification' — not urgency, not crisis. Check get_time first and use your judgement about whether now is a reasonable time to interrupt. " +
+            description = "End the dream and send your master a message that will notify them. Use this when you have something worth their attention: a question you need answered, a genuine curiosity, something you noticed that you want to raise, or something you want to say. The threshold is 'worth a notification' — not urgency, not crisis. Check get_time first and use your judgement about whether now is a reasonable time to interrupt. " +
                 "A wake message is about ONE topic. If this dream turned up several separate things worth mentioning, send the single strongest one now and leave the rest for another dream — don't merge unrelated threads into one message. You can still ask more than one thing about that topic. Content is the message they will see — write it in your own voice, as yourself, informed by everything you found. Context is a private briefing injected into the new thread so your waking self already knows what prompted you — include the relevant notes, what you were trying to figure out, what state they seem to be in, and what you're hoping to do once they respond.",
             parameters  = new
             {
@@ -44,7 +44,7 @@ internal sealed class Wake : Tool
         string      title   = args.TryGetProperty("title",   out JsonElement t) ? t.GetString() ?? "" : "";
 
         if (string.IsNullOrWhiteSpace(content))
-            return Task.FromResult<ToolResult>("content is required — provide the message to send to your owner.");
+            return Task.FromResult<ToolResult>("content is required — provide the message to send to your master.");
         if (string.IsNullOrWhiteSpace(topic))
             return Task.FromResult<ToolResult>("topic is required — name the one thing this message is about, in a few words.");
 
