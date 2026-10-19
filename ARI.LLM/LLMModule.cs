@@ -1321,7 +1321,7 @@ public class LLMModule : ILLMModule, IDisposable
         thread.StartUnread();   // proactive opener: await the user's reply, else unread → dormant → deleted
 
         // Best-effort — a missing/failed push must not lose the thread, which is already created either way.
-        _ = SendProactivePush(assistantText, threadKey);
+        _ = SendProactivePush(assistantText, threadKey, ownerId: null);
 
         return threadKey;
     }
@@ -1353,9 +1353,9 @@ public class LLMModule : ILLMModule, IDisposable
         CreateProactiveDialogueThread(reply, title, context);
     }
 
-    private async Task SendProactivePush(string body, string threadKey)
+    private async Task SendProactivePush(string body, string threadKey, string? ownerId)
     {
-        try { await (Modules.WebPush?.SendPushNotification(body, url: $"/?thread={threadKey}", title: "Ari") ?? Task.CompletedTask); }
+        try { await (Modules.WebPush?.SendPushNotification(body, url: $"/?thread={threadKey}", title: "Ari", ownerUserId: ownerId) ?? Task.CompletedTask); }
         catch (Exception ex) { _logger.LogWarning("[Push] notification failed for thread '{Key}': {Msg}", threadKey, ex.Message); }
     }
 
@@ -1370,7 +1370,7 @@ public class LLMModule : ILLMModule, IDisposable
         string? body = thread.History.OfType<Response>().LastOrDefault(r => r.State == State.Complete)?.ContentText;
         if (string.IsNullOrWhiteSpace(body)) return;
 
-        _ = SendProactivePush(body, threadKey);
+        _ = SendProactivePush(body, threadKey, thread.OwnerId);
     }
 
     public void NotifyTyping(string threadKey)
