@@ -16,6 +16,8 @@ public static class BrainBackup
 
     private record BackupNote(string Title, string Folder, string Content, IReadOnlyList<string>? Aliases, IReadOnlyList<string>? Keywords);
 
+    public static int NoteCount() => Database.AllNotes().Count();
+
     public static string Backup()
     {
         Directory.CreateDirectory(Path_);
