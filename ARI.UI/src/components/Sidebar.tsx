@@ -65,7 +65,7 @@ const baseName = t.isInternal
                         const classes = [
                             t.key === activeThread ? "active" : "",
                             t.isInternal ? "internal-thread" : "",
-                            t.state === "inactive" || t.state === "dormant" ? "inactive" : "",
+                            t.state === "inactive" || t.state === "dormant" || t.state === "expired" ? "inactive" : "",
                         ].filter(Boolean).join(" ")
                         return (
                             <li key={t.key} className={classes} onClick={() => onSelectThread(t)}>
@@ -85,7 +85,7 @@ const baseName = t.isInternal
                                     {!t.isInternal && (
                                         <button
                                             className="thread-close"
-                                            title="Close thread (saves to memory, then removes it)"
+                                            title={t.state === "expired" ? "Delete this saved conversation forever" : "Close thread (saves to memory, then removes it)"}
                                             onClick={e => { e.stopPropagation(); onCloseThread(t) }}
                                         >
                                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">

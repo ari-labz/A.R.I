@@ -353,6 +353,9 @@ public class Thread
     /// overflows. History is append-only apart from tail removals, so the index stays valid.</summary>
     private int contextStartIndex;
 
+    /// <summary>The context window's start, exposed so a saved thread can be restored with the same window (see PersistedThreads).</summary>
+    internal int ContextStart { get => contextStartIndex; set => contextStartIndex = value; }
+
     internal List<ThreadMessage> GetChatHistory(int maxMessages = 0, int maxChars = 0)
     {
         if (contextStartIndex > History.Count) contextStartIndex = 0;
@@ -578,8 +581,9 @@ public class Thread
         State = ThreadState.Deleted;
         DisposeTimers();
 
-        // If FilesystemRoot is a scratchpad dir (not a registered project), delete it.
-        if (FilesystemRoot is { } root && root.StartsWith(ARI.Common.Paths.ServerDir("Scratchpad"), StringComparison.OrdinalIgnoreCase))
+        // If FilesystemRoot is a scratchpad dir (not a registered project), delete it — unless this conversation is being
+        // kept (Persistent Threads), in which case the scratchpad goes with it when the saved thread is deleted.
+        if (!PersistedThreads.ShouldSave(this) && FilesystemRoot is { } root && root.StartsWith(ARI.Common.Paths.ServerDir("Scratchpad"), StringComparison.OrdinalIgnoreCase))
         {
             try { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
             catch (Exception ex) { Shared.Logger.LogWarning("[Thread] ({ThreadKey}) scratchpad delete failed: {Err}", threadKey, ex.Message); }

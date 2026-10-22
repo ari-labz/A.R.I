@@ -56,5 +56,8 @@
       "IdleSeconds": 300,
       "Checkpoint": ""
     }
+  },
+  "PersistedThreads": {
+    "Enabled": false
   }
 }

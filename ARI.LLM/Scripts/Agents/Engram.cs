@@ -33,6 +33,9 @@ internal class Engram : MemoryAgent, IDisposable
     private readonly Dictionary<string, DateTime>       lastRun          = new();
     private readonly Dictionary<string, int>            lastHistoryCount = new();
     private readonly ConcurrentDictionary<string, int>  exchangeCounts   = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>A thread restored from disk (Persistent Threads) already went through Engram: sweeps start after these items.</summary>
+    internal void MarkHistoryRestored(string threadKey, int itemCount) { lock (lastRun) lastHistoryCount[threadKey] = itemCount; }
     private readonly SemaphoreSlim                      engramLock       = new(1, 1);
     private readonly ConcurrentDictionary<string, byte> sweepingThreads  = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string>                    pendingQueue     = new(StringComparer.OrdinalIgnoreCase);
