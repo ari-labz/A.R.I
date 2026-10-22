@@ -49,7 +49,6 @@ internal static class PersistedThreads
         public string   Medium          { get; set; } = "Web";
         public ulong    DiscordChannelId { get; set; }
         public string?  PlatformContext { get; set; }
-        public string?  ProjectName     { get; set; }
         public string?  FilesystemRoot  { get; set; }
         public bool     IsBrainVault    { get; set; }
         public bool     IsRemoteProject { get; set; }
@@ -135,7 +134,7 @@ internal static class PersistedThreads
             {
                 Key = thread.Key, Pipeline = thread.Pipeline.ToString(), OwnerId = thread.OwnerId, Title = thread.Title,
                 Medium = thread.Medium.ToString(), DiscordChannelId = thread.DiscordChannelId, PlatformContext = thread.PlatformContext,
-                ProjectName = thread.ProjectName, FilesystemRoot = thread.FilesystemRoot, IsBrainVault = thread.IsBrainVault,
+                FilesystemRoot = thread.FilesystemRoot, IsBrainVault = thread.IsBrainVault,
                 IsRemoteProject = thread.IsRemoteProject, IsAdminChat = thread.IsAdminChat, HasMemoryAccess = thread.HasMemoryAccess,
                 SafeMode = thread.SafeMode, LastMessageAt = thread.LastMessageAt, ContextStart = thread.ContextStart,
                 TurnSerial = thread.TurnSerial, ItemCount = items.Count, SavedAt = DateTime.UtcNow,
@@ -251,7 +250,6 @@ internal static class PersistedThreads
             thread.Medium          = Enum.TryParse(meta.Medium, out ThreadMedium medium) ? medium : ThreadMedium.Web;
             thread.DiscordChannelId = meta.DiscordChannelId;
             thread.PlatformContext ??= meta.PlatformContext;
-            thread.ProjectName     = meta.ProjectName;
             thread.FilesystemRoot  = meta.FilesystemRoot;
             thread.IsBrainVault    = meta.IsBrainVault;
             thread.IsRemoteProject = meta.IsRemoteProject;
