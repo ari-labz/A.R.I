@@ -1283,11 +1283,6 @@ export default function App() {
                         if (!detail) return loadHistory(keyForStream).then(hist => { if (activeThreadRef.current === keyForStream) setItems(dedupeRecentUserMessages(hist)) }).catch(() => {})
                         if (activeThreadRef.current === keyForStream) setItems(dedupeRecentUserMessages(detail.history))
                     }).catch(() => {})
-    if (authState === "needsSetup") return (
-        <SetupWizard startStep={setupStart} existingUser={authUser}
-            onFinished={(user) => { setAuthUser(user); setAuthState("authed"); startTour() }} />
-    )
-
                 }
             }
         }
@@ -1364,6 +1359,11 @@ export default function App() {
     const isWin32 = window.electronBridge?.platform === "win32"
 
     if (authState === "loading") return <div id="shell" />
+
+    if (authState === "needsSetup") return (
+        <SetupWizard startStep={setupStart} existingUser={authUser}
+            onFinished={(user) => { setAuthUser(user); setAuthState("authed"); startTour() }} />
+    )
 
     if (authState === "needsLogin") return (
         <LoginScreen onLoginSuccess={handleLoginSuccess} />
