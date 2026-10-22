@@ -14,7 +14,7 @@ name: ari
 
 services:
   ari:
-    image: ghcr.io/ari-labz/ari:${ARI_TAG:-latest}      # "latest" = newest release; "0.8.5" pins; "edge" = newest main
+    image: ghcr.io/ari-labz/ari:${ARI_TAG:-edge}      # "edge" = newest main; "latest" = newest release; a version like "0.8.6" pins
     container_name: ari
     restart: unless-stopped
     pull_policy: always
@@ -22,8 +22,11 @@ services:
       - "${ARI_PORT:-5074}:5074"
     environment:
       TZ: ${TZ:-Europe/London}
-      # Who owns the files in /ARI. 10001 is the container's own user; set these to your login's ids
-      # (run `id`) if you want to edit the files by hand without sudo.
+      # The user ARI runs as inside the container (10001 by default). With UMASK 000 below it does not matter who owns
+      # the files, so these can stay as they are.
+      # 000 = everything ARI creates under /ARI is readable and writable by everyone, so an SMB share (or any login)
+      # can edit it. Use 022 to make it writable by the ARI user only.
+      UMASK: "000"
       PUID: ${PUID:-10001}
       PGID: ${PGID:-10001}
     volumes:
