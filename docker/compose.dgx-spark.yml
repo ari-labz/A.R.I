@@ -1,0 +1,47 @@
+# A·R·I on a DGX Spark (or any Linux box with the NVIDIA Container Toolkit), with everything it keeps in plain
+# folders under /ARI so you can browse, back up and copy it.
+#
+#   /ARI/Data      configs, accounts, the brain, backups, logs, keys, downloaded models  (inside: Server/, Models/)
+#   /ARI/Projects  folders A·R·I may work on in Code mode
+#
+# Portainer: Stacks → Add stack → paste this file → Deploy. To update: open the stack and press
+# "Pull and redeploy" (the image tag below moves with every release).
+# Command line:  docker compose -f compose.dgx-spark.yml up -d     then     docker logs -f ari
+#
+# The first-run setup token is printed in the container log. Then open http://<spark>:5074.
+
+name: ari
+
+services:
+  ari:
+    image: ghcr.io/ari-labz/ari:${ARI_TAG:-latest}      # "latest" = newest release; "0.8.5" pins; "edge" = newest main
+    container_name: ari
+    restart: unless-stopped
+    pull_policy: always
+    ports:
+      - "${ARI_PORT:-5074}:5074"
+    environment:
+      TZ: ${TZ:-Europe/London}
+      # Who owns the files in /ARI. 10001 is the container's own user; set these to your login's ids
+      # (run `id`) if you want to edit the files by hand without sudo.
+      PUID: ${PUID:-10001}
+      PGID: ${PGID:-10001}
+    volumes:
+      - /ARI/Data:/data
+      - /ARI/Projects:/projects
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ulimits:
+      memlock: -1            # lets llama.cpp pin memory
+    stop_grace_period: 45s   # time for the model servers to shut down cleanly
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5074/api/theme >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
