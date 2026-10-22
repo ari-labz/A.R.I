@@ -14,7 +14,7 @@ name: ari
 
 services:
   ari:
-    image: ghcr.io/ari-labz/ari:${ARI_TAG:-latest}      # "latest" = newest release; a version like "0.8.6" pins; "edge" = newest main
+    image: ghcr.io/ari-labz/ari:${ARI_TAG:-latest}      # "latest" = newest build; a version like "0.8.7" pins to a release
     container_name: ari
     restart: unless-stopped
     pull_policy: always
