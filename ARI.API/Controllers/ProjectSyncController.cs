@@ -25,7 +25,7 @@ public class ProjectSyncController(ProjectStore store) : ControllerBase
     {
         Project? project = store.Get(id);
         if (project is null) return NotFound();
-        if (!CanAccess(project)) return Forbid();
+        if (!CanAccess(project)) return StatusCode(403);
         if (project.RootPath is not { } root) return BadRequest(new { error = "Project has no server folder." });
 
         string ariDir = Path.Combine(root, ".ariproject");
@@ -67,7 +67,7 @@ public class ProjectSyncController(ProjectStore store) : ControllerBase
     {
         Project? project = store.Get(id);
         if (project is null) return NotFound();
-        if (!CanAccess(project)) return Forbid();
+        if (!CanAccess(project)) return StatusCode(403);
         if (project.RootPath is not { } root) return BadRequest(new { error = "Project has no server folder." });
         ProjectStore.InitAriProject(root);
 
@@ -100,7 +100,7 @@ public class ProjectSyncController(ProjectStore store) : ControllerBase
     {
         Project? project = store.Get(id);
         if (project is null) return NotFound();
-        if (!CanAccess(project)) return Forbid();
+        if (!CanAccess(project)) return StatusCode(403);
         if (project.RootPath is not { } root) return BadRequest(new { error = "Project has no server folder." });
 
         string tmp = Path.GetTempFileName();

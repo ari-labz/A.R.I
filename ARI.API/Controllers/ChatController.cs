@@ -221,7 +221,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         if (!Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? thread))
             return NotFound();
 
-        if (!CanAccessThread(thread)) return Forbid();
+        if (!CanAccessThread(thread)) return StatusCode(403);
 
         List<ThreadItem> history = thread.History
             .Where(i => i.IsVisible && i is not Response { State: State.Cancelled })
@@ -253,7 +253,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         if (!Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? thread))
             return NotFound();
 
-        if (!CanAccessThread(thread)) return Forbid();
+        if (!CanAccessThread(thread)) return StatusCode(403);
 
         return Ok(SerializeDebugThread(thread));
     }
@@ -262,7 +262,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     [HttpPost("{threadKey}/debug/seed")]
     public IActionResult SeedDebugHistory(string threadKey, [FromBody] List<SeedTurn> turns)
     {
-        if (!User.IsInRole(ARI.API.Auth.Roles.Admin)) return Forbid();
+        if (!User.IsInRole(ARI.API.Auth.Roles.Admin)) return StatusCode(403);
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
 
         ARI.LLM.Thread thread = Llm.GetOrCreateDialogueThread(threadKey);
@@ -284,7 +284,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     [HttpPost("{threadKey}/debug/extract-only")]
     public async Task<IActionResult> DebugExtractOnly(string threadKey)
     {
-        if (!User.IsInRole(ARI.API.Auth.Roles.Admin)) return Forbid();
+        if (!User.IsInRole(ARI.API.Auth.Roles.Admin)) return StatusCode(403);
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
         List<(string Entity, bool IsNew, string Excerpt, bool Sensitive)> entities = await Llm.DebugExtractOnly(threadKey);
         return Ok(entities.Select(e => new { e.Entity, e.IsNew, e.Excerpt, e.Sensitive }));
@@ -295,7 +295,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     [HttpGet("debug/sessions")]
     public IActionResult GetDebugSessions()
     {
-        if (!User.IsInRole(ARI.API.Auth.Roles.Admin)) return Forbid();
+        if (!User.IsInRole(ARI.API.Auth.Roles.Admin)) return StatusCode(403);
         List<ARI.LLM.SessionRecorder.DiskSession> sessions = ARI.LLM.SessionRecorder.ListTodaysSessions();
         return Ok(sessions.Select(s => new { stem = s.Stem, bytes = s.Bytes }));
     }
@@ -304,7 +304,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     [HttpGet("debug/sessions/{stem}")]
     public IActionResult GetDebugSession(string stem)
     {
-        if (!User.IsInRole(ARI.API.Auth.Roles.Admin)) return Forbid();
+        if (!User.IsInRole(ARI.API.Auth.Roles.Admin)) return StatusCode(403);
         List<Dictionary<string, object?>>? lines = ARI.LLM.SessionRecorder.ReadSessionFile(stem);
         if (lines is null) return NotFound();
         return Ok(lines);
@@ -359,7 +359,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         // Cancelled responses are hidden from normal view; streaming responses are included so
         // watching clients can render the in-progress reply. Raw view keeps everything.
         ARI.LLM.Thread? histThread = raw ? FindAnyThread(threadKey) : FindThread(threadKey);
-        if (histThread is not null && !CanAccessThread(histThread)) return Forbid();
+        if (histThread is not null && !CanAccessThread(histThread)) return StatusCode(403);
         List<ThreadItem> items = raw
             ? (histThread?.History ?? new())
             : (histThread?.History ?? new())
@@ -374,7 +374,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
         ARI.LLM.Thread? exportThread = FindThread(threadKey);
-        if (exportThread is not null && !CanAccessThread(exportThread)) return Forbid();
+        if (exportThread is not null && !CanAccessThread(exportThread)) return StatusCode(403);
         List<ThreadItem> items = exportThread?.History ?? new();
         string log = string.Join("\n\n", items.Select(i => i.ToString()));
         byte[] bytes = Encoding.UTF8.GetBytes(log);
@@ -524,7 +524,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     [HttpPost("{threadKey}/approvals/{id}")]
     public IActionResult AnswerApproval(string threadKey, string id, [FromBody] ApprovalAnswer body)
     {
-        if (!User.IsInRole(ARI.API.Auth.Roles.Admin)) return Forbid();
+        if (!User.IsInRole(ARI.API.Auth.Roles.Admin)) return StatusCode(403);
         return ARI.LLM.ToolApprovals.Resolve(threadKey, id, body?.Allow == true) ? Ok() : NotFound();
     }
 

@@ -17,7 +17,7 @@ public class AdminUsersController(UserStore users) : ControllerBase
     [HttpGet]
     public IActionResult ListUsers()
     {
-        if (!IsAdmin()) return Forbid();
+        if (!IsAdmin()) return StatusCode(403);
         return Ok(users.GetAll().Select(u => new
         {
             u.Id,
@@ -38,7 +38,7 @@ public class AdminUsersController(UserStore users) : ControllerBase
     [HttpPost]
     public IActionResult CreateUser([FromBody] CreateUserRequest req)
     {
-        if (!IsAdmin()) return Forbid();
+        if (!IsAdmin()) return StatusCode(403);
 
         string role = req.Role is Roles.Admin or Roles.Guest ? req.Role : Roles.Guest;
 
@@ -61,7 +61,7 @@ public class AdminUsersController(UserStore users) : ControllerBase
     [HttpPost("{id:int}/reset-password")]
     public IActionResult ResetPassword(int id, [FromBody] ResetPasswordRequest req)
     {
-        if (!IsAdmin()) return Forbid();
+        if (!IsAdmin()) return StatusCode(403);
 
         User? user = users.GetById(id);
         if (user is null) return NotFound();
@@ -83,7 +83,7 @@ public class AdminUsersController(UserStore users) : ControllerBase
     [HttpDelete("{id:int}")]
     public IActionResult DeleteUser(int id)
     {
-        if (!IsAdmin()) return Forbid();
+        if (!IsAdmin()) return StatusCode(403);
 
         string? myIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (int.TryParse(myIdStr, out int myId) && myId == id)
@@ -104,7 +104,7 @@ public class AdminUsersController(UserStore users) : ControllerBase
     [HttpGet("/admin/sessions")]
     public IActionResult AllSessions()
     {
-        if (!IsAdmin()) return Forbid();
+        if (!IsAdmin()) return StatusCode(403);
         return Ok(users.GetAllActiveSessions().Select(s => new
         {
             s.SessionId,
@@ -119,7 +119,7 @@ public class AdminUsersController(UserStore users) : ControllerBase
     [HttpDelete("/admin/sessions/{sessionId}")]
     public IActionResult RevokeSession(string sessionId)
     {
-        if (!IsAdmin()) return Forbid();
+        if (!IsAdmin()) return StatusCode(403);
         users.RevokeSession(sessionId);
         return Ok();
     }
@@ -129,7 +129,7 @@ public class AdminUsersController(UserStore users) : ControllerBase
     [HttpGet("/admin/blocklist")]
     public IActionResult GetBlocklist()
     {
-        if (!IsAdmin()) return Forbid();
+        if (!IsAdmin()) return StatusCode(403);
         return Ok(users.GetBlockedIps().Select(b => new
         {
             b.Ip,
@@ -141,7 +141,7 @@ public class AdminUsersController(UserStore users) : ControllerBase
     [HttpDelete("/admin/blocklist/{ip}")]
     public IActionResult UnblockIp(string ip)
     {
-        if (!IsAdmin()) return Forbid();
+        if (!IsAdmin()) return StatusCode(403);
         users.UnblockIp(ip);
         return Ok();
     }

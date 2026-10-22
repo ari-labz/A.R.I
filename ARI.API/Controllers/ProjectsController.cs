@@ -66,7 +66,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
     {
         Project? existing = store.Get(id);
         if (existing is null) return NotFound();
-        if (!CanAccess(existing)) return Forbid();
+        if (!CanAccess(existing)) return StatusCode(403);
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest(new { error = "Name is required." });
 
@@ -94,7 +94,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
     {
         Project? project = store.Get(id);
         if (project is null) return NotFound();
-        if (!CanAccess(project)) return Forbid();
+        if (!CanAccess(project)) return StatusCode(403);
         store.Delete(id);
         return Ok();
     }
@@ -137,7 +137,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
     {
         Project? project = store.Get(id);
         if (project is null) return NotFound();
-        if (!CanAccess(project)) return Forbid();
+        if (!CanAccess(project)) return StatusCode(403);
         if (project.Backend != StorageBackend.ServerFs || project.RootPath is null)
             return BadRequest(new { error = "This project has no server filesystem." });
 
@@ -178,7 +178,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
     {
         Project? project = store.Get(id);
         if (project is null) return NotFound();
-        if (!CanAccess(project)) return Forbid();
+        if (!CanAccess(project)) return StatusCode(403);
         if (project.Backend != StorageBackend.ServerFs || project.RootPath is null)
             return BadRequest(new { error = "This project has no server filesystem." });
         if (string.IsNullOrWhiteSpace(path))
@@ -199,7 +199,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
     {
         Project? project = store.Get(id);
         if (project is null) return (null, null, NotFound());
-        if (!CanAccess(project)) return (null, null, Forbid());
+        if (!CanAccess(project)) return (null, null, StatusCode(403));
         if (project.Backend != StorageBackend.ServerFs || project.RootPath is null)
             return (null, null, BadRequest(new { error = "This project has no server filesystem." }));
 
