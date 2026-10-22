@@ -519,10 +519,9 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
       </a>
       <div id="cp-sidebar-nav">
         <div class="cp-nav-item top-level active" data-tab="overview">Overview</div>
+        <div class="cp-nav-item top-level" data-tab="users">Users</div>
+        <div class="cp-nav-item top-level" data-tab="settings">Settings</div>
         <div class="cp-nav-item top-level" data-tab="debug">Deep Thread Inspection (DTI)</div>
-        <div class="cp-nav-group" data-group-id="users">Users<span class="nav-chevron">▾</span></div>
-        <div class="cp-nav-item" data-tab="users-new" data-group="users">New User</div>
-        <div class="cp-nav-item" data-tab="users-manage" data-group="users">User Management</div>
         <div class="cp-nav-group" data-group-id="system">System<span class="nav-chevron">▾</span></div>
         <div class="cp-nav-item" data-tab="modules" data-group="system">Modules</div>
         <div class="cp-nav-item" data-tab="customisation" data-group="system">Customisation</div>
@@ -888,8 +887,26 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
     </div>
 
     <!-- New User tab -->
-    <div id="tab-users-new" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
-      <div class="vs-section" style="max-width:480px;">
+    <div id="tab-users" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div class="vs-section">
+        <div class="vs-section-title" style="display:flex;align-items:center;justify-content:space-between;">
+          <span>Users</span>
+          <button class="vs-btn-outline" id="um-refresh-btn" type="button" style="font-size:12px;padding:5px 12px;">Refresh</button>
+        </div>
+        <div id="um-user-list" style="margin-top:14px;display:flex;flex-direction:column;gap:10px;"></div>
+
+        <!-- Reset password inline form (hidden until a row's Reset button is clicked) -->
+        <div id="um-reset-panel" style="display:none;margin-top:24px;padding:16px 18px;border:1px solid var(--border);border-radius:10px;background:var(--user-bubble);">
+          <div style="font-size:13px;font-weight:600;margin-bottom:10px;">Reset password for <span id="um-reset-name"></span></div>
+          <div style="display:flex;gap:10px;align-items:center;">
+            <input id="um-reset-pw" class="vs-input" type="text" placeholder="New temporary password (min. 6 chars)" style="flex:1;">
+            <button class="vs-btn-primary" id="um-reset-save" type="button">Set password</button>
+            <button class="vs-btn-outline" id="um-reset-cancel" type="button">Cancel</button>
+          </div>
+          <span id="um-reset-status" style="font-size:12px;color:var(--text-dim);display:block;margin-top:6px;"></span>
+        </div>
+      </div>
+      <div class="vs-section" style="max-width:480px;margin-top:28px;">
         <div class="vs-section-title">Create user</div>
         <p style="color:var(--text-dim);font-size:13px;margin:0 0 18px;">
           The new account starts with <em>must-change-password</em> set. The user will be prompted to set their own password on first sign-in.
@@ -914,28 +931,6 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
             <button class="vs-btn-primary" id="nu-create-btn" type="button">Create user</button>
             <span id="nu-status" style="font-size:12px;color:var(--text-dim);"></span>
           </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- User Management tab -->
-    <div id="tab-users-manage" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
-      <div class="vs-section">
-        <div class="vs-section-title" style="display:flex;align-items:center;justify-content:space-between;">
-          <span>Users</span>
-          <button class="vs-btn-outline" id="um-refresh-btn" type="button" style="font-size:12px;padding:5px 12px;">Refresh</button>
-        </div>
-        <div id="um-user-list" style="margin-top:14px;display:flex;flex-direction:column;gap:10px;"></div>
-
-        <!-- Reset password inline form (hidden until a row's Reset button is clicked) -->
-        <div id="um-reset-panel" style="display:none;margin-top:24px;padding:16px 18px;border:1px solid var(--border);border-radius:10px;background:var(--user-bubble);">
-          <div style="font-size:13px;font-weight:600;margin-bottom:10px;">Reset password for <span id="um-reset-name"></span></div>
-          <div style="display:flex;gap:10px;align-items:center;">
-            <input id="um-reset-pw" class="vs-input" type="text" placeholder="New temporary password (min. 6 chars)" style="flex:1;">
-            <button class="vs-btn-primary" id="um-reset-save" type="button">Set password</button>
-            <button class="vs-btn-outline" id="um-reset-cancel" type="button">Cancel</button>
-          </div>
-          <span id="um-reset-status" style="font-size:12px;color:var(--text-dim);display:block;margin-top:6px;"></span>
         </div>
       </div>
     </div>
@@ -1134,6 +1129,40 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
         </p>
         <div id="mod-list" style="display:flex;flex-direction:column;gap:12px;">
           <span style="font-size:12px;color:var(--text-dim);">Loading…</span>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Settings tab -->
+    <div id="tab-settings" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+
+      <div class="vs-section">
+        <div class="vs-section-title">Persistent Threads</div>
+        <div id="pt-box" style="display:flex;align-items:flex-start;gap:16px;padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:var(--user-bubble,var(--col-control-panel-line-1656-colour));">
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:14px;font-weight:600;margin-bottom:4px;">Keep conversations after they expire</div>
+            <div style="font-size:13px;color:var(--text-dim);line-height:1.45;">
+              Off by default: when a conversation expires it is gone for good and only its memories remain. Turn this on and
+              expired conversations — everyone's, guests included — are saved in full on this server, shown greyed in the
+              sidebar, and picked up again when someone sends a message in one. Admins can see all of them.
+            </div>
+            <div id="pt-status" style="font-size:12px;color:var(--text-dim);margin-top:8px;"></div>
+            <button id="pt-delete" type="button" class="vs-btn-outline" style="margin-top:10px;font-size:12px;padding:5px 12px;display:none;">Delete all saved conversations</button>
+          </div>
+          <div id="pt-toggle" style="display:flex;align-items:center;padding-top:2px;"></div>
+        </div>
+      </div>
+
+      <div class="vs-section" style="margin-top:28px;">
+        <div class="vs-section-title">Logging</div>
+        <div id="lg-box" style="padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:var(--user-bubble,var(--col-control-panel-line-1656-colour));">
+          <div style="font-size:13px;color:var(--text-dim);line-height:1.45;margin-bottom:12px;">
+            What ARI records for debugging and for the Deep Thread Inspection page: every request the model sees, its reasoning and
+            its tool calls. Changes are saved straight away but take effect when ARI next starts.
+          </div>
+          <div style="display:flex;flex-direction:column;gap:12px;" id="lg-rows"></div>
+          <div id="lg-status" style="font-size:12px;color:var(--text-dim);margin-top:10px;"></div>
         </div>
       </div>
     </div>
@@ -1472,8 +1501,8 @@ cpFetch('/admin/username').then(r => r.json()).then(d => { if (d.name) window._a
 
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), github: document.getElementById('tab-github'), dreaming: document.getElementById('tab-dreaming'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), 'users-new': document.getElementById('tab-users-new'), 'users-manage': document.getElementById('tab-users-manage'), modules: document.getElementById('tab-modules'), 'imagegen-model': document.getElementById('tab-imagegen-model'), 'imagegen-settings': document.getElementById('tab-imagegen-settings'), calendar: document.getElementById('tab-calendar'), customisation: document.getElementById('tab-customisation'), prompts: document.getElementById('tab-prompts') };
-const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', discord: 'Discord', github: 'GitHub', dreaming: 'Dreaming', llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', 'users-new': 'New User', 'users-manage': 'User Management', modules: 'Modules', 'imagegen-model': 'Image Generation — Model', 'imagegen-settings': 'Image Generation — Settings', calendar: 'Calendar', customisation: 'Customisation', prompts: 'Prompts' };
+const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), github: document.getElementById('tab-github'), dreaming: document.getElementById('tab-dreaming'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), users: document.getElementById('tab-users'), settings: document.getElementById('tab-settings'), modules: document.getElementById('tab-modules'), 'imagegen-model': document.getElementById('tab-imagegen-model'), 'imagegen-settings': document.getElementById('tab-imagegen-settings'), calendar: document.getElementById('tab-calendar'), customisation: document.getElementById('tab-customisation'), prompts: document.getElementById('tab-prompts') };
+const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', discord: 'Discord', github: 'GitHub', dreaming: 'Dreaming', llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', users: 'Users', settings: 'Settings', modules: 'Modules', 'imagegen-model': 'Image Generation — Model', 'imagegen-settings': 'Image Generation — Settings', calendar: 'Calendar', customisation: 'Customisation', prompts: 'Prompts' };
 
 let srvPollTimer = null;
 // Declared here (not down in the GitHub section) because switchTab('overview') below calls stopGhPoll()
@@ -1505,7 +1534,8 @@ function switchTab(name) {
     if (name === 'github') loadGitHub();
     if (name !== 'github') stopGhPoll();
     if (name === 'debug') loadDebugThreads();
-    if (name === 'users-manage') loadUserManagement();
+    if (name === 'users') loadUserManagement();
+    if (name === 'settings') { loadPersistedThreads(); loadLogging(); }
     if (name === 'modules') loadModules();
     if (name === 'voices') loadVoicesList();
     if (name === 'voice') vsRestoreTraining();
@@ -1723,6 +1753,66 @@ async function applyModuleVisibility() {
     } catch {}
 }
 applyModuleVisibility();
+
+// ── Persistent Threads ────────────────────────────────────
+function fmtBytes(n) { return n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; }
+
+async function loadPersistedThreads() {
+    const status = document.getElementById('pt-status'), del = document.getElementById('pt-delete'), slot = document.getElementById('pt-toggle');
+    try {
+        const r = await cpFetch('/admin/persisted-threads');
+        if (!r.ok) throw new Error();
+        const s = await r.json();
+        slot.innerHTML = '';
+        slot.appendChild(buildToggle(s.enabled, async on => {
+            status.textContent = 'Saving…';
+            const res = await cpFetch('/admin/persisted-threads', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: on }) });
+            const now = await res.json();
+            if (!on && now.count > 0 && confirm(`Persistent Threads is off. Delete the ${now.count} saved conversation(s) (${fmtBytes(now.bytes)}) too? This cannot be undone.`))
+                await cpFetch('/admin/persisted-threads', { method: 'DELETE' });
+            loadPersistedThreads();
+        }));
+        status.textContent = s.count > 0 ? `${s.count} saved conversation(s), ${fmtBytes(s.bytes)}.` : (s.enabled ? 'Nothing saved yet.' : '');
+        del.style.display = s.count > 0 ? '' : 'none';
+        del.onclick = async () => {
+            if (!confirm(`Delete all ${s.count} saved conversation(s)? This cannot be undone.`)) return;
+            await cpFetch('/admin/persisted-threads', { method: 'DELETE' });
+            loadPersistedThreads();
+        };
+    } catch { status.textContent = 'Could not load this setting.'; }
+}
+
+async function loadLogging() {
+    const rows = document.getElementById('lg-rows'), status = document.getElementById('lg-status');
+    try {
+        const r = await cpFetch('/admin/settings/logging');
+        if (!r.ok) throw new Error();
+        const cfg = await r.json();
+        const save = async () => {
+            status.textContent = 'Saving…';
+            const res = await cpFetch('/admin/settings/logging', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg) });
+            status.textContent = res.ok ? 'Saved — takes effect when ARI next starts.' : 'Could not save.';
+        };
+        const row = (title, desc, control) => {
+            const d = document.createElement('div');
+            d.style.cssText = 'display:flex;align-items:flex-start;gap:16px;';
+            d.innerHTML = `<div style="flex:1;min-width:0;"><div style="font-size:13.5px;font-weight:600;">${title}</div><div style="font-size:12.5px;color:var(--text-dim);line-height:1.4;">${desc}</div></div>`;
+            const c = document.createElement('div'); c.style.cssText = 'display:flex;align-items:center;'; c.appendChild(control); d.appendChild(c);
+            return d;
+        };
+        const days = document.createElement('input');
+        days.type = 'number'; days.min = 0; days.value = cfg.retentionDays; days.className = 'vs-input'; days.style.cssText = 'width:80px;';
+        days.addEventListener('change', () => { cfg.retentionDays = Math.max(0, parseInt(days.value) || 0); save(); });
+        rows.innerHTML = '';
+        rows.append(
+            row('Record sessions', 'Master switch for the debug, dream and chat logs. Off, ARI writes none of them.', buildToggle(cfg.enabled, v => { cfg.enabled = v; save(); })),
+            row('Full requests', 'Keep the whole request the model saw (system prompt, every message, tool schemas). Off keeps only sizes and digests.', buildToggle(cfg.includeFullRequests, v => { cfg.includeFullRequests = v; save(); })),
+            row('Tool results', 'Keep what tools returned in full. Off keeps only the tool name and result length.', buildToggle(cfg.includeToolResults, v => { cfg.includeToolResults = v; save(); })),
+            row('Keep logs for (days)', 'Older log folders are deleted when ARI starts. 0 keeps them forever.', days),
+        );
+        status.textContent = '';
+    } catch { status.textContent = 'Could not load logging settings.'; }
+}
 
 async function loadModules() {
     if (!modList) return;
@@ -3112,10 +3202,10 @@ async function loadUserManagement() {
             row.innerHTML = `
                 <div style="flex:1;min-width:0;">
                     <div style="font-size:13.5px;font-weight:600;color:var(--text);">${u.username}${u.displayName && u.displayName !== u.username ? ` <span style="font-weight:400;color:var(--text-dim);">(${u.displayName})</span>` : ''}</div>
-                    <div style="font-size:12px;color:var(--text-dim);margin-top:2px;">${u.role} · Last active: ${lastActive}</div>
+                    <div style="font-size:12px;color:var(--text-dim);margin-top:2px;">${u.role}${u.isMaster ? ' · <strong>Master</strong>' : ''} · Last active: ${lastActive}</div>
                 </div>
                 <button class="vs-btn-outline um-reset-btn" data-id="${u.id}" data-name="${u.username}" type="button" style="font-size:12px;padding:5px 11px;">Reset password</button>
-                <button class="vs-btn-outline um-delete-btn" data-id="${u.id}" data-name="${u.username}" type="button" style="font-size:12px;padding:5px 11px;color:var(--col-control-panel-u-id-text);border-color:var(--col-control-panel-u-id-border);">Delete</button>
+                ${u.isMaster ? '' : `<button class="vs-btn-outline um-delete-btn" data-id="${u.id}" data-name="${u.username}" type="button" style="font-size:12px;padding:5px 11px;color:var(--col-control-panel-u-id-text);border-color:var(--col-control-panel-u-id-border);">Delete</button>`}
             `;
             list.appendChild(row);
         });
