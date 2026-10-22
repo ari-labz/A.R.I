@@ -4110,8 +4110,8 @@ function agBindingPickers(agent) {
 // the full param list, editing agent[key] directly — same spec/renderer as the server modal.
 function agBuildThinking(body, agent) {
     const row = agEl('label', 'display:flex;align-items:center;justify-content:space-between;cursor:pointer;margin-bottom:12px;');
-    row.innerHTML = `<span style="font-size:12px;font-weight:600;">Thinking
-        <span style="font-size:11px;color:var(--text-dim);font-weight:400;">— lets the model reason before it answers. Off gives faster, shorter replies and no reasoning tokens.</span></span>`;
+    row.innerHTML = `<span style="font-size:12px;font-weight:600;">Thinking enabled
+        <span style="font-size:11px;color:var(--text-dim);font-weight:400;">— lets the model reason before it answers, if the model supports thinking. Off gives faster replies with no reasoning tokens.</span></span>`;
     const toggle = agEl('input'); toggle.type = 'checkbox';
     toggle.style.cssText = 'width:15px;height:15px;accent-color:var(--accent,var(--col-control-panel-line-3961-colour));';
     toggle.checked = !!agent.think;
