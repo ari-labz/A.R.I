@@ -4108,6 +4108,18 @@ function agBindingPickers(agent) {
 
 // Sampler override: off by default (agent runs on the bound server's settings verbatim). On reveals
 // the full param list, editing agent[key] directly — same spec/renderer as the server modal.
+function agBuildThinking(body, agent) {
+    const row = agEl('label', 'display:flex;align-items:center;justify-content:space-between;cursor:pointer;margin-bottom:12px;');
+    row.innerHTML = `<span style="font-size:12px;font-weight:600;">Thinking
+        <span style="font-size:11px;color:var(--text-dim);font-weight:400;">— lets the model reason before it answers. Off gives faster, shorter replies and no reasoning tokens.</span></span>`;
+    const toggle = agEl('input'); toggle.type = 'checkbox';
+    toggle.style.cssText = 'width:15px;height:15px;accent-color:var(--accent,var(--col-control-panel-line-3961-colour));';
+    toggle.checked = !!agent.think;
+    toggle.addEventListener('change', () => { agent.think = toggle.checked; agDirty(); });
+    row.append(toggle);
+    body.append(row);
+}
+
 function agBuildSamplerOverride(body, agent) {
     const wrap = agEl('div', 'margin-bottom:14px;padding-top:10px;border-top:1px solid var(--border,var(--col-control-panel-line-3930-colour));');
     const row = agEl('label', 'display:flex;align-items:center;justify-content:space-between;cursor:pointer;');
@@ -4228,6 +4240,7 @@ function agRenderAgents() {
         row.append(sw, text, agBindingPickers(agent), gear);
 
         const body = agEl('div', 'display:none;padding:6px 16px 14px;border-top:1px solid var(--border);');
+        agBuildThinking(body, agent);
         agBuildSamplerOverride(body, agent);
         agBuildCompaction(body, agent);
         gear.addEventListener('click', () => {
