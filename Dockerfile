@@ -14,10 +14,10 @@ ARG CUDA_VERSION=13.0.1
 # irrelevant here because the binary is baked in.
 ARG LLAMA_CPP_REF=b11696
 ARG DOTNET_VERSION=10.0
-# Where the CUDA llama.cpp comes from. "llama-bin" (a stage below) compiles it inside this build — slow, ~20 min per
-# architecture — which is also how the shared image is made (see .github/workflows/llama-cuda.yml). The default
-# is that image already built and published once, so a normal A·R·I build never compiles CUDA again.
-ARG LLAMA_IMAGE=llama-bin
+# Where the CUDA llama.cpp comes from. The default is the image published once by .github/workflows/llama-cuda.yml,
+# so a normal A·R·I build never compiles CUDA. To compile it inside your own build instead (slow, ~20 min per
+# architecture, and needed for GPUs the published image doesn't target), pass --build-arg LLAMA_IMAGE=llama-bin.
+ARG LLAMA_IMAGE=ghcr.io/ari-labz/llama-cpp-cuda:${LLAMA_CPP_REF}
 
 
 # ── 1. llama.cpp with CUDA ───────────────────────────────────────────────────────────────────────────
