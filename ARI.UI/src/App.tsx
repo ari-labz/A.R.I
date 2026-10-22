@@ -413,6 +413,10 @@ export default function App() {
                                 loadHistory(data.threadKey).then(hist => setItems(dedupeRecentUserMessages(hist))).catch(() => {})
                         }
                         break
+                    case "threadExpired":
+                        // Persistent Threads kept it: the sidebar shows it greyed, and a thread being viewed stays on screen.
+                        loadThreads()
+                        break
                     case "threadDeleted":
                         loadThreads()
                         if (data.threadKey === activeThreadRef.current) {
@@ -1412,7 +1416,11 @@ export default function App() {
                 onNewChat={newChat}
                 onOpenProjects={() => setActiveView("projects")}
                 onSelectThread={(t: ThreadEntry) => { setActiveView("chat"); openThread(t.key, t.isInternal, t.agentName, t.isCodeMode, t.projectId ?? null) }}
-                onCloseThread={(t: ThreadEntry) => { void closeThread(t.key) }}
+                onCloseThread={(t: ThreadEntry) => {
+                    // On an expired (saved) thread the button deletes it for good, so ask first.
+                    if (t.state === "expired" && !window.confirm("Delete this saved conversation forever? This cannot be undone.")) return
+                    void closeThread(t.key)
+                }}
                 collapsed={sidebarCollapsed}
                 onToggleCollapse={() => setSidebarCollapsed(c => !c)}
                 clientVersion={clientVersion}

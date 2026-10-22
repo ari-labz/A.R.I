@@ -457,7 +457,15 @@ public class LLMModule : ILLMModule, IDisposable
         if (Modules.ImageGen?.IsReady == true && type is ThreadPipeline.Dialogue or ThreadPipeline.Speech)
             ToolFactories.LoadGroup("image_tools", thread);
         thread.Updated           += () => Broadcast(new AppEvent("threadUpdated", threadKey));
-        thread.Deleted           += () => { threads.TryRemove(threadKey, out _); Broadcast(new AppEvent("threadDeleted", threadKey)); };
+        thread.Deleted           += () =>
+        {
+            // With Persistent Threads on, an expiring conversation is saved one last time and leaves memory; the sidebar
+            // keeps it (greyed) rather than dropping it.
+            bool kept = PersistedThreads.ShouldSave(thread);
+            if (kept) PersistedThreads.Save(thread);
+            threads.TryRemove(threadKey, out _);
+            Broadcast(new AppEvent(kept ? "threadExpired" : "threadDeleted", threadKey));
+        };
         thread.Streaming         += text => Broadcast(new AppEvent("streaming", threadKey, text));
         thread.StreamingFinished += () =>
         {
@@ -468,6 +476,9 @@ public class LLMModule : ILLMModule, IDisposable
         // Persist a plain-text transcript to ChatHistory after every completed exchange.
         if (type is not ThreadPipeline.Dream)
             thread.ExchangeCompleted += (_, _) => ChatHistoryLogger.Write(thread);
+        // Persistent Threads: keep a full snapshot after every exchange (a no-op unless the setting is on).
+        if (type is ThreadPipeline.Dialogue)
+            thread.ExchangeCompleted += (_, _) => PersistedThreads.Save(thread);
         // Engram (or a mark-processed no-op) fires on entry to dormant — the single gate before deletion.
         thread.BecameDormant    += () => OnThreadDormant(thread);
         if (type is ThreadPipeline.Dialogue && textingAgent is not null)
@@ -1398,6 +1409,63 @@ public class LLMModule : ILLMModule, IDisposable
 
     public Thread GetOrCreateDialogueThread(string threadKey)
         => GetOrCreateThread(ThreadPipeline.Dialogue, threadKey);
+
+    // ── Persistent Threads ────────────────────────────────────────────────────────────
+    // An expired conversation lives only in its saved file (see PersistedThreads); a live one lives only in memory.
+
+    public sealed record PersistedThreadInfo(string Key, string? OwnerId, string? Title, DateTime LastMessageAt);
+
+    /// <summary>Saved threads that are not currently live, newest first. Empty when the setting is off.</summary>
+    public IReadOnlyList<PersistedThreadInfo> ListPersistedThreads() =>
+        !PersistedThreadsSetting.Enabled
+            ? []
+            : PersistedThreads.ListMeta().Where(m => !threads.ContainsKey(m.Key))
+                .Select(m => new PersistedThreadInfo(m.Key, m.OwnerId, m.Title, m.LastMessageAt)).ToList();
+
+    public PersistedThreadInfo? GetPersistedInfo(string key) =>
+        PersistedThreadsSetting.Enabled && PersistedThreads.ReadMeta(key) is { } m
+            ? new PersistedThreadInfo(m.Key, m.OwnerId, m.Title, m.LastMessageAt)
+            : null;
+
+    /// <summary>A saved thread rebuilt for viewing only — never registered, so it has no timers and no hooks.</summary>
+    public Thread? LoadPersistedForView(string key)
+    {
+        if (!PersistedThreadsSetting.Enabled || !PersistedThreads.Exists(key)) return null;
+        Thread view = new(ThreadPipeline.Dialogue, key);
+        return PersistedThreads.Restore(key, view) ? view : null;
+    }
+
+    /// <summary>Brings a saved thread back to life: registered like any other, with its history, context window and owner
+    /// restored. Engram is told the saved messages are already done, so only new ones are swept.</summary>
+    public Thread? ReopenPersisted(string key)
+    {
+        if (threads.TryGetValue(key, out Thread? live)) return live;
+        if (!PersistedThreadsSetting.Enabled || !PersistedThreads.Exists(key)) return null;
+
+        Thread thread = GetOrCreateThread(ThreadPipeline.Dialogue, key);
+        if (!PersistedThreads.Restore(key, thread)) { threads.TryRemove(key, out _); return null; }
+        engram?.MarkHistoryRestored(key, thread.History.Count);
+        Broadcast(new AppEvent("threadUpdated", key));
+        return thread;
+    }
+
+    /// <summary>Deletes a saved thread for good — its snapshot, attachments and scratchpad.</summary>
+    public bool DeletePersisted(string key)
+    {
+        if (!PersistedThreads.Exists(key)) return false;
+        PersistedThreads.Delete(key);
+        Broadcast(new AppEvent("threadDeleted", key));
+        return true;
+    }
+
+    public (int Count, long Bytes) PersistedStats() => PersistedThreads.Stats();
+
+    public int DeleteAllPersisted()
+    {
+        int n = PersistedThreads.DeleteAll();
+        Broadcast(new AppEvent("threadDeleted", ""));
+        return n;
+    }
 
     // ── Engram eval harness (additive; not used by the live app) ──────────────────────
     // Seeds a dialogue thread with a scripted transcript so a sweep can be tested in isolation,

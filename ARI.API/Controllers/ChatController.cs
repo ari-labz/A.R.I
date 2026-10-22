@@ -65,9 +65,18 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     void Microsoft.AspNetCore.Mvc.Filters.IActionFilter.OnActionExecuting(Microsoft.AspNetCore.Mvc.Filters.ActionExecutingContext context)
     {
         if (context.RouteData.Values["threadKey"] is not string key || Llm is null) return;
-        if (Llm.Threads.TryGetValue(key, out ARI.LLM.Thread? thread) && !CanAccessThread(thread))
+        if (Llm.Threads.TryGetValue(key, out ARI.LLM.Thread? thread))
+        {
+            if (!CanAccessThread(thread)) context.Result = new StatusCodeResult(403);
+        }
+        // A saved (expired) thread is not in memory, but it still belongs to its owner.
+        else if (Llm.GetPersistedInfo(key) is { } saved && !CanAccessOwner(saved.OwnerId))
             context.Result = new StatusCodeResult(403);
     }
+
+    private bool CanAccessOwner(string? ownerId) =>
+        User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin
+        || (ownerId is not null && ownerId == User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier));
 
     void Microsoft.AspNetCore.Mvc.Filters.IActionFilter.OnActionExecuted(Microsoft.AspNetCore.Mvc.Filters.ActionExecutedContext context) { }
 
@@ -158,6 +167,15 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
             })
             .ToList();
 
+        // Persistent Threads: conversations that expired but were kept. Same visibility rule as live ones — a guest's
+        // request never even reads another user's entry into the response.
+        foreach (ARI.LLM.LLMModule.PersistedThreadInfo saved in Llm.ListPersistedThreads())
+        {
+            if (!callerIsAdmin && saved.OwnerId != callerId) continue;
+            threads.Add(new ThreadEntry(saved.Key, AgentName: null, IsInternal: false, LastMessageAt: saved.LastMessageAt, MessageCount: 0,
+                State: "expired", IsCodeMode: false, Pipeline: "dialogue", Title: saved.Title, OwnerName: OwnerNameFor(saved.OwnerId)));
+        }
+
         if (includeInternal)
         {
             HashSet<string> userKeys = new(threads.Select(t => t.Key), StringComparer.OrdinalIgnoreCase);
@@ -218,8 +236,14 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
 
+        bool expired = false;
         if (!Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? thread))
-            return NotFound();
+        {
+            // Not in memory: it may be an expired thread kept by Persistent Threads, rebuilt here for viewing.
+            thread = Llm.LoadPersistedForView(threadKey);
+            if (thread is null) return NotFound();
+            expired = true;
+        }
 
         if (!CanAccessThread(thread)) return StatusCode(403);
 
@@ -230,7 +254,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         return Ok(new
         {
             key           = threadKey,
-            state         = thread.State.ToString().ToLowerInvariant(),
+            state         = expired ? "expired" : thread.State.ToString().ToLowerInvariant(),
             pipeline      = thread.Pipeline.ToString().ToLowerInvariant(),
             isInternal    = thread.Internal,
             lastMessageAt = thread.LastMessageAt,
@@ -916,6 +940,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     public async Task<IActionResult> CloseThread(string threadKey)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        // A thread that is not live but is kept by Persistent Threads: closing it again means deleting it for good.
+        if (!Llm.Threads.ContainsKey(threadKey) && Llm.DeletePersisted(threadKey)) return Ok();
         bool closed = await Llm.CloseThreadAsync(threadKey);
         return closed ? Ok() : NotFound();
     }
@@ -924,6 +950,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     public async Task Stream(string threadKey, [FromBody] StreamRequest body, CancellationToken cancellationToken)
     {
         string prompt = body?.Prompt ?? string.Empty;
+        // Sending to an expired thread (Persistent Threads) reopens it first: history, context window and owner restored.
+        Llm?.ReopenPersisted(threadKey);
         // Safe mode has two halves: the persistent thread flag (enforced as a hard edit-block in the Coder's
         // tool layer) and the prompt injection that steers her toward read-only planning. Set both. The flag
         // mirrors the toggle each send; CodePipeline clears it when the user approves a plan.
