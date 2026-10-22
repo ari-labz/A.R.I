@@ -34,14 +34,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: linux/amd64
-            runner: ubuntu-24.04
-          - platform: linux/arm64
-            runner: ubuntu-24.04-arm
+        # Pushes to main only build ARM64 (the DGX Spark) so "edge" is quick; release tags and manual runs build both.
+        include: ${{ fromJSON((github.ref_type == 'tag' || github.event_name == 'workflow_dispatch') && '[{"platform":"linux/amd64","runner":"ubuntu-24.04"},{"platform":"linux/arm64","runner":"ubuntu-24.04-arm"}]' || '[{"platform":"linux/arm64","runner":"ubuntu-24.04-arm"}]') }}
     runs-on: ${{ matrix.runner }}
-    # Pushes to main only build ARM64 (the DGX Spark) so "edge" is quick; release tags and manual runs build both.
-    if: ${{ matrix.platform == 'linux/arm64' || github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@v4
       # Only SmartReader is needed to build; the voice-engine submodules are ~1 GB and stay out of the image.
