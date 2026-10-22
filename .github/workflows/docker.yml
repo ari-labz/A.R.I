@@ -1,6 +1,6 @@
 name: Docker image
 
-# Builds the A·R·I server image for ARM64 (DGX Spark and other ARM NVIDIA machines) and AMD64 and publishes it to
+# Builds the A·R·I server image for ARM64 (DGX Spark and other ARM NVIDIA machines) and publishes it to
 # ghcr.io/ari-labz/ari. Runs on every push to main (tagged "latest"), on every release tag (tagged with the version and
 # "latest"), or by hand from the Actions tab.
 #
@@ -35,8 +35,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: linux/amd64
-            runner: ubuntu-24.04
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
