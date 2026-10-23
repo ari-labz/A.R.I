@@ -1540,12 +1540,68 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
         return Ok(model);
     }
 
+    /// <summary>Removes a model from the registry. With <c>deleteFile=true</c> its files are deleted from disk too: the
+    /// weights, the vision projector, and any leftover partial download. Nothing is touched when a running server is using
+    /// the model, a file another model entry also points at is kept, and only files inside the models folder are ever
+    /// deleted. The registry entry goes last, so a refusal or a failed delete leaves everything as it was.</summary>
     [HttpDelete("{name}")]
-    public IActionResult DeleteModel(string name)
+    public IActionResult DeleteModel(string name, [FromQuery] bool deleteFile = false)
     {
-        if (!persistentData.RemoveModel(Uri.UnescapeDataString(name)))
-            return NotFound(new { error = "Model not found." });
-        return Ok(new { ok = true });
+        Model? model = persistentData.GetModel(Uri.UnescapeDataString(name));
+        if (model is null) return NotFound(new { error = "Model not found." });
+
+        long freedBytes = 0;
+        List<string> deleted = new(), kept = new();
+
+        if (deleteFile)
+        {
+            Server? running = llm?.Servers.FirstOrDefault(s => s.Status != ServerStatus.Offline
+                && s.ActiveModel is not null && s.ActiveModel.Name.Equals(model.Name, StringComparison.OrdinalIgnoreCase));
+            if (running is not null)
+                return Conflict(new { error = $"{running.Name} is running this model. Stop that server first." });
+
+            string root = Path.GetFullPath(ModelsPath);
+            List<Model> others = persistentData.GetModels().Where(o => !o.Name.Equals(model.Name, StringComparison.OrdinalIgnoreCase)).ToList();
+            bool UsedByAnother(string rel) => others.Any(o =>
+                string.Equals(o.Path, rel, StringComparison.OrdinalIgnoreCase) || string.Equals(o.MmprojPath, rel, StringComparison.OrdinalIgnoreCase));
+
+            try
+            {
+                foreach (string rel in new[] { model.Path, model.MmprojPath }.Where(p => !string.IsNullOrWhiteSpace(p)))
+                {
+                    string full = Path.GetFullPath(Path.Combine(root, rel));
+                    if (!full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                    {
+                        kept.Add($"{rel} (outside the models folder)");
+                        continue;
+                    }
+                    if (UsedByAnother(rel))
+                    {
+                        kept.Add($"{rel} (also used by another model)");
+                        continue;
+                    }
+                    foreach (string file in new[] { full, full + ".tmp" })
+                    {
+                        if (!System.IO.File.Exists(file)) continue;
+                        freedBytes += new FileInfo(file).Length;
+                        System.IO.File.Delete(file);
+                        deleted.Add(Path.GetRelativePath(root, file));
+                    }
+                    // A model kept in its own sub-folder leaves the folder behind once its files are gone.
+                    string? dir = Path.GetDirectoryName(full);
+                    if (dir is not null && dir.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                        && Directory.Exists(dir) && !Directory.EnumerateFileSystemEntries(dir).Any())
+                        Directory.Delete(dir);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return StatusCode(500, new { error = $"Couldn't delete the model's files: {ex.Message}. It was not removed from the list." });
+            }
+        }
+
+        persistentData.RemoveModel(model.Name);
+        return Ok(new { ok = true, freedBytes, deleted, kept });
     }
 
     [HttpPut("notes")]

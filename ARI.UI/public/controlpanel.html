@@ -4860,6 +4860,33 @@ async function loadModels() {
         if (mdlLastData) renderModelCards({ ...mdlLastData, models: sortModels(mdlLastData.models ?? []) });
     }));
 
+// Remove-model dialog. A model that isn't on disk gets the plain confirm; a downloaded one asks whether to delete the file
+// too. Resolves to 'file' (remove and delete the file), 'only' (remove from the list), or null (cancelled).
+function mdlAskRemove(m) {
+    if (!m.downloaded) return Promise.resolve(confirm(`Remove "${m.name}" from the list?`) ? 'only' : null);
+    return new Promise(resolve => {
+        const startup = ((mdlLastData && mdlLastData.servers) || []).filter(sv => sv.currentModelName === m.name).map(sv => sv.name);
+        const back = document.createElement('div');
+        back.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;';
+        const box = document.createElement('div');
+        box.style.cssText = 'background:var(--main-bg);color:var(--text);border:1px solid var(--border);border-radius:12px;padding:22px 24px;max-width:460px;width:calc(100% - 32px);box-shadow:0 12px 40px rgba(0,0,0,.35);';
+        const size = m.fileSizeMb ? ` (${fmtSize(m.fileSizeMb)})` : '';
+        box.innerHTML = `<div style="font-size:15px;font-weight:600;margin-bottom:8px;"></div>
+            <div style="font-size:13px;color:var(--text-dim);line-height:1.5;margin-bottom:16px;">Also delete the model file from disk${size}? Other models are not affected.${
+                startup.length ? ` <b style="color:var(--text);">${startup.join(', ')} ${startup.length > 1 ? 'have' : 'has'} this model set to start with, and will have no model until you pick another.</b>` : ''}</div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;"></div>`;
+        box.firstElementChild.textContent = `Remove "${m.name}"?`;
+        const row = box.lastElementChild;
+        const done = v => { back.remove(); resolve(v); };
+        const btn = (label, cls, v) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.className = cls; b.addEventListener('click', () => done(v)); row.append(b); };
+        btn('Cancel', 'vs-btn-outline', null);
+        btn('Remove only', 'vs-btn-outline', 'only');
+        btn('Remove and delete file', 'vs-btn-primary', 'file');
+        back.addEventListener('click', e => { if (e.target === back) done(null); });
+        back.append(box); document.body.append(back);
+    });
+}
+
 function fmtSize(mb) {
     if (mb <= 0) return null;
     return mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : mb.toFixed(1) + ' MB';
@@ -5040,11 +5067,17 @@ function renderModelCards(data) {
         const deleteBtn = card.querySelector('.mdl-delete-btn');
         if (deleteBtn) {
             deleteBtn.addEventListener('click', async () => {
-                if (!confirm(`Remove "${m.name}" from the registry?`)) return;
+                const choice = await mdlAskRemove(m);
+                if (!choice) return;
                 deleteBtn.disabled = true;
                 try {
-                    const r = await cpFetch(`/models/${encodeURIComponent(m.name)}`, { method: 'DELETE' });
-                    if (!r.ok) { const err = await r.json().catch(()=>({})); alert(err.error ?? 'Delete failed.'); deleteBtn.disabled = false; return; }
+                    const r = await cpFetch(`/models/${encodeURIComponent(m.name)}${choice === 'file' ? '?deleteFile=true' : ''}`, { method: 'DELETE' });
+                    const res = await r.json().catch(() => ({}));
+                    if (!r.ok) { alert(res.error ?? 'Delete failed.'); deleteBtn.disabled = false; return; }
+                    const notes = [];
+                    if (res.freedBytes > 0) notes.push(`Freed ${fmtSize(res.freedBytes / 1048576)}.`);
+                    if ((res.kept || []).length) notes.push(`Kept: ${res.kept.join('; ')}.`);
+                    if (notes.length) alert(`Removed "${m.name}". ${notes.join(' ')}`);
                     loadModels();
                 } catch { deleteBtn.disabled = false; }
             });
