@@ -439,19 +439,17 @@ public abstract class Agent
     }
 
     // One parsed SSE chunk from an open HTTP stream. Advance() reads the next chunk into
-    // CurrentDoc; Dispose() closes the stream and signals the server slot is free.
+    // CurrentDoc; Dispose() closes the stream.
     private sealed class Step : IDisposable
     {
         private readonly Stream        stream;
         private readonly StreamReader  reader;
-        private readonly Action        onClose;
         internal         JsonDocument? CurrentDoc;
 
-        internal Step(Stream stream, StreamReader reader, Action onClose)
+        internal Step(Stream stream, StreamReader reader)
         {
             this.stream = stream;
             this.reader = reader;
-            this.onClose = onClose;
         }
 
         internal async Task<bool> IsStreaming(CancellationToken ct)
@@ -475,7 +473,6 @@ public abstract class Agent
             CurrentDoc?.Dispose();
             reader.Dispose();
             stream.Dispose();
-            onClose();
         }
     }
 
@@ -871,14 +868,10 @@ public abstract class Agent
 
         turn.Clock.RequestSent();
         SetPhase(turn, turn.ReadingWebResults ? ThreadPhase.Researching : ThreadPhase.Prefilling);
-        Server?.BeginRequest(Name);
-        HttpResponseMessage response;
-        try   { response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, turn.Ct); }
-        catch { Server?.EndRequest(); throw; }
+        HttpResponseMessage response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, turn.Ct);
 
         if (!response.IsSuccessStatusCode)
         {
-            Server?.EndRequest();
             string errBody = "";
             try { errBody = await response.Content.ReadAsStringAsync(turn.Ct); } catch { /* ignore */ }
 
@@ -934,7 +927,7 @@ public abstract class Agent
 
         Stream       stream = await response.Content.ReadAsStreamAsync(turn.Ct);
         StreamReader reader = new(stream);
-        return new Step(stream, reader, () => Server?.EndRequest());
+        return new Step(stream, reader);
     }
 
     private async Task ProcessDelta(Turn turn, Step step)
