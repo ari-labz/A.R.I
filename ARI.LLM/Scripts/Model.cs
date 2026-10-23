@@ -74,6 +74,9 @@ public class Model
             KvArch = GgufReader.TryRead(fullPath);
             string? tmplPath = ChatTemplatePath is { Length: > 0 } t ? System.IO.Path.Combine(Paths.PersistentData, t) : null;
             SupportsReasoningEffort = GgufReader.SupportsReasoningEffort(fullPath, tmplPath);
+            // A file with a built-in MTP head turns MTP on whatever the flag said — the header is the honest signal,
+            // where the repo or file name is only a hint.
+            if (!MTP && GgufReader.HasMtpHead(fullPath)) MTP = true;
         }
         else
         {
