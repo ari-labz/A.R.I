@@ -4872,7 +4872,7 @@ function mdlAskRemove(m) {
         box.style.cssText = 'background:var(--main-bg);color:var(--text);border:1px solid var(--border);border-radius:12px;padding:22px 24px;max-width:460px;width:calc(100% - 32px);box-shadow:0 12px 40px rgba(0,0,0,.35);';
         const size = m.fileSizeMb ? ` (${fmtSize(m.fileSizeMb)})` : '';
         box.innerHTML = `<div style="font-size:15px;font-weight:600;margin-bottom:8px;"></div>
-            <div style="font-size:13px;color:var(--text-dim);line-height:1.5;margin-bottom:16px;">Also delete the model file from disk${size}? Other models are not affected.${
+            <div style="font-size:13px;color:var(--text-dim);line-height:1.5;margin-bottom:16px;">Also delete the model file from disk${size}? Other models are not affected. A server running this model will be stopped.${
                 startup.length ? ` <b style="color:var(--text);">${startup.join(', ')} ${startup.length > 1 ? 'have' : 'has'} this model set to start with, and will have no model until you pick another.</b>` : ''}</div>
             <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;"></div>`;
         box.firstElementChild.textContent = `Remove "${m.name}"?`;
