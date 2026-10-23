@@ -526,7 +526,6 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
         <div class="cp-nav-item" data-tab="modules" data-group="system">Modules</div>
         <div class="cp-nav-item" data-tab="customisation" data-group="system">Customisation</div>
         <div class="cp-nav-item" data-tab="calendar" data-group="system" id="nav-calendar">Calendar</div>
-        <div class="cp-nav-item" data-tab="dreaming" data-group="system">Dreaming</div>
         <div class="cp-nav-group" data-group-id="llm">LLM<span class="nav-chevron">▾</span></div>
         <div class="cp-nav-item" data-tab="servers" data-group="llm">Servers</div>
         <div class="cp-nav-item" data-tab="models" data-group="llm">Models</div>
@@ -1100,22 +1099,6 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
       </div>
     </div>
 
-    <!-- Dreaming tab -->
-    <div id="tab-dreaming" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
-      <div class="vs-section">
-        <div class="vs-section-title">Dreaming</div>
-        <p style="color:var(--text-dim);font-size:13px;margin:0 0 14px;">
-          When enabled, Ari enters a dream state after two minutes of inactivity — she explores her memory and
-          projects freely using read-only tools. No user is present; she self-drives until she wakes or a message arrives.
-        </p>
-        <label style="display:flex;align-items:center;gap:10px;font-size:14px;cursor:pointer;user-select:none;">
-          <input type="checkbox" id="dream-enabled" style="width:16px;height:16px;">
-          Enable dreaming
-        </label>
-        <span id="dream-status" style="display:block;margin-top:10px;font-size:12px;color:var(--text-dim);min-height:16px;"></span>
-      </div>
-    </div>
-
     <!-- Modules tab -->
     <div id="tab-modules" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
@@ -1151,6 +1134,21 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
             <button id="pt-delete" type="button" class="vs-btn-outline" style="margin-top:10px;font-size:12px;padding:5px 12px;display:none;">Delete all saved conversations</button>
           </div>
           <div id="pt-toggle" style="display:flex;align-items:center;padding-top:2px;"></div>
+        </div>
+      </div>
+
+      <div class="vs-section" style="margin-top:28px;">
+        <div class="vs-section-title">Dreaming</div>
+        <div style="display:flex;align-items:flex-start;gap:16px;padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:var(--user-bubble,var(--col-control-panel-line-1656-colour));">
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:14px;font-weight:600;margin-bottom:4px;">Let Ari dream when idle</div>
+            <div style="font-size:13px;color:var(--text-dim);line-height:1.45;">
+              When enabled, Ari enters a dream state after two minutes of inactivity — she explores her memory and
+              projects freely using read-only tools. No user is present; she self-drives until she wakes or a message arrives.
+            </div>
+            <div id="dream-status" style="font-size:12px;color:var(--text-dim);margin-top:8px;min-height:16px;"></div>
+          </div>
+          <div id="dream-toggle" style="display:flex;align-items:center;padding-top:2px;"></div>
         </div>
       </div>
 
@@ -1501,8 +1499,8 @@ cpFetch('/admin/username').then(r => r.json()).then(d => { if (d.name) window._a
 
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), github: document.getElementById('tab-github'), dreaming: document.getElementById('tab-dreaming'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), users: document.getElementById('tab-users'), settings: document.getElementById('tab-settings'), modules: document.getElementById('tab-modules'), 'imagegen-model': document.getElementById('tab-imagegen-model'), 'imagegen-settings': document.getElementById('tab-imagegen-settings'), calendar: document.getElementById('tab-calendar'), customisation: document.getElementById('tab-customisation'), prompts: document.getElementById('tab-prompts') };
-const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', discord: 'Discord', github: 'GitHub', dreaming: 'Dreaming', llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', users: 'Users', settings: 'Settings', modules: 'Modules', 'imagegen-model': 'Image Generation — Model', 'imagegen-settings': 'Image Generation — Settings', calendar: 'Calendar', customisation: 'Customisation', prompts: 'Prompts' };
+const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), github: document.getElementById('tab-github'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), users: document.getElementById('tab-users'), settings: document.getElementById('tab-settings'), modules: document.getElementById('tab-modules'), 'imagegen-model': document.getElementById('tab-imagegen-model'), 'imagegen-settings': document.getElementById('tab-imagegen-settings'), calendar: document.getElementById('tab-calendar'), customisation: document.getElementById('tab-customisation'), prompts: document.getElementById('tab-prompts') };
+const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', discord: 'Discord', github: 'GitHub', llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', users: 'Users', settings: 'Settings', modules: 'Modules', 'imagegen-model': 'Image Generation — Model', 'imagegen-settings': 'Image Generation — Settings', calendar: 'Calendar', customisation: 'Customisation', prompts: 'Prompts' };
 
 let srvPollTimer = null;
 // Declared here (not down in the GitHub section) because switchTab('overview') below calls stopGhPoll()
@@ -1529,13 +1527,12 @@ function switchTab(name) {
     if (name === 'agents' || name === 'prompts') loadAgents();
     if (name === 'llmconfigs') loadLLMConfigs();
     if (name === 'calendar') loadCalendar();
-    if (name === 'dreaming') loadDreaming();
     if (name === 'discord') loadDiscord();
     if (name === 'github') loadGitHub();
     if (name !== 'github') stopGhPoll();
     if (name === 'debug') loadDebugThreads();
     if (name === 'users') loadUserManagement();
-    if (name === 'settings') { loadPersistedThreads(); loadLogging(); }
+    if (name === 'settings') { loadPersistedThreads(); loadLogging(); loadDreaming(); }
     if (name === 'modules') loadModules();
     if (name === 'voices') loadVoicesList();
     if (name === 'voice') vsRestoreTraining();
@@ -2703,27 +2700,28 @@ async function deleteCalModal() {
 
 // ── dreaming ──────────────────────────────────────────────
 async function loadDreaming() {
-    const cb  = document.getElementById('dream-enabled');
-    const st  = document.getElementById('dream-status');
+    const host = document.getElementById('dream-toggle');
+    const st   = document.getElementById('dream-status');
+    let enabled = false;
     try {
         const r = await cpFetch('/admin/dreaming');
         if (!r.ok) throw new Error();
-        const d = await r.json();
-        cb.checked = d.enabled ?? false;
+        enabled = (await r.json()).enabled ?? false;
     } catch { st.textContent = 'Failed to load settings.'; return; }
 
-    cb.onchange = async () => {
+    host.innerHTML = '';
+    host.append(buildToggle(enabled, async on => {
         st.textContent = 'Saving…';
         try {
             const r = await cpFetch('/admin/dreaming', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled: cb.checked }),
+                body: JSON.stringify({ enabled: on }),
             });
             if (!r.ok) throw new Error();
-            st.textContent = cb.checked ? 'Dreaming enabled.' : 'Dreaming disabled.';
+            st.textContent = on ? 'Dreaming enabled.' : 'Dreaming disabled.';
             setTimeout(() => { st.textContent = ''; }, 2000);
-        } catch { st.textContent = 'Save failed.'; cb.checked = !cb.checked; }
-    };
+        } catch { st.textContent = 'Save failed.'; loadDreaming(); }
+    }));
 }
 
 // ── collapsible sidebar groups ─────────────────────────────
