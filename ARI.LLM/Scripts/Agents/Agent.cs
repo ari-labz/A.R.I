@@ -822,6 +822,7 @@ public abstract class Agent
         bool   dynamicInjected = dynamicBlock.Length > 0;
         if (dynamicInjected) turn.Messages.Add(new { role = "user", content = dynamicBlock });
 
+        if (foldMidSystem) FoldMidSystem(turn.Messages);
         Dictionary<string, object?> body = BuildRequest(thread, turn.Messages, turn.MaxTokens, turn.ThinkBudget, turn.Opts.ThinkingBudget, turn.ToolSchemas, Think);
 
         string json = JsonSerializer.Serialize(body);
@@ -842,6 +843,21 @@ public abstract class Agent
 
         turn.AriResponse.Data.DebugRequestJson = json;
         return json;
+    }
+
+    // Set the first time the server's chat template rejects a system message that isn't first (see OpenStep).
+    private volatile bool foldMidSystem;
+
+    /// <summary>Turns every system message after the first into a user message, so strict chat templates accept the request.</summary>
+    private static void FoldMidSystem(List<object> messages)
+    {
+        for (int i = 1; i < messages.Count; i++)
+        {
+            JsonElement el = JsonSerializer.SerializeToElement(messages[i]);
+            if (el.ValueKind == JsonValueKind.Object && el.TryGetProperty("role", out JsonElement role) && role.GetString() == "system"
+                && el.TryGetProperty("content", out JsonElement content))
+                messages[i] = new { role = "user", content = content.Clone() };
+        }
     }
 
     private async Task<Step?> OpenStep(Turn turn, string json)
@@ -877,6 +893,18 @@ public abstract class Agent
                 string hint = "One of your tool call arguments contained characters (such as unescaped double-quotes in XML/XAML content) that made the JSON invalid. " +
                               "Please retry: escape all double-quotes inside string values as \\\" and avoid raw newlines inside JSON strings.";
                 turn.Messages.Add(new { role = "user", content = hint });
+                return null;
+            }
+
+            // Some chat templates (e.g. the official Qwen3 one on some models) refuse any system message that isn't the
+            // very first one, and the mode nudge / system continuations are added mid-conversation. Rather than fail,
+            // learn it once: send those as user messages from now on, and retry this step.
+            if (response.StatusCode == System.Net.HttpStatusCode.InternalServerError && !foldMidSystem
+                && errBody.Contains("System message must be at the beginning", StringComparison.OrdinalIgnoreCase))
+            {
+                foldMidSystem = true;
+                Shared.Logger.LogWarning("[{Agent}] ({Thread}) The model's chat template rejects mid-conversation system messages — sending them as user messages instead.", Name, thread.Key);
+                FoldMidSystem(turn.Messages);
                 return null;
             }
 
