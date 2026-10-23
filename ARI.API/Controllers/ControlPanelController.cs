@@ -1409,6 +1409,31 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
     private LLMModule? llm => (LLMModule?)Modules.Llm;
     private string ModelsPath => llm?.ModelsPath ?? "";
 
+    private static readonly HttpClient HfClient = new() { Timeout = TimeSpan.FromSeconds(20) };
+
+    /// <summary>The file list of a Hugging Face repo, fetched by the server rather than the browser. Model downloads
+    /// already happen on this machine, so it is the one place that is known to reach Hugging Face — a browser behind a
+    /// work proxy, an extension or a cross-site rule can't be relied on to.</summary>
+    [HttpGet("hf-tree")]
+    public async Task<IActionResult> HfTree([FromQuery] string? repo, CancellationToken ct)
+    {
+        if (repo is null || !Regex.IsMatch(repo, @"^[A-Za-z0-9][\w.-]*/[A-Za-z0-9][\w.-]*$"))
+            return BadRequest(new { error = "That isn't a Hugging Face repo — expected owner/name." });
+        try
+        {
+            using HttpResponseMessage r = await HfClient.GetAsync($"https://huggingface.co/api/models/{repo}/tree/main", ct);
+            // Hugging Face answers 401, not 404, for a repo that doesn't exist (or is private and gated).
+            if (r.StatusCode is System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.Unauthorized)
+                return NotFound(new { error = "Repo not found (or it's private)." });
+            if (!r.IsSuccessStatusCode) return StatusCode(502, new { error = $"Hugging Face answered HTTP {(int)r.StatusCode}." });
+            return Content(await r.Content.ReadAsStringAsync(ct), "application/json");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            return StatusCode(502, new { error = $"The A·R·I server couldn't reach Hugging Face ({ex.Message})." });
+        }
+    }
+
     [HttpGet]
     public IActionResult GetModels()
     {
