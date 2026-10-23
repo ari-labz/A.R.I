@@ -5135,8 +5135,10 @@ document.getElementById('mdl-wiz-fetch-btn').addEventListener('click', async () 
     status.textContent = 'Fetching repo…';
 
     try {
-        const r = await cpFetch(`https://huggingface.co/api/models/${repo}/tree/main`);
-        if (!r.ok) throw new Error(r.status === 404 ? 'Repo not found' : `HTTP ${r.status}`);
+        // Looked up by the A·R·I server, not this browser — the server is what downloads the model, so it is the
+        // machine that has to reach Hugging Face anyway.
+        const r = await cpFetch(`/models/hf-tree?repo=${encodeURIComponent(repo)}`);
+        if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.error || `HTTP ${r.status}`); }
         const files = await r.json();
         const ggufs = files.filter(f => f.path.endsWith('.gguf'));
         if (!ggufs.length) { status.style.color = 'var(--col-control-panel-line-4843-text)'; status.textContent = 'No .gguf files found in this repo.'; return; }
