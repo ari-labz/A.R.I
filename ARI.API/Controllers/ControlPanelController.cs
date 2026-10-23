@@ -1555,10 +1555,9 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
 
         if (deleteFile)
         {
-            Server? running = llm?.Servers.FirstOrDefault(s => s.Status != ServerStatus.Offline
-                && s.ActiveModel is not null && s.ActiveModel.Name.Equals(model.Name, StringComparison.OrdinalIgnoreCase));
-            if (running is not null)
-                return Conflict(new { error = $"{running.Name} is running this model. Stop that server first." });
+            foreach (Server running in llm?.Servers.Where(s => s.Status != ServerStatus.Offline
+                && s.ActiveModel is not null && s.ActiveModel.Name.Equals(model.Name, StringComparison.OrdinalIgnoreCase)).ToList() ?? new())
+                running.Stop();
 
             string root = Path.GetFullPath(ModelsPath);
             List<Model> others = persistentData.GetModels().Where(o => !o.Name.Equals(model.Name, StringComparison.OrdinalIgnoreCase)).ToList();
