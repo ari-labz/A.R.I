@@ -77,9 +77,17 @@ internal class Memory : Agent
         // surface identity/pronoun facts without model selection, but only the top block, not the full note.
         string? speakerName = chatHistory.LastOrDefault(m => m.Username != "ARI")?.Username;
         Note? userNote = string.IsNullOrWhiteSpace(speakerName) ? null : Brain.GetNote(speakerName);
-        string pinnedBlock = userNote is not null
-            ? $"[{userNote.Title}|{userNote.Url}]\n{userNote.SensitivityNotice}{userNote.ToHeader()}\n\n"
-            : string.Empty;
+        string pinnedBlock = string.Empty;
+        if (userNote is not null)
+        {
+            try { pinnedBlock = $"[{userNote.Title}|{userNote.Url}]\n{userNote.SensitivityNotice}{userNote.ToHeader()}\n\n"; }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                WarnMissing(userNote);
+                ReindexAfterMissing();
+                userNote = null;
+            }
+        }
 
         // Recall always runs — it's fast enough that a keyword gate only ever costs a real hit.
         // If nothing matches, the SQL seed returns no candidates and we bail below at near-zero cost.
@@ -148,13 +156,28 @@ internal class Memory : Agent
         string transcript = transcriptBuilder.ToString();
 
         StringBuilder candidateBlock = new();
+        bool missingNote = false;
+        List<SearchResult> readable = new();
         foreach (SearchResult candidate in candidates)
         {
             string aliasNote = candidate.Note.Aliases.Count > 0
                 ? $"(aka {string.Join(", ", candidate.Note.Aliases)}) "
                 : string.Empty;
-            candidateBlock.AppendLine($"- {candidate.Note.Title}: {aliasNote}{Snippet(candidate.Note.Content)}");
+            string snippet;
+            try { snippet = Snippet(candidate.Note.Content); }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                WarnMissing(candidate.Note);
+                missingNote = true;
+                continue;
+            }
+            candidateBlock.AppendLine($"- {candidate.Note.Title}: {aliasNote}{snippet}");
+            readable.Add(candidate);
         }
+        candidates = readable;
+        if (missingNote) ReindexAfterMissing();
+        if (candidates.Count == 0)
+            return string.IsNullOrEmpty(pinnedBlock) ? string.Empty : pinnedBlock.TrimEnd();
 
         string pathBlock = recall.Paths.Count > 0
             ? "\nCONNECTIONS FOUND:\n" + string.Join("\n", recall.Paths.Select(p =>
@@ -208,6 +231,13 @@ internal class Memory : Agent
             Note? note = Resolve(title, offered, out bool viaFuzzy);
             if (note is null) { unresolved.Add(title); continue; }
             if (!seen.Add(note.Name)) continue;
+            try { _ = note.Content; }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                WarnMissing(note);
+                ReindexAfterMissing();
+                continue;
+            }
             if (viaFuzzy) fuzzy.Add(title);
             fetched.Add(note.Title);
             resolved.Add((note, viaFuzzy));
@@ -339,6 +369,23 @@ internal class Memory : Agent
             Shared.Logger.LogWarning(ex, "[Memory] extraction failed for '{Title}', falling back to full content", note.Title);
             return string.Empty;
         }
+    }
+
+    private static void WarnMissing(Note note) =>
+        Shared.Logger.LogWarning("[Memory] note '{Title}' is in the index but its file is missing ({Path}) — skipping it and re-indexing.", note.Title, note.Path);
+
+    private static int reindexing;
+
+    // Runs once at a time in the background so the recall carries on without waiting for the rebuild.
+    private static void ReindexAfterMissing()
+    {
+        if (Interlocked.Exchange(ref reindexing, 1) == 1) return;
+        _ = Task.Run(() =>
+        {
+            try { Brain.Index(); }
+            catch (Exception ex) { Shared.Logger.LogWarning("[Memory] re-index after a missing note failed: {Err}", ex.Message); }
+            finally { Interlocked.Exchange(ref reindexing, 0); }
+        });
     }
 
     private static List<string> ParseSelection(string raw)

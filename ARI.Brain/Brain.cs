@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using ARI.Common;
+using Microsoft.Extensions.Logging;
 
 namespace ARI.BrainVault;
 
@@ -45,17 +46,57 @@ public static class Brain
         return stats;
     }
 
+    private static readonly object indexLock = new();
+    private static (int Count, DateTime Newest) lastIndexed;
+    public static DateTime LastIndexedUtc { get; private set; }
+
     // Rebuilds the index from the vault files. Safe to run at any time — the index is disposable.
+    // A note that can't be read is skipped with a warning rather than failing the whole rebuild.
     public static IndexStats Index()
     {
-        List<(string Path, Note.Parsed Parsed, DateTime Updated)> files = new();
+        lock (indexLock)
+        {
+            List<(string Path, Note.Parsed Parsed, DateTime Updated)> files = new();
+            int count = 0;
+            DateTime newest = DateTime.MinValue;
+            foreach (string file in Directory.EnumerateFiles(VaultRoot, "*.md", SearchOption.AllDirectories))
+            {
+                string relative = Path.GetRelativePath(VaultRoot, file).Replace(Path.DirectorySeparatorChar, '/');
+                if (relative.Split('/').Any(segment => segment.StartsWith('.'))) continue;
+                try
+                {
+                    DateTime updated = File.GetLastWriteTimeUtc(file);
+                    files.Add((relative, Note.Parse(File.ReadAllText(file)), updated));
+                    count++;
+                    if (updated > newest) newest = updated;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    Shared.Logger.LogWarning("[Brain] skipped unreadable note '{Note}' while indexing: {Error}", relative, ex.Message);
+                }
+            }
+            IndexStats stats = Database.Rebuild(files);
+            lastIndexed = (count, newest);
+            LastIndexedUtc = DateTime.UtcNow;
+            return stats;
+        }
+    }
+
+    // Cheap check for the periodic sweep: file times and count only, no parsing. A changed count catches
+    // additions and deletions (a delete leaves no newer file time behind). Returns null if nothing changed.
+    public static IndexStats? IndexIfChanged()
+    {
+        int count = 0;
+        DateTime newest = DateTime.MinValue;
         foreach (string file in Directory.EnumerateFiles(VaultRoot, "*.md", SearchOption.AllDirectories))
         {
             string relative = Path.GetRelativePath(VaultRoot, file).Replace(Path.DirectorySeparatorChar, '/');
             if (relative.Split('/').Any(segment => segment.StartsWith('.'))) continue;
-            files.Add((relative, Note.Parse(File.ReadAllText(file)), File.GetLastWriteTimeUtc(file)));
+            count++;
+            DateTime updated = File.GetLastWriteTimeUtc(file);
+            if (updated > newest) newest = updated;
         }
-        return Database.Rebuild(files);
+        return (count, newest) == lastIndexed ? null : Index();
     }
 
     // ── Reads ────────────────────────────────────────────────────────────────────────

@@ -222,6 +222,7 @@ public class LLMModule : ILLMModule, IDisposable
                 foreach (string skipped in brainStats.SkippedNotes)
                     _logger.LogWarning("  [Brain] skipped note: {Detail}", skipped);
             }
+            StartBrainWatch();
         }
 
         if (rawAgents.TryGetValue("Context", out JsonElement contextEl))
@@ -676,9 +677,41 @@ public class LLMModule : ILLMModule, IDisposable
         await StartServersAsync(_allModels, _modelsPath);
     }
 
+    private const int BRAIN_CHECK_MINUTES = 5;
+    private CancellationTokenSource? brainWatchCts;
+
+    /// <summary>Every few minutes, re-index the brain if its files changed since the last index, so edits made
+    /// outside ARI (an SMB share, a git pull) take effect without a restart.</summary>
+    private void StartBrainWatch()
+    {
+        brainWatchCts = new CancellationTokenSource();
+        CancellationToken ct = brainWatchCts.Token;
+        _ = Task.Run(async () =>
+        {
+            using PeriodicTimer timer = new(TimeSpan.FromMinutes(BRAIN_CHECK_MINUTES));
+            try
+            {
+                while (await timer.WaitForNextTickAsync(ct))
+                {
+                    try
+                    {
+                        IndexStats? stats = Brain.IndexIfChanged();
+                        if (stats is not null)
+                            _logger.LogInformation("[Brain] files changed — re-indexed: {Notes} notes, {Edges} edges, {Aliases} aliases.",
+                                stats.Notes, stats.Edges, stats.Aliases);
+                    }
+                    catch (Exception ex) { _logger.LogWarning("[Brain] periodic re-index failed: {Err}", ex.Message); }
+                }
+            }
+            catch (OperationCanceledException) { }
+        });
+    }
+
     public void Dispose()
     {
         dreamOrchestrator?.Dispose();
+        brainWatchCts?.Cancel();
+        brainWatchCts?.Dispose();
         refactorLoopCts?.Cancel();
         refactorLoopCts?.Dispose();
         engram?.Dispose();
