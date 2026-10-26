@@ -485,8 +485,18 @@ public class DiscordModule : BackgroundService, IDiscordModule
         await SendLlmReply(message, conversationKey, prompt, message.Author.Username, platformContext, attachments);
     }
 
+    /// <summary>The Master and anyone on the whitelist may talk to ARI in a server, in text or by voice. Everyone else is ignored.</summary>
+    private bool MayTalkToAri(ulong userId)
+        => userId == config.MasterDiscordId || (config.WhitelistedUserIds?.Contains(userId) ?? false);
+
     private async Task HandleServerMessage(SocketMessage message, SocketGuildChannel guildChannel)
     {
+        if (!MayTalkToAri(message.Author.Id))
+        {
+            _logger.LogDebug("Ignored server message from non-whitelisted user {UserId}", message.Author.Id);
+            return;
+        }
+
         if (config.AllowedGuildIds.Count > 0 && !config.AllowedGuildIds.Contains(guildChannel.Guild.Id))
         {
             _logger.LogDebug("Ignored message from non-allowed guild {GuildId}", guildChannel.Guild.Id);
@@ -690,7 +700,7 @@ public class DiscordModule : BackgroundService, IDiscordModule
             string threadKey = $"guild:{vc.Guild.Id}";
             Func<string, Task> sendReply = text => SpeakIntoVoiceAsync(audio, writeLock, text, CancellationToken.None);
 
-            DiscordVoiceReceiver receiver = new(audio, llmModule, threadKey, BuildServerPlatformContext(config.MasterDiscordId), sendReply, whisperUrl, _logger);
+            DiscordVoiceReceiver receiver = new(audio, llmModule, threadKey, BuildServerPlatformContext(config.MasterDiscordId), sendReply, whisperUrl, MayTalkToAri, _logger);
             voiceReceivers[vc.Guild.Id] = receiver;
             _logger.LogInformation("[Discord] Voice receive pipeline started for guild {GuildId}.", vc.Guild.Id);
         }
