@@ -374,7 +374,7 @@ public class VoiceController(
         catch { /* best-effort cleanup */ }
     }
 
-    [HttpPost("stage")]
+    [HttpPost("uploads")]
     public IActionResult CreateStage()
     {
         string stageId  = Guid.NewGuid().ToString("N");
@@ -383,10 +383,10 @@ public class VoiceController(
         return Ok(new { stageId, stagingPath = stageDir });
     }
 
-    [HttpPost("upload")]
+    [HttpPost("uploads/{stageId}")]
     [DisableRequestSizeLimit]
     public async Task<IActionResult> Upload(
-        [FromQuery] string stageId,
+        string stageId,
         [FromQuery] string name,
         [FromQuery] int chunk       = 0,
         [FromQuery] int totalChunks = 1)
@@ -454,7 +454,7 @@ public class VoiceController(
     }
 
     /// <summary>Start a training job from a previously uploaded staging path.</summary>
-    [HttpPost("train")]
+    [HttpPost("training")]
     public IActionResult StartTraining([FromBody] TrainRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.ModelName))
@@ -534,7 +534,7 @@ public class VoiceController(
     }
 
     /// <summary>SSE stream of training progress events.</summary>
-    [HttpGet("progress")]
+    [HttpGet("training/progress")]
     public async Task StreamProgress(CancellationToken ct)
     {
         Response.Headers[HeaderNames.ContentType]  = "text/event-stream";
@@ -589,7 +589,7 @@ public class VoiceController(
     }
 
     /// <summary>Current job status (for polling fallback).</summary>
-    [HttpGet("status")]
+    [HttpGet("training")]
     public IActionResult GetStatus()
     {
         TrainingJob? job = voiceTraining?.Current;
@@ -634,34 +634,16 @@ public class VoiceController(
         return File(wav, "audio/wav");
     }
 
-    [HttpGet("settings")]
-    public IActionResult GetVoiceSettings()
+    [HttpGet("models/{engine}/{modelName}/checkpoints")]
+    public IActionResult GetCheckpoints(string engine, string modelName)
     {
-        if (voiceService is null)
-            return StatusCode(503, new { error = "Voice module is not running." });
-        (float speed, float pauseScale) = voiceService.GetVoiceSettings();
-        return Ok(new { speed, pauseScale });
-    }
-
-    [HttpPost("settings")]
-    public IActionResult SetVoiceSettings([FromBody] VoiceSettingsRequest req)
-    {
-        if (voiceService is null)
-            return StatusCode(503, new { error = "Voice module is not running." });
-        voiceService.SetVoiceSettings(req.Speed, req.PauseScale);
-        logger.LogInformation("[Voice/Settings] speed={Speed} pause={Pause}", req.Speed, req.PauseScale);
-        return Ok(new { speed = req.Speed, pauseScale = req.PauseScale });
-    }
-
-    [HttpGet("{modelName}/checkpoints")]
-    public IActionResult GetCheckpoints(string modelName)
-    {
-        if (string.IsNullOrWhiteSpace(modelName) || modelName.Contains('/') || modelName.Contains('\\'))
+        if (string.IsNullOrWhiteSpace(modelName) || modelName.Contains('/') || modelName.Contains('\\')
+            || string.IsNullOrWhiteSpace(engine) || engine.Contains('/') || engine.Contains('\\'))
             return BadRequest(new { error = "Invalid model name." });
         if (string.IsNullOrEmpty(vsConfig.VoicesPath))
             return StatusCode(503, new { error = "VoiceSynthesis not configured." });
 
-        string modelDir = Path.Combine(vsConfig.VoicesPath, "StyleTTS2", modelName);
+        string modelDir = Path.Combine(vsConfig.VoicesPath, engine, modelName);
         if (!Directory.Exists(modelDir))
             return NotFound(new { error = $"Model '{modelName}' not found." });
 
@@ -711,17 +693,57 @@ public class VoiceController(
         return Ok(new { sentences });
     }
 
-    [HttpGet("active")]
-    public IActionResult GetActive() =>
-        Ok(new
+    /// <summary>The voice ARI is speaking with right now, and how: model, engine, whether it is ready, the voice to
+    /// start with next time, and the speed and pause settings (null if the voice module isn't running).</summary>
+    [HttpGet("playback")]
+    public IActionResult GetPlayback()
+    {
+        (float speed, float pauseScale) = voiceService?.GetVoiceSettings() ?? (0f, 0f);
+        return Ok(new
         {
             model        = voiceService?.ActiveModel,
             engine       = voiceService?.ActiveEngine,
             ready        = voiceService?.IsReady ?? false,
             defaultModel = voiceService is not null ? persistentData.GetDefaultVoiceModel(voiceService.ActiveEngine) : null,
+            speed        = voiceService is not null ? (float?)speed : null,
+            pauseScale   = voiceService is not null ? (float?)pauseScale : null,
         });
+    }
 
-    [HttpGet("engine-params")]
+    public sealed record PlaybackPatch(float? Speed, float? PauseScale, string? DefaultModel, string? Engine);
+
+    /// <summary>Change how ARI speaks: speed and pauses, and/or which voice to start with next time (<c>defaultModel</c>,
+    /// for <c>engine</c>, or StyleTTS2 if none is given). Send only what changes.</summary>
+    [HttpPatch("playback")]
+    public IActionResult PatchPlayback([FromBody] PlaybackPatch req)
+    {
+        if (req.DefaultModel is { } model)
+        {
+            if (string.IsNullOrWhiteSpace(model) || model.Contains('/') || model.Contains('\\'))
+                return BadRequest(new { error = "Invalid model name." });
+            if (string.IsNullOrEmpty(vsConfig.VoicesPath))
+                return StatusCode(503, new { error = "VoiceSynthesis not configured." });
+            string engine = req.Engine ?? "StyleTTS2";
+            if (!Directory.Exists(Path.Combine(vsConfig.VoicesPath, engine, model)))
+                return NotFound(new { error = $"Model '{model}' not found." });
+            persistentData.SetDefaultVoiceModel(engine, model);
+            logger.LogInformation("[Voice] Default startup voice set to {Model} ({Engine})", model, engine);
+        }
+
+        if (req.Speed is not null || req.PauseScale is not null)
+        {
+            if (voiceService is null)
+                return StatusCode(503, new { error = "Voice module is not running." });
+            (float speed, float pauseScale) = voiceService.GetVoiceSettings();
+            float newSpeed = req.Speed ?? speed, newPause = req.PauseScale ?? pauseScale;
+            voiceService.SetVoiceSettings(newSpeed, newPause);
+            logger.LogInformation("[Voice/Settings] speed={Speed} pause={Pause}", newSpeed, newPause);
+        }
+
+        return GetPlayback();
+    }
+
+    [HttpGet("playback/engineParams")]
     public IActionResult GetEngineParams()
     {
         if (voiceService is null)
@@ -733,7 +755,7 @@ public class VoiceController(
         return Ok(new { engine = voiceService.ActiveEngine, parameters });
     }
 
-    [HttpPost("switch")]
+    [HttpPost("playback/switch")]
     public async Task<IActionResult> SwitchEngineModel([FromBody] SwitchEngineRequest req)
     {
         if (voiceService is null)
@@ -758,23 +780,6 @@ public class VoiceController(
             logger.LogError("[Voice] Engine switch failed: {Error}", ex.Message);
             return StatusCode(500, new { error = ex.Message });
         }
-    }
-
-    [HttpPut("default")]
-    public IActionResult SetDefaultModel([FromBody] SetDefaultVoiceRequest req)
-    {
-        if (string.IsNullOrWhiteSpace(req.ModelName) || req.ModelName.Contains('/') || req.ModelName.Contains('\\'))
-            return BadRequest(new { error = "Invalid model name." });
-        if (string.IsNullOrEmpty(vsConfig.VoicesPath))
-            return StatusCode(503, new { error = "VoiceSynthesis not configured." });
-
-        string engine = req.Engine ?? "StyleTTS2";
-        if (!Directory.Exists(Path.Combine(vsConfig.VoicesPath, engine, req.ModelName)))
-            return NotFound(new { error = $"Model '{req.ModelName}' not found." });
-
-        persistentData.SetDefaultVoiceModel(engine, req.ModelName);
-        logger.LogInformation("[Voice] Default startup voice set to {Model} ({Engine})", req.ModelName, engine);
-        return Ok(new { ok = true, defaultModel = req.ModelName });
     }
 
     [HttpGet("models")]
@@ -815,7 +820,7 @@ public class VoiceController(
         return Ok(new { models = models.OrderBy(m => ((dynamic)m).engine).ThenBy(m => ((dynamic)m).name).ToArray() });
     }
 
-    [HttpDelete("{engine}/{modelName}")]
+    [HttpDelete("models/{engine}/{modelName}")]
     public IActionResult DeleteModel(string engine, string modelName)
     {
         if (string.IsNullOrWhiteSpace(modelName) || modelName.Contains('/') || modelName.Contains('\\'))
@@ -832,7 +837,7 @@ public class VoiceController(
         return Ok(new { deleted = modelName, engine });
     }
 
-    [HttpPost("{engine}/{modelName}/dismiss")]
+    [HttpDelete("models/{engine}/{modelName}/resume")]
     public IActionResult DismissResume(string engine, string modelName)
     {
         if (string.IsNullOrWhiteSpace(modelName) || modelName.Contains('/') || modelName.Contains('\\'))
@@ -852,8 +857,8 @@ public class VoiceController(
         return Ok(new { dismissed = modelName, engine });
     }
 
-    [HttpPost("{modelName}/stop")]
-    public async Task<IActionResult> StopTraining(string modelName, [FromQuery] string? engine = "StyleTTS2")
+    [HttpPost("training/stop")]
+    public async Task<IActionResult> StopTraining([FromQuery] string modelName, [FromQuery] string? engine = "StyleTTS2")
     {
         engine ??= "StyleTTS2";
         int port = engine switch { "IndexTTS" => 8026, _ => 8021 };
@@ -912,7 +917,7 @@ public class VoiceController(
                 .FirstOrDefault()
             : null;
 
-    [HttpGet("{engine}/{modelName}/loss-history")]
+    [HttpGet("models/{engine}/{modelName}/lossHistory")]
     public IActionResult GetLossHistory(string engine, string modelName)
     {
         if (string.IsNullOrEmpty(vsConfig.VoicesPath))
@@ -991,7 +996,7 @@ public class VoiceController(
         return Ok(new { points, pauses });
     }
 
-    [HttpPost("resume")]
+    [HttpPost("training/resume")]
     public IActionResult ResumeTraining([FromBody] ResumeRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.ModelName))
@@ -1088,7 +1093,7 @@ public class VoiceController(
     // Chunks uploaded audio and transcribes with Whisper so users can review/edit
     // transcripts before training any voice engine.
 
-    [HttpPost("transcribe")]
+    [HttpPost("dataset/transcribe")]
     public IActionResult StartTranscription([FromBody] DatasetProcessRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.StageId))
@@ -1112,7 +1117,7 @@ public class VoiceController(
         return Ok(new { started = true });
     }
 
-    [HttpGet("transcribe/status")]
+    [HttpGet("dataset/transcribe/status")]
     public IActionResult TranscriptionStatus()
     {
         AudioTranscriber? t = AudioTranscriber.Current;
@@ -1130,7 +1135,7 @@ public class VoiceController(
         });
     }
 
-    [HttpGet("transcribe/audio")]
+    [HttpGet("dataset/transcribe/audio")]
     public IActionResult TranscribeAudio([FromQuery] string name)
     {
         AudioTranscriber? t = AudioTranscriber.Current;
@@ -1695,8 +1700,6 @@ public record SetModuleEnabledRequest(bool Enabled);
 public record SpeakRequest(string Text, string? ModelName = null, string? CheckpointPath = null,
     int DiffusionSteps = 5, float Alpha = 0.3f, float Beta = 0.7f, float EmbeddingScale = 1.0f,
     float Speed = 1.0f, float PauseScale = 1.0f);
-public record VoiceSettingsRequest(float Speed = 1.0f, float PauseScale = 1.0f);
-public record SetDefaultVoiceRequest(string ModelName, string? Engine = null);
 public record SwitchEngineRequest(string Engine, string ModelName);
 public record SplitSentencesRequest(string Text);
 public record ResumeRequest(string ModelName, string? Engine = null, int? Epochs = null, int? SaveEveryNEpochs = null, bool Retrain = false);
