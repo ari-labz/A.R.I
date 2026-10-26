@@ -34,7 +34,7 @@ public class SetupController(UserStore users, AuthService auth, PersistentData p
     {
         if (users.CountUsers() > 0) return Conflict(new { error = "An account already exists." });
 
-        string ip = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        string ip = ClientAddress.Of(HttpContext);
         if (!SetupState.TokenMatches(req.Token))
         {
             int attempts = users.RecordFailedAttempt(ip);
@@ -57,7 +57,7 @@ public class SetupController(UserStore users, AuthService auth, PersistentData p
         string sessionId = Guid.NewGuid().ToString();
         (string token, UserSession session) = auth.IssueToken(user, sessionId, "Browser", false);
         users.CreateSession(session);
-        AuthCookie.Set(Response, token, false, Request.IsHttps);
+        AuthCookie.Set(Response, token, false, ClientAddress.IsHttps(HttpContext));
         return Ok(new { token, role = user.Role, displayName = user.DisplayName, mustChangePassword = false });
     }
 

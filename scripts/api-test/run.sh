@@ -5,6 +5,7 @@
 #   scripts/api-test/run.sh              build, start, test, stop
 #   scripts/api-test/run.sh --keep       leave the server running afterwards
 #   scripts/api-test/run.sh --no-build   skip the build
+#   ARI_TEST_TRUST_PROXY=1 scripts/api-test/run.sh   run with TrustForwardedHeaders on (see tests/99-lockout)
 #
 # Everything lives in $ARI_TEST_DIR (default /tmp/ari-api-test): the build, the data folder and the
 # stand-in model server. Your real ARI data is never touched.
@@ -46,11 +47,12 @@ WRAP
 chmod +x "$T/bin/llama-server"
 
 python3 - "$SERVER" "$T" "$PORT" "$MODEL_PORT" <<'PY'
-import json, sys, uuid
+import json, os, sys, uuid
 server, t, port, model_port = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
 d = f"{t}/data/Server"
 cfg = json.load(open(f"{server}/AppDataDefaults/AriConfig.json"))
 cfg["Modules"]["API"]["Port"] = port
+cfg["Modules"]["API"]["TrustForwardedHeaders"] = os.environ.get("ARI_TEST_TRUST_PROXY") == "1"
 cfg["Modules"]["LLM"]["Enabled"] = True
 cfg["Modules"]["Brain"]["Enabled"] = True
 cfg["Modules"]["Calendar"]["Enabled"] = True

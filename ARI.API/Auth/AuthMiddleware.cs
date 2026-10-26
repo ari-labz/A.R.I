@@ -68,7 +68,7 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
         UserStore store   = ctx.RequestServices.GetRequiredService<UserStore>();
         AuthService auth  = ctx.RequestServices.GetRequiredService<AuthService>();
 
-        string ip = ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        string ip = ClientAddress.Of(ctx);
 
         // Step 1: IP blocklist (always)
         if (store.IsBlocked(ip))
@@ -152,7 +152,7 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
     /// </summary>
     public static ClaimsPrincipal? Authenticate(HttpContext ctx, UserStore store, AuthService auth)
     {
-        string ip = ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        string ip = ClientAddress.Of(ctx);
         if (store.IsBlocked(ip))
             return null;
 

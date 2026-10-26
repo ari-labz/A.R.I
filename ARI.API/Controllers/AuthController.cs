@@ -9,21 +9,6 @@ namespace ARI.API.Controllers;
 [ApiController]
 public class AuthController(UserStore users, AuthService auth) : ControllerBase
 {
-    // Requests may arrive through a reverse proxy (see APIModule.cs), in which case
-    // Connection.RemoteIpAddress is just the proxy's own address and every real client
-    // collapses onto one IP for lockout purposes. Prefer the client IP the proxy reports.
-    private string RemoteIp
-    {
-        get
-        {
-            string? forwarded = Request.Headers["X-Forwarded-For"].FirstOrDefault();
-            if (!string.IsNullOrWhiteSpace(forwarded))
-                return forwarded.Split(',')[0].Trim();
-
-            return HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-        }
-    }
-
     // ── Login ────────────────────────────────────────────────────────────────────
 
     public record LoginRequest(string Username, string Password, string? DeviceHint, bool IsDesktop);
@@ -35,7 +20,7 @@ public class AuthController(UserStore users, AuthService auth) : ControllerBase
         if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrWhiteSpace(req.Password))
             return BadRequest(new { error = "Username and password are required." });
 
-        string ip = RemoteIp;
+        string ip = ClientAddress.Of(HttpContext);
 
         User? user = users.GetByUsername(req.Username);
         if (user is null || !AuthService.VerifyPassword(req.Password, user.PasswordHash))
@@ -56,7 +41,7 @@ public class AuthController(UserStore users, AuthService auth) : ControllerBase
         string      hint      = req.DeviceHint ?? (req.IsDesktop ? "ARI Desktop" : "Browser");
         (string token, UserSession session)  = auth.IssueToken(user, sessionId, hint, req.IsDesktop);
         users.CreateSession(session);
-        AuthCookie.Set(Response, token, req.IsDesktop, Request.IsHttps);
+        AuthCookie.Set(Response, token, req.IsDesktop, ClientAddress.IsHttps(HttpContext));
 
         return Ok(new LoginResponse(token, user.Role, user.DisplayName, user.MustChangePassword));
     }
