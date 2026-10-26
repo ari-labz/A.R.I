@@ -1508,6 +1508,8 @@ function cpGetSettings() { return cpFetch('/api/v1/admin/settings').then(r => r.
 function cpPatchSettings(changes) {
     return cpFetch('/api/v1/admin/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
 }
+// The server always answers a failure as { error: "..." }; this pulls out the words.
+async function cpErrorText(r) { try { return (await r.json()).error || r.statusText; } catch { return r.statusText; } }
 function cpEventSource(url) {
     const token = sessionStorage.getItem('ari_cp_token');
     const sep = url.includes('?') ? '&' : '?';
@@ -4631,7 +4633,7 @@ async function loadServers() {
     let data;
     try {
         const r = await cpFetch('/api/v1/admin/models');
-        if (!r.ok) { console.error('[loadServers] HTTP', r.status, await r.text()); renderServerCards([]); return; }
+        if (!r.ok) { console.error('[loadServers] HTTP', r.status, await cpErrorText(r)); renderServerCards([]); return; }
         data = await r.json();
     } catch(e) { console.error('[loadServers] fetch/parse error:', e); renderServerCards([]); return; }
     srvAllModels = data.models ?? [];
@@ -5745,7 +5747,7 @@ function vsSetProgress(step, pct, detail, state) {
 // Shared upload helper — uploads vsFiles to a new staging dir, returns { stageId, stagingPath }
 async function vsUploadFiles() {
     const stageResp = await cpFetch('/api/v1/admin/voice/uploads', { method: 'POST' });
-    if (!stageResp.ok) throw new Error('Stage failed: ' + (await stageResp.text()));
+    if (!stageResp.ok) throw new Error('Stage failed: ' + (await cpErrorText(stageResp)));
     const { stageId, stagingPath } = await stageResp.json();
     const CHUNK = 5 * 1024 * 1024, CONCURRENCY = 4;
     for (let fi = 0; fi < vsFiles.length; fi++) {
@@ -5756,7 +5758,7 @@ async function vsUploadFiles() {
             const slice = f.slice(ci * CHUNK, Math.min((ci + 1) * CHUNK, f.size));
             const url = `/api/v1/admin/voice/uploads/${encodeURIComponent(stageId)}?name=${encodeURIComponent(f.name)}&chunk=${ci}&totalChunks=${totalChunks}`;
             const up = await cpFetch(url, { method: 'POST', body: slice, headers: { 'Content-Type': 'application/octet-stream' } });
-            if (!up.ok) throw new Error(`Upload of ${f.name} chunk ${ci} failed: ` + (await up.text()));
+            if (!up.ok) throw new Error(`Upload of ${f.name} chunk ${ci} failed: ` + (await cpErrorText(up)));
             done++;
             vsSetProgress(`Uploading file ${fi+1} of ${vsFiles.length}`, Math.round((done / totalChunks) * 100), `${f.name} — ${done} / ${totalChunks} chunks`, '');
         };
@@ -5896,7 +5898,7 @@ function vsStartTrainingJob(trainBody, modelName) {
     (async () => {
         try {
             const trainResp = await cpFetch('/api/v1/admin/voice/training', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(trainBody) });
-            if (!trainResp.ok) throw new Error('Start failed: ' + (await trainResp.text()));
+            if (!trainResp.ok) throw new Error('Start failed: ' + (await cpErrorText(trainResp)));
             vsAttachProgress(modelName, () => { vsTrainBtn.disabled = false; });
         } catch (err) { vsStopTimer(); vsShowSetup(true); vsAppendLog('Error: ' + err.message, 'log-error'); vsLogBadge.textContent = 'failed'; vsLogBadge.classList.remove('live'); vsTrainBtn.disabled = false; }
     })();
@@ -6106,7 +6108,7 @@ vsTrainBtn.addEventListener('click', async () => {
             vsSetProgress('Transcribing audio with Whisper', 5, null, '');
             vsAppendLog('Loading Whisper model…');
             const trResp = await cpFetch('/api/v1/admin/voice/dataset/transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stageId }) });
-            if (!trResp.ok) throw new Error('Transcription failed: ' + (await trResp.text()));
+            if (!trResp.ok) throw new Error('Transcription failed: ' + (await cpErrorText(trResp)));
 
             // Poll for transcription completion
             let trLoggedCount = 0;

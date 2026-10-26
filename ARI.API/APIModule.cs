@@ -88,7 +88,7 @@ public class APIModule : IAsyncDisposable
         if (Directory.Exists(stagingRoot))
             try { Directory.Delete(stagingRoot, recursive: true); } catch { /* best-effort */ }
 
-        builder.Services.AddControllers()
+        builder.Services.AddControllers(options => options.Filters.Add<ResponseShapeFilter>())
             .AddApplicationPart(typeof(ThreadsController).Assembly);
 
         // ARI gates every route (REST and WebSocket) behind its own JWT+session auth — see

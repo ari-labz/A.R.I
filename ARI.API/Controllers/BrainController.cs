@@ -37,7 +37,7 @@ public class BrainController : ControllerBase
     [HttpPost("backups")]
     public IActionResult CreateBackup()
     {
-        if (Llm is null || !Llm.BrainAvailable) return BadRequest(new { message = "Brain is not available." });
+        if (Llm is null || !Llm.BrainAvailable) return BadRequest(new { error = "Brain is not available." });
         return Ok(new { message = Llm.BackupBrain() });
     }
 
@@ -47,8 +47,8 @@ public class BrainController : ControllerBase
     [HttpPost("restore")]
     public IActionResult Restore([FromBody] RestoreRequest request)
     {
-        if (Llm is null || !Llm.BrainAvailable) return BadRequest(new { message = "Brain is not available." });
-        if (string.IsNullOrWhiteSpace(request.File)) return BadRequest(new { message = "No backup file specified." });
+        if (Llm is null || !Llm.BrainAvailable) return BadRequest(new { error = "Brain is not available." });
+        if (string.IsNullOrWhiteSpace(request.File)) return BadRequest(new { error = "No backup file specified." });
         return Ok(new { message = Llm.RestoreBrainBackup(request.File) });
     }
 }

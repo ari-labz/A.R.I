@@ -12,7 +12,7 @@ public class DiscordController : ControllerBase
     [HttpPost("deleteRecent")]
     public async Task<IActionResult> DeleteRecent()
     {
-        if (Modules.Discord is null) return BadRequest(new { message = "Discord is not available." });
+        if (Modules.Discord is null) return BadRequest(new { error = "Discord is not available." });
         int count = await Modules.Discord.DeleteRecentMessagesAsync(TimeSpan.FromHours(24));
         return Ok(new { message = $"Deleted {count} message{(count == 1 ? "" : "s")}." });
     }

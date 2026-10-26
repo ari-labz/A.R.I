@@ -57,21 +57,21 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
             string? token = ExtractBearer(ctx);
             if (token is null)
             {
-                ctx.Response.StatusCode = 401;
+                await Deny(ctx, 401, "Sign in first.");
                 return;
             }
 
             ClaimsPrincipal? principal = auth.ValidateToken(token);
             if (principal is null)
             {
-                ctx.Response.StatusCode = 401;
+                await Deny(ctx, 401, "Sign in first.");
                 return;
             }
 
             string? sessionId = principal.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Jti);
             if (sessionId is null || store.GetSession(sessionId) is null)
             {
-                ctx.Response.StatusCode = 401;
+                await Deny(ctx, 401, "Sign in first.");
                 return;
             }
 
@@ -88,13 +88,20 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
             {
                 if (principal.FindFirstValue(ClaimTypes.Role) != Roles.Admin)
                 {
-                    ctx.Response.StatusCode = 403;
+                    await Deny(ctx, 403, "Only an admin can do this.");
                     return;
                 }
             }
         }
 
         await next(ctx);
+    }
+
+    /// <summary>Refuses a request with the same JSON error shape every other failure uses.</summary>
+    private static async Task Deny(HttpContext ctx, int status, string message)
+    {
+        ctx.Response.StatusCode = status;
+        await ctx.Response.WriteAsJsonAsync(new { error = message });
     }
 
     private static string? ExtractBearer(HttpContext ctx)
