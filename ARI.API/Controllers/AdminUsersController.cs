@@ -17,7 +17,6 @@ public class AdminUsersController(UserStore users) : ControllerBase
     [HttpGet]
     public IActionResult ListUsers()
     {
-        if (!IsAdmin()) return StatusCode(403);
         return Ok(users.GetAll().Select(u => new
         {
             u.Id,
@@ -38,8 +37,6 @@ public class AdminUsersController(UserStore users) : ControllerBase
     [HttpPost]
     public IActionResult CreateUser([FromBody] CreateUserRequest req)
     {
-        if (!IsAdmin()) return StatusCode(403);
-
         string role = req.Role is Roles.Admin or Roles.Guest ? req.Role : Roles.Guest;
 
         string username = (req.Username ?? "").Trim();
@@ -55,21 +52,21 @@ public class AdminUsersController(UserStore users) : ControllerBase
         return Ok(new { user.Id, user.Username, user.Role });
     }
 
-    // ── Reset password (admin sets a new temp password) ───────────────────────────
+    // ── Change a person's account (today: an admin sets a new temporary password) ──
 
-    public record ResetPasswordRequest(string NewPassword);
+    public record ChangeUserRequest(string? NewPassword);
 
-    [HttpPost("{id:int}/reset-password")]
-    public IActionResult ResetPassword(int id, [FromBody] ResetPasswordRequest req)
+    [HttpPatch("{id:int}")]
+    public IActionResult ChangeUser(int id, [FromBody] ChangeUserRequest req)
     {
-        if (!IsAdmin()) return StatusCode(403);
-
         User? user = users.GetById(id);
         if (user is null) return NotFound();
         // Resetting the Master's password would hand over the account that owns the brain, dreams and Discord link.
         if (id.ToString() == ARI.Common.Shared.MasterUserId && User.FindFirstValue(ClaimTypes.NameIdentifier) != id.ToString())
             return BadRequest(new { error = "Only the Master can change the Master's password." });
 
+        if (req.NewPassword is null)
+            return BadRequest(new { error = "Nothing to change." });
         if (AccountRules.CheckPassword(req.NewPassword) is { } passwordProblem)
             return BadRequest(new { error = passwordProblem });
 
@@ -84,8 +81,6 @@ public class AdminUsersController(UserStore users) : ControllerBase
     [HttpDelete("{id:int}")]
     public IActionResult DeleteUser(int id)
     {
-        if (!IsAdmin()) return StatusCode(403);
-
         string? myIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (int.TryParse(myIdStr, out int myId) && myId == id)
             return BadRequest(new { error = "You cannot delete your own account." });
@@ -105,7 +100,6 @@ public class AdminUsersController(UserStore users) : ControllerBase
     [HttpGet("/api/v1/admin/sessions")]
     public IActionResult AllSessions()
     {
-        if (!IsAdmin()) return StatusCode(403);
         return Ok(users.GetAllActiveSessions().Select(s => new
         {
             s.SessionId,
@@ -117,11 +111,10 @@ public class AdminUsersController(UserStore users) : ControllerBase
         }));
     }
 
-    [HttpDelete("/api/v1/admin/sessions/{sessionId}")]
-    public IActionResult RevokeSession(string sessionId)
+    [HttpDelete("/api/v1/admin/sessions/{id}")]
+    public IActionResult RevokeSession(string id)
     {
-        if (!IsAdmin()) return StatusCode(403);
-        users.RevokeSession(sessionId);
+        users.RevokeSession(id);
         return Ok();
     }
 
@@ -130,7 +123,6 @@ public class AdminUsersController(UserStore users) : ControllerBase
     [HttpGet("/api/v1/admin/blocklist")]
     public IActionResult GetBlocklist()
     {
-        if (!IsAdmin()) return StatusCode(403);
         return Ok(users.GetBlockedIps().Select(b => new
         {
             b.Ip,
@@ -139,16 +131,10 @@ public class AdminUsersController(UserStore users) : ControllerBase
         }));
     }
 
-    [HttpDelete("/api/v1/admin/blocklist/{ip}")]
-    public IActionResult UnblockIp(string ip)
+    [HttpDelete("/api/v1/admin/blocklist/{id}")]
+    public IActionResult UnblockIp(string id)
     {
-        if (!IsAdmin()) return StatusCode(403);
-        users.UnblockIp(ip);
+        users.UnblockIp(id);
         return Ok();
     }
-
-    // ── Helpers ──────────────────────────────────────────────────────────────────
-
-    private bool IsAdmin() =>
-        User.FindFirstValue(ClaimTypes.Role) == Roles.Admin;
 }

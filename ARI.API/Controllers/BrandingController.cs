@@ -19,19 +19,21 @@ public class BrandingController : ControllerBase
         Version = BrandingStore.Version(s.Key)?.Ticks ?? 0,
     }));
 
-    [HttpPost("api/v1/admin/branding/{slot}")]
+    [HttpPut("api/v1/admin/branding/{id}")]
     [RequestSizeLimit(3 * 1024 * 1024)]
-    public IActionResult Upload(string slot, IFormFile file)
+    public IActionResult Upload(string id, IFormFile file)
     {
+        string slot = id;
         if (BrandingStore.Find(slot) is null) return NotFound();
         using Stream s = file.OpenReadStream();
         string? err = BrandingStore.Save(slot, s);
         return err is null ? Ok(new { ok = true }) : BadRequest(new { error = err });
     }
 
-    [HttpDelete("api/v1/admin/branding/{slot}")]
-    public IActionResult Reset(string slot)
+    [HttpDelete("api/v1/admin/branding/{id}")]
+    public IActionResult Reset(string id)
     {
+        string slot = id;
         if (BrandingStore.Find(slot) is null) return NotFound();
         BrandingStore.Reset(slot);
         return Ok(new { ok = true });

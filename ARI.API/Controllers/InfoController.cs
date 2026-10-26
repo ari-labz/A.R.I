@@ -61,3 +61,12 @@ public class InfoController : ControllerBase
         });
     }
 }
+
+/// <summary>"Is ARI answering?" for Docker, a reverse proxy or a monitor. Needs no sign-in and says nothing else.</summary>
+[Route("api/v1/health")]
+[ApiController]
+public class HealthController : ControllerBase
+{
+    [HttpGet]
+    public IActionResult Get() => Ok(new { status = "ok" });
+}

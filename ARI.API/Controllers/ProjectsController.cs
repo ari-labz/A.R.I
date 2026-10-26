@@ -61,26 +61,28 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
         return Ok(created);
     }
 
-    [HttpPut("{id}")]
+    /// <summary>Change a project. Send only what changes.</summary>
+    [HttpPatch("{id}")]
     public IActionResult Update(string id, [FromBody] CreateProjectRequest req)
     {
         Project? existing = store.Get(id);
         if (existing is null) return NotFound();
         if (!CanAccess(existing)) return StatusCode(403);
-        if (string.IsNullOrWhiteSpace(req.Name))
-            return BadRequest(new { error = "Name is required." });
+        if (req.Name is not null && string.IsNullOrWhiteSpace(req.Name))
+            return BadRequest(new { error = "Name can't be empty." });
 
-        if (req.Name.Trim() != existing.Name) projects.Rename(id, req.Name.Trim());
+        string name = req.Name?.Trim() ?? existing.Name;
+        if (name != existing.Name) projects.Rename(id, name);
 
         Project current = store.Get(id) ?? existing;
 
         // Ensure every project has a server folder — migrate legacy RemoteFs projects on first save.
-        string rootPath = current.RootPath ?? ProjectStore.CreateServerFolder(id, req.Name.Trim());
+        string rootPath = current.RootPath ?? ProjectStore.CreateServerFolder(id, name);
 
         Project updated = current with
         {
-            Description  = req.Description?.Trim() ?? "",
-            Instructions = req.Instructions?.Trim() ?? "",
+            Description  = req.Description?.Trim() ?? current.Description,
+            Instructions = req.Instructions?.Trim() ?? current.Instructions,
             Category     = req.Category?.Trim() ?? current.Category,
             Backend      = StorageBackend.ServerFs,
             RootPath     = rootPath,

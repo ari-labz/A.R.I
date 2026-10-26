@@ -11,11 +11,11 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace ARI.API.Controllers;
 
-/// <summary>First-run wizard backend. Only /setup/status and /setup/account are anonymous; everything else
-/// needs the admin session that /setup/account hands back.</summary>
+/// <summary>First-run wizard backend, the part that needs no sign-in: is there an account yet, and make the first one.
+/// The rest of the wizard is at /admin/setup and needs the admin session that /setup/account hands back.</summary>
 [Route("api/v1/setup")]
 [ApiController]
-public class SetupController(UserStore users, AuthService auth, PersistentData persistentData, ILoggerFactory loggerFactory) : ControllerBase
+public class SetupController(UserStore users, AuthService auth, ILoggerFactory loggerFactory) : ControllerBase
 {
     private readonly ILogger log = loggerFactory.CreateLogger("ARI.Setup");
 
@@ -60,24 +60,21 @@ public class SetupController(UserStore users, AuthService auth, PersistentData p
         AuthCookie.Set(Response, token, false, ClientAddress.IsHttps(HttpContext));
         return Ok(new { token, role = user.Role, displayName = user.DisplayName, mustChangePassword = false });
     }
+}
 
-    // ── Everything below needs the admin session ─────────────────────────────────
-
-    private bool IsAdmin()
-    {
-        string? id = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        return int.TryParse(id, out int uid) && users.GetById(uid)?.Role == "Admin";
-    }
-
-    [HttpGet("hardware")]
-    public IActionResult Hardware() => !IsAdmin() ? StatusCode(403) : Ok(HardwareInfo.Detect());
+/// <summary>The first-run wizard's admin-only steps: look at a model link, download the model, watch the download, and
+/// record how far the wizard has got. Under /admin/, so admin only.</summary>
+[Route("api/v1/admin/setup")]
+[ApiController]
+public class AdminSetupController(PersistentData persistentData, ILoggerFactory loggerFactory) : ControllerBase
+{
+    private readonly ILogger log = loggerFactory.CreateLogger("ARI.Setup");
 
     public record InspectRequest(string Url);
 
     [HttpPost("inspect")]
     public async Task<IActionResult> Inspect([FromBody] InspectRequest req, CancellationToken ct)
     {
-        if (!IsAdmin()) return StatusCode(403);
         if (!ModelInspector.TryParse(req.Url ?? "", out string repo, out string? file))
             return BadRequest(new { error = "That doesn't look like a Hugging Face link. Paste a model page or file link, e.g. https://huggingface.co/unsloth/Qwen3.5-9B-GGUF" });
 
@@ -108,7 +105,6 @@ public class SetupController(UserStore users, AuthService auth, PersistentData p
     [HttpPost("model")]
     public IActionResult ChooseModel([FromBody] ModelRequest req)
     {
-        if (!IsAdmin()) return StatusCode(403);
         if (SetupDownload.Running) return Conflict(new { error = "A download is already running." });
         if (!req.DownloadUrl.StartsWith("https://huggingface.co/", StringComparison.Ordinal) || !req.File.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase))
             return BadRequest(new { error = "Only Hugging Face .gguf links are accepted." });
@@ -139,17 +135,19 @@ public class SetupController(UserStore users, AuthService auth, PersistentData p
     }
 
     [HttpGet("progress")]
-    public IActionResult Progress() => !IsAdmin() ? StatusCode(403) : Ok(SetupDownload.Snapshot());
+    public IActionResult Progress() => Ok(SetupDownload.Snapshot());
 
-    [HttpPost("skip-model")]
-    public IActionResult SkipModel() { if (!IsAdmin()) return StatusCode(403); SetupState.Set(setup: true); return Ok(); }
+    public record SetupPatch(bool? SetupComplete, bool? TutorialComplete);
 
-    [HttpPost("tutorial-complete")]
-    public IActionResult TutorialDone() { if (!IsAdmin()) return StatusCode(403); SetupState.Set(tutorial: true); return Ok(); }
-
-    /// <summary>Lets an admin run the wizard's tutorial again (keeps their account and models).</summary>
-    [HttpPost("restart-tutorial")]
-    public IActionResult RestartTutorial() { if (!IsAdmin()) return StatusCode(403); SetupState.Set(tutorial: false); return Ok(); }
+    /// <summary>Records how far the first-run wizard has got. <c>setupComplete</c> true means "continue without a model for
+    /// now"; <c>tutorialComplete</c> false lets an admin run the tutorial again (accounts and models are kept).</summary>
+    [HttpPatch]
+    public IActionResult Change([FromBody] SetupPatch req)
+    {
+        if (req.SetupComplete is true) SetupState.Set(setup: true);
+        if (req.TutorialComplete is { } tutorial) SetupState.Set(tutorial: tutorial);
+        return Ok(new { setupComplete = SetupState.SetupComplete, tutorialComplete = SetupState.TutorialComplete });
+    }
 }
 
 /// <summary>One background model download at a time, with progress the wizard polls.</summary>

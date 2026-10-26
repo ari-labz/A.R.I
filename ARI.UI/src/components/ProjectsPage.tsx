@@ -141,7 +141,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
         setEditSaving(true); setEditError(null)
         try {
             const res = await apiFetch(`/api/v1/projects/${selected.id}`, {
-                method: "PUT",
+                method: "PATCH",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ name: editName.trim(), description: editDescription.trim(), instructions: editInstructions.trim(), category: editCategory.trim(), backend: selected.backend }),
             })

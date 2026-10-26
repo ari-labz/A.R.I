@@ -103,7 +103,8 @@
     function finishTour() {
         setCur(null);
         teardown();
-        fetch('/api/v1/setup/tutorial-complete', { method: 'POST', headers: authHeaders(), credentials: 'same-origin' }).catch(function () {});
+        var h = authHeaders(); h['Content-Type'] = 'application/json';
+        fetch('/api/v1/admin/setup', { method: 'PATCH', headers: h, body: JSON.stringify({ tutorialComplete: true }), credentials: 'same-origin' }).catch(function () {});
     }
 
     function go(id) { setCur(id); show(); }

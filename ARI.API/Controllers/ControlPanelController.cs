@@ -32,7 +32,7 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
     /// SSE stream of the ARI.log tail — sends the last 100 lines on connect,
     /// then streams new lines as they are appended.
     /// </summary>
-    [HttpGet("log")]
+    [HttpGet("system/log")]
     public async Task StreamLog(CancellationToken cancellationToken)
     {
         Response.Headers[HeaderNames.ContentType]  = "text/event-stream";
@@ -72,7 +72,7 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
         }
     }
 
-    [HttpGet("ram")]
+    [HttpGet("system/ram")]
     public IActionResult GetRam()
     {
         long bytes = systemInfo.GetTotalRamBytes();
@@ -113,19 +113,23 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
         return Ok(new { ramBytes = bytes, ramMb = bytes / 1024.0 / 1024.0, swapMb, liveCalls, context, breakdown });
     }
 
-    [HttpGet("hardware")]
+    [HttpGet("system/hardware")]
     public IActionResult GetHardware()
     {
+        // One report for everyone who wants to know about the machine: the wizard and the memory chart use the
+        // usable/unified figures, the control panel's model page uses the raw RAM and GPU list.
+        var report = ARI.API.Setup.HardwareInfo.Detect();
         long totalRam = systemInfo.GetTotalPhysicalRamBytes();
         List<SystemInfo.GpuInfo> gpus = systemInfo.GetGpus();
         return Ok(new
         {
+            report.TotalBytes, report.UsableBytes, report.AvailableBytes, report.Unified, report.Gpu, report.Note,
             totalRamBytes = totalRam,
             gpus = gpus.Select(g => new { name = g.Name, vramBytes = g.VramBytes }).ToList()
         });
     }
 
-    [HttpGet("stats")]
+    [HttpGet("system/stats")]
     public IActionResult GetStats()
     {
         long ramBytes = systemInfo.GetTotalRamBytes();
@@ -229,7 +233,7 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
 
     // ── llama.cpp management ─────────────────────────────────────────────────
 
-    [HttpGet("llamacpp/status")]
+    [HttpGet("llamacpp")]
     public IActionResult GetLlamaCppStatus()
     {
         LlamaCppStatus s = Shared.LlamaCpp;
@@ -253,23 +257,19 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
         return Ok(new { version, server = Shared.LlamaServer });
     }
 
-    [HttpPost("llamacpp/set-path")]
-    public IActionResult SetLlamaCppPath([FromBody] LlamaCppPathRequest req)
+    /// <summary>Change how ARI manages llama.cpp. <c>path</c> points ARI at an install; <c>suppressUpdatePrompt</c> set
+    /// to true stops the "update available" prompt. Send only what changes.</summary>
+    [HttpPatch("llamacpp")]
+    public IActionResult ChangeLlamaCpp([FromBody] LlamaCppChange req)
     {
-        if (string.IsNullOrWhiteSpace(req.Path))
-            return BadRequest(new { error = "Path is required." });
-        Shared.LlamaCppSetPath?.Invoke(req.Path);
-        return Ok(new { path = req.Path });
+        if (req.Path is not null && string.IsNullOrWhiteSpace(req.Path))
+            return BadRequest(new { error = "Path can't be empty." });
+        if (req.Path is not null) Shared.LlamaCppSetPath?.Invoke(req.Path);
+        if (req.SuppressUpdatePrompt == true) Shared.LlamaCppSuppressUpdates?.Invoke();
+        return Ok(new { ok = true });
     }
 
-    [HttpPost("llamacpp/suppress-updates")]
-    public IActionResult SuppressLlamaCppUpdates()
-    {
-        Shared.LlamaCppSuppressUpdates?.Invoke();
-        return Ok();
-    }
-
-    public sealed class LlamaCppPathRequest { public string Path { get; set; } = ""; }
+    public sealed class LlamaCppChange { public string? Path { get; set; } public bool? SuppressUpdatePrompt { get; set; } }
 
 }
 
@@ -1607,9 +1607,10 @@ public class ModulesApiController(ILogger<ModulesApiController> logger) : Contro
         return Ok(new { modules = result });
     }
 
-    [HttpPut("{key}")]
-    public async Task<IActionResult> SetEnabled(string key, [FromBody] SetModuleEnabledRequest req)
+    [HttpPatch("{id}")]
+    public async Task<IActionResult> SetEnabled(string id, [FromBody] SetModuleEnabledRequest req)
     {
+        string key = id;
         (string Key, string Name, string Description, bool Required) entry = Catalogue.FirstOrDefault(m => m.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
         if (entry.Key is null)
             return NotFound(new { error = $"Unknown module '{key}'." });
@@ -1739,7 +1740,7 @@ public class ImageGenController(APIConfig config) : ControllerBase
         });
     }
 
-    [HttpPost("config")]
+    [HttpPatch("config")]
     public IActionResult SaveConfig([FromBody] ImageGenConfigRequest req)
     {
         string path = ARI.Common.Paths.AriConfig;
@@ -1750,11 +1751,12 @@ public class ImageGenController(APIConfig config) : ControllerBase
             ?? throw new Exception("AriConfig.json has no Modules section.");
 
         JsonNode ig = modules["ImageGen"] ?? modules["imagegen"] ?? new JsonObject();
-        ig["Enabled"]      = req.Enabled;
-        ig["Checkpoint"]   = req.Checkpoint   ?? "";
-        ig["ComfyUiPath"]  = req.ComfyUiPath  ?? "";
-        ig["Port"]         = req.Port;
-        ig["IdleSeconds"]  = req.IdleSeconds;
+        // Only what was sent changes.
+        if (req.Enabled     is { } enabled)     ig["Enabled"]     = enabled;
+        if (req.Checkpoint  is { } checkpoint)  ig["Checkpoint"]  = checkpoint;
+        if (req.ComfyUiPath is { } comfyUiPath) ig["ComfyUiPath"] = comfyUiPath;
+        if (req.Port        is { } port)        ig["Port"]        = port;
+        if (req.IdleSeconds is { } idleSeconds) ig["IdleSeconds"] = idleSeconds;
 
         // Write back under whichever key exists
         if (modules["ImageGen"] is not null) modules["ImageGen"] = ig;
@@ -1797,5 +1799,5 @@ public class ImageGenController(APIConfig config) : ControllerBase
     }
 }
 
-public record ImageGenConfigRequest(bool Enabled, string? Checkpoint, string? ComfyUiPath = null, int Port = 8188, int IdleSeconds = 300);
+public record ImageGenConfigRequest(bool? Enabled, string? Checkpoint, string? ComfyUiPath, int? Port, int? IdleSeconds);
 public record DatasetSplitRequest(string Name);

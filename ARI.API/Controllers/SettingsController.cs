@@ -29,6 +29,7 @@ public class SettingsController(PersistentData persistentData, ILogger<SettingsC
         bool? DreamingEnabled,
         int? EngramTurns,
         int? ReasoningEffort,
+        bool? PersistedThreadsEnabled,
         LoggingSettings? Logging);
 
     [HttpGet]
@@ -64,6 +65,7 @@ public class SettingsController(PersistentData persistentData, ILogger<SettingsC
         if (patch.Conventions    is not null) ConventionsStore.Set(patch.Conventions);
         if (patch.SafeModePrompt is not null) SafeModePromptStore.Set(patch.SafeModePrompt);
         if (patch.Persona        is not null) PersonaStore.Set(patch.Persona);
+        if (patch.PersistedThreadsEnabled is { } persisted) PersistedThreadsSetting.Set(persisted);
         if (patch.ReasoningEffort is { } effort) ReasoningEffortStore.Step = effort;
         if (patch.DreamingEnabled is { } dreaming) Modules.Llm!.DreamingEnabled = dreaming;
         if (engram is not null)
@@ -89,6 +91,8 @@ public class SettingsController(PersistentData persistentData, ILogger<SettingsC
             dreamingEnabled = Modules.Llm?.DreamingEnabled ?? false,
             // The one global dial for how hard ARI thinks: 0/1/2 = low/medium/xhigh. Anyone signed in can read it at /reasoningEffort.
             reasoningEffort = ReasoningEffortStore.Step,
+            // Whether closed conversations are kept so they can be reopened later. The saved ones are at /admin/persistedThreads.
+            persistedThreadsEnabled = PersistedThreadsSetting.Enabled,
             // How many completed exchanges a thread builds up before Engram sweeps it mid-conversation. 0 = off.
             engramTurns    = Llm?.GetEngramTurnInterval() ?? persistentData.GetAgent("Engram")?.TurnsBeforeSweep ?? 5,
             // The session recorder (DTI, dream and chat logs): what it keeps and for how long. Read when ARI starts.

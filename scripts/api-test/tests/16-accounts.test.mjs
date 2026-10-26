@@ -12,7 +12,7 @@ test("an account needs a password of at least 8 characters, wherever it is set",
   assert(JSON.stringify(r.json).includes("8"), "message should say 8: " + r.text);
 
   const made = status(await master.post("/admin/users", { username: "pwuser", password: "password-one", role: "Guest" }), 200).json;
-  equal((await master.post(`/admin/users/${made.id}/reset-password`, { newPassword: "short" })).status, 400, "reset status");
+  equal((await master.patch(`/admin/users/${made.id}`, { newPassword: "short" })).status, 400, "reset status");
 
   const login = status(await anon.post("/auth/login", { username: "pwuser", password: "password-one" }), 200);
   const me = new Client(login.json.token);

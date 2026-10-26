@@ -4,28 +4,19 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace ARI.API.Controllers;
 
-/// <summary>The Persistent Threads setting and the saved conversations it produces. Under /admin/, so admin only.</summary>
+/// <summary>The saved conversations that Persistent Threads produces (how many, how big, delete them all). Whether the
+/// feature is on is a setting: <c>persistedThreadsEnabled</c> at /admin/settings. Under /admin/, so admin only.</summary>
 [Route("api/v1/admin/persistedThreads")]
 [ApiController]
 public class PersistedThreadsController : ControllerBase
 {
     private LLMModule? Llm => (LLMModule?)Modules.Llm;
 
-    public record SetRequest(bool Enabled);
-
     [HttpGet]
     public IActionResult Get()
     {
         (int count, long bytes) = Llm?.PersistedStats() ?? (0, 0);
-        return Ok(new { enabled = PersistedThreadsSetting.Enabled, count, bytes });
-    }
-
-    [HttpPut]
-    public IActionResult Set([FromBody] SetRequest req)
-    {
-        PersistedThreadsSetting.Set(req.Enabled);
-        (int count, long bytes) = Llm?.PersistedStats() ?? (0, 0);
-        return Ok(new { enabled = req.Enabled, count, bytes });
+        return Ok(new { count, bytes });
     }
 
     /// <summary>Deletes every saved conversation for good.</summary>
