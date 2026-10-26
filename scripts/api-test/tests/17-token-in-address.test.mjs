@@ -2,7 +2,7 @@ import { test, status, equal, Client } from "../lib.mjs";
 const { master, anon } = globalThis.ari;
 
 test("a token in the address works for a read (the way an event stream or image link needs)", async () => {
-  status(await anon.get(`/auth/me?token=${encodeURIComponent(master.token)}`), 200);
+  status(await anon.get(`/me?token=${encodeURIComponent(master.token)}`), 200);
 });
 
 test("a token in the address is refused for anything that changes data", async () => {

@@ -2,7 +2,7 @@ import { test, status, has, equal, assert } from "../lib.mjs";
 const { anon, master, guest } = globalThis.ari;
 
 test("the master can read their own profile", async () => {
-  const r = status(await master.get("/auth/me"), 200);
+  const r = status(await master.get("/me"), 200);
   has(r.json, "username", "role");
   equal(r.json.username, "master");
   equal(r.json.role, "Admin");
@@ -34,7 +34,7 @@ test("a message gets a reply from the stand-in model", async () => {
 
 test("every route lives under /api/v1, and the old unprefixed paths are gone", async () => {
   const { base } = await import("../lib.mjs");
-  for (const old of ["/threads", "/auth/me", "/admin/users", "/api/info"]) {
+  for (const old of ["/threads", "/me", "/admin/users", "/api/info"]) {
     const res = await fetch(base + old, { headers: { Authorization: `Bearer ${master.token}` } });
     const body = await res.text();
     assert(res.status === 404 || !res.headers.get("content-type")?.includes("json"), `${old} should not answer as an API route (got ${res.status}: ${body.slice(0, 60)})`);

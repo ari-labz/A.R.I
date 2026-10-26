@@ -16,8 +16,8 @@ test("an account needs a password of at least 8 characters, wherever it is set",
 
   const login = status(await anon.post("/auth/login", { username: "pwuser", password: "password-one" }), 200);
   const me = new Client(login.json.token);
-  equal((await me.post("/auth/change-password", { currentPassword: "password-one", newPassword: "short" })).status, 400, "change status");
-  status(await me.post("/auth/change-password", { currentPassword: "password-one", newPassword: "password-two" }), 200);
+  equal((await me.patch("/me", { currentPassword: "password-one", newPassword: "short" })).status, 400, "change status");
+  status(await me.patch("/me", { currentPassword: "password-one", newPassword: "password-two" }), 200);
   status(await anon.post("/auth/login", { username: "pwuser", password: "password-two" }), 200);
 });
 
@@ -30,5 +30,5 @@ test("renaming yourself follows the same username rule", async () => {
   status(await master.post("/admin/users", { username: "renamer", password: "long-enough-1", role: "Guest" }), 200);
   const login = status(await anon.post("/auth/login", { username: "renamer", password: "long-enough-1" }), 200);
   const me = new Client(login.json.token);
-  equal((await me.put("/user/username", { newUsername: "bad name", currentPassword: "long-enough-1" })).status, 400, "status");
+  equal((await me.patch("/me", { username: "bad name", currentPassword: "long-enough-1" })).status, 400, "status");
 });

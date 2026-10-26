@@ -83,8 +83,8 @@ export async function login(username: string, password: string, isDesktop: boole
 }
 
 export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
-    const res = await apiFetch("/api/v1/auth/change-password", {
-        method:  "POST",
+    const res = await apiFetch("/api/v1/me", {
+        method:  "PATCH",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ currentPassword, newPassword }),
     })
@@ -97,7 +97,7 @@ export async function changePassword(currentPassword: string, newPassword: strin
 /** Resolves the signed-in user from the token, or — on a fresh tab — from the session cookie. */
 export async function fetchMe(): Promise<AuthUser | null> {
     try {
-        const res = await apiFetch("/api/v1/auth/me")
+        const res = await apiFetch("/api/v1/me")
         if (!res.ok) return null
         return res.json()
     } catch {
