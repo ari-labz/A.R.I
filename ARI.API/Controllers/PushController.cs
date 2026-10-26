@@ -50,8 +50,10 @@ public class PushController : ControllerBase
     }
 
     [HttpDelete("subscriptions")]
-    public IActionResult Unsubscribe([FromBody] UnsubscribeRequest req)
+    public IActionResult Unsubscribe([FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] UnsubscribeRequest? body, [FromQuery] string? endpoint = null)
     {
+        // The address of the subscription can come in the body or as ?endpoint= (some proxies drop a body on DELETE).
+        UnsubscribeRequest req = new(body?.Endpoint ?? endpoint ?? "");
         if (Push is null) return StatusCode(503, "Push is not ready yet.");
         if (int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out int userId) && !string.IsNullOrWhiteSpace(req.Endpoint))
             Push.RemoveSubscription(req.Endpoint, userId);

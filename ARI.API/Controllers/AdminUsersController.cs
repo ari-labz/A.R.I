@@ -44,7 +44,7 @@ public class AdminUsersController(UserStore users) : ControllerBase
             return BadRequest(new { error = usernameProblem });
         if (AccountRules.CheckPassword(req.Password) is { } passwordProblem)
             return BadRequest(new { error = passwordProblem });
-        if (users.GetByUsername(username) is not null)
+        if (users.GetByUsername(username) is not null || users.GetAll().Any(u => u.DisplayName.Equals(username, StringComparison.OrdinalIgnoreCase)))
             return Conflict(new { error = "A user with that username already exists." });
 
         string hash = AuthService.HashPassword(req.Password);

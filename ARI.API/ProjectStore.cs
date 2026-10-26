@@ -173,7 +173,9 @@ public class ProjectStore
     /// folder: nobody may read, write or delete there, because a changed git config can make git run a command.</summary>
     public static bool IsProtectedPath(string relPath)
         => relPath.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries)
-            .Any(part => part.Equals(".ariproject", StringComparison.OrdinalIgnoreCase) || part.Equals(".git", StringComparison.OrdinalIgnoreCase)
+            .Select(part => part.TrimEnd('.', ' '))   // Windows ignores trailing dots and spaces, so ".ariproject." is the same folder
+            .Any(part => part.Contains('~') ||        // ...and short names like ARIPRO~1
+                       part.Equals(".ariproject", StringComparison.OrdinalIgnoreCase) || part.Equals(".git", StringComparison.OrdinalIgnoreCase)
                       || part.Equals(".gitattributes", StringComparison.OrdinalIgnoreCase) || part.Equals(".gitmodules", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>True when the file or folder, or any folder on the way down to it from <paramref name="root"/>, is really a link

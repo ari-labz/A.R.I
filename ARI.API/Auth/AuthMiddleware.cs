@@ -56,7 +56,7 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
         if (store.IsBlocked(ip))
         {
             log.LogWarning("Blocked request from {Ip}", ip);
-            ctx.Response.StatusCode = 403;
+            await Deny(ctx, 403, "Too many failed sign-in attempts from this address. Try again later, or ask an admin to unblock it.");
             return;
         }
 

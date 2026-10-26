@@ -3102,7 +3102,7 @@ async function restoreBackup(file, count) {
     try {
         const r = await cpFetch('/api/v1/admin/brain/restore', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ file }) });
         const d = await r.json();
-        s.textContent = d.message || 'Restored.';
+        s.textContent = r.ok ? (d.message || 'Restored.') : (d.error || 'Restore failed.');
         loadBrain();
     } catch { s.textContent = 'Restore failed.'; }
 }
@@ -5575,7 +5575,7 @@ document.querySelectorAll('.vs-stop-servers-btn').forEach(btn => {
             const r = await cpFetch('/api/v1/admin/models');
             if (!r.ok) return;
             const data = await r.json();
-            await Promise.all((data.servers ?? []).filter(s => s.status !== 'Offline').map(s => fetch(`/api/v1/admin/servers/${s.id}/stop`, { method: 'POST' })));
+            await Promise.all((data.servers ?? []).filter(s => s.status !== 'Offline').map(s => cpFetch(`/api/v1/admin/servers/${s.id}/stop`, { method: 'POST' })));
         } catch {}
         setTimeout(vsCheckServers, 2000);
         btn.disabled = false; btn.textContent = 'Stop servers';
@@ -6775,7 +6775,7 @@ vsTvSpeakBtn.addEventListener('click', async () => {
     const resumed = audioCtx.state === 'suspended' ? audioCtx.resume() : Promise.resolve();
     try {
         const checkpointPath = vsTvEpoch.value || null;
-        const resp = await cpFetch('/api/v1/speech/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, modelName, checkpointPath, ...getSynthParams() }) });
+        const resp = await cpFetch('/api/v1/speech/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, checkpointPath, ...getSynthParams() }) });
         if (!resp.ok) { const err = await resp.json().catch(() => ({ error: resp.statusText })); vsTvStatus.textContent = 'Error: ' + (err.error ?? resp.statusText); return; }
         const bytes = await resp.arrayBuffer();
         if (bytes.byteLength === 0) { vsTvStatus.textContent = 'Error: server returned no audio'; return; }

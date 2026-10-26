@@ -39,7 +39,10 @@ public class ProjectSyncController(ProjectStore store) : ControllerBase
         serverSha = shaCode == 0 && System.Text.RegularExpressions.Regex.IsMatch(serverSha.Trim(), "^[0-9a-f]{40}$") ? serverSha.Trim() : "";
 
         int ahead = 0, behind = 0;
-        if (serverSha.Length == 40 && !string.IsNullOrWhiteSpace(clientSha) && clientSha != serverSha)
+        // A commit the server has never seen means the client has work to push (ahead = 1 is "at least one").
+        bool clientKnown = string.IsNullOrWhiteSpace(clientSha) || ProjectStore.RunGit(root, $"cat-file -e {clientSha}^{{commit}}").ExitCode == 0;
+        if (serverSha.Length == 40 && !clientKnown) ahead = 1;
+        if (serverSha.Length == 40 && clientKnown && !string.IsNullOrWhiteSpace(clientSha) && clientSha != serverSha)
         {
             var (_, aheadStr) = ProjectStore.RunGit(root,
                 $"rev-list --count {serverSha}..{clientSha}");
@@ -124,9 +127,9 @@ public class ProjectSyncController(ProjectStore store) : ControllerBase
 
             // Nothing may be pushed into ARI's own git folder, and no links: a changed git config can make git run a command,
             // and a link could point outside the project.
-            (int treeCode, string tree) = ProjectStore.RunGit(root, "ls-tree -r refs/heads/ari/incoming");
-            bool unsafeTree = treeCode != 0 || tree.Split('\n', StringSplitOptions.RemoveEmptyEntries).Any(line =>
-                line.StartsWith("120000") || line.StartsWith("160000") || ProjectStore.IsProtectedPath(line[(line.IndexOf('\t') + 1)..].Trim('"')));
+            (int treeCode, string tree) = ProjectStore.RunGit(root, "ls-tree -r -z refs/heads/ari/incoming");
+            bool unsafeTree = treeCode != 0 || tree.Split('\0', StringSplitOptions.RemoveEmptyEntries).Any(line =>
+                line.StartsWith("120000") || line.StartsWith("160000") || ProjectStore.IsProtectedPath(line[(line.IndexOf('\t') + 1)..]));
             if (unsafeTree)
             {
                 ProjectStore.RunGit(root, "branch -D ari/incoming");
