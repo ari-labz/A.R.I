@@ -206,11 +206,17 @@ public class APIModule : IAsyncDisposable
             if (ctx.Request.Path == "/api/listener/stream")
             {
                 if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
+
+                // The spoken replies are written into a thread, so the caller must be allowed to use it: its owner,
+                // or an admin. And a name sent by the client is never trusted: the speaker is whoever signed in.
+                string threadKey = ctx.Request.Query["threadKey"].ToString();
+                LLMModule? llmForAudio = (LLMModule?)Modules.Llm;
+                if (string.IsNullOrWhiteSpace(threadKey)) { ctx.Response.StatusCode = 400; return; }
+                if (llmForAudio is not null && !ThreadAccess.CanUse(ctx.User, llmForAudio, threadKey)) { ctx.Response.StatusCode = 403; return; }
                 if (Modules.Listener is not ARI.Listener.ListenerModule listener) { ctx.Response.StatusCode = 503; return; }
 
                 string source    = ctx.Request.Query["source"].ToString() is { Length: > 0 } s ? s : "web";
-                string threadKey = ctx.Request.Query["threadKey"].ToString();
-                string? userId   = ctx.Request.Query["userId"].ToString() is { Length: > 0 } u ? u : null;
+                string? userId   = ctx.User.FindFirst("displayName")?.Value ?? ctx.User.Identity?.Name;
                 ListenerSessionContext context      = new ListenerSessionContext(source, threadKey, userId);
 
                 WebSocket ws = await ctx.WebSockets.AcceptWebSocketAsync();

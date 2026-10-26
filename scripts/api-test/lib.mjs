@@ -1,6 +1,7 @@
 // A tiny test toolkit for the API tests: no packages needed, just Node.
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
+import http from "node:http";
 
 export const base = process.env.ARI_TEST_URL ?? "http://localhost:5199";
 export const dataDir = process.env.ARI_TEST_DATA ?? "";
@@ -125,3 +126,20 @@ export function makeZip(entries) {
 
 export const exists = p => fs.existsSync(p);
 export const scratchpad = key => `${dataDir}/Server/Scratchpad/${key}`;
+
+/** Try to open a WebSocket and report how the server answered: the status code, or 101 if it was accepted. */
+export function wsProbe(path, token) {
+  return new Promise(resolve => {
+    const url = new URL(base + prefix + path);
+    const req = http.request({
+      host: url.hostname, port: url.port, path: url.pathname + url.search, method: "GET",
+      headers: { Connection: "Upgrade", Upgrade: "websocket", "Sec-WebSocket-Version": "13",
+                 "Sec-WebSocket-Key": Buffer.from("0123456789abcdef").toString("base64"),
+                 ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    });
+    req.on("response", res => { res.resume(); resolve(res.statusCode); });
+    req.on("upgrade", (res, socket) => { socket.destroy(); resolve(101); });
+    req.on("error", () => resolve(0));
+    req.end();
+  });
+}
