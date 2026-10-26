@@ -128,12 +128,12 @@ public class AdminUsersController(UserStore users) : ControllerBase
     [HttpGet("/api/v1/admin/blocklist")]
     public IActionResult GetBlocklist()
     {
-        return Ok(users.GetBlockedIps().Select(b => new
+        return Ok(this.Page(users.GetBlockedIps().Select(b => new
         {
             b.Ip,
             BlockedAt      = DateTimeOffset.FromUnixTimeSeconds(b.BlockedAt).ToString("o"),
             b.FailedAttempts,
-        }));
+        }).ToList()));
     }
 
     [HttpDelete("/api/v1/admin/blocklist/{id}")]

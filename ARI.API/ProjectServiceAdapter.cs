@@ -11,8 +11,13 @@ namespace ARI.API;
 /// path (project_tools in ARI.LLM) share exactly one "create/rename a project" code path instead of
 /// two that could drift apart.
 /// </summary>
-public class ProjectServiceAdapter(ProjectStore store) : IProjectService
+public class ProjectServiceAdapter(ProjectStore store, Microsoft.AspNetCore.Http.IHttpContextAccessor? http = null) : IProjectService
 {
+    /// <summary>The brain is the owner's memory. A project made or renamed by a guest, or with a name that is not a plain
+    /// name, never writes a note into it. (Tools ARI runs herself have no web request, and are allowed.)</summary>
+    private bool MayWriteBrainNote(string name)
+        => SafeNames.IsSafe(name) && (http?.HttpContext?.User is not { Identity.IsAuthenticated: true } user || user.IsInRole(ARI.API.Auth.Roles.Admin));
+
     public IReadOnlyList<ProjectSummary> List() => store.GetAll().Select(ToSummary).ToList();
 
     public ProjectSummary? Create(string name, string? category, string? backend = null, string? path = null)
@@ -49,7 +54,7 @@ public class ProjectServiceAdapter(ProjectStore store) : IProjectService
             RootPath:     rootPath);
 
         store.Add(project);
-        EnsureBrainNote(project);
+        if (MayWriteBrainNote(project.Name)) EnsureBrainNote(project);
         if (Modules.Llm is LLMModule llm)
             llm.BroadcastProjectsChanged();
         return ToSummary(project);
@@ -63,7 +68,7 @@ public class ProjectServiceAdapter(ProjectStore store) : IProjectService
         if (trimmed == existing.Name) return true;
 
         store.Update(existing with { Name = trimmed });
-        RenameBrainNote(existing.Name, trimmed);
+        if (MayWriteBrainNote(trimmed)) RenameBrainNote(existing.Name, trimmed);
         return true;
     }
 

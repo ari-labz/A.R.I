@@ -108,13 +108,13 @@ public class SettingsController(PersistentData persistentData, ILogger<SettingsC
 
     private static void WriteLogging(LoggingSettings logging)
     {
-        JsonObject root = ReadRoot() ?? new JsonObject();
+        JsonObject root = ReadRoot() ?? throw new InvalidOperationException("AriConfig.json is missing.");
         if (root["Recording"] is not JsonObject rec) root["Recording"] = rec = new JsonObject();
         rec["Enabled"]             = logging.Enabled;
         rec["IncludeFullRequests"] = logging.IncludeFullRequests;
         rec["IncludeToolResults"]  = logging.IncludeToolResults;
         rec["RetentionDays"]       = logging.RetentionDays;
-        System.IO.File.WriteAllText(Paths.AriConfig, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        ConfigFile.Write(Paths.AriConfig, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
     }
 
     private static JsonObject? ReadRoot()

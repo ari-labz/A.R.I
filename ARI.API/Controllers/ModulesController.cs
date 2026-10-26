@@ -116,7 +116,7 @@ public class ModulesController(ILogger<ModulesController> logger) : ControllerBa
             // Rewrite through the parsed tree so every other setting — ports, paths and any
             // ${SECRET} placeholders — comes back out exactly as it went in.
             string json = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
-            System.IO.File.WriteAllText(path, json);
+            ConfigFile.Write(path, json);
         }
         catch (Exception ex)
         {

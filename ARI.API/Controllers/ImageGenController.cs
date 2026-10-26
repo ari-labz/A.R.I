@@ -71,7 +71,7 @@ public class ImageGenController(APIConfig config) : ControllerBase
         else if (modules["imagegen"] is not null) modules["imagegen"] = ig;
         else modules["ImageGen"] = ig;
 
-        System.IO.File.WriteAllText(path,
+        ConfigFile.Write(path,
             root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
 
         return Ok();

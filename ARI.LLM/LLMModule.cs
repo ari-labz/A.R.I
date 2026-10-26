@@ -11,7 +11,11 @@ namespace ARI.LLM;
 /// <param name="Type">newThread | streaming | streamingFinished | threadDeleted | threadUpdated</param>
 /// <param name="ThreadKey">The thread this event relates to.</param>
 /// <param name="Text">Accumulated streaming text — only present for "streaming" events.</param>
-public record AppEvent(string Type, string ThreadKey, string? Text = null);
+public record AppEvent(string Type, string ThreadKey, string? Text = null)
+{
+    /// <summary>Whose thread this is, so a guest still gets told about the deletion of their own thread after it is gone. Never sent to clients.</summary>
+    [System.Text.Json.Serialization.JsonIgnore] public string? OwnerId { get; init; }
+}
 
 /// <summary>The current processing phase of a thread, sent to watching clients via the watch SSE stream.</summary>
 public enum ThreadPhase { Idle, Prefilling, Thinking, Typing, Researching, Generating, Waiting, Working }
@@ -490,7 +494,7 @@ public class LLMModule : ILLMModule, IDisposable
             bool kept = PersistedThreads.ShouldSave(thread);
             if (kept) PersistedThreads.Save(thread);
             threads.TryRemove(threadKey, out _);
-            Broadcast(new AppEvent(kept ? "threadExpired" : "threadDeleted", threadKey));
+            Broadcast(new AppEvent(kept ? "threadExpired" : "threadDeleted", threadKey) { OwnerId = thread.OwnerId });
         };
         thread.Streaming         += text => Broadcast(new AppEvent("streaming", threadKey, text));
         thread.StreamingFinished += () =>
@@ -852,7 +856,7 @@ public class LLMModule : ILLMModule, IDisposable
         Cancel(threadKey);   // stop any active send before we sweep + delete
 
         // 1) Clear it from the UI now; the thread lingers in the registry until Engram is done.
-        Broadcast(new AppEvent("threadDeleted", threadKey));
+        Broadcast(new AppEvent("threadDeleted", threadKey) { OwnerId = thread.OwnerId });
 
         // 2) Guarantee the conversation is saved before deletion (honours the no-delete-before-Engram rule).
         if (engram is not null && !thread.Internal && thread.HasUserMessages)
@@ -1558,8 +1562,9 @@ public class LLMModule : ILLMModule, IDisposable
     public bool DeletePersisted(string key)
     {
         if (!PersistedThreads.Exists(key)) return false;
+        string? savedOwner = GetPersistedInfo(key)?.OwnerId;
         PersistedThreads.Delete(key);
-        Broadcast(new AppEvent("threadDeleted", key));
+        Broadcast(new AppEvent("threadDeleted", key) { OwnerId = savedOwner });
         return true;
     }
 

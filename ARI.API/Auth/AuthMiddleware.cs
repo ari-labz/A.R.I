@@ -33,8 +33,7 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
 
     /// <summary>True if a guest must be refused.</summary>
     internal static bool IsAdminOnly(string path)
-        => path.StartsWith(AdminPrefix, StringComparison.OrdinalIgnoreCase)
-;
+        => path.StartsWith(AdminPrefix, StringComparison.OrdinalIgnoreCase);
 
     public async Task InvokeAsync(HttpContext ctx)
     {
@@ -42,6 +41,16 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
         AuthService auth  = ctx.RequestServices.GetRequiredService<AuthService>();
 
         string ip = ClientAddress.Of(ctx);
+
+        // A page on another site (or another port on this machine) must not be able to make a signed-in browser change
+        // things: when the browser says where a changing request came from, it has to be this server.
+        if (!HttpMethods.IsGet(ctx.Request.Method) && !HttpMethods.IsHead(ctx.Request.Method) && !HttpMethods.IsOptions(ctx.Request.Method)
+            && ctx.Request.Headers.Origin.ToString() is { Length: > 0 } origin
+            && (!Uri.TryCreate(origin, UriKind.Absolute, out Uri? originUri) || !originUri.Authority.Equals(ctx.Request.Host.Value, StringComparison.OrdinalIgnoreCase)))
+        {
+            await Deny(ctx, 403, "Cross-site requests are not allowed.");
+            return;
+        }
 
         // Step 1: IP blocklist (always)
         if (store.IsBlocked(ip))

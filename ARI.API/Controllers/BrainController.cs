@@ -30,7 +30,7 @@ public class BrainController : ControllerBase
                 sizeBytes = b.SizeBytes,
                 noteCount = b.NoteCount
             });
-        return Ok(backups);
+        return Ok(this.Page(backups.ToList()));
     }
 
     /// <summary>Creates a new backup of the current brain.</summary>

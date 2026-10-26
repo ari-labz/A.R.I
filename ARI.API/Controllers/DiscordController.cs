@@ -39,6 +39,11 @@ public class DiscordController : ControllerBase
     public IActionResult SetConfig([FromBody] DiscordConfigRequest req)
     {
         DiscordSettings current = DiscordStore.Get();
+        // Who the Master is on Discord decides who controls ARI there: only the Master may change it.
+        if (req.MasterDiscordId is not null && req.MasterDiscordId.Trim() != current.MasterDiscordId.ToString()
+            && !(current.MasterDiscordId == 0 && string.IsNullOrWhiteSpace(req.MasterDiscordId))
+            && User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value != ARI.Common.Shared.MasterUserId)
+            return StatusCode(403, new { error = "Only the Master can change the Master's Discord ID." });
 
         List<ulong> users = current.WhitelistedUserIds, channels = current.WatchedChannelIds, guilds = current.AllowedGuildIds;
         if (req.WhitelistedUserIds is not null && !TryIds(req.WhitelistedUserIds, out users)) return BadRequest(new { error = "Whitelisted user IDs must be numeric." });

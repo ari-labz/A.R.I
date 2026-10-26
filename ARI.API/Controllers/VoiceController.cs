@@ -66,7 +66,10 @@ public class VoiceController(
 
         string stageDir = Path.Combine(StagingRoot, stageId);
         if (!Directory.Exists(stageDir))
-            return BadRequest(new { error = "Unknown stageId. Call /stage first." });
+            return BadRequest(new { error = "Unknown stageId. Make one with POST /admin/voice/uploads first." });
+
+        if (totalChunks < 1 || totalChunks > 100_000 || chunk < 0 || chunk >= totalChunks)
+            return BadRequest(new { error = "chunk must be between 0 and totalChunks - 1." });
 
         string safeName  = Path.GetFileName(name);
         string chunkPath = Path.Combine(stageDir, $"{safeName}.part{chunk}");
@@ -76,7 +79,8 @@ public class VoiceController(
             await Request.Body.CopyToAsync(fs);
 
         string counterKey    = $"{stageId}:{safeName}";
-        int    completedCount = chunkCounters.AddOrUpdate(counterKey, 1, (_, existing) => existing + 1);
+        // Counted from the pieces on disk, so a piece sent twice is still only one piece.
+        int    completedCount = Directory.GetFiles(stageDir, $"{safeName}.part*").Length;
         logger.LogInformation("[Voice] Chunk {Chunk}/{Total} written for {Name} ({Done} done)", chunk + 1, totalChunks, safeName, completedCount);
 
         // Only assemble once all chunks are fully written — atomic counter guarantees no partial files
@@ -289,12 +293,13 @@ public class VoiceController(
             return StatusCode(503, new { error = "Voice module is not running." });
 
         Dictionary<string, object> engineParams = new Dictionary<string, object>();
-        engineParams["diffusionSteps"] = req.DiffusionSteps;
-        engineParams["alpha"]          = req.Alpha;
-        engineParams["beta"]           = req.Beta;
-        engineParams["embeddingScale"] = req.EmbeddingScale;
-        engineParams["speed"]          = req.Speed;
-        engineParams["pauseScale"]     = req.PauseScale;
+        // Open to everyone signed in, so every knob is held to a sensible range (a huge step count would tie up the GPU).
+        engineParams["diffusionSteps"] = Math.Clamp(req.DiffusionSteps, 1, 20);
+        engineParams["alpha"]          = Math.Clamp(req.Alpha, 0f, 1f);
+        engineParams["beta"]           = Math.Clamp(req.Beta, 0f, 1f);
+        engineParams["embeddingScale"] = Math.Clamp(req.EmbeddingScale, 0.1f, 3f);
+        engineParams["speed"]          = Math.Clamp(req.Speed, 0.5f, 2f);
+        engineParams["pauseScale"]     = Math.Clamp(req.PauseScale, 0f, 3f);
         // A checkpoint is a file on the server's disk, so only an admin may name one; everyone else gets the active voice.
         if (!string.IsNullOrWhiteSpace(req.CheckpointPath) && User.IsInRole(ARI.API.Auth.Roles.Admin))
         {
@@ -780,7 +785,7 @@ public class VoiceController(
 
         string stageDir = Path.Combine(StagingRoot, req.StageId);
         if (!Directory.Exists(stageDir))
-            return BadRequest(new { error = "Unknown stageId. Call /stage first." });
+            return BadRequest(new { error = "Unknown stageId. Make one with POST /admin/voice/uploads first." });
         if (voiceTraining?.IsSetupComplete != true)
             return StatusCode(503, new { error = "StyleTTS2 must be set up first (Whisper is part of its environment)." });
 
@@ -840,7 +845,7 @@ public class VoiceController(
 
         string stageDir = Path.Combine(StagingRoot, req.StageId);
         if (!Directory.Exists(stageDir))
-            return BadRequest(new { error = "Unknown stageId. Call /stage first." });
+            return BadRequest(new { error = "Unknown stageId. Make one with POST /admin/voice/uploads first." });
         if (string.IsNullOrEmpty(vsConfig.StyleTtsPath))
             return StatusCode(503, new { error = "VoiceSynthesis module is not configured." });
         if (voiceTraining?.IsSetupComplete != true)
@@ -947,7 +952,7 @@ public record TrainRequest(
 /// <param name="Required">Modules that cannot be turned off — switching them off would
 /// take the control panel itself away, leaving no way to turn them back on.</param>
 
-public record SpeakRequest(string Text, string? ModelName = null, string? CheckpointPath = null,
+public record SpeakRequest(string Text, string? CheckpointPath = null,
     int DiffusionSteps = 5, float Alpha = 0.3f, float Beta = 0.7f, float EmbeddingScale = 1.0f,
     float Speed = 1.0f, float PauseScale = 1.0f);
 public record SwitchEngineRequest(string Engine, string ModelName);

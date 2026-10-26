@@ -241,12 +241,15 @@ public class DatasetBuilder
             {
                 string? source = VariantPath(selection.Name, selection.Variant);
                 if (source is null) continue;
-                zip.CreateEntryFromFile(source, $"wavs/{selection.Name}.wav");
+                // The name becomes a file name inside the zip and a line in metadata.csv, so it can't carry path or separator characters.
+                string entryName = System.Text.RegularExpressions.Regex.Replace(selection.Name, @"[^\w .-]", "_").Trim('.');
+                if (entryName.Length == 0) continue;
+                zip.CreateEntryFromFile(source, $"wavs/{entryName}.wav");
                 string transcript = selection.Transcript
                     ?? (transcripts.TryGetValue(selection.Name, out DatasetPart? part) ? part.Transcript : "");
-                metadata.AppendLine($"{selection.Name}.wav|{transcript}");
+                metadata.AppendLine($"{entryName}.wav|{transcript.Replace('|', ' ').Replace('\r', ' ').Replace('\n', ' ')}");
 
-                using StreamWriter txt = new(zip.CreateEntry($"wavs/{selection.Name}.txt").Open());
+                using StreamWriter txt = new(zip.CreateEntry($"wavs/{entryName}.txt").Open());
                 txt.Write(transcript);
             }
             using StreamWriter writer = new(zip.CreateEntry("metadata.csv").Open());

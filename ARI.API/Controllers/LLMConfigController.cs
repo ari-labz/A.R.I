@@ -96,7 +96,7 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
             .OrderByDescending(c => c!.savedAt)
             .ToList();
 
-        return Ok(configs);
+        return Ok(this.Page(configs));
     }
 
     // ── POST /api/v1/admin/llmConfigs/save ─────────────────────────────────────────
@@ -118,7 +118,7 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
         string zipPath = Path.Combine(ConfigsDir, safeName + ".zip");
 
         if (System.IO.File.Exists(zipPath))
-            System.IO.File.Delete(zipPath);
+            return Conflict(new { error = $"A saved setup called '{req.Name}' already exists. Delete it first or pick another name." });
 
         using (ZipArchive zip = ZipFile.Open(zipPath, ZipArchiveMode.Create))
         {
@@ -173,11 +173,14 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
 
         // Extract over PersistentData (skip meta.json, merge Discord.json)
         Directory.CreateDirectory(PersistentDir);
+        try
+        {
         using (ZipArchive zip = ZipFile.OpenRead(zipPath))
         {
             foreach (ZipArchiveEntry entry in zip.Entries)
             {
                 if (entry.Name == "meta.json") continue;
+                if (!ConfigFiles.Contains(entry.Name)) continue;   // only the files a saved setup is made of
 
                 string dest = Path.Combine(PersistentDir, entry.Name);
 
@@ -189,6 +192,13 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
 
                 entry.ExtractToFile(dest, overwrite: true);
             }
+        }
+        }
+        catch (InvalidDataException)
+        {
+            // A damaged zip must not leave every server stopped.
+            if (llm is not null) _ = Task.Run(() => llm.StartServersAsync(persistentData.GetModels().ToList(), llm.ModelsPath));
+            return BadRequest(new { error = "That saved setup is damaged." });
         }
 
         // Restart servers that have BootStartup = true

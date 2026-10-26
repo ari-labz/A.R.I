@@ -802,7 +802,7 @@ export default function App() {
                     command, title,
                     resolve: d => {
                         shownApprovalRef.current = null
-                        apiFetch(`/api/v1/admin/threads/${key}/approvals/${id}`, {
+                        apiFetch(`/api/v1/threads/${key}/approvals/${id}`, {
                             method: "POST", headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({ allow: d !== "deny" }),
                         }).catch(() => {})

@@ -80,6 +80,7 @@ public class APIModule : IAsyncDisposable
         builder.Services.AddSingleton(persistentData);
         builder.Services.AddSingleton(systemInfo);
         builder.Services.AddSingleton<ProjectStore>();
+        builder.Services.AddHttpContextAccessor();
         builder.Services.AddSingleton<ProjectServiceAdapter>();
 
         // Clear stale staging folders from a previous run
