@@ -113,7 +113,7 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest(new { error = "Name is required." });
 
-        string safeName = string.Concat(req.Name.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
+        string safeName = string.Concat(req.Name.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c)).Replace("..", "_");
         Directory.CreateDirectory(ConfigsDir);
         string zipPath = Path.Combine(ConfigsDir, safeName + ".zip");
 

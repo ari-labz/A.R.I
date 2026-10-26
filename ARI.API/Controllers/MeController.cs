@@ -57,6 +57,14 @@ public class MeController(UserStore users) : ControllerBase
         if (req.NewPassword is not null && AccountRules.CheckPassword(req.NewPassword) is { } passwordProblem)
             return BadRequest(new { error = passwordProblem });
 
+        // With a temporary password the one thing to do is replace it.
+        if (user.MustChangePassword && req.NewPassword is null)
+            return BadRequest(new { error = "Choose a new password first." });
+        // A name must not be someone else's name, whether that is their username or their display name.
+        if (username is not null && !username.Equals(user.Username, StringComparison.OrdinalIgnoreCase)
+            && users.GetAll().Any(u => u.Id != user.Id && u.DisplayName.Equals(username, StringComparison.OrdinalIgnoreCase)))
+            return Conflict(new { error = "Another person already uses that name." });
+
         // Everything is checked before anything is changed, so a refused request changes nothing.
         if (username is not null && !username.Equals(user.Username, StringComparison.Ordinal) && !users.SetUsername(user.Id, username))
             return Conflict(new { error = "That username is already taken." });

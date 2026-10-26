@@ -155,6 +155,7 @@ internal static class ToolFactories
         "create_event", "create_reminder", "list_events", "delete_entry", "propose_persona_edit",
         "list_projects", "create_project", "rename_project", "bind_project", "set_project_path",
         "git", "git_clone", "github",
+        "build_project",   // runs the project's own build scripts on this machine
     };
 
     internal static bool TryBuild(string toolName, Thread thread, out Tool tool)

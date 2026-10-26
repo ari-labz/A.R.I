@@ -303,6 +303,10 @@ public class VoiceController(
         // A checkpoint is a file on the server's disk, so only an admin may name one; everyone else gets the active voice.
         if (!string.IsNullOrWhiteSpace(req.CheckpointPath) && User.IsInRole(ARI.API.Auth.Roles.Admin))
         {
+            // The file is loaded by the speech engine, so it has to be one of the voices' own checkpoints.
+            if (string.IsNullOrEmpty(vsConfig.VoicesPath)
+                || !Path.GetFullPath(req.CheckpointPath).StartsWith(Path.GetFullPath(vsConfig.VoicesPath).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                return BadRequest(new { error = "That checkpoint is not one of the installed voices." });
             if (!System.IO.File.Exists(req.CheckpointPath))
                 return NotFound(new { error = $"Checkpoint not found: {req.CheckpointPath}" });
             engineParams["checkpointPath"] = req.CheckpointPath;

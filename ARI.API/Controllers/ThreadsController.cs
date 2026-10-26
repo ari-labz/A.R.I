@@ -595,7 +595,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
         // Only the file's own name is ever used: a client can send "../../x" or a full path as the filename.
         string fileName = Path.GetFileName(file.FileName);
-        if (string.IsNullOrWhiteSpace(fileName) || ProjectStore.IsProtectedPath(fileName)) return BadRequest("The file has no usable name.");
+        if (string.IsNullOrWhiteSpace(fileName) || fileName is "." or ".." || ProjectStore.IsProtectedPath(fileName)) return BadRequest("The file has no usable name.");
 
         string mime = file.ContentType ?? "application/octet-stream";
         bool isZip  = mime is "application/zip" or "application/x-zip-compressed"
@@ -774,7 +774,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         if (file is null || file.Length == 0) return BadRequest("No file provided.");
 
         string fileName = Path.GetFileName(file.FileName);
-        if (string.IsNullOrWhiteSpace(fileName) || ProjectStore.IsProtectedPath(fileName)) return BadRequest("The file has no usable name.");
+        if (string.IsNullOrWhiteSpace(fileName) || fileName is "." or ".." || ProjectStore.IsProtectedPath(fileName)) return BadRequest("The file has no usable name.");
 
         string mime    = file.ContentType ?? "application/octet-stream";
         bool   isImage = ImageMimes.Contains(mime);

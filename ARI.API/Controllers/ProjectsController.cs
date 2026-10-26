@@ -164,7 +164,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
         {
             string safeName = Path.GetFileName(file.FileName);
             if (string.IsNullOrWhiteSpace(safeName)) continue;
-            if (ProjectStore.IsProtectedPath(safeName)) return BadRequest(new { error = $"'{safeName}' is not allowed." });
+            if (safeName is "." or ".." || ProjectStore.IsProtectedPath(safeName)) return BadRequest(new { error = $"'{safeName}' is not allowed." });
             string dest = Path.Combine(dir!, safeName);
             if (ProjectStore.PassesThroughLink(project!.RootPath!, dest)) return BadRequest(new { error = $"'{safeName}' is not allowed." });
             await using FileStream fs = System.IO.File.Create(dest);
