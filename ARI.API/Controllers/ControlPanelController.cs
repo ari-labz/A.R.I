@@ -311,27 +311,28 @@ public class AgentsApiController(PersistentData persistentData) : ControllerBase
     }
 
     /// <summary>Deletes a custom agent. Shipped agents cannot be deleted, only switched off.</summary>
-    [HttpDelete("{name}")]
-    public IActionResult DeleteAgent(string name)
+    [HttpDelete("{id}")]
+    public IActionResult DeleteAgent(string id)
     {
-        if (!persistentData.RemoveCustomAgent(name))
-            return NotFound(new { error = $"'{name}' is not a custom agent." });
+        if (!persistentData.RemoveCustomAgent(id))
+            return NotFound(new { error = $"'{id}' is not a custom agent." });
         return Ok(new { ok = true, restartRequired = true });
     }
 
     /// <summary>Saves the prompts owned by no single agent (the MemoryAgent block, the Budgets footer).
     /// Read at startup, so it takes effect on restart.</summary>
-    [HttpPut("shared")]
+    [HttpPatch("shared")]
     public IActionResult UpdateShared([FromBody] JsonObject req)
     {
         persistentData.MergeShared(req);
         return Ok(new { ok = true, restartRequired = true });
     }
 
-    [HttpPut("{name}")]
-    public IActionResult UpdateAgent(string name, [FromBody] JsonObject req)
+    [HttpPatch("{id}")]
+    public IActionResult UpdateAgent(string id, [FromBody] JsonObject req)
     {
         // Merged into the file rather than replacing the agent, so fields the panel doesn't know about survive.
+        string name = id;
         if (!persistentData.MergeAgent(name, req))
             return NotFound(new { error = $"Agent '{name}' not found." });
 
@@ -342,7 +343,7 @@ public class AgentsApiController(PersistentData persistentData) : ControllerBase
             if (slot is { Length: > 0 }) Llm.AssignAgentSlot(name, slot);
         }
 
-        return NoContent();
+        return Ok(new { ok = true });
     }
 }
 
@@ -1348,49 +1349,30 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
         return Ok(model);
     }
 
-    [HttpPut("{id:guid}")]
-    public IActionResult UpdateModel(Guid id, [FromBody] Model model)
+    /// <summary>Change a model, named by its name. Send only what changes; <c>notes</c> are the model's free-text notes,
+    /// <c>supportsThinking</c> says whether it emits a reasoning chain (takes effect when its server next starts).</summary>
+    [HttpPatch("{id}")]
+    public IActionResult UpdateModel(string id, [FromBody] JsonObject changes)
     {
-        if (!persistentData.UpdateModel(model))
+        Model? existing = persistentData.GetModel(Uri.UnescapeDataString(id));
+        if (existing is null) return NotFound(new { error = "Model not found." });
+
+        JsonObject merged = JsonSerializer.SerializeToNode(existing)!.AsObject();
+        foreach ((string key, JsonNode? value) in changes)
+            if (key is not ("name" or "notes")) merged[key] = value?.DeepClone();
+        Model updated = merged.Deserialize<Model>()!;
+
+        persistentData.UpdateModel(updated);
+        if (changes["notes"] is JsonNode notes) persistentData.SetNote(updated.Name, notes.GetValue<string?>() ?? "");
+        updated.RefreshDownloadedState(ModelsPath);
+        return Ok(updated);
+    }
+
+    [HttpDelete("{id}")]
+    public IActionResult DeleteModel(string id)
+    {
+        if (!persistentData.RemoveModel(Uri.UnescapeDataString(id)))
             return NotFound(new { error = "Model not found." });
-
-        model.RefreshDownloadedState(ModelsPath);
-        return Ok(model);
-    }
-
-    [HttpDelete("{name}")]
-    public IActionResult DeleteModel(string name)
-    {
-        if (!persistentData.RemoveModel(Uri.UnescapeDataString(name)))
-            return NotFound(new { error = "Model not found." });
-        return Ok(new { ok = true });
-    }
-
-    [HttpPut("notes")]
-    public IActionResult SaveNotes([FromBody] ModelNotesRequest req)
-    {
-        if (string.IsNullOrWhiteSpace(req.ModelName))
-            return BadRequest(new { error = "modelName is required." });
-
-        persistentData.SetNote(req.ModelName, req.Notes ?? "");
-        return Ok(new { ok = true });
-    }
-
-    /// <summary>Toggle whether this model emits a reasoning chain. Drives --reasoning-format on the
-    /// llama-server command line: a non-thinking model whose template lacks a think branch fails to
-    /// parse when the flag is passed, so it must be off for those. Takes effect on next server start.</summary>
-    [HttpPut("thinking")]
-    public IActionResult SetThinking([FromBody] ModelThinkingRequest req)
-    {
-        if (string.IsNullOrWhiteSpace(req.ModelName))
-            return BadRequest(new { error = "modelName is required." });
-
-        Model? model = persistentData.GetModels()
-            .FirstOrDefault(m => m.Name.Equals(req.ModelName, StringComparison.OrdinalIgnoreCase));
-        if (model is null) return NotFound(new { error = "Model not found." });
-
-        model.SupportsThinking = req.SupportsThinking;
-        persistentData.UpdateModel(model);
         return Ok(new { ok = true });
     }
 
@@ -1420,13 +1402,6 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
         Server? srv = llm.Servers.FirstOrDefault(s => s.Name == agent.ServerName);
         return srv?.ActiveModel?.SupportsReasoningEffort == true;
     }
-
-    [HttpPut("reasoningEffort")]
-    public IActionResult SetReasoningEffort([FromBody] ReasoningEffortRequest req)
-    {
-        ReasoningEffortStore.Step = req.Step;
-        return Ok(new { ok = true, step = ReasoningEffortStore.Step, level = ReasoningEffortStore.Level });
-    }
 }
 
 // ── Servers API ───────────────────────────────────────────────────────────────
@@ -1448,15 +1423,22 @@ public class ServersApiController(PersistentData persistentData) : ControllerBas
         return Ok(server);
     }
 
-    [HttpPut("{id:guid}")]
-    public IActionResult UpdateServer(Guid id, [FromBody] Server server)
+    /// <summary>Change a server. Send only what changes (<c>currentModelName</c> is the model it loads when it starts).</summary>
+    [HttpPatch("{id:guid}")]
+    public IActionResult UpdateServer(Guid id, [FromBody] JsonObject changes)
     {
-        Server? existing = persistentData.GetServers().FirstOrDefault(s => s.Id == id);
-        if (!persistentData.UpdateServer(server))
-            return NotFound(new { error = "Server not found." });
-        llm?.UpdateServer(server);
+        Server? existing = persistentData.GetServer(id);
+        if (existing is null) return NotFound(new { error = "Server not found." });
 
-        if (existing is not null && existing.Name != server.Name)
+        JsonObject merged = JsonSerializer.SerializeToNode(existing)!.AsObject();
+        foreach ((string key, JsonNode? value) in changes)
+            if (key != "id") merged[key] = value?.DeepClone();
+        Server server = merged.Deserialize<Server>()!;
+        if (string.IsNullOrWhiteSpace(server.Name)) return BadRequest(new { error = "name can't be empty." });
+
+        persistentData.UpdateServer(server);
+        llm?.UpdateServer(server);
+        if (existing.Name != server.Name)
             persistentData.RenameServerInAgents(existing.Name, server.Name);
 
         return Ok(server);
@@ -1505,15 +1487,14 @@ public class ServersApiController(PersistentData persistentData) : ControllerBas
         return Ok(new { ok = true });
     }
 
-    [HttpPost("switch")]
-    public IActionResult Switch([FromBody] SwitchModelRequest req)
+    /// <summary>Load a different model onto a running server now (and remember it as the one to load next time).</summary>
+    [HttpPost("{id:guid}/switch")]
+    public IActionResult Switch(Guid id, [FromBody] SwitchModelRequest req)
     {
-        if (req.ServerId == Guid.Empty)
-            return BadRequest(new { error = "serverId is required." });
         if (string.IsNullOrWhiteSpace(req.ModelName))
             return BadRequest(new { error = "modelName is required." });
 
-        Server? server = llm?.Servers.FirstOrDefault(s => s.Id == req.ServerId);
+        Server? server = llm?.Servers.FirstOrDefault(s => s.Id == id);
         if (server is null)
             return NotFound(new { error = "Server not found." });
 
@@ -1530,24 +1511,9 @@ public class ServersApiController(PersistentData persistentData) : ControllerBas
 
         return Ok(new { ok = true });
     }
-
-    [HttpPut("{id:guid}/startup-model")]
-    public IActionResult SetStartupModel(Guid id, [FromBody] SetStartupModelRequest req)
-    {
-        if (string.IsNullOrWhiteSpace(req.ModelName))
-            return BadRequest(new { error = "modelName is required." });
-        if (persistentData.GetServer(id) is null)
-            return NotFound(new { error = "Server not found." });
-        persistentData.SetServerCurrentModel(id, req.ModelName);
-        return Ok(new { ok = true });
-    }
 }
 
-public record SwitchModelRequest(Guid ServerId, string ModelName);
-public record SetStartupModelRequest(string ModelName);
-public record ModelNotesRequest(string ModelName, string? Notes);
-public record ModelThinkingRequest(string ModelName, bool SupportsThinking);
-public record ReasoningEffortRequest(int Step);
+public record SwitchModelRequest(string ModelName);
 
 
 

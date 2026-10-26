@@ -34,5 +34,5 @@ test("the few things a guest's chat page needs sit outside /admin and work for a
 });
 
 test("changing the reasoning dial stays admin only", async () => {
-  status(await guest.put("/admin/models/reasoningEffort", { step: 1 }), 403);
+  status(await guest.patch("/admin/settings", { reasoningEffort: 1 }), 403);
 });

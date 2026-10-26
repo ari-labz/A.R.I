@@ -57,10 +57,10 @@ export default function ThinkingEffort({ serverReady, codeMode }: Props) {
 
     function changeStep(next: number) {
         setStep(next)
-        apiFetch("/api/v1/reasoningEffort", {
-            method: "PUT",
+        apiFetch("/api/v1/admin/settings", {
+            method: "PATCH",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ step: next }),
+            body: JSON.stringify({ reasoningEffort: next }),
         }).catch(() => { /* best-effort; UI already reflects the choice */ })
     }
 

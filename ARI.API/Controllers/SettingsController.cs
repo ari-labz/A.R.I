@@ -28,6 +28,7 @@ public class SettingsController(PersistentData persistentData, ILogger<SettingsC
         string? Persona,
         bool? DreamingEnabled,
         int? EngramTurns,
+        int? ReasoningEffort,
         LoggingSettings? Logging);
 
     [HttpGet]
@@ -37,6 +38,7 @@ public class SettingsController(PersistentData persistentData, ILogger<SettingsC
     public IActionResult Patch([FromBody] SettingsPatch patch)
     {
         if (patch.EngramTurns is < 0) return BadRequest(new { error = "Engram turns can't be negative." });
+        if (patch.ReasoningEffort is < 0 or > 2) return BadRequest(new { error = "Reasoning effort is 0 (low), 1 (medium) or 2 (xhigh)." });
         if (patch.Logging is { RetentionDays: < 0 }) return BadRequest(new { error = "Retention days can't be negative." });
         if (patch.DreamingEnabled is not null && Modules.Llm is null) return StatusCode(503, new { error = "LLM is not available." });
 
@@ -62,6 +64,7 @@ public class SettingsController(PersistentData persistentData, ILogger<SettingsC
         if (patch.Conventions    is not null) ConventionsStore.Set(patch.Conventions);
         if (patch.SafeModePrompt is not null) SafeModePromptStore.Set(patch.SafeModePrompt);
         if (patch.Persona        is not null) PersonaStore.Set(patch.Persona);
+        if (patch.ReasoningEffort is { } effort) ReasoningEffortStore.Step = effort;
         if (patch.DreamingEnabled is { } dreaming) Modules.Llm!.DreamingEnabled = dreaming;
         if (engram is not null)
         {
@@ -84,6 +87,8 @@ public class SettingsController(PersistentData persistentData, ILogger<SettingsC
             safeModePrompt = SafeModePromptStore.Get(),
             persona        = PersonaStore.Get(),
             dreamingEnabled = Modules.Llm?.DreamingEnabled ?? false,
+            // The one global dial for how hard ARI thinks: 0/1/2 = low/medium/xhigh. Anyone signed in can read it at /reasoningEffort.
+            reasoningEffort = ReasoningEffortStore.Step,
             // How many completed exchanges a thread builds up before Engram sweeps it mid-conversation. 0 = off.
             engramTurns    = Llm?.GetEngramTurnInterval() ?? persistentData.GetAgent("Engram")?.TurnsBeforeSweep ?? 5,
             // The session recorder (DTI, dream and chat logs): what it keeps and for how long. Read when ARI starts.
