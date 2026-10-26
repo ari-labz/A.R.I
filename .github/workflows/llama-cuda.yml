@@ -1,0 +1,37 @@
+name: llama.cpp CUDA base image
+
+# Compiles llama.cpp with CUDA once and publishes it as ghcr.io/ari-labz/llama-cpp-cuda:<version>, so the A·R·I image
+# build (docker.yml) just copies the finished binaries instead of compiling for ~20 minutes every time.
+#
+# Run it by hand from the Actions tab, and only when llama.cpp changes: bump LLAMA_CPP_REF (or CUDA_VERSION / the
+# GPU list) in the Dockerfile, run this, then merge. ARM64 only for now (the DGX Spark).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - id: ref
+        run: echo "ref=$(sed -n 's/^ARG LLAMA_CPP_REF=//p' Dockerfile | head -1)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: llama-bin
+          platforms: linux/arm64
+          tags: ghcr.io/ari-labz/llama-cpp-cuda:${{ steps.ref.outputs.ref }}
+          push: true
+          # Same cache scope docker.yml used for ARM64, so the CUDA compile it already did is reused.
+          cache-from: type=gha,scope=linux-arm64

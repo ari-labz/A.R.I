@@ -14,13 +14,17 @@ ARG CUDA_VERSION=13.0.1
 # irrelevant here because the binary is baked in.
 ARG LLAMA_CPP_REF=b11696
 ARG DOTNET_VERSION=10.0
+# Where the CUDA llama.cpp comes from. The default is the image published once by .github/workflows/llama-cuda.yml,
+# so a normal A·R·I build never compiles CUDA. To compile it inside your own build instead (slow, ~20 min per
+# architecture, and needed for GPUs the published image doesn't target), pass --build-arg LLAMA_IMAGE=llama-bin.
+ARG LLAMA_IMAGE=ghcr.io/ari-labz/llama-cpp-cuda:${LLAMA_CPP_REF}
 
 
 # ── 1. llama.cpp with CUDA ───────────────────────────────────────────────────────────────────────────
 # ARI's built-in downloader only has Vulkan builds for Linux, and none that target a DGX Spark's GPU
 # (GB10, compute capability 12.1). ARI looks for llama-server on PATH before downloading anything, so
 # shipping our own build means it never tries.
-FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu24.04 AS llama
+FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu24.04 AS llama-build
 ARG LLAMA_CPP_REF
 ARG TARGETARCH
 # Space-separated override of the GPU architectures to compile for. Empty = pick by platform:
@@ -63,6 +67,13 @@ RUN set -eux; \
     mkdir -p /opt/llama.cpp/bin; \
     cp /build/bin/llama-server /build/bin/llama-cli /build/bin/llama-bench /opt/llama.cpp/bin/; \
     cp -a /build/bin/*.so* /opt/llama.cpp/bin/ 2>/dev/null || true
+
+
+# Just the finished binaries, as a standalone image: this is what gets published as llama-cpp-cuda:<LLAMA_CPP_REF>.
+FROM scratch AS llama-bin
+COPY --from=llama-build /opt/llama.cpp /opt/llama.cpp
+
+FROM ${LLAMA_IMAGE} AS llama
 
 
 # ── 2. ARI.Core + the web UI ─────────────────────────────────────────────────────────────────────────

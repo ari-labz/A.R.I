@@ -75,6 +75,13 @@ public class ServersController(PersistentData persistentData) : ControllerBase
         Model? model = server.CurrentModelName is not null
             ? persistentData.GetModel(server.CurrentModelName)
             : null;
+        if (model is null)
+        {
+            string reason = string.IsNullOrWhiteSpace(server.CurrentModelName)
+                ? "has no model assigned"
+                : $"points at '{server.CurrentModelName}', which isn't in the model list";
+            return BadRequest(new { error = $"{server.Name} {reason}, so it can't start. Pick a model for it first." });
+        }
         string modelsPath = llm!.ModelsPath;
         _ = Task.Run(() => server.StartAsync(model, modelsPath));
         return Ok(new { ok = true });

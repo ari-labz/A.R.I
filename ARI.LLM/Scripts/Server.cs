@@ -156,6 +156,14 @@ public class Server : IDisposable
     [JsonIgnore] public int Pid { get; private set; } = -1;
     [JsonIgnore] public Model? ActiveModel { get; private set; }
 
+    /// <summary>Live progress of a model file this server is downloading, or null when it isn't downloading.
+    /// Read by the control panel so it can show "Downloading model" with a bar instead of just "Starting".</summary>
+    [JsonIgnore] public DownloadProgress? Download { get; private set; }
+
+    /// <summary>Why this server isn't running, when it refused to start (e.g. no model assigned). Cleared by the next
+    /// successful start attempt. Shown on the server's card and in chat errors.</summary>
+    [JsonIgnore] public string? StartError { get; private set; }
+
     [JsonIgnore] public string FullEndpoint => $"{Endpoint}:{Port}";
 
     /// <summary>True while this server's llama-server process is alive. False after Stop() or if it
@@ -171,23 +179,6 @@ public class Server : IDisposable
     private string _modelsPath = "";
     private string _serverDir  = "";
 
-    // Active-request counter for saturation detection. Incremented by BeginRequest, decremented by
-    // EndRequest (called from Agent.cs around each HTTP dispatch). When it reaches ParallelSlots,
-    // every slot is busy and the next request will queue in llama-server instead of running immediately.
-    private int _activeRequests;
-
-    /// <summary>Call before each HTTP request to llama-server. Logs a warning when all slots are busy.</summary>
-    public void BeginRequest(string agentName)
-    {
-        int active = Interlocked.Increment(ref _activeRequests);
-        if (active >= ParallelSlots)
-            Log.LogWarning("[{Server}] SLOT SATURATED — {Active}/{Total} slots in use; agent '{Agent}' is queuing. Consider adding a slot or reducing parallel background work.",
-                Name, active, ParallelSlots, agentName);
-    }
-
-    /// <summary>Call after each HTTP request completes (success, error, or cancellation).</summary>
-    public void EndRequest() => Interlocked.Decrement(ref _activeRequests);
-
     public void SetLogger(ILogger logger) => _logger = logger;
 
     private ILogger Log => _logger ?? Shared.Logger;
@@ -198,6 +189,18 @@ public class Server : IDisposable
     {
         if (Status is ServerStatus.Online or ServerStatus.Starting) return;
 
+        // Without a model llama-server would start empty, report healthy and answer every request with
+        // "model 'local' not found" — a server that looks Online but can't serve anything. Refuse instead.
+        if (model is null)
+        {
+            StartError = string.IsNullOrWhiteSpace(CurrentModelName)
+                ? "No model assigned."
+                : $"Its model '{CurrentModelName}' isn't in the model list.";
+            Log.LogWarning("[{Server}] not started: {Reason}", Name, StartError);
+            return;
+        }
+
+        StartError = null;
         Status = ServerStatus.Starting;
         _modelsPath = modelsPath;
         _serverDir  = Paths.PersistentData;
@@ -360,6 +363,10 @@ public class Server : IDisposable
         string temp = dest + ".tmp";
         int lastPct = -1;
         long downloaded = 0;
+        DownloadProgress progress = new() { File = filename, TotalBytes = total ?? 0 };
+        Download = progress;
+        long speedMark = 0;
+        DateTime speedAt = DateTime.UtcNow;
 
         try
         {
@@ -372,6 +379,16 @@ public class Server : IDisposable
             {
                 await dst.WriteAsync(buf.AsMemory(0, read));
                 downloaded += read;
+                progress.DoneBytes = downloaded;
+
+                // Speed over roughly the last 2 seconds, so the estimate follows the connection without jumping around.
+                double window = (DateTime.UtcNow - speedAt).TotalSeconds;
+                if (window >= 2)
+                {
+                    progress.BytesPerSec = (long)((downloaded - speedMark) / window);
+                    speedMark = downloaded;
+                    speedAt = DateTime.UtcNow;
+                }
 
                 if (total > 0)
                 {
@@ -390,6 +407,10 @@ public class Server : IDisposable
         {
             if (File.Exists(temp)) File.Delete(temp);
             throw;
+        }
+        finally
+        {
+            Download = null;
         }
 
         Log.LogInformation("[{Server}] Download complete: {File}", Name, filename);
@@ -560,4 +581,13 @@ public class Server : IDisposable
         8 => "q8_0",
         _ => "f16",
     };
+}
+
+/// <summary>Snapshot of one model file download, updated as bytes arrive.</summary>
+public sealed class DownloadProgress
+{
+    public string File { get; init; } = "";
+    public long TotalBytes { get; init; }
+    public long DoneBytes { get; set; }
+    public long BytesPerSec { get; set; }
 }

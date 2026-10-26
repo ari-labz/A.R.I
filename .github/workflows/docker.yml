@@ -1,16 +1,26 @@
 name: Docker image
 
-# Builds the A·R·I server image for ARM64 (DGX Spark and other ARM NVIDIA machines) and AMD64 and publishes it to
-# ghcr.io/ari-labz/ari. Runs on every release tag, or by hand from the Actions tab.
+# Builds the A·R·I server image for ARM64 (DGX Spark and other ARM NVIDIA machines) and publishes it to
+# ghcr.io/ari-labz/ari. Runs on every push to main (tagged "latest"), on every release tag (tagged with the version and
+# "latest"), or by hand from the Actions tab.
 #
 # Each platform builds on a native runner (no emulation — compiling llama.cpp for CUDA under QEMU would take hours),
 # pushes by digest, and a final job stitches the two into one multi-arch tag.
 
 on:
   push:
+    branches: [main]
     tags:
       - "v[0-9]*.[0-9]*.[0-9]*"
+    # Docs-only changes don't need an image build.
+    paths-ignore:
+      - "**.md"
   workflow_dispatch:
+
+# A newer push to the same branch replaces a build that is still running.
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -25,8 +35,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: linux/amd64
-            runner: ubuntu-24.04
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
@@ -89,8 +97,11 @@ jobs:
         working-directory: /tmp/digests
         run: |
           V="$(python3 -c "import json;print(json.load(open('${GITHUB_WORKSPACE}/manifest.json'))['version'])")"
-          # "latest" follows every release, including 0.x; pin a version tag to hold back.
-          docker buildx imagetools create \
-            -t "${IMAGE}:${V}" -t "${IMAGE}:latest" \
-            $(printf "${IMAGE}@sha256:%s " *)
-          docker buildx imagetools inspect "${IMAGE}:${V}"
+          # "latest" is the newest build of main; a release tag also publishes its version number so it can be pinned.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAGS="-t ${IMAGE}:${V} -t ${IMAGE}:latest"
+          else
+            TAGS="-t ${IMAGE}:latest"
+          fi
+          docker buildx imagetools create ${TAGS} $(printf "${IMAGE}@sha256:%s " *)
+          docker buildx imagetools inspect "${IMAGE}:latest"

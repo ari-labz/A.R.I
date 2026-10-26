@@ -41,7 +41,6 @@ public class ARI : BackgroundService, IModuleLifecycle
     private ITtsSynthesiser? synthesiser;
     private SpeechQueue?    speechQueue;
     private bool startupFailed;
-    private static Process? clientProcess;
 
     // Kept from Startup so a hot start/stop (triggered later, from a control-panel request) can reuse
     // exactly what boot used — same persisted server/model/agent config, same shutdown token.
@@ -205,9 +204,6 @@ public class ARI : BackgroundService, IModuleLifecycle
         // schedule themselves the same way inside CalendarModule. Neither needs a shared scheduler.
         if (config.modules.Calendar.Enabled)
             StartCalendar();
-
-        if (config.modules.API.Enabled)
-            LaunchClient(Paths.BuildPath, config.modules.API.Port);
 
         _logger.LogInformation("ARI is ready.");
 
@@ -664,62 +660,11 @@ public class ARI : BackgroundService, IModuleLifecycle
         });
     }
 
-    private void LaunchClient(string executableDirectory, int port)
-    {
-        string? scriptPath = null;
-        DirectoryInfo? dir = new DirectoryInfo(executableDirectory);
-        while (dir is not null)
-        {
-            string candidate = Path.Combine(dir.FullName, "ARI.Client", "setup.sh");
-            if (File.Exists(candidate)) { scriptPath = candidate; break; }
-            dir = dir.Parent;
-        }
-
-        if (scriptPath is null)
-        {
-            _logger.LogWarning("[Client] setup.sh not found — skipping client launch.");
-            return;
-        }
-
-        try
-        {
-            if (clientProcess is not null && !clientProcess.HasExited)
-            {
-                _logger.LogInformation("[Client] Stopping previous client instance (PID {Pid})...", clientProcess.Id);
-                clientProcess.Kill(entireProcessTree: true);
-                clientProcess.WaitForExit(3000);
-            }
-        }
-        catch { }
-        clientProcess = null;
-
-        _logger.LogInformation("[Client] Launching ARI.Client...");
-        Environment.SetEnvironmentVariable("ARI_BASE_URL", $"http://localhost:{port}");
-
-        ProcessStartInfo psi = OperatingSystem.IsMacOS()
-            ? new ProcessStartInfo("open", $"-a Terminal \"{scriptPath}\"") { UseShellExecute = false }
-            : new ProcessStartInfo("/bin/bash", $"\"{scriptPath}\"") { UseShellExecute = true, CreateNoWindow = false };
-
-        try { clientProcess = Process.Start(psi); }
-        catch (Exception ex) { _logger.LogWarning("[Client] Failed to launch client: {Error}", ex.Message); }
-    }
-
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
         if (startupFailed) return;
 
         _logger.LogInformation("ARI is shutting down...");
-
-        try
-        {
-            if (clientProcess is not null && !clientProcess.HasExited)
-            {
-                _logger.LogInformation("[Client] Stopping client process...");
-                clientProcess.Kill(entireProcessTree: true);
-            }
-        }
-        catch { }
-        clientProcess = null;
 
         if (discordService != null)
             await discordService.NotifyOffline();
