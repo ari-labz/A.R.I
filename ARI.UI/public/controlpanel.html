@@ -6885,7 +6885,7 @@ async function loadDebugThreads() {
     list.innerHTML = '<div class="cp-placeholder" style="padding:10px 12px;">Loading…</div>';
     try {
         const [liveRes, diskRes] = await Promise.all([
-            cpFetch('/api/v1/threads?includeInternal=true'),
+            cpFetch('/api/v1/admin/debug/threads'),
             cpFetch('/api/v1/admin/debug/sessions'),
         ]);
         if (!liveRes.ok) throw new Error('HTTP ' + liveRes.status);

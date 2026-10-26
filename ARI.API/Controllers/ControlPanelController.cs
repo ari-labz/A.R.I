@@ -383,10 +383,10 @@ public class VoiceController(
         return Ok(new { stageId, stagingPath = stageDir });
     }
 
-    [HttpPost("uploads/{stageId}")]
+    [HttpPost("uploads/{id}")]
     [DisableRequestSizeLimit]
     public async Task<IActionResult> Upload(
-        string stageId,
+        [FromRoute(Name = "id")] string stageId,
         [FromQuery] string name,
         [FromQuery] int chunk       = 0,
         [FromQuery] int totalChunks = 1)
@@ -634,8 +634,8 @@ public class VoiceController(
         return File(wav, "audio/wav");
     }
 
-    [HttpGet("models/{engine}/{modelName}/checkpoints")]
-    public IActionResult GetCheckpoints(string engine, string modelName)
+    [HttpGet("models/{engine}/{id}/checkpoints")]
+    public IActionResult GetCheckpoints(string engine, [FromRoute(Name = "id")] string modelName)
     {
         if (string.IsNullOrWhiteSpace(modelName) || modelName.Contains('/') || modelName.Contains('\\')
             || string.IsNullOrWhiteSpace(engine) || engine.Contains('/') || engine.Contains('\\'))
@@ -820,8 +820,8 @@ public class VoiceController(
         return Ok(new { models = models.OrderBy(m => ((dynamic)m).engine).ThenBy(m => ((dynamic)m).name).ToArray() });
     }
 
-    [HttpDelete("models/{engine}/{modelName}")]
-    public IActionResult DeleteModel(string engine, string modelName)
+    [HttpDelete("models/{engine}/{id}")]
+    public IActionResult DeleteModel(string engine, [FromRoute(Name = "id")] string modelName)
     {
         if (string.IsNullOrWhiteSpace(modelName) || modelName.Contains('/') || modelName.Contains('\\'))
             return BadRequest(new { error = "Invalid model name." });
@@ -837,8 +837,8 @@ public class VoiceController(
         return Ok(new { deleted = modelName, engine });
     }
 
-    [HttpDelete("models/{engine}/{modelName}/resume")]
-    public IActionResult DismissResume(string engine, string modelName)
+    [HttpDelete("models/{engine}/{id}/resume")]
+    public IActionResult DismissResume(string engine, [FromRoute(Name = "id")] string modelName)
     {
         if (string.IsNullOrWhiteSpace(modelName) || modelName.Contains('/') || modelName.Contains('\\'))
             return BadRequest(new { error = "Invalid model name." });
@@ -917,8 +917,8 @@ public class VoiceController(
                 .FirstOrDefault()
             : null;
 
-    [HttpGet("models/{engine}/{modelName}/lossHistory")]
-    public IActionResult GetLossHistory(string engine, string modelName)
+    [HttpGet("models/{engine}/{id}/lossHistory")]
+    public IActionResult GetLossHistory(string engine, [FromRoute(Name = "id")] string modelName)
     {
         if (string.IsNullOrEmpty(vsConfig.VoicesPath))
             return Ok(new { points = Array.Empty<object>(), pauses = Array.Empty<int>() });

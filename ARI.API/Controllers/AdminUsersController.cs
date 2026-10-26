@@ -17,7 +17,7 @@ public class AdminUsersController(UserStore users) : ControllerBase
     [HttpGet]
     public IActionResult ListUsers()
     {
-        return Ok(users.GetAll().Select(u => new
+        return Ok(this.Page(users.GetAll().Select(u => new
         {
             u.Id,
             u.Username,
@@ -27,7 +27,7 @@ public class AdminUsersController(UserStore users) : ControllerBase
             IsMaster     = u.Id.ToString() == ARI.Common.Shared.MasterUserId,
             CreatedAt    = DateTimeOffset.FromUnixTimeSeconds(u.CreatedAt).ToString("o"),
             LastActiveAt = u.LastActiveAt == 0 ? null : (string?)DateTimeOffset.FromUnixTimeSeconds(u.LastActiveAt).ToString("o"),
-        }));
+        }).ToList()));
     }
 
     // ── Create user ───────────────────────────────────────────────────────────────
@@ -100,7 +100,7 @@ public class AdminUsersController(UserStore users) : ControllerBase
     [HttpGet("/api/v1/admin/sessions")]
     public IActionResult AllSessions()
     {
-        return Ok(users.GetAllActiveSessions().Select(s => new
+        return Ok(this.Page(users.GetAllActiveSessions().Select(s => new
         {
             s.SessionId,
             s.UserId,
@@ -108,7 +108,7 @@ public class AdminUsersController(UserStore users) : ControllerBase
             s.IsDesktop,
             LastUsedAt = DateTimeOffset.FromUnixTimeSeconds(s.LastUsedAt).ToString("o"),
             ExpiresAt  = DateTimeOffset.FromUnixTimeSeconds(s.ExpiresAt).ToString("o"),
-        }));
+        }).ToList()));
     }
 
     [HttpDelete("/api/v1/admin/sessions/{id}")]
