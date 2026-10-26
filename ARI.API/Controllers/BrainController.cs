@@ -49,6 +49,7 @@ public class BrainController : ControllerBase
     {
         if (Llm is null || !Llm.BrainAvailable) return BadRequest(new { error = "Brain is not available." });
         if (string.IsNullOrWhiteSpace(request.File)) return BadRequest(new { error = "No backup file specified." });
+        if (!SafeNames.IsSafe(request.File)) return BadRequest(new { error = "That name is not allowed." });
         return Ok(new { message = Llm.RestoreBrainBackup(request.File) });
     }
 }

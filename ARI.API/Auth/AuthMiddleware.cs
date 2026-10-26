@@ -163,6 +163,10 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
         if (sessionId is null || store.GetSession(sessionId) is null)
             return null;
 
+        // Same rule as the REST routes: a temporary password has to be replaced before anything else.
+        if (int.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out int mustId) && store.GetById(mustId)?.MustChangePassword == true)
+            return null;
+
         store.TouchSession(sessionId);
 
         string? subStr = principal.FindFirstValue(ClaimTypes.NameIdentifier);
