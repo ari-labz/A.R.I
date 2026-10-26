@@ -180,6 +180,13 @@ public class Thread
         return blocks;
     }
 
+    /// <summary>Declared access of each registered tool, so a read-only agent can be limited to tools that only read.</summary>
+    internal readonly Dictionary<string, ToolAccess> toolAccess = new();
+
+    /// <summary>True for a thread no user is attached to (a pipeline's background step): nobody could approve a tool that
+    /// changes things, so only tools that read are offered.</summary>
+    internal bool ReadOnlyTools { get; set; }
+
     internal readonly Dictionary<string, (object Schema, Func<string, Task<ToolResult>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter, Func<string, string?>? StreamingDisplay, Func<string, string?>? StreamingPreCheck, Func<string, string?>? PreCheck, Func<string, ToolResult, ToolResult>? PostRun)> tools = new();
 
     // ── Lifecycle ──────────────────────────────────────────────────────────────

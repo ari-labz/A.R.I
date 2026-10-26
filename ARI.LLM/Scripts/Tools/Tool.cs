@@ -53,8 +53,11 @@ internal abstract class Tool
     internal virtual ToolResult PostRun(Thread thread, string argsJson, ToolResult result) => result;
 
     internal void Register(Thread thread)
-        => thread.RegisterTool(Name, Schema, Execute, Display, DisplayAfter, StreamingDisplay,
+    {
+        thread.toolAccess[Name] = Access;
+        thread.RegisterTool(Name, Schema, Execute, Display, DisplayAfter, StreamingDisplay,
             partialArgs => StreamingPreCheck(thread, partialArgs),
             argsJson    => PreCheck(thread, argsJson),
             (argsJson, result) => PostRun(thread, argsJson, result));
+    }
 }

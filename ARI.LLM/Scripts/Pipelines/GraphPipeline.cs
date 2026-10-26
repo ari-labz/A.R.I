@@ -140,7 +140,9 @@ internal sealed class GraphPipeline : Pipeline
             }
             else
             {
-                Thread scratch = new(ThreadPipeline.Dialogue, $"graph:{Guid.NewGuid():N}") { Internal = true };
+                Thread scratch = new(ThreadPipeline.Dialogue, $"graph:{Guid.NewGuid():N}") { Internal = true, ReadOnlyTools = true };
+                new ListTools(scratch).Register(scratch);
+                new RequestTools(scratch).Register(scratch);
                 result = await agent.Prompt(scratch, effectivePrompt, new PromptOptions { Username = username, Ct = cts.Token });
             }
             Shared.Logger.LogInformation("[Graph:{Graph}] ({Thread}) {Agent} finished in {Sec:F1}s.", graph.Name, threadKey, agentName, sw.Elapsed.TotalSeconds);

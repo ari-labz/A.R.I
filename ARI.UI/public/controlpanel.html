@@ -4287,7 +4287,7 @@ function agRenderAgents() {
 
 function agRestartNote(id) {
     const n = agEl('div', 'display:none;margin-top:12px;padding:10px 12px;border:1px solid var(--col-control-panel-line-4058-border);background:var(--col-control-panel-line-4058-background);color:var(--col-control-panel-line-4058-text);border-radius:8px;font-size:12px;',
-        'Saved. Restart A·R·I for these changes to take effect.');
+        'Saved. Custom agents apply straight away; changes to a built-in agent need A·R·I restarted.');
     n.id = id; return n;
 }
 
@@ -4357,6 +4357,7 @@ function prRenderEditor() {
         const hdr = agEl('div', 'display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:-8px 0 24px;');
         hdr.append(buildToggle(agent.enabled !== false, on => { agent.enabled = on; agDirty(); prRenderList(); }), agEl('span', 'font-size:13px;color:var(--text-dim);', 'Runs on'), agBindingPickers(agent));
         if (agent.custom) {
+            hdr.append(buildToggle(!!agent.readOnly, on => { agent.readOnly = on; agDirty(); }), agEl('span', 'font-size:13px;color:var(--text-dim);', 'Read-only (can look things up, can\'t change anything)'));
             const del = agEl('button', 'margin-left:auto;', 'Delete agent'); del.className = 'agv-btn'; del.type = 'button';
             del.onclick = async () => { if (!confirm('Delete ' + name + '? Pipelines using it will stop being valid.')) return; const r = await cpFetch('/api/v1/admin/agents/' + encodeURIComponent(name), { method: 'DELETE' }); if (!r.ok) { alert('Could not delete it.'); return; } agIsDirty = false; agData = null; prSelected = 'agent:Dialogue'; await loadAgents(); };
             hdr.append(del);
