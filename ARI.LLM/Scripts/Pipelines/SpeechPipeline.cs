@@ -67,12 +67,13 @@ internal sealed class SpeechPipeline : Pipeline
         Shared.Logger.LogInformation("[Speech] ({Thread}) prompt\n\"{Prompt}\"", threadKey, effectivePrompt);
 
         string? contextSummary = context?.GetContext(threadKey);
-        PrivacyMode privacyMode = threadKey.StartsWith("guild:", StringComparison.OrdinalIgnoreCase)
-            ? PrivacyMode.Guarded : PrivacyMode.Unrestricted;
+        // Same rule as the Dialogue and Code pipelines: a guest's conversation gets no memories, and a guarded one
+        // (a server channel, a stranger's DM) only gets filtered ones.
+        PrivacyMode privacyMode = thread.IsGuarded ? PrivacyMode.Guarded : PrivacyMode.Unrestricted;
 
         string? recallBlock = null;
         double? recallSeconds = null;
-        if (memory is not null)
+        if (memory is not null && thread.HasMemoryAccess)
         {
             Stopwatch recallSw = Stopwatch.StartNew();
             try
