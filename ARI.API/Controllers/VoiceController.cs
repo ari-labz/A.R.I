@@ -510,7 +510,7 @@ public class VoiceController(
 
         Directory.Delete(dir, recursive: true);
         logger.LogInformation("[Voice] Deleted {Engine} model '{ModelName}'", engine, modelName);
-        return Ok(new { deleted = modelName, engine });
+        return Ok(new { ok = true, deleted = modelName, engine });
     }
 
     [HttpDelete("models/{engine}/{id}/resume")]
@@ -530,7 +530,7 @@ public class VoiceController(
             System.IO.File.Delete(settingsFile);
 
         logger.LogInformation("[Voice] Dismissed resume for {Engine} model '{ModelName}'", engine, modelName);
-        return Ok(new { dismissed = modelName, engine });
+        return Ok(new { ok = true, dismissed = modelName, engine });
     }
 
     [HttpPost("training/stop")]
@@ -544,7 +544,7 @@ public class VoiceController(
             HttpResponseMessage resp = await http.PostAsync($"http://localhost:{port}/train/pause", null);
             resp.EnsureSuccessStatusCode();
             logger.LogInformation("[Voice] Pause requested for model '{ModelName}' on {Engine}", modelName, engine);
-            return Ok(new { stopping = modelName });
+            return Ok(new { ok = true, stopping = modelName });
         }
         catch (Exception ex)
         {
@@ -792,7 +792,7 @@ public class VoiceController(
             return Conflict(new { error = ex.Message });
         }
 
-        return Ok(new { started = true });
+        return Ok(new { ok = true, started = true });
     }
 
     [HttpGet("dataset/transcribe/status")]
@@ -859,7 +859,7 @@ public class VoiceController(
             if (llm is not null) await llm.RestartAllServersAsync();
         });
 
-        return Ok(new { started = true });
+        return Ok(new { ok = true, started = true });
     }
 
     [HttpGet("dataset/status")]

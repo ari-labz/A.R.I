@@ -27,11 +27,16 @@ public class SetupController(UserStore users, AuthService auth, ILoggerFactory l
         tutorialComplete = SetupState.TutorialComplete,
     });
 
+    private static readonly object AccountGate = new();
+
     public record AccountRequest(string Token, string Username, string Password);
 
     [HttpPost("account")]
     public IActionResult CreateAccount([FromBody] AccountRequest req)
     {
+        // Two requests at once must not both see "no accounts yet".
+        lock (AccountGate)
+        {
         if (users.CountUsers() > 0) return Conflict(new { error = "An account already exists." });
 
         string ip = ClientAddress.Of(HttpContext);
@@ -59,6 +64,7 @@ public class SetupController(UserStore users, AuthService auth, ILoggerFactory l
         users.CreateSession(session);
         AuthCookie.Set(Response, token, false, ClientAddress.IsHttps(HttpContext));
         return Ok(new { token, role = user.Role, displayName = user.DisplayName, mustChangePassword = false });
+        }
     }
 }
 
@@ -150,7 +156,7 @@ public class AdminSetupController(PersistentData persistentData, ILoggerFactory 
     {
         if (req.SetupComplete is true) SetupState.Set(setup: true);
         if (req.TutorialComplete is { } tutorial) SetupState.Set(tutorial: tutorial);
-        return Ok(new { setupComplete = SetupState.SetupComplete, tutorialComplete = SetupState.TutorialComplete });
+        return Ok(new { ok = true, setupComplete = SetupState.SetupComplete, tutorialComplete = SetupState.TutorialComplete });
     }
 }
 
