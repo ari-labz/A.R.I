@@ -110,6 +110,9 @@ public class ProjectSyncController(ProjectStore store) : ControllerBase
         if (!CanAccess(project)) return StatusCode(403);
         if (project.RootPath is not { } root) return BadRequest(new { error = "Project has no server folder." });
 
+        // One push at a time per project, so two uploads can't interleave their git steps.
+        SemaphoreSlim gate = PushLocks.GetOrAdd(id, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync();
         string tmp = Path.GetTempFileName();
         try
         {
@@ -121,6 +124,14 @@ public class ProjectSyncController(ProjectStore store) : ControllerBase
             var (fetchCode, fetchOut) = ProjectStore.RunGit(root, $"fetch \"{tmp}\" HEAD:refs/heads/ari/incoming");
             if (fetchCode != 0)
                 return BadRequest(new { error = $"Fetch failed: {fetchOut}" });
+
+            // The push must build on what the server already has. Otherwise it would silently throw newer server work away.
+            bool serverHasHistory = ProjectStore.RunGit(root, "rev-parse --verify --quiet HEAD").ExitCode == 0;
+            if (serverHasHistory && ProjectStore.RunGit(root, "merge-base --is-ancestor HEAD refs/heads/ari/incoming").ExitCode != 0)
+            {
+                ProjectStore.RunGit(root, "branch -D ari/incoming");
+                return Conflict(new { error = "The server has changes this push does not include. Pull first, then push again." });
+            }
 
             // Point HEAD at main, fast-forward it to the incoming tip, sync the working tree.
             ProjectStore.RunGit(root, "symbolic-ref HEAD refs/heads/main");
@@ -135,8 +146,11 @@ public class ProjectSyncController(ProjectStore store) : ControllerBase
         finally
         {
             if (System.IO.File.Exists(tmp)) System.IO.File.Delete(tmp);
+            gate.Release();
         }
     }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> PushLocks = new();
 
     // ── Helpers ──────────────────────────────────────────────────────────────────
 

@@ -24,6 +24,6 @@ public class PersistedThreadsController : ControllerBase
     public IActionResult DeleteAll()
     {
         if (Llm is null) return StatusCode(503, new { error = "ARI is not ready yet." });
-        return Ok(new { deleted = Llm.DeleteAllPersisted() });
+        return Ok(new { ok = true, deleted = Llm.DeleteAllPersisted() });
     }
 }
