@@ -88,7 +88,7 @@ public class ProjectServiceAdapter(ProjectStore store) : IProjectService
         if (Modules.Llm is LLMModule llm)
         {
             bool isVault = project.RootPath is { } rp && Directory.Exists(Path.Combine(rp, ".obsidian"));
-            llm.BindProjectContext(threadKey, project.RootPath, isVault);
+            llm.BindProjectContext(threadKey, project.RootPath, isVault, project.Name);
             llm.BroadcastThreadBound(threadKey, projectId);
         }
         return true;

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 using ARI.Common;
 
@@ -461,14 +462,25 @@ public static class Brain
         return merged;
     }
 
+    // Daily logs live at Conversations/<year>/<MM - Month>/<ordinal day> <Month> <year>, e.g.
+    // Conversations/2026/10 - October/8th October 2026 — the year and month hubs above it are their parents.
+    public static string DailyNoteName(DateTime day)
+    {
+        int d = day.Day;
+        string suffix = d is >= 11 and <= 13 ? "th" : (d % 10) switch { 1 => "st", 2 => "nd", 3 => "rd", _ => "th" };
+        string month = day.ToString("MMMM", CultureInfo.InvariantCulture);
+        return $"Conversations/{day.Year}/{day:MM} - {month}/{d}{suffix} {month} {day.Year}";
+    }
+
     private static readonly Regex bareDate = new(@"^\d{4}-\d{2}-\d{2}$", RegexOptions.Compiled);
 
-    internal static string PathFor(string noteName)
+    public static string PathFor(string noteName)
     {
         const int MAX_SEGMENT_LENGTH = 120;
         // A bare date is always a daily conversation log — file it under Conversations/ deterministically,
         // regardless of whether the model prefixed the folder.
-        if (bareDate.IsMatch(noteName.Trim())) noteName = "Conversations/" + noteName.Trim();
+        if (bareDate.IsMatch(noteName.Trim()) && DateTime.TryParseExact(noteName.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime day))
+            noteName = DailyNoteName(day);
         IEnumerable<string> segments = noteName.Split('/')
             .Select(segment => invalidFileChars.Replace(segment, "").Trim())
             .Where(segment => segment.Length > 0)

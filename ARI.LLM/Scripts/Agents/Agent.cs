@@ -1729,6 +1729,10 @@ public abstract class Agent
                     }
                 }
 
+                // File mutations are logged with their result so a refused/ineffective edit is diagnosable from the log.
+                if (call.Name is "edit_file" or "write_file" && !ToolCallParser.IsError(result))
+                    Shared.Logger.LogInformation("[{Agent}] ({Thread}) Tool '{Tool}' result: {Result}", Name, thread.Key, call.Name,
+                        result.Length > 160 ? result[..160] + "…" : result);
                 if (ToolCallParser.IsError(result))
                     Shared.Logger.LogError("[{Agent}] ({Thread}) Tool '{Tool}' failed: {Error}", Name, thread.Key, call.Name, result);
                 else if (tool.DisplayAfter is not null)

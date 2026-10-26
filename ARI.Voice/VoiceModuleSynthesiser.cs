@@ -9,6 +9,7 @@ namespace ARI.Voice;
 public class VoiceModuleSynthesiser : ITtsSynthesiser
 {
     private const int POLL_INTERVAL_MS = 2000;
+    private const int IDLE_CHECK_SECONDS = 30;
 
     private readonly HttpClient http;
     private readonly string modulePath;
@@ -17,6 +18,11 @@ public class VoiceModuleSynthesiser : ITtsSynthesiser
     private readonly ILogger? logger;
     private readonly int serverPort;
     private readonly int startupTimeoutSecs;
+    private readonly TimeSpan idleStop;
+    private readonly SemaphoreSlim launchGate = new(1, 1);
+    private Timer? idleTimer;
+    private DateTime lastUsedUtc = DateTime.UtcNow;
+    private int inFlight;
     private Process? server;
 
     private string? engineName;
@@ -24,14 +30,17 @@ public class VoiceModuleSynthesiser : ITtsSynthesiser
     private JsonElement? moduleInfo;
 
     public string EngineName => engineName ?? "Unknown";
+    public bool LoadsOnDemand => idleStop > TimeSpan.Zero;
     public float Speed { get; private set; } = 1.0f;
     public float PauseScale { get; private set; } = 1.0f;
 
     private string SettingsPath => Path.Combine(voiceDir, "voice_settings.json");
+    private string InfoCachePath => Path.Combine(voiceDir, "engine_info.json");
 
     public VoiceModuleSynthesiser(string modulePath, string voiceDir, int port, ILogger? logger = null,
-        int startupTimeoutSecs = 120, int httpTimeoutMinutes = 5, string? extraArgs = null)
+        int startupTimeoutSecs = 120, int httpTimeoutMinutes = 5, string? extraArgs = null, int idleStopMinutes = 0)
     {
+        idleStop = TimeSpan.FromMinutes(Math.Max(0, idleStopMinutes));
         this.modulePath = modulePath;
         this.voiceDir = voiceDir;
         this.serverPort = port;
@@ -46,6 +55,17 @@ public class VoiceModuleSynthesiser : ITtsSynthesiser
     public async Task Start(CancellationToken ct = default)
     {
         LoadSettings();
+        LoadCachedInfo();
+
+        // On-demand engines launch on the first synthesis; only the saved settings and cached parameters are
+        // needed up front so the UI can show them.
+        if (LoadsOnDemand) return;
+
+        await LaunchAsync(ct);
+    }
+
+    private async Task LaunchAsync(CancellationToken ct)
+    {
 
         string venvPython = Path.Combine(modulePath, "venv",
             OperatingSystem.IsWindows() ? @"Scripts\python.exe" : "bin/python3");
@@ -75,6 +95,66 @@ public class VoiceModuleSynthesiser : ITtsSynthesiser
 
         await WaitUntilReady(ct);
         await FetchInfo(ct);
+        SaveCachedInfo();
+
+        lastUsedUtc = DateTime.UtcNow;
+        if (LoadsOnDemand)
+            idleTimer ??= new Timer(_ => StopWhenIdle(), null, TimeSpan.FromSeconds(IDLE_CHECK_SECONDS), TimeSpan.FromSeconds(IDLE_CHECK_SECONDS));
+        logger?.LogInformation("[{Engine}] Voice engine started.", EngineName);
+    }
+
+    private async Task EnsureRunning(CancellationToken ct)
+    {
+        lastUsedUtc = DateTime.UtcNow;
+        if (server is { HasExited: false }) return;
+
+        await launchGate.WaitAsync(ct);
+        try
+        {
+            if (server is { HasExited: false }) return;
+            logger?.LogInformation("[{Engine}] Starting voice engine on demand.", EngineName);
+            await LaunchAsync(ct);
+        }
+        finally { launchGate.Release(); }
+    }
+
+    private void StopWhenIdle()
+    {
+        if (server is null || Volatile.Read(ref inFlight) > 0) return;
+        if (DateTime.UtcNow - lastUsedUtc < idleStop) return;
+        if (!launchGate.Wait(0)) return;
+        try
+        {
+            if (server is null || Volatile.Read(ref inFlight) > 0) return;
+            logger?.LogInformation("[{Engine}] Stopping idle voice engine after {Minutes} min.", EngineName, idleStop.TotalMinutes);
+            try { server.Kill(entireProcessTree: true); } catch { }
+            server.Dispose();
+            server = null;
+        }
+        finally { launchGate.Release(); }
+    }
+
+    private void LoadCachedInfo()
+    {
+        try
+        {
+            if (!File.Exists(InfoCachePath)) return;
+            using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(InfoCachePath));
+            if (engineName is null && doc.RootElement.TryGetProperty("engine", out JsonElement eng))
+                engineName = eng.GetString();
+            if (parameters.Count == 0 && doc.RootElement.TryGetProperty("parameters", out JsonElement parms))
+                parameters = JsonSerializer.Deserialize<List<EngineParameter>>(parms.GetRawText()) ?? [];
+        }
+        catch (Exception ex) { logger?.LogWarning(ex, "Failed to load cached voice engine info."); }
+    }
+
+    private void SaveCachedInfo()
+    {
+        try
+        {
+            File.WriteAllText(InfoCachePath, JsonSerializer.Serialize(new { engine = engineName, parameters }));
+        }
+        catch (Exception ex) { logger?.LogWarning(ex, "Failed to cache voice engine info."); }
     }
 
     private async Task FetchInfo(CancellationToken ct)
@@ -119,6 +199,7 @@ public class VoiceModuleSynthesiser : ITtsSynthesiser
 
     public async Task<bool> CheckHealth()
     {
+        if (LoadsOnDemand && server is not { HasExited: false }) return true;
         try
         {
             return (await http.GetAsync($"http://localhost:{serverPort}/health")).IsSuccessStatusCode;
@@ -150,15 +231,27 @@ public class VoiceModuleSynthesiser : ITtsSynthesiser
 
         string json = JsonSerializer.Serialize(payload);
         using StringContent body = new(json, Encoding.UTF8, "application/json");
-        HttpResponseMessage response = await http.PostAsync(
-            $"http://localhost:{serverPort}/synthesise", body, ct);
-        response.EnsureSuccessStatusCode();
 
-        return await response.Content.ReadAsByteArrayAsync(ct);
+        Interlocked.Increment(ref inFlight);
+        try
+        {
+            await EnsureRunning(ct);
+            HttpResponseMessage response = await http.PostAsync(
+                $"http://localhost:{serverPort}/synthesise", body, ct);
+            response.EnsureSuccessStatusCode();
+
+            return await response.Content.ReadAsByteArrayAsync(ct);
+        }
+        finally
+        {
+            lastUsedUtc = DateTime.UtcNow;
+            Interlocked.Decrement(ref inFlight);
+        }
     }
 
     public async Task LoadCheckpoint(string checkpointPath, CancellationToken ct = default)
     {
+        await EnsureRunning(ct);
         string payload = JsonSerializer.Serialize(new { path = checkpointPath });
         using StringContent body = new(payload, Encoding.UTF8, "application/json");
         HttpResponseMessage resp = await http.PostAsync(
@@ -192,6 +285,7 @@ public class VoiceModuleSynthesiser : ITtsSynthesiser
 
     public void Dispose()
     {
+        idleTimer?.Dispose();
         http.Dispose();
         try { server?.Kill(entireProcessTree: true); } catch { }
         server?.Dispose();

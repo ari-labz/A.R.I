@@ -5,6 +5,7 @@ namespace ARI.Voice;
 public interface ITtsSynthesiser : IDisposable
 {
     string EngineName { get; }
+    bool LoadsOnDemand { get; }
     Task<bool> CheckHealth();
     Task Start(CancellationToken ct = default);
     Task Warmup(CancellationToken ct = default);

@@ -56,6 +56,14 @@ public static class ClientWebSocket
         // Line counts learned from preview_file, used to serve small files directly instead of forcing the
         // preview-then-re-read round-trip dance.
         public ConcurrentDictionary<string, int> KnownLineCounts { get; } = new(StringComparer.OrdinalIgnoreCase);
+        // Files this conversation created with write_file. write_file may rewrite only these — an existing
+        // file is changed with edit_file. Kept on the root scope so a spawned Coder's drafts count too.
+        public ConcurrentDictionary<string, byte> CreatedFiles { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public FileToolState Root
+        {
+            get { FileToolState s = this; while (s.Parent is not null) s = s.Parent; return s; }
+        }
 
         /// <summary>The file changed on disk: forget recorded read ranges and preview state for it in this
         /// scope AND every linked scope (parent chain) — their line numbers are stale now too.</summary>
@@ -297,7 +305,7 @@ public static class ClientWebSocket
 
         RegisterTool(thread, ws, log,
             name: "write_file",
-            description: "Write or create a file. Overwrites if it exists. Prefer edit_file for targeted changes.",
+            description: "Create a new file, including any missing parent directories. It can't replace an existing file (change those with edit_file), except one you created earlier in this conversation. It can't declare a class, struct, interface, enum or record whose name is already declared in another file.",
             parameters: new { type = "object", properties = new { path = new { type = "string", description = "File path relative to project root" }, content = new { type = "string", description = "Full content to write" } }, required = new[] { "path", "content" } },
             displayVerb: "Writing", displayDoneVerb: "Written",
             labelField: "path",
@@ -332,6 +340,7 @@ public static class ClientWebSocket
                 catch { return "<!--ari-tool-end:write_file:file-->"; }
             },
             preCheck: argsJson => CheckDirty(argsJson, fileState),
+            divert: argsJson => BlockExistingOrDuplicate(argsJson, ws, log, fileState),
             preForward: argsJson => EnsureSnapshot(argsJson, ws, log, fileState),
             postHook: (argsJson, result) => { MarkWriteDirty(argsJson, result, fileState); return null; });
 
@@ -384,8 +393,16 @@ public static class ClientWebSocket
             if (string.IsNullOrWhiteSpace(cmd)) return null;
 
             string firstToken = cmd.Split(' ', 2)[0].ToLowerInvariant();
-            if (firstToken is "cat" or "head" or "tail" or "sed" or "awk" or "type")
+            if (firstToken is "cat" or "head" or "tail" or "sed" or "awk" or "type" or "less" or "more" or "nl" or "bat" or "tac")
                 return $"Use read_file instead of '{firstToken}' to read files. Pass the file path directly to read_file.";
+
+            // Commits made through the shell skip the control-panel commit-attribution setting; the git tool applies it.
+            if (ShellGitCommit.IsMatch(cmd))
+                return "Use the git tool to commit (command: \"commit\"), not run_command. It signs the commit as ARI per the user's attribution setting.";
+
+            // grep with an empty pattern prints the whole file (grep -n "" file) — the usual way round the block above.
+            if (firstToken == "grep" && (cmd.Contains(" \"\"") || cmd.Contains(" ''")))
+                return "Use read_file to read a file, with its line range. An empty grep pattern is just a way to dump the whole file.";
 
             // Bare filename with a source-file extension — model trying to view a file via the shell
             if (!cmd.Contains(' ') && LooksLikeFilePath(cmd))
@@ -395,6 +412,9 @@ public static class ClientWebSocket
         }
         catch { return null; }
     }
+
+    // `git commit` anywhere in a command line, tolerating global options (git -C dir commit) and chaining (cd x && git commit).
+    private static readonly Regex ShellGitCommit = new(@"(^|[;&|(\s])git(\s+(-C\s+\S+|-c\s+\S+|--[\w-]+(=\S+)?))*\s+commit(\s|$)", RegexOptions.Compiled);
 
     private static bool LooksLikeFilePath(string cmd)
     {
@@ -464,8 +484,45 @@ public static class ClientWebSocket
         if (!string.IsNullOrEmpty(path) && result.StartsWith("Successfully", StringComparison.OrdinalIgnoreCase))
         {
             fileState.DirtyFiles.TryAdd(path, 0);
+            fileState.Root.CreatedFiles.TryAdd(path, 0);
             fileState.InvalidateFile(path);
         }
+    }
+
+    private static readonly Regex TypeDeclaration = new(@"\b(?:class|struct|interface|enum|record)\s+([A-Za-z_]\w*)", RegexOptions.Compiled);
+
+    /// <summary>write_file only creates. The server can't see the client's disk, so existence is probed with a
+    /// read. Enforced here rather than in the description: a model stuck on edit_file rewrites whole existing
+    /// files from memory and drops code. A new .cs file that redeclares a type already declared elsewhere in the
+    /// project is blocked too — that is how a second Entity and a second ForeignKeyAttribute got in.</summary>
+    private static async Task<string?> BlockExistingOrDuplicate(string argsJson, WebSocket ws, ILogger log, FileToolState fileState)
+    {
+        string path = ExtractToolPath(argsJson);
+        if (string.IsNullOrEmpty(path) || fileState.Root.CreatedFiles.ContainsKey(path)) return null;
+
+        string read = await Forward(ws, log, "read_file", JsonSerializer.Serialize(new { path }), "path");
+        bool exists = !read.StartsWith("[Error", StringComparison.OrdinalIgnoreCase);
+        if (exists)
+            return $"[Blocked] '{path}' already exists. Change it with edit_file; write_file only creates new files.";
+
+        if (!path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)) return null;
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            string content = doc.RootElement.TryGetProperty("content", out JsonElement ce) ? ce.GetString() ?? "" : "";
+            if (content.Contains("partial ", StringComparison.Ordinal)) return null;
+
+            foreach (string typeName in TypeDeclaration.Matches(content).Select(m => m.Groups[1].Value).Distinct())
+            {
+                string pattern = $@"\b(class|struct|interface|enum|record)\s+{typeName}\b";
+                string hits = await Forward(ws, log, "search_files", JsonSerializer.Serialize(new { pattern, glob = "*.cs" }), "pattern");
+                string? first = hits.Split('\n').FirstOrDefault(l => Regex.IsMatch(l, @"^\S.*:\d+:"));
+                if (first is not null)
+                    return $"[Blocked] '{typeName}' is already declared: {first.Trim()}. Edit that file, reuse the type, or choose a different name — do not create a second one.";
+            }
+        }
+        catch (Exception ex) { log.LogWarning(ex, "[Client] Duplicate-type check failed for {Path}; allowing the write.", path); }
+        return null;
     }
 
     private static string ExtractToolPath(string argsJson)

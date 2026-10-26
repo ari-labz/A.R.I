@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using ARI.Common;
 using Microsoft.Extensions.Logging;
 
@@ -6,25 +7,34 @@ namespace ARI.LLM;
 
 internal sealed class CodePipeline : Pipeline
 {
-    private readonly Coder? coder;
+    private readonly Coder?   coder;
+    private readonly Memory?  memory;
+    private readonly Context? context;
+    private readonly Engram?  engram;
 
     protected override Agent  PrimaryAgent => coder!;
     protected override string PipelineName => "Code";
 
     internal CodePipeline(
-        Coder? coder,
+        Coder?   coder,
+        Memory?  memory,
+        Context? context,
+        Engram?  engram,
         ConcurrentDictionary<string, CancellationTokenSource> processingThreads,
         ConcurrentDictionary<string, LiveCallInfo>             liveCalls,
         Action<string>                                          notifyWatchers)
         : base(processingThreads, liveCalls, notifyWatchers)
     {
-        this.coder = coder;
+        this.coder   = coder;
+        this.memory  = memory;
+        this.context = context;
+        this.engram  = engram;
     }
 
     protected override LiveCallInfo BuildLiveCall(string threadKey) =>
         new("Code", threadKey, 0, coder?.BudgetResponse ?? 0, coder?.BudgetContext ?? 0, 0);
 
-    protected override Task<string> RunAsync(
+    protected override async Task<string> RunAsync(
         Thread               thread,
         string               threadKey,
         string               effectivePrompt,
@@ -35,7 +45,40 @@ internal sealed class CodePipeline : Pipeline
         string?              localPath,
         Func<string, Task>?  onTextDelta = null)
     {
+        // Same brain as a Dialogue thread: wait out an Engram sweep of this thread, then recall memories and carry
+        // the running context summary — so coding threads aren't a blank-slate Ari. Skipped on the approval turn
+        // ("[approve-plan]" is a button press, not a message with anything to recall against).
+        if (engram?.IsSweeping(threadKey) == true)
+        {
+            Shared.Logger.LogInformation("[Code] ({Thread}) waiting for Engram sweep to finish before processing.", threadKey);
+            await engram.WaitForSweep(threadKey, cts.Token);
+        }
+
         Shared.Logger.LogInformation("[Code] ({Thread}) prompt\n\"{Prompt}\"", threadKey, effectivePrompt);
+
+        string? contextSummary = context?.GetContext(threadKey);
+        string? recallBlock    = null;
+        double? recallSeconds  = null;
+        if (memory is not null && thread.HasMemoryAccess && !(thread.PlanProposed && effectivePrompt.Trim() == "[approve-plan]"))
+        {
+            PrivacyMode privacyMode = thread.IsGuarded ? PrivacyMode.Guarded : PrivacyMode.Unrestricted;
+            Stopwatch recallSw = Stopwatch.StartNew();
+            try
+            {
+                List<ThreadMessage> chatHistory = thread.GetChatHistory();
+                recallBlock = await memory.GetNotes(chatHistory, effectivePrompt, contextSummary, cts.Token, privacyMode);
+            }
+            catch (OperationCanceledException) when (cts.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // A failed recall must never block coding — carry on without memories.
+                Shared.Logger.LogWarning(ex, "[Memory] ({Thread}) Memory recall failed on a code thread — continuing without memories. {Error}", threadKey, ex.Message);
+            }
+            recallSeconds = recallSw.Elapsed.TotalSeconds;
+        }
 
         // Every code request runs the SAME pipeline: appraise → Coder. The Coder edits directly with its own
         // file tools; there is no sub-agent dispatch. What differs is only WHERE the filesystem lives:
@@ -88,7 +131,10 @@ internal sealed class CodePipeline : Pipeline
         if (coder is null)
             throw new InvalidOperationException("Coder is not configured — the code pipeline cannot run.");
 
-        return coder.RunLoop(thread, threadKey, effectivePrompt, username, resolvedRoot, snapshots, cts, onDelta, remote);
+        coder.RefreshConventions(threadKey, LLMModule.ConventionsProvider?.Invoke());
+
+        return await coder.RunLoop(thread, threadKey, effectivePrompt, username, resolvedRoot, snapshots, cts, onDelta, remote,
+            recallBlock, recallSeconds, contextSummary);
     }
 
     /// <summary>Root for a project on this server's disk: the path the client sent if it exists here, otherwise

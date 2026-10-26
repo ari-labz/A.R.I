@@ -200,10 +200,10 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
             projectStore.BindThread(key, req!.ProjectId!);
         // Pre-register in LLMModule so the newThread event fires immediately and
         // all sidebar observers see the thread without waiting for the first message.
-        // An explicit pipeline selection wins; otherwise a Repository project opens in code-mode.
+        // An explicit pipeline selection wins; otherwise a bound project that isn't a note vault opens in code-mode.
         if (Enum.TryParse(req?.Pipeline, ignoreCase: true, out ARI.LLM.ThreadPipeline selected))
             Llm.ForcePipeline(key, selected);
-        else if (project?.RootPath is { } pr && Directory.Exists(Path.Combine(pr, ".git")))
+        else if (project is not null && ProjectCodeRules.RunsAsCode(project))
             Llm.ForceCodeThread(key);
         else
             Llm.GetOrCreateDialogueThread(key);
@@ -556,9 +556,9 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     public async Task<IActionResult> RunCommand([FromBody] CommandRequest req)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        if (string.IsNullOrWhiteSpace(req.Input)) return BadRequest("Input is required.");
         if (req.ThreadKey is not null && Llm.Threads.TryGetValue(req.ThreadKey, out ARI.LLM.Thread? target) && !CanAccessThread(target))
             return StatusCode(403);
-        if (string.IsNullOrWhiteSpace(req.Input)) return BadRequest("Input is required.");
 
         bool isMaster = User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier) == ARI.Common.Shared.MasterUserId;
         string? result = await Llm.HandleCommand(req.ThreadKey, req.Input, isMaster);
@@ -1095,8 +1095,12 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
                 // Force code pipeline before the classifier runs (first message only)
                 bool isFirstMessage = boundThread?.History.Count is null or 0;
-                if (isFirstMessage && project.RootPath is { } gitRoot && Directory.Exists(Path.Combine(gitRoot, ".git")))
+                if (isFirstMessage && ProjectCodeRules.RunsAsCode(project))
                     Llm.ForceCodeThread(threadKey);
+
+                // The project's name rides on the thread whether or not its files are on this server's disk, so
+                // Engram can file a code thread's decisions on the right Projects/ note.
+                if (boundThread is not null) boundThread.ProjectName = project.Name;
 
                 // Bind FilesystemRoot on the thread every message (idempotent) so filesystem_tools/coding_tools
                 // resolve correctly. Local path (Electron) is preferred and set later via effectiveLocalPath;

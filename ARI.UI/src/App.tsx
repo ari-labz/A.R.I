@@ -18,6 +18,7 @@ import { startTour } from "./tour"
 import { initPush } from "./push"
 import UserPreferences from "./components/UserPreferences"
 import { apiFetch, fetchMe, setToken, getToken, type AuthUser } from "./auth"
+import { decideCommand, sanitizeAllowlist, type CommandDecision, type SegmentInfo } from "./commandApproval"
 import "./styles/app.css"
 
 export type AppMode = "idle" | "active"
@@ -63,110 +64,35 @@ const COMMANDS = [
 export { COMMANDS }
 
 // ── run_command authorization ─────────────────────────────────────────────────
-type CommandDecision = "deny" | "allow" | "whitelist"
-
-// Read-only git subcommands that are safe to whitelist.
-const GIT_READONLY_SUBS = new Set([
-    "log", "show", "status", "diff", "branch", "remote", "fetch",
-    "ls-files", "ls-tree", "rev-parse", "cat-file", "describe",
-    "shortlog", "stash", "tag", "blame", "grep", "reflog",
-    "name-rev", "for-each-ref", "count-objects", "fsck",
-])
-
-// Returns true if the command is a git invocation whose subcommand modifies history/state.
-function isDestructiveGitCommand(command: string): boolean {
-    const tokens = command.trim().split(/\s+/)
-    const prog = tokens[0]?.split("/").pop()
-    if (prog !== "git") return false
-    // skip flags/values like git -C <dir> <sub>
-    let i = 1
-    while (tokens[i] && tokens[i].startsWith("-")) i += 2   // skip flag + its value
-    let sub = tokens[i]
-    return !sub || !GIT_READONLY_SUBS.has(sub)
+// The rules (what a command's key is, what counts as dangerous, what needs a prompt) live in commandApproval.ts.
+// Here: the decision a prompt can return, and the global allowlist's load/save.
+// Loads the global allowlist from the server (the source of truth, shared by every project and client). Entries an
+// older version kept in the desktop app's own store are merged in once, so nothing the user already approved is lost.
+async function loadCommandAllowlist(): Promise<string[]> {
+    let server: string[] | null = null
+    try {
+        const res = await apiFetch("/command-allowlist")
+        if (res.ok) server = sanitizeAllowlist((await res.json())?.commands)
+    } catch { /* offline or not an admin — fall through to the local store */ }
+    let local: string[] = []
+    try { local = sanitizeAllowlist(await env.getCommandAllowlist()) } catch { /* no local store */ }
+    if (server === null) return local
+    const merged = sanitizeAllowlist([...server, ...local])
+    if (merged.length !== server.length) await saveCommandAllowlist(merged)
+    return merged
 }
 
-// Multiplexer programs whose first sub-word matters (so we whitelist "dotnet build" not all of
-// "dotnet", and "git log" not all of "git").
-const MULTIPLEXERS = new Set(["git", "dotnet", "npm", "yarn", "pnpm", "bun", "deno", "docker", "cargo", "go", "kubectl", "pip", "pip3", "brew", "make"])
-
-// Splits a command line into its pipe/sequence segments, respecting quotes. Returns null when it
-// contains command substitution ($(...), backticks, <(...)) or unbalanced quotes — those can hide
-// arbitrary commands and must always be confirmed rather than auto-classified.
-//
-// Quote-aware so a "|" inside grep -E "(a|b)" isn't a pipe, and a "&" inside a 2>&1 redirect isn't a
-// sequence operator. Splits on | || && ; and bare & (background), only outside quotes.
-function commandSegments(command: string): string[] | null {
-    const cmd = command.trim()
-    if (!cmd) return null
-    if (/\$\(|`|<\(/.test(cmd)) return null
-
-    const segments: string[] = []
-    let cur = "", quote: string | null = null
-    for (let i = 0; i < cmd.length; i++) {
-        const c = cmd[i], next = cmd[i + 1], prev = cmd[i - 1]
-        if (quote) { cur += c; if (c === quote) quote = null; continue }
-        if (c === "'" || c === '"') { quote = c; cur += c; continue }
-        if (c === ";" || c === "\n") { segments.push(cur); cur = ""; continue }
-        if (c === "|") { if (next === "|") i++; segments.push(cur); cur = ""; continue }
-        if (c === "&") {
-            if (next === "&") { i++; segments.push(cur); cur = ""; continue }
-            if (prev === ">" || next === ">") { cur += c; continue }  // part of a redirect (2>&1, &>) — keep
-            segments.push(cur); cur = ""; continue                    // bare & — background/sequence
-        }
-        cur += c
-    }
-    if (quote) return null   // unbalanced quotes — don't risk mis-parsing
-    segments.push(cur)
-    return segments.map(s => s.trim()).filter(Boolean)
-}
-
-// Tokenise a segment, dropping leading VAR=val assignments.
-function segmentTokens(seg: string): string[] {
-    return seg.split(/\s+/).filter(t => t && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t))
-}
-
-// The program a segment invokes (basename of the first token, so /usr/bin/grep → grep).
-function segmentProgram(seg: string): string {
-    const first = segmentTokens(seg)[0] || seg
-    return first.split("/").pop() || first
-}
-
-// The allowlist key to store when the user whitelists a segment: "program subcommand" for known
-// multiplexers (dotnet build), otherwise just the program (grep).
-function segmentWhitelistKey(seg: string): string {
-    const tokens = segmentTokens(seg)
-    const prog   = (tokens[0] || seg).split("/").pop() || seg
-    if (MULTIPLEXERS.has(prog) && tokens[1] && !tokens[1].startsWith("-")) return `${prog} ${tokens[1]}`
-    return prog
-}
-
-// Keys to add when whitelisting a command (one per segment). Null when undecomposable.
-function commandWhitelistKeys(command: string): string[] | null {
-    const segs = commandSegments(command)
-    if (!segs || segs.length === 0) return null
-    return [...new Set(segs.map(segmentWhitelistKey).filter(Boolean))]
-}
-
-// An allowlist entry matches a segment if it's a single-token PROGRAM name equal to the segment's
-// program (e.g. "grep"), or a multi-word PREFIX the segment starts with (e.g. "dotnet build").
-function entryMatchesSegment(entry: string, seg: string, prog: string): boolean {
-    const e = entry.trim()
-    if (!e) return false
-    if (/\s/.test(e)) return seg === e || seg.startsWith(e + " ")
-    return prog === e
-}
-
-// A command is allowed only if EVERY segment is on the allowlist.
-// Destructive git commands can never be auto-run; read-only git subcommands can be whitelisted.
-function commandIsAllowed(command: string, allowlist: string[]): boolean {
-    if (isDestructiveGitCommand(command)) return false
-    const segs = commandSegments(command)
-    if (!segs || segs.length === 0) return false
-    return segs.every(seg => {
-        if (isDestructiveGitCommand(seg)) return false
-        const prog = segmentProgram(seg)
-        return allowlist.some(e => entryMatchesSegment(e, seg, prog))
-    })
+async function saveCommandAllowlist(list: string[]): Promise<boolean> {
+    let ok = false
+    try {
+        const res = await apiFetch("/command-allowlist", {
+            method: "PUT", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ commands: list }),
+        })
+        ok = res.ok
+    } catch { /* reported by the caller */ }
+    try { await env.setCommandAllowlist(list) } catch { /* the desktop store is only a mirror */ }
+    return ok
 }
 
 // Formats a finished command for the model: exit code first, then output, tail-biased on
@@ -183,7 +109,6 @@ function formatCommandResult(command: string, res: { code: number; stdout: strin
 
 const cmdOverlayStyle: CSSProperties = { position: "fixed", inset: 0, background: "var(--col-app-line-107-background)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000 }
 const cmdModalStyle:   CSSProperties = { background: "var(--col-app-line-108-background)", border: "1px solid var(--col-app-line-108-border)", borderRadius: 10, padding: "20px 22px", width: "min(560px, 90vw)", boxShadow: "0 12px 40px var(--col-app-line-108-shadow)", color: "var(--col-app-line-108-text)" }
-
 const cmdTitleStyle:   CSSProperties = { fontSize: 15, fontWeight: 600, marginBottom: 4 }
 const cmdSubStyle:     CSSProperties = { fontSize: 12.5, opacity: 0.7, marginBottom: 12 }
 const cmdCodeStyle:    CSSProperties = { background: "var(--col-app-line-111-background)", border: "1px solid var(--col-app-line-111-border)", borderRadius: 6, padding: "10px 12px", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-all", margin: 0, marginBottom: 16 }
@@ -287,7 +212,7 @@ export default function App() {
     // run_command confirmation: pending prompt awaiting a deny/allow/whitelist decision, plus the
     // in-memory allowlist (loaded from the persisted store, extended live by "Whitelist").
     // title is set for a server-side tool's approval request (git/github) — one-off, so no "Always allow".
-    const [pendingCommand, setPendingCommand] = useState<{ command: string; title?: string; resolve: (d: CommandDecision) => void } | null>(null)
+    const [pendingCommand, setPendingCommand] = useState<{ command: string; title?: string; segment?: SegmentInfo; resolve: (d: CommandDecision) => void } | null>(null)
     const shownApprovalRef = useRef<string | null>(null)
     const commandAllowlistRef = useRef<string[]>([])
     // Generic yes/no confirmation (used for destructive file deletes).
@@ -321,7 +246,7 @@ export default function App() {
     useEffect(() => { safetyModeRef.current = safetyMode }, [safetyMode])
 
     useEffect(() => {
-        env.getCommandAllowlist().then(list => { commandAllowlistRef.current = Array.isArray(list) ? list : [] }).catch(() => {})
+        loadCommandAllowlist().then(list => { commandAllowlistRef.current = list }).catch(() => {})
     }, [])
 
     useEffect(() => { projectsRef.current = projects }, [projects])
@@ -780,29 +705,26 @@ export default function App() {
                     if (!command) {
                         ws.send(JSON.stringify({ type: "file_error", callId, error: "No command provided." }))
                     } else {
-                        // Auto-run if allowlisted; otherwise ask the user (deny / allow once / whitelist).
-                        let decision: CommandDecision = "allow"
-                        if (!commandIsAllowed(command, commandAllowlistRef.current)) {
-                            console.warn(`[ToolSocket] run_command needs confirmation  callId=${callId}  cmd=${command}`)
-                            decision = await new Promise<CommandDecision>(resolve => setPendingCommand({ command, resolve }))
-                        }
+                        // Each NEW command is decided on its own: allowlisted / read-only segments just run; every other
+                        // segment gets its own prompt (deny / allow this time / allow every time). One denial stops the
+                        // whole command. Dangerous forms (git reset --hard, push --force, rm -rf, …) always prompt and
+                        // can only be allowed this once — they are never stored. See commandApproval.ts.
+                        const decision = await decideCommand(command, commandAllowlistRef.current, {
+                            ask: (segment) => {
+                                console.warn(`[ToolSocket] run_command needs a decision  callId=${callId}  cmd=${segment.text}  tier=${segment.tier}`)
+                                return new Promise<CommandDecision>(resolve => setPendingCommand({ command, segment, resolve }))
+                            },
+                            persist: saveCommandAllowlist,
+                        })
+                        commandAllowlistRef.current = decision.allowlist
+                        for (const key of decision.unsaved)
+                            console.warn(`[ToolSocket] could not save "${key}" to the server allowlist — it is remembered for this session only`)
+                        const denied = !decision.allowed
 
-                        if (decision === "deny") {
+                        if (denied) {
                             console.warn(`[ToolSocket] → file_error (run_command DENIED)  callId=${callId}`)
                             ws.send(JSON.stringify({ type: "file_error", callId, error: `The user denied permission to run \`${command}\`. Do not try to run it again. Continue without it, or ask the user how they would like to proceed.` }))
                         } else {
-                            if (decision === "whitelist") {
-                                // Whitelist by program (or "program subcommand" for multiplexers like
-                                // dotnet), so future invocations with different args/redirections —
-                                // and chains of already-trusted programs — auto-run.
-                                const keys = (commandWhitelistKeys(command) ?? []).filter(k => k && !isDestructiveGitCommand(k))
-                                const next = [...commandAllowlistRef.current]
-                                for (const k of keys) if (!next.includes(k)) next.push(k)
-                                if (next.length !== commandAllowlistRef.current.length) {
-                                    commandAllowlistRef.current = next
-                                    try { await env.setCommandAllowlist(next) } catch { /* ignore persist failure */ }
-                                }
-                            }
                             console.warn(`[ToolSocket] → run_command EXEC  callId=${callId}  cmd=${command}`)
                             const cmdRes = await window.electronBridge!.runCommand(localPath, command)
                             ws.send(JSON.stringify({ type: "file_content", callId, content: formatCommandResult(command, cmdRes) }))
@@ -1283,11 +1205,6 @@ export default function App() {
                         if (!detail) return loadHistory(keyForStream).then(hist => { if (activeThreadRef.current === keyForStream) setItems(dedupeRecentUserMessages(hist)) }).catch(() => {})
                         if (activeThreadRef.current === keyForStream) setItems(dedupeRecentUserMessages(detail.history))
                     }).catch(() => {})
-    if (authState === "needsSetup") return (
-        <SetupWizard startStep={setupStart} existingUser={authUser}
-            onFinished={(user) => { setAuthUser(user); setAuthState("authed"); startTour() }} />
-    )
-
                 }
             }
         }
@@ -1364,6 +1281,11 @@ export default function App() {
     const isWin32 = window.electronBridge?.platform === "win32"
 
     if (authState === "loading") return <div id="shell" />
+
+    if (authState === "needsSetup") return (
+        <SetupWizard startStep={setupStart} existingUser={authUser}
+            onFinished={(user) => { setAuthUser(user); setAuthState("authed"); startTour() }} />
+    )
 
     if (authState === "needsLogin") return (
         <LoginScreen onLoginSuccess={handleLoginSuccess} />
@@ -1491,29 +1413,33 @@ export default function App() {
                 <div style={cmdOverlayStyle}
                      onClick={() => { pendingCommand.resolve("deny"); setPendingCommand(null) }}>
                     <div style={cmdModalStyle} onClick={e => e.stopPropagation()}>
-                        <div style={cmdTitleStyle}>Run this command?</div>
+                        <div style={cmdTitleStyle}>{pendingCommand.segment?.tier === "dangerous" ? "Run this dangerous command?" : "Run this command?"}</div>
                         <div style={cmdSubStyle}>
                             {pendingCommand.title
-                                ?? (isDestructiveGitCommand(pendingCommand.command)
-                                    ? "ARI wants to run a git command that modifies history. This always requires your approval."
-                                    : "ARI wants to run a command that isn't on the allow list.")}
+                                ?? (pendingCommand.segment?.tier === "dangerous"
+                                    ? `${pendingCommand.segment.reason ?? "This can't be undone."} This is never remembered — it asks every time.`
+                                    : pendingCommand.segment?.tier === "opaque"
+                                        ? `ARI wants to run a command that can't be checked safely (${pendingCommand.segment.reason ?? "unrecognised form"}). It asks every time.`
+                                        : pendingCommand.segment?.key
+                                            ? `ARI wants to run "${pendingCommand.segment.key}", which you haven't decided on yet.`
+                                            : "ARI wants to run a command that isn't on the allow list.")}
                         </div>
-                        <pre style={cmdCodeStyle}>{pendingCommand.command}</pre>
+                        <pre style={cmdCodeStyle}>{pendingCommand.segment && pendingCommand.segment.text !== pendingCommand.command
+                            ? `${pendingCommand.segment.text}\n\n(part of: ${pendingCommand.command})`
+                            : pendingCommand.command}</pre>
                         <div style={cmdActionsStyle}>
                             <button style={{ ...cmdBtnBase, background: "transparent", borderColor: "var(--col-app-line-1406-border)", color: "var(--col-app-line-1406-text)" }}
                                     onClick={() => { pendingCommand.resolve("deny"); setPendingCommand(null) }}>Deny</button>
-                            <button style={{ ...cmdBtnBase, background: "#2d6cdf", color: "#fff" }}
-                                    onClick={() => { pendingCommand.resolve("allow"); setPendingCommand(null) }}>Allow once</button>
-                            {!pendingCommand.title && !isDestructiveGitCommand(pendingCommand.command) && (() => {
-                                const progs = commandWhitelistKeys(pendingCommand.command)
-                                if (!progs || progs.length === 0) return null  // command substitution — allow-once only
-                                return (
-                                    <button style={{ ...cmdBtnBase, background: "#1f9d57", color: "#fff" }}
-                                            onClick={() => { pendingCommand.resolve("whitelist"); setPendingCommand(null) }}>
-                                        Always allow {progs.join(", ")}
-                                    </button>
-                                )
-                            })()}
+                            <button style={{ ...cmdBtnBase, background: "var(--col-app-line-1408-background)", color: "var(--col-app-line-1408-text)" }}
+                                    onClick={() => { pendingCommand.resolve("allow"); setPendingCommand(null) }}>
+                                {pendingCommand.segment ? "Allow just this time" : "Allow once"}
+                            </button>
+                            {!pendingCommand.title && pendingCommand.segment?.tier === "allowable" && pendingCommand.segment.key && (
+                                <button style={{ ...cmdBtnBase, background: "var(--col-app-line-1413-background)", color: "var(--col-app-line-1413-text)" }}
+                                        onClick={() => { pendingCommand.resolve("whitelist"); setPendingCommand(null) }}>
+                                    Allow "{pendingCommand.segment.key}" every time
+                                </button>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -1527,7 +1453,7 @@ export default function App() {
                         <div style={cmdActionsStyle}>
                             <button style={{ ...cmdBtnBase, background: "transparent", borderColor: "var(--col-app-line-1429-border)", color: "var(--col-app-line-1429-text)" }}
                                     onClick={() => { pendingConfirm.resolve(false); setPendingConfirm(null) }}>Cancel</button>
-                            <button style={{ ...cmdBtnBase, background: "#c0392b", color: "#fff" }}
+                            <button style={{ ...cmdBtnBase, background: "var(--col-app-line-1431-background)", color: "var(--col-app-line-1431-text)" }}
                                     onClick={() => { pendingConfirm.resolve(true); setPendingConfirm(null) }}>Delete</button>
                         </div>
                     </div>

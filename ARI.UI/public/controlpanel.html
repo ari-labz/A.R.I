@@ -488,7 +488,7 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 .srv-field-row:last-child { margin-bottom: 0; }
 .srv-field-label { font-size: 12px; color: var(--text-dim); margin-bottom: 5px; display: block; }
 #tab-customisation { display: flex; }
-#tab-prompts { display: flex; flex-direction: row; }
+#tab-agents { display: flex; flex-direction: row; }
 .pr-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; cursor: pointer; font-size: 13px; color: var(--text); }
 .pr-item:hover { background: var(--user-bubble); }
 .pr-item.active { background: var(--user-bubble); font-weight: 600; }
@@ -531,7 +531,7 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
         <div class="cp-nav-item" data-tab="servers" data-group="llm">Servers</div>
         <div class="cp-nav-item" data-tab="models" data-group="llm">Models</div>
         <div class="cp-nav-item" data-tab="agents" data-group="llm">Agents</div>
-        <div class="cp-nav-item" data-tab="prompts" data-group="llm">Prompts</div>
+        <div class="cp-nav-item" data-tab="pipelines" data-group="llm">Pipelines</div>
         <div class="cp-nav-item" data-tab="conventions" data-group="llm">Coding Conventions</div>
         <div class="cp-nav-item" data-tab="persona" data-group="llm">Persona</div>
         <div class="cp-nav-item" data-tab="feedback" data-group="llm">Response Feedback</div>
@@ -1185,20 +1185,44 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
     </div>
 
     <!-- Brain tab -->
-    <div id="tab-agents" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
-      <div style="max-width:980px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-          <span style="font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--text-dim);text-transform:uppercase;">Agents</span>
-          <span id="ag-status" style="font-size:12px;color:var(--text-dim);"></span>
-        </div>
-        <p style="color:var(--text-dim);font-size:13px;margin:0 0 16px;line-height:1.5;">
-          Switch agents on or off and choose which server and slot each one runs on. Saved to <code>Agents.json</code>;
-          A·R·I reads it when she starts, so restart for changes to take effect. Prompts are edited on the Prompts page.
-        </p>
-        <div id="agent-cards" style="display:flex;flex-direction:column;gap:10px;"></div>
-      </div>
+<style id="pip-css">
+.agv-btn{border:1px solid var(--border);background:var(--main-bg);color:var(--text);border-radius:7px;padding:5px 12px;font-size:13px;cursor:pointer}
+.agv-btn:hover{border-color:var(--text-dim)}
+.pip-wrap{display:flex;gap:14px;align-items:flex-start}
+.pip-canvas{position:relative;flex:1;min-width:0;height:560px;overflow:hidden;border:1px solid var(--border);border-radius:12px;background-color:var(--main-bg);background-image:linear-gradient(var(--border) 1px,transparent 1px),linear-gradient(90deg,var(--border) 1px,transparent 1px);cursor:grab;user-select:none}
+.pip-canvas.panning{cursor:grabbing}
+.pip-world{position:absolute;left:0;top:0;transform-origin:0 0}
+.pip-world svg{position:absolute;left:0;top:0;width:1px;height:1px;overflow:visible;pointer-events:none}
+.pip-world svg path{fill:none;stroke:#111;stroke-width:3.5;stroke-linecap:round;pointer-events:stroke;cursor:pointer}
+@media (prefers-color-scheme:dark){.pip-world svg path{stroke:#cadde2}}
+.pip-world svg path:hover{stroke:#d9534f}
+.pip-world svg path.stream{stroke:#2aa6b8;stroke-dasharray:10 7;animation:pipflow .8s linear infinite}
+.pip-world svg path.tmp{stroke:#5aa9b8;stroke-dasharray:5 5;pointer-events:none}
+@keyframes pipflow{to{stroke-dashoffset:-17}}
+.pip-node{position:absolute;width:230px;border-radius:12px;background:#666d70;color:#fff;box-shadow:0 3px 10px rgba(0,0,0,.3);font-size:13px}
+.pip-node.sel{box-shadow:0 0 0 2.5px #5aa9b8,0 3px 10px rgba(0,0,0,.3)}
+.pip-node.off{opacity:.55}
+.pip-nh{height:32px;padding:0 12px;background:#2e4f55;border-radius:12px 12px 0 0;font-weight:700;display:flex;align-items:center;justify-content:space-between;cursor:grab}
+.pip-tag{font-size:10px;font-weight:600;border:1px solid rgba(255,255,255,.4);border-radius:9px;padding:0 7px;color:#d5dcdd}
+.pip-row{height:28px;display:flex;align-items:center;padding:0 14px;font-size:12.5px}.pip-row.out{justify-content:flex-end}
+.pip-nb{padding:2px 14px 9px;font-size:11px;color:#d5dcdd}
+.pip-port{position:absolute;width:14px;height:14px;border-radius:50%;background:#111;border:2px solid #cadde2;cursor:crosshair}
+.pip-port:hover,.pip-port.taken{background:#5aa9b8}
+.pip-term{position:absolute;width:26px;height:26px}
+.pip-term .pip-port{left:0;top:0;width:26px;height:26px;border:0}
+.pip-lab{position:absolute;top:-34px;left:-8px;white-space:nowrap;font-weight:700;font-size:12px;cursor:grab;color:var(--text)}
+.pip-lab small{display:block;font-weight:400;color:var(--text-dim)}
+.pip-term.end .pip-lab{left:auto;right:-8px;text-align:right}
+.pip-insp{width:270px;flex:none;border:1px solid var(--border);border-radius:12px;padding:14px;font-size:13px}
+.pip-insp label{display:block;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);margin:12px 0 4px}
+.pip-menu{position:fixed;z-index:9999;min-width:200px;background:var(--main-bg);color:var(--text);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.3);padding:4px;font-size:13px}
+.pip-menu div{padding:6px 12px;border-radius:5px;cursor:pointer}.pip-menu div:hover{background:var(--user-bubble)}
+.pip-menu .hd{font-size:11px;color:var(--text-dim);cursor:default;font-weight:700;letter-spacing:.06em;text-transform:uppercase}.pip-menu .hd:hover{background:none}
+</style>
+    <div id="tab-pipelines" class="cp-tab" style="display:none;flex:1;min-width:0;overflow-y:auto;padding:24px 28px;">
+      <div id="ag-view-pipelines"></div>
     </div>
-    <div id="tab-prompts" class="cp-tab" style="display:none;flex:1;min-width:0;overflow:hidden;">
+    <div id="tab-agents" class="cp-tab" style="display:none;flex:1;min-width:0;overflow:hidden;">
       <div id="pr-list" style="width:260px;flex:none;overflow-y:auto;border-right:1px solid var(--border);padding:16px 12px;"></div>
       <div style="flex:1;min-width:0;overflow-y:auto;padding:24px 32px;">
         <div id="pr-editor" style="max-width:860px;"></div>
@@ -1501,8 +1525,8 @@ cpFetch('/admin/username').then(r => r.json()).then(d => { if (d.name) window._a
 
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), github: document.getElementById('tab-github'), dreaming: document.getElementById('tab-dreaming'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), users: document.getElementById('tab-users'), settings: document.getElementById('tab-settings'), modules: document.getElementById('tab-modules'), 'imagegen-model': document.getElementById('tab-imagegen-model'), 'imagegen-settings': document.getElementById('tab-imagegen-settings'), calendar: document.getElementById('tab-calendar'), customisation: document.getElementById('tab-customisation'), prompts: document.getElementById('tab-prompts') };
-const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', brain: 'Brain', discord: 'Discord', github: 'GitHub', dreaming: 'Dreaming', llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', users: 'Users', settings: 'Settings', modules: 'Modules', 'imagegen-model': 'Image Generation — Model', 'imagegen-settings': 'Image Generation — Settings', calendar: 'Calendar', customisation: 'Customisation', prompts: 'Prompts' };
+const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), pipelines: document.getElementById('tab-pipelines'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), github: document.getElementById('tab-github'), dreaming: document.getElementById('tab-dreaming'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), users: document.getElementById('tab-users'), settings: document.getElementById('tab-settings'), modules: document.getElementById('tab-modules'), 'imagegen-model': document.getElementById('tab-imagegen-model'), 'imagegen-settings': document.getElementById('tab-imagegen-settings'), calendar: document.getElementById('tab-calendar'), customisation: document.getElementById('tab-customisation') };
+const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', pipelines: 'Pipelines', brain: 'Brain', discord: 'Discord', github: 'GitHub', dreaming: 'Dreaming', llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', users: 'Users', settings: 'Settings', modules: 'Modules', 'imagegen-model': 'Image Generation — Model', 'imagegen-settings': 'Image Generation — Settings', calendar: 'Calendar', customisation: 'Customisation', prompts: 'Prompts' };
 
 let srvPollTimer = null;
 // Declared here (not down in the GitHub section) because switchTab('overview') below calls stopGhPoll()
@@ -1526,7 +1550,7 @@ function switchTab(name) {
     if (name === 'models') loadModels();
     if (name === 'brain') loadBrain();
     if (name === 'servers') loadServers();
-    if (name === 'agents' || name === 'prompts') loadAgents();
+    if (name === 'agents' || name === 'pipelines') loadAgents();
     if (name === 'llmconfigs') loadLLMConfigs();
     if (name === 'calendar') loadCalendar();
     if (name === 'dreaming') loadDreaming();
@@ -4108,6 +4132,18 @@ function agBindingPickers(agent) {
 
 // Sampler override: off by default (agent runs on the bound server's settings verbatim). On reveals
 // the full param list, editing agent[key] directly — same spec/renderer as the server modal.
+function agBuildThinking(body, agent) {
+    const row = agEl('label', 'display:flex;align-items:center;justify-content:space-between;cursor:pointer;margin-bottom:12px;');
+    row.innerHTML = `<span style="font-size:12px;font-weight:600;">Thinking enabled
+        <span style="font-size:11px;color:var(--text-dim);font-weight:400;">— lets the model reason before it answers, if the model supports thinking. Off gives faster replies with no reasoning tokens.</span></span>`;
+    const toggle = agEl('input'); toggle.type = 'checkbox';
+    toggle.style.cssText = 'width:15px;height:15px;accent-color:var(--accent,var(--col-control-panel-line-3961-colour));';
+    toggle.checked = !!agent.think;
+    toggle.addEventListener('change', () => { agent.think = toggle.checked; agDirty(); });
+    row.append(toggle);
+    body.append(row);
+}
+
 function agBuildSamplerOverride(body, agent) {
     const wrap = agEl('div', 'margin-bottom:14px;padding-top:10px;border-top:1px solid var(--border,var(--col-control-panel-line-3930-colour));');
     const row = agEl('label', 'display:flex;align-items:center;justify-content:space-between;cursor:pointer;');
@@ -4194,7 +4230,6 @@ const AG_INFO = [
     ['Memory',    'Recalls relevant notes from the brain while a conversation is going.'],
     ['Engram',    'Writes new memories after conversations (reflection). Off makes the brain read-only.'],
     ['Refactor',  'Tidies the memory graph in the background on a schedule.'],
-    ['Curiosity', 'Explores her own memory and records questions. Read-only.'],
     ['Subagent',  'Runs the side tasks she starts with spawn_agent.'],
 ];
 
@@ -4228,6 +4263,7 @@ function agRenderAgents() {
         row.append(sw, text, agBindingPickers(agent), gear);
 
         const body = agEl('div', 'display:none;padding:6px 16px 14px;border-top:1px solid var(--border);');
+        agBuildThinking(body, agent);
         agBuildSamplerOverride(body, agent);
         agBuildCompaction(body, agent);
         gear.addEventListener('click', () => {
@@ -4289,6 +4325,17 @@ function prRenderList() {
     item('shared:budgets', 'Budgets block');
     item('shared:memory', 'Memory graph rules');
     group('Agents');
+    const add = agEl('div', 'color:var(--text-dim);'); add.className = 'pr-item'; add.append(agEl('span', '', '+ New agent'));
+    add.onclick = async () => {
+        const name = (prompt('Name for the new agent?') || '').trim(); if (!name) return;
+        const srv = (agData.servers || [])[0] || { name: '', slots: [] };
+        const r = await cpFetch('/agents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, serverName: srv.name, slotName: (srv.slots && srv.slots[0] && (srv.slots[0].name || srv.slots[0])) || null, agentPrompt: '' }) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { alert(j.error || 'Could not create the agent.'); return; }
+        agIsDirty = false; agData = null; prSelected = 'agent:' + name; await loadAgents();
+        const n = document.getElementById('pr-restart'); if (n) n.style.display = '';
+    };
+    list.append(add);
     agOrdered().forEach(a => item('agent:' + a.name, a.name, a.enabled === false));
 }
 
@@ -4305,8 +4352,16 @@ function prRenderEditor() {
     } else {
         const name = prSelected.slice(6), agent = (agData.agents || []).find(a => a.name === name), spec = agSpec(name);
         if (!agent) { ed.textContent = 'Not found.'; return; }
-        title(name + ' prompts', (AG_INFO.find(x => x[0] === name) || [])[1] || '');
-        prField(ed, 'Agent prompt', 'The system prompt this agent starts every conversation with.', spec.systemTokens || [], agent.agentPrompt, v => agent.agentPrompt = v);
+        title(name, agent.custom ? (agent.description || 'A custom agent. Wire it into a pipeline on the Pipelines page.') : (AG_INFO.find(x => x[0] === name) || [])[1] || '');
+        const hdr = agEl('div', 'display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:-8px 0 24px;');
+        hdr.append(buildToggle(agent.enabled !== false, on => { agent.enabled = on; agDirty(); prRenderList(); }), agEl('span', 'font-size:13px;color:var(--text-dim);', 'Runs on'), agBindingPickers(agent));
+        if (agent.custom) {
+            const del = agEl('button', 'margin-left:auto;', 'Delete agent'); del.className = 'agv-btn'; del.type = 'button';
+            del.onclick = async () => { if (!confirm('Delete ' + name + '? Pipelines using it will stop being valid.')) return; const r = await cpFetch('/agents/' + encodeURIComponent(name), { method: 'DELETE' }); if (!r.ok) { alert('Could not delete it.'); return; } agIsDirty = false; agData = null; prSelected = 'agent:Dialogue'; await loadAgents(); };
+            hdr.append(del);
+        }
+        ed.append(hdr);
+        prField(ed, 'Agent prompt', 'The system prompt this agent starts every conversation with.', agent.custom ? [['message', "the user's latest message (always available)"], ['history', 'the conversation so far — wire START into this port in a pipeline'], ['anything_else', 'any other {name} becomes an input port you can wire another agent into']] : (spec.systemTokens || []), agent.agentPrompt, v => agent.agentPrompt = v);
         (spec.prompts || []).forEach(p => { agent.promptTemplates = agent.promptTemplates || {}; prField(ed, p.label, p.hint, p.tokens, agent.promptTemplates[p.key], v => agent.promptTemplates[p.key] = v); });
         const known = new Set((spec.prompts || []).map(p => p.key));
         Object.keys(agent.promptTemplates || {}).filter(k => !known.has(k)).forEach(k => {
@@ -4316,6 +4371,13 @@ function prRenderEditor() {
         });
         if (spec.phases && agent.phases) Object.keys(agent.phases).forEach(ph => prField(ed, 'Mode: ' + ph, 'Swapped in for the ' + ph.toLowerCase() + ' phase.', [], agent.phases[ph].systemPrompt, v => agent.phases[ph].systemPrompt = v));
     }
+    if (prSelected.startsWith('agent:')) {
+        const ag = (agData.agents || []).find(a => a.name === prSelected.slice(6));
+        if (ag) {
+            const det = agEl('details', 'margin:4px 0 22px;'); det.append(agEl('summary', 'cursor:pointer;font-size:14px;font-weight:600;', 'Advanced settings'));
+            const body = agEl('div', 'padding-top:8px;'); agBuildThinking(body, ag); agBuildSamplerOverride(body, ag); agBuildCompaction(body, ag); det.append(body); ed.append(det);
+        }
+    }
     const bar = agEl('div', 'display:flex;align-items:center;gap:12px;margin-top:6px;');
     const save = agEl('button', '', 'Save'); save.className = 'vs-btn-primary'; save.type = 'button'; save.addEventListener('click', agSave);
     const st = agEl('span', 'font-size:12px;color:var(--text-dim);'); st.id = 'pr-status';
@@ -4323,9 +4385,235 @@ function prRenderEditor() {
     ed.append(bar, agRestartNote('pr-restart'));
 }
 
+
+// ── Pipelines: node editor backed by /pipeline-graphs ──
+// START (the conversation) → agents → END (the user). An agent's input ports are its {tokens} (custom agents) or fixed
+// (built-ins); each port takes one wire. The graph marked "active" answers chat messages in place of the built-in Dialogue.
+var pipD = null, pipSel = null, pipDirty = false, pipHooked = false, pipViews = {};
+const PIP_W = 230, PIP_BUILTIN = { Memory: ['history'], Dialogue: ['history', 'memories'] };
+const pipUid = () => Math.random().toString(36).slice(2, 8);
+const pipTokens = t => [...new Set(((t || '').match(/\{(\w+)\}/g) || []).map(x => x.slice(1, -1)))].filter(x => x !== 'message');
+function pipDef(n) { return (agData.agents || []).find(a => a.name === n.agent) || {}; }
+function pipPortsOf(name) { const d = (agData.agents || []).find(a => a.name === name); if (!d) return null; return d.custom ? pipTokens(d.agentPrompt) : (pipD.ports && pipD.ports[name]) || PIP_BUILTIN[name] || null; }
+function pipInputs(n) { return n.type === 'agent' ? (pipPortsOf(n.agent) || []) : n.type === 'end' ? ['stream'] : []; }
+function pipCur() { return pipD.data.pipelines.find(p => p.id === pipD.cur) || pipD.data.pipelines[0]; }
+function pipView(p) { return pipViews[p.id] = pipViews[p.id] || { x: 0, y: 0, k: 1, fresh: true }; }
+function pipTouch() { pipDirty = true; const s = document.getElementById('pip-status'); if (s) s.textContent = 'Unsaved changes'; }
+function pipNode(p, id) { return p.nodes.find(n => n.id === id); }
+function pipBlank(name) { return { id: pipUid(), name, nodes: [{ id: 'start', type: 'start', x: 20, y: 143 }, { id: 'end', type: 'end', x: 700, y: 143 }], edges: [] }; }
+
+async function pipLoad() {
+    if (pipD && pipDirty) return pipRender();
+    const host = document.getElementById('ag-view-pipelines');
+    try {
+        const r = await cpFetch('/pipeline-graphs'); if (!r.ok) throw new Error();
+        const j = await r.json();
+        pipD = { data: j.data, ports: j.ports || {}, running: j.running || null, problems: j.problems || {}, cur: (pipD && pipD.cur) || j.data.active || j.data.pipelines[0].id };
+        pipDirty = false;
+    } catch { host.textContent = 'Failed to load pipelines.'; return; }
+    pipRender();
+}
+async function pipSave() {
+    const st = document.getElementById('pip-status'); st.textContent = 'Saving…';
+    try {
+        const r = await cpFetch('/pipeline-graphs', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pipD.data) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { st.textContent = (j.error || 'Save failed.') + ' ' + ((j.problems || []).join(' ')); return; }
+        pipD.running = j.running || null; pipD.problems = j.problems || {}; pipDirty = false; st.textContent = 'Saved.'; pipRender();
+    } catch { st.textContent = 'Save failed.'; }
+}
+
+function pipRender() {
+    const host = document.getElementById('ag-view-pipelines'); if (!host || !pipD) return;
+    const p = pipCur(); host.innerHTML = '';
+    const answering = pipD.running === p.id;
+    const bar = agEl('div', 'display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;');
+    const sel = agEl('select', 'font-size:13px;padding:5px 8px;border:1px solid var(--border);border-radius:7px;background:transparent;color:var(--text);');
+    pipD.data.pipelines.forEach(q => { const o = agEl('option', '', q.name + (pipD.running === q.id ? '  ● answering chats' : '')); o.value = q.id; sel.append(o); });
+    sel.value = p.id; sel.onchange = () => { pipD.cur = sel.value; pipSel = null; pipRender(); };
+    const btn = (t, f, cls) => { const b = agEl('button', '', t); b.type = 'button'; b.className = cls || 'agv-btn'; b.onclick = f; return b; };
+    const add = btn('+ Add agent', () => pipAddMenu(add), 'vs-btn-primary');
+    const ren = btn('Rename', () => { const n = (prompt('Pipeline name?', p.name) || '').trim(); if (n) { p.name = n; pipTouch(); pipRender(); } });
+    const neu = btn('+ New pipeline', () => { const n = pipBlank('Pipeline ' + (pipD.data.pipelines.length + 1)); pipD.data.pipelines.push(n); pipD.cur = n.id; pipSel = null; pipTouch(); pipRender(); });
+    const del = btn('Delete', () => { if (pipD.data.pipelines.length < 2) { alert('Keep at least one pipeline.'); return; } if (!confirm('Delete "' + p.name + '"?')) return; pipD.data.pipelines = pipD.data.pipelines.filter(x => x.id !== p.id); if (pipD.data.active === p.id) pipD.data.active = null; pipD.cur = pipD.data.pipelines[0].id; pipTouch(); pipRender(); });
+    const use = btn(pipD.data.active === p.id ? 'Stop using' : 'Use for chats', () => { pipD.data.active = pipD.data.active === p.id ? null : p.id; pipTouch(); pipRender(); });
+    const save = btn('Save', pipSave, 'vs-btn-primary');
+    const st = agEl('span', 'font-size:12px;color:var(--text-dim);', pipDirty ? 'Unsaved changes' : ''); st.id = 'pip-status';
+    bar.append(sel, add, btn('Recenter', () => pipRecenter(p)), ren, neu, del, use, save, st);
+
+    const state = agEl('div', 'font-size:12.5px;color:var(--text-dim);margin-bottom:10px;');
+    state.textContent = pipD.running ? 'Chats are being answered by “' + ((pipD.data.pipelines.find(x => x.id === pipD.running) || {}).name || '?') + '”.' : 'Chats are being answered by the built-in Dialogue pipeline. Mark a pipeline “Use for chats” and save to switch.';
+    if (pipD.data.active !== pipD.running) state.textContent += '  (Unsaved: ' + (pipD.data.active ? 'will switch to “' + (pipD.data.pipelines.find(x => x.id === pipD.data.active) || {}).name + '”' : 'will switch back to built-in Dialogue') + '.)';
+
+    const wrap = agEl('div'); wrap.className = 'pip-wrap';
+    const canvas = agEl('div'); canvas.className = 'pip-canvas'; pipCanvas = canvas;
+    wrap.append(canvas, pipInspector(p));
+    const issues = pipIssues(p);
+    const warn = agEl('div', 'margin-top:10px;font-size:12.5px;line-height:1.6;white-space:pre-line;color:' + (issues.length ? '#d9a441' : 'var(--text-dim)'), issues.length ? issues.map(i => '⚠ ' + i).join('\n') : '✓ Pipeline is valid.');
+    host.append(bar, state, wrap, warn);
+    pipDraw(p); pipHook(p);
+    const v = pipView(p);
+    if (v.fresh) requestAnimationFrame(() => { if (pipCanvas && pipCanvas.clientWidth > 0 && v.fresh) { v.fresh = false; pipRecenter(p); } });
+}
+
+function pipReaches(p, from, to) { const seen = new Set(), st = [from]; while (st.length) { const x = st.pop(); if (x === to) return true; if (seen.has(x)) continue; seen.add(x); p.edges.filter(e => e.from === x).forEach(e => st.push(e.to)); } return false; }
+function pipIssues(p) {
+    const out = [], end = p.nodes.find(n => n.type === 'end'), into = p.edges.filter(e => e.to === end.id);
+    if (!into.length) out.push('Nothing is connected to END, so this pipeline never answers.');
+    p.nodes.filter(n => n.type === 'agent').forEach(n => {
+        const ports = pipPortsOf(n.agent);
+        if (!ports) { out.push(n.agent + ' is not available (switched off, or ARI needs a restart after creating it).'); return; }
+        ports.forEach(q => { if (!p.edges.some(e => e.to === n.id && e.port === q)) out.push(n.agent + ': {' + q + '} has nothing wired in.'); });
+        if (!pipReaches(p, n.id, end.id)) out.push(n.agent + ' never reaches END, so it does nothing.');
+        if (n.agent === 'Dialogue' && into.length && into[0].from !== n.id) out.push('The built-in Dialogue agent must be the one connected to END.');
+    });
+    const sl = {}; p.nodes.filter(n => n.type === 'agent').forEach(n => { const d = pipDef(n); if (d.serverName) (sl[d.serverName + '/' + d.slotName] = sl[d.serverName + '/' + d.slotName] || []).push(n.agent); });
+    Object.entries(sl).forEach(([k, v]) => { if (v.length > 1) out.push(v.join(' and ') + ' share ' + k + ' — they will evict each other\'s cache.'); });
+    return out;
+}
+
+var pipCanvas = null, pipWorld = null, pipSvg = null;
+function pipPos(n, side, port) {
+    if (n.type !== 'agent') return { x: n.x + 13, y: n.y + 13 };
+    return side === 'out' ? { x: n.x + PIP_W, y: n.y + 46 } : { x: n.x, y: n.y + 74 + pipInputs(n).indexOf(port) * 28 };
+}
+const pipWirePath = (a, b) => { const d = Math.max(60, Math.abs(b.x - a.x) / 2); return `M${a.x},${a.y} C${a.x + d},${a.y} ${b.x - d},${b.y} ${b.x},${b.y}`; };
+function pipApplyView(p) {
+    const v = pipView(p), g = 24 * v.k;
+    pipWorld.style.transform = `translate(${v.x}px,${v.y}px) scale(${v.k})`;
+    pipCanvas.style.backgroundSize = `${g}px ${g}px`; pipCanvas.style.backgroundPosition = `${v.x}px ${v.y}px`;
+}
+function pipToWorld(p, e) { const r = pipCanvas.getBoundingClientRect(), v = pipView(p); return { x: (e.clientX - r.left - v.x) / v.k, y: (e.clientY - r.top - v.y) / v.k }; }
+function pipRecenter(p) {
+    const r = pipCanvas.getBoundingClientRect(), xs = p.nodes.map(n => n.x), ys = p.nodes.map(n => n.y);
+    const w = Math.max(...xs) + 280 - Math.min(...xs), h = Math.max(...ys) + 200 - Math.min(...ys);
+    const k = Math.min(1.2, Math.max(.3, Math.min((r.width - 60) / w, (r.height - 60) / h)));
+    Object.assign(pipView(p), { k, x: (r.width - w * k) / 2 - Math.min(...xs) * k, y: (r.height - h * k) / 2 - Math.min(...ys) * k }); pipApplyView(p);
+}
+function pipCloseMenu() { document.querySelectorAll('.pip-menu').forEach(m => m.remove()); }
+function pipMenu(e, title, items) {
+    pipCloseMenu(); e.preventDefault();
+    const m = agEl('div'); m.className = 'pip-menu'; m.style.left = e.clientX + 'px'; m.style.top = e.clientY + 'px';
+    if (title) { const h = agEl('div', '', title); h.className = 'hd'; m.append(h); }
+    items.forEach(([l, f]) => { const d = agEl('div', '', l); d.onclick = () => { pipCloseMenu(); f(); }; m.append(d); });
+    document.body.append(m);
+}
+function pipAddAgentNode(p, a, at) { const id = pipUid(); p.nodes.push({ id, type: 'agent', agent: a.name, x: at.x, y: at.y }); pipSel = id; pipTouch(); pipRender(); }
+function pipDelete(p, n) { if (n.type !== 'agent') return; p.nodes = p.nodes.filter(x => x !== n); p.edges = p.edges.filter(e => e.from !== n.id && e.to !== n.id); if (pipSel === n.id) pipSel = null; pipTouch(); pipRender(); }
+function pipAddable(p) {   // agents that can sit in a graph and aren't in this one yet
+    const have = new Set(p.nodes.filter(n => n.type === 'agent').map(n => n.agent));
+    return (agData.agents || []).filter(a => !have.has(a.name) && (a.custom || PIP_BUILTIN[a.name]));
+}
+function pipAddMenu(anchor) {
+    const p = pipCur(), r = anchor.getBoundingClientRect(), v = pipView(p), rc = pipCanvas.getBoundingClientRect(), free = pipAddable(p);
+    const at = { x: (rc.width / 2 - v.x) / v.k - 115, y: (rc.height / 2 - v.y) / v.k - 40 };
+    pipMenu({ clientX: r.left, clientY: r.bottom + 4, preventDefault() {} }, 'Add agent', free.map(a => [a.name, () => pipAddAgentNode(p, a, at)]).concat(free.length ? [] : [['(every agent is already here — make more on the Agents page)', () => {}]]));
+}
+function pipDraw(p) {
+    const c = pipCanvas; c.innerHTML = '';
+    const world = agEl('div'); world.className = 'pip-world'; pipWorld = world; c.append(world);
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); pipSvg = svg; world.append(svg);
+    pipApplyView(p); pipWires(p);
+    const taken = new Set(p.edges.map(e => e.to + ':' + e.port));
+    p.nodes.forEach(n => {
+        let d;
+        if (n.type === 'agent') {
+            const def = pipDef(n), ports = pipInputs(n);
+            d = agEl('div'); d.className = 'pip-node' + (pipSel === n.id ? ' sel' : '') + (def.enabled === false ? ' off' : '');
+            const h = agEl('div'); h.className = 'pip-nh'; h.append(agEl('span', '', n.agent)); const tg = agEl('span', '', def.custom ? 'custom' : 'built-in'); tg.className = 'pip-tag'; h.append(tg);
+            const out = agEl('div', '', 'Output'); out.className = 'pip-row out'; d.append(h, out);
+            ports.forEach(q => { const r = agEl('div', '', q); r.className = 'pip-row in'; d.append(r); });
+            const nb = agEl('div', '', (def.serverName || '?') + ' · ' + (def.slotName || 'default slot') + (def.enabled === false ? ' · off' : '')); nb.className = 'pip-nb'; d.append(nb);
+            const po = agEl('div'); po.className = 'pip-port'; po.style.cssText = 'right:-7px;top:39px'; po.onmousedown = e => pipDragWire(p, n, e); d.append(po);
+            ports.forEach((q, i) => { const pi = agEl('div'); pi.className = 'pip-port' + (taken.has(n.id + ':' + q) ? ' taken' : ''); pi.dataset.node = n.id; pi.dataset.port = q; pi.style.cssText = `left:-7px;top:${67 + i * 28}px`; d.append(pi); });
+            d.onmousedown = e => { if (e.button === 0 && !e.target.classList.contains('pip-port')) { e.stopPropagation(); pipDragNode(p, n, d, e); } };
+            d.oncontextmenu = e => { e.stopPropagation(); pipMenu(e, n.agent, [['Disconnect all', () => { p.edges = p.edges.filter(x => x.from !== n.id && x.to !== n.id); pipTouch(); pipRender(); }], ['Remove from pipeline', () => pipDelete(p, n)]]); };
+        } else {
+            d = agEl('div'); d.className = 'pip-term ' + n.type;
+            const lab = agEl('div', '', n.type === 'start' ? 'START' : 'END'); lab.className = 'pip-lab'; const sm = agEl('small', '', n.type === 'start' ? 'Conversation history' : 'Stream to user'); lab.append(sm);
+            const pt = agEl('div'); pt.className = 'pip-port';
+            if (n.type === 'start') pt.onmousedown = e => pipDragWire(p, n, e); else { pt.dataset.node = n.id; pt.dataset.port = 'stream'; }
+            d.append(lab, pt); lab.onmousedown = e => { e.stopPropagation(); pipDragNode(p, n, d, e); };
+        }
+        d.style.left = n.x + 'px'; d.style.top = n.y + 'px'; world.append(d);
+    });
+}
+function pipWires(p) {
+    pipSvg.querySelectorAll('path:not(.tmp)').forEach(x => x.remove());
+    p.edges.forEach((e, i) => {
+        const A = pipNode(p, e.from), B = pipNode(p, e.to); if (!A || !B) return;
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', pipWirePath(pipPos(A, 'out'), pipPos(B, 'in', e.port))); if (e.mode === 'stream') path.setAttribute('class', 'stream');
+        const flip = () => { e.mode = e.mode === 'stream' ? 'complete' : 'stream'; pipTouch(); pipRender(); };
+        path.onclick = flip;
+        path.oncontextmenu = ev => pipMenu(ev, 'Connection', [[e.mode === 'stream' ? 'Wait until finished' : 'Stream live (not run yet)', flip], ['Disconnect', () => { p.edges.splice(i, 1); pipTouch(); pipRender(); }]]);
+        pipSvg.append(path);
+    });
+}
+function pipDragNode(p, n, el, e) {
+    const v = pipView(p), sx = e.clientX, sy = e.clientY, ox = n.x, oy = n.y; let moved = false;
+    const mv = ev => { moved = true; n.x = ox + (ev.clientX - sx) / v.k; n.y = oy + (ev.clientY - sy) / v.k; el.style.left = n.x + 'px'; el.style.top = n.y + 'px'; pipWires(p); };
+    const up = () => { document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); if (moved) pipTouch(); if (pipSel !== n.id) { pipSel = n.id; pipRender(); } };
+    document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
+}
+function pipDragWire(p, from, e) {
+    e.stopPropagation();
+    const t = document.createElementNS('http://www.w3.org/2000/svg', 'path'); t.setAttribute('class', 'tmp'); pipSvg.append(t);
+    const a = pipPos(from, 'out'), mv = ev => t.setAttribute('d', pipWirePath(a, pipToWorld(p, ev)));
+    const up = ev => {
+        document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); t.remove();
+        const el = document.elementFromPoint(ev.clientX, ev.clientY);
+        if (!el || !el.dataset || !el.dataset.port || el.dataset.node === from.id) return;
+        const to = pipNode(p, el.dataset.node); if (!to || pipReaches(p, to.id, from.id)) return;
+        p.edges = p.edges.filter(x => !(x.to === to.id && x.port === el.dataset.port));
+        p.edges.push({ from: from.id, to: to.id, port: el.dataset.port, mode: to.type === 'end' ? 'stream' : 'complete' }); pipTouch(); pipRender();
+    };
+    document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up); mv(e);
+}
+function pipHook(p) {
+    const c = pipCanvas;
+    c.onmousedown = e => {
+        if (e.button !== 0 || e.target.closest('.pip-node,.pip-term,path')) return;
+        pipSel = null; pipCloseMenu(); c.classList.add('panning');
+        const v = pipView(p), sx = e.clientX, sy = e.clientY, ox = v.x, oy = v.y;
+        const mv = ev => { v.x = ox + ev.clientX - sx; v.y = oy + ev.clientY - sy; pipApplyView(p); };
+        const up = () => { document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); c.classList.remove('panning'); pipRender(); };
+        document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
+    };
+    c.onwheel = e => { e.preventDefault(); const v = pipView(p), r = c.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top, k = Math.min(2, Math.max(.3, v.k * (e.deltaY < 0 ? 1.1 : 1 / 1.1))), f = k / v.k; v.x = mx - (mx - v.x) * f; v.y = my - (my - v.y) * f; v.k = k; pipApplyView(p); };
+    c.oncontextmenu = e => { const at = pipToWorld(p, e), free = pipAddable(p); pipMenu(e, 'Add agent here', free.map(a => [a.name, () => pipAddAgentNode(p, a, { x: at.x - 115, y: at.y - 20 })]).concat(free.length ? [] : [['(every agent is already here)', () => {}]]).concat([['Recenter', () => pipRecenter(p)]])); };
+    if (!pipHooked) {
+        pipHooked = true;
+        document.addEventListener('click', pipCloseMenu);
+        document.addEventListener('keydown', e => {
+            if (!['Delete', 'Backspace'].includes(e.key) || !pipD || !pipSel || /INPUT|TEXTAREA|SELECT/.test((e.target || {}).tagName || '')) return;
+            const tab = document.getElementById('tab-pipelines'); if (!tab || tab.style.display === 'none') return;
+            const p2 = pipCur(), n = pipNode(p2, pipSel); if (n) pipDelete(p2, n);
+        });
+    }
+}
+function pipInspector(p) {
+    const box = agEl('div'); box.className = 'pip-insp'; const n = pipNode(p, pipSel);
+    const dim = t => { const d = agEl('div', 'color:var(--text-dim);line-height:1.5;white-space:pre-wrap;margin-bottom:10px;', t); box.append(d); return d; };
+    const lab = t => box.append(agEl('label', '', t));
+    if (!n || n.type !== 'agent') {
+        dim(n ? (n.type === 'start' ? 'START carries the conversation history into the pipeline.' : 'END streams whatever arrives here to the user.') : 'Select an agent to see it.');
+        dim('Each {token} in a custom agent\'s prompt becomes an input port; wire any agent\'s output into it. The built-in Memory and Dialogue have fixed ports. A solid wire waits until the agent has finished; a streaming wire is planned but not run yet.');
+        return box;
+    }
+    const def = pipDef(n);
+    box.append(agEl('div', 'font-size:15px;font-weight:600;', n.agent));
+    lab('Runs on'); dim((def.serverName || '?') + ' · ' + (def.slotName || 'default slot'));
+    lab('Inputs'); dim(pipInputs(n).map(q => '{' + q + '}  ←  ' + ((p.edges.find(e => e.to === n.id && e.port === q) || {}).from ? (() => { const f = pipNode(p, p.edges.find(e => e.to === n.id && e.port === q).from); return f.type === 'start' ? 'conversation' : f.agent; })() : 'nothing') ).join('\n') || 'none');
+    lab('System prompt'); dim(((def.agentPrompt || '').slice(0, 300) + ((def.agentPrompt || '').length > 300 ? '…' : '')) || '(empty)');
+    const go = agEl('button', 'margin-right:8px;', 'Edit this agent'); go.className = 'agv-btn'; go.type = 'button'; go.onclick = () => { prSelected = 'agent:' + n.agent; switchTab('agents'); }; box.append(go);
+    const d = agEl('button', '', 'Remove from pipeline'); d.className = 'agv-btn'; d.type = 'button'; d.onclick = () => pipDelete(p, n); box.append(d);
+    return box;
+}
+
 var agIsDirty = false;
 async function loadAgents() {
-    const host = document.getElementById('agent-cards');
+    const host = document.getElementById('pr-editor');
     if (!agData || !agIsDirty) {
         host.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Loading…</span>';
         try {
@@ -4340,11 +4628,10 @@ async function loadAgents() {
         agData.shared.budgets     = agData.shared.budgets     || {};
         agData.shared.memoryAgent = agData.shared.memoryAgent || {};
         agIsDirty = false;
-        document.getElementById('ag-status').textContent = '';
     }
-    agRenderAgents();
     prRenderList();
     prRenderEditor();
+    pipLoad();
 }
 
 async function agSave() {

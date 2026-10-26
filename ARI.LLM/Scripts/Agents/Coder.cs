@@ -62,6 +62,18 @@ internal sealed class Coder : Agent
         s.ProjectRules      = rules;
     }
 
+    /// <summary>Makes sure this thread's system prompt carries the user's current coding conventions. They used to
+    /// arrive only with the desktop client's file-tree message, so a thread where that never came (or came without
+    /// them) coded with no conventions at all. Now the server's own copy is applied on every turn; the prompt only
+    /// changes — and re-prefills once — when the conventions file itself was edited.</summary>
+    internal void RefreshConventions(string threadKey, string? conventions)
+    {
+        string? text = string.IsNullOrWhiteSpace(conventions) ? null : conventions.Trim();
+        CodeThreadState s = GetOrCreateState(threadKey);
+        if (string.Equals(s.CodingConventions, text, StringComparison.Ordinal)) return;
+        s.CodingConventions = text;
+    }
+
     private static string BuildStaticContext(CodeThreadState s)
     {
         StringBuilder sb = new();
@@ -70,7 +82,8 @@ internal sealed class Coder : Agent
             if (string.IsNullOrWhiteSpace(body)) return;
             sb.Append("\n\n").Append(title).Append('\n').Append(body.Trim());
         }
-        Block("## Coding conventions", s.CodingConventions);
+        // Coding conventions are NOT here: they ride in the mode block (ModePromptFor), the last thing the model
+        // reads before it writes code, instead of sitting buried under the persona in the system prompt.
         Block("## Project rules",      s.ProjectRules);
         Block("## Project map",        s.ProjectMap);
         return sb.ToString();
@@ -110,9 +123,15 @@ internal sealed class Coder : Agent
     internal string? ModePromptFor(Thread thread)
     {
         PhaseConfig? phase = PhaseFor(thread);
-        return phase is null || phase.SystemPrompt.Length == 0
+        string? mode = phase is null || phase.SystemPrompt.Length == 0
             ? null
             : $"# Mode: {thread.Phase}\n{phase.SystemPrompt}";
+
+        string? conventions = GetOrCreateState(thread.Key).CodingConventions;
+        if (string.IsNullOrWhiteSpace(conventions)) return mode;
+
+        string block = $"# Coding conventions — every line you write or change must follow these\n{conventions}";
+        return mode is null ? block : $"{mode}\n\n{block}";
     }
 
     internal override SamplerSettings ResolveSampler(Thread thread)
@@ -182,7 +201,7 @@ internal sealed class Coder : Agent
     internal async Task<string> RunLoop(
         Thread parent, string threadKey, string prompt, string username,
         string? root, FileSnapshots snapshots, CancellationTokenSource cts, Func<string, Task>? onDelta,
-        bool remote = false)
+        bool remote = false, string? recallNotes = null, double? recallSeconds = null, string? contextSummary = null)
     {
         // The architect is a conversational coding agent driving its OWN tool loop: exploration (read-only) plus
         // two execution tools — spawn_coder (dispatch one edit) and build_project (verify). It infers whether a
@@ -300,6 +319,9 @@ internal sealed class Coder : Agent
             Username            = username,
             AugmentedPrompt     = handoff.Length > 0 ? $"{handoff}{prompt}" : null,
             ModeNudge           = modeNudge,
+            RecallNotes         = recallNotes,
+            RecallSeconds       = recallSeconds,
+            ContextSummary      = contextSummary,
             Ct                  = cts.Token,
             UserMessagePreadded = true,
             OnDelta             = onDelta,

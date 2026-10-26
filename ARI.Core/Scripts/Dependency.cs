@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using ARI.Common;
 using System.Diagnostics;
 using System.IO.Compression;
@@ -474,13 +475,12 @@ public class Dependency
         {
             using HttpClient hc = new() { Timeout = TimeSpan.FromSeconds(HEALTH_CHECK_TIMEOUT_SEC) };
             hc.DefaultRequestHeaders.UserAgent.ParseAdd("ARI-Server/1.0");
-            string json = await hc.GetStringAsync("https://api.github.com/repos/ggml-org/llama.cpp/releases/latest");
-            using JsonDocument doc = JsonDocument.Parse(json);
-            string latestTag = doc.RootElement.GetProperty("tag_name").GetString() ?? "";
+            JsonElement release = await FetchLatestRelease(hc);
+            string latestTag = release.GetProperty("tag_name").GetString() ?? "";
 
             cfg.LatestVersion = latestTag;
             cfg.UpdateAvailable = !string.IsNullOrEmpty(cfg.InstalledVersion)
-                && !cfg.InstalledVersion.Contains(latestTag);
+                && BuildNumber(latestTag) > BuildNumber(cfg.InstalledVersion);
             SaveConfig(cfg);
             Shared.LlamaCpp = cfg;
 
@@ -503,10 +503,9 @@ public class Dependency
         hc.DefaultRequestHeaders.UserAgent.ParseAdd("ARI-Server/1.0");
 
         Shared.Logger.LogInformation("Fetching latest llama.cpp release...");
-        string json = await hc.GetStringAsync("https://api.github.com/repos/ggml-org/llama.cpp/releases/latest");
-        using JsonDocument doc = JsonDocument.Parse(json);
+        JsonElement release = await FetchLatestRelease(hc);
 
-        (string? url, bool isTarGz) = SelectAsset(doc.RootElement.GetProperty("assets"));
+        (string? url, bool isTarGz) = SelectAsset(release.GetProperty("assets"));
         if (url is null)
             throw new Exception(
                 "No prebuilt llama.cpp binary matched this platform. " +
@@ -568,6 +567,31 @@ public class Dependency
     /// Selects the right prebuilt binary for this platform.
     /// macOS → Metal (built-in), Windows/Linux → Vulkan (works on Nvidia + AMD).
     /// </summary>
+    /// <summary>The newest release that carries a binary for this platform. releases/latest isn't enough:
+    /// upstream also tags asset-less milestone releases (v0.6.0) that GitHub marks as "latest", which would
+    /// leave a fresh install with nothing to download.</summary>
+    private static async Task<JsonElement> FetchLatestRelease(HttpClient hc)
+    {
+        string json = await hc.GetStringAsync("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=30");
+        using JsonDocument doc = JsonDocument.Parse(json);
+
+        foreach (JsonElement release in doc.RootElement.EnumerateArray())
+        {
+            JsonElement assets = release.GetProperty("assets");
+            if (assets.GetArrayLength() > 0 && SelectAsset(assets).Url is not null)
+                return release.Clone();
+        }
+
+        throw new Exception("No llama.cpp release with a binary for this platform was found.");
+    }
+
+    /// <summary>The build number inside a version string ("b11565", "version: 10305 (31558dbb7)"); 0 if none.</summary>
+    private static int BuildNumber(string version)
+    {
+        Match match = Regex.Match(version, @"\d{4,6}");
+        return match.Success ? int.Parse(match.Value) : 0;
+    }
+
     private static (string? Url, bool IsTarGz) SelectAsset(JsonElement assets)
     {
         string os   = OperatingSystem.IsWindows() ? "win" : OperatingSystem.IsMacOS() ? "macos" : "ubuntu";

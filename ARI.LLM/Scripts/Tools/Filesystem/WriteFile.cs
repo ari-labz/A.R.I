@@ -73,7 +73,7 @@ internal sealed class WriteFile : Tool
         return null;
     }
 
-    internal override Task<ToolResult> Execute(string argsJson) => fs.Write(argsJson).AsToolResult();
+    internal override Task<ToolResult> Execute(string argsJson) => fs.Write(argsJson).AsMutationResult();
 
     // Remember files created here so PreCheck lets ARI rewrite her own drafts later in the conversation.
     internal override ToolResult PostRun(Thread thread, string argsJson, ToolResult result)
