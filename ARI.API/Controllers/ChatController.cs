@@ -88,16 +88,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         return thread.OwnerId == callerId;
     }
 
-    /// <summary>Finds an existing user-facing thread (Dialogue or Code) by key.</summary>
+    /// <summary>Finds an existing live thread by key (user-facing or internal).</summary>
     private ARI.LLM.Thread? FindThread(string threadKey)
-    {
-        if (Llm is null) return null;
-        Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? t);
-        return t;
-    }
-
-    /// <summary>Finds any thread (including internal) by key.</summary>
-    private ARI.LLM.Thread? FindAnyThread(string threadKey)
     {
         if (Llm is null) return null;
         Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? t);
@@ -261,18 +253,14 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
         if (!CanAccessThread(thread)) return StatusCode(403);
 
-        List<ThreadItem> history = thread.History
-            .Where(i => i.IsVisible && i is not Response { State: State.Cancelled })
-            .ToList();
-
         return Ok(new
         {
             key           = threadKey,
             state         = expired ? "expired" : thread.State.ToString().ToLowerInvariant(),
             pipeline      = thread.Pipeline.ToString().ToLowerInvariant(),
             isInternal    = thread.Internal,
+            isProcessing  = !expired && Llm.IsThreadProcessing(threadKey),
             lastMessageAt = thread.LastMessageAt,
-            history,
         });
     }
 
@@ -383,14 +371,15 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
             }
             : (object)item;
 
-    [HttpGet("{threadKey}/history")]
-    public IActionResult GetHistory(string threadKey, [FromQuery] bool raw = false)
+    /// <summary>A thread's messages, oldest first. Cancelled responses are hidden unless <c>raw</c> is set; streaming
+    /// responses are included so watching clients can render the in-progress reply. A thread that has expired
+    /// (kept by Persistent Threads) is rebuilt just to be read.</summary>
+    [HttpGet("{threadKey}/messages")]
+    public IActionResult GetMessages(string threadKey, [FromQuery] bool raw = false)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
 
-        // Cancelled responses are hidden from normal view; streaming responses are included so
-        // watching clients can render the in-progress reply. Raw view keeps everything.
-        ARI.LLM.Thread? histThread = raw ? FindAnyThread(threadKey) : FindThread(threadKey);
+        ARI.LLM.Thread? histThread = FindThread(threadKey) ?? Llm.LoadPersistedForView(threadKey);
         if (histThread is not null && !CanAccessThread(histThread)) return StatusCode(403);
         List<ThreadItem> items = raw
             ? (histThread?.History ?? new())
@@ -411,13 +400,6 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         string log = string.Join("\n\n", items.Select(i => i.ToString()));
         byte[] bytes = Encoding.UTF8.GetBytes(log);
         return File(bytes, "text/plain", $"ari-{threadKey}-{DateTime.Now:yyyyMMdd-HHmm}.txt");
-    }
-
-    [HttpGet("{threadKey}/status")]
-    public IActionResult GetThreadStatus(string threadKey)
-    {
-        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
-        return Ok(new { isProcessing = Llm.IsThreadProcessing(threadKey) });
     }
 
     /// <summary>
@@ -929,14 +911,6 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         return Ok();
     }
 
-    [HttpDelete("{threadKey}/processing")]
-    public IActionResult CancelProcessing(string threadKey)
-    {
-        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
-        Llm.Cancel(threadKey);
-        return Ok();
-    }
-
     /// <summary>Esc = stop. Cancels the in-flight turn but PRESERVES the partial work (thinking + partial
     /// reply/tools) so nothing is lost — the user's next message is a fresh turn.</summary>
     [HttpPost("{threadKey}/interrupt")]
@@ -949,7 +923,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
     /// <summary>Mid-turn message = "stop and read this, then continue". The turn keeps running; the message is
     /// folded into Ari's current chain of thought. Returns 409 if the thread isn't streaming (send normally).</summary>
-    [HttpPost("{threadKey}/interject")]
+    [HttpPost("{threadKey}/interjections")]
     public IActionResult Interject(string threadKey, [FromBody] InterjectRequest body)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
@@ -970,7 +944,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         return closed ? Ok() : NotFound();
     }
 
-    [HttpPost("{threadKey}/stream")]
+    [HttpPost("{threadKey}/messages")]
     public async Task Stream(string threadKey, [FromBody] StreamRequest body, CancellationToken cancellationToken)
     {
         string prompt = body?.Prompt ?? string.Empty;
