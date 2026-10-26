@@ -3921,6 +3921,38 @@ function freshServerDraft() {
 function srvStatusColor(s) {
     return { Online:cv('--col-control-panel-line-3727-colour'), Starting:cv('--col-control-panel-line-3727-colour-2'), Stopping:cv('--col-control-panel-line-3727-colour-2'), Offline:cv('--col-control-panel-line-3727-colour-3') }[s] ?? cv('--col-control-panel-line-3727-colour-3');
 }
+// While a server is downloading its model it reports status "Starting", which on its own looks stuck for
+// the whole download. Show what is actually happening, with a bar, until llama-server begins loading.
+function srvBadgeText(server) { return server.download ? 'Downloading model' : server.status; }
+function srvShownStatus(server) { return server.download && server.status === 'Offline' ? 'Starting' : server.status; }
+
+function srvFmtBytes(b) { return b >= 1073741824 ? (b / 1073741824).toFixed(1) + ' GB' : (b / 1048576).toFixed(0) + ' MB'; }
+
+function srvFmtEta(sec) {
+    if (!isFinite(sec) || sec <= 0) return '';
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+    return h > 0 ? `${h}h ${m}m left` : m > 0 ? `${m}m left` : 'under a minute left';
+}
+
+function srvDownloadStrip(server) {
+    const d = server.download;
+    if (!d) return null;
+    const pct = d.totalBytes > 0 ? Math.min(100, d.doneBytes * 100 / d.totalBytes) : 0;
+    const speed = d.bytesPerSec > 0 ? `${srvFmtBytes(d.bytesPerSec)}/s` : 'measuring speed…';
+    const eta = d.bytesPerSec > 0 && d.totalBytes > 0 ? srvFmtEta((d.totalBytes - d.doneBytes) / d.bytesPerSec) : '';
+    const wrap = agEl('div', 'padding:0 14px 12px;');
+    wrap.className = 'srv-dl';
+    const bar = agEl('div', 'height:6px;border-radius:3px;background:var(--border);overflow:hidden;');
+    bar.append(agEl('div', `height:100%;width:${pct.toFixed(1)}%;background:var(--accent, #4a9aa8);border-radius:3px;`));
+    const total = d.totalBytes > 0 ? ` of ${srvFmtBytes(d.totalBytes)}` : '';
+    const line = agEl('div', 'display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--text-dim);margin-top:6px;font-variant-numeric:tabular-nums;',
+        `${d.file} · ${pct.toFixed(0)}% · ${srvFmtBytes(d.doneBytes)}${total}`);
+    line.append(agEl('span', '', [speed, eta].filter(Boolean).join(' · ')));
+    const note = agEl('div', 'font-size:11px;color:var(--text-dim);margin-top:4px;', 'Restarting ARI during a download discards what has been downloaded so far.');
+    wrap.append(bar, line, note);
+    return wrap;
+}
+
 function srvStatusBg(s) {
     return { Online:cv('--col-control-panel-line-3730-colour'), Starting:cv('--col-control-panel-line-3730-colour-2'), Stopping:cv('--col-control-panel-line-3730-colour-2'), Offline:cv('--col-control-panel-line-3730-colour-3') }[s] ?? cv('--col-control-panel-line-3730-colour-3');
 }
@@ -4391,7 +4423,7 @@ async function loadServers() {
     srvAllModels = data.models ?? [];
     renderServerCards(data.servers ?? []);
     clearTimeout(srvPollTimer);
-    const hasTransient = (data.servers ?? []).some(s => s.status === 'Starting' || s.status === 'Stopping');
+    const hasTransient = (data.servers ?? []).some(s => s.status === 'Starting' || s.status === 'Stopping' || s.download);
     srvPollTimer = setTimeout(loadServers, hasTransient ? 1500 : 6000);
 }
 
@@ -4447,10 +4479,13 @@ function patchServerCardHeader(cardEl, server) {
     const refs = cardEl._srvRefs;
     if (!refs || !server) return;
     const isOnline  = server.status === 'Online';
-    const isOffline = server.status === 'Offline';
-    refs.badge.textContent = server.status;
-    refs.badge.style.background = srvStatusBg(server.status);
-    refs.badge.style.color      = srvStatusColor(server.status);
+    const isOffline = srvShownStatus(server) === 'Offline';
+    refs.badge.textContent = srvBadgeText(server);
+    cardEl.querySelector('.srv-dl')?.remove();
+    const dlStrip = srvDownloadStrip(server);
+    if (dlStrip) cardEl.firstElementChild.after(dlStrip);
+    refs.badge.style.background = srvStatusBg(srvShownStatus(server));
+    refs.badge.style.color      = srvStatusColor(srvShownStatus(server));
     refs.startBtn.disabled = !isOffline;
     refs.startBtn.style.cssText = 'font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid;cursor:pointer;' + (isOffline ? 'background:var(--col-control-panel-line-4158-background);border-color:var(--col-control-panel-line-4158-border);color:var(--col-control-panel-line-4158-text);' : 'background:transparent;border-color:var(--border,var(--col-control-panel-line-4158-colour));color:var(--text-dim);opacity:.5;');
     refs.stopBtn.disabled = !isOnline;
@@ -4472,11 +4507,11 @@ function buildServerCard(server) {
     const draft = srvDrafts[id];
 
     const isOnline  = server?.status === 'Online';
-    const isOffline = !server || server.status === 'Offline';
+    const isOffline = !server || srvShownStatus(server) === 'Offline';
 
     const headerRight = agEl('div', 'display:flex;align-items:center;gap:8px;');
     if (!isNew) {
-        const badge = agEl('span', `font-size:11px;font-weight:600;border-radius:20px;padding:2px 10px;background:${srvStatusBg(server.status)};color:${srvStatusColor(server.status)};`, server.status);
+        const badge = agEl('span', `font-size:11px;font-weight:600;border-radius:20px;padding:2px 10px;background:${srvStatusBg(srvShownStatus(server))};color:${srvStatusColor(srvShownStatus(server))};`, srvBadgeText(server));
         headerRight.append(badge);
         const startBtn = agEl('button', 'font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid;cursor:pointer;' + (isOffline ? 'background:var(--col-control-panel-line-4184-background);border-color:var(--col-control-panel-line-4184-border);color:var(--col-control-panel-line-4184-text);' : 'background:transparent;border-color:var(--border,var(--col-control-panel-line-4184-colour));color:var(--text-dim);opacity:.5;'), 'Start');
         startBtn.disabled = !isOffline;
@@ -4493,6 +4528,7 @@ function buildServerCard(server) {
     const sec = agSection(isNew ? 'New server' : server.name, { right: headerRight });
     sec.card.style.marginTop = '0';
     if (expanded) { sec.body.style.display = ''; sec.head.querySelector('span').textContent = '▼'; }
+    if (!isNew) { const dlStrip = srvDownloadStrip(server); if (dlStrip) sec.card.firstElementChild.after(dlStrip); }
     if (!isNew) sec.card._srvRefs = { badge: headerRight.children[0], startBtn: headerRight.children[1], stopBtn: headerRight.children[2], restartBtn: headerRight.children[3] };
 
     if (expanded) renderServerCardBody(sec.body, draft, server, isNew);

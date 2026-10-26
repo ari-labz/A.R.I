@@ -1469,9 +1469,11 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
         {
             ServerStatus status = llm?.Servers.FirstOrDefault(r => r.Id == s.Id)?.Status ?? ServerStatus.Offline;
             Model?    active = llm?.Servers.FirstOrDefault(r => r.Id == s.Id)?.ActiveModel;
+            DownloadProgress? dl = llm?.Servers.FirstOrDefault(r => r.Id == s.Id)?.Download;
             return new
             {
                 id              = s.Id,
+                download        = dl is null ? null : new { file = dl.File, doneBytes = dl.DoneBytes, totalBytes = dl.TotalBytes, bytesPerSec = dl.BytesPerSec },
                 name            = s.Name,
                 status          = status.ToString(),
                 activeModelName = active?.Name,
