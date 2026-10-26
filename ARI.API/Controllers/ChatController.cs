@@ -569,7 +569,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
           "application/vnd.openxmlformats-officedocument.presentationml.presentation",
           "application/msword", "application/vnd.ms-excel", "application/vnd.ms-powerpoint" };
 
-    [HttpPost("{threadKey}/attachments")]
+    [HttpPost("{threadKey}/files")]
     [DisableRequestSizeLimit]
     public async Task<IActionResult> AddAttachment(string threadKey, IFormFile file)
     {
@@ -657,22 +657,22 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         fullName.Contains("/.vs/",        StringComparison.OrdinalIgnoreCase) ||
         fullName.StartsWith("__MACOSX/",  StringComparison.OrdinalIgnoreCase);
 
-    [HttpDelete("{threadKey}/attachments/{name}")]
-    public IActionResult RemoveAttachment(string threadKey, string name)
+    [HttpDelete("{threadKey}/files")]
+    public IActionResult RemoveFile(string threadKey, [FromQuery] string path)
     {
-        // Remove from pending message attachments if present (per-message images staged before send).
-        if (pendingMessageAttachments.TryGetValue(threadKey, out List<Attachment>? msgList))
-            msgList.RemoveAll(a => a.Name == name);
+        if (string.IsNullOrWhiteSpace(path)) return BadRequest("path is required.");
 
-        // Remove from disk if present.
-        string fileRoot = FindThread(threadKey)?.FilesystemRoot ?? Paths.ScratchpadDir(threadKey);
-        string path     = Path.Combine(fileRoot, name);
-        if (System.IO.File.Exists(path)) System.IO.File.Delete(path);
+        string rootAbs = Path.GetFullPath(FindThread(threadKey)?.FilesystemRoot ?? Paths.ScratchpadDir(threadKey));
+        string absPath = Path.GetFullPath(Path.Combine(rootAbs, path));
+        // The trailing separator matters: without it "/x/Foo" would also accept "/x/Foo-secret/...".
+        if (!absPath.StartsWith(rootAbs.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            return BadRequest("Access denied.");
 
+        if (System.IO.File.Exists(absPath)) System.IO.File.Delete(absPath);
         return Ok();
     }
 
-    [HttpGet("{threadKey}/attachments")]
+    [HttpGet("{threadKey}/files")]
     public IActionResult GetAttachments(string threadKey)
     {
         static bool IsImageExt(string ext) => ext is ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp";
@@ -680,7 +680,6 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         // All thread files live on disk (scratchpad or project dir).
         string scratchpad = Paths.ScratchpadDir(threadKey);
         string fileRoot   = FindThread(threadKey)?.FilesystemRoot ?? scratchpad;
-        bool   isInScratchpad = fileRoot.StartsWith(Path.GetFullPath(scratchpad), StringComparison.OrdinalIgnoreCase);
 
         IEnumerable<object> diskFiles = Directory.Exists(fileRoot)
             ? Directory.GetFiles(fileRoot, "*", SearchOption.AllDirectories)
@@ -689,10 +688,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
                            string rel = Path.GetRelativePath(fileRoot, p);
                            string ext = Path.GetExtension(p).ToLowerInvariant();
                            bool isImg = IsImageExt(ext);
-                           // Scratchpad files are served via /scratchpad/{name}; project files via /file?path=...
-                           string url = isInScratchpad && !rel.Contains(Path.DirectorySeparatorChar)
-                               ? $"/threads/{Uri.EscapeDataString(threadKey)}/scratchpad/{Uri.EscapeDataString(rel)}"
-                               : $"/threads/{Uri.EscapeDataString(threadKey)}/file?path={Uri.EscapeDataString(rel)}";
+                           string url = $"/api/v1/threads/{Uri.EscapeDataString(threadKey)}/files/content?path={Uri.EscapeDataString(rel)}";
                            return (object)new { Name = rel, Url = url, IsImage = isImg };
                        })
             : Enumerable.Empty<object>();
@@ -702,7 +698,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
     // ── Promote scratchpad to project ──────────────────────────────────────────
 
-    [HttpPost("{threadKey}/promote-to-project")]
+    [HttpPost("{threadKey}/promote")]
     public IActionResult PromoteToProject(string threadKey, [FromBody] PromoteToProjectRequest req)
     {
         if (string.IsNullOrWhiteSpace(req?.Name))
@@ -746,7 +742,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
     // ── Message Attachments (ephemeral — cleared after send) ────────────────────
 
-    [HttpPost("{threadKey}/message-attachments")]
+    [HttpPost("{threadKey}/messageAttachments")]
     [DisableRequestSizeLimit]
     public async Task<IActionResult> AddMessageAttachment(string threadKey, IFormFile file)
     {
@@ -799,7 +795,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         return Ok(new { id = attachment.Id, name = fileName, isImage, mimeType = mime, content, promoted = false });
     }
 
-    [HttpDelete("{threadKey}/message-attachments/{id}")]
+    [HttpDelete("{threadKey}/messageAttachments/{id}")]
     public IActionResult RemoveMessageAttachment(string threadKey, string id)
     {
         if (pendingMessageAttachments.TryGetValue(threadKey, out List<Attachment>? list))
@@ -807,7 +803,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         return Ok();
     }
 
-    [HttpGet("{threadKey}/message-attachments")]
+    [HttpGet("{threadKey}/messageAttachments")]
     public IActionResult GetMessageAttachments(string threadKey)
     {
         List<Attachment> staged = pendingMessageAttachments.TryGetValue(threadKey, out List<Attachment>? list) ? list : new();
@@ -821,8 +817,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     /// clipboard-pasted image used to be called "image.png") and name alone would always resolve to
     /// whichever message happened to appear first in the thread.
     /// </summary>
-    [HttpGet("{threadKey}/msg-attachment")]
-    public IActionResult GetMessageAttachmentContent(string threadKey, [FromQuery] string id)
+    [HttpGet("{threadKey}/messageAttachments/{id}")]
+    public IActionResult GetMessageAttachmentContent(string threadKey, string id)
     {
         if (Llm is null) return StatusCode(503);
 
@@ -841,12 +837,12 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     }
 
     /// <summary>
-    /// Serves a file ARI delivered (via the deliver_file tool) as a download. The file lives in the
-    /// thread's file root — its bound project dir or its scratchpad — and is resolved by the relative
-    /// path from the download card. Path traversal outside the root is refused.
+    /// Serves one of the thread's files, by its path inside the thread's folder (its bound project, or its
+    /// scratchpad). Pictures and video come back as themselves so they can be shown in the page; anything else
+    /// comes back as a download. A path that leaves the folder is refused.
     /// </summary>
-    [HttpGet("{threadKey}/file")]
-    public IActionResult GetDeliveredFile(string threadKey, [FromQuery] string path)
+    [HttpGet("{threadKey}/files/content")]
+    public IActionResult GetFileContent(string threadKey, [FromQuery] string path)
     {
         if (Llm is null) return StatusCode(503);
         if (string.IsNullOrWhiteSpace(path)) return BadRequest("path is required.");
@@ -859,31 +855,11 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
             return BadRequest("Access denied.");
         if (!System.IO.File.Exists(absPath)) return NotFound();
 
-        return PhysicalFile(absPath, "application/octet-stream", Path.GetFileName(absPath));
-    }
-
-    /// <summary>
-    /// Serves a file from a thread's scratchpad for inline display (images, etc.).
-    /// Only files directly inside the scratchpad root are accessible — no subdirectory traversal.
-    /// </summary>
-    [HttpGet("{threadKey}/scratchpad/{filename}")]
-    public IActionResult GetScratchpadFile(string threadKey, string filename)
-    {
-        if (string.IsNullOrWhiteSpace(filename) || filename.Contains('/') || filename.Contains('\\'))
-            return BadRequest("Invalid filename.");
-
-        string dir     = Path.GetFullPath(Paths.ScratchpadDir(threadKey)).TrimEnd(Path.DirectorySeparatorChar);
-        string absPath = Path.GetFullPath(Path.Combine(dir, filename));
-
-        // Verify the resolved path is still inside the scratchpad dir (belt-and-suspenders).
-        if (!absPath.StartsWith(dir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-            return BadRequest("Access denied.");
-
-        if (!System.IO.File.Exists(absPath)) return NotFound();
-
-        string ext  = Path.GetExtension(filename).TrimStart('.').ToLowerInvariant();
-        string mime = ext switch { "png" => "image/png", "jpg" or "jpeg" => "image/jpeg", "gif" => "image/gif", "webp" => "image/webp", "mp4" => "video/mp4", "webm" => "video/webm", _ => "application/octet-stream" };
-        return PhysicalFile(absPath, mime);
+        string ext = Path.GetExtension(absPath).TrimStart('.').ToLowerInvariant();
+        string? shownAs = ext switch { "png" => "image/png", "jpg" or "jpeg" => "image/jpeg", "gif" => "image/gif", "webp" => "image/webp", "mp4" => "video/mp4", "webm" => "video/webm", _ => null };
+        return shownAs is not null
+            ? PhysicalFile(absPath, shownAs)
+            : PhysicalFile(absPath, "application/octet-stream", Path.GetFileName(absPath));
     }
 
     /// <summary>

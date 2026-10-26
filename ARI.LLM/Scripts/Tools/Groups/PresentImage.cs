@@ -77,7 +77,7 @@ internal sealed class PresentImage : Tool
         shownFilename  = filename;
         shownThreadKey = boundThread.Key;
 
-        string url = $"/threads/{Uri.EscapeDataString(boundThread.Key)}/scratchpad/{Uri.EscapeDataString(filename)}";
+        string url = $"/api/v1/threads/{Uri.EscapeDataString(boundThread.Key)}/files/content?path={Uri.EscapeDataString(filename)}";
         boundThread.RaiseScratchpadFileReady(url);
 
         return $"'{filename}' has been shown to the user.";
