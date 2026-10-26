@@ -129,10 +129,14 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
         string? header = ctx.Request.Headers.Authorization;
         if (header is not null && header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
             return header["Bearer ".Length..].Trim();
-        // EventSource and WebSocket connections cannot set custom headers — accept token as query param.
-        string? queryToken = ctx.Request.Query["token"];
-        if (!string.IsNullOrEmpty(queryToken))
-            return queryToken;
+        // EventSource, WebSocket, <img> and download links cannot set custom headers, so a read (GET) may carry the
+        // token in the address. Anything that changes data may not: addresses end up in logs and browser history.
+        if (HttpMethods.IsGet(ctx.Request.Method))
+        {
+            string? queryToken = ctx.Request.Query["token"];
+            if (!string.IsNullOrEmpty(queryToken))
+                return queryToken;
+        }
         // Browsers keep the session in a cookie, so a fresh tab (or a direct hit on
         // /controlpanel.html) is still signed in without passing the token around.
         string? cookieToken = ctx.Request.Cookies[AuthCookie.Name];
