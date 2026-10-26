@@ -4,12 +4,12 @@ using Microsoft.AspNetCore.Mvc;
 namespace ARI.API.Controllers;
 
 /// <summary>Control-panel endpoints for the Discord integration.</summary>
-[Route("api/v1/admin/discord")]
+[Route("api/v1/admin/integrations/discord")]
 [ApiController]
 public class DiscordController : ControllerBase
 {
     /// <summary>Deletes every message ARI sent in the last 24 hours.</summary>
-    [HttpPost("delete-recent")]
+    [HttpPost("deleteRecent")]
     public async Task<IActionResult> DeleteRecent()
     {
         if (Modules.Discord is null) return BadRequest(new { message = "Discord is not available." });
@@ -18,7 +18,7 @@ public class DiscordController : ControllerBase
     }
 
     /// <summary>Current settings. The token is never returned — only whether one is set.</summary>
-    [HttpGet("config")]
+    [HttpGet]
     public IActionResult GetConfig()
     {
         DiscordSettings s = DiscordStore.Get();
@@ -33,24 +33,29 @@ public class DiscordController : ControllerBase
         });
     }
 
-    /// <summary>Saves settings. A blank token leaves the stored one alone, so the panel never has to
-    /// hold it to save anything else. Takes effect on restart.</summary>
-    [HttpPut("config")]
+    /// <summary>Changes settings; send only what changes (a list that is sent replaces the whole list). A blank
+    /// token leaves the stored one alone, so the panel never has to hold it to save anything else. Takes effect on restart.</summary>
+    [HttpPatch]
     public IActionResult SetConfig([FromBody] DiscordConfigRequest req)
     {
         DiscordSettings current = DiscordStore.Get();
 
-        if (!TryIds(req.WhitelistedUserIds, out List<ulong> users))    return BadRequest(new { error = "Whitelisted user IDs must be numeric." });
-        if (!TryIds(req.WatchedChannelIds,  out List<ulong> channels)) return BadRequest(new { error = "Watched channel IDs must be numeric." });
-        if (!TryIds(req.AllowedGuildIds,    out List<ulong> guilds))   return BadRequest(new { error = "Guild IDs must be numeric." });
+        List<ulong> users = current.WhitelistedUserIds, channels = current.WatchedChannelIds, guilds = current.AllowedGuildIds;
+        if (req.WhitelistedUserIds is not null && !TryIds(req.WhitelistedUserIds, out users)) return BadRequest(new { error = "Whitelisted user IDs must be numeric." });
+        if (req.WatchedChannelIds  is not null && !TryIds(req.WatchedChannelIds,  out channels)) return BadRequest(new { error = "Watched channel IDs must be numeric." });
+        if (req.AllowedGuildIds    is not null && !TryIds(req.AllowedGuildIds,    out guilds)) return BadRequest(new { error = "Guild IDs must be numeric." });
 
-        ulong masterDiscordId = 0;
-        if (!string.IsNullOrWhiteSpace(req.MasterDiscordId) && !ulong.TryParse(req.MasterDiscordId.Trim(), out masterDiscordId))
-            return BadRequest(new { error = "Master's Discord ID must be numeric." });
+        ulong masterDiscordId = current.MasterDiscordId;
+        if (req.MasterDiscordId is not null)
+        {
+            masterDiscordId = 0;
+            if (!string.IsNullOrWhiteSpace(req.MasterDiscordId) && !ulong.TryParse(req.MasterDiscordId.Trim(), out masterDiscordId))
+                return BadRequest(new { error = "Master's Discord ID must be numeric." });
+        }
 
         DiscordStore.Set(new DiscordSettings
         {
-            Enabled            = req.Enabled,
+            Enabled            = req.Enabled ?? current.Enabled,
             Token              = string.IsNullOrWhiteSpace(req.Token) ? current.Token : req.Token.Trim(),
             MasterDiscordId    = masterDiscordId,
             WhitelistedUserIds = users,
@@ -77,7 +82,7 @@ public class DiscordController : ControllerBase
 // IDs travel as strings: they are 64-bit snowflakes and JavaScript numbers lose precision above 2^53.
 public sealed class DiscordConfigRequest
 {
-    public bool Enabled { get; set; }
+    public bool? Enabled { get; set; }
     public string? Token { get; set; }
     public string? MasterDiscordId { get; set; }
     public List<string>? WhitelistedUserIds { get; set; }

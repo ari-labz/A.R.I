@@ -2838,7 +2838,7 @@ document.getElementById('discord-delete-btn').addEventListener('click', async (e
     const s = document.getElementById('discord-status');
     btn.disabled = true; s.textContent = 'Deleting…';
     try {
-        const r = await cpFetch('/api/v1/admin/discord/delete-recent', { method: 'POST' });
+        const r = await cpFetch('/api/v1/admin/integrations/discord/deleteRecent', { method: 'POST' });
         const d = await r.json();
         s.textContent = d.message || (r.ok ? 'Done.' : 'Failed.');
     } catch { s.textContent = 'Delete failed.'; }
@@ -2857,7 +2857,7 @@ var dcState = null;
 async function loadDiscord() {
     const host = document.getElementById('dc-lists');
     try {
-        const r = await cpFetch('/api/v1/admin/discord/config');
+        const r = await cpFetch('/api/v1/admin/integrations/discord');
         if (!r.ok) throw new Error();
         dcState = await r.json();
     } catch {
@@ -2970,8 +2970,8 @@ document.getElementById('dc-save').addEventListener('click', async e => {
 
     btn.disabled = true; s.textContent = 'Saving…';
     try {
-        const r = await cpFetch('/api/v1/admin/discord/config', {
-            method: 'PUT',
+        const r = await cpFetch('/api/v1/admin/integrations/discord', {
+            method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
         });
@@ -2994,7 +2994,7 @@ async function loadGitHub() {
     document.getElementById('gh-code-box').style.display = 'none';
     ghSetStatus('', false);
     try {
-        const r = await cpFetch('/api/v1/admin/github/config');
+        const r = await cpFetch('/api/v1/admin/integrations/github');
         if (!r.ok) throw new Error();
         const d = await r.json();
         document.getElementById('gh-client-id').value = d.clientId || '';
@@ -3012,8 +3012,8 @@ document.getElementById('gh-commit-as').addEventListener('change', async e => {
     const status = document.getElementById('gh-commit-as-status');
     status.textContent = 'Saving…';
     try {
-        const r = await cpFetch('/api/v1/admin/github/commit-as', {
-            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        const r = await cpFetch('/api/v1/admin/integrations/github', {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ commitAs: e.currentTarget.value }),
         });
         status.textContent = r.ok ? 'Saved.' : 'Save failed.';
@@ -3028,8 +3028,8 @@ function ghSetStatus(text, isError) {
 }
 
 async function ghSaveClientId(clientId) {
-    const r = await cpFetch('/api/v1/admin/github/client-id', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    const r = await cpFetch('/api/v1/admin/integrations/github', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ clientId }),
     });
     const d = await r.json().catch(() => ({}));
@@ -3060,7 +3060,7 @@ document.getElementById('gh-connect-btn').addEventListener('click', async e => {
         if (!ok) { ghSetStatus(error || 'Failed to save Client ID.', true); return; }
 
         ghSetStatus('Starting…', false);
-        const r = await cpFetch('/api/v1/admin/github/connect', { method: 'POST' });
+        const r = await cpFetch('/api/v1/admin/integrations/github/connection', { method: 'POST' });
         const d = await r.json().catch(() => ({}));
         if (!r.ok) { ghSetStatus(d.error || 'Failed to start.', true); return; }
         ghSetStatus('', false);
@@ -3077,7 +3077,7 @@ document.getElementById('gh-connect-btn').addEventListener('click', async e => {
 async function pollGhConnect() {
     let d;
     try {
-        const r = await cpFetch('/api/v1/admin/github/connect/status');
+        const r = await cpFetch('/api/v1/admin/integrations/github/connection');
         if (!r.ok) return;
         d = await r.json();
     } catch { return; }
@@ -3105,7 +3105,7 @@ document.getElementById('gh-disconnect').addEventListener('click', async e => {
     const btn = e.currentTarget;
     btn.disabled = true;
     try {
-        await cpFetch('/api/v1/admin/github/disconnect', { method: 'POST' });
+        await cpFetch('/api/v1/admin/integrations/github/connection', { method: 'DELETE' });
         await loadGitHub();
     } finally { btn.disabled = false; }
 });
