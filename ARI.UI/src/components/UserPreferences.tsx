@@ -99,7 +99,7 @@ export default function UserPreferences({ user, onClose, onLogout, onUserUpdated
 
     async function savePassword(e: React.FormEvent) {
         e.preventDefault()
-        if (newPw.length < 5) { setPwError("At least 5 characters required."); return }
+        if (newPw.length < 8) { setPwError("At least 8 characters required."); return }
         if (newPw !== confirmPw) { setPwError("Passwords do not match."); return }
         setPwError(null)
         setPwLoading(true)

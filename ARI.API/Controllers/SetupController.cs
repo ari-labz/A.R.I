@@ -43,8 +43,8 @@ public class SetupController(UserStore users, AuthService auth, PersistentData p
         }
 
         string name = (req.Username ?? "").Trim();
-        if (name.Length < 2 || name.Length > 40) return BadRequest(new { error = "Choose a username between 2 and 40 characters." });
-        if ((req.Password ?? "").Length < 8)     return BadRequest(new { error = "Password must be at least 8 characters." });
+        if (AccountRules.CheckUsername(name) is { } usernameProblem) return BadRequest(new { error = usernameProblem });
+        if (AccountRules.CheckPassword(req.Password) is { } passwordProblem) return BadRequest(new { error = passwordProblem });
 
         User user = users.CreateUser(name, AuthService.HashPassword(req.Password!), "Admin", name);
         users.SetPassword(user.Id, user.PasswordHash, mustChange: false);

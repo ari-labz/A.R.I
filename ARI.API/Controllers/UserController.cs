@@ -57,10 +57,8 @@ public class UserController(UserStore users) : ControllerBase
             return BadRequest(new { error = "Current password is incorrect." });
 
         string name = req.NewUsername.Trim();
-        if (name.Length < 2)   return BadRequest(new { error = "Username must be at least 2 characters." });
-        if (name.Length > 40)  return BadRequest(new { error = "Username must be 40 characters or fewer." });
-        if (!System.Text.RegularExpressions.Regex.IsMatch(name, @"^[a-zA-Z0-9_\-\.]+$"))
-            return BadRequest(new { error = "Username may only contain letters, numbers, underscores, hyphens, and dots." });
+        if (AccountRules.CheckUsername(name) is { } usernameProblem)
+            return BadRequest(new { error = usernameProblem });
 
         if (!users.SetUsername(id, name))
             return Conflict(new { error = "That username is already taken." });

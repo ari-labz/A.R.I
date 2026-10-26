@@ -3189,7 +3189,7 @@ document.getElementById('nu-create-btn').addEventListener('click', async () => {
     const password = document.getElementById('nu-password').value;
     const role     = document.getElementById('nu-role').value;
     if (!username) { status.textContent = 'Username is required.'; return; }
-    if (password.length < 6) { status.textContent = 'Password must be at least 6 characters.'; return; }
+    if (password.length < 8) { status.textContent = 'Password must be at least 8 characters.'; return; }
     status.textContent = 'Creating…';
     try {
         const r = await cpFetch('/admin/users', {
@@ -3258,7 +3258,7 @@ document.getElementById('um-refresh-btn').addEventListener('click', loadUserMana
 document.getElementById('um-reset-save').addEventListener('click', async () => {
     const status = document.getElementById('um-reset-status');
     const pw = document.getElementById('um-reset-pw').value;
-    if (pw.length < 6) { status.textContent = 'Password must be at least 6 characters.'; return; }
+    if (pw.length < 8) { status.textContent = 'Password must be at least 8 characters.'; return; }
     status.textContent = 'Saving…';
     try {
         const r = await cpFetch(`/admin/users/${umResetUserId}/reset-password`, {
