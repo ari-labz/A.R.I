@@ -553,7 +553,7 @@ public class Thread
     {
         if (State is not (ThreadState.Inactive or ThreadState.Unread)) return;
         State = ThreadState.Dormant;
-        Shared.Logger.LogInformation("[Thread] ({ThreadKey}) dormant — running Engram; deletion in {Min}m.", threadKey, DORMANT_TO_DELETE_MIN);
+        Shared.Logger.LogInformation("[Thread] ({ThreadKey}) dormant; deletion in {Min}m.", threadKey, DORMANT_TO_DELETE_MIN);
         BecameDormant?.Invoke();   // Engram runs here; handler marks EngramProcessed when there's nothing to save
         dormantTimer?.Dispose();
         dormantTimer = new Timer(_ => Delete(), null, TimeSpan.FromMinutes(DORMANT_TO_DELETE_MIN), Timeout.InfiniteTimeSpan);

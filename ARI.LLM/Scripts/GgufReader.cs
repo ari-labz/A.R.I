@@ -63,6 +63,49 @@ public static class GgufReader
         return null;
     }
 
+    /// <summary>True when the model has a built-in multi-token-prediction head: its header carries
+    /// <c>&lt;arch&gt;.nextn_predict_layers</c> greater than zero (the extra layer's tensors are named <c>blk.N.nextn.*</c>).
+    /// The architecture keys are written before the tokenizer's, so the scan stops at the first tokenizer key rather
+    /// than reading the whole vocabulary.</summary>
+    public static bool HasMtpHead(string path)
+    {
+        try
+        {
+            using FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            return HasMtpHead(fs);
+        }
+        catch { return false; }
+    }
+
+    public static bool HasMtpHead(Stream fs)
+    {
+        try
+        {
+            using BinaryReader br = new BinaryReader(fs, Encoding.UTF8, leaveOpen: true);
+
+            if (br.ReadUInt32() != MagicGGUF) return false;
+            uint version = br.ReadUInt32();
+            if (version is < 1 or > 3) return false;
+
+            _ = version >= 2 ? (long)br.ReadUInt64() : br.ReadUInt32(); // tensor count
+            long metaKvCount = version >= 2 ? (long)br.ReadUInt64() : br.ReadUInt32();
+
+            for (long i = 0; i < metaKvCount; i++)
+            {
+                string key = ReadString(br);
+                if (key.StartsWith("tokenizer.", StringComparison.Ordinal)) return false;
+                GgufValueType vtype = (GgufValueType)br.ReadUInt32();
+                object value = ReadValue(br, vtype);
+
+                if (key.EndsWith(".nextn_predict_layers", StringComparison.Ordinal))
+                    return (ToInt(value) ?? 0) > 0;
+            }
+        }
+        catch { /* corrupt / truncated file */ }
+
+        return false;
+    }
+
     /// <summary>Reads the embedded <c>tokenizer.chat_template</c> string, or null if absent/unreadable.
     /// Used to detect features the template branches on (e.g. reasoning_effort).</summary>
     public static string? TryReadChatTemplate(string path)

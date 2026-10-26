@@ -59,9 +59,12 @@ public class ModelsController(PersistentData persistentData) : ControllerBase
         {
             ServerStatus status = llm?.Servers.FirstOrDefault(r => r.Id == s.Id)?.Status ?? ServerStatus.Offline;
             Model?    active = llm?.Servers.FirstOrDefault(r => r.Id == s.Id)?.ActiveModel;
+            DownloadProgress? dl = llm?.Servers.FirstOrDefault(r => r.Id == s.Id)?.Download;
             return new
             {
                 id              = s.Id,
+                startError      = llm?.Servers.FirstOrDefault(r => r.Id == s.Id)?.StartError,
+                download        = dl is null ? null : new { file = dl.File, doneBytes = dl.DoneBytes, totalBytes = dl.TotalBytes, bytesPerSec = dl.BytesPerSec },
                 name            = s.Name,
                 status          = status.ToString(),
                 activeModelName = active?.Name,
@@ -145,12 +148,92 @@ public class ModelsController(PersistentData persistentData) : ControllerBase
         return Ok(updated);
     }
 
-    [HttpDelete("{id}")]
-    public IActionResult DeleteModel(string id)
+    private static readonly HttpClient HfClient = new() { Timeout = TimeSpan.FromSeconds(20) };
+
+    /// <summary>The file list of a Hugging Face repo, fetched by the server rather than the browser. Model downloads
+    /// already happen on this machine, so it is the one place that is known to reach Hugging Face — a browser behind a
+    /// work proxy, an extension or a cross-site rule can't be relied on to.</summary>
+    [HttpGet("hf-tree")]
+    public async Task<IActionResult> HfTree([FromQuery] string? repo, CancellationToken ct)
     {
-        if (!persistentData.RemoveModel(id))
-            return NotFound(new { error = "Model not found." });
-        return Ok(new { ok = true });
+        if (repo is null || !Regex.IsMatch(repo, @"^[A-Za-z0-9][\w.-]*/[A-Za-z0-9][\w.-]*$"))
+            return BadRequest(new { error = "That isn't a Hugging Face repo — expected owner/name." });
+        try
+        {
+            using HttpResponseMessage r = await HfClient.GetAsync($"https://huggingface.co/api/models/{repo}/tree/main", ct);
+            // Hugging Face answers 401, not 404, for a repo that doesn't exist (or is private and gated).
+            if (r.StatusCode is System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.Unauthorized)
+                return NotFound(new { error = "Repo not found (or it's private)." });
+            if (!r.IsSuccessStatusCode) return StatusCode(502, new { error = $"Hugging Face answered HTTP {(int)r.StatusCode}." });
+            return Content(await r.Content.ReadAsStringAsync(ct), "application/json");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            return StatusCode(502, new { error = $"The A·R·I server couldn't reach Hugging Face ({ex.Message})." });
+        }
+    }
+
+    /// <summary>Removes a model from the registry. With <c>deleteFile=true</c> its files are deleted from disk too: the
+    /// weights, the vision projector, and any leftover partial download. Nothing is touched when a running server is using
+    /// the model, a file another model entry also points at is kept, and only files inside the models folder are ever
+    /// deleted. The registry entry goes last, so a refusal or a failed delete leaves everything as it was.</summary>
+    [HttpDelete("{id}")]
+    public IActionResult DeleteModel(string id, [FromQuery] bool deleteFile = false)
+    {
+        Model? model = persistentData.GetModel(id);
+        if (model is null) return NotFound(new { error = "Model not found." });
+
+        long freedBytes = 0;
+        List<string> deleted = new(), kept = new();
+
+        if (deleteFile)
+        {
+            foreach (Server running in llm?.Servers.Where(s => s.Status != ServerStatus.Offline
+                && s.ActiveModel is not null && s.ActiveModel.Name.Equals(model.Name, StringComparison.OrdinalIgnoreCase)).ToList() ?? new())
+                running.Stop();
+
+            string root = Path.GetFullPath(ModelsPath);
+            List<Model> others = persistentData.GetModels().Where(o => !o.Name.Equals(model.Name, StringComparison.OrdinalIgnoreCase)).ToList();
+            bool UsedByAnother(string rel) => others.Any(o =>
+                string.Equals(o.Path, rel, StringComparison.OrdinalIgnoreCase) || string.Equals(o.MmprojPath, rel, StringComparison.OrdinalIgnoreCase));
+
+            try
+            {
+                foreach (string rel in new[] { model.Path, model.MmprojPath }.Where(p => !string.IsNullOrWhiteSpace(p)))
+                {
+                    string full = Path.GetFullPath(Path.Combine(root, rel));
+                    if (!full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                    {
+                        kept.Add($"{rel} (outside the models folder)");
+                        continue;
+                    }
+                    if (UsedByAnother(rel))
+                    {
+                        kept.Add($"{rel} (also used by another model)");
+                        continue;
+                    }
+                    foreach (string file in new[] { full, full + ".tmp" })
+                    {
+                        if (!System.IO.File.Exists(file)) continue;
+                        freedBytes += new FileInfo(file).Length;
+                        System.IO.File.Delete(file);
+                        deleted.Add(Path.GetRelativePath(root, file));
+                    }
+                    // A model kept in its own sub-folder leaves the folder behind once its files are gone.
+                    string? dir = Path.GetDirectoryName(full);
+                    if (dir is not null && dir.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                        && Directory.Exists(dir) && !Directory.EnumerateFileSystemEntries(dir).Any())
+                        Directory.Delete(dir);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return StatusCode(500, new { error = $"Couldn't delete the model's files: {ex.Message}. It was not removed from the list." });
+            }
+        }
+
+        persistentData.RemoveModel(model.Name);
+        return Ok(new { ok = true, freedBytes, deleted, kept });
     }
 
     /// <summary>The one global reasoning-effort dial (0/1/2 = low/medium/xhigh). Universal across all agents;
