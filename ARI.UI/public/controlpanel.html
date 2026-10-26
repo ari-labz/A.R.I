@@ -576,16 +576,6 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
     <!-- Models tab -->
     <div id="tab-models" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
 
-      <!-- Switch progress banner -->
-      <div id="mdl-switch-banner" style="display:none;margin-bottom:20px;" class="vs-section">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-          <span class="vs-section-title" style="margin:0" id="mdl-switch-phase-label">Switching model…</span>
-          <span id="mdl-switch-pct-label" style="font-size:12px;color:var(--text-dim)">0%</span>
-        </div>
-        <div class="vs-progress-track"><div class="vs-progress-fill" id="mdl-switch-fill" style="width:0%"></div></div>
-        <div id="mdl-switch-msg" style="font-size:12px;color:var(--text-dim);margin-top:6px;min-height:16px;"></div>
-      </div>
-
       <!-- Add model toggle -->
       <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:16px;">
         <button class="vs-btn-primary" id="mdl-toggle-add-btn" type="button">+ Add Model</button>
@@ -4619,12 +4609,12 @@ async function agSave() {
     try {
         for (const a of agData.agents || []) {
             const r = await cpFetch(`/api/v1/admin/agents/${encodeURIComponent(a.name)}`, {
-                method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(a),
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(a),
             });
             if (!r.ok) throw new Error(a.name);
         }
         const r2 = await cpFetch('/api/v1/admin/agents/shared', {
-            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ memoryAgent: agData.shared.memoryAgent, budgets: agData.shared.budgets }),
         });
         if (!r2.ok) throw new Error('shared');
@@ -4841,7 +4831,7 @@ function renderServerCardBody(body, draft, server, isNew) {
             : { ...draft, endpoint: 'http://127.0.0.1' };
         try {
             const url    = isNew ? '/api/v1/admin/servers' : `/api/v1/admin/servers/${server.id}`;
-            const method = isNew ? 'POST' : 'PUT';
+            const method = isNew ? 'POST' : 'PATCH';
             const r = await cpFetch(url, { method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
             if (!r.ok) { const e = await r.json().catch(()=>{}); err.textContent = e?.error ?? 'Save failed.'; return; }
             if (isNew) { srvNewDraftActive = false; delete srvDrafts.__new__; }
@@ -5057,12 +5047,6 @@ document.getElementById('srv-add-btn').addEventListener('click', () => {
 });
 
 // ── Models ────────────────────────────────────────────────
-let mdlSwitchEs = null;
-const mdlBanner     = document.getElementById('mdl-switch-banner');
-const mdlPhaseLabel = document.getElementById('mdl-switch-phase-label');
-const mdlPctLabel   = document.getElementById('mdl-switch-pct-label');
-const mdlFill       = document.getElementById('mdl-switch-fill');
-const mdlMsg        = document.getElementById('mdl-switch-msg');
 const mdlCards      = document.getElementById('mdl-cards');
 const mdlNoteTimers = {};
 
@@ -5107,7 +5091,6 @@ async function loadModels() {
     catch { return; }
     mdlLastData = data;
     renderModelCards({ ...data, models: sortModels(data.models ?? []) });
-    if (data.switching && !mdlSwitchEs) startSwitchProgressSse();
 }
 
 ['mdl-sort', 'mdl-sort-dir'].forEach(id =>
@@ -5244,7 +5227,7 @@ function renderModelCards(data) {
             clearTimeout(mdlNoteTimers[name]);
             mdlNoteTimers[name] = setTimeout(async () => {
                 try {
-                    await cpFetch('/api/v1/admin/models/notes', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ modelName: name, notes: ta.value }) });
+                    await cpFetch(`/api/v1/admin/models/${encodeURIComponent(name)}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ notes: ta.value }) });
                     saveStatus.textContent = 'Saved.';
                     setTimeout(() => { saveStatus.textContent = ''; }, 2000);
                 } catch { saveStatus.textContent = 'Save failed.'; }
@@ -5255,7 +5238,7 @@ function renderModelCards(data) {
         const thinkStatus = card.querySelector('.mdl-think-status');
         card.querySelector('.mdl-think-slot').appendChild(buildToggle(!!m.supportsThinking, async on => {
             try {
-                const r = await cpFetch('/api/v1/admin/models/thinking', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ modelName: m.name, supportsThinking: on }) });
+                const r = await cpFetch(`/api/v1/admin/models/${encodeURIComponent(m.name)}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ supportsThinking: on }) });
                 if (!r.ok) throw new Error();
                 m.supportsThinking = on;
                 card.querySelector('.mdl-tags').innerHTML = parseModelTags(m)
@@ -5264,32 +5247,6 @@ function renderModelCards(data) {
                 thinkStatus.textContent = 'Saved — restart server to apply.';
             } catch { thinkStatus.textContent = 'Save failed.'; }
         }));
-
-        // Load model button
-        const switchBtn = card.querySelector('.mdl-switch-btn');
-        if (switchBtn) {
-            switchBtn.addEventListener('click', async () => {
-                switchBtn.disabled = true;
-                try {
-                    const r = await cpFetch('/api/v1/admin/servers/switch', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ file: switchBtn.dataset.file }) });
-                    if (!r.ok) { const err = await r.json().catch(()=>({})); alert(err.error ?? 'Switch failed.'); switchBtn.disabled = false; return; }
-                    startSwitchProgressSse();
-                    loadModels();
-                } catch { switchBtn.disabled = false; }
-            });
-        }
-
-        // Set as startup button
-        const startupBtn = card.querySelector('.mdl-startup-btn');
-        if (startupBtn) {
-            startupBtn.addEventListener('click', async () => {
-                startupBtn.disabled = true;
-                try {
-                    await cpFetch('/api/v1/admin/models/startup', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ file: startupBtn.dataset.file }) });
-                    loadModels();
-                } catch { startupBtn.disabled = false; }
-            });
-        }
 
         // Delete model button
         const deleteBtn = card.querySelector('.mdl-delete-btn');
@@ -5498,30 +5455,6 @@ document.getElementById('mdl-wiz-fetch-btn').addEventListener('click', async () 
 document.getElementById('mdl-add-url').addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); document.getElementById('mdl-wiz-fetch-btn').click(); }
 });
-
-function startSwitchProgressSse() {
-    if (mdlSwitchEs) mdlSwitchEs.close();
-    mdlBanner.style.display = '';
-    mdlFill.className = 'vs-progress-fill';
-    const PHASES = { 'idle-wait':'Waiting for active requests to finish…', 'powering-down':'Powering down…', 'powering-up':'Powering up…', 'ready':'Model ready.', 'error':'Switch failed.' };
-
-    mdlSwitchEs = cpEventSource('/api/v1/admin/servers/switch/progress');
-    mdlSwitchEs.onmessage = e => {
-        try {
-            const d = JSON.parse(e.data);
-            mdlPhaseLabel.textContent = PHASES[d.phase] ?? d.phase;
-            mdlPctLabel.textContent   = d.percent + '%';
-            mdlFill.style.width       = d.percent + '%';
-            mdlMsg.textContent        = d.message ?? '';
-            if (d.done) {
-                mdlFill.className = 'vs-progress-fill ' + (d.success ? 'done' : 'error');
-                mdlSwitchEs.close(); mdlSwitchEs = null;
-                setTimeout(() => { mdlBanner.style.display = 'none'; loadModels(); }, 1500);
-            }
-        } catch { /* ignore */ }
-    };
-    mdlSwitchEs.onerror = () => { if (mdlSwitchEs) { mdlSwitchEs.close(); mdlSwitchEs = null; } };
-}
 
 // ── Voice Synthesis ───────────────────────────────────────
 const vsDropzone = document.getElementById('vs-dropzone');
