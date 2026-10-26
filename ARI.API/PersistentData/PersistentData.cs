@@ -367,6 +367,18 @@ public class PersistentData
         }
     }
 
+    /// <summary>One agent's Agents.json entry as JSON text, or null if there is no such agent.</summary>
+    public string? GetAgentEntryJson(string name)
+    {
+        lock (_agentsLock)
+        {
+            JsonObject root = LoadAgentsRaw();
+            if (root[KeyFor(root, "Agents") ?? "Agents"] is not JsonArray agents) return null;
+            return agents.OfType<JsonObject>().FirstOrDefault(a =>
+                string.Equals(a[KeyFor(a, "Name") ?? "Name"]?.GetValue<string>(), name, StringComparison.OrdinalIgnoreCase))?.ToJsonString();
+        }
+    }
+
     /// <summary>Deletes a control-panel-made agent. Shipped agents are never removed by this.</summary>
     public bool RemoveCustomAgent(string name)
     {

@@ -219,6 +219,11 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         if (Enum.TryParse(req?.Pipeline, ignoreCase: true, out ARI.LLM.ThreadPipeline selected) && !int.TryParse(req?.Pipeline, out _)
             && selected is ARI.LLM.ThreadPipeline.Dialogue or ARI.LLM.ThreadPipeline.Code or ARI.LLM.ThreadPipeline.Speech)
             Llm.ForcePipeline(key, selected);
+        else if (req?.Pipeline is { Length: > 0 } graphId && Llm.ReplyPipelines().Any(p => p.Id.Equals(graphId, StringComparison.OrdinalIgnoreCase)))
+        {
+            Llm.GetOrCreateDialogueThread(key);
+            Llm.SetThreadPipeline(key, graphId);
+        }
         else if (project is not null && ProjectCodeRules.RunsAsCode(project))
             Llm.ForceCodeThread(key);
         else
@@ -234,13 +239,42 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     }
 
     /// <summary>
-    /// The pipelines a thread can run on, lowercased (e.g. "dialogue", "code", "speech"). The client
-    /// renders its selector from this list and maps each name to a label/icon with a generic fallback,
-    /// so adding a ThreadPipeline value surfaces in the UI without a frontend change.
+    /// The pipelines a thread can run on, as <c>{ id, label }</c>: the built-in "dialogue" (Default), "code" and "speech", then
+    /// every pipeline made in the control panel that can run. The client builds its selector from this list, so a new pipeline
+    /// appears there as soon as it is saved.
     /// </summary>
     [HttpGet("~/api/v1/pipelines")]
     public IActionResult GetPipelines()
-        => Ok(new[] { "dialogue", "code", "speech" });
+    {
+        List<object> list = [new { id = "dialogue", label = "Default" }, new { id = "code", label = "Code" }, new { id = "speech", label = "Talk" }];
+        foreach ((string id, string name) in Llm?.ReplyPipelines() ?? [])
+            if (!id.Equals("default", StringComparison.OrdinalIgnoreCase)) list.Add(new { id, label = name });
+        return Ok(list);
+    }
+
+    public sealed record SetPipelineRequest(string? Pipeline);
+
+    /// <summary>Switches a thread to another pipeline for its next reply: "dialogue" is Default, "code" and "speech" are the
+    /// built-in modes, anything else is a pipeline made in the control panel. The thread keeps its history, but the next
+    /// reply has to read it all again (the new pipeline's agents have not seen it).</summary>
+    [HttpPut("{id}/pipeline")]
+    public IActionResult SetPipeline([FromRoute(Name = "id")] string threadKey, [FromBody] SetPipelineRequest req)
+    {
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        if (!Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? thread)) return NotFound();
+        if (!CanAccessThread(thread)) return StatusCode(403);
+        string? id = req?.Pipeline;
+        if (string.IsNullOrWhiteSpace(id)) return BadRequest(new { error = "pipeline is required." });
+        if (id.Equals("code", StringComparison.OrdinalIgnoreCase)) Llm.ForcePipeline(threadKey, ARI.LLM.ThreadPipeline.Code);
+        else if (id.Equals("speech", StringComparison.OrdinalIgnoreCase)) Llm.ForcePipeline(threadKey, ARI.LLM.ThreadPipeline.Speech);
+        else
+        {
+            if (id.Equals("dialogue", StringComparison.OrdinalIgnoreCase)) id = "default";
+            Llm.ForcePipeline(threadKey, ARI.LLM.ThreadPipeline.Dialogue);
+            if (!Llm.SetThreadPipeline(threadKey, id)) return NotFound(new { error = $"No pipeline '{id}' can run." });
+        }
+        return Ok(new { ok = true });
+    }
 
     /// <summary>
     /// Returns thread metadata plus full history. The primary polling endpoint for streaming threads.
@@ -267,7 +301,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         {
             key           = threadKey,
             state         = expired ? "expired" : thread.State.ToString().ToLowerInvariant(),
-            pipeline      = thread.Pipeline.ToString().ToLowerInvariant(),
+            pipeline      = thread.GraphId ?? thread.Pipeline.ToString().ToLowerInvariant(),
             isInternal    = thread.Internal,
             isProcessing  = !expired && Llm.IsThreadProcessing(threadKey),
             lastMessageAt = thread.LastMessageAt,
@@ -347,7 +381,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         key        = thread.Key,
         label      = thread.Label,
         isInternal = thread.Internal,
-        pipeline   = thread.Pipeline.ToString().ToLowerInvariant(),
+        pipeline   = thread.GraphId ?? thread.Pipeline.ToString().ToLowerInvariant(),
         state      = thread.State.ToString().ToLowerInvariant(),
         history    = thread.History.Select(DebugItem).ToList(),
         children   = thread.Children.Select(SerializeDebugThread).ToList(),

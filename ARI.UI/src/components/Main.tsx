@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react"
+import type { PipelineOption } from "../hooks/usePipelines"
 import Messages from "./Messages"
 import InputArea from "./InputArea"
 import ThreadPanel from "./ThreadPanel"
@@ -39,7 +40,7 @@ interface Props {
     projects:         Project[]
     selectedProject:  string | null
     onProjectChange:  (id: string | null) => void
-    pipelines:        string[]
+    pipelines:        PipelineOption[]
     selectedPipeline: string | null
     onPipelineChange: (id: string | null) => void
     speechMode:       boolean

@@ -23,11 +23,11 @@ public enum ThreadPhase { Idle, Prefilling, Thinking, Typing, Researching, Gener
 public class LLMModule : ILLMModule, IDisposable
 {
     //pipelines
-    private readonly DialoguePipeline? dialoguePipeline;
+    private readonly ConcurrentDictionary<string, PipelineGraph> graphs = new(StringComparer.OrdinalIgnoreCase);
     private readonly CodePipeline?     codePipeline;
     private readonly SpeechPipeline?   speechPipeline;
     private readonly GraphPipeline?    graphPipeline;
-    private readonly Dictionary<string, CustomAgent> customAgents = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, CustomAgent> customAgents = new(StringComparer.OrdinalIgnoreCase);
     private readonly string            pipelinesPath;
     
     //agents
@@ -61,7 +61,7 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly ConcurrentDictionary<string, CancellationTokenSource>  processingThreads  = new();
     private readonly ConcurrentDictionary<string, LiveCallInfo>            liveCalls           = new();
     private readonly ConcurrentDictionary<Guid, Channel<AppEvent>>         globalSubscribers   = new();
-    private readonly Dictionary<string, Agent>                             agentMap            = new();
+    private readonly ConcurrentDictionary<string, Agent>                       agentMap            = new();
     private readonly ConcurrentDictionary<string, ThreadPipeline>          forcedPipelines     = new();
     private readonly ConcurrentDictionary<string, ThreadPhase>             threadPhases        = new();
     // Live count of /watch connections per thread — a client only holds one open while that thread is
@@ -130,8 +130,6 @@ public class LLMModule : ILLMModule, IDisposable
 
         CleanScratchpads();
 
-        Dictionary<string, Server> serverByName = servers.ToDictionary(s => s.Name, s => s);
-
         Dictionary<string, JsonElement> rawAgents = new(StringComparer.OrdinalIgnoreCase);
         // Agents switched off with "Enabled": false. They're absent from rawAgents, and this set stops the
         // built-in fallbacks (Awareness, Subagent) from quietly reviving them.
@@ -165,59 +163,6 @@ public class LLMModule : ILLMModule, IDisposable
                     }
         }
 
-        T Deserialize<T>(JsonElement el) where T : Agent
-        {
-            T agent = JsonSerializer.Deserialize<T>(el.GetRawText(), JsonOptions)!;
-
-            if (serverByName.TryGetValue(agent.ServerName, out Server? bound))
-            {
-                agent.Endpoint    = bound.FullEndpoint;
-                agent.Server = bound;
-            }
-            else if (_servers.Count > 0)
-            {
-                // No binding, or one naming a server that no longer exists. Bindings are machine facts,
-                // so the shipped Agents.json carries none — on a fresh install this is how every agent
-                // finds the demo server. Lowest-index server, lowest-index slot, unless the user said
-                // otherwise. Logged because "why is this agent on that server" should be answerable
-                // from the log rather than by reading this method.
-                Server first = _servers[0];
-                _logger.LogInformation(
-                    agent.ServerName.Length == 0
-                        ? "Agent '{Agent}' has no server binding — defaulting to '{Server}' slot 0."
-                        : "Agent '{Agent}' is bound to unknown server '{Missing}' — defaulting to '{Server}' slot 0.",
-                    agent.Name, agent.ServerName.Length == 0 ? first.Name : agent.ServerName, first.Name);
-
-                agent.ServerName  = first.Name;
-                agent.Endpoint    = first.FullEndpoint;
-                agent.Server = first;
-            }
-            else
-            {
-                _logger.LogError("Agent '{Agent}' cannot be bound — no servers are configured.", agent.Name);
-            }
-
-            if (agent.Server is not null)
-            {
-                if (agent.SlotName is { Length: > 0 })
-                {
-                    agent.Slot = agent.Server.Slots.FirstOrDefault(sl => sl.Name.Equals(agent.SlotName, StringComparison.OrdinalIgnoreCase));
-                    if (agent.Slot is null)
-                        _logger.LogWarning("Agent '{Agent}' names slot '{Slot}' which doesn't exist on server '{Server}' — falling back to its first slot.",
-                            agent.Name, agent.SlotName, agent.Server.Name);
-                }
-                // No name given (or it didn't resolve) — default to the server's first slot, same as the
-                // old raw agent.Slot ??= 0 behaviour, so an agent still gets pinned/context-derived out of
-                // the box without needing the control panel touched first.
-                if (agent.Slot is null && agent.Server.Slots.Count > 0)
-                {
-                    agent.Slot = agent.Server.Slots[0];
-                    agent.SlotName  = agent.Slot.Name;
-                }
-            }
-            agent.Queue = QueueFor(agent.Server);
-            return agent;
-        }
 
         if (brainConfig is not null)
         {
@@ -350,10 +295,6 @@ public class LLMModule : ILLMModule, IDisposable
 
         if (textingAgent is not null && talkingAgent is not null)
         {
-            dialoguePipeline = new DialoguePipeline(textingAgent, memory, context, engram, processingThreads, liveCalls, NotifyWatchers);
-            dialoguePipeline.ThreadBufferFull     += key => NotifyWatchers(key);
-            dialoguePipeline.ThreadBecameInactive += key => NotifyWatchers(key);
-
             speechPipeline = new SpeechPipeline(talkingAgent, memory, context, engram, processingThreads, liveCalls, NotifyWatchers);
             speechPipeline.ThreadBufferFull     += key => NotifyWatchers(key);
             speechPipeline.ThreadBecameInactive += key => NotifyWatchers(key);
@@ -361,7 +302,9 @@ public class LLMModule : ILLMModule, IDisposable
 
         if (textingAgent is not null)
         {
-            graphPipeline = new GraphPipeline(textingAgent, memory, context, engram, customAgents, processingThreads, liveCalls, NotifyWatchers);
+            graphPipeline = new GraphPipeline(textingAgent, memory, context, engram, customAgents, GraphFor, processingThreads, liveCalls, NotifyWatchers);
+            graphPipeline.ThreadBufferFull     += key => NotifyWatchers(key);
+            graphPipeline.ThreadBecameInactive += key => NotifyWatchers(key);
             ReloadPipelines();
         }
 
@@ -435,16 +378,117 @@ public class LLMModule : ILLMModule, IDisposable
             agentMap["Dreamer"] = dreamer;
 
         // Wire phase tracking on every agent so watch clients know which phase is active.
-        foreach (Agent agent in agentMap.Values)
+        foreach (Agent agent in agentMap.Values) WirePhaseTracking(agent);
+    }
+
+    private void WirePhaseTracking(Agent agent)
+    {
+        agent.OnPhaseChange = (threadKey, phase) =>
         {
-            agent.OnPhaseChange = (threadKey, phase) =>
-            {
-                Shared.Logger.LogDebug("[PhaseChange] {Agent} ({Thread}) → {Phase}", agent.Name, threadKey, phase);
-                if (phase == ThreadPhase.Idle) threadPhases.TryRemove(threadKey, out _);
-                else                           threadPhases[threadKey] = phase;
-                NotifyWatchers(threadKey);
-            };
+            Shared.Logger.LogDebug("[PhaseChange] {Agent} ({Thread}) → {Phase}", agent.Name, threadKey, phase);
+            if (phase == ThreadPhase.Idle) threadPhases.TryRemove(threadKey, out _);
+            else                           threadPhases[threadKey] = phase;
+            NotifyWatchers(threadKey);
+        };
+    }
+
+    /// <summary>Adds an agent made in the control panel to the running server, so a pipeline can use it straight away.
+    /// <paramref name="entry"/> is its Agents.json entry. Returns false if an agent of that name is already loaded.</summary>
+    public bool AddCustomAgent(JsonElement entry)
+    {
+        CustomAgent custom = Deserialize<CustomAgent>(entry);
+        if (agentMap.ContainsKey(custom.Name)) return false;
+        WirePhaseTracking(custom);
+        customAgents[custom.Name] = custom;
+        agentMap[custom.Name]     = custom;
+        _logger.LogInformation("Custom agent '{Agent}' added.", custom.Name);
+        ReloadPipelines();
+        return true;
+    }
+
+    /// <summary>Takes a custom agent out of the running server. Any pipeline that still uses it stops being valid.</summary>
+    public bool RemoveCustomAgent(string name)
+    {
+        if (!customAgents.TryRemove(name, out _)) return false;
+        agentMap.TryRemove(name, out _);
+        _logger.LogInformation("Custom agent '{Agent}' removed.", name);
+        ReloadPipelines();
+        return true;
+    }
+
+    /// <summary>Swaps a running custom agent for its edited Agents.json entry (prompt, server and slot), so the change
+    /// applies to the next pipeline run.</summary>
+    public bool ReplaceCustomAgent(JsonElement entry)
+    {
+        CustomAgent custom = Deserialize<CustomAgent>(entry);
+        if (!customAgents.ContainsKey(custom.Name)) return false;
+        WirePhaseTracking(custom);
+        customAgents[custom.Name] = custom;
+        agentMap[custom.Name]     = custom;
+        ReloadPipelines();
+        return true;
+    }
+
+    /// <summary>Reads an agent from its Agents.json entry and binds it to its server and slot, falling back to the first
+    /// server (and its first slot) when it names none that exists.</summary>
+    private T Deserialize<T>(JsonElement el) where T : Agent
+    {
+        T agent = JsonSerializer.Deserialize<T>(el.GetRawText(), JsonOptions)!;
+
+        if (TryGetServer(agent.ServerName, out Server? bound))
+        {
+            agent.Endpoint    = bound.FullEndpoint;
+            agent.Server = bound;
         }
+        else if (_servers.Count > 0)
+        {
+            // No binding, or one naming a server that no longer exists. Bindings are machine facts,
+            // so the shipped Agents.json carries none — on a fresh install this is how every agent
+            // finds the demo server. Lowest-index server, lowest-index slot, unless the user said
+            // otherwise. Logged because "why is this agent on that server" should be answerable
+            // from the log rather than by reading this method.
+            Server first = _servers[0];
+            _logger.LogInformation(
+                agent.ServerName.Length == 0
+                    ? "Agent '{Agent}' has no server binding — defaulting to '{Server}' slot 0."
+                    : "Agent '{Agent}' is bound to unknown server '{Missing}' — defaulting to '{Server}' slot 0.",
+                agent.Name, agent.ServerName.Length == 0 ? first.Name : agent.ServerName, first.Name);
+
+            agent.ServerName  = first.Name;
+            agent.Endpoint    = first.FullEndpoint;
+            agent.Server = first;
+        }
+        else
+        {
+            _logger.LogError("Agent '{Agent}' cannot be bound — no servers are configured.", agent.Name);
+        }
+
+        if (agent.Server is not null)
+        {
+            if (agent.SlotName is { Length: > 0 })
+            {
+                agent.Slot = agent.Server.Slots.FirstOrDefault(sl => sl.Name.Equals(agent.SlotName, StringComparison.OrdinalIgnoreCase));
+                if (agent.Slot is null)
+                    _logger.LogWarning("Agent '{Agent}' names slot '{Slot}' which doesn't exist on server '{Server}' — falling back to its first slot.",
+                        agent.Name, agent.SlotName, agent.Server.Name);
+            }
+            // No name given (or it didn't resolve) — default to the server's first slot, same as the
+            // old raw agent.Slot ??= 0 behaviour, so an agent still gets pinned/context-derived out of
+            // the box without needing the control panel touched first.
+            if (agent.Slot is null && agent.Server.Slots.Count > 0)
+            {
+                agent.Slot = agent.Server.Slots[0];
+                agent.SlotName  = agent.Slot.Name;
+            }
+        }
+        agent.Queue = QueueFor(agent.Server);
+        return agent;
+    }
+
+    private bool TryGetServer(string name, out Server server)
+    {
+        server = _servers.FirstOrDefault(s => s.Name == name)!;
+        return server is not null;
     }
 
     // ── Thread registry ──────────────────────────────────────────────────────────
@@ -577,15 +621,35 @@ public class LLMModule : ILLMModule, IDisposable
         converted.IsBrainVault   = existing.IsBrainVault;
         converted.HasMemoryAccess  = existing.HasMemoryAccess;
         converted.IsAdminChat    = existing.IsAdminChat;
+        converted.GraphId        = existing.GraphId;
         converted.Ct             = existing.Ct;
         return converted;
     }
 
     // ── Pipeline graphs ──────────────────────────────────────────────────────
 
-    /// <summary>The id of the pipeline graph currently answering Dialogue threads, or null while the built-in Dialogue
-    /// pipeline does.</summary>
-    public string? ActivePipelineId => graphPipeline?.Graph?.Id;
+    /// <summary>The pipelines a thread can be switched to: every graph that can run, Default first.</summary>
+    public IReadOnlyList<(string Id, string Name)> ReplyPipelines() =>
+        graphs.Values.OrderBy(g => g.Id == PipelineGraph.DefaultId ? 0 : 1).ThenBy(g => g.Name, StringComparer.OrdinalIgnoreCase)
+              .Select(g => (g.Id, g.Name)).ToList();
+
+    /// <summary>The graph a thread runs on. An id that no longer exists (deleted, or broken by a deleted agent) answers
+    /// with Default rather than failing the reply.</summary>
+    private PipelineGraph GraphFor(string? id)
+    {
+        if (!string.IsNullOrEmpty(id) && graphs.TryGetValue(id, out PipelineGraph? g)) return g;
+        if (!string.IsNullOrEmpty(id)) _logger.LogWarning("Pipeline '{Id}' can't run any more — answering with Default.", id);
+        return graphs.TryGetValue(PipelineGraph.DefaultId, out PipelineGraph? d) ? d : PipelineGraph.BuiltInDefault(memory is not null);
+    }
+
+    /// <summary>Switches a thread to another pipeline for its next reply. False if there is no such pipeline.</summary>
+    public bool SetThreadPipeline(string threadKey, string? id)
+    {
+        if (!string.IsNullOrEmpty(id) && !id.Equals(PipelineGraph.DefaultId, StringComparison.OrdinalIgnoreCase) && !graphs.ContainsKey(id)) return false;
+        if (!threads.TryGetValue(threadKey, out Thread? t)) return false;
+        t.GraphId = string.IsNullOrEmpty(id) || id.Equals(PipelineGraph.DefaultId, StringComparison.OrdinalIgnoreCase) ? null : id;
+        return true;
+    }
 
     /// <summary>What can be wired into each agent: the built-ins' fixed ports, and a custom agent's {tokens}.</summary>
     public Dictionary<string, string[]> AgentPorts()
@@ -605,33 +669,36 @@ public class LLMModule : ILLMModule, IDisposable
         return parsed.Count == 0 ? new() { "Not a pipeline." } : parsed[0].Validate(graphPipeline.PortsOf);
     }
 
-    /// <summary>Re-reads Pipelines.json and switches Dialogue threads to the graph it marks active. A graph that doesn't
-    /// validate is never used — the built-in Dialogue pipeline keeps answering, and the reasons are logged.</summary>
+    /// <summary>Re-reads Pipelines.json and keeps every graph that can run. One that doesn't validate (an agent it uses was
+    /// deleted, say) is left out and the reasons logged; threads on it answer with Default until it is fixed. Default is
+    /// always there: the one in the file, or the built-in one.</summary>
     public void ReloadPipelines()
     {
         if (graphPipeline is null) return;
-        graphPipeline.Graph = null;
-        if (!File.Exists(pipelinesPath)) return;
-        try
+        Dictionary<string, PipelineGraph> loaded = new(StringComparer.OrdinalIgnoreCase);
+        if (File.Exists(pipelinesPath))
         {
-            using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(pipelinesPath), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
-            string? active = TryGetPropCI(doc.RootElement, "active", out JsonElement a) && a.ValueKind == JsonValueKind.String ? a.GetString() : null;
-            if (string.IsNullOrEmpty(active)) return;
-            PipelineGraph? graph = PipelineGraph.ParseAll(doc.RootElement).FirstOrDefault(g => g.Id == active);
-            if (graph is null) { _logger.LogWarning("Pipelines.json names active pipeline '{Id}' but no such pipeline exists — using built-in Dialogue.", active); return; }
-            List<string> problems = graph.Validate(graphPipeline.PortsOf);
-            if (problems.Count > 0)
+            try
             {
-                _logger.LogWarning("Pipeline '{Name}' is marked active but cannot run — using built-in Dialogue instead: {Problems}", graph.Name, string.Join(" | ", problems));
-                return;
+                using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(pipelinesPath), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
+                foreach (PipelineGraph graph in PipelineGraph.ParseAll(doc.RootElement))
+                {
+                    List<string> problems = graph.Validate(graphPipeline.PortsOf);
+                    if (problems.Count > 0)
+                        _logger.LogWarning("Pipeline '{Name}' can't run and is not available: {Problems}", graph.Name, string.Join(" | ", problems));
+                    else
+                        loaded[graph.Id] = graph;
+                }
             }
-            graphPipeline.Graph = graph;
-            _logger.LogInformation("Pipeline '{Name}' is answering Dialogue threads.", graph.Name);
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Could not read Pipelines.json — only the built-in Default pipeline is available.");
+            }
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Could not read Pipelines.json — using built-in Dialogue.");
-        }
+        if (!loaded.ContainsKey(PipelineGraph.DefaultId)) loaded[PipelineGraph.DefaultId] = PipelineGraph.BuiltInDefault(graphPipeline.PortsOf("Memory") is not null);
+
+        foreach (string gone in graphs.Keys.Where(k => !loaded.ContainsKey(k)).ToList()) graphs.TryRemove(gone, out _);
+        foreach ((string id, PipelineGraph g) in loaded) graphs[id] = g;
     }
 
     // ── Agent assignment ─────────────────────────────────────────────────────────
@@ -1048,7 +1115,7 @@ public class LLMModule : ILLMModule, IDisposable
         if (isDiscordThread)
         {
             Thread dlgThread = GetOrCreateThread(ThreadPipeline.Dialogue, threadKey, platformContext);
-            return await dialoguePipeline!.ExecuteAsync(dlgThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments);
+            return await graphPipeline!.ExecuteAsync(dlgThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments);
         }
 
         // No more classifier. Routing is deterministic: an explicit pin (UI selection, or a bound
@@ -1075,19 +1142,18 @@ public class LLMModule : ILLMModule, IDisposable
             case "Code":
             {
                 Thread codeThread = Recategorise(ThreadPipeline.Code, threadKey, platformContext);
-                return await (codePipeline ?? (Pipeline)dialoguePipeline!).ExecuteAsync(codeThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, localPath);
+                return await (codePipeline ?? (Pipeline)graphPipeline!).ExecuteAsync(codeThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, localPath);
             }
             case "Speech":
             {
                 Thread speechThread = Recategorise(ThreadPipeline.Speech, threadKey, platformContext);
                 speechPipeline?.SetSteering(threadKey, steering);
-                return await (speechPipeline ?? (Pipeline)dialoguePipeline!).ExecuteAsync(speechThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, localPath, onTextDelta);
+                return await (speechPipeline ?? (Pipeline)graphPipeline!).ExecuteAsync(speechThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, localPath, onTextDelta);
             }
             default:
             {
                 Thread dlgThread = Recategorise(ThreadPipeline.Dialogue, threadKey, platformContext);
-                Pipeline replyPipeline = graphPipeline is { Graph: not null } ? graphPipeline : dialoguePipeline!;
-                string reply = await replyPipeline.ExecuteAsync(dlgThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments);
+                string reply = await graphPipeline!.ExecuteAsync(dlgThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments);
                 return dlgThread.PendingCoderHandoff is { } brief
                     ? await RunCoderHandoff(dlgThread, brief, username, platformContext, onDelta, externalCt, localPath) ?? reply
                     : reply;
@@ -1496,7 +1562,7 @@ public class LLMModule : ILLMModule, IDisposable
     /// thread — see CreateProactiveDialogueThread.</summary>
     public async Task FireReminderAsync(string prompt, string context, string title, CancellationToken ct = default)
     {
-        if (dialoguePipeline is null)
+        if (graphPipeline is null)
             throw new ModelNotFoundException("Dialogue model is not loaded or is not enabled.");
 
         string scratchKey = $"reminder-scratch-{Guid.NewGuid():N}";
@@ -1507,7 +1573,7 @@ public class LLMModule : ILLMModule, IDisposable
         string reply;
         try
         {
-            reply = await dialoguePipeline.ExecuteAsync(scratch, scratchKey, prompt, "reminder", context, onDelta: null, cts);
+            reply = await graphPipeline.ExecuteAsync(scratch, scratchKey, prompt, "reminder", context, onDelta: null, cts);
         }
         finally
         {
