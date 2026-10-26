@@ -1481,25 +1481,12 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 // Reads a colour variable from colours.css as a value, for canvas and chart code that can't use var().
 function cv(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 
-// ── auth token ────────────────────────────────────────────
-// Token is passed as ?token=... when the control panel link is opened from the main app.
-// Stored in sessionStorage so refreshes within the same tab work without re-passing it.
-// Opening the panel directly works too: with no token the browser's `ari_session` cookie
-// authenticates the request, and only a real 401 sends us back to the login screen.
-(function() {
-    const urlToken = new URLSearchParams(location.search).get('token');
-    if (urlToken) {
-        sessionStorage.setItem('ari_cp_token', urlToken);
-        // Clean the token from the URL bar so it isn't visible / logged
-        history.replaceState(null, '', location.pathname);
-    }
-})();
+// ── sign-in ───────────────────────────────────────────────
+// The browser's `ari_session` cookie signs this page in (the same cookie the chat page uses), so there is no token to
+// pass around. A real 401 sends us back to the login screen.
 function cpFetch(url, opts) {
-    const token = sessionStorage.getItem('ari_cp_token');
-    const headers = new Headers((opts && opts.headers) || {});
-    if (token) headers.set('Authorization', 'Bearer ' + token);
-    return fetch(url, Object.assign({}, opts, { headers })).then(r => {
-        if (r.status === 401) { sessionStorage.removeItem('ari_cp_token'); window.location.href = '/'; return new Promise(() => {}); }
+    return fetch(url, opts).then(r => {
+        if (r.status === 401) { window.location.href = '/'; return new Promise(() => {}); }
         return r;
     });
 }
@@ -1510,11 +1497,7 @@ function cpPatchSettings(changes) {
 }
 // The server always answers a failure as { error: "..." }; this pulls out the words.
 async function cpErrorText(r) { try { return (await r.json()).error || r.statusText; } catch { return r.statusText; } }
-function cpEventSource(url) {
-    const token = sessionStorage.getItem('ari_cp_token');
-    const sep = url.includes('?') ? '&' : '?';
-    return new EventSource(token ? url + sep + 'token=' + encodeURIComponent(token) : url);
-}
+function cpEventSource(url) { return new EventSource(url); }
 
 // ── tab switching ─────────────────────────────────────────
 window._ariUserName = 'User';
