@@ -5508,7 +5508,7 @@ async function vsSwitchEngineModel(engine, modelName) {
     const statusEl = document.getElementById('vs-switch-status');
     if (statusEl) { statusEl.textContent = 'Switching…'; statusEl.style.display = ''; }
     try {
-        const r = await cpFetch('/api/v1/admin/voice/switch', {
+        const r = await cpFetch('/api/v1/admin/voice/playback/switch', {
             method: 'POST', headers: {'Content-Type':'application/json'},
             body: JSON.stringify({ engine, modelName })
         });
@@ -5520,7 +5520,7 @@ async function vsSwitchEngineModel(engine, modelName) {
         vsUpdateEngineUI();
         // reload engine-specific params
         try {
-            const pr = await cpFetch('/api/v1/admin/voice/engine-params');
+            const pr = await cpFetch('/api/v1/admin/voice/playback/engineParams');
             if (pr.ok) {
                 const pd = await pr.json();
                 if (typeof renderEngineParams === 'function') renderEngineParams(pd);
@@ -5634,7 +5634,7 @@ async function vsPauseTraining() {
     vsPauseBtn.disabled = true;
     vsPauseBtn.textContent = 'Pausing… (finishes current epoch)';
     try {
-        const r = await cpFetch(`/api/v1/admin/voice/${encodeURIComponent(vsActiveModelName)}/stop`, { method: 'POST' });
+        const r = await cpFetch(`/api/v1/admin/voice/training/stop?modelName=${encodeURIComponent(vsActiveModelName)}`, { method: 'POST' });
         if (!r.ok) { const e = await r.json().catch(() => ({})); vsPauseBtn.textContent = 'Pause failed: ' + (e.error ?? r.statusText); vsPauseBtn.disabled = false; }
     } catch (err) { vsPauseBtn.textContent = 'Pause failed: ' + err.message; vsPauseBtn.disabled = false; }
 }
@@ -5743,7 +5743,7 @@ function vsSetProgress(step, pct, detail, state) {
 
 // Shared upload helper — uploads vsFiles to a new staging dir, returns { stageId, stagingPath }
 async function vsUploadFiles() {
-    const stageResp = await cpFetch('/api/v1/admin/voice/stage', { method: 'POST' });
+    const stageResp = await cpFetch('/api/v1/admin/voice/uploads', { method: 'POST' });
     if (!stageResp.ok) throw new Error('Stage failed: ' + (await stageResp.text()));
     const { stageId, stagingPath } = await stageResp.json();
     const CHUNK = 5 * 1024 * 1024, CONCURRENCY = 4;
@@ -5753,7 +5753,7 @@ async function vsUploadFiles() {
         let done = 0;
         const uploadChunk = async (ci) => {
             const slice = f.slice(ci * CHUNK, Math.min((ci + 1) * CHUNK, f.size));
-            const url = `/api/v1/admin/voice/upload?stageId=${encodeURIComponent(stageId)}&name=${encodeURIComponent(f.name)}&chunk=${ci}&totalChunks=${totalChunks}`;
+            const url = `/api/v1/admin/voice/uploads/${encodeURIComponent(stageId)}?name=${encodeURIComponent(f.name)}&chunk=${ci}&totalChunks=${totalChunks}`;
             const up = await cpFetch(url, { method: 'POST', body: slice, headers: { 'Content-Type': 'application/octet-stream' } });
             if (!up.ok) throw new Error(`Upload of ${f.name} chunk ${ci} failed: ` + (await up.text()));
             done++;
@@ -5894,7 +5894,7 @@ function vsStartTrainingJob(trainBody, modelName) {
     vsStartTimer();
     (async () => {
         try {
-            const trainResp = await cpFetch('/api/v1/admin/voice/train', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(trainBody) });
+            const trainResp = await cpFetch('/api/v1/admin/voice/training', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(trainBody) });
             if (!trainResp.ok) throw new Error('Start failed: ' + (await trainResp.text()));
             vsAttachProgress(modelName, () => { vsTrainBtn.disabled = false; });
         } catch (err) { vsStopTimer(); vsShowSetup(true); vsAppendLog('Error: ' + err.message, 'log-error'); vsLogBadge.textContent = 'failed'; vsLogBadge.classList.remove('live'); vsTrainBtn.disabled = false; }
@@ -5911,7 +5911,7 @@ function vsAttachProgress(modelName, onDone) {
     function connect() {
         if (done) return;
         if (vsProgressEs) vsProgressEs.close();
-        vsProgressEs = cpEventSource('/api/v1/admin/voice/progress');
+        vsProgressEs = cpEventSource('/api/v1/admin/voice/training/progress');
         vsLogBadge.textContent = 'live'; vsLogBadge.classList.add('live');
         let seen = 0;
         vsProgressEs.onmessage = e => {
@@ -5969,7 +5969,7 @@ async function vsRestoreTraining() {
     try {
     let status;
     try {
-        const r = await cpFetch('/api/v1/admin/voice/status');
+        const r = await cpFetch('/api/v1/admin/voice/training');
         if (!r.ok) return;
         status = await r.json();
     } catch { return; }
@@ -5989,7 +5989,7 @@ async function vsRestoreTraining() {
     }
     // Epochs from before this run (a resumed model) only exist in Train.log, not in the event list
     try {
-        const hr = await cpFetch(`/api/v1/admin/voice/StyleTTS2/${encodeURIComponent(status.modelName)}/loss-history`);
+        const hr = await cpFetch(`/api/v1/admin/voice/models/StyleTTS2/${encodeURIComponent(status.modelName)}/lossHistory`);
         if (hr.ok) {
             const { points, pauses } = await hr.json();
             for (const pt of points) vsLossPush(pt);
@@ -6005,7 +6005,7 @@ vsRestoreTraining();
 
 // Play a transcript clip
 function trPlay(btn, fileName) {
-    const src = `/api/v1/admin/voice/transcribe/audio?name=${encodeURIComponent(fileName)}`;
+    const src = `/api/v1/admin/voice/dataset/transcribe/audio?name=${encodeURIComponent(fileName)}`;
     const wasPlaying = btn.classList.contains('playing');
     document.querySelectorAll('.tr-play.playing').forEach(b => b.classList.remove('playing'));
     trAudio.pause();
@@ -6104,14 +6104,14 @@ vsTrainBtn.addEventListener('click', async () => {
             vsLogBadge.textContent = 'transcribing…';
             vsSetProgress('Transcribing audio with Whisper', 5, null, '');
             vsAppendLog('Loading Whisper model…');
-            const trResp = await cpFetch('/api/v1/admin/voice/transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stageId }) });
+            const trResp = await cpFetch('/api/v1/admin/voice/dataset/transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stageId }) });
             if (!trResp.ok) throw new Error('Transcription failed: ' + (await trResp.text()));
 
             // Poll for transcription completion
             let trLoggedCount = 0;
             const trPoll = setInterval(async () => {
                 try {
-                    const d = await cpFetch('/api/v1/admin/voice/transcribe/status').then(r => r.json());
+                    const d = await cpFetch('/api/v1/admin/voice/dataset/transcribe/status').then(r => r.json());
                     vsTrStep.textContent = d.step;
                     vsTrPct.textContent = d.percent + '%';
                     vsTrFill.style.width = d.percent + '%';
@@ -6437,13 +6437,13 @@ dsProcessBtn.addEventListener('click', async () => {
     dsStepLabel.textContent = 'Uploading'; dsPctLabel.textContent = '0%'; dsProgFill.style.width = '0%';
     const demucs = dsDemucsToggle.checked;
     try {
-        const { stageId } = await cpFetch('/api/v1/admin/voice/stage', { method: 'POST' }).then(r => r.json());
+        const { stageId } = await cpFetch('/api/v1/admin/voice/uploads', { method: 'POST' }).then(r => r.json());
         const CHUNK = 5 * 1024 * 1024, CONCURRENCY = 4;
         for (let fi = 0; fi < dsFiles.length; fi++) {
             const f = dsFiles[fi], totalChunks = Math.max(1, Math.ceil(f.size / CHUNK));
             const uploadChunk = async (ci) => {
                 const slice = f.slice(ci * CHUNK, Math.min((ci + 1) * CHUNK, f.size));
-                const url = `/api/v1/admin/voice/upload?stageId=${encodeURIComponent(stageId)}&name=${encodeURIComponent(f.name)}&chunk=${ci}&totalChunks=${totalChunks}`;
+                const url = `/api/v1/admin/voice/uploads/${encodeURIComponent(stageId)}?name=${encodeURIComponent(f.name)}&chunk=${ci}&totalChunks=${totalChunks}`;
                 const up = await cpFetch(url, { method: 'POST', body: slice, headers: { 'Content-Type': 'application/octet-stream' } });
                 if (!up.ok) throw new Error(`Upload of ${f.name} failed`);
             };
@@ -6502,7 +6502,7 @@ async function loadCheckpoints(modelName) {
     vsTvEpoch.innerHTML = '<option value="">latest</option>';
     if (!modelName) return;
     try {
-        const r = await cpFetch(`/api/v1/admin/voice/${encodeURIComponent(modelName)}/checkpoints`);
+        const r = await cpFetch(`/api/v1/admin/voice/models/StyleTTS2/${encodeURIComponent(modelName)}/checkpoints`);
         if (!r.ok) return;
         const { checkpoints } = await r.json();
         // skip the first entry (latest/model.pth) since we already have it as default
@@ -6527,7 +6527,7 @@ vsTvModel.addEventListener('change', () => {
 
 async function loadVoiceModels() {
     try {
-        const [mr, ar] = await Promise.all([cpFetch('/api/v1/admin/voice/models'), cpFetch('/api/v1/admin/voice/active')]);
+        const [mr, ar] = await Promise.all([cpFetch('/api/v1/admin/voice/models'), cpFetch('/api/v1/admin/voice/playback')]);
         const { models } = await mr.json(), { model: activeModel, engine: activeEngine, ready, defaultModel } = await ar.json();
         vsAllModels = models.map(m => ({ ...m, isActive: m.name === activeModel, isDefault: m.name === defaultModel }));
         if (activeEngine) {
@@ -6587,7 +6587,7 @@ async function vsStartResume(modelName, retrain = false) {
     if (!retrain) {
         try {
             const engine = btn?.dataset.engine ?? 'StyleTTS2';
-            const hr = await cpFetch(`/api/v1/admin/voice/${encodeURIComponent(engine)}/${encodeURIComponent(modelName)}/loss-history`);
+            const hr = await cpFetch(`/api/v1/admin/voice/models/${encodeURIComponent(engine)}/${encodeURIComponent(modelName)}/lossHistory`);
             if (hr.ok) {
                 const { points, pauses } = await hr.json();
                 for (const p of points) vsLossPush(p);
@@ -6597,7 +6597,7 @@ async function vsStartResume(modelName, retrain = false) {
         } catch { /* non-fatal */ }
     }
     try {
-        const resp = await cpFetch('/api/v1/admin/voice/resume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName, epochs, retrain }) });
+        const resp = await cpFetch('/api/v1/admin/voice/training/resume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName, epochs, retrain }) });
         if (!resp.ok) throw new Error((await resp.json().catch(()=>({error:resp.statusText}))).error ?? resp.statusText);
         vsAttachProgress(modelName, () => { if (btn) btn.disabled = false; });
     } catch(err) { vsStopTimer(); vsAppendLog('Error: ' + err.message, 'log-error'); vsLogBadge.textContent = 'failed'; vsLogBadge.classList.remove('live'); if (btn) btn.disabled = false; }
@@ -6607,7 +6607,7 @@ async function vsDismissResume(modelName, engine) {
     if (!confirm(`Remove "${modelName}" from the resume list? The voice itself will be kept.`)) return;
     const eng = engine || 'StyleTTS2';
     try {
-        const resp = await cpFetch(`/api/v1/admin/voice/${encodeURIComponent(eng)}/${encodeURIComponent(modelName)}/dismiss`, { method: 'POST' });
+        const resp = await cpFetch(`/api/v1/admin/voice/models/${encodeURIComponent(eng)}/${encodeURIComponent(modelName)}/resume`, { method: 'DELETE' });
         if (!resp.ok) { const e = await resp.json().catch(()=>({error:resp.statusText})); alert('Dismiss failed: ' + (e.error ?? resp.statusText)); return; }
         await loadVoiceModels();
     } catch(err) { alert('Dismiss failed: ' + err.message); }
@@ -6618,7 +6618,7 @@ async function loadVoicesList() {
     const container = document.getElementById('voices-list');
     if (!container) return;
     try {
-        const [mr, ar] = await Promise.all([cpFetch('/api/v1/admin/voice/models'), cpFetch('/api/v1/admin/voice/active')]);
+        const [mr, ar] = await Promise.all([cpFetch('/api/v1/admin/voice/models'), cpFetch('/api/v1/admin/voice/playback')]);
         const { models } = await mr.json();
         const { model: activeModel, engine: activeEngine, defaultModel } = await ar.json();
         const trained = models.filter(m => m.hasModel || m.hasResume);
@@ -6669,7 +6669,7 @@ async function loadVoicesList() {
 
 async function voicesSetActive(modelName, engine) {
     try {
-        const r = await cpFetch('/api/v1/admin/voice/switch', {
+        const r = await cpFetch('/api/v1/admin/voice/playback/switch', {
             method: 'POST', headers: {'Content-Type':'application/json'},
             body: JSON.stringify({ engine, modelName })
         });
@@ -6683,7 +6683,7 @@ async function voicesSetActive(modelName, engine) {
 async function voicesDeleteModel(modelName, engine) {
     if (!confirm(`Delete "${modelName}" and all its checkpoints? This cannot be undone.`)) return;
     try {
-        const resp = await cpFetch(`/api/v1/admin/voice/${encodeURIComponent(engine)}/${encodeURIComponent(modelName)}`, { method: 'DELETE' });
+        const resp = await cpFetch(`/api/v1/admin/voice/models/${encodeURIComponent(engine)}/${encodeURIComponent(modelName)}`, { method: 'DELETE' });
         if (!resp.ok) { const e = await resp.json().catch(()=>({error:resp.statusText})); alert('Delete failed: ' + (e.error ?? resp.statusText)); return; }
         await loadVoicesList();
         await loadVoiceModels();
@@ -6709,7 +6709,7 @@ bindSlider('sp-pause', 'sp-pause-val', 2);
 let engineParamDefs = [];
 async function loadEngineParams() {
     try {
-        const r = await cpFetch('/api/v1/admin/voice/engine-params');
+        const r = await cpFetch('/api/v1/admin/voice/playback/engineParams');
         if (!r.ok) return;
         const data = await r.json();
         document.getElementById('sp-engine-label').textContent = data.engine ?? '';
@@ -6748,9 +6748,10 @@ function getSynthParams() {
 // voice, not just Test Voice. Load the saved values on start and save on change.
 async function loadVoiceSettings() {
     try {
-        const r = await cpFetch('/api/v1/admin/voice/settings');
+        const r = await cpFetch('/api/v1/admin/voice/playback');
         if (!r.ok) return;
         const s = await r.json();
+        if (s.speed == null) return;   // the voice module isn't running
         const speed = document.getElementById('sp-speed'), pause = document.getElementById('sp-pause');
         speed.value = s.speed; document.getElementById('sp-speed-val').textContent = parseFloat(s.speed).toFixed(2);
         pause.value = s.pauseScale; document.getElementById('sp-pause-val').textContent = parseFloat(s.pauseScale).toFixed(2);
@@ -6758,8 +6759,8 @@ async function loadVoiceSettings() {
 }
 async function saveVoiceSettings() {
     try {
-        await cpFetch('/api/v1/admin/voice/settings', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
+        await cpFetch('/api/v1/admin/voice/playback', {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 speed:      parseFloat(document.getElementById('sp-speed').value),
                 pauseScale: parseFloat(document.getElementById('sp-pause').value),
@@ -6822,7 +6823,7 @@ vsTvDefaultBtn.addEventListener('click', async () => {
     if (!modelName) return;
     vsTvDefaultBtn.disabled = true;
     try {
-        const resp = await cpFetch('/api/v1/admin/voice/default', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName }) });
+        const resp = await cpFetch('/api/v1/admin/voice/playback', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ defaultModel: modelName }) });
         if (!resp.ok) { const err = await resp.json().catch(() => ({ error: resp.statusText })); vsTvStatus.textContent = 'Error: ' + (err.error ?? resp.statusText); }
         else {
             await loadVoiceModels();
