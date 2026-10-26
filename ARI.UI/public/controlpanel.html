@@ -2655,7 +2655,7 @@ function calUpdateRepeatVisibility() {
 
 function calBuildRecurrencePayload() {
     const freq = document.getElementById('cal-f-repeat').value;
-    if (freq === 'none') return null;
+    if (freq === 'none') return { frequency: 'none' };
     const days = freq === 'weekly'
         ? Array.from(document.querySelectorAll('#cal-f-repeat-days input:checked')).map(cb => CAL_DOW_NAMES[+cb.dataset.dow])
         : null;
@@ -2675,7 +2675,7 @@ async function saveCalModal() {
     const title = document.getElementById('cal-f-title').value.trim();
     if (!title) { status.textContent = 'Title is required.'; return; }
 
-    let body, url;
+    let body;
     if (calModalKind === 'event') {
         const wholeDay = document.getElementById('cal-f-wholeday').checked;
         const start = dtpGetValue(document.getElementById('cal-f-start'));
@@ -2683,31 +2683,31 @@ async function saveCalModal() {
         if (!start || !end) { status.textContent = wholeDay ? 'From and to are required.' : 'Start and end are required.'; return; }
         // A whole-day field holds a bare date ("2026-09-08"); a timed one already has ":00" to add.
         body = {
-            title, notes: document.getElementById('cal-f-notes').value.trim() || null,
+            kind: 'event',
+            title, notes: document.getElementById('cal-f-notes').value.trim(),
             start: wholeDay ? `${start}T00:00:00` : start + ':00',
             end:   wholeDay ? `${end}T00:00:00`   : end + ':00',
             isWholeDay: wholeDay,
             recurrence: calBuildRecurrencePayload(),
         };
-        url = calModalId ? `/api/v1/admin/calendar/event/${calModalId}` : '/api/v1/admin/calendar/event';
     } else {
         const trigger = dtpGetValue(document.getElementById('cal-f-trigger'));
         const prompt  = document.getElementById('cal-f-prompt').value.trim();
         if (!trigger) { status.textContent = 'Trigger time is required.'; return; }
         if (!prompt)  { status.textContent = 'Prompt is required.'; return; }
         body = {
-            title, notes: document.getElementById('cal-f-notes').value.trim() || null,
+            kind: 'reminder',
+            title, notes: document.getElementById('cal-f-notes').value.trim(),
             triggerTime: trigger + ':00', prompt,
-            context: document.getElementById('cal-f-context').value.trim() || null,
+            context: document.getElementById('cal-f-context').value.trim(),
             recurrence: calBuildRecurrencePayload(),
         };
-        url = calModalId ? `/api/v1/admin/calendar/reminder/${calModalId}` : '/api/v1/admin/calendar/reminder';
     }
 
     status.textContent = 'Saving…';
     try {
-        const r = await cpFetch(url, {
-            method: calModalId ? 'PUT' : 'POST',
+        const r = await cpFetch(calModalId ? `/api/v1/admin/calendar/entries/${calModalId}` : '/api/v1/admin/calendar/entries', {
+            method: calModalId ? 'PATCH' : 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
         });
@@ -2721,7 +2721,7 @@ async function deleteCalModal() {
     if (!calModalId) return;
     if (!confirm(`Delete this ${calModalKind}? This cannot be undone.`)) return;
     try {
-        const r = await cpFetch(`/api/v1/admin/calendar/entry/${calModalId}`, { method: 'DELETE' });
+        const r = await cpFetch(`/api/v1/admin/calendar/entries/${calModalId}`, { method: 'DELETE' });
         if (!r.ok) throw new Error();
         closeCalModal();
         renderCalendar();
