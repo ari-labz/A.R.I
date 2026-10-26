@@ -587,9 +587,13 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
         if (file is null || file.Length == 0) return BadRequest("No file provided.");
 
+        // Only the file's own name is ever used: a client can send "../../x" or a full path as the filename.
+        string fileName = Path.GetFileName(file.FileName);
+        if (string.IsNullOrWhiteSpace(fileName)) return BadRequest("The file has no usable name.");
+
         string mime = file.ContentType ?? "application/octet-stream";
         bool isZip  = mime is "application/zip" or "application/x-zip-compressed"
-                   || file.FileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
+                   || fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
 
         // Resolve the target directory — project dir if already bound, otherwise the thread's scratchpad.
         string targetDir = FindThread(threadKey)?.FilesystemRoot is { } root
@@ -607,6 +611,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
             List<string> extracted = new();
             List<string> skipped   = new();
 
+            string targetRoot = Path.GetFullPath(targetDir);
             using ZipArchive archive = new(zipStream, ZipArchiveMode.Read);
             foreach (ZipArchiveEntry entry in archive.Entries)
             {
@@ -614,28 +619,36 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
                 if (entry.Name.StartsWith('.'))        continue;
                 if (IsSkippedZipPath(entry.FullName))  continue;
 
-                string destPath = Path.Combine(targetDir, entry.FullName.Replace('/', Path.DirectorySeparatorChar));
+                // A crafted zip can name an entry "../../x" to escape the folder ("zip slip"): refuse any
+                // entry that does not land inside the target.
+                string destPath = Path.GetFullPath(Path.Combine(targetRoot, entry.FullName.Replace('/', Path.DirectorySeparatorChar)));
+                if (!destPath.StartsWith(targetRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                {
+                    skipped.Add(entry.FullName);
+                    continue;
+                }
+
                 Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
                 using FileStream fs = System.IO.File.Create(destPath);
                 await entry.Open().CopyToAsync(fs);
                 extracted.Add(entry.FullName);
             }
 
-            return Ok(new { zip = file.FileName, extracted, skipped });
+            return Ok(new { zip = fileName, extracted, skipped });
         }
 
         // ── Normal single file ────────────────────────────────────────────────────
         if (BinaryMimes.Contains(mime))
-            return StatusCode(415, new { error = $"{Path.GetExtension(file.FileName).TrimStart('.').ToUpper()} files cannot be attached — binary formats are not supported." });
+            return StatusCode(415, new { error = $"{Path.GetExtension(fileName).TrimStart('.').ToUpper()} files cannot be attached — binary formats are not supported." });
 
         // All files land on the filesystem (scratchpad or project dir); ARI reads them via read_file.
         Directory.CreateDirectory(targetDir);
-        string fileDest = Path.Combine(targetDir, file.FileName);
+        string fileDest = Path.Combine(targetDir, fileName);
         await using FileStream destFs = System.IO.File.Create(fileDest);
         await file.CopyToAsync(destFs);
-        pendingFileNotes.GetOrAdd(threadKey, _ => new()).Add(file.FileName);
+        pendingFileNotes.GetOrAdd(threadKey, _ => new()).Add(fileName);
 
-        return Ok(new { name = file.FileName });
+        return Ok(new { name = fileName });
     }
 
     /// <summary>Extensions treated as plain text and extracted from zips.</summary>
@@ -751,11 +764,14 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
         if (file is null || file.Length == 0) return BadRequest("No file provided.");
 
+        string fileName = Path.GetFileName(file.FileName);
+        if (string.IsNullOrWhiteSpace(fileName)) return BadRequest("The file has no usable name.");
+
         string mime    = file.ContentType ?? "application/octet-stream";
         bool   isImage = ImageMimes.Contains(mime);
 
         if (!isImage && BinaryMimes.Contains(mime))
-            return StatusCode(415, new { error = $"{Path.GetExtension(file.FileName).TrimStart('.').ToUpper()} files are not supported — only images and plain text files can be attached to a message." });
+            return StatusCode(415, new { error = $"{Path.GetExtension(fileName).TrimStart('.').ToUpper()} files are not supported — only images and plain text files can be attached to a message." });
 
         string content;
         if (isImage)
@@ -773,9 +789,9 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         // Large text files are promoted to the thread scratchpad instead of being inlined.
         if (!isImage && content.Length > 10_000)
         {
-            string destPath = Path.Combine(Paths.ScratchpadDir(threadKey), file.FileName);
+            string destPath = Path.Combine(Paths.ScratchpadDir(threadKey), fileName);
             await System.IO.File.WriteAllTextAsync(destPath, content);
-            return Ok(new { name = file.FileName, isImage = false, mimeType = mime, promoted = true });
+            return Ok(new { name = fileName, isImage = false, mimeType = mime, promoted = true });
         }
 
         // Images are also saved to the scratchpad so ARI can pass them to image generation tools.
@@ -784,14 +800,14 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
             string scratchDir = Paths.ScratchpadDir(threadKey);
             Directory.CreateDirectory(scratchDir);
             byte[] imgBytes = Convert.FromBase64String(content);
-            await System.IO.File.WriteAllBytesAsync(Path.Combine(scratchDir, file.FileName), imgBytes);
+            await System.IO.File.WriteAllBytesAsync(Path.Combine(scratchDir, fileName), imgBytes);
         }
 
-        Attachment attachment = new Attachment { Id = Guid.NewGuid().ToString("N"), Name = file.FileName, Content = content, IsImage = isImage, MimeType = mime };
+        Attachment attachment = new Attachment { Id = Guid.NewGuid().ToString("N"), Name = fileName, Content = content, IsImage = isImage, MimeType = mime };
         List<Attachment> msgList = pendingMessageAttachments.GetOrAdd(threadKey, _ => new());
         msgList.RemoveAll(a => a.Name == attachment.Name);
         msgList.Add(attachment);
-        return Ok(new { id = attachment.Id, name = file.FileName, isImage, mimeType = mime, content, promoted = false });
+        return Ok(new { id = attachment.Id, name = fileName, isImage, mimeType = mime, content, promoted = false });
     }
 
     [HttpDelete("{threadKey}/message-attachments/{id}")]

@@ -1,5 +1,6 @@
 // A tiny test toolkit for the API tests: no packages needed, just Node.
 import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 
 export const base = process.env.ARI_TEST_URL ?? "http://localhost:5199";
 export const dataDir = process.env.ARI_TEST_DATA ?? "";
@@ -115,3 +116,12 @@ export function readSetupToken() {
   }
   throw new Failure("Setup Token not found in the log");
 }
+
+/** Build a zip file in memory. entries: { "name/inside.zip": "text" }. Names are used exactly as given, even "../x". */
+export function makeZip(entries) {
+  const script = "import sys,json,zipfile,io\nb=io.BytesIO()\nz=zipfile.ZipFile(b,'w')\nfor n,t in json.load(sys.stdin).items(): z.writestr(zipfile.ZipInfo(n),t)\nz.close()\nsys.stdout.buffer.write(b.getvalue())";
+  return execFileSync("python3", ["-c", script], { input: JSON.stringify(entries), maxBuffer: 50 * 1024 * 1024 });
+}
+
+export const exists = p => fs.existsSync(p);
+export const scratchpad = key => `${dataDir}/Server/Scratchpad/${key}`;
