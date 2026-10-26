@@ -9,7 +9,7 @@ using System.Text.Json.Nodes;
 
 namespace ARI.API.Controllers;
 
-[Route("api/v1/admin/llmconfigs")]
+[Route("api/v1/admin/llmConfigs")]
 [ApiController]
 public class LLMConfigController(PersistentData persistentData) : ControllerBase
 {
@@ -56,7 +56,7 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
             .InformationalVersion ?? "unknown";
     }
 
-    // ── GET /api/v1/admin/llmconfigs ───────────────────────────────────────────────
+    // ── GET /api/v1/admin/llmConfigs ───────────────────────────────────────────────
 
     [HttpGet]
     public IActionResult List()
@@ -99,7 +99,7 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
         return Ok(configs);
     }
 
-    // ── POST /api/v1/admin/llmconfigs/save ─────────────────────────────────────────
+    // ── POST /api/v1/admin/llmConfigs/save ─────────────────────────────────────────
 
     public sealed class SaveConfigRequest
     {
@@ -155,7 +155,7 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
         return Ok(new { ok = true, fileName = Path.GetFileName(zipPath) });
     }
 
-    // ── POST /api/v1/admin/llmconfigs/{fileName}/restore ───────────────────────────
+    // ── POST /api/v1/admin/llmConfigs/{fileName}/restore ───────────────────────────
 
     [HttpPost("{id}/restore")]
     public async Task<IActionResult> Restore(string id)
@@ -203,7 +203,7 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
         return Ok(new { ok = true });
     }
 
-    // ── GET /api/v1/admin/llmconfigs/{fileName}/contents ──────────────────────────
+    // ── GET /api/v1/admin/llmConfigs/{fileName}/contents ──────────────────────────
 
     [HttpGet("{id}")]
     public IActionResult Contents(string id)
@@ -222,7 +222,7 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
         return Ok(contents);
     }
 
-    // ── DELETE /api/v1/admin/llmconfigs/{fileName} ─────────────────────────────────
+    // ── DELETE /api/v1/admin/llmConfigs/{fileName} ─────────────────────────────────
 
     [HttpDelete("{id}")]
     public IActionResult Delete(string id)

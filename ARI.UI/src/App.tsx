@@ -487,10 +487,10 @@ export default function App() {
             const dirs: string[] = await window.electronBridge.getShallowTree(localPath, 2)
             const header = `Project root: ${localPath}\nDirectory structure (folders only — use list_directory to explore):\n`
             const content = header + dirs.join("\n")
-            // Inject as _fs_skeleton — a system-context hint, NOT a user-turn attachment.
+            // Inject as _fs_skeleton — a systemContext hint, NOT a user-turn attachment.
             // The server reads this name specially and places it in the system prompt rather
             // than prepending it to every user message.
-            const res = await apiFetch(`/api/v1/threads/${threadKey}/system-context`, {
+            const res = await apiFetch(`/api/v1/threads/${threadKey}/systemContext`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ name: "_fs_skeleton", content }),

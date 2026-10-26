@@ -6,8 +6,8 @@ namespace ARI.API.Controllers;
 
 /// <summary>
 /// The approval gate on persona self-edits. Ari can propose a change to how she carries herself; only a
-/// call to approve here ever writes Persona.md. Kept off the /admin surface deliberately — this is the
-/// user answering a question in their own conversation, not an administrative action.
+/// call to approve here ever writes Persona.md. It changes the one persona every conversation uses, so it is
+/// an admin action like any other edit of the persona.
 /// </summary>
 [Route("api/v1/admin/personaProposals")]
 [ApiController]
@@ -30,13 +30,13 @@ public class PersonaProposalsController : ControllerBase
         (bool ok, string message) = PersonaProposalStore.Approve(id);
         if (ok) Refresh(id);
         return ok ? Ok(new { ok = true, message, persona = PersonaStore.Get() })
-                  : BadRequest(new { ok = false, message });
+                  : BadRequest(new { error = message });
     }
 
     [HttpPost("{id}/reject")]
     public IActionResult Reject(string id)
     {
-        if (!PersonaProposalStore.Reject(id)) return BadRequest(new { ok = false, message = "Nothing pending to reject." });
+        if (!PersonaProposalStore.Reject(id)) return BadRequest(new { error = "Nothing pending to reject." });
         Refresh(id);
         return Ok(new { ok = true });
     }

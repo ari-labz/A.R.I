@@ -170,7 +170,7 @@ function useFeedback(threadKey: string | null) {
         setByTimestamp({})
         if (!threadKey) return
         let cancelled = false
-        fetch(`/api/v1/feedback/thread/${encodeURIComponent(threadKey)}`)
+        fetch(`/api/v1/threads/${encodeURIComponent(threadKey)}/feedback`)
             .then(r => r.ok ? r.json() : [])
             .then((rows: { id: string; vote: Vote; note: string; responseTimestamp: string }[]) => {
                 if (cancelled) return
@@ -805,12 +805,12 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
             if (!id) return
 
             btn.setAttribute("disabled", "true")
-            fetch(`/api/v1/admin/personaProposals/${encodeURIComponent(id)}/${approve ? "approve" : "reject"}`, { method: "POST" })
+            apiFetch(`/api/v1/admin/personaProposals/${encodeURIComponent(id)}/${approve ? "approve" : "reject"}`, { method: "POST" })
                 .then(async r => {
                     if (r.ok) return
-                    const body = await r.json().catch(() => ({ message: "" }))
+                    const body = await r.json().catch(() => ({ error: "" }))
                     btn.removeAttribute("disabled")
-                    if (body.message) alert(body.message)
+                    if (body.error) alert(body.error)
                 })
                 .catch(() => btn.removeAttribute("disabled"))
         }

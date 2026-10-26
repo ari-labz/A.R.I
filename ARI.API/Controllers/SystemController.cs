@@ -52,6 +52,7 @@ public class SystemController(APIConfig config, SystemInfo systemInfo, Persisten
         {
             await Task.Delay(500, cancellationToken);
             long newLength = new System.IO.FileInfo(logPath).Length;
+            if (newLength < position) position = 0;   // the log was rotated: start from the top of the new file
             if (newLength <= position) continue;
 
             using System.IO.FileStream fs = new(logPath, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite);

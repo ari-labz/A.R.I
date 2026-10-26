@@ -57,21 +57,21 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
             string? token = ExtractBearer(ctx);
             if (token is null)
             {
-                await Deny(ctx, 401, "Sign in first.");
+                await Unauthenticated(ctx);
                 return;
             }
 
             ClaimsPrincipal? principal = auth.ValidateToken(token);
             if (principal is null)
             {
-                await Deny(ctx, 401, "Sign in first.");
+                await Unauthenticated(ctx);
                 return;
             }
 
             string? sessionId = principal.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Jti);
             if (sessionId is null || store.GetSession(sessionId) is null)
             {
-                await Deny(ctx, 401, "Sign in first.");
+                await Unauthenticated(ctx);
                 return;
             }
 
@@ -95,6 +95,18 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
         }
 
         await next(ctx);
+    }
+
+    /// <summary>Not signed in. Signing out when you already are signed out is not an error: it just clears the cookie.</summary>
+    private static async Task Unauthenticated(HttpContext ctx)
+    {
+        if (HttpMethods.IsPost(ctx.Request.Method) && ctx.Request.Path.Equals("/api/v1/auth/logout", StringComparison.OrdinalIgnoreCase))
+        {
+            AuthCookie.Clear(ctx.Response);
+            await ctx.Response.WriteAsJsonAsync(new { ok = true });
+            return;
+        }
+        await Deny(ctx, 401, "Sign in first.");
     }
 
     /// <summary>Refuses a request with the same JSON error shape every other failure uses.</summary>

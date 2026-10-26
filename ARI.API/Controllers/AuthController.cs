@@ -14,6 +14,8 @@ public class AuthController(UserStore users, AuthService auth) : ControllerBase
     public record LoginRequest(string Username, string Password, string? DeviceHint, bool IsDesktop);
     public record LoginResponse(string Token, string Role, string DisplayName, bool MustChangePassword);
 
+    private static readonly string DummyHash = AuthService.HashPassword("not-a-real-password");
+
     [HttpPost("login")]
     public IActionResult Login([FromBody] LoginRequest req)
     {
@@ -23,7 +25,9 @@ public class AuthController(UserStore users, AuthService auth) : ControllerBase
         string ip = ClientAddress.Of(HttpContext);
 
         User? user = users.GetByUsername(req.Username);
-        if (user is null || !AuthService.VerifyPassword(req.Password, user.PasswordHash))
+        // Always do the same amount of work, so the time taken doesn't reveal whether the username exists.
+        bool passwordOk = AuthService.VerifyPassword(req.Password, user?.PasswordHash ?? DummyHash);
+        if (user is null || !passwordOk)
         {
             int attempts = users.RecordFailedAttempt(ip);
             if (attempts >= 3)

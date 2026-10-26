@@ -127,7 +127,10 @@ public class VoiceController(
     {
         if (string.IsNullOrWhiteSpace(req.ModelName))
             return BadRequest(new { error = "modelName is required." });
-        if (string.IsNullOrWhiteSpace(req.StagingPath) || !Directory.Exists(req.StagingPath))
+        if (!SafeNames.IsSafe(req.ModelName) || (req.Engine is not null && !SafeNames.IsSafe(req.Engine)))
+            return BadRequest(new { error = "That name is not allowed." });
+        if (string.IsNullOrWhiteSpace(req.StagingPath) || !Directory.Exists(req.StagingPath)
+            || !Path.GetFullPath(req.StagingPath).StartsWith(Path.GetFullPath(StagingRoot) + Path.DirectorySeparatorChar, StringComparison.Ordinal))
             return BadRequest(new { error = "stagingPath does not exist." });
         if (string.IsNullOrEmpty(vsConfig.VoicesPath))
             return StatusCode(503, new { error = "VoiceSynthesis module is not configured." });
@@ -280,6 +283,8 @@ public class VoiceController(
     {
         if (string.IsNullOrWhiteSpace(req.Text))
             return BadRequest(new { error = "text is required." });
+        if (req.Text.Length > 5000)
+            return BadRequest(new { error = "text is too long (5000 characters at most)." });
         if (voiceService?.IsReady != true)
             return StatusCode(503, new { error = "Voice module is not running." });
 
@@ -290,7 +295,8 @@ public class VoiceController(
         engineParams["embeddingScale"] = req.EmbeddingScale;
         engineParams["speed"]          = req.Speed;
         engineParams["pauseScale"]     = req.PauseScale;
-        if (!string.IsNullOrWhiteSpace(req.CheckpointPath))
+        // A checkpoint is a file on the server's disk, so only an admin may name one; everyone else gets the active voice.
+        if (!string.IsNullOrWhiteSpace(req.CheckpointPath) && User.IsInRole(ARI.API.Auth.Roles.Admin))
         {
             if (!System.IO.File.Exists(req.CheckpointPath))
                 return NotFound(new { error = $"Checkpoint not found: {req.CheckpointPath}" });
@@ -426,6 +432,8 @@ public class VoiceController(
     [HttpPost("playback/switch")]
     public async Task<IActionResult> SwitchEngineModel([FromBody] SwitchEngineRequest req)
     {
+        if (!SafeNames.IsSafe(req.Engine) || !SafeNames.IsSafe(req.ModelName))
+            return BadRequest(new { error = "That name is not allowed." });
         if (voiceService is null)
             return StatusCode(503, new { error = "Voice module is not running." });
         if (string.IsNullOrWhiteSpace(req.Engine) || string.IsNullOrWhiteSpace(req.ModelName))
@@ -667,6 +675,8 @@ public class VoiceController(
     [HttpPost("training/resume")]
     public IActionResult ResumeTraining([FromBody] ResumeRequest req)
     {
+        if (!SafeNames.IsSafe(req.ModelName) || (req.Engine is not null && !SafeNames.IsSafe(req.Engine)))
+            return BadRequest(new { error = "That name is not allowed." });
         if (string.IsNullOrWhiteSpace(req.ModelName))
             return BadRequest(new { error = "modelName is required." });
         if (string.IsNullOrEmpty(vsConfig.VoicesPath))
@@ -764,7 +774,7 @@ public class VoiceController(
     [HttpPost("dataset/transcribe")]
     public IActionResult StartTranscription([FromBody] DatasetProcessRequest req)
     {
-        if (string.IsNullOrWhiteSpace(req.StageId))
+        if (!SafeNames.IsSafe(req.StageId))
             return BadRequest(new { error = "stageId is required." });
 
         string stageDir = Path.Combine(StagingRoot, req.StageId);
@@ -824,7 +834,7 @@ public class VoiceController(
     [HttpPost("dataset/process")]
     public IActionResult ProcessDataset([FromBody] DatasetProcessRequest req)
     {
-        if (string.IsNullOrWhiteSpace(req.StageId))
+        if (!SafeNames.IsSafe(req.StageId))
             return BadRequest(new { error = "stageId is required." });
 
         string stageDir = Path.Combine(StagingRoot, req.StageId);

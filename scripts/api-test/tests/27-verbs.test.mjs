@@ -21,13 +21,13 @@ test("a module is switched with PATCH", async () => {
 });
 
 test("image generation settings change with PATCH and keep what is not sent", async () => {
-  const before = status(await master.get("/admin/imagegen/config"), 200).json;
-  status(await master.patch("/admin/imagegen/config", { idleSeconds: 123 }), 200);
-  const now = status(await master.get("/admin/imagegen/config"), 200).json;
+  const before = status(await master.get("/admin/imageGen/config"), 200).json;
+  status(await master.patch("/admin/imageGen/config", { idleSeconds: 123 }), 200);
+  const now = status(await master.get("/admin/imageGen/config"), 200).json;
   equal(now.idleSeconds, 123);
   equal(now.port, before.port, "port untouched");
-  status(await master.patch("/admin/imagegen/config", { idleSeconds: before.idleSeconds }), 200);
-  status(await master.post("/admin/imagegen/config", {}), 404);
+  status(await master.patch("/admin/imageGen/config", { idleSeconds: before.idleSeconds }), 200);
+  status(await master.post("/admin/imageGen/config", {}), 404);
 });
 
 test("llama.cpp is one thing: read it, and change it with PATCH", async () => {
@@ -43,12 +43,12 @@ test("brain backups: list, create at /backups", async () => {
 });
 
 test("saved model setups: create at the collection, read and delete by id", async () => {
-  status(await master.get("/admin/llmconfigs"), 200);
-  status(await master.post("/admin/llmconfigs/save", { name: "x" }), 404);
-  const made = status(await master.post("/admin/llmconfigs", { name: "verbs-test", description: "" }), 200).json;
-  status(await master.get(`/admin/llmconfigs/${encodeURIComponent(made.fileName)}`), 200);
-  status(await master.get(`/admin/llmconfigs/${encodeURIComponent(made.fileName)}/contents`), 404);
-  status(await master.del(`/admin/llmconfigs/${encodeURIComponent(made.fileName)}`), 200);
+  status(await master.get("/admin/llmConfigs"), 200);
+  status(await master.post("/admin/llmConfigs/save", { name: "x" }), 404);
+  const made = status(await master.post("/admin/llmConfigs", { name: "verbs-test", description: "" }), 200).json;
+  status(await master.get(`/admin/llmConfigs/${encodeURIComponent(made.fileName)}`), 200);
+  status(await master.get(`/admin/llmConfigs/${encodeURIComponent(made.fileName)}/contents`), 404);
+  status(await master.del(`/admin/llmConfigs/${encodeURIComponent(made.fileName)}`), 200);
 });
 
 test("the theme is replaced with PUT, and picture slots too", async () => {

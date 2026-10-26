@@ -8,6 +8,9 @@ namespace ARI.API;
 /// </summary>
 public static class Paging
 {
+    /// <summary>The most one slice can hold.</summary>
+    public const int MaxLimit = 1000;
+
     public static List<T> Page<T>(this ControllerBase controller, IReadOnlyList<T> all)
     {
         controller.Response.Headers["X-Total-Count"] = all.Count.ToString();
@@ -15,7 +18,7 @@ public static class Paging
         controller.Request.Query.TryGetValue("offset", out Microsoft.Extensions.Primitives.StringValues offsetText);
         int offset = int.TryParse(offsetText, out int o) && o > 0 ? o : 0;
         IEnumerable<T> slice = all.Skip(offset);
-        if (int.TryParse(limitText, out int limit) && limit > 0) slice = slice.Take(limit);
+        if (int.TryParse(limitText, out int limit) && limit > 0) slice = slice.Take(Math.Min(limit, MaxLimit));
         return slice.ToList();
     }
 }

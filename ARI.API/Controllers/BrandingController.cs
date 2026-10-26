@@ -25,6 +25,7 @@ public class BrandingController : ControllerBase
     {
         string slot = id;
         if (BrandingStore.Find(slot) is null) return NotFound();
+        if (file is null || file.Length == 0) return BadRequest(new { error = "No file provided." });
         using Stream s = file.OpenReadStream();
         string? err = BrandingStore.Save(slot, s);
         return err is null ? Ok(new { ok = true }) : BadRequest(new { error = err });

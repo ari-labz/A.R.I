@@ -82,6 +82,7 @@ public class AdminSetupController(PersistentData persistentData, ILoggerFactory 
         if (listing.Error is not null) return BadRequest(new { error = listing.Error });
 
         HardwareReport hw = HardwareInfo.Detect();
+        if (listing.Files.Count == 0) return BadRequest(new { error = "No .gguf files were found there." });
         double kvPerTok   = ModelInspector.KvBytesPerToken(listing.Arch, listing.Files[listing.Files.Count / 2].SizeBytes);
 
         var files = listing.Files.Select(f =>
@@ -106,6 +107,9 @@ public class AdminSetupController(PersistentData persistentData, ILoggerFactory 
     public IActionResult ChooseModel([FromBody] ModelRequest req)
     {
         if (SetupDownload.Running) return Conflict(new { error = "A download is already running." });
+        if (string.IsNullOrWhiteSpace(req.Repo) || string.IsNullOrWhiteSpace(req.File) || string.IsNullOrWhiteSpace(req.DownloadUrl)
+            || !System.Text.RegularExpressions.Regex.IsMatch(req.Repo, @"^[\w.-]+/[\w.-]+$"))
+            return BadRequest(new { error = "repo, file and downloadUrl are required." });
         if (!req.DownloadUrl.StartsWith("https://huggingface.co/", StringComparison.Ordinal) || !req.File.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase))
             return BadRequest(new { error = "Only Hugging Face .gguf links are accepted." });
 

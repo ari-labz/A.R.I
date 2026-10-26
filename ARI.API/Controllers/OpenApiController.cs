@@ -53,7 +53,7 @@ public class OpenApiController(IApiDescriptionGroupCollectionProvider routes) : 
             Dictionary<string, object> operation = new()
             {
                 ["operationId"] = $"{method}_{path.Trim('/').Replace('/', '_').Replace("{", "").Replace("}", "")}",
-                ["summary"]     = action,
+                ["summary"]     = Humanise(action),
                 ["tags"]        = new[] { TagOf(path) },
                 ["parameters"]  = parameters,
                 ["x-adminOnly"] = admin,
@@ -64,6 +64,7 @@ public class OpenApiController(IApiDescriptionGroupCollectionProvider routes) : 
                 },
             };
             if (body is not null) operation["requestBody"] = body;
+            if (OpenPaths.Contains(path)) operation["security"] = Array.Empty<object>();   // no sign-in needed
 
             if (!paths.TryGetValue(path, out SortedDictionary<string, object>? verbs)) paths[path] = verbs = new();
             verbs[method] = operation;
@@ -78,11 +79,19 @@ public class OpenApiController(IApiDescriptionGroupCollectionProvider routes) : 
             openapi = "3.0.3",
             info    = new { title = "ARI API", version = "v1", description = "Everything under /api/v1/admin is for admins only. Everything else needs a signed-in person; each route that holds someone's own data checks it is theirs." },
             servers = new[] { new { url = "/" } },
-            components = new { securitySchemes = new { bearer = new { type = "http", scheme = "bearer" } } },
-            security = new[] { new Dictionary<string, string[]> { ["bearer"] = [] } },
+            components = new { securitySchemes = new Dictionary<string, object> { ["bearer"] = new { type = "http", scheme = "bearer" }, ["cookie"] = new { type = "apiKey", @in = "cookie", name = "ari_session" } } },
+            security = new[] { new Dictionary<string, string[]> { ["bearer"] = [] }, new Dictionary<string, string[]> { ["cookie"] = [] } },
             paths,
         });
     }
+
+    /// <summary>Routes that need no sign-in (see AuthMiddleware).</summary>
+    private static readonly HashSet<string> OpenPaths = new(StringComparer.OrdinalIgnoreCase)
+        { "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/theme", "/api/v1/branding", "/api/v1/setup/status", "/api/v1/setup/account", "/api/v1/health" };
+
+    /// <summary>"GetThreadStatus" becomes "Get thread status".</summary>
+    private static string Humanise(string name)
+        => System.Text.RegularExpressions.Regex.Replace(name, "(?<=[a-z0-9])(?=[A-Z])", " ").ToLowerInvariant() is { Length: > 0 } t ? char.ToUpperInvariant(t[0]) + t[1..] : name;
 
     private static void AddSocket(SortedDictionary<string, SortedDictionary<string, object>> paths, string path, string description)
         => paths[path] = new SortedDictionary<string, object>

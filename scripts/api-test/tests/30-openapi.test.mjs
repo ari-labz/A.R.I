@@ -7,6 +7,7 @@ test("the API describes itself at /openapi.json, for anyone signed in", async ()
   status(await anon.get("/openapi.json"), 401);
   const spec = status(await guest.get("/openapi.json"), 200).json;
   equal(spec.openapi, "3.0.3");
+  if (process.env.ARI_TEST_SPEC_OUT) (await import("node:fs")).writeFileSync(process.env.ARI_TEST_SPEC_OUT, JSON.stringify(spec, null, 2));
   assert(Object.keys(spec.paths).length > 80, "should list the routes: " + Object.keys(spec.paths).length);
   assert(Object.keys(spec.paths).every(p => p.startsWith("/api/v1/")), "every path should be under /api/v1");
 });
@@ -22,7 +23,7 @@ test("the description knows the shape of a body and the parts of an address", as
 
 test("EVERY route under /admin refuses a guest, and EVERY other route refuses someone not signed in (except the few open ones)", async () => {
   const spec = status(await master.get("/openapi.json"), 200).json;
-  const open = new Set(["/api/v1/auth/login", "/api/v1/theme", "/api/v1/branding", "/api/v1/setup/status", "/api/v1/setup/account", "/api/v1/health"]);
+  const open = new Set(["/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/theme", "/api/v1/branding", "/api/v1/setup/status", "/api/v1/setup/account", "/api/v1/health"]);
   let checked = 0;
   for (const [path, verbs] of Object.entries(spec.paths)) {
     if (path.includes("/client") || path.includes("/listener/stream")) continue;          // sockets are checked in their own tests

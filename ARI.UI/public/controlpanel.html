@@ -3352,7 +3352,7 @@ async function loadLLMConfigs() {
     const status = document.getElementById('lcfg-status');
     list.innerHTML = '<span style="color:var(--text-dim);font-size:13px;">Loading…</span>';
     try {
-        const configs = await cpFetch('/api/v1/admin/llmconfigs').then(r => r.json());
+        const configs = await cpFetch('/api/v1/admin/llmConfigs').then(r => r.json());
         if (!configs.length) { list.innerHTML = '<span style="color:var(--text-dim);font-size:13px;">No saved configs yet.</span>'; return; }
         list.innerHTML = '';
         configs.forEach(cfg => {
@@ -3376,7 +3376,7 @@ async function loadLLMConfigs() {
                 if (!confirm(`Restore "${cfg.name}"?\n\nAll running servers will stop, the config will be applied, then servers with Auto-start will boot.`)) return;
                 status.textContent = 'Restoring…';
                 try {
-                    const r = await cpFetch(`/api/v1/admin/llmconfigs/${encodeURIComponent(cfg.fileName)}/restore`, { method: 'POST' });
+                    const r = await cpFetch(`/api/v1/admin/llmConfigs/${encodeURIComponent(cfg.fileName)}/restore`, { method: 'POST' });
                     if (!r.ok) { const e = await r.json().catch(()=>{}); status.textContent = e?.error ?? 'Restore failed.'; return; }
                     status.textContent = 'Restored. Servers booting…';
                     setTimeout(() => { status.textContent = ''; }, 5000);
@@ -3384,7 +3384,7 @@ async function loadLLMConfigs() {
             });
             row.querySelector('.lcfg-delete').addEventListener('click', async () => {
                 if (!confirm(`Delete config "${cfg.name}"? This cannot be undone.`)) return;
-                await cpFetch(`/api/v1/admin/llmconfigs/${encodeURIComponent(cfg.fileName)}`, { method: 'DELETE' });
+                await cpFetch(`/api/v1/admin/llmConfigs/${encodeURIComponent(cfg.fileName)}`, { method: 'DELETE' });
                 loadLLMConfigs();
             });
             list.appendChild(row);
@@ -3399,7 +3399,7 @@ document.getElementById('lcfg-save-btn').addEventListener('click', async () => {
     if (!name) { status.textContent = 'Enter a name first.'; return; }
     status.textContent = 'Saving…';
     try {
-        const r = await cpFetch('/api/v1/admin/llmconfigs', {
+        const r = await cpFetch('/api/v1/admin/llmConfigs', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, description: desc }),
         });
@@ -7562,7 +7562,7 @@ let igConfig = {};
 
 async function igLoad() {
     try {
-        igConfig = await cpFetch('/api/v1/admin/imagegen/config').then(r => r.json());
+        igConfig = await cpFetch('/api/v1/admin/imageGen/config').then(r => r.json());
         document.getElementById('ig-enabled').checked        = igConfig.enabled      ?? false;
         document.getElementById('ig-comfyui-path').value     = igConfig.comfyUiPath  ?? '';
         document.getElementById('ig-port').value             = igConfig.port         ?? 8188;
@@ -7571,7 +7571,7 @@ async function igLoad() {
     } catch(e) { console.error('ImageGen config load failed', e); }
 
     try {
-        const status = await cpFetch('/api/v1/admin/imagegen/status').then(r => r.json());
+        const status = await cpFetch('/api/v1/admin/imageGen/status').then(r => r.json());
         const el = document.getElementById('ig-status');
         if (status.ready)         el.innerHTML   = '<span style="color:var(--col-control-panel-line-7104-text)">● ComfyUI ready</span>';
         else if (status.active)   el.textContent = 'Module loaded — ComfyUI will start on first generation request.';
@@ -7586,7 +7586,7 @@ async function igLoadModels() {
     const sel = document.getElementById('ig-checkpoint-select');
     sel.innerHTML = '<option value="">— select a checkpoint —</option>';
     try {
-        const models = await cpFetch('/api/v1/admin/imagegen/models').then(r => r.json());
+        const models = await cpFetch('/api/v1/admin/imageGen/models').then(r => r.json());
         models.forEach(m => {
             const opt = document.createElement('option');
             opt.value = opt.textContent = m;
@@ -7609,7 +7609,7 @@ document.getElementById('ig-save-model-btn').addEventListener('click', async () 
     const status = document.getElementById('ig-model-save-status');
     status.textContent = 'Saving…';
     try {
-        await cpFetch('/api/v1/admin/imagegen/config', { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
+        await cpFetch('/api/v1/admin/imageGen/config', { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
             enabled:     document.getElementById('ig-enabled').checked,
             checkpoint,
             port:        parseInt(document.getElementById('ig-port').value) || 8188,
@@ -7625,7 +7625,7 @@ document.getElementById('ig-save-settings-btn').addEventListener('click', async 
     const status = document.getElementById('ig-settings-save-status');
     status.textContent = 'Saving…';
     try {
-        await cpFetch('/api/v1/admin/imagegen/config', { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
+        await cpFetch('/api/v1/admin/imageGen/config', { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
             enabled:     document.getElementById('ig-enabled').checked,
             checkpoint:  igConfig.checkpoint ?? '',
             comfyUiPath: document.getElementById('ig-comfyui-path').value.trim(),
