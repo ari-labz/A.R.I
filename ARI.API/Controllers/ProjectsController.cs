@@ -18,7 +18,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
         {
             // Admins see everything — join owner username so the control panel can display it.
             Dictionary<int, string> allUsers = users.GetAll().ToDictionary(u => u.Id, u => u.Username);
-            return Ok(store.GetAll().Select(p => new
+            return Ok(this.Page(store.GetAll().Select(p => new
             {
                 p.Id, p.Name, p.Description, p.Instructions, p.CreatedAt,
                 p.Category,
@@ -29,12 +29,12 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
                 Backend = p.Backend.ToString(),
                 p.RootPath, p.OwnerId,
                 OwnerUsername = p.OwnerId == 0 ? "admin" : (allUsers.TryGetValue(p.OwnerId, out string? n) ? n : "unknown"),
-            }));
+            }).ToList()));
         }
 
         // Guests see only their own projects.
         int callerId = CallerId();
-        return Ok(store.GetByOwner(callerId));
+        return Ok(this.Page(store.GetByOwner(callerId).ToList()));
     }
 
     [HttpPost]

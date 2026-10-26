@@ -59,12 +59,12 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
     // ── Thread navigation helpers ───────────────────────────────────────────────
 
-    /// <summary>Every action with a {threadKey} in its route passes through here first, so no endpoint can forget the
+    /// <summary>Every action with a {id} in its route passes through here first, so no endpoint can forget the
     /// ownership check: a guest can only touch their own threads. A key with no thread yet is let through — creating
     /// it (stream) stamps the caller as its owner.</summary>
     void Microsoft.AspNetCore.Mvc.Filters.IActionFilter.OnActionExecuting(Microsoft.AspNetCore.Mvc.Filters.ActionExecutingContext context)
     {
-        if (context.RouteData.Values["threadKey"] is not string key || Llm is null) return;
+        if (context.RouteData.Values["id"] is not string key || Llm is null) return;
         if (Llm.Threads.TryGetValue(key, out ARI.LLM.Thread? thread))
         {
             if (!CanAccessThread(thread)) context.Result = new StatusCodeResult(403);
@@ -89,7 +89,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     }
 
     /// <summary>Finds an existing live thread by key (user-facing or internal).</summary>
-    private ARI.LLM.Thread? FindThread(string threadKey)
+    private ARI.LLM.Thread? FindThread([FromRoute(Name = "id")] string threadKey)
     {
         if (Llm is null) return null;
         Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? t);
@@ -97,7 +97,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     }
 
     /// <summary>Gets or creates the correct thread for the given key, routing to Code or Dialogue.</summary>
-    private ARI.LLM.Thread GetOrCreateThread(string threadKey)
+    private ARI.LLM.Thread GetOrCreateThread([FromRoute(Name = "id")] string threadKey)
     {
         bool isCode = Llm!.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? existing)
                       && existing.Pipeline == ARI.LLM.ThreadPipeline.Code;
@@ -119,12 +119,17 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
     // ── Thread endpoints ────────────────────────────────────────────────────────
 
+    /// <summary>Your threads, newest first (an admin's list holds everyone's). Take a slice with limit and offset.</summary>
     [HttpGet]
-    public IActionResult GetThreads([FromQuery] bool includeInternal = false)
+    public IActionResult GetThreads() => BuildThreadList(includeInternal: false);
+
+    /// <summary>Every thread, including the internal ones (memory work, dreams, other people's conversations): the admin's debugging view.</summary>
+    [HttpGet("~/api/v1/admin/debug/threads")]
+    public IActionResult GetAllThreads() => BuildThreadList(includeInternal: true);
+
+    private IActionResult BuildThreadList(bool includeInternal)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
-        // Internal threads (memory work, dreams, other people's conversations) are the admin's debugging view.
-        if (includeInternal && !User.IsInRole(ARI.API.Auth.Roles.Admin)) return StatusCode(403);
 
         IReadOnlyDictionary<string, ARI.LLM.Thread> allThreads = Llm.Threads;
 
@@ -185,7 +190,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
             threads.AddRange(internalThreads);
         }
 
-        return Ok(threads.OrderByDescending(t => t.LastMessageAt).ToList());
+        return Ok(this.Page(threads.OrderByDescending(t => t.LastMessageAt).ToList()));
     }
 
     [HttpPost]
@@ -237,8 +242,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     /// Poll at ~150ms while thread.state == "streaming"; stop once it is anything else (active/inactive/…).
     /// DebugRequestJson / DebugResponseText are excluded here — use GET /threads/{key}/debug for those.
     /// </summary>
-    [HttpGet("{threadKey}")]
-    public IActionResult GetThread(string threadKey)
+    [HttpGet("{id}")]
+    public IActionResult GetThread([FromRoute(Name = "id")] string threadKey)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
 
@@ -271,8 +276,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     /// <c>{ key, label, isInternal, pipeline, history: [...], children: [ {same shape}, ... ] }</c>.
     /// Used exclusively by the control-panel Debug Threads pane — not for normal clients.
     /// </summary>
-    [HttpGet("~/api/v1/admin/debug/threads/{threadKey}")]
-    public IActionResult GetThreadDebug(string threadKey)
+    [HttpGet("~/api/v1/admin/debug/threads/{id}")]
+    public IActionResult GetThreadDebug([FromRoute(Name = "id")] string threadKey)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
 
@@ -283,8 +288,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     }
 
     // Test-only: injects a fixed transcript directly into a thread's history, no LLM call, so Engram can be exercised repeatedly against the same input.
-    [HttpPost("~/api/v1/admin/debug/threads/{threadKey}/seed")]
-    public IActionResult SeedDebugHistory(string threadKey, [FromBody] List<SeedTurn> turns)
+    [HttpPost("~/api/v1/admin/debug/threads/{id}/seed")]
+    public IActionResult SeedDebugHistory([FromRoute(Name = "id")] string threadKey, [FromBody] List<SeedTurn> turns)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
 
@@ -304,8 +309,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     public record SeedTurn(string Speaker, string Text, string? AuthorName = null);
 
     // Test-only: runs Engram's Classify+Extract stages and returns the raw entity list — never touches Save.
-    [HttpPost("~/api/v1/admin/debug/threads/{threadKey}/extractOnly")]
-    public async Task<IActionResult> DebugExtractOnly(string threadKey)
+    [HttpPost("~/api/v1/admin/debug/threads/{id}/extractOnly")]
+    public async Task<IActionResult> DebugExtractOnly([FromRoute(Name = "id")] string threadKey)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
         List<(string Entity, bool IsNew, string Excerpt, bool Sensitive)> entities = await Llm.DebugExtractOnly(threadKey);
@@ -322,8 +327,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     }
 
     /// <summary>Returns the raw events from a disk-recorded session file.</summary>
-    [HttpGet("~/api/v1/admin/debug/sessions/{stem}")]
-    public IActionResult GetDebugSession(string stem)
+    [HttpGet("~/api/v1/admin/debug/sessions/{id}")]
+    public IActionResult GetDebugSession([FromRoute(Name = "id")] string stem)
     {
         List<Dictionary<string, object?>>? lines = ARI.LLM.SessionRecorder.ReadSessionFile(stem);
         if (lines is null) return NotFound();
@@ -374,8 +379,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     /// <summary>A thread's messages, oldest first. Cancelled responses are hidden unless <c>raw</c> is set; streaming
     /// responses are included so watching clients can render the in-progress reply. A thread that has expired
     /// (kept by Persistent Threads) is rebuilt just to be read.</summary>
-    [HttpGet("{threadKey}/messages")]
-    public IActionResult GetMessages(string threadKey, [FromQuery] bool raw = false)
+    [HttpGet("{id}/messages")]
+    public IActionResult GetMessages([FromRoute(Name = "id")] string threadKey, [FromQuery] bool raw = false)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
 
@@ -387,11 +392,11 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
                 .Where(i => i.IsVisible && i is not Response { State: State.Cancelled })
                 .ToList();
 
-        return Ok(items);
+        return Ok(this.Page(items));
     }
 
-    [HttpGet("{threadKey}/export")]
-    public IActionResult ExportLog(string threadKey)
+    [HttpGet("{id}/export")]
+    public IActionResult ExportLog([FromRoute(Name = "id")] string threadKey)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
         ARI.LLM.Thread? exportThread = FindThread(threadKey);
@@ -455,8 +460,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     /// <summary>
     /// Per-thread SSE endpoint — kept for debug panel / legacy consumers.
     /// </summary>
-    [HttpGet("{threadKey}/watch")]
-    public async Task Watch(string threadKey, CancellationToken cancellationToken)
+    [HttpGet("{id}/watch")]
+    public async Task Watch([FromRoute(Name = "id")] string threadKey, CancellationToken cancellationToken)
     {
         Response.Headers[HeaderNames.ContentType]  = "text/event-stream";
         Response.Headers[HeaderNames.CacheControl] = "no-cache";
@@ -510,7 +515,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         }
     }
 
-    private async Task SendWatchEvent(string threadKey, CancellationToken ct)
+    private async Task SendWatchEvent([FromRoute(Name = "id")] string threadKey, CancellationToken ct)
     {
         string status = (Llm?.IsEngramSweeping(threadKey)  ?? false) ? "remembering"
                       : Llm?.GetThreadPhase(threadKey) switch
@@ -535,8 +540,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     }
 
     /// <summary>The user's answer to a tool's approval prompt (see ToolApprovals). 404 if it's no longer waiting.</summary>
-    [HttpPost("~/api/v1/admin/threads/{threadKey}/approvals/{id}")]
-    public IActionResult AnswerApproval(string threadKey, string id, [FromBody] ApprovalAnswer body)
+    [HttpPost("~/api/v1/admin/threads/{id}/approvals/{approvalId}")]
+    public IActionResult AnswerApproval([FromRoute(Name = "id")] string threadKey, [FromRoute(Name = "approvalId")] string id, [FromBody] ApprovalAnswer body)
     {
         return ARI.LLM.ToolApprovals.Resolve(threadKey, id, body?.Allow == true) ? Ok() : NotFound();
     }
@@ -569,9 +574,9 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
           "application/vnd.openxmlformats-officedocument.presentationml.presentation",
           "application/msword", "application/vnd.ms-excel", "application/vnd.ms-powerpoint" };
 
-    [HttpPost("{threadKey}/files")]
+    [HttpPost("{id}/files")]
     [DisableRequestSizeLimit]
-    public async Task<IActionResult> AddAttachment(string threadKey, IFormFile file)
+    public async Task<IActionResult> AddAttachment([FromRoute(Name = "id")] string threadKey, IFormFile file)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
         if (file is null || file.Length == 0) return BadRequest("No file provided.");
@@ -657,8 +662,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         fullName.Contains("/.vs/",        StringComparison.OrdinalIgnoreCase) ||
         fullName.StartsWith("__MACOSX/",  StringComparison.OrdinalIgnoreCase);
 
-    [HttpDelete("{threadKey}/files")]
-    public IActionResult RemoveFile(string threadKey, [FromQuery] string path)
+    [HttpDelete("{id}/files")]
+    public IActionResult RemoveFile([FromRoute(Name = "id")] string threadKey, [FromQuery] string path)
     {
         if (string.IsNullOrWhiteSpace(path)) return BadRequest("path is required.");
 
@@ -672,8 +677,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         return Ok();
     }
 
-    [HttpGet("{threadKey}/files")]
-    public IActionResult GetAttachments(string threadKey)
+    [HttpGet("{id}/files")]
+    public IActionResult GetAttachments([FromRoute(Name = "id")] string threadKey)
     {
         static bool IsImageExt(string ext) => ext is ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp";
 
@@ -698,8 +703,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
     // ── Promote scratchpad to project ──────────────────────────────────────────
 
-    [HttpPost("{threadKey}/promote")]
-    public IActionResult PromoteToProject(string threadKey, [FromBody] PromoteToProjectRequest req)
+    [HttpPost("{id}/promote")]
+    public IActionResult PromoteToProject([FromRoute(Name = "id")] string threadKey, [FromBody] PromoteToProjectRequest req)
     {
         if (string.IsNullOrWhiteSpace(req?.Name))
             return BadRequest(new { error = "Name is required." });
@@ -742,9 +747,9 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
     // ── Message Attachments (ephemeral — cleared after send) ────────────────────
 
-    [HttpPost("{threadKey}/messageAttachments")]
+    [HttpPost("{id}/messageAttachments")]
     [DisableRequestSizeLimit]
-    public async Task<IActionResult> AddMessageAttachment(string threadKey, IFormFile file)
+    public async Task<IActionResult> AddMessageAttachment([FromRoute(Name = "id")] string threadKey, IFormFile file)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
         if (file is null || file.Length == 0) return BadRequest("No file provided.");
@@ -795,16 +800,16 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         return Ok(new { id = attachment.Id, name = fileName, isImage, mimeType = mime, content, promoted = false });
     }
 
-    [HttpDelete("{threadKey}/messageAttachments/{id}")]
-    public IActionResult RemoveMessageAttachment(string threadKey, string id)
+    [HttpDelete("{id}/messageAttachments/{attachmentId}")]
+    public IActionResult RemoveMessageAttachment([FromRoute(Name = "id")] string threadKey, [FromRoute(Name = "attachmentId")] string id)
     {
         if (pendingMessageAttachments.TryGetValue(threadKey, out List<Attachment>? list))
             list.RemoveAll(a => a.Id == id);
         return Ok();
     }
 
-    [HttpGet("{threadKey}/messageAttachments")]
-    public IActionResult GetMessageAttachments(string threadKey)
+    [HttpGet("{id}/messageAttachments")]
+    public IActionResult GetMessageAttachments([FromRoute(Name = "id")] string threadKey)
     {
         List<Attachment> staged = pendingMessageAttachments.TryGetValue(threadKey, out List<Attachment>? list) ? list : new();
         return Ok(staged.Select(a => new { a.Id, a.Name, a.IsImage, a.MimeType, a.Content }));
@@ -817,8 +822,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     /// clipboard-pasted image used to be called "image.png") and name alone would always resolve to
     /// whichever message happened to appear first in the thread.
     /// </summary>
-    [HttpGet("{threadKey}/messageAttachments/{id}")]
-    public IActionResult GetMessageAttachmentContent(string threadKey, string id)
+    [HttpGet("{id}/messageAttachments/{attachmentId}")]
+    public IActionResult GetMessageAttachmentContent([FromRoute(Name = "id")] string threadKey, [FromRoute(Name = "attachmentId")] string id)
     {
         if (Llm is null) return StatusCode(503);
 
@@ -841,8 +846,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     /// scratchpad). Pictures and video come back as themselves so they can be shown in the page; anything else
     /// comes back as a download. A path that leaves the folder is refused.
     /// </summary>
-    [HttpGet("{threadKey}/files/content")]
-    public IActionResult GetFileContent(string threadKey, [FromQuery] string path)
+    [HttpGet("{id}/files/content")]
+    public IActionResult GetFileContent([FromRoute(Name = "id")] string threadKey, [FromQuery] string path)
     {
         if (Llm is null) return StatusCode(503);
         if (string.IsNullOrWhiteSpace(path)) return BadRequest("path is required.");
@@ -871,8 +876,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     /// hasn't been created yet). Used by the Electron client to supply the project file tree
     /// and file read results without routing through a user message.
     /// </summary>
-    [HttpPost("{threadKey}/system-context")]
-    public IActionResult SetSystemContext(string threadKey, [FromBody] InjectContextRequest req)
+    [HttpPost("{id}/system-context")]
+    public IActionResult SetSystemContext([FromRoute(Name = "id")] string threadKey, [FromBody] InjectContextRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.Name) || req.Content is null)
             return BadRequest("Name and Content are required.");
@@ -880,8 +885,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         return Ok();
     }
 
-    [HttpPost("{threadKey}/typing")]
-    public IActionResult NotifyTyping(string threadKey)
+    [HttpPost("{id}/typing")]
+    public IActionResult NotifyTyping([FromRoute(Name = "id")] string threadKey)
     {
         Llm?.NotifyTyping(threadKey);
         return Ok();
@@ -889,8 +894,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
     /// <summary>Esc = stop. Cancels the in-flight turn but PRESERVES the partial work (thinking + partial
     /// reply/tools) so nothing is lost — the user's next message is a fresh turn.</summary>
-    [HttpPost("{threadKey}/interrupt")]
-    public IActionResult InterruptProcessing(string threadKey)
+    [HttpPost("{id}/interrupt")]
+    public IActionResult InterruptProcessing([FromRoute(Name = "id")] string threadKey)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
         Llm.Interrupt(threadKey);
@@ -899,8 +904,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
     /// <summary>Mid-turn message = "stop and read this, then continue". The turn keeps running; the message is
     /// folded into Ari's current chain of thought. Returns 409 if the thread isn't streaming (send normally).</summary>
-    [HttpPost("{threadKey}/interjections")]
-    public IActionResult Interject(string threadKey, [FromBody] InterjectRequest body)
+    [HttpPost("{id}/interjections")]
+    public IActionResult Interject([FromRoute(Name = "id")] string threadKey, [FromBody] InterjectRequest body)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
         pendingMessageAttachments.TryGetValue(threadKey, out List<Attachment>? staged);
@@ -910,8 +915,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     }
 
     /// <summary>Close a thread: runs Engram to save it to memory, then deletes it. Fires a threadDeleted event.</summary>
-    [HttpDelete("{threadKey}")]
-    public async Task<IActionResult> CloseThread(string threadKey)
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> CloseThread([FromRoute(Name = "id")] string threadKey)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
         // A thread that is not live but is kept by Persistent Threads: closing it again means deleting it for good.
@@ -920,8 +925,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         return closed ? Ok() : NotFound();
     }
 
-    [HttpPost("{threadKey}/messages")]
-    public async Task Stream(string threadKey, [FromBody] StreamRequest body, CancellationToken cancellationToken)
+    [HttpPost("{id}/messages")]
+    public async Task Stream([FromRoute(Name = "id")] string threadKey, [FromBody] StreamRequest body, CancellationToken cancellationToken)
     {
         string prompt = body?.Prompt ?? string.Empty;
         // Sending to an expired thread (Persistent Threads) reopens it first: history, context window and owner restored.

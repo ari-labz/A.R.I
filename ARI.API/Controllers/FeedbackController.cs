@@ -40,7 +40,7 @@ public class FeedbackController : ControllerBase
             return NotFound("No such thread.");
         if (!CanAccess(thread)) return StatusCode(403);
 
-        // The same filter GET /threads/{key} applies, so the client's index lines up with this list.
+        // The same filter GET /threads/{id}/messages applies, so the client's index lines up with this list.
         List<ThreadItem> visible = thread.History
             .Where(i => i.IsVisible && i is not Response { State: State.Cancelled })
             .ToList();
@@ -73,8 +73,8 @@ public class FeedbackController : ControllerBase
     }
 
     /// <summary>Ratings already recorded in a thread, so the chat UI can light up the right thumb on load.</summary>
-    [HttpGet("thread/{threadKey}")]
-    public IActionResult ForThread(string threadKey) =>
+    [HttpGet("thread/{id}")]
+    public IActionResult ForThread([FromRoute(Name = "id")] string threadKey) =>
         Llm is not null && Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? t) && !CanAccess(t) ? StatusCode(403) :
         Ok(FeedbackStore.ForThread(threadKey).Select(f => new
         {
@@ -116,7 +116,7 @@ public class FeedbackController : ControllerBase
         {
             up,
             down,
-            items = all.OrderByDescending(f => f.CreatedAt).ToList(),
+            items = this.Page(all.OrderByDescending(f => f.CreatedAt).ToList()),
         });
     }
 

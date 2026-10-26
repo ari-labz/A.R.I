@@ -56,7 +56,7 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
             .InformationalVersion ?? "unknown";
     }
 
-    // ── GET /api/cp/llmconfigs ───────────────────────────────────────────────
+    // ── GET /api/v1/admin/llmconfigs ───────────────────────────────────────────────
 
     [HttpGet]
     public IActionResult List()
@@ -99,7 +99,7 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
         return Ok(configs);
     }
 
-    // ── POST /api/cp/llmconfigs/save ─────────────────────────────────────────
+    // ── POST /api/v1/admin/llmconfigs/save ─────────────────────────────────────────
 
     public sealed class SaveConfigRequest
     {
@@ -155,7 +155,7 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
         return Ok(new { ok = true, fileName = Path.GetFileName(zipPath) });
     }
 
-    // ── POST /api/cp/llmconfigs/{fileName}/restore ───────────────────────────
+    // ── POST /api/v1/admin/llmconfigs/{fileName}/restore ───────────────────────────
 
     [HttpPost("{id}/restore")]
     public async Task<IActionResult> Restore(string id)
@@ -203,7 +203,7 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
         return Ok(new { ok = true });
     }
 
-    // ── GET /api/cp/llmconfigs/{fileName}/contents ──────────────────────────
+    // ── GET /api/v1/admin/llmconfigs/{fileName}/contents ──────────────────────────
 
     [HttpGet("{id}")]
     public IActionResult Contents(string id)
@@ -222,7 +222,7 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
         return Ok(contents);
     }
 
-    // ── DELETE /api/cp/llmconfigs/{fileName} ─────────────────────────────────
+    // ── DELETE /api/v1/admin/llmconfigs/{fileName} ─────────────────────────────────
 
     [HttpDelete("{id}")]
     public IActionResult Delete(string id)
