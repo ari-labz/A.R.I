@@ -4409,7 +4409,7 @@ async function pipLoad() {
     try {
         const r = await cpFetch('/api/v1/admin/pipelineGraphs'); if (!r.ok) throw new Error();
         const j = await r.json();
-        pipD = { data: j.data, ports: j.ports || {}, running: j.running || null, problems: j.problems || {}, cur: (pipD && pipD.cur) || j.data.active || j.data.pipelines[0].id };
+        pipD = { data: j.data, ports: j.ports || {}, optional: j.optional || {}, problems: j.problems || {}, cur: (pipD && pipD.cur) || j.data.pipelines[0].id };
         pipDirty = false;
     } catch { host.textContent = 'Failed to load pipelines.'; return; }
     pipRender();
@@ -4420,31 +4420,28 @@ async function pipSave() {
         const r = await cpFetch('/api/v1/admin/pipelineGraphs', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pipD.data) });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) { st.textContent = (j.error || 'Save failed.') + ' ' + ((j.problems || []).join(' ')); return; }
-        pipD.running = j.running || null; pipD.problems = j.problems || {}; pipDirty = false; st.textContent = 'Saved.'; pipRender();
+        pipD.problems = j.problems || {}; pipDirty = false; st.textContent = 'Saved.'; pipRender();
     } catch { st.textContent = 'Save failed.'; }
 }
 
 function pipRender() {
     const host = document.getElementById('ag-view-pipelines'); if (!host || !pipD) return;
     const p = pipCur(); host.innerHTML = '';
-    const answering = pipD.running === p.id;
     const bar = agEl('div', 'display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;');
     const sel = agEl('select', 'font-size:13px;padding:5px 8px;border:1px solid var(--border);border-radius:7px;background:transparent;color:var(--text);');
-    pipD.data.pipelines.forEach(q => { const o = agEl('option', '', q.name + (pipD.running === q.id ? '  ● answering chats' : '')); o.value = q.id; sel.append(o); });
+    pipD.data.pipelines.forEach(q => { const o = agEl('option', '', q.name + (q.id === 'default' ? '  (default)' : '')); o.value = q.id; sel.append(o); });
     sel.value = p.id; sel.onchange = () => { pipD.cur = sel.value; pipSel = null; pipRender(); };
     const btn = (t, f, cls) => { const b = agEl('button', '', t); b.type = 'button'; b.className = cls || 'agv-btn'; b.onclick = f; return b; };
     const add = btn('+ Add agent', () => pipAddMenu(add), 'vs-btn-primary');
     const ren = btn('Rename', () => { const n = (prompt('Pipeline name?', p.name) || '').trim(); if (n) { p.name = n; pipTouch(); pipRender(); } });
     const neu = btn('+ New pipeline', () => { const n = pipBlank('Pipeline ' + (pipD.data.pipelines.length + 1)); pipD.data.pipelines.push(n); pipD.cur = n.id; pipSel = null; pipTouch(); pipRender(); });
-    const del = btn('Delete', () => { if (pipD.data.pipelines.length < 2) { alert('Keep at least one pipeline.'); return; } if (!confirm('Delete "' + p.name + '"?')) return; pipD.data.pipelines = pipD.data.pipelines.filter(x => x.id !== p.id); if (pipD.data.active === p.id) pipD.data.active = null; pipD.cur = pipD.data.pipelines[0].id; pipTouch(); pipRender(); });
-    const use = btn(pipD.data.active === p.id ? 'Stop using' : 'Use for chats', () => { pipD.data.active = pipD.data.active === p.id ? null : p.id; pipTouch(); pipRender(); });
+    const del = btn('Delete', () => { if (!confirm('Delete "' + p.name + '"? Chats using it go back to Default.')) return; pipD.data.pipelines = pipD.data.pipelines.filter(x => x.id !== p.id); pipD.cur = 'default'; pipTouch(); pipRender(); });
     const save = btn('Save', pipSave, 'vs-btn-primary');
     const st = agEl('span', 'font-size:12px;color:var(--text-dim);', pipDirty ? 'Unsaved changes' : ''); st.id = 'pip-status';
-    bar.append(sel, add, btn('Recenter', () => pipRecenter(p)), ren, neu, del, use, save, st);
+    bar.append(sel, add, btn('Recenter', () => pipRecenter(p)), ren, neu, ...(p.id === 'default' ? [] : [del]), save, st);
 
     const state = agEl('div', 'font-size:12.5px;color:var(--text-dim);margin-bottom:10px;');
-    state.textContent = pipD.running ? 'Chats are being answered by “' + ((pipD.data.pipelines.find(x => x.id === pipD.running) || {}).name || '?') + '”.' : 'Chats are being answered by the built-in Dialogue pipeline. Mark a pipeline “Use for chats” and save to switch.';
-    if (pipD.data.active !== pipD.running) state.textContent += '  (Unsaved: ' + (pipD.data.active ? 'will switch to “' + (pipD.data.pipelines.find(x => x.id === pipD.data.active) || {}).name + '”' : 'will switch back to built-in Dialogue') + '.)';
+    state.textContent = 'A pipeline is a way of building a reply: the agents that work on it and how they pass work along. Pick one when you start a chat. Default is what chats use unless you choose another, and it can be edited but not deleted.';
 
     const wrap = agEl('div'); wrap.className = 'pip-wrap';
     const canvas = agEl('div'); canvas.className = 'pip-canvas'; pipCanvas = canvas;
@@ -4463,8 +4460,8 @@ function pipIssues(p) {
     if (!into.length) out.push('Nothing is connected to END, so this pipeline never answers.');
     p.nodes.filter(n => n.type === 'agent').forEach(n => {
         const ports = pipPortsOf(n.agent);
-        if (!ports) { out.push(n.agent + ' is not available (switched off, or ARI needs a restart after creating it).'); return; }
-        ports.forEach(q => { if (!p.edges.some(e => e.to === n.id && e.port === q)) out.push(n.agent + ': {' + q + '} has nothing wired in.'); });
+        if (!ports) { out.push(n.agent + ' is not available (is it switched off?).'); return; }
+        ports.filter(q => !((pipD.optional || {})[n.agent] || []).includes(q)).forEach(q => { if (!p.edges.some(e => e.to === n.id && e.port === q)) out.push(n.agent + ': {' + q + '} has nothing wired in.'); });
         if (!pipReaches(p, n.id, end.id)) out.push(n.agent + ' never reaches END, so it does nothing.');
         if (n.agent === 'Dialogue' && into.length && into[0].from !== n.id) out.push('The built-in Dialogue agent must be the one connected to END.');
     });

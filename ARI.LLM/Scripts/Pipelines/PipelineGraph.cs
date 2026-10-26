@@ -25,6 +25,33 @@ internal sealed class PipelineGraph
         ["Dialogue"] = ["history", "memories"],
     };
 
+    /// <summary>Input ports a graph may leave unwired: the agent then simply runs without that input. Lets a pipeline be
+    /// just Dialogue talking straight to the model, with no Memory step.</summary>
+    internal static readonly IReadOnlyDictionary<string, string[]> OptionalPorts = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Dialogue"] = ["memories"],
+    };
+
+    internal static bool IsOptional(string agent, string port) =>
+        OptionalPorts.TryGetValue(agent, out string[]? o) && o.Contains(port, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The pipeline ARI ships and always has: recall memories, then reply with them. <paramref name="withMemory"/> false
+    /// gives the same without the recall step, for an install that has no Memory agent.</summary>
+    internal static PipelineGraph BuiltInDefault(bool withMemory)
+    {
+        List<Node> nodes = [new(StartId, "start", null), new("dia", "agent", "Dialogue"), new(EndId, "end", null)];
+        List<Edge> edges = [new(StartId, "dia", "history", false), new("dia", EndId, "stream", true)];
+        if (withMemory)
+        {
+            nodes.Insert(1, new Node("mem", "agent", "Memory"));
+            edges.Insert(0, new Edge(StartId, "mem", "history", false));
+            edges.Insert(2, new Edge("mem", "dia", "memories", false));
+        }
+        return new PipelineGraph { Id = DefaultId, Name = "Default", Nodes = nodes, Edges = edges };
+    }
+
+    internal const string DefaultId = "default";
+
     /// <summary>Tokens a custom agent's prompt can use without wiring: the user's latest message.</summary>
     internal static readonly string[] ImplicitTokens = ["message"];
 
@@ -72,8 +99,8 @@ internal sealed class PipelineGraph
         foreach (Node n in Nodes.Where(n => n.Type == "agent"))
         {
             string[]? ports = n.Agent is null ? null : portsOf(n.Agent);
-            if (ports is null) { problems.Add($"Agent '{n.Agent}' is not loaded (is it enabled, and has ARI been restarted since you created it?)."); continue; }
-            foreach (string port in ports)
+            if (ports is null) { problems.Add($"Agent '{n.Agent}' is not loaded (is it switched off?)."); continue; }
+            foreach (string port in ports.Where(port => !IsOptional(n.Agent!, port)))
                 if (!Edges.Any(e => e.To == n.Id && e.Port.Equals(port, StringComparison.OrdinalIgnoreCase)))
                     problems.Add($"{n.Agent}: {{{port}}} has nothing wired in.");
         }

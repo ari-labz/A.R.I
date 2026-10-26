@@ -16,7 +16,7 @@ test("a guest cannot pick an internal pipeline", async () => {
     if (pipeline === "dream") equal(t.pipeline, "dialogue");
   }
   const list = status(await guest.get("/pipelines"), 200).json;
-  assert(!list.includes("dream"), "dream is not offered");
+  assert(!list.some(p => p.id === "dream"), "dream is not offered");
 });
 
 test("a push address must be a real browser push service", async () => {

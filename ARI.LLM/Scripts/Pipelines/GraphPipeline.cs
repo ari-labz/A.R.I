@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
-/// <summary>Runs a user-drawn <see cref="PipelineGraph"/> in place of <see cref="DialoguePipeline"/>. Agents run in waves
+/// <summary>Runs the <see cref="PipelineGraph"/> a thread is on (Default unless it was switched). Agents run in waves
 /// (everything in a wave has its inputs ready, so a wave runs in parallel); the one wired to END replies into the user's
 /// own thread, every other agent runs on a throw-away thread and only hands its text to the ports it is wired to.</summary>
 internal sealed class GraphPipeline : Pipeline
@@ -17,8 +17,11 @@ internal sealed class GraphPipeline : Pipeline
     private readonly Engram?                              engram;
     private readonly IReadOnlyDictionary<string, CustomAgent> customAgents;
 
-    /// <summary>The graph to run; null means "none valid" and the caller falls back to <see cref="DialoguePipeline"/>.</summary>
-    internal PipelineGraph? Graph { get; set; }
+    /// <summary>Finds the graph a thread runs on: the one it was switched to, or Default.</summary>
+    private readonly Func<string?, PipelineGraph> graphFor;
+
+    internal event Action<string>? ThreadBufferFull;
+    internal event Action<string>? ThreadBecameInactive;
 
     protected override Agent  PrimaryAgent => textingAgent;
     protected override string PipelineName => "Graph";
@@ -26,6 +29,7 @@ internal sealed class GraphPipeline : Pipeline
     internal GraphPipeline(
         TextingAgent textingAgent, Memory? memory, Context? context, Engram? engram,
         IReadOnlyDictionary<string, CustomAgent> customAgents,
+        Func<string?, PipelineGraph> graphFor,
         ConcurrentDictionary<string, CancellationTokenSource> processingThreads,
         ConcurrentDictionary<string, LiveCallInfo>             liveCalls,
         Action<string>                                          notifyWatchers)
@@ -36,6 +40,10 @@ internal sealed class GraphPipeline : Pipeline
         this.context      = context;
         this.engram       = engram;
         this.customAgents = customAgents;
+        this.graphFor     = graphFor;
+
+        textingAgent.ThreadBufferFull     += key => ThreadBufferFull?.Invoke(key);
+        textingAgent.ThreadBecameInactive += key => ThreadBecameInactive?.Invoke(key);
     }
 
     /// <summary>The input ports of an agent that can sit in a graph, or null if it isn't loaded.</summary>
@@ -60,7 +68,7 @@ internal sealed class GraphPipeline : Pipeline
         string?              localPath,
         Func<string, Task>?  onTextDelta = null)
     {
-        PipelineGraph graph = Graph ?? throw new InvalidOperationException("No pipeline graph is active.");
+        PipelineGraph graph = graphFor(thread.GraphId);
 
         if (engram?.IsSweeping(threadKey) == true)
         {

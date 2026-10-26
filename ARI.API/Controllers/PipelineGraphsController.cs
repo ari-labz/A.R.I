@@ -7,8 +7,8 @@ using System.Text.Json.Nodes;
 
 namespace ARI.API.Controllers;
 
-/// <summary>The control panel's pipeline editor: the graphs in Pipelines.json and which one answers Dialogue threads.
-/// Saving a graph is live; the active one has to validate, or it is refused.</summary>
+/// <summary>The control panel's pipeline editor: the graphs in Pipelines.json. A pipeline is a way of building a reply, picked per
+/// thread; saving is live. The built-in Default can be edited but never removed, and has to stay valid.</summary>
 [Route("api/v1/admin/pipelineGraphs")]
 [ApiController]
 public class PipelineGraphsController(PersistentData persistentData) : ControllerBase
@@ -16,9 +16,10 @@ public class PipelineGraphsController(PersistentData persistentData) : Controlle
     private LLMModule? Llm => (LLMModule?)Modules.Llm;
 
     /// <summary>What ships: the same two steps the built-in Dialogue pipeline runs — recall memories, then reply with them.</summary>
-    private static JsonObject Seed() => JsonNode.Parse("""
+    private static JsonObject Seed(bool withMemory = true)
     {
-      "active": null,
+        JsonObject seed = JsonNode.Parse("""
+    {
       "pipelines": [
         {
           "id": "default", "name": "Default",
@@ -38,16 +39,24 @@ public class PipelineGraphsController(PersistentData persistentData) : Controlle
       ]
     }
     """)!.AsObject();
+        if (withMemory) return seed;
+        // No Memory agent on this install: Dialogue answers straight from the conversation.
+        JsonObject graph = seed["pipelines"]![0]!.AsObject();
+        JsonArray nodes = graph["nodes"]!.AsArray(), edges = graph["edges"]!.AsArray();
+        foreach (JsonNode? n in nodes.Where(n => n!["id"]!.GetValue<string>() == "mem").ToList()) nodes.Remove(n);
+        foreach (JsonNode? e in edges.Where(e => e!["from"]!.GetValue<string>() == "mem" || e["to"]!.GetValue<string>() == "mem").ToList()) edges.Remove(e);
+        return seed;
+    }
 
     [HttpGet]
     public IActionResult Get()
     {
-        JsonObject data = persistentData.GetPipelinesRaw() ?? Seed();
+        JsonObject data = persistentData.GetPipelinesRaw() ?? Seed(Llm?.AgentPorts().ContainsKey("Memory") ?? true);
         return Ok(new
         {
             data,
-            running = Llm?.ActivePipelineId,
-            ports   = Llm?.AgentPorts() ?? new Dictionary<string, string[]>(),
+            ports    = Llm?.AgentPorts() ?? new Dictionary<string, string[]>(),
+            optional = PipelineGraph.OptionalPorts,
             problems = Problems(data),
         });
     }
@@ -59,18 +68,15 @@ public class PipelineGraphsController(PersistentData persistentData) : Controlle
             return BadRequest(new { error = "Expected { active, pipelines: [...] }." });
 
         Dictionary<string, List<string>> problems = Problems(body);
-        string? active = body["active"]?.GetValue<string>();
-        if (!string.IsNullOrEmpty(active))
-        {
-            if (!problems.TryGetValue(active, out List<string>? p))
-                return BadRequest(new { error = $"No pipeline with id '{active}'." });
-            if (p.Count > 0)
-                return BadRequest(new { error = "That pipeline can't be made active yet.", problems = p });
-        }
+        // Default is the reply type every thread starts on and falls back to, so it must stay and must be able to run.
+        if (!problems.TryGetValue(PipelineGraph.DefaultId, out List<string>? defaultProblems))
+            return BadRequest(new { error = "The Default pipeline can't be deleted." });
+        if (defaultProblems.Count > 0)
+            return BadRequest(new { error = "The Default pipeline can't run yet, so it can't be saved like this.", problems = defaultProblems });
 
         persistentData.SavePipelinesRaw(body);
         Llm?.ReloadPipelines();
-        return Ok(new { ok = true, running = Llm?.ActivePipelineId, problems });
+        return Ok(new { ok = true, problems });
     }
 
     private Dictionary<string, List<string>> Problems(JsonObject data)

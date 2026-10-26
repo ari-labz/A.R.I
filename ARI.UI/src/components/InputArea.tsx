@@ -1,4 +1,5 @@
 import { useRef, useEffect, useState, type KeyboardEvent } from "react"
+import type { PipelineOption } from "../hooks/usePipelines"
 import type { PendingAttachment } from "../App"
 import type { Project } from "../hooks/useThreads"
 import PipelineSelector from "./PipelineSelector"
@@ -14,7 +15,7 @@ interface Props {
     projects:         Project[]
     selectedProject:  string | null
     onProjectChange:  (id: string | null) => void
-    pipelines:        string[]
+    pipelines:        PipelineOption[]
     selectedPipeline: string | null
     onPipelineChange: (id: string | null) => void
     onBeginSpeech:    () => void

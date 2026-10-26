@@ -41,6 +41,10 @@ public class Thread
 
     /// <summary>The pipeline this thread runs on.</summary>
     public ThreadPipeline Pipeline { get; }
+
+    /// <summary>The pipeline graph this thread's replies run through; null is Default. Switching it changes the agents that
+    /// build the next reply, and the thread pays one re-prefill when it does.</summary>
+    public string? GraphId { get; set; }
     /// <summary>
     /// Whether this thread is kept off the flat user thread list (e.g. an internal worker or a
     /// Coder sub-thread). Note: "off the list" is NOT the same as "hidden" — sub-threads remain
