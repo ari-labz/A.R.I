@@ -877,7 +877,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         string root    = FindThread(threadKey)?.FilesystemRoot ?? Paths.ScratchpadDir(threadKey);
         string rootAbs = Path.GetFullPath(root);
         string absPath = Path.GetFullPath(Path.Combine(rootAbs, path));
-        if (!absPath.StartsWith(rootAbs, StringComparison.OrdinalIgnoreCase))
+        // The trailing separator matters: without it "/x/Foo" would also accept "/x/Foo-secret/...".
+        if (!absPath.StartsWith(rootAbs.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             return BadRequest("Access denied.");
         if (!System.IO.File.Exists(absPath)) return NotFound();
 
@@ -894,11 +895,11 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         if (string.IsNullOrWhiteSpace(filename) || filename.Contains('/') || filename.Contains('\\'))
             return BadRequest("Invalid filename.");
 
-        string dir     = Paths.ScratchpadDir(threadKey);
-        string absPath = Path.Combine(Path.GetFullPath(dir), filename);
+        string dir     = Path.GetFullPath(Paths.ScratchpadDir(threadKey)).TrimEnd(Path.DirectorySeparatorChar);
+        string absPath = Path.GetFullPath(Path.Combine(dir, filename));
 
         // Verify the resolved path is still inside the scratchpad dir (belt-and-suspenders).
-        if (!absPath.StartsWith(Path.GetFullPath(dir), StringComparison.OrdinalIgnoreCase))
+        if (!absPath.StartsWith(dir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             return BadRequest("Access denied.");
 
         if (!System.IO.File.Exists(absPath)) return NotFound();
