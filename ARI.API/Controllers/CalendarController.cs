@@ -55,6 +55,7 @@ public class CalendarController : ControllerBase
     {
         if (Modules.Calendar is not { } calendar) return StatusCode(503, new { error = "Calendar is not available." });
         if (string.IsNullOrWhiteSpace(body.Title)) return BadRequest(new { error = "title is required." });
+        if (CheckRecurrence(body.Recurrence) is { } repeatProblem) return BadRequest(new { error = repeatProblem });
 
         switch (body.Kind?.ToLowerInvariant())
         {
@@ -75,6 +76,7 @@ public class CalendarController : ControllerBase
     {
         if (Modules.Calendar is not { } calendar) return StatusCode(503, new { error = "Calendar is not available." });
         if (body.Title is { } t && string.IsNullOrWhiteSpace(t)) return BadRequest(new { error = "title can't be empty." });
+        if (CheckRecurrence(body.Recurrence) is { } repeatProblem) return BadRequest(new { error = repeatProblem });
 
         // Recurrence is replaced when sent (frequency "none" removes it) and kept when left out.
         if (calendar.GetEvent(id) is { } e)
@@ -98,6 +100,15 @@ public class CalendarController : ControllerBase
     {
         if (Modules.Calendar is not { } calendar) return StatusCode(503, new { error = "Calendar is not available." });
         return calendar.DeleteEntry(id) ? Ok(new { ok = true }) : NotFound(new { error = "No such calendar entry." });
+    }
+
+    /// <summary>Null if the repeat is acceptable, otherwise the message to show.</summary>
+    private static string? CheckRecurrence(RecurrenceBody? req)
+    {
+        if (req is null || string.Equals(req.Frequency, "none", StringComparison.OrdinalIgnoreCase)) return null;
+        if (!Enum.TryParse(req.Frequency, true, out RecurrenceFrequency _)) return "frequency must be none, Daily, Weekly, Monthly or Yearly.";
+        if (req.DaysOfWeek?.Any(d => !Enum.TryParse(d, true, out DayOfWeek _)) == true) return "daysOfWeek must be day names like Monday.";
+        return null;
     }
 
     private static RecurrenceInfo? FromBody(RecurrenceBody? req)

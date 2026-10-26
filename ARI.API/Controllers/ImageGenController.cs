@@ -17,7 +17,7 @@ namespace ARI.API.Controllers;
 
 // ── Image Generation API ──────────────────────────────────────────────────────
 
-[Route("api/v1/admin/imagegen")]
+[Route("api/v1/admin/imageGen")]
 [ApiController]
 public class ImageGenController(APIConfig config) : ControllerBase
 {

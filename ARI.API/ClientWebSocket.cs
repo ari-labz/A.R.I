@@ -1260,7 +1260,7 @@ public static class ClientWebSocket
 
                             string conventions = ConventionsStore.Get();
                             string? projectRules = doc.RootElement.TryGetProperty("projectRules", out JsonElement prEl) ? prEl.GetString()?.Trim() : null;
-                            // projectMap is omitted — the desktop sends a lazy skeleton via /system-context
+                            // projectMap is omitted — the desktop sends a lazy skeleton via /systemContext
                             // instead of the full flat list, saving ~800 tokens per message.
                             llm.SetCodeThreadContext(
                                 threadKey,
@@ -1280,7 +1280,7 @@ public static class ClientWebSocket
                                 string content = contentEl.GetString() ?? "";
                                 string flabel  = pendingCallLabels.TryGetValue(callId, out string? fl) ? fl : "";
                                 log.LogInformation("[Client] ← file_content  {Label}  callId={CallId}  bytes={Bytes}  pending={Pending}", flabel, callId, content.Length, pendingFileCalls.ContainsKey(callId));
-                                if (pendingFileCalls.TryGetValue(callId, out (WebSocket Ws, TaskCompletionSource<string> Tcs) pending))
+                                if (pendingFileCalls.TryGetValue(callId, out (WebSocket Ws, TaskCompletionSource<string> Tcs) pending) && ReferenceEquals(pending.Ws, ws))
                                     pending.Tcs.TrySetResult(content);
                                 else
                                     log.LogWarning("[Client] ← file_content  callId={CallId}  NO PENDING CALL", callId);
@@ -1295,7 +1295,7 @@ public static class ClientWebSocket
                                 string error  = errEl.GetString()  ?? "";
                                 string elabel = pendingCallLabels.TryGetValue(callId, out string? el2) ? el2 : "";
                                 log.LogWarning("[Client] ← file_error  {Label}  callId={CallId}  error={Error}", elabel, callId, error);
-                                if (pendingFileCalls.TryGetValue(callId, out (WebSocket Ws, TaskCompletionSource<string> Tcs) pending))
+                                if (pendingFileCalls.TryGetValue(callId, out (WebSocket Ws, TaskCompletionSource<string> Tcs) pending) && ReferenceEquals(pending.Ws, ws))
                                     pending.Tcs.TrySetResult($"[Error: {SanitizeClientError(error)}]");
                             }
                             break;

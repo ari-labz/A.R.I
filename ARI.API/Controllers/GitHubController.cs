@@ -89,7 +89,3 @@ public sealed class GitHubChange
     public string? CommitAs { get; set; }
 }
 
-public sealed class GitHubCommitAsRequest
-{
-    public string? CommitAs { get; set; }
-}

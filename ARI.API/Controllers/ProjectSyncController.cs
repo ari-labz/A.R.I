@@ -102,7 +102,7 @@ public class ProjectSyncController(ProjectStore store) : ControllerBase
 
     /// <summary>Accepts a git bundle from the Desktop and applies it to the server's .ariproject.</summary>
     [HttpPost("push")]
-    [DisableRequestSizeLimit]
+    [RequestSizeLimit(200L * 1024 * 1024)]
     public async Task<IActionResult> Push(string id)
     {
         Project? project = store.Get(id);

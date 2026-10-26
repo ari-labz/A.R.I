@@ -14,27 +14,22 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
     [HttpGet]
     public IActionResult GetAll()
     {
-        if (IsAdmin())
-        {
-            // Admins see everything — join owner username so the control panel can display it.
-            Dictionary<int, string> allUsers = users.GetAll().ToDictionary(u => u.Id, u => u.Username);
-            return Ok(this.Page(store.GetAll().Select(p => new
-            {
-                p.Id, p.Name, p.Description, p.Instructions, p.CreatedAt,
-                p.Category,
-                // Anonymous-type properties don't inherit the [JsonConverter(JsonStringEnumConverter)]
-                // attribute from Project.Backend, and there's no global string-enum converter
-                // registered — left as p.Backend this serialized as a raw integer (0) instead of
-                // "ServerFs", so the client's `backend === "ServerFs"` checks always failed for admins.
-                Backend = p.Backend.ToString(),
-                p.RootPath, p.OwnerId,
-                OwnerUsername = p.OwnerId == 0 ? "admin" : (allUsers.TryGetValue(p.OwnerId, out string? n) ? n : "unknown"),
-            }).ToList()));
-        }
+        // Admins see everything, with the owner's name beside each; everyone else sees only their own.
+        Dictionary<int, string> names = IsAdmin() ? users.GetAll().ToDictionary(u => u.Id, u => u.Username) : [];
+        IEnumerable<Project> mine = IsAdmin() ? store.GetAll() : store.GetByOwner(CallerId());
+        return Ok(this.Page(mine.Select(p => Shape(p, names)).ToList()));
+    }
 
-        // Guests see only their own projects.
-        int callerId = CallerId();
-        return Ok(this.Page(store.GetByOwner(callerId).ToList()));
+    /// <summary>The one shape a project is sent in. Where it lives on the server's disk, and whose it is, are for admins only.</summary>
+    private object Shape(Project p, Dictionary<int, string>? names = null)
+    {
+        // A project's backend is sent as its name ("ServerFs"), not the number it is stored as.
+        if (!IsAdmin())
+            return new { p.Id, p.Name, p.Description, p.Instructions, p.CreatedAt, p.Category, Backend = p.Backend.ToString() };
+        string owner = p.OwnerId == 0 ? "admin"
+            : names is not null && names.TryGetValue(p.OwnerId, out string? n) ? n
+            : users.GetById(p.OwnerId)?.Username ?? "unknown";
+        return new { p.Id, p.Name, p.Description, p.Instructions, p.CreatedAt, p.Category, Backend = p.Backend.ToString(), p.RootPath, p.OwnerId, OwnerUsername = owner };
     }
 
     [HttpPost]
@@ -58,7 +53,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
         };
         store.Update(created);
 
-        return Ok(created);
+        return Ok(Shape(created));
     }
 
     /// <summary>Change a project. Send only what changes.</summary>
@@ -88,7 +83,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
             RootPath     = rootPath,
         };
         store.Update(updated);
-        return Ok(updated);
+        return Ok(Shape(updated));
     }
 
     [HttpDelete("{id}")]
@@ -153,7 +148,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
     }
 
     [HttpPost("{id}/files")]
-    [DisableRequestSizeLimit]
+    [RequestSizeLimit(100L * 1024 * 1024)]
     public async Task<IActionResult> UploadFiles(string id, [FromQuery] string path = "")
     {
         (Project? project, string? dir, IActionResult? error) = ResolveDir(id, path);
@@ -217,8 +212,16 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
     {
         string abs = Path.GetFullPath(Path.Combine(root, relPath ?? ""));
         string rootFull = Path.GetFullPath(root);
-        return abs == rootFull || abs.StartsWith(rootFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
-            ? abs : null;
+        if (abs != rootFull && !abs.StartsWith(rootFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return null;
+        // ARI's own git bookkeeping is off limits, and so is anything that is really a link pointing outside the project.
+        if (ProjectStore.IsProtectedPath(Path.GetRelativePath(rootFull, abs))) return null;
+        try
+        {
+            FileSystemInfo? real = (Directory.Exists(abs) ? new DirectoryInfo(abs) : (FileSystemInfo)new FileInfo(abs)).ResolveLinkTarget(true);
+            if (real is not null && !Path.GetFullPath(real.FullName).StartsWith(rootFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return null;
+        }
+        catch { return null; }
+        return abs;
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────────

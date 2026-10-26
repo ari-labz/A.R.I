@@ -169,11 +169,17 @@ public class ProjectStore
             """);
     }
 
+    /// <summary>True for a path (relative to a project or thread folder) that points into ARI's own git folder or a .git
+    /// folder: nobody may read, write or delete there, because a changed git config can make git run a command.</summary>
+    public static bool IsProtectedPath(string relPath)
+        => relPath.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries)
+            .Any(part => part.Equals(".ariproject", StringComparison.OrdinalIgnoreCase) || part.Equals(".git", StringComparison.OrdinalIgnoreCase));
+
     /// <summary>Runs a git command against the .ariproject git dir in the given folder.</summary>
     public static (int ExitCode, string Output) RunGit(string workTree, string arguments)
     {
         string ariDir = Path.Combine(workTree, ".ariproject");
-        string fullArgs = $"--git-dir=\"{ariDir}\" --work-tree=\"{workTree}\" {arguments}";
+        string fullArgs = $"-c core.fsmonitor= -c core.hooksPath=/dev/null --git-dir=\"{ariDir}\" --work-tree=\"{workTree}\" {arguments}";
         using Process proc = new Process
         {
             StartInfo = new ProcessStartInfo
@@ -188,8 +194,15 @@ public class ProjectStore
             }
         };
         proc.Start();
-        string output = proc.StandardOutput.ReadToEnd() + proc.StandardError.ReadToEnd();
-        proc.WaitForExit();
+        // Read both streams at once (so a chatty stderr can't block git) and never wait forever.
+        Task<string> stdout = proc.StandardOutput.ReadToEndAsync();
+        Task<string> stderr = proc.StandardError.ReadToEndAsync();
+        if (!proc.WaitForExit(120_000))
+        {
+            try { proc.Kill(entireProcessTree: true); } catch { /* already gone */ }
+            return (-1, "git took too long and was stopped.");
+        }
+        string output = stdout.Result + stderr.Result;
         return (proc.ExitCode, output.Trim());
     }
 

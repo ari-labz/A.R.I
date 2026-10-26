@@ -6,7 +6,7 @@ namespace ARI.API.Controllers;
 
 /// <summary>
 /// Admin-only endpoints for user management and the IP blocklist.
-/// All routes require the caller to have the Admin role (enforced by AdminGuard middleware).
+/// All routes require the caller to have the Admin role (enforced by the /api/v1/admin/ path rule in AuthMiddleware).
 /// </summary>
 [Route("api/v1/admin/users")]
 [ApiController]
@@ -86,7 +86,7 @@ public class AdminUsersController(UserStore users) : ControllerBase
             return BadRequest(new { error = "You cannot delete your own account." });
 
         User? user = users.GetById(id);
-        if (user is null) return NotFound();
+        if (user is null) return NotFound(new { error = "No such account." });
         if (id.ToString() == ARI.Common.Shared.MasterUserId)
             return BadRequest(new { error = "The Master account cannot be deleted." });
 
@@ -114,6 +114,11 @@ public class AdminUsersController(UserStore users) : ControllerBase
     [HttpDelete("/api/v1/admin/sessions/{id}")]
     public IActionResult RevokeSession(string id)
     {
+        UserSession? session = users.GetSession(id);
+        if (session is null) return NotFound(new { error = "No such session." });
+        // Only the Master may sign the Master out.
+        if (session.UserId.ToString() == ARI.Common.Shared.MasterUserId && User.FindFirstValue(ClaimTypes.NameIdentifier) != session.UserId.ToString())
+            return BadRequest(new { error = "Only the Master can end the Master's sessions." });
         users.RevokeSession(id);
         return Ok();
     }
@@ -134,7 +139,6 @@ public class AdminUsersController(UserStore users) : ControllerBase
     [HttpDelete("/api/v1/admin/blocklist/{id}")]
     public IActionResult UnblockIp(string id)
     {
-        users.UnblockIp(id);
-        return Ok();
+        return users.UnblockIp(id) ? Ok() : NotFound(new { error = "That address is not blocked." });
     }
 }

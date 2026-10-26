@@ -294,12 +294,16 @@ public class UserStore
 
     // ── IP Blocklist ──────────────────────────────────────────────────────────────
 
+    private const int BLOCK_MINUTES = 15;
+
     public bool IsBlocked(string ip)
     {
         using SqliteConnection conn = Open();
         using SqliteCommand cmd = conn.CreateCommand();
-        cmd.CommandText = $"SELECT COUNT(*) FROM IpBlocklist WHERE Ip = $ip AND FailedAttempts >= {FAILED_ATTEMPTS_BLOCK_THRESHOLD}";
+        // A block lasts BLOCK_MINUTES from the last failed attempt; an admin can lift it sooner.
+        cmd.CommandText = $"SELECT COUNT(*) FROM IpBlocklist WHERE Ip = $ip AND FailedAttempts >= {FAILED_ATTEMPTS_BLOCK_THRESHOLD} AND BlockedAt > $since";
         cmd.Parameters.AddWithValue("$ip", ip);
+        cmd.Parameters.AddWithValue("$since", DateTimeOffset.UtcNow.ToUnixTimeSeconds() - BLOCK_MINUTES * 60);
         return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
     }
 
@@ -316,11 +320,12 @@ public class UserStore
             INSERT INTO IpBlocklist (Ip, BlockedAt, FailedAttempts)
             VALUES ($ip, $now, 1)
             ON CONFLICT(Ip) DO UPDATE SET
-                FailedAttempts = FailedAttempts + 1,
+                FailedAttempts = CASE WHEN BlockedAt < $now - $window THEN 1 ELSE FailedAttempts + 1 END,
                 BlockedAt      = $now
             """;
         cmd.Parameters.AddWithValue("$ip",  ip);
         cmd.Parameters.AddWithValue("$now", now);
+        cmd.Parameters.AddWithValue("$window", BLOCK_MINUTES * 60);
         cmd.ExecuteNonQuery();
 
         using SqliteCommand readCmd = conn.CreateCommand();
@@ -355,13 +360,13 @@ public class UserStore
         return list;
     }
 
-    public void UnblockIp(string ip)
+    public bool UnblockIp(string ip)
     {
         using SqliteConnection conn = Open();
         using SqliteCommand cmd = conn.CreateCommand();
         cmd.CommandText = "DELETE FROM IpBlocklist WHERE Ip = $ip";
         cmd.Parameters.AddWithValue("$ip", ip);
-        cmd.ExecuteNonQuery();
+        return cmd.ExecuteNonQuery() > 0;
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────────

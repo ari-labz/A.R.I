@@ -2,7 +2,7 @@ import { test, status, assert } from "../lib.mjs";
 const { master, guest, anon } = globalThis.ari;
 
 const adminReads = [
-  "/admin/agents", "/admin/models", "/admin/voice/training", "/admin/imagegen/status", "/admin/modules",
+  "/admin/agents", "/admin/models", "/admin/voice/training", "/admin/imageGen/status", "/admin/modules",
   "/admin/pipelineGraphs", "/admin/commandAllowlist", "/admin/feedback", "/admin/debug/sessions",
   "/admin/persistedThreads", "/admin/settings", "/admin/users",
 ];

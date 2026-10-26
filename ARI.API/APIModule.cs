@@ -88,7 +88,7 @@ public class APIModule : IAsyncDisposable
         if (Directory.Exists(stagingRoot))
             try { Directory.Delete(stagingRoot, recursive: true); } catch { /* best-effort */ }
 
-        builder.Services.AddControllers(options => options.Filters.Add<ResponseShapeFilter>())
+        builder.Services.AddControllers(options => { options.Filters.Add<ResponseShapeFilter>(); options.Filters.Add<SafeNames.Filter>(); })
             .AddApplicationPart(typeof(ThreadsController).Assembly);
 
         // ARI gates every route (REST and WebSocket) behind its own JWT+session auth — see
@@ -109,6 +109,16 @@ public class APIModule : IAsyncDisposable
             Exception? ex  = ctx.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
             ILogger log = ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("ARI.API");
             log.LogError(ex, "Unhandled exception on {Method} {Path}", ctx.Request.Method, ctx.Request.Path);
+
+            if (ctx.Request.Path.StartsWithSegments("/api"))
+            {
+                // A value of the wrong type in a JSON body is the caller's mistake (400); anything else is ours (500).
+                bool badInput = ex is FormatException or System.Text.Json.JsonException
+                    || (ex is InvalidOperationException && ex.Source == "System.Text.Json") || ex is ArgumentException { ParamName: not null } && ex.Source == "System.Private.CoreLib";
+                ctx.Response.StatusCode = badInput ? 400 : 500;
+                await ctx.Response.WriteAsJsonAsync(new { error = badInput ? "A value in the request was not the right kind." : "Something went wrong." });
+                return;
+            }
 
             ctx.Response.StatusCode  = 500;
             ctx.Response.ContentType = "text/html";

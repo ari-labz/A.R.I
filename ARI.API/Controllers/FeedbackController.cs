@@ -73,7 +73,7 @@ public class FeedbackController : ControllerBase
     }
 
     /// <summary>Ratings already recorded in a thread, so the chat UI can light up the right thumb on load.</summary>
-    [HttpGet("thread/{id}")]
+    [HttpGet("~/api/v1/threads/{id}/feedback")]
     public IActionResult ForThread([FromRoute(Name = "id")] string threadKey) =>
         Llm is not null && Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? t) && !CanAccess(t) ? StatusCode(403) :
         Ok(FeedbackStore.ForThread(threadKey).Select(f => new

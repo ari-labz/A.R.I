@@ -8,6 +8,7 @@ using System.Threading.Channels;
 using ARI.API;
 using ARI.Common;
 using ARI.LLM;
+using Microsoft.Extensions.Logging;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Net.Http.Headers;
@@ -65,13 +66,20 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     void Microsoft.AspNetCore.Mvc.Filters.IActionFilter.OnActionExecuting(Microsoft.AspNetCore.Mvc.Filters.ActionExecutingContext context)
     {
         if (context.RouteData.Values["id"] is not string key || Llm is null) return;
+        if (context.ActionDescriptor.RouteValues["action"] is nameof(GetDebugSession)) return;   // its id is a recording, not a thread
         if (Llm.Threads.TryGetValue(key, out ARI.LLM.Thread? thread))
         {
             if (!CanAccessThread(thread)) context.Result = new StatusCodeResult(403);
         }
         // A saved (expired) thread is not in memory, but it still belongs to its owner.
-        else if (Llm.GetPersistedInfo(key) is { } saved && !CanAccessOwner(saved.OwnerId))
-            context.Result = new StatusCodeResult(403);
+        else if (Llm.GetPersistedInfo(key) is { } saved)
+        {
+            if (!CanAccessOwner(saved.OwnerId)) context.Result = new StatusCodeResult(403);
+        }
+        // A key nobody has used yet: only sending the first message (which creates the thread and makes the caller its
+        // owner) may use it. Anything else would be reaching into folders left behind by a thread that is gone.
+        else if (context.ActionDescriptor.RouteValues["action"] is not (nameof(Stream) or nameof(SetSystemContext) or nameof(NotifyTyping)))
+            context.Result = new NotFoundObjectResult(new { error = "No such thread." });
     }
 
     private bool CanAccessOwner(string? ownerId) =>
@@ -240,7 +248,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     /// <summary>
     /// Returns thread metadata plus full history. The primary polling endpoint for streaming threads.
     /// Poll at ~150ms while thread.state == "streaming"; stop once it is anything else (active/inactive/…).
-    /// DebugRequestJson / DebugResponseText are excluded here — use GET /threads/{key}/debug for those.
+    /// DebugRequestJson / DebugResponseText are excluded here — use GET /admin/debug/threads/{id} for those.
     /// </summary>
     [HttpGet("{id}")]
     public IActionResult GetThread([FromRoute(Name = "id")] string threadKey)
@@ -458,7 +466,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     }
 
     /// <summary>
-    /// Per-thread SSE endpoint — kept for debug panel / legacy consumers.
+    /// Per-thread live status (SSE): what the thread is doing, and any permission request waiting for an answer.
     /// </summary>
     [HttpGet("{id}/watch")]
     public async Task Watch([FromRoute(Name = "id")] string threadKey, CancellationToken cancellationToken)
@@ -575,7 +583,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
           "application/msword", "application/vnd.ms-excel", "application/vnd.ms-powerpoint" };
 
     [HttpPost("{id}/files")]
-    [DisableRequestSizeLimit]
+    [RequestSizeLimit(100L * 1024 * 1024)]
     public async Task<IActionResult> AddAttachment([FromRoute(Name = "id")] string threadKey, IFormFile file)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
@@ -607,6 +615,9 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
             string targetRoot = Path.GetFullPath(targetDir);
             using ZipArchive archive = new(zipStream, ZipArchiveMode.Read);
+            // A small zip can unpack to something enormous; refuse one that claims too many files or too much data.
+            if (archive.Entries.Count > 5000 || archive.Entries.Sum(e => e.Length) > 200L * 1024 * 1024)
+                return BadRequest(new { error = "That zip is too big to unpack (5000 files or 200 MB at most)." });
             foreach (ZipArchiveEntry entry in archive.Entries)
             {
                 if (string.IsNullOrEmpty(entry.Name)) continue;
@@ -646,15 +657,9 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     }
 
     /// <summary>Extensions treated as plain text and extracted from zips.</summary>
-    private static bool IsTextExtension(string ext) => ext is
-        ".cs" or ".ts" or ".tsx" or ".js" or ".jsx" or ".json" or ".xml" or ".yaml" or ".yml"
-        or ".md" or ".txt" or ".html" or ".css" or ".scss" or ".less" or ".razor" or ".cshtml"
-        or ".py" or ".go" or ".rs" or ".cpp" or ".c" or ".h" or ".java" or ".kt" or ".swift"
-        or ".sh" or ".bash" or ".ps1" or ".toml" or ".ini" or ".env" or ".config" or ".csproj"
-        or ".sln" or ".props" or ".targets" or ".sql" or ".graphql" or ".proto";
-
     /// <summary>Zip paths to silently skip (build output, deps, hidden dirs).</summary>
     private static bool IsSkippedZipPath(string fullName) =>
+        ProjectStore.IsProtectedPath(fullName) ||
         fullName.Contains("/bin/",        StringComparison.OrdinalIgnoreCase) ||
         fullName.Contains("/obj/",        StringComparison.OrdinalIgnoreCase) ||
         fullName.Contains("/node_modules/",StringComparison.OrdinalIgnoreCase) ||
@@ -670,7 +675,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         string rootAbs = Path.GetFullPath(FindThread(threadKey)?.FilesystemRoot ?? Paths.ScratchpadDir(threadKey));
         string absPath = Path.GetFullPath(Path.Combine(rootAbs, path));
         // The trailing separator matters: without it "/x/Foo" would also accept "/x/Foo-secret/...".
-        if (!absPath.StartsWith(rootAbs.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        if (!absPath.StartsWith(rootAbs.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || ProjectStore.IsProtectedPath(Path.GetRelativePath(rootAbs, absPath)))
             return BadRequest("Access denied.");
 
         if (System.IO.File.Exists(absPath)) System.IO.File.Delete(absPath);
@@ -742,13 +748,13 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         // Bind the thread to the new project so file tools continue working.
         svc.BindThread(threadKey, summary.Id);
 
-        return Ok(new { projectId = summary.Id, name = summary.Name, rootPath = destDir });
+        return Ok(new { projectId = summary.Id, name = summary.Name });
     }
 
     // ── Message Attachments (ephemeral — cleared after send) ────────────────────
 
     [HttpPost("{id}/messageAttachments")]
-    [DisableRequestSizeLimit]
+    [RequestSizeLimit(25L * 1024 * 1024)]
     public async Task<IActionResult> AddMessageAttachment([FromRoute(Name = "id")] string threadKey, IFormFile file)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
@@ -856,7 +862,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         string rootAbs = Path.GetFullPath(root);
         string absPath = Path.GetFullPath(Path.Combine(rootAbs, path));
         // The trailing separator matters: without it "/x/Foo" would also accept "/x/Foo-secret/...".
-        if (!absPath.StartsWith(rootAbs.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        if (!absPath.StartsWith(rootAbs.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || ProjectStore.IsProtectedPath(Path.GetRelativePath(rootAbs, absPath)))
             return BadRequest("Access denied.");
         if (!System.IO.File.Exists(absPath)) return NotFound();
 
@@ -876,7 +883,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     /// hasn't been created yet). Used by the Electron client to supply the project file tree
     /// and file read results without routing through a user message.
     /// </summary>
-    [HttpPost("{id}/system-context")]
+    [HttpPost("{id}/systemContext")]
     public IActionResult SetSystemContext([FromRoute(Name = "id")] string threadKey, [FromBody] InjectContextRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.Name) || req.Content is null)
@@ -1045,7 +1052,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
                 if (!string.IsNullOrWhiteSpace(project.Instructions))
                     ctx.AppendLine().AppendLine(project.Instructions);
 
-                // Filesystem skeleton sent via /system-context — lives in the system prompt (stable
+                // Filesystem skeleton sent via /systemContext — lives in the system prompt (stable
                 // cached prefix) and never appears as a user-visible thread attachment.
                 if (systemContextBlock is not null)
                 {
@@ -1147,12 +1154,13 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         {
             string username = GetUsername();
             // Pass CancellationToken.None so HTTP client disconnect does NOT cancel the LLM.
-            // The LLM runs to completion; explicit cancel via DELETE /processing still works
+            // The LLM runs to completion; explicit cancel via POST /interrupt still works
             // because LLMModule.Cancel() cancels the thread's internal CTS directly.
             // A ServerFs project's root is server-managed — resolve it from the bound project when the
             // client didn't send one explicitly (RemoteFs keeps relying on the client-sent LocalPath,
             // sourced from the desktop app's own per-device folder store, same as before).
-            string? effectiveLocalPath = string.IsNullOrWhiteSpace(body.LocalPath) ? null : body.LocalPath;
+            // Only an admin may name a folder on this machine; for anyone else the path is ignored and only the bound project is used.
+            string? effectiveLocalPath = string.IsNullOrWhiteSpace(body.LocalPath) || !User.IsInRole(ARI.API.Auth.Roles.Admin) ? null : body.LocalPath;
             if (effectiveLocalPath is null
                 && ThreadProjects.TryGetValue(threadKey, out string? boundProjectId)
                 && projectStore.Get(boundProjectId) is { RootPath: { } rootPath })
@@ -1177,7 +1185,9 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         }
         catch (Exception ex)
         {
-            await WriteEventAsync($"data: [ERROR] {ex.Message}\n\n");
+            // The details go to the server log; the person sees only that it failed (and admins get the reason).
+            Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>(HttpContext.RequestServices).CreateLogger("ARI.Threads").LogError(ex, "Reply failed on thread {Thread}", threadKey);
+            await WriteEventAsync($"data: [ERROR] {(User.IsInRole(ARI.API.Auth.Roles.Admin) ? ex.Message : "Something went wrong while replying.")}\n\n");
         }
         finally
         {
