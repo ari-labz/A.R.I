@@ -131,6 +131,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     public IActionResult GetThreads([FromQuery] bool includeInternal = false)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        // Internal threads (memory work, dreams, other people's conversations) are the admin's debugging view.
+        if (includeInternal && !User.IsInRole(ARI.API.Auth.Roles.Admin)) return StatusCode(403);
 
         IReadOnlyDictionary<string, ARI.LLM.Thread> allThreads = Llm.Threads;
 
