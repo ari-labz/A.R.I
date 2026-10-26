@@ -378,7 +378,7 @@ export default function App() {
         // Check protocol compatibility — only relevant in the Desktop app where the
         // client has a fixed protocol baked in and the server may be a different build.
         if (window.electronBridge) {
-            const CLIENT_PROTOCOL = 3
+            const CLIENT_PROTOCOL = 4
             const infoRes = await apiFetch("/api/v1/info/ready").catch(() => null)
             if (infoRes?.ok) {
                 const { protocol: serverProtocol } = await infoRes.json()
