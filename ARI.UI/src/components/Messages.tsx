@@ -25,7 +25,7 @@ function getVolume(): number {
 // Decoding happens in parallel with synthesis of other sentences.
 async function synthesise(sentence: string, signal: AbortSignal): Promise<AudioBuffer | null> {
     try {
-        const resp = await fetch("/voice/speak", {
+        const resp = await fetch("/api/v1/voice/speak", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ text: sentence }),
@@ -76,7 +76,7 @@ async function speakResponse(content: string, setSpeaking: (v: boolean) => void)
     setSpeaking(true)
 
     try {
-        const splitRes = await fetch("/voice/split-sentences", {
+        const splitRes = await fetch("/api/v1/voice/split-sentences", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ text: content }),
@@ -170,7 +170,7 @@ function useFeedback(threadKey: string | null) {
         setByTimestamp({})
         if (!threadKey) return
         let cancelled = false
-        fetch(`/feedback/thread/${encodeURIComponent(threadKey)}`)
+        fetch(`/api/v1/feedback/thread/${encodeURIComponent(threadKey)}`)
             .then(r => r.ok ? r.json() : [])
             .then((rows: { id: string; vote: Vote; note: string; responseTimestamp: string }[]) => {
                 if (cancelled) return
@@ -222,13 +222,13 @@ function FeedbackButtons({ threadKey, item, msgIndex, feedback, onChange }: {
         try {
             // Clicking the lit thumb clears the rating.
             if (vote === next && feedback) {
-                await apiFetch(`/feedback/${feedback.id}`, { method: "DELETE" })
+                await apiFetch(`/api/v1/feedback/${feedback.id}`, { method: "DELETE" })
                 onChange(item.timestamp, null)
                 setNoteOpen(false)
                 return
             }
 
-            const res = await apiFetch("/feedback", {
+            const res = await apiFetch("/api/v1/feedback", {
                 method:  "POST",
                 headers: { "Content-Type": "application/json" },
                 body:    JSON.stringify({
@@ -251,7 +251,7 @@ function FeedbackButtons({ threadKey, item, msgIndex, feedback, onChange }: {
         if (!feedback) return
         setNoteOpen(false)
         try {
-            await apiFetch(`/feedback/${feedback.id}`, {
+            await apiFetch(`/api/v1/feedback/${feedback.id}`, {
                 method:  "PATCH",
                 headers: { "Content-Type": "application/json" },
                 body:    JSON.stringify({ note }),
@@ -376,7 +376,7 @@ function UserMessage({ item, activeThread }: { item: ThreadItem; activeThread: s
                             <img className="msg-image" src={
                                 a.content
                                     ? `data:${a.mimeType ?? "image/jpeg"};base64,${a.content}`
-                                    : `/threads/${activeThread}/msg-attachment?id=${encodeURIComponent(a.id ?? "")}`
+                                    : `/api/v1/threads/${activeThread}/msg-attachment?id=${encodeURIComponent(a.id ?? "")}`
                             } alt={a.name} />
                         ) : (
                             <div className="file-card">
@@ -805,7 +805,7 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
             if (!id) return
 
             btn.setAttribute("disabled", "true")
-            fetch(`/persona/proposals/${encodeURIComponent(id)}/${approve ? "approve" : "reject"}`, { method: "POST" })
+            fetch(`/api/v1/persona/proposals/${encodeURIComponent(id)}/${approve ? "approve" : "reject"}`, { method: "POST" })
                 .then(async r => {
                     if (r.ok) return
                     const body = await r.json().catch(() => ({ message: "" }))

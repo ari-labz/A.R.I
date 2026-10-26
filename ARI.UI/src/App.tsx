@@ -71,7 +71,7 @@ export { COMMANDS }
 async function loadCommandAllowlist(): Promise<string[]> {
     let server: string[] | null = null
     try {
-        const res = await apiFetch("/command-allowlist")
+        const res = await apiFetch("/api/v1/command-allowlist")
         if (res.ok) server = sanitizeAllowlist((await res.json())?.commands)
     } catch { /* offline or not an admin — fall through to the local store */ }
     let local: string[] = []
@@ -85,7 +85,7 @@ async function loadCommandAllowlist(): Promise<string[]> {
 async function saveCommandAllowlist(list: string[]): Promise<boolean> {
     let ok = false
     try {
-        const res = await apiFetch("/command-allowlist", {
+        const res = await apiFetch("/api/v1/command-allowlist", {
             method: "PUT", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ commands: list }),
         })
@@ -170,7 +170,7 @@ export default function App() {
     useEffect(() => {
         Promise.all([
             fetchMe(),
-            fetch("/setup/status").then(r => r.json()).catch(() => null) as Promise<{ needsAccount: boolean; setupComplete: boolean; tutorialComplete: boolean } | null>,
+            fetch("/api/v1/setup/status").then(r => r.json()).catch(() => null) as Promise<{ needsAccount: boolean; setupComplete: boolean; tutorialComplete: boolean } | null>,
         ]).then(([user, setup]) => {
             if (setup?.needsAccount)                                { setSetupStart("account"); setAuthState("needsSetup") }
             else if (user && setup && !setup.setupComplete && user.role === "Admin") { setAuthUser(user); setSetupStart("model"); setAuthState("needsSetup") }
@@ -270,7 +270,7 @@ export default function App() {
 
     const loadProjects = useCallback(async () => {
         try {
-            const res = await apiFetch("/projects")
+            const res = await apiFetch("/api/v1/projects")
             if (res.ok) setProjects(await res.json())
         } catch { /* ignore */ }
     }, [])
@@ -372,7 +372,7 @@ export default function App() {
         setConnState("connecting")
         let failures = 0
         while (true) {
-            const res = await apiFetch("/threads").catch(() => null)
+            const res = await apiFetch("/api/v1/threads").catch(() => null)
             if (res?.status === 401) { setAuthState("needsLogin"); return }  // token expired/invalid
             if (res && res.status !== 503) break                              // server ready
             if (res === null && ++failures >= 5) { setConnState("failed"); return }
@@ -382,7 +382,7 @@ export default function App() {
         await Promise.all([loadThreads(), loadProjects()])
         openGlobalStream()
         setConnState("connected")
-        apiFetch("/admin/scheduler").then(r => r.json()).then(data => {
+        apiFetch("/api/v1/admin/scheduler").then(r => r.json()).then(data => {
             const running = (data.tasks ?? []).filter((t: any) => t.running).map((t: any) => t.name as string)
             if (running.length > 0) setRunningTasks(new Set(running))
         }).catch(() => {})
@@ -391,7 +391,7 @@ export default function App() {
         // client has a fixed protocol baked in and the server may be a different build.
         if (window.electronBridge) {
             const CLIENT_PROTOCOL = 3
-            const infoRes = await apiFetch("/api/info/ready").catch(() => null)
+            const infoRes = await apiFetch("/api/v1/info/ready").catch(() => null)
             if (infoRes?.ok) {
                 const { protocol: serverProtocol } = await infoRes.json()
                 // Servers older than protocol 2 don't return this field — treat as v1.
@@ -411,7 +411,7 @@ export default function App() {
         // Shows the outdated banner when a newer stable server release exists on GitHub.
         // The server does the GitHub comparison and caches it; we just read the flag.
         async function checkVersion() {
-            const res = await apiFetch("/api/info/version").catch(() => null)
+            const res = await apiFetch("/api/v1/info/version").catch(() => null)
             if (!res?.ok) return
             const { serverOutdated } = await res.json()
             setOutdated(!!serverOutdated)
@@ -421,7 +421,7 @@ export default function App() {
         // says so rather than accepting a message nothing can answer. Polled often enough that the
         // warning clears shortly after the user starts a server.
         async function checkReady() {
-            const res = await apiFetch("/api/info/ready").catch(() => null)
+            const res = await apiFetch("/api/v1/info/ready").catch(() => null)
             if (!res?.ok) return
             const { ready } = await res.json()
             setServerReady(!!ready)
@@ -478,7 +478,7 @@ export default function App() {
     // ── load thread attachments ───────────────────────────
     const refreshThreadAttach = useCallback(async (key: string) => {
         try {
-            const res = await apiFetch(`/threads/${key}/attachments`)
+            const res = await apiFetch(`/api/v1/threads/${key}/attachments`)
             if (res.ok) setThreadAttach(await res.json())
             else setThreadAttach([])
         } catch { setThreadAttach([]) }
@@ -502,7 +502,7 @@ export default function App() {
             // Inject as _fs_skeleton — a system-context hint, NOT a user-turn attachment.
             // The server reads this name specially and places it in the system prompt rather
             // than prepending it to every user message.
-            const res = await apiFetch(`/threads/${threadKey}/system-context`, {
+            const res = await apiFetch(`/api/v1/threads/${threadKey}/system-context`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ name: "_fs_skeleton", content }),
@@ -511,7 +511,7 @@ export default function App() {
         } catch (e) { console.error("[FileTree] Error:", e) }
     }, [])
 
-    // Open a WebSocket to /api/client?threadKey=... so the server registers file tools
+    // Open a WebSocket to /api/v1/client?threadKey=... so the server registers file tools
     // on the active thread. Handles all incoming tool-call messages from the server.
     const openToolSocket = useCallback(async (threadKey: string, projectId: string) => {
         console.warn(`[ToolSocket] openToolSocket called  threadKey=${threadKey}  projectId=${projectId}  currentBound=${toolSocketKeyRef.current ?? "none"}`)
@@ -532,7 +532,7 @@ export default function App() {
         if (!localPath) { console.warn(`[ToolSocket] No local path for project ${projectId} — aborting`); return }
 
         const wsProto = window.location.protocol === "https:" ? "wss" : "ws"
-        const wsUrl = `${wsProto}://${window.location.host}/api/client?threadKey=${encodeURIComponent(threadKey)}`
+        const wsUrl = `${wsProto}://${window.location.host}/api/v1/client?threadKey=${encodeURIComponent(threadKey)}`
         console.warn(`[ToolSocket] Opening WebSocket  url=${wsUrl}`)
         const ws = new WebSocket(wsUrl)
         toolSocketRef.current    = ws
@@ -814,7 +814,7 @@ export default function App() {
                     command, title,
                     resolve: d => {
                         shownApprovalRef.current = null
-                        apiFetch(`/threads/${key}/approvals/${id}`, {
+                        apiFetch(`/api/v1/threads/${key}/approvals/${id}`, {
                             method: "POST", headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({ allow: d !== "deny" }),
                         }).catch(() => {})
@@ -945,7 +945,7 @@ export default function App() {
         const STOP_WORDS = ["stop", "wait", "escape"]
         if (isStreaming && STOP_WORDS.includes(prompt.toLowerCase().trim())) {
             // "stop" = Esc: cancel but preserve the partial work (not the throwaway cancel).
-            if (activeThreadRef.current) await apiFetch(`/threads/${activeThreadRef.current}/interrupt`, { method: "POST" }).catch(() => {})
+            if (activeThreadRef.current) await apiFetch(`/api/v1/threads/${activeThreadRef.current}/interrupt`, { method: "POST" }).catch(() => {})
             return
         }
         // A real message sent while she's still working = "stop and read this, then continue". Fold it into
@@ -958,7 +958,7 @@ export default function App() {
             // above it). When the server folds it in, a [SPLIT] event finalizes that bubble and opens the
             // continuation below this message; the [SPLIT]/[DONE] handlers dedupe against this optimistic copy.
             setItems(prev => [...prev, { type: "userMessage", content: prompt, timestamp: new Date().toISOString(), attachments: interjectAttach as Attachment[] | undefined }])
-            const res = await apiFetch(`/threads/${key}/interject`, {
+            const res = await apiFetch(`/api/v1/threads/${key}/interject`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ text: prompt }),
             }).catch(() => null)
@@ -1040,7 +1040,7 @@ export default function App() {
 
         if (prompt.startsWith("/")) {
             try {
-                const res = await apiFetch("/commands", {
+                const res = await apiFetch("/api/v1/commands", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ threadKey: key, input: prompt }),
@@ -1087,7 +1087,7 @@ export default function App() {
 
         async function runStream() {
             try {
-                const resp = await apiFetch(`/threads/${keyForStream}/stream`, {
+                const resp = await apiFetch(`/api/v1/threads/${keyForStream}/stream`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ prompt, ...(localPath ? { localPath } : {}), ...(safetyMode && !isApprove ? { safeMode: true } : {}) }),
@@ -1226,7 +1226,7 @@ export default function App() {
         const succeeded: string[] = []
         for (const file of files) {
             const fd = new FormData(); fd.append("file", file)
-            const res = await apiFetch(`/threads/${key}/attachments`, { method: "POST", body: fd })
+            const res = await apiFetch(`/api/v1/threads/${key}/attachments`, { method: "POST", body: fd })
             if (res.ok) succeeded.push(file.name)
             else { const err = await res.json().catch(() => null); showToast(err?.error ?? `Could not attach ${file.name}.`) }
         }
@@ -1236,7 +1236,7 @@ export default function App() {
 
     const removeThreadAttachment = useCallback(async (name: string) => {
         if (!activeThreadRef.current) return
-        await apiFetch(`/threads/${activeThreadRef.current}/attachments/${encodeURIComponent(name)}`, { method: "DELETE" })
+        await apiFetch(`/api/v1/threads/${activeThreadRef.current}/attachments/${encodeURIComponent(name)}`, { method: "DELETE" })
         await refreshThreadAttach(activeThreadRef.current)
     }, [refreshThreadAttach])
 
@@ -1255,7 +1255,7 @@ export default function App() {
 
         for (const file of files) {
             const fd = new FormData(); fd.append("file", file)
-            const res = await apiFetch(`/threads/${key}/message-attachments`, { method: "POST", body: fd })
+            const res = await apiFetch(`/api/v1/threads/${key}/message-attachments`, { method: "POST", body: fd })
             if (res.ok) {
                 const data = await res.json()
                 setPendingAttach(prev => [
@@ -1274,7 +1274,7 @@ export default function App() {
     // never gets one and is never staged server-side either, so falling back to name-match is safe.
     const removeMessageAttachment = useCallback(async (idOrName: string) => {
         if (!activeThreadRef.current) return
-        await apiFetch(`/threads/${activeThreadRef.current}/message-attachments/${encodeURIComponent(idOrName)}`, { method: "DELETE" })
+        await apiFetch(`/api/v1/threads/${activeThreadRef.current}/message-attachments/${encodeURIComponent(idOrName)}`, { method: "DELETE" })
         setPendingAttach(prev => prev.filter(a => (a.id ?? a.name) !== idOrName))
     }, [])
 
@@ -1329,7 +1329,7 @@ export default function App() {
                 </div>
             )}
             <TaskBanner tasks={runningTasks} sidebarCollapsed={sidebarCollapsed} onCancel={name => {
-                apiFetch(`/admin/scheduler/task/${encodeURIComponent(name)}/stop`, { method: "POST" }).catch(() => {})
+                apiFetch(`/api/v1/admin/scheduler/task/${encodeURIComponent(name)}/stop`, { method: "POST" }).catch(() => {})
             }} />
             <Sidebar
                 threads={threads}

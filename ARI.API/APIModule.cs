@@ -165,7 +165,7 @@ public class APIModule : IAsyncDisposable
         app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(15) });
         app.Use(async (ctx, next) =>
         {
-            if (ctx.Request.Path == "/api/client" || ctx.Request.Path == "/api/listener/stream")
+            if (ctx.Request.Path == "/api/v1/client" || ctx.Request.Path == "/api/v1/listener/stream")
             {
                 // These sockets are accepted before UseMiddleware<AuthMiddleware>() runs (WebSocket
                 // upgrades can't carry the normal pipeline's response), so authenticate here explicitly —
@@ -182,7 +182,7 @@ public class APIModule : IAsyncDisposable
                 ctx.User = principal;
             }
 
-            if (ctx.Request.Path == "/api/client")
+            if (ctx.Request.Path == "/api/v1/client")
             {
                 if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
 
@@ -203,7 +203,7 @@ public class APIModule : IAsyncDisposable
             }
 
             // Audio ingress for the Speech pipeline — browser mic / client streams PCM here.
-            if (ctx.Request.Path == "/api/listener/stream")
+            if (ctx.Request.Path == "/api/v1/listener/stream")
             {
                 if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
 

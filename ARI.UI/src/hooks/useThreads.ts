@@ -34,7 +34,7 @@ export function useThreads() {
 
     const load = useCallback(async () => {
         try {
-            const res = await apiFetch("/threads")
+            const res = await apiFetch("/api/v1/threads")
             if (!res.ok) return
             const data: ThreadEntry[] = await res.json()
             setThreads(data)
@@ -129,7 +129,7 @@ export interface Attachment {
 }
 
 export async function createThread(projectId?: string | null, pipeline?: string | null): Promise<string> {
-    const res = await apiFetch("/threads", {
+    const res = await apiFetch("/api/v1/threads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectId: projectId ?? null, desktop: env.isDesktop, pipeline: pipeline ?? null }),
@@ -140,12 +140,12 @@ export async function createThread(projectId?: string | null, pipeline?: string 
 
 // Close a thread: the server runs Engram (saving it to memory) then deletes it, broadcasting threadDeleted.
 export async function closeThread(key: string): Promise<boolean> {
-    const res = await apiFetch(`/threads/${key}`, { method: "DELETE" })
+    const res = await apiFetch(`/api/v1/threads/${key}`, { method: "DELETE" })
     return res.ok
 }
 
 export async function loadHistory(key: string, raw = false): Promise<ThreadItem[]> {
-    const url = raw ? `/threads/${key}/history?raw=true` : `/threads/${key}/history`
+    const url = raw ? `/api/v1/threads/${key}/history?raw=true` : `/api/v1/threads/${key}/history`
     const res = await apiFetch(url)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     return res.json()
@@ -162,7 +162,7 @@ export interface ThreadDetail {
 
 export async function fetchThread(key: string): Promise<ThreadDetail | null> {
     try {
-        const res = await apiFetch(`/threads/${key}`)
+        const res = await apiFetch(`/api/v1/threads/${key}`)
         if (!res.ok) return null
         return res.json()
     } catch { return null }
@@ -200,7 +200,7 @@ export function openWatchStream(
     onEvent: (data: WatchEvent) => void,
     onError: () => void,
 ): EventSource {
-    const es = new EventSource(tokenUrl(`/threads/${key}/watch`))
+    const es = new EventSource(tokenUrl(`/api/v1/threads/${key}/watch`))
     es.onmessage = e => {
         try { onEvent(JSON.parse(e.data)) } catch { /* ignore */ }
     }
@@ -228,7 +228,7 @@ export function openEventStream(
     onEvent: (data: AppEvent) => void,
     onError: () => void,
 ): EventSource {
-    const es = new EventSource(tokenUrl("/events"))
+    const es = new EventSource(tokenUrl("/api/v1/events"))
     es.onmessage = e => {
         try { onEvent(JSON.parse(e.data)) } catch { /* ignore */ }
     }
@@ -242,7 +242,7 @@ export function useTypingHeartbeat(getThreadKey: () => string | null) {
     function send() {
         const key = getThreadKey()
         if (!key) return
-        apiFetch(`/threads/${key}/typing`, { method: "POST" }).catch(() => {})
+        apiFetch(`/api/v1/threads/${key}/typing`, { method: "POST" }).catch(() => {})
     }
 
     function start() {

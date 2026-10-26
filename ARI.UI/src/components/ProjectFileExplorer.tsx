@@ -51,7 +51,7 @@ export default function ProjectFileExplorer({ projectId }: Props) {
     const load = useCallback(async (p: string) => {
         setLoading(true); setError(null)
         try {
-            const res = await apiFetch(`/projects/${projectId}/files?path=${encodeURIComponent(p)}`)
+            const res = await apiFetch(`/api/v1/projects/${projectId}/files?path=${encodeURIComponent(p)}`)
             if (!res.ok) { setError((await res.json().catch(() => null))?.error ?? "Failed to load files."); setEntries([]); return }
             const data = await res.json()
             setEntries(data.entries ?? [])
@@ -74,7 +74,7 @@ export default function ProjectFileExplorer({ projectId }: Props) {
         try {
             const fd = new FormData()
             for (const f of list) fd.append("files", f)
-            const res = await apiFetch(`/projects/${projectId}/files?path=${encodeURIComponent(path)}`, { method: "POST", body: fd })
+            const res = await apiFetch(`/api/v1/projects/${projectId}/files?path=${encodeURIComponent(path)}`, { method: "POST", body: fd })
             if (!res.ok) { setError((await res.json().catch(() => null))?.error ?? "Upload failed."); return }
             await load(path)
         } catch { setError("Upload failed — could not reach ARI.") }
@@ -85,7 +85,7 @@ export default function ProjectFileExplorer({ projectId }: Props) {
         e.stopPropagation()
         if (!confirm(`Delete "${entry.name}"?${entry.isDir ? " This deletes the whole folder." : ""}`)) return
         const entryPath = path ? `${path}/${entry.name}` : entry.name
-        const res = await apiFetch(`/projects/${projectId}/files?path=${encodeURIComponent(entryPath)}`, { method: "DELETE" })
+        const res = await apiFetch(`/api/v1/projects/${projectId}/files?path=${encodeURIComponent(entryPath)}`, { method: "DELETE" })
         if (!res.ok) { setError((await res.json().catch(() => null))?.error ?? "Delete failed."); return }
         await load(path)
     }
@@ -93,7 +93,7 @@ export default function ProjectFileExplorer({ projectId }: Props) {
     function openEntry(entry: FileEntry) {
         if (entry.isDir) { setPath(path ? `${path}/${entry.name}` : entry.name); return }
         const entryPath = path ? `${path}/${entry.name}` : entry.name
-        window.open(tokenUrl(`/projects/${projectId}/files/content?path=${encodeURIComponent(entryPath)}`), "_blank")
+        window.open(tokenUrl(`/api/v1/projects/${projectId}/files/content?path=${encodeURIComponent(entryPath)}`), "_blank")
     }
 
     return (

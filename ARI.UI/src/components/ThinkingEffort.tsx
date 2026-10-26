@@ -32,7 +32,7 @@ export default function ThinkingEffort({ serverReady, codeMode }: Props) {
         let cancelled = false
         async function load() {
             try {
-                const res = await apiFetch("/models/reasoning-effort")
+                const res = await apiFetch("/api/v1/models/reasoning-effort")
                 if (cancelled) return
                 const effort = await res.json()
                 setSupported(codeMode ? effort?.support?.coder === true : effort?.support?.dialogue === true)
@@ -57,7 +57,7 @@ export default function ThinkingEffort({ serverReady, codeMode }: Props) {
 
     function changeStep(next: number) {
         setStep(next)
-        apiFetch("/models/reasoning-effort", {
+        apiFetch("/api/v1/models/reasoning-effort", {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ step: next }),

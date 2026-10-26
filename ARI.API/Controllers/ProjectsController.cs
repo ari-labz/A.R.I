@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.StaticFiles;
 
 namespace ARI.API.Controllers;
 
-[Route("projects")]
+[Route("api/v1/projects")]
 [ApiController]
 public class ProjectsController(ProjectStore store, ProjectServiceAdapter projects, UserStore users) : ControllerBase
 {

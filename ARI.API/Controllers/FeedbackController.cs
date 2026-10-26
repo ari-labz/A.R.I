@@ -10,7 +10,7 @@ namespace ARI.API.Controllers;
 /// the control panel that browses them. Snapshotting happens here rather than client-side because only
 /// the server holds the clean, markup-free text the model actually produced.
 /// </summary>
-[Route("feedback")]
+[Route("api/v1/feedback")]
 [ApiController]
 public class FeedbackController : ControllerBase
 {

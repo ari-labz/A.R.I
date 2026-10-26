@@ -23,7 +23,7 @@ function renderFileMarkers(s: string): string {
         const path = decodeMarkerLabel(rawPath)
         const name = path.split("/").pop() || path
         const ext  = (name.includes(".") ? name.split(".").pop()! : "file").toUpperCase().slice(0, 4)
-        const href = `/threads/${encodeURIComponent(threadKey)}/file?path=${encodeURIComponent(path)}`
+        const href = `/api/v1/threads/${encodeURIComponent(threadKey)}/file?path=${encodeURIComponent(path)}`
         return `\n\n<a class="file-card file-card--download" href="${href}" download="${escHtml(name)}" title="Download ${escHtml(name)}">`
              + `<span class="file-card-icon">${escHtml(ext)}</span>`
              + `<span class="file-card-name">${escHtml(name)}</span>`
@@ -37,7 +37,7 @@ function escHtml(s: string): string {
 
 function renderImageMarkers(s: string): string {
     return s.replace(IMAGE_RE, (_, threadKey, filename) => {
-        const src = `/threads/${encodeURIComponent(threadKey)}/scratchpad/${encodeURIComponent(filename)}`
+        const src = `/api/v1/threads/${encodeURIComponent(threadKey)}/scratchpad/${encodeURIComponent(filename)}`
         return `\n\n<div class="tool-card tool-card--image" data-image-src="${escHtml(src)}" data-image-name="${escHtml(filename)}">`
              + `<img class="tool-card-image-thumb" src="${escHtml(src)}" alt="${escHtml(filename)}" />`
              + `<span>${escHtml(filename)}</span>`

@@ -14,7 +14,7 @@ namespace ARI.API.Controllers;
 ///   GET  /projects/{id}/sync/pull    — streams a git bundle of changes since the client's SHA
 ///   POST /projects/{id}/sync/push    — accepts a git bundle, applies it, commits to server
 /// </summary>
-[Route("projects/{id}/sync")]
+[Route("api/v1/projects/{id}/sync")]
 [ApiController]
 public class ProjectSyncController(ProjectStore store) : ControllerBase
 {

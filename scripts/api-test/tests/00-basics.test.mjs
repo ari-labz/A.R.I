@@ -31,3 +31,13 @@ test("a message gets a reply from the stand-in model", async () => {
   assert(r.events.some(e => e.includes("[DONE]")), "stream should end with [DONE]: " + JSON.stringify(r.events.slice(-3)));
   assert(r.events.some(e => e.includes("Echo: hello there")), "reply should echo the message: " + JSON.stringify(r.events.slice(-3)));
 });
+
+test("every route lives under /api/v1, and the old unprefixed paths are gone", async () => {
+  const { base } = await import("../lib.mjs");
+  for (const old of ["/threads", "/auth/me", "/admin/users", "/api/info"]) {
+    const res = await fetch(base + old, { headers: { Authorization: `Bearer ${master.token}` } });
+    const body = await res.text();
+    assert(res.status === 404 || !res.headers.get("content-type")?.includes("json"), `${old} should not answer as an API route (got ${res.status}: ${body.slice(0, 60)})`);
+  }
+  status(await master.get("/threads"), 200);
+});

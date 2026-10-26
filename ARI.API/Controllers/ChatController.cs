@@ -15,7 +15,7 @@ using Microsoft.Net.Http.Headers;
 namespace ARI.API.Controllers;
 
 
-[Route("threads")]
+[Route("api/v1/threads")]
 [ApiController]
 public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore users) : ControllerBase, Microsoft.AspNetCore.Mvc.Filters.IActionFilter
 {
@@ -236,7 +236,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     /// renders its selector from this list and maps each name to a label/icon with a generic fallback,
     /// so adding a ThreadPipeline value surfaces in the UI without a frontend change.
     /// </summary>
-    [HttpGet("~/pipelines")]
+    [HttpGet("~/api/v1/pipelines")]
     public IActionResult GetPipelines()
         => Ok(Enum.GetNames<ARI.LLM.ThreadPipeline>().Select(n => n.ToLowerInvariant()).ToList());
 
@@ -430,7 +430,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     /// Global SSE event stream — one connection per client, covers all threads.
     /// Event types: newThread | streaming | streamingFinished | threadDeleted | threadUpdated | threadBound
     /// </summary>
-    [HttpGet("~/events")]
+    [HttpGet("~/api/v1/events")]
     public async Task Events(CancellationToken cancellationToken)
     {
         Response.Headers[HeaderNames.ContentType]  = "text/event-stream";
@@ -566,7 +566,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         return ARI.LLM.ToolApprovals.Resolve(threadKey, id, body?.Allow == true) ? Ok() : NotFound();
     }
 
-    [HttpPost("~/commands")]
+    [HttpPost("~/api/v1/commands")]
     public async Task<IActionResult> RunCommand([FromBody] CommandRequest req)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");

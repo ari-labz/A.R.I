@@ -70,7 +70,7 @@ export interface LoginResult {
 }
 
 export async function login(username: string, password: string, isDesktop: boolean): Promise<LoginResult> {
-    const res = await fetch("/auth/login", {
+    const res = await fetch("/api/v1/auth/login", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ username, password, isDesktop, deviceHint: isDesktop ? "ARI Desktop" : "Browser" }),
@@ -83,7 +83,7 @@ export async function login(username: string, password: string, isDesktop: boole
 }
 
 export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
-    const res = await apiFetch("/auth/change-password", {
+    const res = await apiFetch("/api/v1/auth/change-password", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ currentPassword, newPassword }),
@@ -97,7 +97,7 @@ export async function changePassword(currentPassword: string, newPassword: strin
 /** Resolves the signed-in user from the token, or — on a fresh tab — from the session cookie. */
 export async function fetchMe(): Promise<AuthUser | null> {
     try {
-        const res = await apiFetch("/auth/me")
+        const res = await apiFetch("/api/v1/auth/me")
         if (!res.ok) return null
         return res.json()
     } catch {
@@ -107,6 +107,6 @@ export async function fetchMe(): Promise<AuthUser | null> {
 
 export async function logout(): Promise<void> {
     await unregisterPush()   // while the session is still valid
-    await apiFetch("/auth/logout", { method: "POST" }).catch(() => {})
+    await apiFetch("/api/v1/auth/logout", { method: "POST" }).catch(() => {})
     clearToken()
 }

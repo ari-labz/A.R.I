@@ -4,7 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace ARI.API.Controllers;
 
 /// <summary>Control-panel endpoints for the Discord integration.</summary>
-[Route("admin/discord")]
+[Route("api/v1/admin/discord")]
 [ApiController]
 public class DiscordController : ControllerBase
 {

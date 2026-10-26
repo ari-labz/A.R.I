@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ARI.API.Controllers;
 
-[Route("api/client")]
+[Route("api/v1/client")]
 [ApiController]
 public class ClientController : ControllerBase
 {

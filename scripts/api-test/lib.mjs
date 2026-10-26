@@ -7,7 +7,7 @@ export const base = process.env.ARI_TEST_URL ?? "http://localhost:5199";
 export const dataDir = process.env.ARI_TEST_DATA ?? "";
 
 /** Where the API lives. Tests use paths like "/threads"; this is put in front. */
-export const prefix = "";
+export const prefix = "/api/v1";
 
 const tests = [];
 export function test(name, fn) { tests.push({ name, fn }); }

@@ -45,14 +45,14 @@ export default function UserPreferences({ user, onClose, onLogout, onUserUpdated
     const [allowedError,      setAllowedError]       = useState<string | null>(null)
 
     useEffect(() => {
-        apiFetch("/user/preferences").then(r => r.ok ? r.json() : null).then(data => {
+        apiFetch("/api/v1/user/preferences").then(r => r.ok ? r.json() : null).then(data => {
             if (data?.sessions) setSessions(data.sessions)
         }).catch(() => {}).finally(() => setSessionsLoading(false))
     }, [])
 
     useEffect(() => {
         if (!isAdmin) return
-        apiFetch("/command-allowlist").then(r => r.ok ? r.json() : null).then(data => {
+        apiFetch("/api/v1/command-allowlist").then(r => r.ok ? r.json() : null).then(data => {
             if (Array.isArray(data?.commands)) setAllowed(data.commands)
         }).catch(() => {}).finally(() => setAllowedLoading(false))
     }, [isAdmin])
@@ -60,7 +60,7 @@ export default function UserPreferences({ user, onClose, onLogout, onUserUpdated
     async function saveAllowed(next: string[]) {
         setAllowedError(null)
         try {
-            const res = await apiFetch("/command-allowlist", {
+            const res = await apiFetch("/api/v1/command-allowlist", {
                 method: "PUT", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ commands: next }),
             })
@@ -77,7 +77,7 @@ export default function UserPreferences({ user, onClose, onLogout, onUserUpdated
         setNameLoading(true)
         setNameSaved(false)
         try {
-            const res = await apiFetch("/user/preferences", {
+            const res = await apiFetch("/api/v1/user/preferences", {
                 method:  "PUT",
                 headers: { "Content-Type": "application/json" },
                 body:    JSON.stringify({ displayName: name }),
@@ -123,7 +123,7 @@ export default function UserPreferences({ user, onClose, onLogout, onUserUpdated
         setUnError(null)
         setUnLoading(true)
         try {
-            const res = await apiFetch("/user/username", {
+            const res = await apiFetch("/api/v1/user/username", {
                 method:  "PUT",
                 headers: { "Content-Type": "application/json" },
                 body:    JSON.stringify({ newUsername: name, currentPassword: unPassword }),
@@ -138,7 +138,7 @@ export default function UserPreferences({ user, onClose, onLogout, onUserUpdated
     }
 
     async function revokeSession(id: string) {
-        await apiFetch(`/user/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {})
+        await apiFetch(`/api/v1/user/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {})
         setSessions(prev => prev.filter(s => s.sessionId !== id))
     }
 

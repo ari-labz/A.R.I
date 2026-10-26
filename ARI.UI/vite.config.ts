@@ -8,7 +8,7 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      // ws:true so the Listener audio WebSocket (/api/listener/stream) proxies to the backend in dev
+      // ws:true so the Listener audio WebSocket (/api/v1/listener/stream) proxies to the backend in dev
       "/api": { target: "http://localhost:5074", ws: true },
     },
   },

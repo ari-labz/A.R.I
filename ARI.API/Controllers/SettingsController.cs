@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging;
 namespace ARI.API.Controllers;
 
 /// <summary>General settings shown on the control panel's Settings page. Under /admin/, so admin only.</summary>
-[Route("admin/settings")]
+[Route("api/v1/admin/settings")]
 [ApiController]
 public class SettingsController(ILogger<SettingsController> logger) : ControllerBase
 {

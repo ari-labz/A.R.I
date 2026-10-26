@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace ARI.API.Controllers;
 
 /// <summary>Preferences and session management for the currently signed-in user.</summary>
-[Route("user")]
+[Route("api/v1/user")]
 [ApiController]
 public class UserController(UserStore users) : ControllerBase
 {
@@ -79,10 +79,10 @@ public class UserController(UserStore users) : ControllerBase
         if (session is null || session.UserId != id)
             return NotFound();
 
-        // Don't allow revoking the current session via this endpoint — use /auth/logout
+        // Don't allow revoking the current session via this endpoint — use /api/v1/auth/logout
         string? mySession = User.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Jti);
         if (session.SessionId == mySession)
-            return BadRequest(new { error = "Use /auth/logout to end your current session." });
+            return BadRequest(new { error = "Use /api/v1/auth/logout to end your current session." });
 
         users.RevokeSession(sessionId);
         return Ok();

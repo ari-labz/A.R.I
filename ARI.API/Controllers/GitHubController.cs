@@ -6,7 +6,7 @@ namespace ARI.API.Controllers;
 /// <summary>Control-panel endpoints for connecting ARI to a GitHub account via the OAuth device-authorization
 /// flow — nobody types or pastes a token here; you approve a short code on github.com and whatever comes
 /// back is stored server-side. See GitHubDeviceAuth for the flow itself.</summary>
-[Route("admin/github")]
+[Route("api/v1/admin/github")]
 [ApiController]
 public class GitHubController : ControllerBase
 {
