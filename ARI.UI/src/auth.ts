@@ -52,14 +52,6 @@ export function apiFetch(input: string, init?: RequestInit): Promise<Response> {
     return fetch(input, { ...init, headers })
 }
 
-/** Appends `?token=…` to a URL — for EventSource / WebSocket which can't set headers. */
-export function tokenUrl(url: string): string {
-    const token = getToken()
-    if (!token) return url
-    const sep = url.includes("?") ? "&" : "?"
-    return `${url}${sep}token=${encodeURIComponent(token)}`
-}
-
 // ── Auth API calls ────────────────────────────────────────────────────────────
 
 export interface LoginResult {

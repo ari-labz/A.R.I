@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react"
-import { apiFetch, tokenUrl } from "../auth"
+import { apiFetch } from "../auth"
 
 interface FileEntry {
     name:       string
@@ -93,7 +93,7 @@ export default function ProjectFileExplorer({ projectId }: Props) {
     function openEntry(entry: FileEntry) {
         if (entry.isDir) { setPath(path ? `${path}/${entry.name}` : entry.name); return }
         const entryPath = path ? `${path}/${entry.name}` : entry.name
-        window.open(tokenUrl(`/api/v1/projects/${projectId}/files/content?path=${encodeURIComponent(entryPath)}`), "_blank")
+        window.open(`/api/v1/projects/${projectId}/files/content?path=${encodeURIComponent(entryPath)}`, "_blank")
     }
 
     return (

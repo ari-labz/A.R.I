@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from "react"
 import { env } from "../env"
-import { apiFetch, tokenUrl } from "../auth"
+import { apiFetch } from "../auth"
 
 export interface ThreadEntry {
     key:          string
@@ -201,7 +201,7 @@ export function openWatchStream(
     onEvent: (data: WatchEvent) => void,
     onError: () => void,
 ): EventSource {
-    const es = new EventSource(tokenUrl(`/api/v1/threads/${key}/watch`))
+    const es = new EventSource(`/api/v1/threads/${key}/watch`)
     es.onmessage = e => {
         try { onEvent(JSON.parse(e.data)) } catch { /* ignore */ }
     }
@@ -229,7 +229,7 @@ export function openEventStream(
     onEvent: (data: AppEvent) => void,
     onError: () => void,
 ): EventSource {
-    const es = new EventSource(tokenUrl("/api/v1/events"))
+    const es = new EventSource("/api/v1/events")
     es.onmessage = e => {
         try { onEvent(JSON.parse(e.data)) } catch { /* ignore */ }
     }
