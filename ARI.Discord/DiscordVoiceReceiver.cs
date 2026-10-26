@@ -17,6 +17,7 @@ internal sealed class DiscordVoiceReceiver : IAsyncDisposable
     private readonly string whisperUrl;
     private readonly ILogger? logger;
 
+    private readonly Func<ulong, bool> mayTalk;
     private readonly Dictionary<ulong, DiscordUserAudioSession> sessions = new();
     private readonly SemaphoreSlim sessionsLock = new(1, 1);
 
@@ -27,10 +28,12 @@ internal sealed class DiscordVoiceReceiver : IAsyncDisposable
         string platformContext,
         Func<string, Task> sendReply,
         string whisperUrl,
+        Func<ulong, bool> mayTalk,
         ILogger? logger)
     {
         this.audioClient = audioClient;
         this.whisperUrl  = whisperUrl;
+        this.mayTalk     = mayTalk;
         this.logger      = logger;
 
         compositor = new DiscordVoiceCompositor(llm, threadKey, platformContext, sendReply, logger);
@@ -60,6 +63,11 @@ internal sealed class DiscordVoiceReceiver : IAsyncDisposable
 
     private Task OnStreamCreated(ulong userId, AudioInStream stream)
     {
+        if (!mayTalk(userId))
+        {
+            logger?.LogDebug("[VoiceReceiver] ignored voice from non-whitelisted user {UserId}.", userId);
+            return Task.CompletedTask;
+        }
         _ = Task.Run(async () =>
         {
             // Wait for DAVE E2EE handshake to settle before starting the decoder — frames arriving
