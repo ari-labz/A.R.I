@@ -90,8 +90,8 @@ public class AuthController(UserStore users, AuthService auth) : ControllerBase
         if (!AuthService.VerifyPassword(req.CurrentPassword, user.PasswordHash))
             return BadRequest(new { error = "Current password is incorrect." });
 
-        if (req.NewPassword.Length < 5)
-            return BadRequest(new { error = "New password must be at least 8 characters." });
+        if (AccountRules.CheckPassword(req.NewPassword) is { } passwordProblem)
+            return BadRequest(new { error = passwordProblem });
 
         string hash = AuthService.HashPassword(req.NewPassword);
         users.SetPassword(userId, hash, mustChange: false);

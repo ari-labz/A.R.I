@@ -42,15 +42,16 @@ public class AdminUsersController(UserStore users) : ControllerBase
 
         string role = req.Role is Roles.Admin or Roles.Guest ? req.Role : Roles.Guest;
 
-        if (string.IsNullOrWhiteSpace(req.Username))
-            return BadRequest(new { error = "Username is required." });
-        if (req.Password.Length < 5)
-            return BadRequest(new { error = "Password must be at least 5 characters." });
-        if (users.GetByUsername(req.Username) is not null)
+        string username = (req.Username ?? "").Trim();
+        if (AccountRules.CheckUsername(username) is { } usernameProblem)
+            return BadRequest(new { error = usernameProblem });
+        if (AccountRules.CheckPassword(req.Password) is { } passwordProblem)
+            return BadRequest(new { error = passwordProblem });
+        if (users.GetByUsername(username) is not null)
             return Conflict(new { error = "A user with that username already exists." });
 
         string hash = AuthService.HashPassword(req.Password);
-        User   user = users.CreateUser(req.Username, hash, role, displayName: req.Username);
+        User   user = users.CreateUser(username, hash, role, displayName: username);
         return Ok(new { user.Id, user.Username, user.Role });
     }
 
@@ -69,8 +70,8 @@ public class AdminUsersController(UserStore users) : ControllerBase
         if (id.ToString() == ARI.Common.Shared.MasterUserId && User.FindFirstValue(ClaimTypes.NameIdentifier) != id.ToString())
             return BadRequest(new { error = "Only the Master can change the Master's password." });
 
-        if (req.NewPassword.Length < 5)
-            return BadRequest(new { error = "Password must be at least 5 characters." });
+        if (AccountRules.CheckPassword(req.NewPassword) is { } passwordProblem)
+            return BadRequest(new { error = passwordProblem });
 
         string hash = AuthService.HashPassword(req.NewPassword);
         users.SetPassword(id, hash, mustChange: true);
