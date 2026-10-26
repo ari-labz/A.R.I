@@ -120,6 +120,11 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         return thread;
     }
 
+    /// <summary>True if the caller owns the project, or is an admin (who can use any project).</summary>
+    private bool CanUseProject(Project project)
+        => User.FindFirstValue(ClaimTypes.Role) == ARI.API.Auth.Roles.Admin
+           || (int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out int callerId) && project.OwnerId == callerId);
+
     // ── Thread endpoints ────────────────────────────────────────────────────────
 
     [HttpGet]
@@ -195,9 +200,16 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
         // Desktop (Electron) clients get a "client-" key so they're distinguishable from browser ("web-") threads.
         string key = $"{(req?.Desktop == true ? "client" : "web")}-{Guid.NewGuid():N}";
-        Project? project = !string.IsNullOrWhiteSpace(req?.ProjectId) ? projectStore.Get(req.ProjectId) : null;
-        if (project is not null)
+        // A project can only be attached by someone who may use it: its owner, or an admin. Anything else is
+        // reported as "not found" so a guess at someone else's project id reveals nothing.
+        Project? project = null;
+        if (!string.IsNullOrWhiteSpace(req?.ProjectId))
+        {
+            project = projectStore.Get(req.ProjectId);
+            if (project is null || !CanUseProject(project))
+                return NotFound(new { error = "Project not found." });
             projectStore.BindThread(key, req!.ProjectId!);
+        }
         // Pre-register in LLMModule so the newThread event fires immediately and
         // all sidebar observers see the thread without waiting for the first message.
         // An explicit pipeline selection wins; otherwise a bound project that isn't a note vault opens in code-mode.
