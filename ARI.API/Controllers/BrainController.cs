@@ -34,7 +34,7 @@ public class BrainController : ControllerBase
     }
 
     /// <summary>Creates a new backup of the current brain.</summary>
-    [HttpPost("backup")]
+    [HttpPost("backups")]
     public IActionResult CreateBackup()
     {
         if (Llm is null || !Llm.BrainAvailable) return BadRequest(new { message = "Brain is not available." });

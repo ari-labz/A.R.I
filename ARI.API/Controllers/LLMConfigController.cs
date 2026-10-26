@@ -107,7 +107,7 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
         public string Description { get; set; } = "";
     }
 
-    [HttpPost("save")]
+    [HttpPost]
     public IActionResult Save([FromBody] SaveConfigRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.Name))
@@ -157,9 +157,10 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
 
     // ── POST /api/cp/llmconfigs/{fileName}/restore ───────────────────────────
 
-    [HttpPost("{fileName}/restore")]
-    public async Task<IActionResult> Restore(string fileName)
+    [HttpPost("{id}/restore")]
+    public async Task<IActionResult> Restore(string id)
     {
+        string fileName = id;
         string zipPath = Path.Combine(ConfigsDir, fileName);
         if (!System.IO.File.Exists(zipPath))
             return NotFound(new { error = "Config not found." });
@@ -204,9 +205,10 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
 
     // ── GET /api/cp/llmconfigs/{fileName}/contents ──────────────────────────
 
-    [HttpGet("{fileName}/contents")]
-    public IActionResult Contents(string fileName)
+    [HttpGet("{id}")]
+    public IActionResult Contents(string id)
     {
+        string fileName = id;
         string zipPath = Path.Combine(ConfigsDir, fileName);
         if (!System.IO.File.Exists(zipPath))
             return NotFound(new { error = "Config not found." });
@@ -222,9 +224,10 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
 
     // ── DELETE /api/cp/llmconfigs/{fileName} ─────────────────────────────────
 
-    [HttpDelete("{fileName}")]
-    public IActionResult Delete(string fileName)
+    [HttpDelete("{id}")]
+    public IActionResult Delete(string id)
     {
+        string fileName = id;
         string zipPath = Path.Combine(ConfigsDir, fileName);
         if (!System.IO.File.Exists(zipPath))
             return NotFound(new { error = "Config not found." });

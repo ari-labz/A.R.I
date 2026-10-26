@@ -1595,7 +1595,7 @@ function cuBrandCard(s) {
         if (!file.files.length) return;
         const fd = new FormData(); fd.append('file', file.files[0]);
         msg.textContent = 'Uploading…';
-        const r = await cpFetch('/api/v1/admin/branding/' + s.key, { method: 'POST', body: fd });
+        const r = await cpFetch('/api/v1/admin/branding/' + s.key, { method: 'PUT', body: fd });
         if (r.ok) loadBranding(); else msg.textContent = (await r.json().catch(() => ({}))).error || 'Upload failed.';
     });
     reset.addEventListener('click', async () => {
@@ -1711,7 +1711,7 @@ document.getElementById('cu-search').addEventListener('input', cuFilter);
 document.getElementById('cu-changed').addEventListener('change', cuFilter);
 document.getElementById('cu-save-btn').addEventListener('click', async () => {
     const msg = document.getElementById('cu-status-msg');
-    const r = await cpFetch('/api/v1/admin/theme', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ overrides: cuOver }) });
+    const r = await cpFetch('/api/v1/admin/theme', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ overrides: cuOver }) });
     if (r.ok) { try { localStorage.setItem('ari_theme', JSON.stringify(await r.json())); } catch {} msg.textContent = 'Saved.'; }
     else msg.textContent = (await r.json().catch(() => ({}))).error || 'Save failed.';
 });
@@ -1782,16 +1782,17 @@ async function loadPersistedThreads() {
         const r = await cpFetch('/api/v1/admin/persistedThreads');
         if (!r.ok) throw new Error();
         const s = await r.json();
+        const enabled = (await cpGetSettings()).persistedThreadsEnabled;
         slot.innerHTML = '';
-        slot.appendChild(buildToggle(s.enabled, async on => {
+        slot.appendChild(buildToggle(enabled, async on => {
             status.textContent = 'Saving…';
-            const res = await cpFetch('/api/v1/admin/persistedThreads', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: on }) });
-            const now = await res.json();
+            await cpPatchSettings({ persistedThreadsEnabled: on });
+            const now = await cpFetch('/api/v1/admin/persistedThreads').then(x => x.json());
             if (!on && now.count > 0 && confirm(`Persistent Threads is off. Delete the ${now.count} saved conversation(s) (${fmtBytes(now.bytes)}) too? This cannot be undone.`))
                 await cpFetch('/api/v1/admin/persistedThreads', { method: 'DELETE' });
             loadPersistedThreads();
         }));
-        status.textContent = s.count > 0 ? `${s.count} saved conversation(s), ${fmtBytes(s.bytes)}.` : (s.enabled ? 'Nothing saved yet.' : '');
+        status.textContent = s.count > 0 ? `${s.count} saved conversation(s), ${fmtBytes(s.bytes)}.` : (enabled ? 'Nothing saved yet.' : '');
         del.style.display = s.count > 0 ? '' : 'none';
         del.onclick = async () => {
             if (!confirm(`Delete all ${s.count} saved conversation(s)? This cannot be undone.`)) return;
@@ -1884,7 +1885,7 @@ function renderModules(modules) {
                 status.textContent = 'Saving…';
                 try {
                     const resp = await cpFetch(`/api/v1/admin/modules/${encodeURIComponent(m.key)}`, {
-                        method: 'PUT',
+                        method: 'PATCH',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ enabled }),
                     });
@@ -2823,7 +2824,7 @@ async function loadBrain() {
 document.getElementById('brain-backup-btn').addEventListener('click', async () => {
     const s = brainStatus(); s.textContent = 'Creating backup…';
     try {
-        const r = await cpFetch('/api/v1/admin/brain/backup', { method: 'POST' });
+        const r = await cpFetch('/api/v1/admin/brain/backups', { method: 'POST' });
         const d = await r.json();
         s.textContent = d.message || 'Backup created.';
         loadBrain();
@@ -3234,8 +3235,8 @@ document.getElementById('um-reset-save').addEventListener('click', async () => {
     if (pw.length < 8) { status.textContent = 'Password must be at least 8 characters.'; return; }
     status.textContent = 'Saving…';
     try {
-        const r = await cpFetch(`/api/v1/admin/users/${umResetUserId}/reset-password`, {
-            method: 'POST',
+        const r = await cpFetch(`/api/v1/admin/users/${umResetUserId}`, {
+            method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ newPassword: pw }),
         });
@@ -3413,7 +3414,7 @@ document.getElementById('lcfg-save-btn').addEventListener('click', async () => {
     if (!name) { status.textContent = 'Enter a name first.'; return; }
     status.textContent = 'Saving…';
     try {
-        const r = await cpFetch('/api/v1/admin/llmconfigs/save', {
+        const r = await cpFetch('/api/v1/admin/llmconfigs', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, description: desc }),
         });
@@ -3537,7 +3538,7 @@ function appendLogLine(text) {
     else scrollHint.classList.add('visible');
 }
 (function connectLog() {
-    const es = cpEventSource('/api/v1/admin/log');
+    const es = cpEventSource('/api/v1/admin/system/log');
     es.onopen    = () => { logStatus.textContent = 'live'; logStatus.classList.add('live'); };
     es.onerror   = () => { logStatus.textContent = 'reconnecting…'; logStatus.classList.remove('live'); setTimeout(connectLog, 3000); es.close(); };
     es.onmessage = e  => appendLogLine(e.data.replace(/↵/g, '\n'));
@@ -3585,7 +3586,7 @@ const ramChart = new Chart(ramCtx, {
 // minus a reserve (same figure the setup wizard fits models against) — not a fixed number.
 (async () => {
     try {
-        const r = await cpFetch('/api/v1/setup/hardware');
+        const r = await cpFetch('/api/v1/admin/system/hardware');
         if (!r.ok) return;
         const d = await r.json();
         RAM_LIMIT_MB = Math.round(d.usableBytes / 1048576);
@@ -3791,7 +3792,7 @@ function fmtMbShort(mb) { return mb >= 1024 ? (mb / 1024).toFixed(1) + 'G'  : mb
 let prevLiveKeys = '';
 async function pollRam() {
     try {
-        const res = await cpFetch('/api/v1/admin/ram');
+        const res = await cpFetch('/api/v1/admin/system/ram');
         const data = await res.json();
         const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         ramLabels.push(now); ramData.push(data.ramMb); swapData.push(data.swapMb ?? 0);
@@ -3810,7 +3811,7 @@ async function pollRam() {
 }
 async function pollStats() {
     try {
-        const res = await cpFetch('/api/v1/admin/stats');
+        const res = await cpFetch('/api/v1/admin/system/stats');
         const data = await res.json();
         renderTokens(data.calls);
     } catch { /* ignore */ }
@@ -5282,7 +5283,7 @@ document.getElementById('mdl-toggle-add-btn').addEventListener('click', () => {
 let _wizHw = { ramGb: 0, gpus: [] };
 (async () => {
     try {
-        const r = await cpFetch('/api/v1/admin/hardware');
+        const r = await cpFetch('/api/v1/admin/system/hardware');
         if (!r.ok) return;
         const d = await r.json();
         _wizHw.ramGb = (d.totalRamBytes || 0) / 1073741824;
@@ -7623,7 +7624,7 @@ document.getElementById('ig-save-model-btn').addEventListener('click', async () 
     const status = document.getElementById('ig-model-save-status');
     status.textContent = 'Saving…';
     try {
-        await cpFetch('/api/v1/admin/imagegen/config', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
+        await cpFetch('/api/v1/admin/imagegen/config', { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
             enabled:     document.getElementById('ig-enabled').checked,
             checkpoint,
             port:        parseInt(document.getElementById('ig-port').value) || 8188,
@@ -7639,7 +7640,7 @@ document.getElementById('ig-save-settings-btn').addEventListener('click', async 
     const status = document.getElementById('ig-settings-save-status');
     status.textContent = 'Saving…';
     try {
-        await cpFetch('/api/v1/admin/imagegen/config', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
+        await cpFetch('/api/v1/admin/imagegen/config', { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
             enabled:     document.getElementById('ig-enabled').checked,
             checkpoint:  igConfig.checkpoint ?? '',
             comfyUiPath: document.getElementById('ig-comfyui-path').value.trim(),

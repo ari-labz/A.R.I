@@ -19,6 +19,7 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
     private static readonly HashSet<string> AnonPaths =
     [
         "/api/v1/auth/login",
+        "/api/v1/health",
         "/api/v1/theme",
         "/api/v1/branding",
         "/api/v1/setup/status",

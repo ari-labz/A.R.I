@@ -45,7 +45,7 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5074/api/v1/theme >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5074/api/v1/health >/dev/null || exit 1"]
       interval: 30s
       timeout: 5s
       start_period: 90s

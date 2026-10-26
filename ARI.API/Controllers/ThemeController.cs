@@ -9,7 +9,7 @@ public class ThemeController : ControllerBase
     [HttpGet("api/v1/theme")]
     public IActionResult Get() => Ok(ThemeStore.Get());
 
-    [HttpPost("api/v1/admin/theme")]
+    [HttpPut("api/v1/admin/theme")]
     public IActionResult Set([FromBody] Theme theme)
     {
         string? err = ThemeStore.Set(theme);

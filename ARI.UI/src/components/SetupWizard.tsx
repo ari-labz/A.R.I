@@ -34,7 +34,7 @@ export default function SetupWizard({ startStep, existingUser, onFinished }: Pro
                 <div style={logoRow}><img src="/images/logo-black.png?v=2" alt="A·R·I" style={logoImg} /></div>
                 <Dots step={step} />
                 {step === "account" && <AccountStep onDone={(u, t) => { setToken(t); tokenRef.current = t; setUser(u); setStep("model") }} />}
-                {step === "model" && <ModelStep onChosen={() => setStep("download")} onSkip={async () => { await apiFetch("/api/v1/setup/skip-model", { method: "POST" }); setStep("done") }} />}
+                {step === "model" && <ModelStep onChosen={() => setStep("download")} onSkip={async () => { await apiFetch("/api/v1/admin/setup", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ setupComplete: true }) }); setStep("done") }} />}
                 {step === "download" && <DownloadStep onDone={() => setStep("done")} onBack={() => setStep("model")} />}
                 {step === "done" && (
                     <div style={form}>
@@ -100,12 +100,12 @@ function ModelStep({ onChosen, onSkip }: { onChosen: () => void; onSkip: () => v
     const [sel, setSel] = useState<ModelFile | null>(null)
     const [error, setError] = useState<string | null>(null); const [busy, setBusy] = useState(false)
 
-    useEffect(() => { json<Hardware>("/api/v1/setup/hardware").then(setHw).catch(() => {}) }, [])
+    useEffect(() => { json<Hardware>("/api/v1/admin/system/hardware").then(setHw).catch(() => {}) }, [])
 
     async function inspect(e: React.FormEvent) {
         e.preventDefault(); setBusy(true); setError(null); setRes(null); setSel(null)
         try {
-            const r = await json<Inspect>("/api/v1/setup/inspect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) })
+            const r = await json<Inspect>("/api/v1/admin/setup/inspect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) })
             setRes(r)
             const pick = (q: string) => r.files.find(f => f.fit === "fits" && f.quant === q)
             setSel(pick("Q4_K_M") ?? pick("Q5_K_M") ?? pick("Q4_K_S") ?? [...r.files].reverse().find(f => f.fit === "fits") ?? null)
@@ -116,7 +116,7 @@ function ModelStep({ onChosen, onSkip }: { onChosen: () => void; onSkip: () => v
         if (!sel || !res) return
         setBusy(true); setError(null)
         try {
-            await json("/api/v1/setup/model", { method: "POST", headers: { "Content-Type": "application/json" },
+            await json("/api/v1/admin/setup/model", { method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ repo: res.repo, file: sel.path, downloadUrl: sel.downloadUrl, sizeBytes: sel.sizeBytes, contextSize: Math.min(sel.maxContext, 32768) }) })
             onChosen()
         } catch (err) { setError(err instanceof Error ? err.message : "Failed"); setBusy(false) }
@@ -165,7 +165,7 @@ function DownloadStep({ onDone, onBack }: { onDone: () => void; onBack: () => vo
     useEffect(() => {
         const t = setInterval(async () => {
             try {
-                const p = await json<Progress>("/api/v1/setup/progress")
+                const p = await json<Progress>("/api/v1/admin/setup/progress")
                 setPr(p)
                 if (p.phase === "done") { clearInterval(t); onDone() }
                 if (p.phase === "error") clearInterval(t)

@@ -19,14 +19,14 @@ public class PushController : ControllerBase
     public sealed record UnsubscribeRequest(string Endpoint);
 
     /// <summary>The VAPID public key the browser needs to call pushManager.subscribe.</summary>
-    [HttpGet("vapid-public-key")]
+    [HttpGet("key")]
     public IActionResult GetVapidPublicKey()
     {
         if (Push is null) return StatusCode(503, "Push is not ready yet.");
         return Ok(new { publicKey = Push.VapidPublicKey });
     }
 
-    [HttpPost("subscribe")]
+    [HttpPost("subscriptions")]
     public IActionResult Subscribe([FromBody] SubscribeRequest req)
     {
         if (Push is null) return StatusCode(503, "Push is not ready yet.");
@@ -39,7 +39,7 @@ public class PushController : ControllerBase
         return Ok(new { ok = true });
     }
 
-    [HttpPost("unsubscribe")]
+    [HttpDelete("subscriptions")]
     public IActionResult Unsubscribe([FromBody] UnsubscribeRequest req)
     {
         if (Push is null) return StatusCode(503, "Push is not ready yet.");
