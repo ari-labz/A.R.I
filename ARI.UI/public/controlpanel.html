@@ -3936,6 +3936,11 @@ function srvFmtEta(sec) {
 
 function srvDownloadStrip(server) {
     const d = server.download;
+    if (!d && server.startError && server.status === 'Offline') {
+        const err = agEl('div', 'padding:0 14px 12px;font-size:12px;color:var(--danger, #c0392b);', `Not started: ${server.startError} Pick a model for it on the Models page, then start it.`);
+        err.className = 'srv-dl';
+        return err;
+    }
     if (!d) return null;
     const pct = d.totalBytes > 0 ? Math.min(100, d.doneBytes * 100 / d.totalBytes) : 0;
     const speed = d.bytesPerSec > 0 ? `${srvFmtBytes(d.bytesPerSec)}/s` : 'measuring speed…';
