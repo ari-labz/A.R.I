@@ -115,6 +115,7 @@ public class ModelsController(PersistentData persistentData) : ControllerBase
         if (!SafeNames.IsSafe(model.Name))
             return BadRequest(new { error = "name is required and must be a plain name." });
         // A model file is found under the models folder, so its path may not be absolute or climb out of it.
+        model.Path ??= ""; model.MmprojPath ??= "";
         if (Path.IsPathRooted(model.Path) || model.Path.Contains("..") || Path.IsPathRooted(model.MmprojPath) || model.MmprojPath.Contains(".."))
             return BadRequest(new { error = "path must stay inside the models folder." });
 

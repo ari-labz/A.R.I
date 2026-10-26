@@ -193,6 +193,7 @@ public class ProjectStore
     /// <summary>Runs a git command against the .ariproject git dir in the given folder.</summary>
     public static (int ExitCode, string Output) RunGit(string workTree, string arguments)
     {
+        if (workTree.Contains('"')) return (-1, "That folder name is not allowed.");
         string ariDir = Path.Combine(workTree, ".ariproject");
         string fullArgs = $"-c core.fsmonitor= -c core.hooksPath=/dev/null -c core.symlinks=false -c core.attributesFile=/dev/null -c protocol.ext.allow=never --git-dir=\"{ariDir}\" --work-tree=\"{workTree}\" {arguments}";
         using Process proc = new Process
@@ -223,7 +224,8 @@ public class ProjectStore
 
     private static string SanitizeFolderName(string name)
     {
-        string safe = new(name.Trim().Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '-' : c).ToArray());
+        // Letters, digits, space, - _ . only: the folder name ends up in a git command line, so no quotes or other symbols.
+        string safe = new string(name.Trim().Select(c => char.IsLetterOrDigit(c) || c is ' ' or '-' or '_' or '.' ? c : '-').ToArray()).Trim('.');
         return safe.Length == 0 ? "project" : safe;
     }
 
