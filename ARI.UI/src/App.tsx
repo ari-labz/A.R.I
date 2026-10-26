@@ -478,7 +478,7 @@ export default function App() {
     // ── load thread attachments ───────────────────────────
     const refreshThreadAttach = useCallback(async (key: string) => {
         try {
-            const res = await apiFetch(`/api/v1/threads/${key}/attachments`)
+            const res = await apiFetch(`/api/v1/threads/${key}/files`)
             if (res.ok) setThreadAttach(await res.json())
             else setThreadAttach([])
         } catch { setThreadAttach([]) }
@@ -1226,7 +1226,7 @@ export default function App() {
         const succeeded: string[] = []
         for (const file of files) {
             const fd = new FormData(); fd.append("file", file)
-            const res = await apiFetch(`/api/v1/threads/${key}/attachments`, { method: "POST", body: fd })
+            const res = await apiFetch(`/api/v1/threads/${key}/files`, { method: "POST", body: fd })
             if (res.ok) succeeded.push(file.name)
             else { const err = await res.json().catch(() => null); showToast(err?.error ?? `Could not attach ${file.name}.`) }
         }
@@ -1236,7 +1236,7 @@ export default function App() {
 
     const removeThreadAttachment = useCallback(async (name: string) => {
         if (!activeThreadRef.current) return
-        await apiFetch(`/api/v1/threads/${activeThreadRef.current}/attachments/${encodeURIComponent(name)}`, { method: "DELETE" })
+        await apiFetch(`/api/v1/threads/${activeThreadRef.current}/files?path=${encodeURIComponent(name)}`, { method: "DELETE" })
         await refreshThreadAttach(activeThreadRef.current)
     }, [refreshThreadAttach])
 
@@ -1255,7 +1255,7 @@ export default function App() {
 
         for (const file of files) {
             const fd = new FormData(); fd.append("file", file)
-            const res = await apiFetch(`/api/v1/threads/${key}/message-attachments`, { method: "POST", body: fd })
+            const res = await apiFetch(`/api/v1/threads/${key}/messageAttachments`, { method: "POST", body: fd })
             if (res.ok) {
                 const data = await res.json()
                 setPendingAttach(prev => [
@@ -1274,7 +1274,7 @@ export default function App() {
     // never gets one and is never staged server-side either, so falling back to name-match is safe.
     const removeMessageAttachment = useCallback(async (idOrName: string) => {
         if (!activeThreadRef.current) return
-        await apiFetch(`/api/v1/threads/${activeThreadRef.current}/message-attachments/${encodeURIComponent(idOrName)}`, { method: "DELETE" })
+        await apiFetch(`/api/v1/threads/${activeThreadRef.current}/messageAttachments/${encodeURIComponent(idOrName)}`, { method: "DELETE" })
         setPendingAttach(prev => prev.filter(a => (a.id ?? a.name) !== idOrName))
     }, [])
 
