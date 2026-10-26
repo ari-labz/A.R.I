@@ -1513,6 +1513,11 @@ function cpFetch(url, opts) {
         return r;
     });
 }
+// All general settings live at one address: read them all, or change any of them by sending only what changes.
+function cpGetSettings() { return cpFetch('/api/v1/admin/settings').then(r => r.ok ? r.json() : Promise.reject()); }
+function cpPatchSettings(changes) {
+    return cpFetch('/api/v1/admin/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
+}
 function cpEventSource(url) {
     const token = sessionStorage.getItem('ari_cp_token');
     const sep = url.includes('?') ? '&' : '?';
@@ -1521,7 +1526,7 @@ function cpEventSource(url) {
 
 // ── tab switching ─────────────────────────────────────────
 window._ariUserName = 'User';
-cpFetch('/api/v1/admin/username').then(r => r.json()).then(d => { if (d.name) window._ariUserName = d.name; }).catch(() => {});
+cpGetSettings().then(d => { if (d.userName) window._ariUserName = d.userName; }).catch(() => {});
 
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
@@ -1809,12 +1814,10 @@ async function loadPersistedThreads() {
 async function loadLogging() {
     const rows = document.getElementById('lg-rows'), status = document.getElementById('lg-status');
     try {
-        const r = await cpFetch('/api/v1/admin/settings/logging');
-        if (!r.ok) throw new Error();
-        const cfg = await r.json();
+        const cfg = (await cpGetSettings()).logging;
         const save = async () => {
             status.textContent = 'Saving…';
-            const res = await cpFetch('/api/v1/admin/settings/logging', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg) });
+            const res = await cpPatchSettings({ logging: cfg });
             status.textContent = res.ok ? 'Saved — takes effect when ARI next starts.' : 'Could not save.';
         };
         const row = (title, desc, control) => {
@@ -2730,19 +2733,14 @@ async function loadDreaming() {
     const cb  = document.getElementById('dream-enabled');
     const st  = document.getElementById('dream-status');
     try {
-        const r = await cpFetch('/api/v1/admin/dreaming');
-        if (!r.ok) throw new Error();
-        const d = await r.json();
-        cb.checked = d.enabled ?? false;
+        const d = await cpGetSettings();
+        cb.checked = d.dreamingEnabled ?? false;
     } catch { st.textContent = 'Failed to load settings.'; return; }
 
     cb.onchange = async () => {
         st.textContent = 'Saving…';
         try {
-            const r = await cpFetch('/api/v1/admin/dreaming', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled: cb.checked }),
-            });
+            const r = await cpPatchSettings({ dreamingEnabled: cb.checked });
             if (!r.ok) throw new Error();
             st.textContent = cb.checked ? 'Dreaming enabled.' : 'Dreaming disabled.';
             setTimeout(() => { st.textContent = ''; }, 2000);
@@ -2786,10 +2784,9 @@ async function loadEngramInterval() {
     const slider = document.getElementById('brain-interval-slider');
     const label  = document.getElementById('brain-interval-value');
     try {
-        const r = await cpFetch('/api/v1/admin/brain/engram-interval');
-        const d = await r.json();
-        slider.value = d.turns;
-        label.textContent = fmtTurns(d.turns);
+        const d = await cpGetSettings();
+        slider.value = d.engramTurns;
+        label.textContent = fmtTurns(d.engramTurns);
     } catch { /* leave the default shown */ }
 }
 document.getElementById('brain-interval-slider').addEventListener('input', (e) => {
@@ -2800,13 +2797,10 @@ document.getElementById('brain-interval-save-btn').addEventListener('click', asy
     const s = document.getElementById('brain-interval-status');
     s.textContent = 'Saving…';
     try {
-        const r = await cpFetch('/api/v1/admin/brain/engram-interval', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ turns })
-        });
-        const d = await r.json();
-        s.textContent = `Saved — ${fmtTurns(d.turns)}.`;
+        const r = await cpPatchSettings({ engramTurns: turns });
+        if (!r.ok) throw new Error();
+        const d = (await r.json()).settings;
+        s.textContent = `Saved — ${fmtTurns(d.engramTurns)}.`;
     } catch { s.textContent = 'Save failed.'; }
 });
 
@@ -3142,27 +3136,19 @@ let conventionsLoaded = false;
 async function loadConventions() {
     if (conventionsLoaded) return;
     try {
-        const r = await cpFetch('/api/v1/admin/conventions');
-        const d = await r.json();
-        document.getElementById('cv-text').value = d.text || '';
+        const d = await cpGetSettings();
+        document.getElementById('cv-text').value = d.conventions || '';
+        document.getElementById('safemode-text').value = d.safeModePrompt || '';
         conventionsLoaded = true;
     } catch { document.getElementById('cv-status').textContent = 'Failed to load.'; }
-    try {
-        const r2 = await cpFetch('/api/cp/safemode-prompt');
-        const d2 = await r2.json();
-        document.getElementById('safemode-text').value = d2.text || '';
-    } catch {}
 }
 document.getElementById('cv-save-btn').addEventListener('click', async () => {
     const status = document.getElementById('cv-status');
     const text   = document.getElementById('cv-text').value;
     status.textContent = 'Saving…';
     try {
-        await cpFetch('/api/v1/admin/conventions', {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ text }),
-        });
+        const r = await cpPatchSettings({ conventions: text });
+        if (!r.ok) throw new Error();
         status.textContent = 'Saved — applies to new coding threads.';
         setTimeout(() => { status.textContent = ''; }, 4000);
     } catch { status.textContent = 'Save failed.'; }
@@ -3172,11 +3158,8 @@ document.getElementById('safemode-save-btn').addEventListener('click', async () 
     const text   = document.getElementById('safemode-text').value.trim();
     status.textContent = 'Saving…';
     try {
-        await cpFetch('/api/cp/safemode-prompt', {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ text }),
-        });
+        const r = await cpPatchSettings({ safeModePrompt: text });
+        if (!r.ok) throw new Error();
         status.textContent = 'Saved.';
         setTimeout(() => { status.textContent = ''; }, 3000);
     } catch { status.textContent = 'Save failed.'; }
@@ -3282,9 +3265,8 @@ let personaLoaded = false;
 async function loadPersona() {
     if (personaLoaded) return;
     try {
-        const r = await cpFetch('/api/v1/admin/persona');
-        const d = await r.json();
-        document.getElementById('persona-text').value = d.text || '';
+        const d = await cpGetSettings();
+        document.getElementById('persona-text').value = d.persona || '';
         personaLoaded = true;
     } catch { document.getElementById('persona-status').textContent = 'Failed to load.'; }
 }
@@ -3293,11 +3275,8 @@ document.getElementById('persona-save-btn').addEventListener('click', async () =
     const text   = document.getElementById('persona-text').value;
     status.textContent = 'Saving…';
     try {
-        await cpFetch('/api/v1/admin/persona', {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ text }),
-        });
+        const r = await cpPatchSettings({ persona: text });
+        if (!r.ok) throw new Error();
         status.textContent = 'Saved — applies to new threads.';
         setTimeout(() => { status.textContent = ''; }, 4000);
     } catch { status.textContent = 'Save failed.'; }

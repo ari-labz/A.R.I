@@ -72,68 +72,6 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
         }
     }
 
-    [HttpGet("conventions")]
-    public IActionResult GetConventions() => Ok(new { text = ConventionsStore.Get() });
-
-    [HttpPost("conventions")]
-    public IActionResult SetConventions([FromBody] ConventionsRequest req)
-    {
-        ConventionsStore.Set(req.Text ?? "");
-        return Ok(new { ok = true });
-    }
-
-    // ── User display name ─────────────────────────────────────────────────────────────
-    [HttpGet("username")]
-    public IActionResult GetUserName() => Ok(new { name = UserNameStore.Get() });
-
-    [HttpPost("username")]
-    public IActionResult SetUserName([FromBody] UserNameRequest req)
-    {
-        UserNameStore.Set(req.Name);
-        return Ok(new { ok = true });
-    }
-
-    // ── Safe-mode prompt ──────────────────────────────────────────────────────────────
-    [HttpGet("safemode-prompt")]
-    public IActionResult GetSafeModePrompt() => Ok(new { text = SafeModePromptStore.Get() });
-
-    [HttpPost("safemode-prompt")]
-    public IActionResult SetSafeModePrompt([FromBody] SafeModePromptRequest req)
-    {
-        SafeModePromptStore.Set(req.Text);
-        return Ok(new { ok = true });
-    }
-
-    // ── Persona ───────────────────────────────────────────────────────────────────────
-    [HttpGet("persona")]
-    public IActionResult GetPersona() => Ok(new { text = PersonaStore.Get() });
-
-    [HttpPost("persona")]
-    public IActionResult SetPersona([FromBody] PersonaRequest req)
-    {
-        PersonaStore.Set(req.Text ?? "");
-        return Ok(new { ok = true });
-    }
-
-    // ── Dreaming ──────────────────────────────────────────────────────────────────────
-
-    [HttpGet("dreaming")]
-    public IActionResult GetDreaming()
-    {
-        ILLMModule? llm = Modules.Llm;
-        if (llm is null) return StatusCode(503, "LLM is not available.");
-        return Ok(new { enabled = llm.DreamingEnabled });
-    }
-
-    [HttpPost("dreaming")]
-    public IActionResult SetDreaming([FromBody] DreamingRequest req)
-    {
-        ILLMModule? llm = Modules.Llm;
-        if (llm is null) return StatusCode(503, "LLM is not available.");
-        llm.DreamingEnabled = req.Enabled;
-        return Ok(new { ok = true });
-    }
-
     // ── Calendar ──────────────────────────────────────────────────────────────────────
 
     /// <summary>Either pass `from`/`to` to browse an explicit window (what the control panel's
@@ -1735,11 +1673,6 @@ public record ModelNotesRequest(string ModelName, string? Notes);
 public record ModelThinkingRequest(string ModelName, bool SupportsThinking);
 public record ReasoningEffortRequest(int Step);
 
-public record ConventionsRequest(string? Text);
-public record PersonaRequest(string? Text);
-public record UserNameRequest(string? Name);
-public record SafeModePromptRequest(string? Text);
-public record DreamingRequest(bool Enabled);
 
 public record RecurrenceRequest(string Frequency, int Interval = 1, List<string>? DaysOfWeek = null, DateTime? Until = null, int? Count = null);
 public record CalendarEventRequest(string Title, DateTime Start, DateTime End, bool IsWholeDay, string? Notes, RecurrenceRequest? Recurrence);

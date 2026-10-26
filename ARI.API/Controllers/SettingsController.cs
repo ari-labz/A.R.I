@@ -1,52 +1,111 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ARI.API.Data;
 using ARI.Common;
+using ARI.LLM;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 
 namespace ARI.API.Controllers;
 
-/// <summary>General settings shown on the control panel's Settings page. Under /admin/, so admin only.</summary>
+/// <summary>
+/// Every general setting in one place: read them all with GET, change any of them with PATCH (send only what changes).
+/// Under /admin/, so admin only.
+/// </summary>
 [Route("api/v1/admin/settings")]
 [ApiController]
-public class SettingsController(ILogger<SettingsController> logger) : ControllerBase
+public class SettingsController(PersistentData persistentData, ILogger<SettingsController> logger) : ControllerBase
 {
-    public record LoggingRequest(bool Enabled, bool IncludeFullRequests, bool IncludeToolResults, int RetentionDays);
+    private LLMModule? Llm => (LLMModule?)Modules.Llm;
 
-    /// <summary>The session recorder (DTI, dream and chat logs): what it keeps and for how long. Read when ARI starts.</summary>
-    [HttpGet("logging")]
-    public IActionResult GetLogging()
+    public record LoggingSettings(bool Enabled, bool IncludeFullRequests, bool IncludeToolResults, int RetentionDays);
+
+    /// <summary>Any field left out (null) is left as it was.</summary>
+    public record SettingsPatch(
+        string? UserName,
+        string? Conventions,
+        string? SafeModePrompt,
+        string? Persona,
+        bool? DreamingEnabled,
+        int? EngramTurns,
+        LoggingSettings? Logging);
+
+    [HttpGet]
+    public IActionResult Get() => Ok(Current());
+
+    [HttpPatch]
+    public IActionResult Patch([FromBody] SettingsPatch patch)
     {
-        JsonNode? rec = ReadRoot()?["Recording"];
-        return Ok(new
+        if (patch.EngramTurns is < 0) return BadRequest(new { error = "Engram turns can't be negative." });
+        if (patch.Logging is { RetentionDays: < 0 }) return BadRequest(new { error = "Retention days can't be negative." });
+        if (patch.DreamingEnabled is not null && Modules.Llm is null) return StatusCode(503, new { error = "LLM is not available." });
+
+        AgentDefinition? engram = null;
+        if (patch.EngramTurns is not null)
         {
-            enabled             = rec?["Enabled"]?.GetValue<bool>()             ?? true,
-            includeFullRequests = rec?["IncludeFullRequests"]?.GetValue<bool>() ?? true,
-            includeToolResults  = rec?["IncludeToolResults"]?.GetValue<bool>()  ?? true,
-            retentionDays       = rec?["RetentionDays"]?.GetValue<int>()        ?? 30,
-        });
+            engram = persistentData.GetAgent("Engram");
+            if (engram is null) return NotFound(new { error = "Engram agent definition not found." });
+        }
+
+        bool restartRequired = false;
+        if (patch.Logging is not null)
+        {
+            try { WriteLogging(patch.Logging); restartRequired = true; }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "[Settings] Failed to write {Path}.", Paths.AriConfig);
+                return StatusCode(500, new { error = $"Could not save AriConfig.json: {ex.Message}" });
+            }
+        }
+
+        if (patch.UserName       is not null) UserNameStore.Set(patch.UserName);
+        if (patch.Conventions    is not null) ConventionsStore.Set(patch.Conventions);
+        if (patch.SafeModePrompt is not null) SafeModePromptStore.Set(patch.SafeModePrompt);
+        if (patch.Persona        is not null) PersonaStore.Set(patch.Persona);
+        if (patch.DreamingEnabled is { } dreaming) Modules.Llm!.DreamingEnabled = dreaming;
+        if (engram is not null)
+        {
+            // Saved to Agents.json AND applied to the running Engram, so no restart is needed.
+            engram.TurnsBeforeSweep = patch.EngramTurns!.Value;
+            persistentData.UpdateAgent(engram);
+            Llm?.SetEngramTurnInterval(patch.EngramTurns.Value);
+        }
+
+        return Ok(new { settings = Current(), restartRequired });
     }
 
-    [HttpPut("logging")]
-    public IActionResult SetLogging([FromBody] LoggingRequest req)
+    private object Current()
     {
-        if (req.RetentionDays < 0) return BadRequest(new { error = "Retention days can't be negative." });
-        try
+        JsonNode? rec = ReadRoot()?["Recording"];
+        return new
         {
-            JsonObject root = ReadRoot() ?? new JsonObject();
-            if (root["Recording"] is not JsonObject rec) root["Recording"] = rec = new JsonObject();
-            rec["Enabled"]             = req.Enabled;
-            rec["IncludeFullRequests"] = req.IncludeFullRequests;
-            rec["IncludeToolResults"]  = req.IncludeToolResults;
-            rec["RetentionDays"]       = req.RetentionDays;
-            System.IO.File.WriteAllText(Paths.AriConfig, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
-            return Ok(new { restartRequired = true });
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "[Settings] Failed to write {Path}.", Paths.AriConfig);
-            return StatusCode(500, new { error = $"Could not save AriConfig.json: {ex.Message}" });
-        }
+            userName       = UserNameStore.Get(),
+            conventions    = ConventionsStore.Get(),
+            safeModePrompt = SafeModePromptStore.Get(),
+            persona        = PersonaStore.Get(),
+            dreamingEnabled = Modules.Llm?.DreamingEnabled ?? false,
+            // How many completed exchanges a thread builds up before Engram sweeps it mid-conversation. 0 = off.
+            engramTurns    = Llm?.GetEngramTurnInterval() ?? persistentData.GetAgent("Engram")?.TurnsBeforeSweep ?? 5,
+            // The session recorder (DTI, dream and chat logs): what it keeps and for how long. Read when ARI starts.
+            logging = new
+            {
+                enabled             = rec?["Enabled"]?.GetValue<bool>()             ?? true,
+                includeFullRequests = rec?["IncludeFullRequests"]?.GetValue<bool>() ?? true,
+                includeToolResults  = rec?["IncludeToolResults"]?.GetValue<bool>()  ?? true,
+                retentionDays       = rec?["RetentionDays"]?.GetValue<int>()        ?? 30,
+            },
+        };
+    }
+
+    private static void WriteLogging(LoggingSettings logging)
+    {
+        JsonObject root = ReadRoot() ?? new JsonObject();
+        if (root["Recording"] is not JsonObject rec) root["Recording"] = rec = new JsonObject();
+        rec["Enabled"]             = logging.Enabled;
+        rec["IncludeFullRequests"] = logging.IncludeFullRequests;
+        rec["IncludeToolResults"]  = logging.IncludeToolResults;
+        rec["RetentionDays"]       = logging.RetentionDays;
+        System.IO.File.WriteAllText(Paths.AriConfig, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
     }
 
     private static JsonObject? ReadRoot()
