@@ -968,9 +968,23 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         Response.Headers[HeaderNames.CacheControl] = "no-cache";
         Response.Headers["X-Accel-Buffering"] = "no";
 
+        // Two ways to read the reply as it is written. The default is the original one (the whole reply so far, with markers in
+        // it, then [DONE]); ?format=v2 gives typed JSON events that carry only what is new (see StreamEvents).
+        bool v2 = Request.Query["format"] == "v2";
+        System.Text.Json.JsonSerializerOptions mvcJson = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions
+            .GetRequiredService<Microsoft.Extensions.Options.IOptions<Microsoft.AspNetCore.Mvc.JsonOptions>>(HttpContext.RequestServices).Value.JsonSerializerOptions;
+        StreamEvents events = new(mvcJson);
+        async Task Control(string kind, string? message = null, CancellationToken ct = default)
+        {
+            string line = v2
+                ? (kind == "error" ? events.Format("error", new { message }) : events.Format("message.done", new { message = (object?)null }))
+                : (kind == "error" ? $"data: [ERROR] {message}\n\n" : "data: [DONE]\n\n");
+            await Response.WriteAsync(line, ct);
+        }
+
         if (Llm is null)
         {
-            await Response.WriteAsync("data: [ERROR] ARI is not ready yet.\n\n", cancellationToken);
+            await Control("error", "ARI is not ready yet.", cancellationToken);
             await Response.Body.FlushAsync(cancellationToken);
             return;
         }
@@ -985,8 +999,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         if (!Llm.Servers.Any(s => s.Status == ARI.LLM.ServerStatus.Online)
             && !Llm.Servers.Any(s => s.BootStartup || s.Status == ARI.LLM.ServerStatus.Starting))
         {
-            await Response.WriteAsync("data: [ERROR] No model server is running. Open the control panel, choose the model you want, and start a server.\n\n", cancellationToken);
-            await Response.WriteAsync("data: [DONE]\n\n", cancellationToken);
+            await Control("error", "No model server is running. Open the control panel, choose the model you want, and start a server.", cancellationToken);
+            await Control("done", null, cancellationToken);
             await Response.Body.FlushAsync(cancellationToken);
             return;
         }
@@ -999,8 +1013,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
                 await Task.Delay(1000, cancellationToken);
             if (Llm.Servers.Any(s => s.BootStartup && s.Status != ARI.LLM.ServerStatus.Online))
             {
-                await Response.WriteAsync("data: [ERROR] ARI's model server has not come online — please try again in a moment.\n\n", cancellationToken);
-                await Response.WriteAsync("data: [DONE]\n\n", cancellationToken);
+                await Control("error", "ARI's model server has not come online — please try again in a moment.", cancellationToken);
+                await Control("done", null, cancellationToken);
                 await Response.Body.FlushAsync(cancellationToken);
                 return;
             }
@@ -1014,7 +1028,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         if (estimatedTokens > effectiveLimit)
         {
             await Response.WriteAsync("data: Your message is too large for me to process. Please attach the content as a file instead.\n\n", cancellationToken);
-            await Response.WriteAsync("data: [DONE]\n\n", cancellationToken);
+            await Control("done", null, cancellationToken);
             await Response.Body.FlushAsync(cancellationToken);
             return;
         }
@@ -1028,7 +1042,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         // mode fills an empty one with its own instructions.
         if (string.IsNullOrWhiteSpace(body?.Prompt) && (msgAtts is null || msgAtts.Count == 0) && (fileNotes is null || fileNotes.Count == 0))
         {
-            await Response.WriteAsync("data: [DONE]\n\n", cancellationToken);
+            await Control("done", null, cancellationToken);
             await Response.Body.FlushAsync(cancellationToken);
             return;
         }
@@ -1189,23 +1203,36 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
             ARI.LLM.Thread chatThread = GetOrCreateThread(threadKey);
             chatThread.IsAdminChat = User.IsInRole(ARI.API.Auth.Roles.Admin);
 
+            if (v2) await WriteEventAsync(events.Format("message.start", new { threadId = threadKey }));
             await Llm.PromptStreaming(threadKey, prompt, username, platformContext, async accumulated =>
             {
+                if (v2)
+                {
+                    foreach (string evt in events.FromAccumulated(accumulated)) await WriteEventAsync(evt);
+                    return;
+                }
                 string escaped = accumulated.Replace("\n", "\\n").Replace("\r", "");
                 await WriteEventAsync($"data: {escaped}\n\n");
             }, CancellationToken.None, messageAttachments: msgAtts,
                localPath: effectiveLocalPath);
-            await WriteEventAsync("data: [DONE]\n\n");
+            if (v2)
+            {
+                // The wrap-up: the whole finished reply, exactly as GET /threads/{id}/messages returns it.
+                ARI.LLM.Response? finished = chatThread.History.OfType<ARI.LLM.Response>().LastOrDefault();
+                await WriteEventAsync(events.Format("message.done", new { message = finished is null ? null : JsonSerializer.SerializeToNode<ThreadItem>(finished, mvcJson) }));
+            }
+            else await WriteEventAsync("data: [DONE]\n\n");
         }
         catch (OperationCanceledException)
         {
-            await WriteEventAsync("data: [CANCELLED]\n\n");
+            await WriteEventAsync(v2 ? events.Format("message.cancelled", new { }) : "data: [CANCELLED]\n\n");
         }
         catch (Exception ex)
         {
             // The details go to the server log; the person sees only that it failed (and admins get the reason).
             Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>(HttpContext.RequestServices).CreateLogger("ARI.Threads").LogError(ex, "Reply failed on thread {Thread}", threadKey);
-            await WriteEventAsync($"data: [ERROR] {(User.IsInRole(ARI.API.Auth.Roles.Admin) ? ex.Message : "Something went wrong while replying.")}\n\n");
+            string failure = User.IsInRole(ARI.API.Auth.Roles.Admin) ? ex.Message : "Something went wrong while replying.";
+            await WriteEventAsync(v2 ? events.Format("error", new { message = failure }) : $"data: [ERROR] {failure}\n\n");
         }
         finally
         {
