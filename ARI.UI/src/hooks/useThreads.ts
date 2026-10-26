@@ -220,7 +220,7 @@ export interface WatchEvent {
 }
 
 export interface AppEvent {
-    type:       "newThread" | "streaming" | "streamingFinished" | "threadDeleted" | "threadExpired" | "threadUpdated" | "threadBound" | "taskStarted" | "taskStopped" | "projectsChanged" | "imageReady"
+    type:       "newThread" | "streaming" | "streamingFinished" | "threadDeleted" | "threadExpired" | "threadUpdated" | "threadBound" | "projectsChanged" | "imageReady"
     threadKey:  string
     text?:      string | null
 }
