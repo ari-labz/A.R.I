@@ -52,7 +52,7 @@ export default function UserPreferences({ user, onClose, onLogout, onUserUpdated
 
     useEffect(() => {
         if (!isAdmin) return
-        apiFetch("/api/v1/command-allowlist").then(r => r.ok ? r.json() : null).then(data => {
+        apiFetch("/api/v1/admin/commandAllowlist").then(r => r.ok ? r.json() : null).then(data => {
             if (Array.isArray(data?.commands)) setAllowed(data.commands)
         }).catch(() => {}).finally(() => setAllowedLoading(false))
     }, [isAdmin])
@@ -60,7 +60,7 @@ export default function UserPreferences({ user, onClose, onLogout, onUserUpdated
     async function saveAllowed(next: string[]) {
         setAllowedError(null)
         try {
-            const res = await apiFetch("/api/v1/command-allowlist", {
+            const res = await apiFetch("/api/v1/admin/commandAllowlist", {
                 method: "PUT", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ commands: next }),
             })

@@ -966,7 +966,7 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
           </div>
           <div style="display:flex;gap:8px;align-items:center;">
             <span id="fb-status" style="font-size:12px;color:var(--text-dim);"></span>
-            <a class="vs-btn-outline" id="fb-export" href="/api/v1/feedback/export" download>Export JSONL</a>
+            <a class="vs-btn-outline" id="fb-export" href="/api/v1/admin/feedback/export" download>Export JSONL</a>
           </div>
         </div>
         <div id="fb-list"></div>
@@ -1755,7 +1755,7 @@ const NAV_GROUP_ITEMS = {
 
 async function applyModuleVisibility() {
     try {
-        const r = await cpFetch('/api/v1/modules');
+        const r = await cpFetch('/api/v1/admin/modules');
         if (!r.ok) return;
         const { modules } = await r.json();
         const isEnabled = key => modules.find(m => m.key === key)?.enabled ?? false;
@@ -1784,23 +1784,23 @@ function fmtBytes(n) { return n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : M
 async function loadPersistedThreads() {
     const status = document.getElementById('pt-status'), del = document.getElementById('pt-delete'), slot = document.getElementById('pt-toggle');
     try {
-        const r = await cpFetch('/api/v1/admin/persisted-threads');
+        const r = await cpFetch('/api/v1/admin/persistedThreads');
         if (!r.ok) throw new Error();
         const s = await r.json();
         slot.innerHTML = '';
         slot.appendChild(buildToggle(s.enabled, async on => {
             status.textContent = 'Saving…';
-            const res = await cpFetch('/api/v1/admin/persisted-threads', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: on }) });
+            const res = await cpFetch('/api/v1/admin/persistedThreads', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: on }) });
             const now = await res.json();
             if (!on && now.count > 0 && confirm(`Persistent Threads is off. Delete the ${now.count} saved conversation(s) (${fmtBytes(now.bytes)}) too? This cannot be undone.`))
-                await cpFetch('/api/v1/admin/persisted-threads', { method: 'DELETE' });
+                await cpFetch('/api/v1/admin/persistedThreads', { method: 'DELETE' });
             loadPersistedThreads();
         }));
         status.textContent = s.count > 0 ? `${s.count} saved conversation(s), ${fmtBytes(s.bytes)}.` : (s.enabled ? 'Nothing saved yet.' : '');
         del.style.display = s.count > 0 ? '' : 'none';
         del.onclick = async () => {
             if (!confirm(`Delete all ${s.count} saved conversation(s)? This cannot be undone.`)) return;
-            await cpFetch('/api/v1/admin/persisted-threads', { method: 'DELETE' });
+            await cpFetch('/api/v1/admin/persistedThreads', { method: 'DELETE' });
             loadPersistedThreads();
         };
     } catch { status.textContent = 'Could not load this setting.'; }
@@ -1842,7 +1842,7 @@ async function loadModules() {
     if (!modList) return;
     modList.innerHTML = '<span style="font-size:12px;color:var(--text-dim);">Loading…</span>';
     try {
-        const r = await cpFetch('/api/v1/modules');
+        const r = await cpFetch('/api/v1/admin/modules');
         if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
         const { modules } = await r.json();
         renderModules(modules);
@@ -1890,7 +1890,7 @@ function renderModules(modules) {
             right.appendChild(buildToggle(m.enabled, async enabled => {
                 status.textContent = 'Saving…';
                 try {
-                    const resp = await cpFetch(`/api/v1/modules/${encodeURIComponent(m.key)}`, {
+                    const resp = await cpFetch(`/api/v1/admin/modules/${encodeURIComponent(m.key)}`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ enabled }),
@@ -3314,7 +3314,7 @@ async function loadFeedback() {
     const status = document.getElementById('fb-status');
     list.innerHTML = '<span style="color:var(--text-dim);font-size:13px;">Loading…</span>';
     try {
-        const url  = fbFilter ? `/api/v1/feedback?vote=${fbFilter}` : '/api/v1/feedback';
+        const url  = fbFilter ? `/api/v1/admin/feedback?vote=${fbFilter}` : '/api/v1/admin/feedback';
         const data = await cpFetch(url).then(r => r.json());
 
         document.getElementById('fb-count-all').textContent  = data.up + data.down;
@@ -4329,7 +4329,7 @@ function prRenderList() {
     add.onclick = async () => {
         const name = (prompt('Name for the new agent?') || '').trim(); if (!name) return;
         const srv = (agData.servers || [])[0] || { name: '', slots: [] };
-        const r = await cpFetch('/api/v1/agents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, serverName: srv.name, slotName: (srv.slots && srv.slots[0] && (srv.slots[0].name || srv.slots[0])) || null, agentPrompt: '' }) });
+        const r = await cpFetch('/api/v1/admin/agents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, serverName: srv.name, slotName: (srv.slots && srv.slots[0] && (srv.slots[0].name || srv.slots[0])) || null, agentPrompt: '' }) });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) { alert(j.error || 'Could not create the agent.'); return; }
         agIsDirty = false; agData = null; prSelected = 'agent:' + name; await loadAgents();
@@ -4357,7 +4357,7 @@ function prRenderEditor() {
         hdr.append(buildToggle(agent.enabled !== false, on => { agent.enabled = on; agDirty(); prRenderList(); }), agEl('span', 'font-size:13px;color:var(--text-dim);', 'Runs on'), agBindingPickers(agent));
         if (agent.custom) {
             const del = agEl('button', 'margin-left:auto;', 'Delete agent'); del.className = 'agv-btn'; del.type = 'button';
-            del.onclick = async () => { if (!confirm('Delete ' + name + '? Pipelines using it will stop being valid.')) return; const r = await cpFetch('/api/v1/agents/' + encodeURIComponent(name), { method: 'DELETE' }); if (!r.ok) { alert('Could not delete it.'); return; } agIsDirty = false; agData = null; prSelected = 'agent:Dialogue'; await loadAgents(); };
+            del.onclick = async () => { if (!confirm('Delete ' + name + '? Pipelines using it will stop being valid.')) return; const r = await cpFetch('/api/v1/admin/agents/' + encodeURIComponent(name), { method: 'DELETE' }); if (!r.ok) { alert('Could not delete it.'); return; } agIsDirty = false; agData = null; prSelected = 'agent:Dialogue'; await loadAgents(); };
             hdr.append(del);
         }
         ed.append(hdr);
@@ -4406,7 +4406,7 @@ async function pipLoad() {
     if (pipD && pipDirty) return pipRender();
     const host = document.getElementById('ag-view-pipelines');
     try {
-        const r = await cpFetch('/api/v1/pipeline-graphs'); if (!r.ok) throw new Error();
+        const r = await cpFetch('/api/v1/admin/pipelineGraphs'); if (!r.ok) throw new Error();
         const j = await r.json();
         pipD = { data: j.data, ports: j.ports || {}, running: j.running || null, problems: j.problems || {}, cur: (pipD && pipD.cur) || j.data.active || j.data.pipelines[0].id };
         pipDirty = false;
@@ -4416,7 +4416,7 @@ async function pipLoad() {
 async function pipSave() {
     const st = document.getElementById('pip-status'); st.textContent = 'Saving…';
     try {
-        const r = await cpFetch('/api/v1/pipeline-graphs', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pipD.data) });
+        const r = await cpFetch('/api/v1/admin/pipelineGraphs', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pipD.data) });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) { st.textContent = (j.error || 'Save failed.') + ' ' + ((j.problems || []).join(' ')); return; }
         pipD.running = j.running || null; pipD.problems = j.problems || {}; pipDirty = false; st.textContent = 'Saved.'; pipRender();
@@ -4617,7 +4617,7 @@ async function loadAgents() {
     if (!agData || !agIsDirty) {
         host.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Loading…</span>';
         try {
-            const r = await cpFetch('/api/v1/agents');
+            const r = await cpFetch('/api/v1/admin/agents');
             if (!r.ok) throw new Error();
             agData = await r.json();
         } catch {
@@ -4639,12 +4639,12 @@ async function agSave() {
     setStatus('Saving…');
     try {
         for (const a of agData.agents || []) {
-            const r = await cpFetch(`/api/v1/agents/${encodeURIComponent(a.name)}`, {
+            const r = await cpFetch(`/api/v1/admin/agents/${encodeURIComponent(a.name)}`, {
                 method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(a),
             });
             if (!r.ok) throw new Error(a.name);
         }
-        const r2 = await cpFetch('/api/v1/agents/shared', {
+        const r2 = await cpFetch('/api/v1/admin/agents/shared', {
             method: 'PUT', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ memoryAgent: agData.shared.memoryAgent, budgets: agData.shared.budgets }),
         });
@@ -4660,7 +4660,7 @@ async function agSave() {
 async function loadServers() {
     let data;
     try {
-        const r = await cpFetch('/api/v1/models');
+        const r = await cpFetch('/api/v1/admin/models');
         if (!r.ok) { console.error('[loadServers] HTTP', r.status, await r.text()); renderServerCards([]); return; }
         data = await r.json();
     } catch(e) { console.error('[loadServers] fetch/parse error:', e); renderServerCards([]); return; }
@@ -4672,7 +4672,7 @@ async function loadServers() {
 }
 
 async function srvAction(id, action) {
-    await cpFetch(`/api/v1/servers/${id}/${action}`, { method:'POST' });
+    await cpFetch(`/api/v1/admin/servers/${id}/${action}`, { method:'POST' });
 }
 
 // Cards that are currently EXPANDED are never torn down by a background poll — only their header
@@ -4836,7 +4836,7 @@ function renderServerCardBody(body, draft, server, isNew) {
         if (delBtn.disabled) delBtn.style.opacity = '.5';
         delBtn.addEventListener('click', async () => {
             if (!confirm(`Delete server "${server.name}"? This cannot be undone.`)) return;
-            await cpFetch(`/api/v1/servers/${server.id}`, { method:'DELETE' });
+            await cpFetch(`/api/v1/admin/servers/${server.id}`, { method:'DELETE' });
             srvExpandedIds.delete(server.id); delete srvDrafts[server.id];
             loadServers();
         });
@@ -4861,7 +4861,7 @@ function renderServerCardBody(body, draft, server, isNew) {
             ? { ...draft, id: '00000000-0000-0000-0000-000000000000', endpoint: 'http://127.0.0.1' }
             : { ...draft, endpoint: 'http://127.0.0.1' };
         try {
-            const url    = isNew ? '/api/v1/servers' : `/api/v1/servers/${server.id}`;
+            const url    = isNew ? '/api/v1/admin/servers' : `/api/v1/admin/servers/${server.id}`;
             const method = isNew ? 'POST' : 'PUT';
             const r = await cpFetch(url, { method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
             if (!r.ok) { const e = await r.json().catch(()=>{}); err.textContent = e?.error ?? 'Save failed.'; return; }
@@ -5124,7 +5124,7 @@ function sortModels(models) {
 
 async function loadModels() {
     let data;
-    try { const r = await cpFetch('/api/v1/models'); data = await r.json(); }
+    try { const r = await cpFetch('/api/v1/admin/models'); data = await r.json(); }
     catch { return; }
     mdlLastData = data;
     renderModelCards({ ...data, models: sortModels(data.models ?? []) });
@@ -5265,7 +5265,7 @@ function renderModelCards(data) {
             clearTimeout(mdlNoteTimers[name]);
             mdlNoteTimers[name] = setTimeout(async () => {
                 try {
-                    await cpFetch('/api/v1/models/notes', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ modelName: name, notes: ta.value }) });
+                    await cpFetch('/api/v1/admin/models/notes', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ modelName: name, notes: ta.value }) });
                     saveStatus.textContent = 'Saved.';
                     setTimeout(() => { saveStatus.textContent = ''; }, 2000);
                 } catch { saveStatus.textContent = 'Save failed.'; }
@@ -5276,7 +5276,7 @@ function renderModelCards(data) {
         const thinkStatus = card.querySelector('.mdl-think-status');
         card.querySelector('.mdl-think-slot').appendChild(buildToggle(!!m.supportsThinking, async on => {
             try {
-                const r = await cpFetch('/api/v1/models/thinking', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ modelName: m.name, supportsThinking: on }) });
+                const r = await cpFetch('/api/v1/admin/models/thinking', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ modelName: m.name, supportsThinking: on }) });
                 if (!r.ok) throw new Error();
                 m.supportsThinking = on;
                 card.querySelector('.mdl-tags').innerHTML = parseModelTags(m)
@@ -5292,7 +5292,7 @@ function renderModelCards(data) {
             switchBtn.addEventListener('click', async () => {
                 switchBtn.disabled = true;
                 try {
-                    const r = await cpFetch('/api/v1/servers/switch', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ file: switchBtn.dataset.file }) });
+                    const r = await cpFetch('/api/v1/admin/servers/switch', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ file: switchBtn.dataset.file }) });
                     if (!r.ok) { const err = await r.json().catch(()=>({})); alert(err.error ?? 'Switch failed.'); switchBtn.disabled = false; return; }
                     startSwitchProgressSse();
                     loadModels();
@@ -5306,7 +5306,7 @@ function renderModelCards(data) {
             startupBtn.addEventListener('click', async () => {
                 startupBtn.disabled = true;
                 try {
-                    await cpFetch('/api/v1/models/startup', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ file: startupBtn.dataset.file }) });
+                    await cpFetch('/api/v1/admin/models/startup', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ file: startupBtn.dataset.file }) });
                     loadModels();
                 } catch { startupBtn.disabled = false; }
             });
@@ -5319,7 +5319,7 @@ function renderModelCards(data) {
                 if (!confirm(`Remove "${m.name}" from the registry?`)) return;
                 deleteBtn.disabled = true;
                 try {
-                    const r = await cpFetch(`/api/v1/models/${encodeURIComponent(m.name)}`, { method: 'DELETE' });
+                    const r = await cpFetch(`/api/v1/admin/models/${encodeURIComponent(m.name)}`, { method: 'DELETE' });
                     if (!r.ok) { const err = await r.json().catch(()=>({})); alert(err.error ?? 'Delete failed.'); deleteBtn.disabled = false; return; }
                     loadModels();
                 } catch { deleteBtn.disabled = false; }
@@ -5487,7 +5487,7 @@ document.getElementById('mdl-wiz-fetch-btn').addEventListener('click', async () 
                     }
 
                     try {
-                        const r = await cpFetch('/api/v1/models', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+                        const r = await cpFetch('/api/v1/admin/models', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
                         if (!r.ok) { const err = await r.json().catch(()=>({})); wizStatus.style.color='var(--col-control-panel-line-4918-text)'; wizStatus.textContent = err.error ?? 'Failed.'; return; }
                         wizStatus.style.color = 'var(--col-control-panel-line-4919-text)';
                         wizStatus.textContent = `${modelName} registered.`;
@@ -5526,7 +5526,7 @@ function startSwitchProgressSse() {
     mdlFill.className = 'vs-progress-fill';
     const PHASES = { 'idle-wait':'Waiting for active requests to finish…', 'powering-down':'Powering down…', 'powering-up':'Powering up…', 'ready':'Model ready.', 'error':'Switch failed.' };
 
-    mdlSwitchEs = cpEventSource('/api/v1/servers/switch/progress');
+    mdlSwitchEs = cpEventSource('/api/v1/admin/servers/switch/progress');
     mdlSwitchEs.onmessage = e => {
         try {
             const d = JSON.parse(e.data);
@@ -5596,7 +5596,7 @@ async function vsSwitchEngineModel(engine, modelName) {
     const statusEl = document.getElementById('vs-switch-status');
     if (statusEl) { statusEl.textContent = 'Switching…'; statusEl.style.display = ''; }
     try {
-        const r = await cpFetch('/api/v1/voice/switch', {
+        const r = await cpFetch('/api/v1/admin/voice/switch', {
             method: 'POST', headers: {'Content-Type':'application/json'},
             body: JSON.stringify({ engine, modelName })
         });
@@ -5608,7 +5608,7 @@ async function vsSwitchEngineModel(engine, modelName) {
         vsUpdateEngineUI();
         // reload engine-specific params
         try {
-            const pr = await cpFetch('/api/v1/voice/engine-params');
+            const pr = await cpFetch('/api/v1/admin/voice/engine-params');
             if (pr.ok) {
                 const pd = await pr.json();
                 if (typeof renderEngineParams === 'function') renderEngineParams(pd);
@@ -5661,7 +5661,7 @@ function vsFilterSavedRuns() {
 const vsServerWarns = document.querySelectorAll('.vs-server-warn');
 async function vsCheckServers() {
     try {
-        const r = await cpFetch('/api/v1/models');
+        const r = await cpFetch('/api/v1/admin/models');
         if (!r.ok) return;
         const data = await r.json();
         const anyOnline = (data.servers ?? []).some(s => s.status !== 'Offline');
@@ -5674,10 +5674,10 @@ document.querySelectorAll('.vs-stop-servers-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
         btn.disabled = true; btn.textContent = 'Stopping…';
         try {
-            const r = await cpFetch('/api/v1/models');
+            const r = await cpFetch('/api/v1/admin/models');
             if (!r.ok) return;
             const data = await r.json();
-            await Promise.all((data.servers ?? []).filter(s => s.status !== 'Offline').map(s => fetch(`/api/v1/servers/${s.id}/stop`, { method: 'POST' })));
+            await Promise.all((data.servers ?? []).filter(s => s.status !== 'Offline').map(s => fetch(`/api/v1/admin/servers/${s.id}/stop`, { method: 'POST' })));
         } catch {}
         setTimeout(vsCheckServers, 2000);
         btn.disabled = false; btn.textContent = 'Stop servers';
@@ -5722,7 +5722,7 @@ async function vsPauseTraining() {
     vsPauseBtn.disabled = true;
     vsPauseBtn.textContent = 'Pausing… (finishes current epoch)';
     try {
-        const r = await cpFetch(`/api/v1/voice/${encodeURIComponent(vsActiveModelName)}/stop`, { method: 'POST' });
+        const r = await cpFetch(`/api/v1/admin/voice/${encodeURIComponent(vsActiveModelName)}/stop`, { method: 'POST' });
         if (!r.ok) { const e = await r.json().catch(() => ({})); vsPauseBtn.textContent = 'Pause failed: ' + (e.error ?? r.statusText); vsPauseBtn.disabled = false; }
     } catch (err) { vsPauseBtn.textContent = 'Pause failed: ' + err.message; vsPauseBtn.disabled = false; }
 }
@@ -5831,7 +5831,7 @@ function vsSetProgress(step, pct, detail, state) {
 
 // Shared upload helper — uploads vsFiles to a new staging dir, returns { stageId, stagingPath }
 async function vsUploadFiles() {
-    const stageResp = await cpFetch('/api/v1/voice/stage', { method: 'POST' });
+    const stageResp = await cpFetch('/api/v1/admin/voice/stage', { method: 'POST' });
     if (!stageResp.ok) throw new Error('Stage failed: ' + (await stageResp.text()));
     const { stageId, stagingPath } = await stageResp.json();
     const CHUNK = 5 * 1024 * 1024, CONCURRENCY = 4;
@@ -5841,7 +5841,7 @@ async function vsUploadFiles() {
         let done = 0;
         const uploadChunk = async (ci) => {
             const slice = f.slice(ci * CHUNK, Math.min((ci + 1) * CHUNK, f.size));
-            const url = `/api/v1/voice/upload?stageId=${encodeURIComponent(stageId)}&name=${encodeURIComponent(f.name)}&chunk=${ci}&totalChunks=${totalChunks}`;
+            const url = `/api/v1/admin/voice/upload?stageId=${encodeURIComponent(stageId)}&name=${encodeURIComponent(f.name)}&chunk=${ci}&totalChunks=${totalChunks}`;
             const up = await cpFetch(url, { method: 'POST', body: slice, headers: { 'Content-Type': 'application/octet-stream' } });
             if (!up.ok) throw new Error(`Upload of ${f.name} chunk ${ci} failed: ` + (await up.text()));
             done++;
@@ -5982,7 +5982,7 @@ function vsStartTrainingJob(trainBody, modelName) {
     vsStartTimer();
     (async () => {
         try {
-            const trainResp = await cpFetch('/api/v1/voice/train', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(trainBody) });
+            const trainResp = await cpFetch('/api/v1/admin/voice/train', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(trainBody) });
             if (!trainResp.ok) throw new Error('Start failed: ' + (await trainResp.text()));
             vsAttachProgress(modelName, () => { vsTrainBtn.disabled = false; });
         } catch (err) { vsStopTimer(); vsShowSetup(true); vsAppendLog('Error: ' + err.message, 'log-error'); vsLogBadge.textContent = 'failed'; vsLogBadge.classList.remove('live'); vsTrainBtn.disabled = false; }
@@ -5999,7 +5999,7 @@ function vsAttachProgress(modelName, onDone) {
     function connect() {
         if (done) return;
         if (vsProgressEs) vsProgressEs.close();
-        vsProgressEs = cpEventSource('/api/v1/voice/progress');
+        vsProgressEs = cpEventSource('/api/v1/admin/voice/progress');
         vsLogBadge.textContent = 'live'; vsLogBadge.classList.add('live');
         let seen = 0;
         vsProgressEs.onmessage = e => {
@@ -6057,7 +6057,7 @@ async function vsRestoreTraining() {
     try {
     let status;
     try {
-        const r = await cpFetch('/api/v1/voice/status');
+        const r = await cpFetch('/api/v1/admin/voice/status');
         if (!r.ok) return;
         status = await r.json();
     } catch { return; }
@@ -6077,7 +6077,7 @@ async function vsRestoreTraining() {
     }
     // Epochs from before this run (a resumed model) only exist in Train.log, not in the event list
     try {
-        const hr = await cpFetch(`/api/v1/voice/StyleTTS2/${encodeURIComponent(status.modelName)}/loss-history`);
+        const hr = await cpFetch(`/api/v1/admin/voice/StyleTTS2/${encodeURIComponent(status.modelName)}/loss-history`);
         if (hr.ok) {
             const { points, pauses } = await hr.json();
             for (const pt of points) vsLossPush(pt);
@@ -6093,7 +6093,7 @@ vsRestoreTraining();
 
 // Play a transcript clip
 function trPlay(btn, fileName) {
-    const src = `/api/v1/voice/transcribe/audio?name=${encodeURIComponent(fileName)}`;
+    const src = `/api/v1/admin/voice/transcribe/audio?name=${encodeURIComponent(fileName)}`;
     const wasPlaying = btn.classList.contains('playing');
     document.querySelectorAll('.tr-play.playing').forEach(b => b.classList.remove('playing'));
     trAudio.pause();
@@ -6192,14 +6192,14 @@ vsTrainBtn.addEventListener('click', async () => {
             vsLogBadge.textContent = 'transcribing…';
             vsSetProgress('Transcribing audio with Whisper', 5, null, '');
             vsAppendLog('Loading Whisper model…');
-            const trResp = await cpFetch('/api/v1/voice/transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stageId }) });
+            const trResp = await cpFetch('/api/v1/admin/voice/transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stageId }) });
             if (!trResp.ok) throw new Error('Transcription failed: ' + (await trResp.text()));
 
             // Poll for transcription completion
             let trLoggedCount = 0;
             const trPoll = setInterval(async () => {
                 try {
-                    const d = await cpFetch('/api/v1/voice/transcribe/status').then(r => r.json());
+                    const d = await cpFetch('/api/v1/admin/voice/transcribe/status').then(r => r.json());
                     vsTrStep.textContent = d.step;
                     vsTrPct.textContent = d.percent + '%';
                     vsTrFill.style.width = d.percent + '%';
@@ -6300,7 +6300,7 @@ dsDropzone.addEventListener('dragleave', () => dsDropzone.classList.remove('drag
 dsDropzone.addEventListener('drop', e => { e.preventDefault(); dsDropzone.classList.remove('drag-over'); dsAddFiles(e.dataTransfer.files); });
 
 function dsPlay(btn, name, variant) {
-    const src = `/api/v1/voice/dataset/audio?name=${encodeURIComponent(name)}&variant=${variant}`;
+    const src = `/api/v1/admin/voice/dataset/audio?name=${encodeURIComponent(name)}&variant=${variant}`;
     const wasPlaying = btn.classList.contains('playing');
     document.querySelectorAll('.ds-play.playing').forEach(b => b.classList.remove('playing'));
     dsAudio.pause();
@@ -6362,7 +6362,7 @@ async function dsSplit(name) {
     const splitBtn = wrap.querySelector('.ds-split-btn');
     splitBtn.disabled = true; splitBtn.textContent = 'Splitting…';
     try {
-        const r = await cpFetch('/api/v1/voice/dataset/split', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        const r = await cpFetch('/api/v1/admin/voice/dataset/split', { method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name }) });
         if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Split failed');
         const { parts: newParts } = await r.json();
@@ -6382,7 +6382,7 @@ async function dsSplit(name) {
         undoBtn.className = 'ds-action-btn'; undoBtn.style.cssText = 'font-size:11px;padding:4px 12px';
         undoBtn.textContent = 'Undo';
         undoBtn.addEventListener('click', async () => {
-            await cpFetch('/api/v1/voice/dataset/unsplit', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            await cpFetch('/api/v1/admin/voice/dataset/unsplit', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name }) });
             newParts.forEach(np => {
                 const el = dsCompareList.querySelector(`[data-row="${CSS.escape(np.name)}"]`);
@@ -6500,7 +6500,7 @@ function dsAppendParts(parts) {
 function dsPollStatus() {
     dsStatusTimer = setInterval(async () => {
         try {
-            const d = await cpFetch('/api/v1/voice/dataset/status').then(r => r.json());
+            const d = await cpFetch('/api/v1/admin/voice/dataset/status').then(r => r.json());
             dsStepLabel.textContent = d.step;
             dsPctLabel.textContent  = d.percent + '%';
             dsProgFill.style.width  = d.percent + '%';
@@ -6525,20 +6525,20 @@ dsProcessBtn.addEventListener('click', async () => {
     dsStepLabel.textContent = 'Uploading'; dsPctLabel.textContent = '0%'; dsProgFill.style.width = '0%';
     const demucs = dsDemucsToggle.checked;
     try {
-        const { stageId } = await cpFetch('/api/v1/voice/stage', { method: 'POST' }).then(r => r.json());
+        const { stageId } = await cpFetch('/api/v1/admin/voice/stage', { method: 'POST' }).then(r => r.json());
         const CHUNK = 5 * 1024 * 1024, CONCURRENCY = 4;
         for (let fi = 0; fi < dsFiles.length; fi++) {
             const f = dsFiles[fi], totalChunks = Math.max(1, Math.ceil(f.size / CHUNK));
             const uploadChunk = async (ci) => {
                 const slice = f.slice(ci * CHUNK, Math.min((ci + 1) * CHUNK, f.size));
-                const url = `/api/v1/voice/upload?stageId=${encodeURIComponent(stageId)}&name=${encodeURIComponent(f.name)}&chunk=${ci}&totalChunks=${totalChunks}`;
+                const url = `/api/v1/admin/voice/upload?stageId=${encodeURIComponent(stageId)}&name=${encodeURIComponent(f.name)}&chunk=${ci}&totalChunks=${totalChunks}`;
                 const up = await cpFetch(url, { method: 'POST', body: slice, headers: { 'Content-Type': 'application/octet-stream' } });
                 if (!up.ok) throw new Error(`Upload of ${f.name} failed`);
             };
             for (let ci = 0; ci < totalChunks; ci += CONCURRENCY) { await Promise.all(Array.from({ length: Math.min(CONCURRENCY, totalChunks - ci) }, (_, i) => uploadChunk(ci + i))); }
             dsStepLabel.textContent = `Uploaded ${fi + 1} / ${dsFiles.length}`;
         }
-        const r = await cpFetch('/api/v1/voice/dataset/process', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stageId, demucs }) });
+        const r = await cpFetch('/api/v1/admin/voice/dataset/process', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stageId, demucs }) });
         if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Process failed');
         dsStepLabel.textContent = 'Processing'; dsPollStatus();
     } catch (err) { dsStepLabel.textContent = 'Error: ' + err.message; dsProgFill.className = 'vs-progress-fill error'; dsProcessBtn.disabled = false; }
@@ -6548,7 +6548,7 @@ dsBuildBtn.addEventListener('click', async () => {
     dsBuildBtn.disabled = true; dsBuildBtn.textContent = 'Building…';
     try {
         const selections = [...dsSelections].filter(([, v]) => v !== 'skip').map(([name, variant]) => ({ name, variant, transcript: dsTranscripts.get(name) || '' }));
-        const r = await cpFetch('/api/v1/voice/dataset/build', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selections }) });
+        const r = await cpFetch('/api/v1/admin/voice/dataset/build', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selections }) });
         if (!r.ok) throw new Error('Build failed');
         const blob = await r.blob();
         const a = document.createElement('a');
@@ -6590,7 +6590,7 @@ async function loadCheckpoints(modelName) {
     vsTvEpoch.innerHTML = '<option value="">latest</option>';
     if (!modelName) return;
     try {
-        const r = await cpFetch(`/api/v1/voice/${encodeURIComponent(modelName)}/checkpoints`);
+        const r = await cpFetch(`/api/v1/admin/voice/${encodeURIComponent(modelName)}/checkpoints`);
         if (!r.ok) return;
         const { checkpoints } = await r.json();
         // skip the first entry (latest/model.pth) since we already have it as default
@@ -6615,7 +6615,7 @@ vsTvModel.addEventListener('change', () => {
 
 async function loadVoiceModels() {
     try {
-        const [mr, ar] = await Promise.all([cpFetch('/api/v1/voice/models'), cpFetch('/api/v1/voice/active')]);
+        const [mr, ar] = await Promise.all([cpFetch('/api/v1/admin/voice/models'), cpFetch('/api/v1/admin/voice/active')]);
         const { models } = await mr.json(), { model: activeModel, engine: activeEngine, ready, defaultModel } = await ar.json();
         vsAllModels = models.map(m => ({ ...m, isActive: m.name === activeModel, isDefault: m.name === defaultModel }));
         if (activeEngine) {
@@ -6675,7 +6675,7 @@ async function vsStartResume(modelName, retrain = false) {
     if (!retrain) {
         try {
             const engine = btn?.dataset.engine ?? 'StyleTTS2';
-            const hr = await cpFetch(`/api/v1/voice/${encodeURIComponent(engine)}/${encodeURIComponent(modelName)}/loss-history`);
+            const hr = await cpFetch(`/api/v1/admin/voice/${encodeURIComponent(engine)}/${encodeURIComponent(modelName)}/loss-history`);
             if (hr.ok) {
                 const { points, pauses } = await hr.json();
                 for (const p of points) vsLossPush(p);
@@ -6685,7 +6685,7 @@ async function vsStartResume(modelName, retrain = false) {
         } catch { /* non-fatal */ }
     }
     try {
-        const resp = await cpFetch('/api/v1/voice/resume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName, epochs, retrain }) });
+        const resp = await cpFetch('/api/v1/admin/voice/resume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName, epochs, retrain }) });
         if (!resp.ok) throw new Error((await resp.json().catch(()=>({error:resp.statusText}))).error ?? resp.statusText);
         vsAttachProgress(modelName, () => { if (btn) btn.disabled = false; });
     } catch(err) { vsStopTimer(); vsAppendLog('Error: ' + err.message, 'log-error'); vsLogBadge.textContent = 'failed'; vsLogBadge.classList.remove('live'); if (btn) btn.disabled = false; }
@@ -6695,7 +6695,7 @@ async function vsDismissResume(modelName, engine) {
     if (!confirm(`Remove "${modelName}" from the resume list? The voice itself will be kept.`)) return;
     const eng = engine || 'StyleTTS2';
     try {
-        const resp = await cpFetch(`/api/v1/voice/${encodeURIComponent(eng)}/${encodeURIComponent(modelName)}/dismiss`, { method: 'POST' });
+        const resp = await cpFetch(`/api/v1/admin/voice/${encodeURIComponent(eng)}/${encodeURIComponent(modelName)}/dismiss`, { method: 'POST' });
         if (!resp.ok) { const e = await resp.json().catch(()=>({error:resp.statusText})); alert('Dismiss failed: ' + (e.error ?? resp.statusText)); return; }
         await loadVoiceModels();
     } catch(err) { alert('Dismiss failed: ' + err.message); }
@@ -6706,7 +6706,7 @@ async function loadVoicesList() {
     const container = document.getElementById('voices-list');
     if (!container) return;
     try {
-        const [mr, ar] = await Promise.all([cpFetch('/api/v1/voice/models'), cpFetch('/api/v1/voice/active')]);
+        const [mr, ar] = await Promise.all([cpFetch('/api/v1/admin/voice/models'), cpFetch('/api/v1/admin/voice/active')]);
         const { models } = await mr.json();
         const { model: activeModel, engine: activeEngine, defaultModel } = await ar.json();
         const trained = models.filter(m => m.hasModel || m.hasResume);
@@ -6757,7 +6757,7 @@ async function loadVoicesList() {
 
 async function voicesSetActive(modelName, engine) {
     try {
-        const r = await cpFetch('/api/v1/voice/switch', {
+        const r = await cpFetch('/api/v1/admin/voice/switch', {
             method: 'POST', headers: {'Content-Type':'application/json'},
             body: JSON.stringify({ engine, modelName })
         });
@@ -6771,7 +6771,7 @@ async function voicesSetActive(modelName, engine) {
 async function voicesDeleteModel(modelName, engine) {
     if (!confirm(`Delete "${modelName}" and all its checkpoints? This cannot be undone.`)) return;
     try {
-        const resp = await cpFetch(`/api/v1/voice/${encodeURIComponent(engine)}/${encodeURIComponent(modelName)}`, { method: 'DELETE' });
+        const resp = await cpFetch(`/api/v1/admin/voice/${encodeURIComponent(engine)}/${encodeURIComponent(modelName)}`, { method: 'DELETE' });
         if (!resp.ok) { const e = await resp.json().catch(()=>({error:resp.statusText})); alert('Delete failed: ' + (e.error ?? resp.statusText)); return; }
         await loadVoicesList();
         await loadVoiceModels();
@@ -6797,7 +6797,7 @@ bindSlider('sp-pause', 'sp-pause-val', 2);
 let engineParamDefs = [];
 async function loadEngineParams() {
     try {
-        const r = await cpFetch('/api/v1/voice/engine-params');
+        const r = await cpFetch('/api/v1/admin/voice/engine-params');
         if (!r.ok) return;
         const data = await r.json();
         document.getElementById('sp-engine-label').textContent = data.engine ?? '';
@@ -6836,7 +6836,7 @@ function getSynthParams() {
 // voice, not just Test Voice. Load the saved values on start and save on change.
 async function loadVoiceSettings() {
     try {
-        const r = await cpFetch('/api/v1/voice/settings');
+        const r = await cpFetch('/api/v1/admin/voice/settings');
         if (!r.ok) return;
         const s = await r.json();
         const speed = document.getElementById('sp-speed'), pause = document.getElementById('sp-pause');
@@ -6846,7 +6846,7 @@ async function loadVoiceSettings() {
 }
 async function saveVoiceSettings() {
     try {
-        await cpFetch('/api/v1/voice/settings', {
+        await cpFetch('/api/v1/admin/voice/settings', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 speed:      parseFloat(document.getElementById('sp-speed').value),
@@ -6876,7 +6876,7 @@ vsTvSpeakBtn.addEventListener('click', async () => {
     const resumed = audioCtx.state === 'suspended' ? audioCtx.resume() : Promise.resolve();
     try {
         const checkpointPath = vsTvEpoch.value || null;
-        const resp = await cpFetch('/api/v1/voice/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, modelName, checkpointPath, ...getSynthParams() }) });
+        const resp = await cpFetch('/api/v1/speech/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, modelName, checkpointPath, ...getSynthParams() }) });
         if (!resp.ok) { const err = await resp.json().catch(() => ({ error: resp.statusText })); vsTvStatus.textContent = 'Error: ' + (err.error ?? resp.statusText); return; }
         const bytes = await resp.arrayBuffer();
         if (bytes.byteLength === 0) { vsTvStatus.textContent = 'Error: server returned no audio'; return; }
@@ -6910,7 +6910,7 @@ vsTvDefaultBtn.addEventListener('click', async () => {
     if (!modelName) return;
     vsTvDefaultBtn.disabled = true;
     try {
-        const resp = await cpFetch('/api/v1/voice/default', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName }) });
+        const resp = await cpFetch('/api/v1/admin/voice/default', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelName }) });
         if (!resp.ok) { const err = await resp.json().catch(() => ({ error: resp.statusText })); vsTvStatus.textContent = 'Error: ' + (err.error ?? resp.statusText); }
         else {
             await loadVoiceModels();
@@ -6970,7 +6970,7 @@ async function loadDebugThreads() {
     try {
         const [liveRes, diskRes] = await Promise.all([
             cpFetch('/api/v1/threads?includeInternal=true'),
-            cpFetch('/api/v1/threads/debug/sessions'),
+            cpFetch('/api/v1/admin/debug/sessions'),
         ]);
         if (!liveRes.ok) throw new Error('HTTP ' + liveRes.status);
         const liveThreads = await liveRes.json();
@@ -7084,7 +7084,7 @@ async function dbgLoadDiskSession(stem) {
     keyEl.textContent = stem + ' (archived)';
     body.innerHTML = '<div class="dbg-empty">Loading…</div>';
     try {
-        const r = await cpFetch(`/api/v1/threads/debug/sessions/${encodeURIComponent(stem)}`);
+        const r = await cpFetch(`/api/v1/admin/debug/sessions/${encodeURIComponent(stem)}`);
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const events = await r.json();
         body.dataset.loaded = '1';
@@ -7112,7 +7112,7 @@ async function dbgLoadThread(key) {
     keyEl.textContent = key;
     if (!body.dataset.loaded) body.innerHTML = '<div class="dbg-empty">Loading…</div>';
     try {
-        const r = await cpFetch(`/api/v1/threads/${encodeURIComponent(key)}/debug`);
+        const r = await cpFetch(`/api/v1/admin/debug/threads/${encodeURIComponent(key)}`);
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const thread = await r.json();
         // /debug now returns a thread tree: { key, label, state, history:[...], children:[...] }.
@@ -7602,7 +7602,7 @@ function dbgThreadToText(thread, depth) {
 async function dbgDownloadThread() {
     if (!dbgSelectedThread) return;
     try {
-        const r = await cpFetch('/api/v1/threads/' + encodeURIComponent(dbgSelectedThread) + '/debug');
+        const r = await cpFetch('/api/v1/admin/debug/threads/' + encodeURIComponent(dbgSelectedThread));
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const thread = await r.json();
         const text = 'DEBUG THREAD EXPORT\nthread: ' + dbgSelectedThread + '\ngenerated: ' + new Date().toISOString()
@@ -7663,7 +7663,7 @@ let igConfig = {};
 
 async function igLoad() {
     try {
-        igConfig = await cpFetch('/api/v1/imagegen/config').then(r => r.json());
+        igConfig = await cpFetch('/api/v1/admin/imagegen/config').then(r => r.json());
         document.getElementById('ig-enabled').checked        = igConfig.enabled      ?? false;
         document.getElementById('ig-comfyui-path').value     = igConfig.comfyUiPath  ?? '';
         document.getElementById('ig-port').value             = igConfig.port         ?? 8188;
@@ -7672,7 +7672,7 @@ async function igLoad() {
     } catch(e) { console.error('ImageGen config load failed', e); }
 
     try {
-        const status = await cpFetch('/api/v1/imagegen/status').then(r => r.json());
+        const status = await cpFetch('/api/v1/admin/imagegen/status').then(r => r.json());
         const el = document.getElementById('ig-status');
         if (status.ready)         el.innerHTML   = '<span style="color:var(--col-control-panel-line-7104-text)">● ComfyUI ready</span>';
         else if (status.active)   el.textContent = 'Module loaded — ComfyUI will start on first generation request.';
@@ -7687,7 +7687,7 @@ async function igLoadModels() {
     const sel = document.getElementById('ig-checkpoint-select');
     sel.innerHTML = '<option value="">— select a checkpoint —</option>';
     try {
-        const models = await cpFetch('/api/v1/imagegen/models').then(r => r.json());
+        const models = await cpFetch('/api/v1/admin/imagegen/models').then(r => r.json());
         models.forEach(m => {
             const opt = document.createElement('option');
             opt.value = opt.textContent = m;
@@ -7710,7 +7710,7 @@ document.getElementById('ig-save-model-btn').addEventListener('click', async () 
     const status = document.getElementById('ig-model-save-status');
     status.textContent = 'Saving…';
     try {
-        await cpFetch('/api/v1/imagegen/config', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
+        await cpFetch('/api/v1/admin/imagegen/config', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
             enabled:     document.getElementById('ig-enabled').checked,
             checkpoint,
             port:        parseInt(document.getElementById('ig-port').value) || 8188,
@@ -7726,7 +7726,7 @@ document.getElementById('ig-save-settings-btn').addEventListener('click', async 
     const status = document.getElementById('ig-settings-save-status');
     status.textContent = 'Saving…';
     try {
-        await cpFetch('/api/v1/imagegen/config', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
+        await cpFetch('/api/v1/admin/imagegen/config', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
             enabled:     document.getElementById('ig-enabled').checked,
             checkpoint:  igConfig.checkpoint ?? '',
             comfyUiPath: document.getElementById('ig-comfyui-path').value.trim(),

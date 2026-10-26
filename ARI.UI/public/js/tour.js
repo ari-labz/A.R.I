@@ -159,7 +159,7 @@
         }
         if (step.waitLlm) {
             pollTimer = setInterval(function () {
-                fetch('/api/v1/modules', { headers: authHeaders(), credentials: 'same-origin' })
+                fetch('/api/v1/admin/modules', { headers: authHeaders(), credentials: 'same-origin' })
                     .then(function (r) { return r.json(); })
                     .then(function (d) {
                         var m = (d.modules || []).filter(function (x) { return x.key === 'LLM'; })[0];

@@ -100,7 +100,7 @@ public class FeedbackController : ControllerBase
     // ── Control panel ─────────────────────────────────────────────────────────────
 
     /// <summary>The whole dataset, newest first. Optional <c>vote</c> filter ("up"/"down").</summary>
-    [HttpGet]
+    [HttpGet("~/api/v1/admin/feedback")]
     public IActionResult List([FromQuery] string? vote)
     {
         List<ResponseFeedback> all = FeedbackStore.Load();
@@ -137,7 +137,7 @@ public class FeedbackController : ControllerBase
         FeedbackStore.Remove(id) ? Ok(new { ok = true }) : NotFound();
 
     /// <summary>Every rating as JSONL — the raw dataset, ready to be reshaped into training pairs.</summary>
-    [HttpGet("export")]
+    [HttpGet("~/api/v1/admin/feedback/export")]
     public IActionResult Export()
     {
         string path = Path.Combine(Paths.Feedback, "responses.jsonl");
