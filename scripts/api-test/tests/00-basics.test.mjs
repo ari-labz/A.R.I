@@ -26,7 +26,7 @@ test("a thread can be created and listed", async () => {
 test("a message gets a reply from the stand-in model", async () => {
   const made = status(await master.post("/threads", {}), 200);
   const key = made.json.key;
-  const r = await master.stream(`/threads/${key}/stream`, { prompt: "hello there" });
+  const r = await master.stream(`/threads/${key}/messages`, { prompt: "hello there" });
   status(r, 200);
   assert(r.events.some(e => e.includes("[DONE]")), "stream should end with [DONE]: " + JSON.stringify(r.events.slice(-3)));
   assert(r.events.some(e => e.includes("Echo: hello there")), "reply should echo the message: " + JSON.stringify(r.events.slice(-3)));

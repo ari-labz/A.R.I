@@ -145,7 +145,7 @@ export async function closeThread(key: string): Promise<boolean> {
 }
 
 export async function loadHistory(key: string, raw = false): Promise<ThreadItem[]> {
-    const url = raw ? `/api/v1/threads/${key}/history?raw=true` : `/api/v1/threads/${key}/history`
+    const url = raw ? `/api/v1/threads/${key}/messages?raw=true` : `/api/v1/threads/${key}/messages`
     const res = await apiFetch(url)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     return res.json()
@@ -160,11 +160,12 @@ export interface ThreadDetail {
     history:       ThreadItem[]
 }
 
+/** The thread's details and its messages, which the server keeps at two addresses. */
 export async function fetchThread(key: string): Promise<ThreadDetail | null> {
     try {
-        const res = await apiFetch(`/api/v1/threads/${key}`)
-        if (!res.ok) return null
-        return res.json()
+        const [info, messages] = await Promise.all([apiFetch(`/api/v1/threads/${key}`), apiFetch(`/api/v1/threads/${key}/messages`)])
+        if (!info.ok || !messages.ok) return null
+        return { ...(await info.json()), history: await messages.json() }
     } catch { return null }
 }
 

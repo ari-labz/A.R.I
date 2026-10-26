@@ -958,7 +958,7 @@ export default function App() {
             // above it). When the server folds it in, a [SPLIT] event finalizes that bubble and opens the
             // continuation below this message; the [SPLIT]/[DONE] handlers dedupe against this optimistic copy.
             setItems(prev => [...prev, { type: "userMessage", content: prompt, timestamp: new Date().toISOString(), attachments: interjectAttach as Attachment[] | undefined }])
-            const res = await apiFetch(`/api/v1/threads/${key}/interject`, {
+            const res = await apiFetch(`/api/v1/threads/${key}/interjections`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ text: prompt }),
             }).catch(() => null)
@@ -1087,7 +1087,7 @@ export default function App() {
 
         async function runStream() {
             try {
-                const resp = await apiFetch(`/api/v1/threads/${keyForStream}/stream`, {
+                const resp = await apiFetch(`/api/v1/threads/${keyForStream}/messages`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ prompt, ...(localPath ? { localPath } : {}), ...(safetyMode && !isApprove ? { safeMode: true } : {}) }),

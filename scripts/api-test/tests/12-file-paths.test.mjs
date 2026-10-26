@@ -4,7 +4,7 @@ const { master, guest } = globalThis.ari;
 async function threadWithProject(client, projectId) {
   const key = status(await client.post("/threads", { projectId }), 200).json.key;
   // The folder is attached to the thread the first time a message is sent.
-  await client.stream(`/threads/${key}/stream`, { prompt: "hi" });
+  await client.stream(`/threads/${key}/messages`, { prompt: "hi" });
   return key;
 }
 
