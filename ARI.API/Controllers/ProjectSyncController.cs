@@ -18,6 +18,11 @@ namespace ARI.API.Controllers;
 [ApiController]
 public class ProjectSyncController(ProjectStore store) : ControllerBase
 {
+    /// <summary>A commit id is 7 to 40 hex digits. Anything else is refused, because the value is put on a git
+    /// command line and a crafted one (such as one starting with "--") could change what git does.</summary>
+    private static bool IsCommitId(string? value)
+        => string.IsNullOrWhiteSpace(value) || System.Text.RegularExpressions.Regex.IsMatch(value, "^[0-9a-fA-F]{7,40}$");
+
     // ── Status ────────────────────────────────────────────────────────────────────
 
     [HttpGet("status")]
@@ -27,6 +32,7 @@ public class ProjectSyncController(ProjectStore store) : ControllerBase
         if (project is null) return NotFound();
         if (!CanAccess(project)) return StatusCode(403);
         if (project.RootPath is not { } root) return BadRequest(new { error = "Project has no server folder." });
+        if (!IsCommitId(clientSha)) return BadRequest(new { error = "clientSha must be a commit id (7 to 40 hex digits)." });
 
         string ariDir = Path.Combine(root, ".ariproject");
         if (!Directory.Exists(ariDir))
@@ -69,6 +75,7 @@ public class ProjectSyncController(ProjectStore store) : ControllerBase
         if (project is null) return NotFound();
         if (!CanAccess(project)) return StatusCode(403);
         if (project.RootPath is not { } root) return BadRequest(new { error = "Project has no server folder." });
+        if (!IsCommitId(clientSha)) return BadRequest(new { error = "clientSha must be a commit id (7 to 40 hex digits)." });
         ProjectStore.InitAriProject(root);
 
         string tmp = Path.GetTempFileName();
