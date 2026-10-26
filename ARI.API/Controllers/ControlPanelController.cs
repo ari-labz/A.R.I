@@ -461,7 +461,7 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
 
 // ── Agents API ────────────────────────────────────────────────────────────────
 
-[Route("api/v1/agents")]
+[Route("api/v1/admin/agents")]
 [ApiController]
 public class AgentsApiController(PersistentData persistentData) : ControllerBase
 {
@@ -534,7 +534,7 @@ public class AgentsApiController(PersistentData persistentData) : ControllerBase
 
 // ── Voice Synthesis API ───────────────────────────────────────────────────────
 
-[Route("api/v1/voice")]
+[Route("api/v1/admin/voice")]
 [ApiController]
 public class VoiceController(
     VoiceSynthesisConfig vsConfig,
@@ -792,7 +792,7 @@ public class VoiceController(
         });
     }
 
-    [HttpPost("speak")]
+    [HttpPost("~/api/v1/speech/speak")]
     public async Task<IActionResult> Speak([FromBody] SpeakRequest req, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(req.Text))
@@ -887,7 +887,7 @@ public class VoiceController(
         return Ok(new { checkpoints });
     }
 
-    [HttpPost("split-sentences")]
+    [HttpPost("~/api/v1/speech/splitSentences")]
     public IActionResult SplitSentences([FromBody] SplitSentencesRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.Text))
@@ -1431,7 +1431,7 @@ public class VoiceController(
 
 // ── LLM Models & Servers API ──────────────────────────────────────────────────
 
-[Route("api/v1/models")]
+[Route("api/v1/admin/models")]
 [ApiController]
 public class ModelsApiController(PersistentData persistentData) : ControllerBase
 {
@@ -1583,7 +1583,7 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
     /// <summary>The one global reasoning-effort dial (0/1/2 = low/medium/xhigh). Universal across all agents;
     /// scales each agent's thinking budget and drives the reasoning_effort wire field on supporting models.
     /// See Documentation/Server/ARI.LLM/Reasoning-Effort.</summary>
-    [HttpGet("reasoning-effort")]
+    [HttpGet("~/api/v1/reasoningEffort")]
     public IActionResult GetReasoningEffort() => Ok(new
     {
         step        = ReasoningEffortStore.Step,
@@ -1607,7 +1607,7 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
         return srv?.ActiveModel?.SupportsReasoningEffort == true;
     }
 
-    [HttpPut("reasoning-effort")]
+    [HttpPut("reasoningEffort")]
     public IActionResult SetReasoningEffort([FromBody] ReasoningEffortRequest req)
     {
         ReasoningEffortStore.Step = req.Step;
@@ -1617,7 +1617,7 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
 
 // ── Servers API ───────────────────────────────────────────────────────────────
 
-[Route("api/v1/servers")]
+[Route("api/v1/admin/servers")]
 [ApiController]
 public class ServersApiController(PersistentData persistentData) : ControllerBase
 {
@@ -1763,7 +1763,7 @@ public record TrainRequest(
 /// take the control panel itself away, leaving no way to turn them back on.</param>
 public record ModuleInfo(string Key, string Name, string Description, bool Enabled, bool Running, bool Required);
 
-[Route("api/v1/modules")]
+[Route("api/v1/admin/modules")]
 [ApiController]
 public class ModulesApiController(ILogger<ModulesApiController> logger) : ControllerBase
 {
@@ -1933,7 +1933,7 @@ public record DatasetBuildRequest(ARI.VoiceSynthesis.DatasetBuildSelection[] Sel
 
 // ── Image Generation API ──────────────────────────────────────────────────────
 
-[Route("api/v1/imagegen")]
+[Route("api/v1/admin/imagegen")]
 [ApiController]
 public class ImageGenController(APIConfig config) : ControllerBase
 {

@@ -25,7 +25,7 @@ function getVolume(): number {
 // Decoding happens in parallel with synthesis of other sentences.
 async function synthesise(sentence: string, signal: AbortSignal): Promise<AudioBuffer | null> {
     try {
-        const resp = await fetch("/api/v1/voice/speak", {
+        const resp = await fetch("/api/v1/speech/speak", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ text: sentence }),
@@ -76,7 +76,7 @@ async function speakResponse(content: string, setSpeaking: (v: boolean) => void)
     setSpeaking(true)
 
     try {
-        const splitRes = await fetch("/api/v1/voice/split-sentences", {
+        const splitRes = await fetch("/api/v1/speech/splitSentences", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ text: content }),
@@ -805,7 +805,7 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
             if (!id) return
 
             btn.setAttribute("disabled", "true")
-            fetch(`/api/v1/persona/proposals/${encodeURIComponent(id)}/${approve ? "approve" : "reject"}`, { method: "POST" })
+            fetch(`/api/v1/admin/personaProposals/${encodeURIComponent(id)}/${approve ? "approve" : "reject"}`, { method: "POST" })
                 .then(async r => {
                     if (r.ok) return
                     const body = await r.json().catch(() => ({ message: "" }))

@@ -71,7 +71,7 @@ export { COMMANDS }
 async function loadCommandAllowlist(): Promise<string[]> {
     let server: string[] | null = null
     try {
-        const res = await apiFetch("/api/v1/command-allowlist")
+        const res = await apiFetch("/api/v1/admin/commandAllowlist")
         if (res.ok) server = sanitizeAllowlist((await res.json())?.commands)
     } catch { /* offline or not an admin — fall through to the local store */ }
     let local: string[] = []
@@ -85,7 +85,7 @@ async function loadCommandAllowlist(): Promise<string[]> {
 async function saveCommandAllowlist(list: string[]): Promise<boolean> {
     let ok = false
     try {
-        const res = await apiFetch("/api/v1/command-allowlist", {
+        const res = await apiFetch("/api/v1/admin/commandAllowlist", {
             method: "PUT", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ commands: list }),
         })
@@ -814,7 +814,7 @@ export default function App() {
                     command, title,
                     resolve: d => {
                         shownApprovalRef.current = null
-                        apiFetch(`/api/v1/threads/${key}/approvals/${id}`, {
+                        apiFetch(`/api/v1/admin/threads/${key}/approvals/${id}`, {
                             method: "POST", headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({ allow: d !== "deny" }),
                         }).catch(() => {})

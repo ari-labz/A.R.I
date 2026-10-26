@@ -25,43 +25,15 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
         "/api/v1/setup/account",
     ];
 
-    private static readonly string[] AdminPrefixes =
-    [
-        "/api/v1/admin/",
-        "/controlpanel.html",
-    ];
+    /// <summary>The admin half of the API. Everything under it is for admins only, so a new admin route is protected
+    /// by where it lives; nothing has to be remembered or added to a list. Everything else is open to any signed-in
+    /// person, and each route that holds someone's own data checks ownership itself.</summary>
+    internal const string AdminPrefix = "/api/v1/admin/";
 
-    // Control-panel controllers whose routes don't live under /admin/. Every path under these is admin-only,
-    // except the few things the chat UI itself needs and so are listed as exceptions in IsAdminOnly.
-    private static readonly string[] AdminOnlyAreas =
-    [
-        "/api/v1/agents", "/api/v1/pipeline-graphs", "/api/v1/servers", "/api/v1/modules", "/api/v1/imagegen", "/api/v1/persona/proposals", "/api/v1/models", "/api/v1/voice", "/api/v1/feedback",
-    ];
-
-    /// <summary>True if a guest must be refused. A path is matched on whole segments ("/api/v1/models" but not "/api/v1/modelsX").</summary>
-    internal static bool IsAdminOnly(string path, string method)
-    {
-        if (Array.Exists(AdminPrefixes, p => path.StartsWith(p, StringComparison.OrdinalIgnoreCase))) return true;
-
-        bool inArea = Array.Exists(AdminOnlyAreas, a =>
-            path.Equals(a, StringComparison.OrdinalIgnoreCase) || path.StartsWith(a + "/", StringComparison.OrdinalIgnoreCase));
-        if (!inArea) return false;
-
-        bool post = method.Equals("POST", StringComparison.OrdinalIgnoreCase);
-        bool get  = method.Equals("GET",  StringComparison.OrdinalIgnoreCase);
-
-        // What an ordinary signed-in user's chat page uses: reading the reasoning dial, speaking a reply aloud,
-        // and thumbs up/down on a response in a thread they can open (the controller checks the thread).
-        if (get  && path.Equals("/api/v1/models/reasoning-effort", StringComparison.OrdinalIgnoreCase)) return false;
-        if (post && (path.Equals("/api/v1/voice/speak", StringComparison.OrdinalIgnoreCase)
-                  || path.Equals("/api/v1/voice/split-sentences", StringComparison.OrdinalIgnoreCase))) return false;
-        if (post && path.Equals("/api/v1/feedback", StringComparison.OrdinalIgnoreCase)) return false;
-        if (get  && path.StartsWith("/api/v1/feedback/thread/", StringComparison.OrdinalIgnoreCase)) return false;
-        // Changing or withdrawing a rating (the controller checks the rating's thread is theirs).
-        if ((method.Equals("PATCH", StringComparison.OrdinalIgnoreCase) || method.Equals("DELETE", StringComparison.OrdinalIgnoreCase))
-            && path.StartsWith("/api/v1/feedback/", StringComparison.OrdinalIgnoreCase)) return false;
-        return true;
-    }
+    /// <summary>True if a guest must be refused.</summary>
+    internal static bool IsAdminOnly(string path)
+        => path.StartsWith(AdminPrefix, StringComparison.OrdinalIgnoreCase)
+        || path.Equals("/controlpanel.html", StringComparison.OrdinalIgnoreCase);
 
     public async Task InvokeAsync(HttpContext ctx)
     {
@@ -111,7 +83,7 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
 
             // Admin-only paths — guests get a flat 403
             string path = ctx.Request.Path.Value ?? "";
-            if (IsAdminOnly(path, ctx.Request.Method))
+            if (IsAdminOnly(path))
             {
                 if (principal.FindFirstValue(ClaimTypes.Role) != Roles.Admin)
                 {

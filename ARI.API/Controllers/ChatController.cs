@@ -283,7 +283,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     /// <c>{ key, label, isInternal, pipeline, history: [...], children: [ {same shape}, ... ] }</c>.
     /// Used exclusively by the control-panel Debug Threads pane — not for normal clients.
     /// </summary>
-    [HttpGet("{threadKey}/debug")]
+    [HttpGet("~/api/v1/admin/debug/threads/{threadKey}")]
     public IActionResult GetThreadDebug(string threadKey)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
@@ -291,16 +291,13 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         if (!Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? thread))
             return NotFound();
 
-        if (!CanAccessThread(thread)) return StatusCode(403);
-
         return Ok(SerializeDebugThread(thread));
     }
 
-    // Test-only: injects a fixed transcript directly into a thread's history, no LLM call, so Engram can be exercised repeatedly against the same input. Admin-only.
-    [HttpPost("{threadKey}/debug/seed")]
+    // Test-only: injects a fixed transcript directly into a thread's history, no LLM call, so Engram can be exercised repeatedly against the same input.
+    [HttpPost("~/api/v1/admin/debug/threads/{threadKey}/seed")]
     public IActionResult SeedDebugHistory(string threadKey, [FromBody] List<SeedTurn> turns)
     {
-        if (!User.IsInRole(ARI.API.Auth.Roles.Admin)) return StatusCode(403);
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
 
         ARI.LLM.Thread thread = Llm.GetOrCreateDialogueThread(threadKey);
@@ -318,31 +315,28 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
     public record SeedTurn(string Speaker, string Text, string? AuthorName = null);
 
-    // Test-only: runs Engram's Classify+Extract stages and returns the raw entity list — never touches Save. Admin-only.
-    [HttpPost("{threadKey}/debug/extract-only")]
+    // Test-only: runs Engram's Classify+Extract stages and returns the raw entity list — never touches Save.
+    [HttpPost("~/api/v1/admin/debug/threads/{threadKey}/extractOnly")]
     public async Task<IActionResult> DebugExtractOnly(string threadKey)
     {
-        if (!User.IsInRole(ARI.API.Auth.Roles.Admin)) return StatusCode(403);
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
         List<(string Entity, bool IsNew, string Excerpt, bool Sensitive)> entities = await Llm.DebugExtractOnly(threadKey);
         return Ok(entities.Select(e => new { e.Entity, e.IsNew, e.Excerpt, e.Sensitive }));
     }
 
     /// <summary>Lists today's recorded session files from disk. Includes completed Engram sweeps and other
-    /// ephemeral threads that are no longer in the live registry. Admin-only (raw session data).</summary>
-    [HttpGet("debug/sessions")]
+    /// ephemeral threads that are no longer in the live registry. (raw session data).</summary>
+    [HttpGet("~/api/v1/admin/debug/sessions")]
     public IActionResult GetDebugSessions()
     {
-        if (!User.IsInRole(ARI.API.Auth.Roles.Admin)) return StatusCode(403);
         List<ARI.LLM.SessionRecorder.DiskSession> sessions = ARI.LLM.SessionRecorder.ListTodaysSessions();
         return Ok(sessions.Select(s => new { stem = s.Stem, bytes = s.Bytes }));
     }
 
-    /// <summary>Returns the raw events from a disk-recorded session file. Admin-only.</summary>
-    [HttpGet("debug/sessions/{stem}")]
+    /// <summary>Returns the raw events from a disk-recorded session file.</summary>
+    [HttpGet("~/api/v1/admin/debug/sessions/{stem}")]
     public IActionResult GetDebugSession(string stem)
     {
-        if (!User.IsInRole(ARI.API.Auth.Roles.Admin)) return StatusCode(403);
         List<Dictionary<string, object?>>? lines = ARI.LLM.SessionRecorder.ReadSessionFile(stem);
         if (lines is null) return NotFound();
         return Ok(lines);
@@ -559,10 +553,9 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     }
 
     /// <summary>The user's answer to a tool's approval prompt (see ToolApprovals). 404 if it's no longer waiting.</summary>
-    [HttpPost("{threadKey}/approvals/{id}")]
+    [HttpPost("~/api/v1/admin/threads/{threadKey}/approvals/{id}")]
     public IActionResult AnswerApproval(string threadKey, string id, [FromBody] ApprovalAnswer body)
     {
-        if (!User.IsInRole(ARI.API.Auth.Roles.Admin)) return StatusCode(403);
         return ARI.LLM.ToolApprovals.Resolve(threadKey, id, body?.Allow == true) ? Ok() : NotFound();
     }
 

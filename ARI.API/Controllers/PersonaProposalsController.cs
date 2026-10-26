@@ -9,7 +9,7 @@ namespace ARI.API.Controllers;
 /// call to approve here ever writes Persona.md. Kept off the /admin surface deliberately — this is the
 /// user answering a question in their own conversation, not an administrative action.
 /// </summary>
-[Route("api/v1/persona/proposals")]
+[Route("api/v1/admin/personaProposals")]
 [ApiController]
 public class PersonaProposalsController : ControllerBase
 {
