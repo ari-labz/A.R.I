@@ -26,6 +26,11 @@ public class PushController : ControllerBase
         return Ok(new { publicKey = Push.VapidPublicKey });
     }
 
+    private static readonly string[] PushHosts = ["fcm.googleapis.com", "updates.push.services.mozilla.com", "push.apple.com", "notify.windows.com", "push.services.mozilla.com"];
+
+    private static bool IsPushServiceHost(string host)
+        => PushHosts.Any(h => host.Equals(h, StringComparison.OrdinalIgnoreCase) || host.EndsWith("." + h, StringComparison.OrdinalIgnoreCase));
+
     [HttpPost("subscriptions")]
     public IActionResult Subscribe([FromBody] SubscribeRequest req)
     {
@@ -33,6 +38,11 @@ public class PushController : ControllerBase
         if (string.IsNullOrWhiteSpace(req.Endpoint) || req.Keys is null
             || string.IsNullOrWhiteSpace(req.Keys.P256dh) || string.IsNullOrWhiteSpace(req.Keys.Auth))
             return BadRequest("Missing endpoint or keys.");
+
+        // Only the push services browsers use: the server will send a request to this address, so it must never be an
+        // address inside the network.
+        if (!Uri.TryCreate(req.Endpoint, UriKind.Absolute, out Uri? endpoint) || endpoint.Scheme != Uri.UriSchemeHttps || !IsPushServiceHost(endpoint.Host))
+            return BadRequest(new { error = "That is not a browser push service address." });
 
         if (!int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out int userId)) return Unauthorized();
         Push.AddSubscription(req.Endpoint, req.Keys.P256dh, req.Keys.Auth, userId, User.IsInRole(ARI.API.Auth.Roles.Admin));

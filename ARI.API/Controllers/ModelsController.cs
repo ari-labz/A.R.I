@@ -112,8 +112,11 @@ public class ModelsController(PersistentData persistentData) : ControllerBase
     [HttpPost]
     public IActionResult AddModel([FromBody] Model model)
     {
-        if (string.IsNullOrWhiteSpace(model.Name))
-            return BadRequest(new { error = "name is required." });
+        if (!SafeNames.IsSafe(model.Name))
+            return BadRequest(new { error = "name is required and must be a plain name." });
+        // A model file is found under the models folder, so its path may not be absolute or climb out of it.
+        if (Path.IsPathRooted(model.Path) || model.Path.Contains("..") || Path.IsPathRooted(model.MmprojPath) || model.MmprojPath.Contains(".."))
+            return BadRequest(new { error = "path must stay inside the models folder." });
 
         persistentData.AddModel(model);
         model.RefreshDownloadedState(ModelsPath);
@@ -125,13 +128,15 @@ public class ModelsController(PersistentData persistentData) : ControllerBase
     [HttpPatch("{id}")]
     public IActionResult UpdateModel(string id, [FromBody] JsonObject changes)
     {
-        Model? existing = persistentData.GetModel(Uri.UnescapeDataString(id));
+        Model? existing = persistentData.GetModel(id);
         if (existing is null) return NotFound(new { error = "Model not found." });
 
         JsonObject merged = JsonSerializer.SerializeToNode(existing)!.AsObject();
         foreach ((string key, JsonNode? value) in changes)
             if (key is not ("name" or "notes")) merged[key] = value?.DeepClone();
         Model updated = merged.Deserialize<Model>()!;
+        if (Path.IsPathRooted(updated.Path) || updated.Path.Contains("..") || Path.IsPathRooted(updated.MmprojPath) || updated.MmprojPath.Contains(".."))
+            return BadRequest(new { error = "path must stay inside the models folder." });
 
         persistentData.UpdateModel(updated);
         if (changes["notes"] is JsonNode notes) persistentData.SetNote(updated.Name, notes.GetValue<string?>() ?? "");
@@ -142,7 +147,7 @@ public class ModelsController(PersistentData persistentData) : ControllerBase
     [HttpDelete("{id}")]
     public IActionResult DeleteModel(string id)
     {
-        if (!persistentData.RemoveModel(Uri.UnescapeDataString(id)))
+        if (!persistentData.RemoveModel(id))
             return NotFound(new { error = "Model not found." });
         return Ok(new { ok = true });
     }

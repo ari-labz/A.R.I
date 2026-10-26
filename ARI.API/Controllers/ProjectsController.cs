@@ -162,6 +162,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
         {
             string safeName = Path.GetFileName(file.FileName);
             if (string.IsNullOrWhiteSpace(safeName)) continue;
+            if (ProjectStore.IsProtectedPath(safeName)) return BadRequest(new { error = $"'{safeName}' is not allowed." });
             string dest = Path.Combine(dir!, safeName);
             await using FileStream fs = System.IO.File.Create(dest);
             await file.CopyToAsync(fs);
@@ -215,12 +216,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
         if (abs != rootFull && !abs.StartsWith(rootFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return null;
         // ARI's own git bookkeeping is off limits, and so is anything that is really a link pointing outside the project.
         if (ProjectStore.IsProtectedPath(Path.GetRelativePath(rootFull, abs))) return null;
-        try
-        {
-            FileSystemInfo? real = (Directory.Exists(abs) ? new DirectoryInfo(abs) : (FileSystemInfo)new FileInfo(abs)).ResolveLinkTarget(true);
-            if (real is not null && !Path.GetFullPath(real.FullName).StartsWith(rootFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return null;
-        }
-        catch { return null; }
+        if (ProjectStore.PassesThroughLink(rootFull, abs)) return null;
         return abs;
     }
 

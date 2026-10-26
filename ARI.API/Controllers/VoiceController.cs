@@ -52,7 +52,7 @@ public class VoiceController(
     }
 
     [HttpPost("uploads/{id}")]
-    [DisableRequestSizeLimit]
+    [RequestSizeLimit(1024L * 1024 * 1024)]
     public async Task<IActionResult> Upload(
         [FromRoute(Name = "id")] string stageId,
         [FromQuery] string name,
@@ -304,7 +304,7 @@ public class VoiceController(
         }
 
         byte[] wav = await voiceService.Synthesise(req.Text, engineParams.Count > 0 ? engineParams : null, ct);
-        logger.LogInformation("[Voice/Speak] '{Text}' → {Bytes} bytes", req.Text, wav.Length);
+        logger.LogInformation("[Voice/Speak] {Chars} characters → {Bytes} bytes", req.Text.Length, wav.Length);
         return File(wav, "audio/wav");
     }
 
@@ -391,6 +391,7 @@ public class VoiceController(
     [HttpPatch("playback")]
     public IActionResult PatchPlayback([FromBody] PlaybackPatch req)
     {
+        if (req.Engine is not null && !SafeNames.IsSafe(req.Engine)) return BadRequest(new { error = "That name is not allowed." });
         if (req.DefaultModel is { } model)
         {
             if (string.IsNullOrWhiteSpace(model) || model.Contains('/') || model.Contains('\\'))
@@ -894,6 +895,7 @@ public class VoiceController(
         DatasetBuilder? builder = DatasetBuilder.Current;
         if (builder is null || builder.IsRunning)
             return BadRequest(new { error = "No completed dataset." });
+        if (!SafeNames.IsSafe(req.Name)) return BadRequest(new { error = "That name is not allowed." });
         try
         {
             List<DatasetPart> parts = builder.Split(req.Name);
@@ -908,6 +910,7 @@ public class VoiceController(
         DatasetBuilder? builder = DatasetBuilder.Current;
         if (builder is null || builder.IsRunning)
             return BadRequest(new { error = "No completed dataset." });
+        if (!SafeNames.IsSafe(req.Name)) return BadRequest(new { error = "That name is not allowed." });
         try
         {
             DatasetPart? part = builder.Unsplit(req.Name);

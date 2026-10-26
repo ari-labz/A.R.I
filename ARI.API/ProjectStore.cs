@@ -173,13 +173,28 @@ public class ProjectStore
     /// folder: nobody may read, write or delete there, because a changed git config can make git run a command.</summary>
     public static bool IsProtectedPath(string relPath)
         => relPath.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries)
-            .Any(part => part.Equals(".ariproject", StringComparison.OrdinalIgnoreCase) || part.Equals(".git", StringComparison.OrdinalIgnoreCase));
+            .Any(part => part.Equals(".ariproject", StringComparison.OrdinalIgnoreCase) || part.Equals(".git", StringComparison.OrdinalIgnoreCase)
+                      || part.Equals(".gitattributes", StringComparison.OrdinalIgnoreCase) || part.Equals(".gitmodules", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>True when the file or folder, or any folder on the way down to it from <paramref name="root"/>, is really a link
+    /// (a shortcut that could lead outside the project). Nothing under a link is read, written or deleted.</summary>
+    public static bool PassesThroughLink(string root, string abs)
+    {
+        string current = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar);
+        foreach (string part in Path.GetRelativePath(current, abs).Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, part);
+            FileSystemInfo info = Directory.Exists(current) ? new DirectoryInfo(current) : new FileInfo(current);
+            if (info.Exists && info.LinkTarget is not null) return true;
+        }
+        return false;
+    }
 
     /// <summary>Runs a git command against the .ariproject git dir in the given folder.</summary>
     public static (int ExitCode, string Output) RunGit(string workTree, string arguments)
     {
         string ariDir = Path.Combine(workTree, ".ariproject");
-        string fullArgs = $"-c core.fsmonitor= -c core.hooksPath=/dev/null --git-dir=\"{ariDir}\" --work-tree=\"{workTree}\" {arguments}";
+        string fullArgs = $"-c core.fsmonitor= -c core.hooksPath=/dev/null -c core.symlinks=false -c core.attributesFile=/dev/null -c protocol.ext.allow=never --git-dir=\"{ariDir}\" --work-tree=\"{workTree}\" {arguments}";
         using Process proc = new Process
         {
             StartInfo = new ProcessStartInfo

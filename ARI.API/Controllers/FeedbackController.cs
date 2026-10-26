@@ -75,14 +75,18 @@ public class FeedbackController : ControllerBase
     /// <summary>Ratings already recorded in a thread, so the chat UI can light up the right thumb on load.</summary>
     [HttpGet("~/api/v1/threads/{id}/feedback")]
     public IActionResult ForThread([FromRoute(Name = "id")] string threadKey) =>
-        Llm is not null && Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? t) && !CanAccess(t) ? StatusCode(403) :
-        Ok(FeedbackStore.ForThread(threadKey).Select(f => new
+        Llm is null ? StatusCode(503, "ARI is not ready yet.") :
+        !Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? t) ? (Llm.GetPersistedInfo(threadKey) is { } saved && (User.IsInRole(ARI.API.Auth.Roles.Admin) || saved.OwnerId == User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value) ? Ok(ForThreadList(threadKey)) : NotFound(new { error = "No such thread." })) :
+        !CanAccess(t) ? StatusCode(403) :
+        Ok(ForThreadList(threadKey));
+
+    private static object ForThreadList(string threadKey) => FeedbackStore.ForThread(threadKey).Select(f => new
         {
             id                = f.Id,
             vote              = f.Vote,
             note              = f.Note,
             responseTimestamp = f.ResponseTimestamp,
-        }));
+        }).ToList();
 
     /// <summary>Admins can rate anything; everyone else only threads they own.</summary>
     private bool CanAccess(ARI.LLM.Thread thread) =>

@@ -42,6 +42,10 @@ public class MeController(UserStore users) : ControllerBase
 
         string? displayName = req.DisplayName?.Trim();
         if (displayName is { Length: 0 }) return BadRequest(new { error = "Display name cannot be empty." });
+        // A name people see in conversations must not be someone else's, or a guest could pass as the Master.
+        if (displayName is not null && users.GetAll().Any(u => u.Id != user.Id
+                && (u.Username.Equals(displayName, StringComparison.OrdinalIgnoreCase) || u.DisplayName.Equals(displayName, StringComparison.OrdinalIgnoreCase))))
+            return Conflict(new { error = "Another person already uses that name." });
 
         string? username = req.Username?.Trim();
         bool changesLogin = username is not null || req.NewPassword is not null;
