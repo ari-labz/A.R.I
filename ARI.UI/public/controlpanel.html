@@ -3910,9 +3910,19 @@ let srvDrafts = {};
 let srvExpandedIds = new Set();
 let srvNewDraftActive = false;
 
+// A new server starts on the port after the last one in the list (8081 for the first), skipping any port already taken,
+// so two servers never default to the same port.
+function nextServerPort() {
+    const servers = (typeof lastServerList !== 'undefined' && lastServerList) || [];
+    const used = new Set(servers.map(s => s.port));
+    let port = servers.length ? (servers[servers.length - 1].port || 8080) + 1 : 8081;
+    while (used.has(port)) port++;
+    return port;
+}
+
 function freshServerDraft() {
     return {
-        id: null, name: '', port: 8081, contextSize: 32768, unifiedCache: false,
+        id: null, name: '', port: nextServerPort(), contextSize: 32768, unifiedCache: false,
         kvCacheQuantK: 4, kvCacheQuantV: 4, cacheRamMib: 0, currentModelName: null, autoStart: true,
         slots: [{ id: '00000000-0000-0000-0000-000000000000', name: 'Default', contextLimit: 32768 }],
     };
