@@ -137,6 +137,10 @@ public class Server : IDisposable
     [JsonIgnore] public int Pid { get; private set; } = -1;
     [JsonIgnore] public Model? ActiveModel { get; private set; }
 
+    /// <summary>Live progress of a model file this server is downloading, or null when it isn't downloading.
+    /// Read by the control panel so it can show "Downloading model" with a bar instead of just "Starting".</summary>
+    [JsonIgnore] public DownloadProgress? Download { get; private set; }
+
     [JsonIgnore] public string FullEndpoint => $"{Endpoint}:{Port}";
 
     /// <summary>True while this server's llama-server process is alive. False after Stop() or if it
@@ -324,6 +328,10 @@ public class Server : IDisposable
         string temp = dest + ".tmp";
         int lastPct = -1;
         long downloaded = 0;
+        DownloadProgress progress = new() { File = filename, TotalBytes = total ?? 0 };
+        Download = progress;
+        long speedMark = 0;
+        DateTime speedAt = DateTime.UtcNow;
 
         try
         {
@@ -336,6 +344,16 @@ public class Server : IDisposable
             {
                 await dst.WriteAsync(buf.AsMemory(0, read));
                 downloaded += read;
+                progress.DoneBytes = downloaded;
+
+                // Speed over roughly the last 2 seconds, so the estimate follows the connection without jumping around.
+                double window = (DateTime.UtcNow - speedAt).TotalSeconds;
+                if (window >= 2)
+                {
+                    progress.BytesPerSec = (long)((downloaded - speedMark) / window);
+                    speedMark = downloaded;
+                    speedAt = DateTime.UtcNow;
+                }
 
                 if (total > 0)
                 {
@@ -354,6 +372,10 @@ public class Server : IDisposable
         {
             if (File.Exists(temp)) File.Delete(temp);
             throw;
+        }
+        finally
+        {
+            Download = null;
         }
 
         Log.LogInformation("[{Server}] Download complete: {File}", Name, filename);
@@ -523,4 +545,13 @@ public class Server : IDisposable
         8 => "q8_0",
         _ => "f16",
     };
+}
+
+/// <summary>Snapshot of one model file download, updated as bytes arrive.</summary>
+public sealed class DownloadProgress
+{
+    public string File { get; init; } = "";
+    public long TotalBytes { get; init; }
+    public long DoneBytes { get; set; }
+    public long BytesPerSec { get; set; }
 }
