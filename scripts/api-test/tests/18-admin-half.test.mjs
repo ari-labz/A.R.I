@@ -4,7 +4,7 @@ const { master, guest, anon } = globalThis.ari;
 const adminReads = [
   "/admin/agents", "/admin/models", "/admin/voice/status", "/admin/imagegen/status", "/admin/modules",
   "/admin/pipelineGraphs", "/admin/commandAllowlist", "/admin/feedback", "/admin/debug/sessions",
-  "/admin/persistedThreads", "/admin/settings/logging", "/admin/users",
+  "/admin/persistedThreads", "/admin/settings", "/admin/users",
 ];
 // The log is a never-ending stream, so it is checked for who may open it, but the master never waits for it to finish.
 const streams = ["/admin/log"];

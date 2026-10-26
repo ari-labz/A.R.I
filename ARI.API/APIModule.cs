@@ -233,7 +233,13 @@ public class APIModule : IAsyncDisposable
         // The fallback runs its OWN static-file middleware and ignores the options set above, so browsing
         // to "/" served index.html with default caching. That is why a rebuilt UI kept loading the old
         // bundle: the page was fresh on disk and a month old in the browser.
-        app.MapFallbackToFile("index.html", new StaticFileOptions
+        // An address under /api/ that no route owns is a real "not found", never the web page.
+        app.MapFallback("/api/{**rest}", async ctx =>
+        {
+            ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+            await ctx.Response.WriteAsJsonAsync(new { error = "Not found." });
+        });
+        app.MapFallbackToFile("{*path:regex(^(?!api/).*$)}", "index.html", new StaticFileOptions
         {
             FileProvider      = new PhysicalFileProvider(Paths.WwwRoot),
             OnPrepareResponse = cacheHeaders,
