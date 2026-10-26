@@ -123,6 +123,26 @@ public class AdminUsersController(UserStore users) : ControllerBase
         return Ok();
     }
 
+    // ── Personal access tokens (admin view) ───────────────────────────────────────
+
+    /// <summary>Every token anyone has made (never the token itself), so an admin can see what has access and cut it off.</summary>
+    [HttpGet("/api/v1/admin/tokens")]
+    public IActionResult AllTokens()
+    {
+        Dictionary<int, string> names = users.GetAll().ToDictionary(u => u.Id, u => u.Username);
+        return Ok(this.Page(users.ListTokens().Select(t => new
+        {
+            t.Id, t.Name, t.Prefix, t.UserId,
+            Username   = names.TryGetValue(t.UserId, out string? n) ? n : "unknown",
+            CreatedAt  = DateTimeOffset.FromUnixTimeSeconds(t.CreatedAt).ToString("o"),
+            LastUsedAt = t.LastUsedAt == 0 ? null : DateTimeOffset.FromUnixTimeSeconds(t.LastUsedAt).ToString("o"),
+        }).ToList()));
+    }
+
+    [HttpDelete("/api/v1/admin/tokens/{id}")]
+    public IActionResult RevokeToken(string id)
+        => users.RevokeToken(id) ? Ok() : NotFound(new { error = "No such token." });
+
     // ── IP Blocklist ──────────────────────────────────────────────────────────────
 
     [HttpGet("/api/v1/admin/blocklist")]

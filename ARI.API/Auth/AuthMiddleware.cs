@@ -70,7 +70,7 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
                 return;
             }
 
-            ClaimsPrincipal? principal = auth.ValidateToken(token);
+            ClaimsPrincipal? principal = ResolvePrincipal(token, store, auth);
             if (principal is null)
             {
                 await Unauthenticated(ctx);
@@ -78,7 +78,7 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
             }
 
             string? sessionId = principal.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Jti);
-            if (sessionId is null || store.GetSession(sessionId) is null)
+            if (sessionId is null || (!sessionId.StartsWith(PatSessionPrefix, StringComparison.Ordinal) && store.GetSession(sessionId) is null))
             {
                 await Unauthenticated(ctx);
                 return;
@@ -116,6 +116,38 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
 
         await next(ctx);
     }
+
+    public const string PatPrefix = "ari_pat_";
+    public const string PatSessionPrefix = "pat:";
+
+    /// <summary>The hash a personal token is stored and looked up by.</summary>
+    public static string HashToken(string token) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(token)));
+
+    /// <summary>Turns what the caller presented into who they are: a login token (checked as before), or a personal access
+    /// token, which carries the permissions of the person who made it as they are right now (their role is read fresh, so a
+    /// demotion or deletion takes effect at once).</summary>
+    private static ClaimsPrincipal? ResolvePrincipal(string token, UserStore store, AuthService auth)
+    {
+        if (!token.StartsWith(PatPrefix, StringComparison.Ordinal)) return auth.ValidateToken(token);
+
+        PersonalToken? pat = store.FindTokenByHash(HashToken(token));
+        if (pat is null || store.GetById(pat.UserId) is not { } owner) return null;
+        store.TouchToken(pat.Id, pat.LastUsedAt);
+        return new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub, owner.Id.ToString()),
+            new Claim(ClaimTypes.NameIdentifier,                                   owner.Id.ToString()),
+            new Claim(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Jti, PatSessionPrefix + pat.Id),
+            new Claim(ClaimTypes.Name,                                             owner.Username),
+            new Claim(ClaimTypes.Role,                                             owner.Role),
+            new Claim("displayName",                                               owner.DisplayName),
+            new Claim("mustChangePassword",                                        owner.MustChangePassword ? "true" : "false"),
+        ], "PersonalToken"));
+    }
+
+    /// <summary>True when this request was made with a personal access token rather than a signed-in session.</summary>
+    public static bool UsedPersonalToken(ClaimsPrincipal user)
+        => user.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Jti)?.StartsWith(PatSessionPrefix, StringComparison.Ordinal) == true;
 
     /// <summary>Not signed in. Signing out when you already are signed out is not an error: it just clears the cookie.</summary>
     private static async Task Unauthenticated(HttpContext ctx)
@@ -164,12 +196,12 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
         if (token is null)
             return null;
 
-        ClaimsPrincipal? principal = auth.ValidateToken(token);
+        ClaimsPrincipal? principal = ResolvePrincipal(token, store, auth);
         if (principal is null)
             return null;
 
         string? sessionId = principal.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Jti);
-        if (sessionId is null || store.GetSession(sessionId) is null)
+        if (sessionId is null || (!sessionId.StartsWith(PatSessionPrefix, StringComparison.Ordinal) && store.GetSession(sessionId) is null))
             return null;
 
         // Same rule as the REST routes: a temporary password has to be replaced before anything else.

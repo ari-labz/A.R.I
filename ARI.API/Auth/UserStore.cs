@@ -70,6 +70,16 @@ public class UserStore
                 LastUsedAt INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (UserId) REFERENCES Users(Id) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS PersonalTokens (
+                Id         TEXT    PRIMARY KEY,
+                UserId     INTEGER NOT NULL,
+                Name       TEXT    NOT NULL,
+                TokenHash  TEXT    NOT NULL UNIQUE,
+                Prefix     TEXT    NOT NULL,
+                CreatedAt  INTEGER NOT NULL,
+                LastUsedAt INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (UserId) REFERENCES Users(Id) ON DELETE CASCADE
+            );
             CREATE TABLE IF NOT EXISTS IpBlocklist (
                 Ip             TEXT PRIMARY KEY,
                 BlockedAt      INTEGER NOT NULL,
@@ -206,6 +216,93 @@ public class UserStore
         cmd.Parameters.AddWithValue("$id", userId);
         cmd.ExecuteNonQuery();
     }
+
+    // ── Personal access tokens ───────────────────────────────────────────────────
+
+    public const int MaxTokensPerUser = 50;
+
+    public int CountTokens(int userId)
+    {
+        using SqliteConnection conn = Open();
+        using SqliteCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM PersonalTokens WHERE UserId = $u";
+        cmd.Parameters.AddWithValue("$u", userId);
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    public PersonalToken CreateToken(int userId, string name, string tokenHash, string prefix)
+    {
+        PersonalToken t = new() { Id = Guid.NewGuid().ToString("N"), UserId = userId, Name = name, Prefix = prefix, CreatedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds() };
+        using SqliteConnection conn = Open();
+        using SqliteCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "INSERT INTO PersonalTokens (Id, UserId, Name, TokenHash, Prefix, CreatedAt) VALUES ($id, $u, $n, $h, $p, $c)";
+        cmd.Parameters.AddWithValue("$id", t.Id);
+        cmd.Parameters.AddWithValue("$u", userId);
+        cmd.Parameters.AddWithValue("$n", name);
+        cmd.Parameters.AddWithValue("$h", tokenHash);
+        cmd.Parameters.AddWithValue("$p", prefix);
+        cmd.Parameters.AddWithValue("$c", t.CreatedAt);
+        cmd.ExecuteNonQuery();
+        return t;
+    }
+
+    /// <summary>The token (and so the person) a presented key belongs to, or null.</summary>
+    public PersonalToken? FindTokenByHash(string tokenHash)
+    {
+        using SqliteConnection conn = Open();
+        using SqliteCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT * FROM PersonalTokens WHERE TokenHash = $h";
+        cmd.Parameters.AddWithValue("$h", tokenHash);
+        using SqliteDataReader r = cmd.ExecuteReader();
+        return r.Read() ? ReadToken(r) : null;
+    }
+
+    /// <summary>One person's tokens, or everyone's when <paramref name="userId"/> is null.</summary>
+    public List<PersonalToken> ListTokens(int? userId = null)
+    {
+        using SqliteConnection conn = Open();
+        using SqliteCommand cmd = conn.CreateCommand();
+        cmd.CommandText = userId is null ? "SELECT * FROM PersonalTokens ORDER BY CreatedAt DESC" : "SELECT * FROM PersonalTokens WHERE UserId = $u ORDER BY CreatedAt DESC";
+        if (userId is not null) cmd.Parameters.AddWithValue("$u", userId);
+        using SqliteDataReader r = cmd.ExecuteReader();
+        List<PersonalToken> list = new();
+        while (r.Read()) list.Add(ReadToken(r));
+        return list;
+    }
+
+    /// <summary>Removes a token. With <paramref name="userId"/> set, only if it is that person's.</summary>
+    public bool RevokeToken(string id, int? userId = null)
+    {
+        using SqliteConnection conn = Open();
+        using SqliteCommand cmd = conn.CreateCommand();
+        cmd.CommandText = userId is null ? "DELETE FROM PersonalTokens WHERE Id = $id" : "DELETE FROM PersonalTokens WHERE Id = $id AND UserId = $u";
+        cmd.Parameters.AddWithValue("$id", id);
+        if (userId is not null) cmd.Parameters.AddWithValue("$u", userId);
+        return cmd.ExecuteNonQuery() > 0;
+    }
+
+    /// <summary>Notes that a token was just used (at most once a minute, so busy clients don't write constantly).</summary>
+    public void TouchToken(string id, long lastUsedAt)
+    {
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        if (now - lastUsedAt < 60) return;
+        using SqliteConnection conn = Open();
+        using SqliteCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE PersonalTokens SET LastUsedAt = $t WHERE Id = $id";
+        cmd.Parameters.AddWithValue("$t", now);
+        cmd.Parameters.AddWithValue("$id", id);
+        cmd.ExecuteNonQuery();
+    }
+
+    private static PersonalToken ReadToken(SqliteDataReader r) => new()
+    {
+        Id         = r.GetString(r.GetOrdinal("Id")),
+        UserId     = r.GetInt32(r.GetOrdinal("UserId")),
+        Name       = r.GetString(r.GetOrdinal("Name")),
+        Prefix     = r.GetString(r.GetOrdinal("Prefix")),
+        CreatedAt  = r.GetInt64(r.GetOrdinal("CreatedAt")),
+        LastUsedAt = r.GetInt64(r.GetOrdinal("LastUsedAt")),
+    };
 
     // ── Sessions ─────────────────────────────────────────────────────────────────
 
