@@ -93,6 +93,8 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
         if (project is null) return NotFound();
         if (!CanAccess(project)) return StatusCode(403);
         store.Delete(id);
+        // Threads that were attached to it no longer point at a project that is gone.
+        foreach (string key in store.ThreadProjects.Where(kv => kv.Value == id).Select(kv => kv.Key).ToList()) store.ThreadProjects.TryRemove(key, out _);
         return Ok();
     }
 
@@ -164,6 +166,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
             if (string.IsNullOrWhiteSpace(safeName)) continue;
             if (ProjectStore.IsProtectedPath(safeName)) return BadRequest(new { error = $"'{safeName}' is not allowed." });
             string dest = Path.Combine(dir!, safeName);
+            if (ProjectStore.PassesThroughLink(project!.RootPath!, dest)) return BadRequest(new { error = $"'{safeName}' is not allowed." });
             await using FileStream fs = System.IO.File.Create(dest);
             await file.CopyToAsync(fs);
             saved.Add(safeName);
@@ -227,7 +230,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
     private int CallerId()
     {
         string? sub = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        return int.TryParse(sub, out int id) ? id : 0;
+        return int.TryParse(sub, out int id) ? id : -1;   // -1 matches no owner (0 means "the admin")
     }
 
     // Admins can access any project; guests can only access their own.

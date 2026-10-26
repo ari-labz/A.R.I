@@ -71,6 +71,14 @@ public class OpenApiController(IApiDescriptionGroupCollectionProvider routes) : 
                     ["default"] = new { description = "Failure: { \"error\": \"what went wrong\" } with a status of 400 or more." },
                 },
             };
+            // Routes that read the request themselves (a file upload, a raw git bundle) still have a body worth describing.
+            body ??= (method, path) switch
+            {
+                ("post", "/api/v1/projects/{id}/files") => new { required = true, content = new Dictionary<string, object> { ["multipart/form-data"] = new { schema = new { type = "object", properties = new { file = new { type = "string", format = "binary" } } } } } },
+                ("post", "/api/v1/projects/{id}/sync/push") => new { required = true, content = new Dictionary<string, object> { ["application/octet-stream"] = new { schema = new { type = "string", format = "binary" } } } },
+                ("post", "/api/v1/admin/voice/uploads/{id}") => new { required = true, content = new Dictionary<string, object> { ["application/octet-stream"] = new { schema = new { type = "string", format = "binary" } } } },
+                _ => null,
+            };
             if (body is not null) operation["requestBody"] = body;
             if (OpenPaths.Contains(path)) operation["security"] = Array.Empty<object>();   // no sign-in needed
 
@@ -95,7 +103,7 @@ public class OpenApiController(IApiDescriptionGroupCollectionProvider routes) : 
 
     /// <summary>The lists that accept limit and offset.</summary>
     private static readonly HashSet<string> PagedLists = new()
-        { "/api/v1/threads", "/api/v1/threads/{id}/messages", "/api/v1/projects", "/api/v1/admin/users", "/api/v1/admin/sessions", "/api/v1/admin/feedback" };
+        { "/api/v1/threads", "/api/v1/threads/{id}/messages", "/api/v1/projects", "/api/v1/admin/users", "/api/v1/admin/sessions", "/api/v1/admin/feedback", "/api/v1/admin/debug/threads", "/api/v1/admin/blocklist", "/api/v1/admin/llmConfigs", "/api/v1/admin/brain/backups", "/api/v1/admin/debug/sessions", "/api/v1/threads/{id}/files" };
 
     /// <summary>Routes that need no sign-in (see AuthMiddleware).</summary>
     private static readonly HashSet<string> OpenPaths = new(StringComparer.OrdinalIgnoreCase)

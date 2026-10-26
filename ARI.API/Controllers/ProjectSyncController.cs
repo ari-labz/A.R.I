@@ -34,15 +34,12 @@ public class ProjectSyncController(ProjectStore store) : ControllerBase
         if (project.RootPath is not { } root) return BadRequest(new { error = "Project has no server folder." });
         if (!IsCommitId(clientSha)) return BadRequest(new { error = "clientSha must be a commit id (7 to 40 hex digits)." });
 
-        string ariDir = Path.Combine(root, ".ariproject");
-        if (!Directory.Exists(ariDir))
-            ProjectStore.InitAriProject(root);
-
-        var (_, serverSha) = ProjectStore.RunGit(root, "rev-parse HEAD");
-        serverSha = serverSha.Trim();
+        // Reading the status never changes anything: a project's history is set up when the project is made.
+        var (shaCode, serverSha) = ProjectStore.RunGit(root, "rev-parse HEAD");
+        serverSha = shaCode == 0 && System.Text.RegularExpressions.Regex.IsMatch(serverSha.Trim(), "^[0-9a-f]{40}$") ? serverSha.Trim() : "";
 
         int ahead = 0, behind = 0;
-        if (!string.IsNullOrWhiteSpace(clientSha) && clientSha != serverSha)
+        if (serverSha.Length == 40 && !string.IsNullOrWhiteSpace(clientSha) && clientSha != serverSha)
         {
             var (_, aheadStr) = ProjectStore.RunGit(root,
                 $"rev-list --count {serverSha}..{clientSha}");
@@ -76,7 +73,7 @@ public class ProjectSyncController(ProjectStore store) : ControllerBase
         if (!CanAccess(project)) return StatusCode(403);
         if (project.RootPath is not { } root) return BadRequest(new { error = "Project has no server folder." });
         if (!IsCommitId(clientSha)) return BadRequest(new { error = "clientSha must be a commit id (7 to 40 hex digits)." });
-        ProjectStore.InitAriProject(root);
+        if (!Directory.Exists(Path.Combine(root, ".ariproject"))) return Conflict(new { error = "This project has no sync history yet." });
 
         string tmp = Path.GetTempFileName();
         try

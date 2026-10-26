@@ -17,7 +17,7 @@ namespace ARI.API.Controllers;
 
 [Route("api/v1/admin")]
 [ApiController]
-public class SystemController(APIConfig config, SystemInfo systemInfo, PersistentData persistentData) : ControllerBase
+public class SystemController(SystemInfo systemInfo) : ControllerBase
 {
     private LLMModule? Llm => (LLMModule?)Modules.Llm;
 

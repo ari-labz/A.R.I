@@ -39,10 +39,12 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     // system prompt at send time — never exposed as user-visible thread attachments.
     private static readonly ConcurrentDictionary<string, string> pendingSystemContext = new();
 
-    /// <summary>Derives a display username from the authenticated user's email (strips @domain).</summary>
+    /// <summary>The name this caller goes by in conversations.</summary>
     private string GetUsername()
     {
-        // JWT display name claim (set at login from the user's preferences).
+        // The name comes from the account as it is now, not from the token, which can be weeks old.
+        if (int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out int callerId) && users.GetById(callerId) is { } account)
+            return string.IsNullOrWhiteSpace(account.DisplayName) ? account.Username : account.DisplayName;
         string? displayName = User.FindFirstValue("displayName");
         if (!string.IsNullOrEmpty(displayName)) return displayName;
         // Username claim as last resort.
@@ -326,7 +328,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     public IActionResult GetDebugSessions()
     {
         List<ARI.LLM.SessionRecorder.DiskSession> sessions = ARI.LLM.SessionRecorder.ListTodaysSessions();
-        return Ok(sessions.Select(s => new { stem = s.Stem, bytes = s.Bytes }));
+        return Ok(this.Page(sessions.Select(s => new { stem = s.Stem, bytes = s.Bytes }).ToList()));
     }
 
     /// <summary>Returns the raw events from a disk-recorded session file.</summary>
@@ -451,7 +453,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
             if (!evtCallerIsAdmin)
             {
                 Llm.Threads.TryGetValue(evt.ThreadKey, out ARI.LLM.Thread? evtThread);
-                if (evtThread is null || evtThread.OwnerId != evtCallerId) continue;
+                string? evtOwner = evtThread?.OwnerId ?? evt.OwnerId;
+                if (evtOwner is null || evtOwner != evtCallerId) continue;
             }
 
             string payload = JsonSerializer.Serialize(evt, SseJson);
@@ -543,7 +546,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     }
 
     /// <summary>The user's answer to a tool's approval prompt (see ToolApprovals). 404 if it's no longer waiting.</summary>
-    [HttpPost("~/api/v1/admin/threads/{id}/approvals/{approvalId}")]
+    [HttpPost("{id}/approvals/{approvalId}")]
     public IActionResult AnswerApproval([FromRoute(Name = "id")] string threadKey, [FromRoute(Name = "approvalId")] string id, [FromBody] ApprovalAnswer body)
     {
         return ARI.LLM.ToolApprovals.Resolve(threadKey, id, body?.Allow == true) ? Ok() : NotFound();
@@ -554,8 +557,14 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
         if (string.IsNullOrWhiteSpace(req.Input)) return BadRequest("Input is required.");
-        if (req.ThreadKey is not null && Llm.Threads.TryGetValue(req.ThreadKey, out ARI.LLM.Thread? target) && !CanAccessThread(target))
-            return StatusCode(403);
+        if (req.ThreadKey is not null)
+        {
+            // The same rule as every thread route: a live thread must be yours, a saved one too, and a key nobody has used
+            // can only be one the server hands out.
+            if (Llm.Threads.TryGetValue(req.ThreadKey, out ARI.LLM.Thread? target)) { if (!CanAccessThread(target)) return StatusCode(403); }
+            else if (Llm.GetPersistedInfo(req.ThreadKey) is { } savedThread) { if (!CanAccessOwner(savedThread.OwnerId)) return StatusCode(403); }
+            else if (!User.IsInRole(ARI.API.Auth.Roles.Admin) && !ARI.API.Auth.ThreadAccess.IsClientKey(req.ThreadKey)) return StatusCode(403);
+        }
 
         bool isMaster = User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier) == ARI.Common.Shared.MasterUserId;
         string? result = await Llm.HandleCommand(req.ThreadKey, req.Input, isMaster);
@@ -622,7 +631,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
                 // A crafted zip can name an entry "../../x" to escape the folder ("zip slip"): refuse any
                 // entry that does not land inside the target.
                 string destPath = Path.GetFullPath(Path.Combine(targetRoot, entry.FullName.Replace('/', Path.DirectorySeparatorChar)));
-                if (!destPath.StartsWith(targetRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                if (!destPath.StartsWith(targetRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal) || ProjectStore.PassesThroughLink(targetRoot, destPath))
                 {
                     skipped.Add(entry.FullName);
                     continue;
@@ -644,6 +653,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         // All files land on the filesystem (scratchpad or project dir); ARI reads them via read_file.
         Directory.CreateDirectory(targetDir);
         string fileDest = Path.Combine(targetDir, fileName);
+        if (ProjectStore.PassesThroughLink(targetDir, fileDest)) return BadRequest(new { error = "That file name is not allowed." });
         await using FileStream destFs = System.IO.File.Create(fileDest);
         await file.CopyToAsync(destFs);
         pendingFileNotes.GetOrAdd(threadKey, _ => new()).Add(fileName);
@@ -690,6 +700,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
         IEnumerable<object> diskFiles = Directory.Exists(fileRoot)
             ? Directory.GetFiles(fileRoot, "*", SearchOption.AllDirectories)
+                       .Where(p => !ProjectStore.IsProtectedPath(Path.GetRelativePath(fileRoot, p)) && !ProjectStore.PassesThroughLink(fileRoot, p))
                        .Select(p =>
                        {
                            string rel = Path.GetRelativePath(fileRoot, p);
@@ -700,7 +711,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
                        })
             : Enumerable.Empty<object>();
 
-        return Ok(diskFiles);
+        return Ok(this.Page(diskFiles.ToList()));
     }
 
     // ── Promote scratchpad to project ──────────────────────────────────────────
@@ -763,7 +774,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         if (file is null || file.Length == 0) return BadRequest("No file provided.");
 
         string fileName = Path.GetFileName(file.FileName);
-        if (string.IsNullOrWhiteSpace(fileName)) return BadRequest("The file has no usable name.");
+        if (string.IsNullOrWhiteSpace(fileName) || ProjectStore.IsProtectedPath(fileName)) return BadRequest("The file has no usable name.");
 
         string mime    = file.ContentType ?? "application/octet-stream";
         bool   isImage = ImageMimes.Contains(mime);
@@ -789,6 +800,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         {
             Directory.CreateDirectory(Paths.ScratchpadDir(threadKey));
             string destPath = Path.Combine(Paths.ScratchpadDir(threadKey), fileName);
+            if (ProjectStore.PassesThroughLink(Paths.ScratchpadDir(threadKey), destPath)) return BadRequest(new { error = "That file name is not allowed." });
             await System.IO.File.WriteAllTextAsync(destPath, content);
             return Ok(new { name = fileName, isImage = false, mimeType = mime, promoted = true });
         }
@@ -799,6 +811,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
             string scratchDir = Paths.ScratchpadDir(threadKey);
             Directory.CreateDirectory(scratchDir);
             byte[] imgBytes = Convert.FromBase64String(content);
+            if (ProjectStore.PassesThroughLink(scratchDir, Path.Combine(scratchDir, fileName))) return BadRequest(new { error = "That file name is not allowed." });
             await System.IO.File.WriteAllBytesAsync(Path.Combine(scratchDir, fileName), imgBytes);
         }
 
@@ -939,7 +952,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     [HttpPost("{id}/messages")]
     public async Task Stream([FromRoute(Name = "id")] string threadKey, [FromBody] StreamRequest body, CancellationToken cancellationToken)
     {
-        string prompt = body?.Prompt ?? string.Empty;
+        body ??= new StreamRequest("");
+        string prompt = body.Prompt ?? string.Empty;
         // Sending to an expired thread (Persistent Threads) reopens it first: history, context window and owner restored.
         Llm?.ReopenPersisted(threadKey);
         // Safe mode has two halves: the persistent thread flag (enforced as a hard edit-block in the Coder's

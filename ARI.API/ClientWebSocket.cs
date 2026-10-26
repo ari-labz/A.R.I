@@ -98,6 +98,7 @@ public static class ClientWebSocket
         try
         {
             codeThread = llm.GetOrCreateCodeThread(threadKey);
+            codeThread.OwnerId ??= ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
             log.LogInformation("[Client] Code thread ready: {Key}", threadKey);
         }
         catch (Exception ex)
@@ -112,7 +113,7 @@ public static class ClientWebSocket
         try
         {
             log.LogInformation("[Client] Entering receive loop");
-            await ReceiveLoop(ws, llm, codeThread, threadKey, fileTree, state, fileState, log, connId, ctx.User);
+            await ReceiveLoop(ws, llm, codeThread, threadKey, fileTree, state, fileState, log, connId, ctx.User, ctx.RequestServices);
         }
         catch (Exception ex)
         {
@@ -1190,7 +1191,7 @@ public static class ClientWebSocket
     private static async Task ReceiveLoop(
         WebSocket ws, LLMModule llm, ARI.LLM.Thread initialThread,
         string initialThreadKey, List<string> fileTree, ConnectionState state,
-        FileToolState fileState, ILogger log, Guid connId, System.Security.Claims.ClaimsPrincipal user)
+        FileToolState fileState, ILogger log, Guid connId, System.Security.Claims.ClaimsPrincipal user, IServiceProvider services)
     {
         ARI.LLM.Thread codeThread = initialThread;
         string         threadKey  = initialThreadKey;
@@ -1221,6 +1222,14 @@ public static class ClientWebSocket
                     }
                 }
                 while (!result.EndOfMessage);
+
+                // Signing out, or an admin ending the session, must also end this connection.
+                if (user.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Jti)?.Value is { } jti
+                    && services.GetService(typeof(ARI.API.Auth.UserStore)) is ARI.API.Auth.UserStore sessions && sessions.GetSession(jti) is null)
+                {
+                    await ws.CloseAsync(WebSocketCloseStatus.PolicyViolation, "signed out", CancellationToken.None);
+                    return;
+                }
 
                 string json = Encoding.UTF8.GetString(ms.ToArray());
                 JsonDocument doc;
@@ -1257,6 +1266,7 @@ public static class ClientWebSocket
                                     log.LogInformation("[Client] Rebinding tools from {Old} → {New}", threadKey, bindKey);
                                     UnregisterIfOwner(codeThread, connId, log);
                                     codeThread = llm.GetOrCreateCodeThread(bindKey);
+                                    codeThread.OwnerId ??= user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
                                     FileToolState reboundFileState = threadFileState.GetOrAdd(bindKey, _ => new FileToolState());
                                     RegisterTools(codeThread, ws, log, reboundFileState, connId);
                                     threadKey = bindKey;
