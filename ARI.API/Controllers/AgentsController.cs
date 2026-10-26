@@ -35,7 +35,7 @@ public class AgentsController(PersistentData persistentData) : ControllerBase
     /// <summary>Names that belong to shipped agents, so a custom agent can never shadow one.</summary>
     private static readonly string[] ReservedNames = ["Dialogue", "Coder", "Context", "Awareness", "Memory", "Engram", "Refactor", "Curiosity", "Subagent", "Dreamer", "Shared"];
 
-    public sealed record NewAgent(string Name, string? ServerName, string? SlotName, string? AgentPrompt);
+    public sealed record NewAgent(string Name, string? ServerName, string? SlotName, string? AgentPrompt, bool ReadOnly = false);
 
     /// <summary>Creates a custom agent and adds it to the running server, so a pipeline can use it straight away.</summary>
     [HttpPost]
@@ -47,7 +47,7 @@ public class AgentsController(PersistentData persistentData) : ControllerBase
         if (ReservedNames.Contains(name, StringComparer.OrdinalIgnoreCase))
             return BadRequest(new { error = $"'{name}' is the name of a built-in agent." });
         Server? server = persistentData.GetServers().FirstOrDefault(s => s.Name == req.ServerName) ?? persistentData.GetServers().FirstOrDefault();
-        if (!persistentData.CreateCustomAgent(name, server?.Name ?? "", req.SlotName ?? server?.Slots.FirstOrDefault()?.Name, req.AgentPrompt ?? ""))
+        if (!persistentData.CreateCustomAgent(name, server?.Name ?? "", req.SlotName ?? server?.Slots.FirstOrDefault()?.Name, req.AgentPrompt ?? "", req.ReadOnly))
             return Conflict(new { error = $"An agent called '{name}' already exists." });
         LoadLive(name);
         return Ok(new { ok = true });

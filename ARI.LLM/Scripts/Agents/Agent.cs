@@ -17,6 +17,8 @@ public abstract class Agent
     
     // Tool groups registered eagerly (skips the request_tools round-trip). Null/empty = defer all.
     public string[]? PreloadedTools { get; init; }
+    // An agent that may look but not change anything: it only ever sees (and can only call) tools whose access is Read.
+    public bool ReadOnly { get; init; }
     // Inference queue priority (see InferencePriority) — higher runs first, ties break FIFO. Unset (0)
     // sits between Normal and Background: live-facing agents don't need to state one, background writers
     // (Engram, Refactor, Curiosity) set a negative value so they never delay a live reply.
@@ -168,6 +170,12 @@ public abstract class Agent
     internal Func<Thread, string, string?>? OnThinkingDeltaPipeline { get; set; }
 
     // Non-null = short-circuit the tool without executing it.
+    /// <summary>Whether this agent may use a registered tool on this thread. A read-only agent, or any agent on a thread with
+    /// no user attached to approve things (a pipeline's background step), gets only tools that declare Read access; a tool
+    /// registered without a declared access (a client's own) counts as one that changes things.</summary>
+    private bool MayUse(Thread thread, string toolName) =>
+        !(ReadOnly || thread.ReadOnlyTools) || (thread.toolAccess.TryGetValue(toolName, out ToolAccess access) && access == ToolAccess.Read);
+
     internal virtual string? OnToolCall(Thread thread, ToolTurnState state, string name, string callId, string argsJson) => null;
     internal Func<Thread, string, string, string?>? OnToolCallPipeline { get; set; }
 
@@ -793,6 +801,7 @@ public abstract class Agent
                 // survives a search block and she can still finish the job from what she already found.
                 if (turn.SearchBlocked && name == "search_web") continue;
                 if (turn.ReadBlocked   && name == "fetch_page") continue;
+                if (!MayUse(thread, name)) continue;
                 schemas.Add(tool.Schema);
             }
             turn.ToolSchemas = schemas.ToArray();
@@ -1607,7 +1616,9 @@ public abstract class Agent
 
             string? guard = null;
             bool toolFound = thread.tools.TryGetValue(call.Name, out (object Schema, Func<string, Task<ToolResult>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter, Func<string, string?>? StreamingDisplay, Func<string, string?>? StreamingPreCheck, Func<string, string?>? PreCheck, Func<string, ToolResult, ToolResult>? PostRun) tool);
-            if (toolFound)
+            if (toolFound && !MayUse(thread, call.Name))
+                guard = $"{call.Name} isn't available to this agent: it can only use tools that read, not change anything.";
+            if (guard is null && toolFound)
                 guard = tool.PreCheck?.Invoke(argsJson);
             if (guard is null)
                 guard = OnToolCall(thread, turn.ToolTurn, call.Name, call.Id, argsJson);
