@@ -37,6 +37,11 @@ export default function UserPreferences({ user, onClose, onLogout, onUserUpdated
 
     const [sessions,          setSessions]           = useState<Session[]>([])
     const [sessionsLoading,   setSessionsLoading]    = useState(true)
+    // Personal access tokens: keys for scripts and other apps, with this person's permissions.
+    const [tokens,            setTokens]             = useState<{ id: string; name: string; prefix: string; createdAt: string; lastUsedAt: string | null }[]>([])
+    const [tokenName,         setTokenName]          = useState("")
+    const [newToken,          setNewToken]           = useState<string | null>(null)
+    const [tokenError,        setTokenError]         = useState<string | null>(null)
 
     // Commands ARI may run without asking ("allow every time"), global across projects. Admin only.
     const isAdmin = user.role === "Admin"
@@ -49,6 +54,29 @@ export default function UserPreferences({ user, onClose, onLogout, onUserUpdated
             if (data?.sessions) setSessions(data.sessions)
         }).catch(() => {}).finally(() => setSessionsLoading(false))
     }, [])
+
+    useEffect(() => {
+        apiFetch("/api/v1/me/tokens").then(r => r.ok ? r.json() : []).then(setTokens).catch(() => {})
+    }, [])
+
+    async function createToken(e: React.FormEvent) {
+        e.preventDefault()
+        setTokenError(null)
+        const res = await apiFetch("/api/v1/me/tokens", {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: tokenName }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) { setTokenError((data as { error?: string }).error ?? "Could not make the token"); return }
+        setNewToken(data.token)
+        setTokenName("")
+        setTokens(prev => [data.details, ...prev])
+    }
+
+    async function deleteToken(id: string) {
+        if (!confirm("Delete this token? Anything using it stops working straight away.")) return
+        await apiFetch(`/api/v1/me/tokens/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {})
+        setTokens(prev => prev.filter(t => t.id !== id))
+    }
 
     useEffect(() => {
         if (!isAdmin) return
@@ -255,6 +283,36 @@ export default function UserPreferences({ user, onClose, onLogout, onUserUpdated
                             {allowedError && <p style={errorStyle}>{allowedError}</p>}
                         </div>
                     )}
+
+                    {/* Personal access tokens */}
+                    <div style={section}>
+                        <p style={sectionLabel}>PERSONAL ACCESS TOKENS</p>
+                        <p style={mutedText}>A token lets a script or another app use ARI as you, with your permissions. It never expires; delete it to cut it off.</p>
+                        {newToken && (
+                            <div>
+                                <p style={mutedText}>Copy it now. It will not be shown again.</p>
+                                <input style={inputStyle} readOnly value={newToken} onFocus={e => e.currentTarget.select()} />
+                                <button style={revokeBtn} onClick={() => { navigator.clipboard?.writeText(newToken).catch(() => {}); }}>Copy</button>
+                                <button style={revokeBtn} onClick={() => setNewToken(null)}>Done</button>
+                            </div>
+                        )}
+                        <form onSubmit={createToken}>
+                            <input style={inputStyle} placeholder="What is it for? (e.g. my backup script)" value={tokenName} onChange={e => setTokenName(e.target.value)} />
+                            <button style={revokeBtn} type="submit">Make token</button>
+                        </form>
+                        {tokenError && <p style={errorStyle}>{tokenError}</p>}
+                        <div style={sessionList}>
+                            {tokens.map(t => (
+                                <div key={t.id} style={sessionRow}>
+                                    <div>
+                                        <span style={sessionDevice}>{t.name}</span>
+                                        <span style={sessionDate}>{t.prefix}… · {t.lastUsedAt ? `used ${formatDate(t.lastUsedAt)}` : "never used"}</span>
+                                    </div>
+                                    <button style={revokeBtn} onClick={() => deleteToken(t.id)}>Delete</button>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
 
                     {/* Active sessions */}
                     <div style={section}>

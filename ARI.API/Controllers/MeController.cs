@@ -105,6 +105,51 @@ public class MeController(UserStore users) : ControllerBase
         return Ok();
     }
 
+    // ── Personal access tokens ───────────────────────────────────────────────────
+    // A long-lived key for a script or a third-party app, like a GitHub token. It does what its owner can do, and nothing
+    // more, and it stops working the moment it is deleted. It is shown once, when it is made. Making and deleting tokens
+    // needs a signed-in session, so a token can't be used to make more tokens.
+
+    public record NewToken(string? Name);
+
+    private static object Describe(PersonalToken t) => new
+    {
+        t.Id, t.Name, t.Prefix,
+        CreatedAt  = DateTimeOffset.FromUnixTimeSeconds(t.CreatedAt).ToString("o"),
+        LastUsedAt = t.LastUsedAt == 0 ? null : DateTimeOffset.FromUnixTimeSeconds(t.LastUsedAt).ToString("o"),
+    };
+
+    [HttpGet("tokens")]
+    public IActionResult ListTokens()
+    {
+        if (!TryGetUser(out User? user)) return Unauthorized();
+        if (AuthMiddleware.UsedPersonalToken(User)) return StatusCode(403, new { error = "Sign in to manage tokens; a token can't manage tokens." });
+        return Ok(users.ListTokens(user.Id).Select(Describe).ToList());
+    }
+
+    [HttpPost("tokens")]
+    public IActionResult CreateToken([FromBody] NewToken req)
+    {
+        if (!TryGetUser(out User? user)) return Unauthorized();
+        if (AuthMiddleware.UsedPersonalToken(User)) return StatusCode(403, new { error = "Sign in to manage tokens; a token can't manage tokens." });
+        string name = (req.Name ?? "").Trim();
+        if (name.Length is 0 or > 60) return BadRequest(new { error = "Give the token a name of 1 to 60 characters, so you can tell it apart later." });
+        if (users.CountTokens(user.Id) >= UserStore.MaxTokensPerUser) return BadRequest(new { error = $"You can have at most {UserStore.MaxTokensPerUser} tokens. Delete one you no longer use." });
+
+        string secret = AuthMiddleware.PatPrefix + Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        PersonalToken made = users.CreateToken(user.Id, name, AuthMiddleware.HashToken(secret), secret[..(AuthMiddleware.PatPrefix.Length + 4)]);
+        // The only time the token itself is ever shown: only its fingerprint is kept.
+        return Ok(new { token = secret, details = Describe(made) });
+    }
+
+    [HttpDelete("tokens/{id}")]
+    public IActionResult DeleteToken(string id)
+    {
+        if (!TryGetUser(out User? user)) return Unauthorized();
+        if (AuthMiddleware.UsedPersonalToken(User)) return StatusCode(403, new { error = "Sign in to manage tokens; a token can't manage tokens." });
+        return users.RevokeToken(id, user.Id) ? Ok() : NotFound(new { error = "No such token." });
+    }
+
     private bool TryGetUser(out User user)
     {
         user = null!;
