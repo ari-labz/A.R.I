@@ -193,6 +193,11 @@ internal class Engram : MemoryAgent, IDisposable
             List<ThreadItem> allItems = threads.TryGetValue(threadKey, out Thread? dialogueThread) ? dialogueThread.History : new List<ThreadItem>();
             List<ThreadItem> conversationItems = allItems.Where(i => i is LLM.Prompt or Response).ToList();
 
+            // A code thread is swept with its own prompts: what was done and decided, filed on the project's note —
+            // never the code itself (the repo and git already hold that).
+            bool    code    = dialogueThread?.Pipeline == ThreadPipeline.Code;
+            string? project = code ? ProjectNameFor(dialogueThread!) : null;
+
             int lastCount = lastHistoryCount.TryGetValue(threadKey, out int c) ? c : 0;
             List<ThreadItem> recentItems = conversationItems.Skip(lastCount).ToList();
 
@@ -211,8 +216,8 @@ internal class Engram : MemoryAgent, IDisposable
             }
 
             // --- Classify: is there anything worth remembering? ---
-            transcriptSeen = BuildTranscript(recentItems);
-            if (!await Classify(recentItems, trigger))
+            transcriptSeen = BuildTranscript(recentItems, code);
+            if (!await Classify(recentItems, trigger, code))
             {
                 outcome   = "skipped — classified as task-only (or no new messages)";
                 processed = true;   // nothing to save is still "processed" — the thread may be deleted
@@ -220,7 +225,7 @@ internal class Engram : MemoryAgent, IDisposable
             }
 
             // recentItems is only what's new since lastHistoryCount — a 2nd+ sweep never re-reads the full transcript.
-            string transcript = transcriptSeen.Length > 0 ? transcriptSeen : BuildTranscript(recentItems);
+            string transcript = transcriptSeen.Length > 0 ? transcriptSeen : BuildTranscript(recentItems, code);
             if (context is not null) await context.RebuildFromTranscript(threadKey, transcript);
             string contextSummary = context?.GetContext(threadKey) ?? string.Empty;
             string speaker = conversationItems.OfType<Prompt>().Select(p => p.AuthorName)
@@ -233,7 +238,7 @@ internal class Engram : MemoryAgent, IDisposable
             //     tool-free call, so it can't wander; the excerpt it captures per entity is what keeps
             //     Stage 3 faithful to what was actually said without needing one continuous thread. ---
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] extracting entities...", threadKey);
-            List<ExtractedEntity> entities = await ExtractAsync(transcript, contextSummary);
+            List<ExtractedEntity> entities = await ExtractAsync(transcript, contextSummary, code, project);
 
             // The conversation's own date — not "today", since Engram can run well after the fact.
             // Stage 3 is told this explicitly so it never has to guess or invent one.
@@ -245,12 +250,14 @@ internal class Engram : MemoryAgent, IDisposable
             //     still resolved by exact match beforehand and the write tool is still confined to that
             //     pre-resolved set of paths — one call now covers the whole sweep's entities instead of
             //     one call per entity, but no entity can still reach a note it wasn't resolved against. ---
-            (int commits, int blocked) = await SaveAllAsync(threadKey, entities, speaker, conversationDate);
+            (int commits, int blocked) = await SaveAllAsync(threadKey, entities, speaker, conversationDate, code, project);
 
             // A short linked summary of what was concluded; falls back to a linked entity list if the summary call fails.
             if (entities.Count > 0)
             {
-                string logLine = await GenerateConversationSummary(transcript, speaker);
+                string logLine = code
+                    ? await GenerateCodeSummary(transcript, speaker, project)
+                    : await GenerateConversationSummary(transcript, speaker);
                 if (string.IsNullOrWhiteSpace(logLine))
                 {
                     IEnumerable<string> linked = entities.Select(e => e.Entity).Distinct(StringComparer.OrdinalIgnoreCase)
@@ -258,7 +265,10 @@ internal class Engram : MemoryAgent, IDisposable
                         .Select(e => $"[[{e}]]");
                     logLine = "Discussed: " + string.Join(", ", linked) + ".";
                 }
-                AppendToConversationLog(DateTime.Now.ToString("yyyy-MM-dd"), logLine, logStart, logEnd);
+                if (code)
+                    AppendToConversationLog(logStart, logLine, logStart, logEnd, "Coding session");
+                else
+                    AppendToConversationLog(logStart, logLine, logStart, logEnd);
             }
 
             committed    = commits;
@@ -317,7 +327,7 @@ internal class Engram : MemoryAgent, IDisposable
     /// regardless of whether it's already in the vault (Stage 3 checks that), each with the actual
     /// transcript lines it came from — not a paraphrase, so Stage 3 has real material to work from
     /// without needing to share a thread with this call.</summary>
-    private async Task<List<ExtractedEntity>> ExtractAsync(string transcript, string contextSummary)
+    private async Task<List<ExtractedEntity>> ExtractAsync(string transcript, string contextSummary, bool code = false, string? project = null)
     {
         string context = string.IsNullOrWhiteSpace(contextSummary)
             ? ""
@@ -328,8 +338,12 @@ internal class Engram : MemoryAgent, IDisposable
             model    = "local",
             messages = new[]
             {
-                new { role = "system", content = ResolveTemplate("ExtractSystem", "") + "\n<|think_off|>" },
-                new { role = "user",   content = ResolveTemplate("ExtractTask", "", ("context", context), ("transcript", transcript)) }
+                new { role = "system", content = (code
+                        ? ResolveTemplate("CodeExtractSystem", CodePrompts.ExtractSystem, ("projectNote", ProjectNoteName(project)))
+                        : ResolveTemplate("ExtractSystem", "")) + "\n<|think_off|>" },
+                new { role = "user",   content = code
+                        ? ResolveTemplate("CodeExtractTask", CodePrompts.ExtractTask, ("context", context), ("transcript", transcript))
+                        : ResolveTemplate("ExtractTask", "", ("context", context), ("transcript", transcript)) }
             },
             stream      = false,
             max_tokens  = EXTRACT_MAX_TOKENS,
@@ -361,33 +375,48 @@ internal class Engram : MemoryAgent, IDisposable
     }
 
     // The model may wrap the array in prose or a fenced code block despite instructions — pull out the
-    // first [...] span rather than requiring the whole completion to be pure JSON.
+    // first [...] span rather than requiring the whole completion to be pure JSON. If the answer was cut off
+    // (token cap) or is otherwise not valid JSON, keep every object that did complete instead of losing all of them.
     private static List<ExtractedEntity> ParseExtracted(string content)
     {
         int start = content.IndexOf('[');
         int end   = content.LastIndexOf(']');
-        if (start < 0 || end <= start) return new();
+        if (start < 0) return new();
 
-        try
+        if (end > start)
         {
-            using JsonDocument doc = JsonDocument.Parse(content[start..(end + 1)]);
-            List<ExtractedEntity> results = new();
-            foreach (JsonElement el in doc.RootElement.EnumerateArray())
+            try
             {
-                string entity    = el.TryGetProperty("entity",    out JsonElement e) ? e.GetString() ?? "" : "";
-                string excerpt   = el.TryGetProperty("excerpt",   out JsonElement x) ? x.GetString() ?? "" : "";
-                bool   isNew     = el.TryGetProperty("is_new",    out JsonElement n) && n.ValueKind == JsonValueKind.True;
-                bool   sensitive = el.TryGetProperty("sensitive", out JsonElement s) && s.ValueKind == JsonValueKind.True;
-                if (entity.Length > 0 && excerpt.Length > 0)
-                    results.Add(new ExtractedEntity(entity, isNew, excerpt, sensitive));
+                using JsonDocument doc = JsonDocument.Parse(content[start..(end + 1)]);
+                return doc.RootElement.EnumerateArray().Select(ToEntity).OfType<ExtractedEntity>().ToList();
             }
-            return results;
+            catch (JsonException ex)
+            {
+                Shared.Logger.LogWarning("[Engram] Extraction output isn't valid JSON ({Error}) — salvaging the complete entries.", ex.Message);
+            }
         }
-        catch (Exception ex)
+
+        List<ExtractedEntity> salvaged = new();
+        foreach (string obj in JsonObjectSalvage.CompleteObjects(content))
         {
-            Shared.Logger.LogWarning("[Engram] Failed to parse extraction output ({Error}) — treating as nothing extracted.", ex.Message);
-            return new();
+            try
+            {
+                using JsonDocument doc = JsonDocument.Parse(obj);
+                if (ToEntity(doc.RootElement) is { } entity) salvaged.Add(entity);
+            }
+            catch (JsonException) { /* a malformed entry — skip just that one */ }
         }
+        Shared.Logger.LogInformation("[Engram] Salvaged {Count} entit{Suffix} from a truncated extraction.", salvaged.Count, salvaged.Count == 1 ? "y" : "ies");
+        return salvaged;
+    }
+
+    private static ExtractedEntity? ToEntity(JsonElement el)
+    {
+        string entity    = el.TryGetProperty("entity",    out JsonElement e) ? e.GetString() ?? "" : "";
+        string excerpt   = el.TryGetProperty("excerpt",   out JsonElement x) ? x.GetString() ?? "" : "";
+        bool   isNew     = el.TryGetProperty("is_new",    out JsonElement n) && n.ValueKind == JsonValueKind.True;
+        bool   sensitive = el.TryGetProperty("sensitive", out JsonElement s) && s.ValueKind == JsonValueKind.True;
+        return entity.Length > 0 && excerpt.Length > 0 ? new ExtractedEntity(entity, isNew, excerpt, sensitive) : null;
     }
 
     // ── Stage 3: save ──────────────────────────────────────────────────────────────────
@@ -431,7 +460,7 @@ internal class Engram : MemoryAgent, IDisposable
     }
 
     // Saves every entity in one call; edit_memory is confined to each entity's own pre-resolved name/prefix (see ResolveEntity).
-    private async Task<(int Commits, int Blocked)> SaveAllAsync(string threadKey, List<ExtractedEntity> entities, string speaker, string conversationDate)
+    private async Task<(int Commits, int Blocked)> SaveAllAsync(string threadKey, List<ExtractedEntity> entities, string speaker, string conversationDate, bool code = false, string? project = null)
     {
         if (entities.Count == 0) return (0, 0);
 
@@ -464,9 +493,14 @@ internal class Engram : MemoryAgent, IDisposable
         new EditMemory(allowedNames: allowedNames, allowedPrefixes: allowedPrefixes).Register(mini);
         PublishForInspection(mini);
 
-        string task = ResolveTemplate("SaveTask", "",
-            ("entities", entityBlocks.ToString().TrimEnd()),
-            ("date",     conversationDate));
+        string task = code
+            ? ResolveTemplate("CodeSaveTask", CodePrompts.SaveTask,
+                ("entities",    entityBlocks.ToString().TrimEnd()),
+                ("date",        conversationDate),
+                ("projectNote", ProjectNoteName(project)))
+            : ResolveTemplate("SaveTask", "",
+                ("entities", entityBlocks.ToString().TrimEnd()),
+                ("date",     conversationDate));
 
         await Prompt(mini, task, new PromptOptions
         {
@@ -505,70 +539,23 @@ internal class Engram : MemoryAgent, IDisposable
         return (commits, blocked);
     }
 
-    // ── Lightweight code-thread summary ────────────────────────────────────────────────
+    // ── Code threads ───────────────────────────────────────────────────────────────────
 
-    /// <summary>Summarises a coding thread into 1-2 paragraphs and appends it to today's conversation log.
-    /// No memory extraction, no graph walk — just a record of what was worked on.</summary>
-    internal async Task RunCodeSummary(string threadKey, string trigger)
+    /// <summary>The brain note a code thread's decisions and status are filed on: <c>Projects/{name}</c>, the note
+    /// the project service creates when a project is made. Empty when the thread has no project.</summary>
+    private static string ProjectNoteName(string? project) => string.IsNullOrWhiteSpace(project) ? "" : $"Projects/{project.Trim()}";
+
+    /// <summary>The project a code thread is working on — the bound project's name, else its folder's name.</summary>
+    private static string? ProjectNameFor(Thread thread)
     {
-        if (Shared.DevMode)
-        {
-            if (threads.TryGetValue(threadKey, out Thread? devThread)) devThread.EngramProcessed = true;
-            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] code summary skipped — DevMode is on.", threadKey);
-            return;
-        }
-
-        if (!IsEnabled)
-        {
-            lock (pendingQueue) pendingQueue.Add(threadKey);
-            return;
-        }
-        if (!await engramLock.WaitAsync(0)) return;
-        sweepingThreads[threadKey] = 0;
-
-        string outcome = "incomplete (unexpected exit)";
-        bool processed = false;
-
-        try
-        {
-            if (!threads.TryGetValue(threadKey, out Thread? codeThread)) { processed = true; return; }
-            List<ThreadItem> items = codeThread.History.Where(i => i is LLM.Prompt or Response).ToList();
-            if (items.Count == 0) { outcome = "skipped — no messages"; processed = true; return; }
-
-            string transcript = BuildTranscript(items);
-            string speaker = items.OfType<Prompt>().Select(p => p.AuthorName)
-                .FirstOrDefault(a => !string.IsNullOrWhiteSpace(a))
-                ?? ReadStoredUserName() ?? "the user";
-
-            string summary = await GenerateCodeSummary(transcript, speaker);
-            if (string.IsNullOrWhiteSpace(summary)) { outcome = "skipped — empty summary"; processed = true; return; }
-
-            string date = DateTime.Now.ToString("yyyy-MM-dd");
-            AppendToConversationLog(date, summary, items[0].Timestamp, items[^1].Timestamp, "Coding session");
-
-            outcome   = "code summary saved";
-            processed = true;
-            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] code summary saved to Conversations/{Date}.", threadKey, date);
-        }
-        finally
-        {
-            SessionRecorder.StandaloneNote("Engram", $"engram-code:{threadKey}", "code-summary", new Dictionary<string, object?>
-            {
-                ["trigger"]   = trigger,
-                ["thread"]    = threadKey,
-                ["outcome"]   = outcome,
-                ["processed"] = processed,
-            });
-            if (processed && threads.TryGetValue(threadKey, out Thread? pt)) pt.EngramProcessed = true;
-            sweepingThreads.TryRemove(threadKey, out _);
-            engramLock.Release();
-            SweepCompleted?.Invoke(threadKey);
-        }
+        if (!string.IsNullOrWhiteSpace(thread.ProjectName)) return thread.ProjectName.Trim();
+        string? folder = thread.FilesystemRoot is { } root ? Path.GetFileName(root.TrimEnd('/', '\\')) : null;
+        return string.IsNullOrWhiteSpace(folder) ? null : folder;
     }
 
-    private Task<string> GenerateCodeSummary(string transcript, string speaker) =>
+    private Task<string> GenerateCodeSummary(string transcript, string speaker, string? project) =>
         CompleteSummary(
-            "You summarise coding sessions. Write 1-2 short paragraphs describing what was worked on: the project, features implemented, bugs fixed, and any notable decisions. Write in past tense, third person (refer to the user by name). No bullet points, no code snippets. Be concise.\n\nWrap every named entity (person, project, tool, service, library, feature) in [[wikilinks]] so the memory graph can link them. Examples: [[Xywren]], [[ARI.UI]], [[PureBill]], [[Engram]], [[pipeline selector]]. If unsure whether something deserves a link, link it.",
+            ResolveTemplate("CodeLogSummarySystem", CodePrompts.LogSummarySystem, ("project", string.IsNullOrWhiteSpace(project) ? "the project" : $"[[{project.Trim()}]]")),
             $"Summarise this coding session by {speaker}:\n\n{transcript}");
 
     private Task<string> GenerateConversationSummary(string transcript, string speaker) =>
@@ -623,15 +610,18 @@ internal class Engram : MemoryAgent, IDisposable
     // Each entry carries the actual time range of that conversation (first message → last message),
     // rather than one undifferentiated blob per day — several separate conversations on the same day
     // stay distinguishable.
-    private static void AppendToConversationLog(string date, string summary, DateTime start, DateTime end, string label = "Conversation")
+    private static void AppendToConversationLog(DateTime day, string summary, DateTime start, DateTime end, string label = "Conversation")
     {
-        string path = Path.Combine(Brain.VaultRoot, "Conversations", $"{date}.md");
+        string noteName = Brain.DailyNoteName(day);
+        string relativePath = Brain.PathFor(noteName);
+        string path = Path.Combine(Brain.VaultRoot, relativePath);
         string existing = File.Exists(path) ? File.ReadAllText(path) : "";
 
         string timeRange = start.ToString("HH:mm") == end.ToString("HH:mm")
             ? start.ToString("HH:mm")
             : $"{start:HH:mm}–{end:HH:mm}";
         string entry = $"\n\n---\n### {timeRange} — {label}\n{summary}";
+        List<string> touched = [relativePath];
         if (existing.Length > 0)
         {
             File.AppendAllText(path, entry);
@@ -639,19 +629,45 @@ internal class Engram : MemoryAgent, IDisposable
         else
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, $"# {date}{entry}");
+            string stamp = DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'");
+            string title = Path.GetFileNameWithoutExtension(path);
+            string monthNote = Path.GetDirectoryName(noteName)!.Replace('\\', '/');
+            File.WriteAllText(path, $"---\ncreated: {stamp}\nupdated: {stamp}\ntype: discussion\n---\n# {title}\n\n**Parent:** [[{monthNote}]]{entry}");
+            touched.AddRange(EnsureConversationHubs(day, stamp));
         }
         Brain.Index();
-        GitCommitBrain($"Conversation log: {label.ToLowerInvariant()} — {date}", Path.Combine("Conversations", $"{date}.md"));
+        GitCommitBrain($"Conversation log: {label.ToLowerInvariant()} — {day:yyyy-MM-dd}", touched);
+    }
+
+    // The year and month hubs a daily note hangs from; created on first use so the note is never orphaned.
+    private static IEnumerable<string> EnsureConversationHubs(DateTime day, string stamp)
+    {
+        string yearNote  = $"Conversations/{day.Year}";
+        string monthNote = Path.GetDirectoryName(Brain.DailyNoteName(day))!.Replace('\\', '/');
+        string monthName = day.ToString("MMMM", System.Globalization.CultureInfo.InvariantCulture);
+        (string note, string parent, string heading, string blurb)[] hubs =
+        [
+            (yearNote,  "Conversations", day.Year.ToString(),           $"{day.Year} conversations, by month."),
+            (monthNote, yearNote,        $"{monthName} {day.Year}",     $"{monthName} {day.Year} conversations."),
+        ];
+        foreach ((string note, string parent, string heading, string blurb) in hubs)
+        {
+            string relative = Brain.PathFor(note);
+            string full = Path.Combine(Brain.VaultRoot, relative);
+            if (File.Exists(full)) continue;
+            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+            File.WriteAllText(full, $"---\ntype: hub\ncreated: {stamp}\nupdated: {stamp}\n---\n# {heading}\n\n**Parent:** [[{parent}]]\n\n{blurb}\n\n## Directory\n\n## Members\n");
+            yield return relative;
+        }
     }
 
     // relativePath scopes the commit to exactly the touched file — `git add -A` would sweep in unrelated dirty state.
-    private static void GitCommitBrain(string message, string relativePath)
+    private static void GitCommitBrain(string message, IEnumerable<string> relativePaths)
     {
         try
         {
             string vault = Brain.VaultRoot;
-            AriGit.Run(vault, ["add", "--", relativePath]);
+            AriGit.Run(vault, ["add", "--", .. relativePaths]);
             AriGit.Commit(vault, message);
         }
         catch (Exception ex)
@@ -662,9 +678,9 @@ internal class Engram : MemoryAgent, IDisposable
 
     // ── Classify (unchanged) ─────────────────────────────────────────────────────────
 
-    private async Task<bool> Classify(IReadOnlyList<ThreadItem> recentItems, string trigger)
+    private async Task<bool> Classify(IReadOnlyList<ThreadItem> recentItems, string trigger, bool code = false)
     {
-        string transcript = BuildTranscript(recentItems);
+        string transcript = BuildTranscript(recentItems, code);
         if (string.IsNullOrWhiteSpace(transcript))
         {
             Shared.Logger.LogInformation("[Engram] [{Trigger}] no new messages to classify, skipping.", trigger);
@@ -679,7 +695,9 @@ internal class Engram : MemoryAgent, IDisposable
                 // <|think_off|> is appended in code, not stored with the prompt: it is a model control
                 // token, not prose, and editing it would silently stop think-off rather than reword anything.
                 new { role = "system", content = ResolveTemplate("ClassifierSystem", "") + "\n<|think_off|>" },
-                new { role = "user",   content = ResolveTemplate("ClassifierTask", "", ("transcript", transcript)) }
+                new { role = "user",   content = code
+                        ? ResolveTemplate("CodeClassifierTask", CodePrompts.ClassifierTask, ("transcript", transcript))
+                        : ResolveTemplate("ClassifierTask", "", ("transcript", transcript)) }
             },
             stream      = false,
             max_tokens  = 5,
@@ -732,15 +750,28 @@ internal class Engram : MemoryAgent, IDisposable
         catch { return null; }
     }
 
-    private static string BuildTranscript(IEnumerable<ThreadItem> items)
+    private const int CODE_TURN_MAX_CHARS = 2500;
+
+    // Code threads are full of fenced code, diffs and long plan payloads. Engram records what was done and decided,
+    // never the code itself, so the model is shown the prose only: fences collapse to a marker and each turn is capped.
+    private static readonly System.Text.RegularExpressions.Regex CodeFence =
+        new("```.*?```", System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static string ForCodeTranscript(string text)
+    {
+        string prose = CodeFence.Replace(text, "[code omitted]").Trim();
+        return prose.Length <= CODE_TURN_MAX_CHARS ? prose : prose[..CODE_TURN_MAX_CHARS] + " […]";
+    }
+
+    private static string BuildTranscript(IEnumerable<ThreadItem> items, bool code = false)
     {
         StringBuilder sb = new();
         foreach (ThreadItem item in items)
         {
             switch (item)
             {
-                case Prompt u: sb.AppendLine($"{u.AuthorName}: {u.Text}"); break;
-                case Response r: sb.AppendLine($"ARI: {r.ContentText}");      break;
+                case Prompt u: sb.AppendLine($"{u.AuthorName}: {(code ? ForCodeTranscript(u.Text) : u.Text)}"); break;
+                case Response r: sb.AppendLine($"ARI: {(code ? ForCodeTranscript(r.ContentText) : r.ContentText)}"); break;
             }
         }
         return sb.ToString();

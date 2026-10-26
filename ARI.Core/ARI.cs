@@ -391,8 +391,12 @@ public class ARI : BackgroundService, IModuleLifecycle
             return;
         }
         synthesiser = engineSynthesiser;
-        try { await synthesiser.Warmup(appStoppingToken); }
-        catch (Exception ex) { _logger.LogError("Voice warmup failed (model may have corrupt weights): {Error}", ex.Message); }
+        // An on-demand engine isn't running yet; warming it up here would start it and defeat the point.
+        if (!synthesiser.LoadsOnDemand)
+        {
+            try { await synthesiser.Warmup(appStoppingToken); }
+            catch (Exception ex) { _logger.LogError("Voice warmup failed (model may have corrupt weights): {Error}", ex.Message); }
+        }
 
         speechQueue = new SpeechQueue(synthesiser, voiceLogger);
         string modulePy = Path.Combine(Paths.VoiceModules, engine, "venv",
@@ -403,7 +407,9 @@ public class ARI : BackgroundService, IModuleLifecycle
 
         voiceModule = new VoiceModule(synthesiser, speechQueue, modelName, SynthFactory, WireAudio, voiceLogger);
         CommonModules.Register(voice: voiceModule);
-        _logger.LogInformation("Voice ready.");
+        _logger.LogInformation(synthesiser.LoadsOnDemand
+            ? "Voice ready (engine loads on first use, stops after {Minutes} min idle)."
+            : "Voice ready.", config.modules.Voice.IdleStopMinutes);
     }
 
     private void StopVoice()
@@ -614,7 +620,7 @@ public class ARI : BackgroundService, IModuleLifecycle
         extraArgs.Add("--cpu");
 
         return new VoiceModuleSynthesiser(modulePath, voiceDir, port, voiceLogger,
-            extraArgs: string.Join(" ", extraArgs));
+            extraArgs: string.Join(" ", extraArgs), idleStopMinutes: config.modules.Voice.IdleStopMinutes);
     }
 
     // Only one audio-output stream at a time — otherwise back-to-back sentences (Speech pipeline) spawn

@@ -22,6 +22,8 @@ public sealed class AgentDefinition
     public Dictionary<string, PhaseConfig>? Phases { get; set; }
     public bool?   UseGraphRulebook  { get; set; }
     public bool    Enabled           { get; set; } = true;
+    // Made in the control panel rather than shipped: the only agents that can be deleted.
+    public bool    Custom            { get; set; }
     public string? SlotName          { get; set; }
     public bool    Think             { get; set; }
     public int     BudgetThinking    { get; set; }
@@ -344,6 +346,59 @@ public class PersistentData
             MergeInto(shared, (JsonObject)patch.DeepClone());
             File.WriteAllText(_agentsPath, root.ToJsonString(JsonOpts));
         }
+    }
+
+    /// <summary>Adds a control-panel-made agent to Agents.json (merged into the raw file, so nothing else in it is touched).
+    /// False if the name is taken.</summary>
+    public bool CreateCustomAgent(string name, string serverName, string? slotName, string prompt)
+    {
+        lock (_agentsLock)
+        {
+            JsonObject root = LoadAgentsRaw();
+            string key = KeyFor(root, "Agents") ?? "Agents";
+            if (root[key] is not JsonArray agents) root[key] = agents = new JsonArray();
+            if (agents.OfType<JsonObject>().Any(a => string.Equals(a[KeyFor(a, "Name") ?? "Name"]?.GetValue<string>(), name, StringComparison.OrdinalIgnoreCase)))
+                return false;
+            JsonObject agent = new() { ["Name"] = name, ["Custom"] = true, ["Enabled"] = true, ["ServerName"] = serverName, ["AgentPrompt"] = prompt };
+            if (!string.IsNullOrEmpty(slotName)) agent["SlotName"] = slotName;
+            agents.Add(agent);
+            File.WriteAllText(_agentsPath, root.ToJsonString(JsonOpts));
+            return true;
+        }
+    }
+
+    /// <summary>Deletes a control-panel-made agent. Shipped agents are never removed by this.</summary>
+    public bool RemoveCustomAgent(string name)
+    {
+        lock (_agentsLock)
+        {
+            JsonObject root = LoadAgentsRaw();
+            if (root[KeyFor(root, "Agents") ?? "Agents"] is not JsonArray agents) return false;
+            JsonObject? target = agents.OfType<JsonObject>().FirstOrDefault(a =>
+                string.Equals(a[KeyFor(a, "Name") ?? "Name"]?.GetValue<string>(), name, StringComparison.OrdinalIgnoreCase)
+                && a[KeyFor(a, "Custom") ?? "Custom"]?.GetValue<bool>() == true);
+            if (target is null) return false;
+            agents.Remove(target);
+            File.WriteAllText(_agentsPath, root.ToJsonString(JsonOpts));
+            return true;
+        }
+    }
+
+    // ── Pipelines ──────────────────────────────────────────────────────────
+
+    private string PipelinesPath => Path.Combine(_dir, "Pipelines.json");
+    private readonly object _pipelinesLock = new();
+
+    /// <summary>Pipelines.json as written, or null if the user has never saved one.</summary>
+    public JsonObject? GetPipelinesRaw()
+    {
+        lock (_pipelinesLock)
+            return File.Exists(PipelinesPath) ? JsonNode.Parse(File.ReadAllText(PipelinesPath), documentOptions: DocOpts)?.AsObject() : null;
+    }
+
+    public void SavePipelinesRaw(JsonObject pipelines)
+    {
+        lock (_pipelinesLock) File.WriteAllText(PipelinesPath, pipelines.ToJsonString(JsonOpts));
     }
 
     public AgentDefinition AddAgent(AgentDefinition agent)

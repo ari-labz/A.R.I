@@ -53,6 +53,7 @@ public class APIModule : IAsyncDisposable
         builder.Logging.ClearProviders();
         builder.Logging.AddProvider(new ForwardingLoggerProvider(loggerFactory));
 
+        LLMModule.ConventionsProvider = ConventionsStore.Get;
         builder.WebHost.UseUrls($"http://0.0.0.0:{config.Port}");
         builder.WebHost.UseShutdownTimeout(TimeSpan.FromSeconds(2));
         builder.WebHost.ConfigureKestrel(k =>
@@ -140,10 +141,10 @@ public class APIModule : IAsyncDisposable
             }
         };
 
-        // Rewrite bare "/" to "/index.html" before the auth middleware runs, so the browser can
         // Uploaded logos replace the built-in image URLs (see BrandingStore); must run before the static files.
         app.Use(BrandingStore.Middleware);
 
+        // Rewrite bare "/" to "/index.html" before the auth middleware runs, so the browser can
         // fetch the SPA shell without a token (the JS inside handles auth state itself).
         app.UseDefaultFiles(new DefaultFilesOptions
         {

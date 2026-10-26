@@ -464,8 +464,13 @@ internal sealed class ServerFileSystem : FileSystem
                     }
                 }
 
-                if (en - s + 1 > MAX_REPLACE_SPAN && ed.New.Trim().Length > 0)
-                    return $"This edit{label} replaces {en - s + 1} lines at once ({s}-{en}). Edit only the line(s) that actually change — pass an 'edits' array with one tight item per changed spot (start_line==end_line for a single line); don't re-type the surrounding unchanged code, it gets dropped. For a genuine whole-block rewrite use write_file. (Deleting a range with an empty new_string is allowed at any size.)";
+                // The span cap exists to stop the model re-typing a big block of unchanged code (where lines get
+                // dropped or duplicated). A deletion-heavy edit — the new text is at most half the size of the range
+                // it replaces — isn't that: most of the range is going away on purpose, so let it through.
+                int newLineCount0 = ed.New.Replace("\r", "").TrimEnd('\n').Split('\n').Length;
+                bool deletionHeavy = newLineCount0 * 2 <= en - s + 1;
+                if (en - s + 1 > MAX_REPLACE_SPAN && ed.New.Trim().Length > 0 && !deletionHeavy)
+                    return $"This edit{label} replaces {en - s + 1} lines at once ({s}-{en}). Edit only the line(s) that actually change — pass an 'edits' array with one tight item per changed spot (start_line==end_line for a single line); don't re-type the surrounding unchanged code, it gets dropped. For a genuine whole-block rewrite use write_file. (Deleting a range with an empty new_string, or replacing it with at most half as many lines, is allowed at any size.)";
                 int offStart = lineStarts[s - 1];
                 int offEnd; bool hadNL;
                 if (en < totalLines) { offEnd = lineStarts[en]; hadNL = true; } else { offEnd = buf0.Length; hadNL = false; }

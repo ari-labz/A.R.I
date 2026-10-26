@@ -49,4 +49,16 @@ public readonly struct ToolResult
 internal static class ToolResultTasks
 {
     internal static async Task<ToolResult> AsToolResult(this Task<string> task) => await task;
+
+    /// <summary>For file-mutating tools (edit_file/write_file): anything that isn't a "Successfully …" result is a
+    /// refusal or failure ("Refused:", "No change:", "File not found", out-of-range, overlap…). Those used to
+    /// come back as plain text, so the host saw no error — the card flipped to "done", nothing was logged, and
+    /// the model could claim an edit that never landed. Prefixing "Error: " routes them through the normal error
+    /// path (error card, error log) while the full explanation still reaches the model.</summary>
+    internal static async Task<ToolResult> AsMutationResult(this Task<string> task)
+    {
+        string r = await task;
+        bool ok = r.StartsWith("Successfully", StringComparison.Ordinal) || ToolCallParser.IsError(r);
+        return ok ? r : "Error: " + r;
+    }
 }

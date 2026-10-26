@@ -31,7 +31,8 @@ internal abstract class Pipeline
         CancellationTokenSource cts,
         List<Attachment>?    messageAttachments = null,
         string?              localPath          = null,
-        Func<string, Task>?  onTextDelta        = null)
+        Func<string, Task>?  onTextDelta        = null,
+        bool                 internalPrompt     = false)
     {
         LiveCallInfo liveCall = BuildLiveCall(threadKey);
         liveCalls[threadKey] = liveCall;
@@ -41,14 +42,24 @@ internal abstract class Pipeline
             ? $"{prev.Text}\n{prompt}"
             : prompt;
 
-        thread.AddItem(new Prompt
+        // internalPrompt: the framework is speaking, not the user (a dialogue→coder handoff). It's added as an
+        // InternalPrompt — in the model's context, hidden from the chat UI, and not a user line for Engram.
+        if (internalPrompt)
         {
-            AuthorName  = username,
-            Text        = prompt,
-            Timestamp   = DateTime.Now,
-            Attachments = messageAttachments is { Count: > 0 } ? messageAttachments : null,
-        });
-        SessionRecorder.ChatLine(thread, threadKey, username, prompt);
+            effectivePrompt = prompt;
+            thread.AddItem(new InternalPrompt { AuthorName = "system", Text = prompt, Timestamp = DateTime.Now, IsVisible = false });
+        }
+        else
+        {
+            thread.AddItem(new Prompt
+            {
+                AuthorName  = username,
+                Text        = prompt,
+                Timestamp   = DateTime.Now,
+                Attachments = messageAttachments is { Count: > 0 } ? messageAttachments : null,
+            });
+            SessionRecorder.ChatLine(thread, threadKey, username, prompt);
+        }
 
         // Everything this prompt sets off — Memory's recall, Context's summariser, the primary agent,
         // any sub-thread — records under one exchange id, so the fan-out reassembles from its separate

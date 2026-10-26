@@ -38,11 +38,36 @@ export default function UserPreferences({ user, onClose, onLogout, onUserUpdated
     const [sessions,          setSessions]           = useState<Session[]>([])
     const [sessionsLoading,   setSessionsLoading]    = useState(true)
 
+    // Commands ARI may run without asking ("allow every time"), global across projects. Admin only.
+    const isAdmin = user.role === "Admin"
+    const [allowed,           setAllowed]            = useState<string[]>([])
+    const [allowedLoading,    setAllowedLoading]     = useState(isAdmin)
+    const [allowedError,      setAllowedError]       = useState<string | null>(null)
+
     useEffect(() => {
         apiFetch("/user/preferences").then(r => r.ok ? r.json() : null).then(data => {
             if (data?.sessions) setSessions(data.sessions)
         }).catch(() => {}).finally(() => setSessionsLoading(false))
     }, [])
+
+    useEffect(() => {
+        if (!isAdmin) return
+        apiFetch("/command-allowlist").then(r => r.ok ? r.json() : null).then(data => {
+            if (Array.isArray(data?.commands)) setAllowed(data.commands)
+        }).catch(() => {}).finally(() => setAllowedLoading(false))
+    }, [isAdmin])
+
+    async function saveAllowed(next: string[]) {
+        setAllowedError(null)
+        try {
+            const res = await apiFetch("/command-allowlist", {
+                method: "PUT", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ commands: next }),
+            })
+            if (!res.ok) { setAllowedError("Couldn't update the list."); return }
+            setAllowed(next)
+        } catch { setAllowedError("Couldn't update the list.") }
+    }
 
     async function saveName(e: React.FormEvent) {
         e.preventDefault()
@@ -208,6 +233,29 @@ export default function UserPreferences({ user, onClose, onLogout, onUserUpdated
                         )}
                     </div>
 
+                    {/* Commands ARI may run without asking */}
+                    {isAdmin && (
+                        <div style={section}>
+                            <p style={sectionLabel}>ALLOWED COMMANDS</p>
+                            <p style={{ ...mutedText, marginTop: 0 }}>Commands ARI runs without asking, in every project. Dangerous ones (like git reset --hard) always ask and never appear here.</p>
+                            {allowedLoading ? (
+                                <p style={mutedText}>Loading…</p>
+                            ) : allowed.length === 0 ? (
+                                <p style={mutedText}>None yet — you'll be asked once per new command.</p>
+                            ) : (
+                                <div style={sessionList}>
+                                    {allowed.map(cmd => (
+                                        <div key={cmd} style={sessionRow}>
+                                            <span style={sessionDevice}>{cmd}</span>
+                                            <button style={revokeBtn} onClick={() => saveAllowed(allowed.filter(c => c !== cmd))}>Remove</button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                            {allowedError && <p style={errorStyle}>{allowedError}</p>}
+                        </div>
+                    )}
+
                     {/* Active sessions */}
                     <div style={section}>
                         <p style={sectionLabel}>ACTIVE SESSIONS</p>
@@ -273,7 +321,7 @@ const header: React.CSSProperties = {
 const headerTitle: React.CSSProperties = {
     fontSize:   16,
     fontWeight: 600,
-    color:      "var(--col-user-preferences-line-477-text)",
+    color:      "var(--col-user-preferences-line-324-text)",
 }
 
 const closeBtn: React.CSSProperties = {
@@ -320,7 +368,7 @@ const accountLine: React.CSSProperties = {
 const accountUsername: React.CSSProperties = {
     fontSize:   15,
     fontWeight: 500,
-    color:      "var(--col-user-preferences-line-324-text)",
+    color:      "var(--col-user-preferences-line-371-text)",
 }
 
 function rolePill(role: string): React.CSSProperties {
@@ -426,13 +474,13 @@ const sessionDevice: React.CSSProperties = {
     display:    "block",
     fontSize:   13,
     fontWeight: 500,
-    color:      "var(--col-user-preferences-line-371-text)",
+    color:      "var(--col-user-preferences-line-477-text)",
 }
 
 const sessionDate: React.CSSProperties = {
     display:  "block",
     fontSize: 12,
-    color:    "var(--col-user-preferences-line-500-text)",
+    color:    "var(--col-user-preferences-line-483-text)",
     marginTop: 2,
 }
 
@@ -449,7 +497,7 @@ const revokeBtn: React.CSSProperties = {
 const mutedText: React.CSSProperties = {
     margin:   0,
     fontSize: 13,
-    color:    "var(--col-user-preferences-line-483-text)",
+    color:    "var(--col-user-preferences-line-500-text)",
 }
 
 const logoutBtn: React.CSSProperties = {

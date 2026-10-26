@@ -99,6 +99,25 @@ public class Server : IDisposable
     [JsonPropertyName("cacheRamMib")]
     public int CacheRamMib { get; set; } = 8192;
 
+    /// <summary>MTP drafting: most tokens to draft per step (--spec-draft-n-max). Only used for MTP models.</summary>
+    [JsonPropertyName("mtpDraftMax")]
+    public int MtpDraftMax { get; set; } = 3;
+
+    /// <summary>MTP drafting: only draft while the head is at least this confident (--spec-draft-p-min).
+    /// Unset (0) drafts every step, and on prose the verification overhead of rejected drafts makes decoding
+    /// slower than not drafting (measured on Qwen3.8-27B Q6: 13 t/s vs 18 t/s plain). 0.9 measured +6% prose,
+    /// +12% code.</summary>
+    [JsonPropertyName("mtpDraftPMin")]
+    public double MtpDraftPMin { get; set; } = 0;
+
+    /// <summary>Let llama-server save and clear a slot's KV whenever ANOTHER slot starts a task
+    /// (--cache-idle-slots, its default under unified KV). Off here: every background agent task would
+    /// otherwise wipe the foreground chat's cache, and on the hybrid-SSM models a cleared slot can only
+    /// come back from the host cache when the new prompt is an exact extension of the saved one — a
+    /// divergent prompt re-prefills from zero (measured: 0 of 4310 tokens reused, 20s, vs 3924 reused).</summary>
+    [JsonPropertyName("cacheIdleSlots")]
+    public bool CacheIdleSlots { get; set; } = false;
+
     // ── Sampler defaults (the catch-all every agent falls back to) ────────────────
     // Non-nullable — a server's sampler settings are never "blank"; they seed from llama.cpp's own
     // binary defaults on creation (see llama-server --help) and are always concrete from then on. An
@@ -406,7 +425,7 @@ public class Server : IDisposable
             VisionEnabled && model?.MmprojPath is { Length: > 0 }
                 ? $"--mmproj \"{System.IO.Path.Combine(_modelsPath, model.MmprojPath)}\""
                 : "",
-            mtp ? "--spec-type draft-mtp --spec-draft-n-max 3" : "",
+            mtp ? $"--spec-type draft-mtp --spec-draft-n-max {MtpDraftMax}" + (MtpDraftPMin > 0 ? $" --spec-draft-p-min {MtpDraftPMin:F2}" : "") : "",
             "--flash-attn on",
             // Larger physical/logical batch speeds prompt-processing — the dominant cost of the coding
             // pipeline (one sweep over the MoE expert weights per ub prompt tokens). ub is capped at 2048:
@@ -454,6 +473,7 @@ public class Server : IDisposable
             // (e.g. a non-compacting agent) — costs nothing until it actually triggers (see design notes).
             "--context-shift",
             UnifiedCache ? "--kv-unified --cache-reuse 256" : "",
+            UnifiedCache && !CacheIdleSlots ? "--no-cache-idle-slots" : "",
         };
 
         args.RemoveAll(string.IsNullOrWhiteSpace);

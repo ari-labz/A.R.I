@@ -22,6 +22,9 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly DialoguePipeline? dialoguePipeline;
     private readonly CodePipeline?     codePipeline;
     private readonly SpeechPipeline?   speechPipeline;
+    private readonly GraphPipeline?    graphPipeline;
+    private readonly Dictionary<string, CustomAgent> customAgents = new(StringComparer.OrdinalIgnoreCase);
+    private readonly string            pipelinesPath;
     
     //agents
     private readonly TextingAgent?     textingAgent;
@@ -118,6 +121,7 @@ public class LLMModule : ILLMModule, IDisposable
         _servers.AddRange(servers);
         foreach (Server s in _servers) queues[s] = new LLMQueue();
 
+        pipelinesPath = Path.Combine(Path.GetDirectoryName(agentsJsonPath) ?? ".", "Pipelines.json");
         dreamingEnabled = LoadDreamingState();
 
         CleanScratchpads();
@@ -223,6 +227,17 @@ public class LLMModule : ILLMModule, IDisposable
                     _logger.LogWarning("  [Brain] skipped note: {Detail}", skipped);
             }
         }
+
+        // Agents the user made in the control panel ("custom": true). Built-ins above/below are matched by name;
+        // these are matched by the pipeline graphs that name them.
+        foreach ((string customName, JsonElement customEl) in rawAgents)
+            if (TryGetPropCI(customEl, "custom", out JsonElement isCustom) && isCustom.ValueKind == JsonValueKind.True)
+            {
+                CustomAgent custom = Deserialize<CustomAgent>(customEl);
+                customAgents[customName] = custom;
+                agentMap[customName]     = custom;
+                _logger.LogInformation("Custom agent '{Agent}' is active.", customName);
+            }
 
         if (rawAgents.TryGetValue("Context", out JsonElement contextEl))
         {
@@ -339,8 +354,14 @@ public class LLMModule : ILLMModule, IDisposable
             speechPipeline.ThreadBecameInactive += key => NotifyWatchers(key);
         }
 
+        if (textingAgent is not null)
+        {
+            graphPipeline = new GraphPipeline(textingAgent, memory, context, engram, customAgents, processingThreads, liveCalls, NotifyWatchers);
+            ReloadPipelines();
+        }
+
         if (codeArchitect is not null)
-            codePipeline = new CodePipeline(codeArchitect, processingThreads, liveCalls, NotifyWatchers);
+            codePipeline = new CodePipeline(codeArchitect, memory, context, engram, processingThreads, liveCalls, NotifyWatchers);
 
         if (textingAgent is not null)
         {
@@ -456,6 +477,11 @@ public class LLMModule : ILLMModule, IDisposable
         // Image/video generation tools are always hot when the module is ready — no request_tools hop.
         if (Modules.ImageGen?.IsReady == true && type is ThreadPipeline.Dialogue or ThreadPipeline.Speech)
             ToolFactories.LoadGroup("image_tools", thread);
+        // hand_to_coder is the net under the deterministic Code routing: if a coding request lands on a Dialogue
+        // thread (the gate never fired), she can pass it to the Coder instead of improvising. Hot, like
+        // propose_persona_edit — discovering it via list_tools is not something to rely on mid-request.
+        if (!isDiscord && type is ThreadPipeline.Dialogue)
+            new HandToCoder(thread).Register(thread);
         thread.Updated           += () => Broadcast(new AppEvent("threadUpdated", threadKey));
         thread.Deleted           += () =>
         {
@@ -493,7 +519,7 @@ public class LLMModule : ILLMModule, IDisposable
             thread.BufferFull     += () => talkingAgent.RaiseThreadBufferFull(threadKey);
             thread.BecameInactive += () => talkingAgent.RaiseThreadBecameInactive(threadKey);
         }
-        if (type is ThreadPipeline.Dialogue or ThreadPipeline.Speech)
+        if (type is ThreadPipeline.Dialogue or ThreadPipeline.Speech or ThreadPipeline.Code)
         {
             if (context is not null)
                 thread.ExchangeCompleted += (user, asst) =>
@@ -539,7 +565,68 @@ public class LLMModule : ILLMModule, IDisposable
         threads.TryRemove(threadKey, out _);
         Thread converted = GetOrCreateThread(type, threadKey, platformContext);
         converted.History.AddRange(existing.History);
+        // The bound project and who's talking ride along — the converted thread would otherwise lose its
+        // filesystem root and run as if unbound until the next message re-binds it.
+        converted.FilesystemRoot = existing.FilesystemRoot;
+        converted.ProjectName    = existing.ProjectName;
+        converted.IsBrainVault   = existing.IsBrainVault;
+        converted.HasMemoryAccess  = existing.HasMemoryAccess;
+        converted.IsAdminChat    = existing.IsAdminChat;
+        converted.Ct             = existing.Ct;
         return converted;
+    }
+
+    // ── Pipeline graphs ──────────────────────────────────────────────────────
+
+    /// <summary>The id of the pipeline graph currently answering Dialogue threads, or null while the built-in Dialogue
+    /// pipeline does.</summary>
+    public string? ActivePipelineId => graphPipeline?.Graph?.Id;
+
+    /// <summary>What can be wired into each agent: the built-ins' fixed ports, and a custom agent's {tokens}.</summary>
+    public Dictionary<string, string[]> AgentPorts()
+    {
+        Dictionary<string, string[]> result = new(StringComparer.OrdinalIgnoreCase);
+        foreach (string name in agentMap.Keys)
+            if (graphPipeline?.PortsOf(name) is { } ports) result[name] = ports;
+        return result;
+    }
+
+    /// <summary>Problems with a pipeline graph given as the control panel's JSON (one entry of Pipelines.json), empty if it can run.</summary>
+    public List<string> ValidatePipeline(JsonElement pipeline)
+    {
+        if (graphPipeline is null) return new() { "Dialogue is not configured, so no pipeline can run." };
+        using JsonDocument wrap = JsonDocument.Parse("{\"pipelines\":[" + pipeline.GetRawText() + "]}");
+        List<PipelineGraph> parsed = PipelineGraph.ParseAll(wrap.RootElement);
+        return parsed.Count == 0 ? new() { "Not a pipeline." } : parsed[0].Validate(graphPipeline.PortsOf);
+    }
+
+    /// <summary>Re-reads Pipelines.json and switches Dialogue threads to the graph it marks active. A graph that doesn't
+    /// validate is never used — the built-in Dialogue pipeline keeps answering, and the reasons are logged.</summary>
+    public void ReloadPipelines()
+    {
+        if (graphPipeline is null) return;
+        graphPipeline.Graph = null;
+        if (!File.Exists(pipelinesPath)) return;
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(pipelinesPath), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
+            string? active = TryGetPropCI(doc.RootElement, "active", out JsonElement a) && a.ValueKind == JsonValueKind.String ? a.GetString() : null;
+            if (string.IsNullOrEmpty(active)) return;
+            PipelineGraph? graph = PipelineGraph.ParseAll(doc.RootElement).FirstOrDefault(g => g.Id == active);
+            if (graph is null) { _logger.LogWarning("Pipelines.json names active pipeline '{Id}' but no such pipeline exists — using built-in Dialogue.", active); return; }
+            List<string> problems = graph.Validate(graphPipeline.PortsOf);
+            if (problems.Count > 0)
+            {
+                _logger.LogWarning("Pipeline '{Name}' is marked active but cannot run — using built-in Dialogue instead: {Problems}", graph.Name, string.Join(" | ", problems));
+                return;
+            }
+            graphPipeline.Graph = graph;
+            _logger.LogInformation("Pipeline '{Name}' is answering Dialogue threads.", graph.Name);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Could not read Pipelines.json — using built-in Dialogue.");
+        }
     }
 
     // ── Agent assignment ─────────────────────────────────────────────────────────
@@ -712,7 +799,7 @@ public class LLMModule : ILLMModule, IDisposable
     /// <summary>Binds a ServerFs project onto a thread immediately — called synchronously by bind_project
     /// so the model can use filesystem_tools THIS turn instead of waiting for the next message. No-op for
     /// RemoteFs projects — their files aren't on this server's disk.</summary>
-    public void BindProjectContext(string threadKey, string? rootPath, bool isVault)
+    public void BindProjectContext(string threadKey, string? rootPath, bool isVault, string? projectName = null)
     {
         if (!Threads.TryGetValue(threadKey, out Thread? thread) || rootPath is null) return;
 
@@ -725,13 +812,14 @@ public class LLMModule : ILLMModule, IDisposable
             return;
 
         thread.FilesystemRoot  = rootPath;
+        thread.ProjectName     = projectName ?? thread.ProjectName;
         thread.IsBrainVault = isVault;
         thread.Ct           = CancellationToken.None;
     }
 
     /// <summary>Engram gate on entry to dormant — the ONLY point at which a thread earns the right to be
-    /// deleted. Runs a sweep for Dialogue/Speech threads that carry user messages and aren't already
-    /// processed; otherwise (Code thread, or an unanswered proactive with nothing to learn) marks the
+    /// deleted. Runs a sweep for Dialogue/Speech/Code threads that carry user messages and aren't already
+    /// processed; otherwise (an unanswered proactive with nothing to learn) marks the
     /// thread processed so its deletion timer may proceed. RunEngram sets EngramProcessed on success; if
     /// it can't run (disabled / a concurrent sweep holds the lock) the flag stays false and the thread's
     /// delete-retry poll tries again.</summary>
@@ -740,20 +828,12 @@ public class LLMModule : ILLMModule, IDisposable
         bool canSweep = engram is not null && !thread.Internal && thread.HasUserMessages && !thread.EngramProcessed && thread.HasMemoryAccess && thread.OwnerId is not null;
         if (!canSweep) { thread.EngramProcessed = true; return; }
 
-        if (thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech)
+        if (thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech or ThreadPipeline.Code)
         {
             _ = Task.Run(async () =>
             {
                 try { await engram!.RunEngram(thread.Key, "dormant"); }
                 catch (Exception ex) { _logger.LogWarning("[Dormant] Engram failed for {Key}: {Err}", thread.Key, ex.Message); }
-            });
-        }
-        else if (thread.Pipeline is ThreadPipeline.Code)
-        {
-            _ = Task.Run(async () =>
-            {
-                try { await engram!.RunCodeSummary(thread.Key, "dormant"); }
-                catch (Exception ex) { _logger.LogWarning("[Dormant] Code summary failed for {Key}: {Err}", thread.Key, ex.Message); }
             });
         }
         else
@@ -777,15 +857,10 @@ public class LLMModule : ILLMModule, IDisposable
         // 2) Guarantee the conversation is saved before deletion (honours the no-delete-before-Engram rule).
         if (engram is not null && !thread.Internal && thread.HasUserMessages)
         {
-            if (thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech)
+            if (thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech or ThreadPipeline.Code)
             {
                 try { await engram.RunEngram(threadKey, "closed", force: true); }
                 catch (Exception ex) { _logger.LogWarning("[Close] Engram failed for {Key}: {Err}", threadKey, ex.Message); }
-            }
-            else if (thread.Pipeline is ThreadPipeline.Code)
-            {
-                try { await engram.RunCodeSummary(threadKey, "closed"); }
-                catch (Exception ex) { _logger.LogWarning("[Close] Code summary failed for {Key}: {Err}", threadKey, ex.Message); }
             }
         }
 
@@ -974,9 +1049,39 @@ public class LLMModule : ILLMModule, IDisposable
             default:
             {
                 Thread dlgThread = Recategorise(ThreadPipeline.Dialogue, threadKey, platformContext);
-                return await dialoguePipeline!.ExecuteAsync(dlgThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments);
+                Pipeline replyPipeline = graphPipeline is { Graph: not null } ? graphPipeline : dialoguePipeline!;
+                string reply = await replyPipeline.ExecuteAsync(dlgThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments);
+                return dlgThread.PendingCoderHandoff is { } brief
+                    ? await RunCoderHandoff(dlgThread, brief, username, platformContext, onDelta, externalCt, localPath) ?? reply
+                    : reply;
             }
         }
+    }
+
+    /// <summary>Second half of a dialogue→coder handoff (<see cref="HandToCoder"/>): the dialogue turn has finished
+    /// (she told the user she's passing it along), so move the thread onto the Code pipeline — history and bound
+    /// project carried by <see cref="Recategorise"/> — and run the request there as an internal prompt. Returns null
+    /// when there is no Code pipeline, so the caller keeps the dialogue reply.</summary>
+    private async Task<string?> RunCoderHandoff(Thread dlgThread, string brief, string username, string? platformContext,
+        Func<string, Task>? onDelta, CancellationToken externalCt, string? localPath)
+    {
+        dlgThread.PendingCoderHandoff = null;
+        if (codePipeline is null) return null;
+
+        string threadKey = dlgThread.Key;
+        _logger.LogInformation("[Router] ({Thread}) → Code (handoff from Dialogue)", threadKey);
+        Thread codeThread = Recategorise(ThreadPipeline.Code, threadKey, platformContext);
+
+        CancellationTokenSource cts = externalCt.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(externalCt)
+            : new CancellationTokenSource();
+        processingThreads[threadKey] = cts;
+        NotifyWatchers(threadKey);
+
+        string task = "[Handed off from the conversation side — take over the user's request above and carry it out." +
+                      (string.IsNullOrWhiteSpace(brief) ? "" : $" Context from the hand-off: {brief.Trim()}") + "]";
+        return await codePipeline.ExecuteAsync(codeThread, threadKey, task, username, platformContext, onDelta, cts,
+            localPath: localPath, internalPrompt: true);
     }
 
     // ── Commands ────────────────────────────────────────────────────────────────
@@ -1485,6 +1590,10 @@ public class LLMModule : ILLMModule, IDisposable
         await engram.RunEngram(threadKey, "eval");
         return true;
     }
+
+    /// <summary>Supplies the user's coding-conventions text (set by the API module, which owns the store). The Code
+    /// pipeline applies it to every code thread each turn — see <see cref="Coder.RefreshConventions"/>.</summary>
+    public static Func<string?>? ConventionsProvider { get; set; }
 
     public void SetCodeThreadContext(string threadKey, string? projectMap, string? conventions, string? rules)
         => codeArchitect?.SetThreadContext(threadKey, projectMap, conventions, rules);

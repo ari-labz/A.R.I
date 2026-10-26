@@ -35,7 +35,7 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
     // except the few things the chat UI itself needs and so are listed as exceptions in IsAdminOnly.
     private static readonly string[] AdminOnlyAreas =
     [
-        "/agents", "/servers", "/modules", "/imagegen", "/persona/proposals", "/models", "/voice", "/feedback",
+        "/agents", "/pipeline-graphs", "/servers", "/modules", "/imagegen", "/persona/proposals", "/models", "/voice", "/feedback",
     ];
 
     /// <summary>True if a guest must be refused. A path is matched on whole segments ("/models" but not "/modelsX").</summary>
