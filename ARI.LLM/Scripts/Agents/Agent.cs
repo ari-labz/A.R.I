@@ -868,6 +868,8 @@ public abstract class Agent
 
         turn.Clock.RequestSent();
         SetPhase(turn, turn.ReadingWebResults ? ThreadPhase.Researching : ThreadPhase.Prefilling);
+        if (Server is { Status: ServerStatus.Offline, StartError: not null } offline)
+            throw new LlmRequestFailedException($"{offline.Name} is offline: {offline.StartError}");
         HttpResponseMessage response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, turn.Ct);
 
         if (!response.IsSuccessStatusCode)

@@ -141,6 +141,10 @@ public class Server : IDisposable
     /// Read by the control panel so it can show "Downloading model" with a bar instead of just "Starting".</summary>
     [JsonIgnore] public DownloadProgress? Download { get; private set; }
 
+    /// <summary>Why this server isn't running, when it refused to start (e.g. no model assigned). Cleared by the next
+    /// successful start attempt. Shown on the server's card and in chat errors.</summary>
+    [JsonIgnore] public string? StartError { get; private set; }
+
     [JsonIgnore] public string FullEndpoint => $"{Endpoint}:{Port}";
 
     /// <summary>True while this server's llama-server process is alive. False after Stop() or if it
@@ -166,6 +170,18 @@ public class Server : IDisposable
     {
         if (Status is ServerStatus.Online or ServerStatus.Starting) return;
 
+        // Without a model llama-server would start empty, report healthy and answer every request with
+        // "model 'local' not found" — a server that looks Online but can't serve anything. Refuse instead.
+        if (model is null)
+        {
+            StartError = string.IsNullOrWhiteSpace(CurrentModelName)
+                ? "No model assigned."
+                : $"Its model '{CurrentModelName}' isn't in the model list.";
+            Log.LogWarning("[{Server}] not started: {Reason}", Name, StartError);
+            return;
+        }
+
+        StartError = null;
         Status = ServerStatus.Starting;
         _modelsPath = modelsPath;
         _serverDir  = Paths.PersistentData;
