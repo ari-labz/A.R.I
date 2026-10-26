@@ -1,5 +1,5 @@
 // Browser mic client for ARI.Listener: captures the microphone, downsamples to 16 kHz mono 16-bit PCM,
-// and streams it to /api/listener/stream. Receives back {type:"transcript", text, addressed} events, plus
+// and streams it to /api/v1/listener/stream. Receives back {type:"transcript", text, addressed} events, plus
 // Ari's spoken reply as binary WAV frames. While she speaks, the playback is analysed into frequency bands
 // (low → high) so the orb can light up like a radial equaliser.
 
@@ -58,7 +58,7 @@ export async function startListening(
     levels?: { current: number[] },
 ): Promise<ListenerHandle> {
     const wsProto = location.protocol === "https:" ? "wss" : "ws"
-    const ws = new WebSocket(`${wsProto}://${location.host}/api/listener/stream?source=web&threadKey=${encodeURIComponent(threadKey)}`)
+    const ws = new WebSocket(`${wsProto}://${location.host}/api/v1/listener/stream?source=web&threadKey=${encodeURIComponent(threadKey)}`)
     ws.binaryType = "arraybuffer"
 
     const stream = await navigator.mediaDevices.getUserMedia({

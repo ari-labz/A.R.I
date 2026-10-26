@@ -9,7 +9,7 @@ using System.Text.Json.Nodes;
 
 namespace ARI.API.Controllers;
 
-[Route("admin/llmconfigs")]
+[Route("api/v1/admin/llmconfigs")]
 [ApiController]
 public class LLMConfigController(PersistentData persistentData) : ControllerBase
 {

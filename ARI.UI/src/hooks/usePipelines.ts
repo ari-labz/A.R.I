@@ -10,7 +10,7 @@ export function usePipelines(): string[] {
 
     useEffect(() => {
         let alive = true
-        fetch("/pipelines")
+        fetch("/api/v1/pipelines")
             .then(r => (r.ok ? r.json() : null))
             .then((list: string[] | null) => { if (alive && Array.isArray(list) && list.length) setPipelines(list) })
             .catch(() => { /* keep fallback */ })

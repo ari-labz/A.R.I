@@ -22,7 +22,7 @@ public class ControlPanelController : Controller
     public IActionResult Index() => Redirect("/controlpanel.html");
 }
 
-[Route("admin")]
+[Route("api/v1/admin")]
 [ApiController]
 public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, PersistentData persistentData) : ControllerBase
 {
@@ -461,7 +461,7 @@ public class ControlPanelApiController(APIConfig config, SystemInfo systemInfo, 
 
 // ── Agents API ────────────────────────────────────────────────────────────────
 
-[Route("agents")]
+[Route("api/v1/agents")]
 [ApiController]
 public class AgentsApiController(PersistentData persistentData) : ControllerBase
 {
@@ -534,7 +534,7 @@ public class AgentsApiController(PersistentData persistentData) : ControllerBase
 
 // ── Voice Synthesis API ───────────────────────────────────────────────────────
 
-[Route("voice")]
+[Route("api/v1/voice")]
 [ApiController]
 public class VoiceController(
     VoiceSynthesisConfig vsConfig,
@@ -1431,7 +1431,7 @@ public class VoiceController(
 
 // ── LLM Models & Servers API ──────────────────────────────────────────────────
 
-[Route("models")]
+[Route("api/v1/models")]
 [ApiController]
 public class ModelsApiController(PersistentData persistentData) : ControllerBase
 {
@@ -1617,7 +1617,7 @@ public class ModelsApiController(PersistentData persistentData) : ControllerBase
 
 // ── Servers API ───────────────────────────────────────────────────────────────
 
-[Route("servers")]
+[Route("api/v1/servers")]
 [ApiController]
 public class ServersApiController(PersistentData persistentData) : ControllerBase
 {
@@ -1763,7 +1763,7 @@ public record TrainRequest(
 /// take the control panel itself away, leaving no way to turn them back on.</param>
 public record ModuleInfo(string Key, string Name, string Description, bool Enabled, bool Running, bool Required);
 
-[Route("modules")]
+[Route("api/v1/modules")]
 [ApiController]
 public class ModulesApiController(ILogger<ModulesApiController> logger) : ControllerBase
 {
@@ -1933,7 +1933,7 @@ public record DatasetBuildRequest(ARI.VoiceSynthesis.DatasetBuildSelection[] Sel
 
 // ── Image Generation API ──────────────────────────────────────────────────────
 
-[Route("imagegen")]
+[Route("api/v1/imagegen")]
 [ApiController]
 public class ImageGenController(APIConfig config) : ControllerBase
 {

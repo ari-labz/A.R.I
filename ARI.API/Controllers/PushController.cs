@@ -8,7 +8,7 @@ namespace ARI.API.Controllers;
 /// Web Push subscription management for the PWA. The client fetches the VAPID public key, subscribes
 /// through the browser, and posts the resulting subscription here so Ari can push notifications to it.
 /// </summary>
-[Route("push")]
+[Route("api/v1/push")]
 [ApiController]
 public class PushController : ControllerBase
 {

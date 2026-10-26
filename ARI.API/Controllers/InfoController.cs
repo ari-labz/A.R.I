@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace ARI.API.Controllers;
 
-[Route("api/info")]
+[Route("api/v1/info")]
 [ApiController]
 public class InfoController : ControllerBase
 {

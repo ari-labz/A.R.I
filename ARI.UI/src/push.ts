@@ -18,7 +18,7 @@ export async function unregisterPush(): Promise<void> {
         const reg = await navigator.serviceWorker.getRegistration("/sw.js")
         const sub = await reg?.pushManager.getSubscription()
         if (!sub) return
-        await fetch("/push/unsubscribe", {
+        await fetch("/api/v1/push/unsubscribe", {
             method: "POST",
             headers: { "Content-Type": "application/json", ...bearer() },
             body: JSON.stringify({ endpoint: sub.endpoint }),
@@ -51,7 +51,7 @@ export async function initPush(): Promise<void> {
     }
 
     try {
-        const keyRes = await fetch("/push/vapid-public-key")
+        const keyRes = await fetch("/api/v1/push/vapid-public-key")
         if (!keyRes.ok) return
         const { publicKey } = await keyRes.json()
         if (!publicKey) return
@@ -62,7 +62,7 @@ export async function initPush(): Promise<void> {
             applicationServerKey: urlBase64ToUint8Array(publicKey),
         })
 
-        await fetch("/push/subscribe", {
+        await fetch("/api/v1/push/subscribe", {
             method: "POST",
             headers: { "Content-Type": "application/json", ...bearer() },
             body: JSON.stringify(sub.toJSON()),

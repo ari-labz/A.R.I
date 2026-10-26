@@ -149,7 +149,7 @@ ENV PATH="/opt/llama.cpp/bin:${PATH}" \
 EXPOSE 5074
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:5074/api/theme >/dev/null || exit 1
+    CMD curl -fsS http://127.0.0.1:5074/api/v1/theme >/dev/null || exit 1
 
 # Logs go to stdout (Serilog console sink), so `docker logs` is the log. The first-run Setup Token is in there too.
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/ari-entrypoint"]

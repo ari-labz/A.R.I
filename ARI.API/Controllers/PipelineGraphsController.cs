@@ -9,7 +9,7 @@ namespace ARI.API.Controllers;
 
 /// <summary>The control panel's pipeline editor: the graphs in Pipelines.json and which one answers Dialogue threads.
 /// Saving a graph is live; the active one has to validate, or it is refused.</summary>
-[Route("pipeline-graphs")]
+[Route("api/v1/pipeline-graphs")]
 [ApiController]
 public class PipelineGraphsController(PersistentData persistentData) : ControllerBase
 {

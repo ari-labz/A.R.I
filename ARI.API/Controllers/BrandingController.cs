@@ -7,10 +7,10 @@ namespace ARI.API.Controllers;
 public class BrandingController : ControllerBase
 {
     // Public (AuthMiddleware.AnonPaths): the UI needs it before sign-in to style the sidebar logo.
-    [HttpGet("api/branding")]
+    [HttpGet("api/v1/branding")]
     public IActionResult State() => Ok(new { sidebarDerived = BrandingStore.SidebarDerived });
 
-    [HttpGet("admin/branding")]
+    [HttpGet("api/v1/admin/branding")]
     public IActionResult List() => Ok(BrandingStore.Slots.Select(s => new
     {
         s.Key, s.Label, s.Used, s.DefaultPath,
@@ -19,7 +19,7 @@ public class BrandingController : ControllerBase
         Version = BrandingStore.Version(s.Key)?.Ticks ?? 0,
     }));
 
-    [HttpPost("admin/branding/{slot}")]
+    [HttpPost("api/v1/admin/branding/{slot}")]
     [RequestSizeLimit(3 * 1024 * 1024)]
     public IActionResult Upload(string slot, IFormFile file)
     {
@@ -29,7 +29,7 @@ public class BrandingController : ControllerBase
         return err is null ? Ok(new { ok = true }) : BadRequest(new { error = err });
     }
 
-    [HttpDelete("admin/branding/{slot}")]
+    [HttpDelete("api/v1/admin/branding/{slot}")]
     public IActionResult Reset(string slot)
     {
         if (BrandingStore.Find(slot) is null) return NotFound();

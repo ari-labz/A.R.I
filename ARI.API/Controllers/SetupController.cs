@@ -13,7 +13,7 @@ namespace ARI.API.Controllers;
 
 /// <summary>First-run wizard backend. Only /setup/status and /setup/account are anonymous; everything else
 /// needs the admin session that /setup/account hands back.</summary>
-[Route("setup")]
+[Route("api/v1/setup")]
 [ApiController]
 public class SetupController(UserStore users, AuthService auth, PersistentData persistentData, ILoggerFactory loggerFactory) : ControllerBase
 {

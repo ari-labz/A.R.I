@@ -55,7 +55,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
         if (!name.trim()) return
         setSaving(true); setError(null)
         try {
-            const res = await apiFetch("/projects", {
+            const res = await apiFetch("/api/v1/projects", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ name: name.trim(), description: description.trim(), instructions: instructions.trim(), category: category.trim() }),
@@ -140,7 +140,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
         if (!selected || !editName.trim()) return
         setEditSaving(true); setEditError(null)
         try {
-            const res = await apiFetch(`/projects/${selected.id}`, {
+            const res = await apiFetch(`/api/v1/projects/${selected.id}`, {
                 method: "PUT",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ name: editName.trim(), description: editDescription.trim(), instructions: editInstructions.trim(), category: editCategory.trim(), backend: selected.backend }),
@@ -155,7 +155,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
     async function handleDelete() {
         if (!selected) return
         if (!confirm(`Delete "${selected.name}"? This cannot be undone.`)) return
-        await apiFetch(`/projects/${selected.id}`, { method: "DELETE" })
+        await apiFetch(`/api/v1/projects/${selected.id}`, { method: "DELETE" })
         setSelected(null)
         onProjectCreated()
     }

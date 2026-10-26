@@ -18,16 +18,16 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
 {
     private static readonly HashSet<string> AnonPaths =
     [
-        "/auth/login",
-        "/api/theme",
-        "/api/branding",
-        "/setup/status",
-        "/setup/account",
+        "/api/v1/auth/login",
+        "/api/v1/theme",
+        "/api/v1/branding",
+        "/api/v1/setup/status",
+        "/api/v1/setup/account",
     ];
 
     private static readonly string[] AdminPrefixes =
     [
-        "/admin/",
+        "/api/v1/admin/",
         "/controlpanel.html",
     ];
 
@@ -35,10 +35,10 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
     // except the few things the chat UI itself needs and so are listed as exceptions in IsAdminOnly.
     private static readonly string[] AdminOnlyAreas =
     [
-        "/agents", "/pipeline-graphs", "/servers", "/modules", "/imagegen", "/persona/proposals", "/models", "/voice", "/feedback",
+        "/api/v1/agents", "/api/v1/pipeline-graphs", "/api/v1/servers", "/api/v1/modules", "/api/v1/imagegen", "/api/v1/persona/proposals", "/api/v1/models", "/api/v1/voice", "/api/v1/feedback",
     ];
 
-    /// <summary>True if a guest must be refused. A path is matched on whole segments ("/models" but not "/modelsX").</summary>
+    /// <summary>True if a guest must be refused. A path is matched on whole segments ("/api/v1/models" but not "/api/v1/modelsX").</summary>
     internal static bool IsAdminOnly(string path, string method)
     {
         if (Array.Exists(AdminPrefixes, p => path.StartsWith(p, StringComparison.OrdinalIgnoreCase))) return true;
@@ -52,14 +52,14 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
 
         // What an ordinary signed-in user's chat page uses: reading the reasoning dial, speaking a reply aloud,
         // and thumbs up/down on a response in a thread they can open (the controller checks the thread).
-        if (get  && path.Equals("/models/reasoning-effort", StringComparison.OrdinalIgnoreCase)) return false;
-        if (post && (path.Equals("/voice/speak", StringComparison.OrdinalIgnoreCase)
-                  || path.Equals("/voice/split-sentences", StringComparison.OrdinalIgnoreCase))) return false;
-        if (post && path.Equals("/feedback", StringComparison.OrdinalIgnoreCase)) return false;
-        if (get  && path.StartsWith("/feedback/thread/", StringComparison.OrdinalIgnoreCase)) return false;
+        if (get  && path.Equals("/api/v1/models/reasoning-effort", StringComparison.OrdinalIgnoreCase)) return false;
+        if (post && (path.Equals("/api/v1/voice/speak", StringComparison.OrdinalIgnoreCase)
+                  || path.Equals("/api/v1/voice/split-sentences", StringComparison.OrdinalIgnoreCase))) return false;
+        if (post && path.Equals("/api/v1/feedback", StringComparison.OrdinalIgnoreCase)) return false;
+        if (get  && path.StartsWith("/api/v1/feedback/thread/", StringComparison.OrdinalIgnoreCase)) return false;
         // Changing or withdrawing a rating (the controller checks the rating's thread is theirs).
         if ((method.Equals("PATCH", StringComparison.OrdinalIgnoreCase) || method.Equals("DELETE", StringComparison.OrdinalIgnoreCase))
-            && path.StartsWith("/feedback/", StringComparison.OrdinalIgnoreCase)) return false;
+            && path.StartsWith("/api/v1/feedback/", StringComparison.OrdinalIgnoreCase)) return false;
         return true;
     }
 

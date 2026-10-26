@@ -8,7 +8,7 @@ namespace ARI.API.Controllers;
 /// Admin-only endpoints for user management and the IP blocklist.
 /// All routes require the caller to have the Admin role (enforced by AdminGuard middleware).
 /// </summary>
-[Route("admin/users")]
+[Route("api/v1/admin/users")]
 [ApiController]
 public class AdminUsersController(UserStore users) : ControllerBase
 {
@@ -102,7 +102,7 @@ public class AdminUsersController(UserStore users) : ControllerBase
 
     // ── Sessions (admin view) ─────────────────────────────────────────────────────
 
-    [HttpGet("/admin/sessions")]
+    [HttpGet("/api/v1/admin/sessions")]
     public IActionResult AllSessions()
     {
         if (!IsAdmin()) return StatusCode(403);
@@ -117,7 +117,7 @@ public class AdminUsersController(UserStore users) : ControllerBase
         }));
     }
 
-    [HttpDelete("/admin/sessions/{sessionId}")]
+    [HttpDelete("/api/v1/admin/sessions/{sessionId}")]
     public IActionResult RevokeSession(string sessionId)
     {
         if (!IsAdmin()) return StatusCode(403);
@@ -127,7 +127,7 @@ public class AdminUsersController(UserStore users) : ControllerBase
 
     // ── IP Blocklist ──────────────────────────────────────────────────────────────
 
-    [HttpGet("/admin/blocklist")]
+    [HttpGet("/api/v1/admin/blocklist")]
     public IActionResult GetBlocklist()
     {
         if (!IsAdmin()) return StatusCode(403);
@@ -139,7 +139,7 @@ public class AdminUsersController(UserStore users) : ControllerBase
         }));
     }
 
-    [HttpDelete("/admin/blocklist/{ip}")]
+    [HttpDelete("/api/v1/admin/blocklist/{ip}")]
     public IActionResult UnblockIp(string ip)
     {
         if (!IsAdmin()) return StatusCode(403);

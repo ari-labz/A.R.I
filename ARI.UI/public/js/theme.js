@@ -14,12 +14,12 @@
     // A single uploaded logo also rebrands the sidebar, where it has to be turned white (see colours/CSS).
     function brand(b) { document.documentElement.toggleAttribute('data-brand-sidebar-derived', !!(b && b.sidebarDerived)); }
     try { brand(JSON.parse(localStorage.getItem('ari_brand'))); } catch (e) {}
-    fetch('/api/branding').then(function (r) { return r.ok ? r.json() : null; }).then(function (b) {
+    fetch('/api/v1/branding').then(function (r) { return r.ok ? r.json() : null; }).then(function (b) {
         if (!b) return;
         brand(b);
         try { localStorage.setItem('ari_brand', JSON.stringify(b)); } catch (e) {}
     }).catch(function () {});
-    fetch('/api/theme').then(function (r) { return r.ok ? r.json() : null; }).then(function (t) {
+    fetch('/api/v1/theme').then(function (r) { return r.ok ? r.json() : null; }).then(function (t) {
         if (!t) return;
         apply(t);
         try { localStorage.setItem('ari_theme', JSON.stringify(t)); } catch (e) {}

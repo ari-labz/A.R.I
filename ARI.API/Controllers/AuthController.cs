@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace ARI.API.Controllers;
 
-[Route("auth")]
+[Route("api/v1/auth")]
 [ApiController]
 public class AuthController(UserStore users, AuthService auth) : ControllerBase
 {

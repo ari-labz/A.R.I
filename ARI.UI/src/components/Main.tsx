@@ -112,7 +112,7 @@ export default function Main({
     useEffect(() => {
         function onKey(e: KeyboardEvent) {
             if (e.key !== "Escape" || !isStreaming || !activeThread) return
-            apiFetch(`/threads/${activeThread}/interrupt`, { method: "POST" }).catch(() => {})
+            apiFetch(`/api/v1/threads/${activeThread}/interrupt`, { method: "POST" }).catch(() => {})
         }
         document.addEventListener("keydown", onKey)
         return () => document.removeEventListener("keydown", onKey)

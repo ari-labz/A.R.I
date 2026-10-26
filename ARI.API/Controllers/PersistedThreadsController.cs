@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace ARI.API.Controllers;
 
 /// <summary>The Persistent Threads setting and the saved conversations it produces. Under /admin/, so admin only.</summary>
-[Route("admin/persisted-threads")]
+[Route("api/v1/admin/persisted-threads")]
 [ApiController]
 public class PersistedThreadsController : ControllerBase
 {
