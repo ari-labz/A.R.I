@@ -69,8 +69,7 @@ public class APIModule : IAsyncDisposable
         // Web Push (PWA notifications). Owns the VAPID keypair + subscription store; Ari's proactive
         // path rings the phone via Modules.WebPush. Registered statically so controllers reach it like Llm.
         string pushDir = Paths.Push;
-        // VAPID subject is just a contact field on the push keypair — a generic mailto is fine;
-        // auth (who may reach ARI) is handled by whatever reverse proxy sits in front, not here.
+        // VAPID subject is just a contact field on the push keypair — a generic mailto is fine.
         WebPushModule webPush = new(loggerFactory.CreateLogger<WebPushModule>(), pushDir, "mailto:owner@localhost");
         Modules.Register(webPush: webPush);
 
@@ -177,6 +176,15 @@ public class APIModule : IAsyncDisposable
         {
             if (ctx.Request.Path == "/api/v1/client" || ctx.Request.Path == "/api/v1/listener/stream")
             {
+                // A page on some other site (or another port on this machine) must not be able to open these sockets with
+                // the visitor's cookie: when the browser says where the page came from, it has to be this server.
+                if (ctx.Request.Headers.Origin.ToString() is { Length: > 0 } origin
+                    && (!Uri.TryCreate(origin, UriKind.Absolute, out Uri? originUri) || !originUri.Authority.Equals(ctx.Request.Host.Value, StringComparison.OrdinalIgnoreCase)))
+                {
+                    ctx.Response.StatusCode = 403;
+                    await ctx.Response.WriteAsJsonAsync(new { error = "Cross-site connections are not allowed." });
+                    return;
+                }
                 // These sockets are accepted before UseMiddleware<AuthMiddleware>() runs (WebSocket
                 // upgrades can't carry the normal pipeline's response), so authenticate here explicitly —
                 // same JWT+session check as every REST endpoint. Unauthenticated requests never reach
@@ -187,6 +195,7 @@ public class APIModule : IAsyncDisposable
                 if (principal is null)
                 {
                     ctx.Response.StatusCode = 401;
+                    await ctx.Response.WriteAsJsonAsync(new { error = "Sign in first." });
                     return;
                 }
                 ctx.User = principal;

@@ -43,7 +43,7 @@ public class SetupController(UserStore users, AuthService auth, ILoggerFactory l
         if (!SetupState.TokenMatches(req.Token))
         {
             int attempts = users.RecordFailedAttempt(ip);
-            if (attempts >= 5) return StatusCode(403, new { error = "Too many wrong tokens. This IP has been locked out." });
+            if (attempts >= 3) return StatusCode(403, new { error = "Too many wrong tokens. This IP has been locked out." });
             return Unauthorized(new { error = "That Setup Token is not right. It is printed in the ARI log (docker logs)." });
         }
 
@@ -114,7 +114,7 @@ public class AdminSetupController(PersistentData persistentData, ILoggerFactory 
     {
         if (SetupDownload.Running) return Conflict(new { error = "A download is already running." });
         if (string.IsNullOrWhiteSpace(req.Repo) || string.IsNullOrWhiteSpace(req.File) || string.IsNullOrWhiteSpace(req.DownloadUrl)
-            || !System.Text.RegularExpressions.Regex.IsMatch(req.Repo, @"^[\w.-]+/[\w.-]+$"))
+            || !System.Text.RegularExpressions.Regex.IsMatch(req.Repo, @"^[\w.-]+/[\w.-]+$") || req.Repo.Contains(".."))
             return BadRequest(new { error = "repo, file and downloadUrl are required." });
         if (!req.DownloadUrl.StartsWith("https://huggingface.co/", StringComparison.Ordinal) || !req.File.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase))
             return BadRequest(new { error = "Only Hugging Face .gguf links are accepted." });

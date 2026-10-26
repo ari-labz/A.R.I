@@ -42,14 +42,6 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     /// <summary>Derives a display username from the authenticated user's email (strips @domain).</summary>
     private string GetUsername()
     {
-        // Proxy auth claim wins if present (Cloudflare Access etc.)
-        string? email = User.FindFirstValue(ClaimTypes.Email);
-        if (!string.IsNullOrEmpty(email))
-        {
-            int at = email.IndexOf('@');
-            string raw = at > 0 ? email[..at] : email;
-            return raw.Length > 0 ? char.ToUpper(raw[0]) + raw[1..] : raw;
-        }
         // JWT display name claim (set at login from the user's preferences).
         string? displayName = User.FindFirstValue("displayName");
         if (!string.IsNullOrEmpty(displayName)) return displayName;
@@ -80,6 +72,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         // owner) may use it. Anything else would be reaching into folders left behind by a thread that is gone.
         else if (context.ActionDescriptor.RouteValues["action"] is not (nameof(Stream) or nameof(SetSystemContext) or nameof(NotifyTyping)))
             context.Result = new NotFoundObjectResult(new { error = "No such thread." });
+        else if (!User.IsInRole(ARI.API.Auth.Roles.Admin) && !ARI.API.Auth.ThreadAccess.IsClientKey(key))
+            context.Result = new StatusCodeResult(403);
     }
 
     private bool CanAccessOwner(string? ownerId) =>
@@ -220,7 +214,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         // Pre-register in LLMModule so the newThread event fires immediately and
         // all sidebar observers see the thread without waiting for the first message.
         // An explicit pipeline selection wins; otherwise a bound project that isn't a note vault opens in code-mode.
-        if (Enum.TryParse(req?.Pipeline, ignoreCase: true, out ARI.LLM.ThreadPipeline selected))
+        if (Enum.TryParse(req?.Pipeline, ignoreCase: true, out ARI.LLM.ThreadPipeline selected) && !int.TryParse(req?.Pipeline, out _)
+            && selected is ARI.LLM.ThreadPipeline.Dialogue or ARI.LLM.ThreadPipeline.Code or ARI.LLM.ThreadPipeline.Speech)
             Llm.ForcePipeline(key, selected);
         else if (project is not null && ProjectCodeRules.RunsAsCode(project))
             Llm.ForceCodeThread(key);
@@ -243,7 +238,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     /// </summary>
     [HttpGet("~/api/v1/pipelines")]
     public IActionResult GetPipelines()
-        => Ok(Enum.GetNames<ARI.LLM.ThreadPipeline>().Select(n => n.ToLowerInvariant()).ToList());
+        => Ok(new[] { "dialogue", "code", "speech" });
 
     /// <summary>
     /// Returns thread metadata plus full history. The primary polling endpoint for streaming threads.
@@ -407,7 +402,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     public IActionResult ExportLog([FromRoute(Name = "id")] string threadKey)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
-        ARI.LLM.Thread? exportThread = FindThread(threadKey);
+        ARI.LLM.Thread? exportThread = FindThread(threadKey) ?? Llm.LoadPersistedForView(threadKey);
         if (exportThread is not null && !CanAccessThread(exportThread)) return StatusCode(403);
         List<ThreadItem> items = exportThread?.History ?? new();
         string log = string.Join("\n\n", items.Select(i => i.ToString()));
@@ -591,7 +586,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
         // Only the file's own name is ever used: a client can send "../../x" or a full path as the filename.
         string fileName = Path.GetFileName(file.FileName);
-        if (string.IsNullOrWhiteSpace(fileName)) return BadRequest("The file has no usable name.");
+        if (string.IsNullOrWhiteSpace(fileName) || ProjectStore.IsProtectedPath(fileName)) return BadRequest("The file has no usable name.");
 
         string mime = file.ContentType ?? "application/octet-stream";
         bool isZip  = mime is "application/zip" or "application/x-zip-compressed"
@@ -676,7 +671,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         string absPath = Path.GetFullPath(Path.Combine(rootAbs, path));
         // The trailing separator matters: without it "/x/Foo" would also accept "/x/Foo-secret/...".
         if (!absPath.StartsWith(rootAbs.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
-            || ProjectStore.IsProtectedPath(Path.GetRelativePath(rootAbs, absPath)))
+            || ProjectStore.IsProtectedPath(Path.GetRelativePath(rootAbs, absPath))
+            || ProjectStore.PassesThroughLink(rootAbs, absPath))
             return BadRequest("Access denied.");
 
         if (System.IO.File.Exists(absPath)) System.IO.File.Delete(absPath);
@@ -734,6 +730,12 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         if (summary is null) return StatusCode(500, new { error = "Failed to create project record." });
 
         Project? project = projectStore.Get(summary.Id);
+        // The project belongs to whoever made it, so a guest keeps access to their own promoted files.
+        if (project is not null && int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out int promoterId) && !User.IsInRole(ARI.API.Auth.Roles.Admin))
+        {
+            projectStore.Update(project with { OwnerId = promoterId });
+            project = projectStore.Get(summary.Id);
+        }
         if (project?.RootPath is not { } destDir)
             return StatusCode(500, new { error = "Project has no server root." });
 
@@ -785,6 +787,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         // Large text files are promoted to the thread scratchpad instead of being inlined.
         if (!isImage && content.Length > 10_000)
         {
+            Directory.CreateDirectory(Paths.ScratchpadDir(threadKey));
             string destPath = Path.Combine(Paths.ScratchpadDir(threadKey), fileName);
             await System.IO.File.WriteAllTextAsync(destPath, content);
             return Ok(new { name = fileName, isImage = false, mimeType = mime, promoted = true });
@@ -863,7 +866,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         string absPath = Path.GetFullPath(Path.Combine(rootAbs, path));
         // The trailing separator matters: without it "/x/Foo" would also accept "/x/Foo-secret/...".
         if (!absPath.StartsWith(rootAbs.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
-            || ProjectStore.IsProtectedPath(Path.GetRelativePath(rootAbs, absPath)))
+            || ProjectStore.IsProtectedPath(Path.GetRelativePath(rootAbs, absPath))
+            || ProjectStore.PassesThroughLink(rootAbs, absPath))
             return BadRequest("Access denied.");
         if (!System.IO.File.Exists(absPath)) return NotFound();
 

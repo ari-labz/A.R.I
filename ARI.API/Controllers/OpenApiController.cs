@@ -47,6 +47,12 @@ public class OpenApiController(IApiDescriptionGroupCollectionProvider routes) : 
             }
 
             string method = route.HttpMethod.ToLowerInvariant();
+            bool paged = method == "get" && PagedLists.Contains(path);
+            if (paged)
+            {
+                parameters.Add(new { name = "limit",  @in = "query", required = false, description = "Take at most this many (1 to 1000).", schema = new { type = "integer" } });
+                parameters.Add(new { name = "offset", @in = "query", required = false, description = "Skip this many first.", schema = new { type = "integer" } });
+            }
             bool admin = ("/" + route.RelativePath).StartsWith(AuthMiddleware.AdminPrefix, StringComparison.OrdinalIgnoreCase);
             string action = (route.ActionDescriptor as ControllerActionDescriptor)?.ActionName ?? method;
 
@@ -59,7 +65,9 @@ public class OpenApiController(IApiDescriptionGroupCollectionProvider routes) : 
                 ["x-adminOnly"] = admin,
                 ["responses"]   = new Dictionary<string, object>
                 {
-                    ["200"]     = new { description = "Success: the thing itself, or { \"ok\": true } when there is nothing to return." },
+                    ["200"]     = paged
+                        ? new { description = "Success. The size of the whole list is in the X-Total-Count header." }
+                        : new { description = "Success: the thing itself, or { \"ok\": true } when there is nothing to return." },
                     ["default"] = new { description = "Failure: { \"error\": \"what went wrong\" } with a status of 400 or more." },
                 },
             };
@@ -84,6 +92,10 @@ public class OpenApiController(IApiDescriptionGroupCollectionProvider routes) : 
             paths,
         });
     }
+
+    /// <summary>The lists that accept limit and offset.</summary>
+    private static readonly HashSet<string> PagedLists = new()
+        { "/api/v1/threads", "/api/v1/threads/{id}/messages", "/api/v1/projects", "/api/v1/admin/users", "/api/v1/admin/sessions", "/api/v1/admin/feedback" };
 
     /// <summary>Routes that need no sign-in (see AuthMiddleware).</summary>
     private static readonly HashSet<string> OpenPaths = new(StringComparer.OrdinalIgnoreCase)

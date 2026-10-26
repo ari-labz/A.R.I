@@ -1214,6 +1214,11 @@ public static class ClientWebSocket
                     result = await ws.ReceiveAsync(buffer, CancellationToken.None);
                     if (result.MessageType == WebSocketMessageType.Close) return;
                     ms.Write(buffer, 0, result.Count);
+                    if (ms.Length > 16 * 1024 * 1024)   // nobody legitimately sends more than this in one message
+                    {
+                        await ws.CloseAsync(WebSocketCloseStatus.MessageTooBig, "message too big", CancellationToken.None);
+                        return;
+                    }
                 }
                 while (!result.EndOfMessage);
 

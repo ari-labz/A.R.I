@@ -11,7 +11,7 @@ namespace ARI.API.Auth;
 ///   1. IP blocklist — blocked IPs get a silent 403 before any logic runs.
 ///   2. JWT validation — extracts and validates the bearer token.
 ///   3. Session check — confirms the session ID (jti) still exists in the DB (supports revocation).
-/// Endpoints decorated with [AllowAnonymous] bypass step 2+3 (login endpoint).
+/// A short list of addresses (AnonPaths) bypass step 2+3: login, the open setup steps, the theme and health.
 /// Step 1 always runs.
 /// </summary>
 public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
@@ -34,7 +34,7 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
     /// <summary>True if a guest must be refused.</summary>
     internal static bool IsAdminOnly(string path)
         => path.StartsWith(AdminPrefix, StringComparison.OrdinalIgnoreCase)
-        || path.Equals("/controlpanel.html", StringComparison.OrdinalIgnoreCase);
+;
 
     public async Task InvokeAsync(HttpContext ctx)
     {
@@ -82,8 +82,19 @@ public class AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> log)
             if (int.TryParse(subStr, out int userId))
                 store.TouchLastActive(userId);
 
-            // Admin-only paths — guests get a flat 403
             string path = ctx.Request.Path.Value ?? "";
+
+            // A temporary password must be replaced before anything else works: only reading who you are, changing it
+            // (PATCH /me) and signing out are allowed until then.
+            if (int.TryParse(subStr, out int mustId) && store.GetById(mustId)?.MustChangePassword == true
+                && !(path.Equals("/api/v1/me", StringComparison.OrdinalIgnoreCase) && (HttpMethods.IsGet(ctx.Request.Method) || HttpMethods.IsPatch(ctx.Request.Method)))
+                && !path.Equals("/api/v1/auth/logout", StringComparison.OrdinalIgnoreCase))
+            {
+                await Deny(ctx, 403, "Change your temporary password first.");
+                return;
+            }
+
+            // Admin-only paths — guests get a flat 403
             if (IsAdminOnly(path))
             {
                 if (principal.FindFirstValue(ClaimTypes.Role) != Roles.Admin)

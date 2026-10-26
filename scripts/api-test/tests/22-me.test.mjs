@@ -4,7 +4,9 @@ const { master, anon } = globalThis.ari;
 async function newPerson(name, password = "long-enough-1") {
   status(await master.post("/admin/users", { username: name, password, role: "Guest" }), 200);
   const login = status(await anon.post("/auth/login", { username: name, password }), 200);
-  return new Client(login.json.token);
+  const person = new Client(login.json.token);
+  status(await person.patch("/me", { currentPassword: password, newPassword: password }), 200);
+  return person;
 }
 
 test("/me says who you are and which devices you are signed in on", async () => {

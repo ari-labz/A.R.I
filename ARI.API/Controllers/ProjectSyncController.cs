@@ -125,6 +125,17 @@ public class ProjectSyncController(ProjectStore store) : ControllerBase
             if (fetchCode != 0)
                 return BadRequest(new { error = $"Fetch failed: {fetchOut}" });
 
+            // Nothing may be pushed into ARI's own git folder, and no links: a changed git config can make git run a command,
+            // and a link could point outside the project.
+            (int treeCode, string tree) = ProjectStore.RunGit(root, "ls-tree -r refs/heads/ari/incoming");
+            bool unsafeTree = treeCode != 0 || tree.Split('\n', StringSplitOptions.RemoveEmptyEntries).Any(line =>
+                line.StartsWith("120000") || line.StartsWith("160000") || ProjectStore.IsProtectedPath(line[(line.IndexOf('\t') + 1)..].Trim('"')));
+            if (unsafeTree)
+            {
+                ProjectStore.RunGit(root, "branch -D ari/incoming");
+                return BadRequest(new { error = "That push contains links, submodules or ARI's own folders, which are not allowed." });
+            }
+
             // The push must build on what the server already has. Otherwise it would silently throw newer server work away.
             bool serverHasHistory = ProjectStore.RunGit(root, "rev-parse --verify --quiet HEAD").ExitCode == 0;
             if (serverHasHistory && ProjectStore.RunGit(root, "merge-base --is-ancestor HEAD refs/heads/ari/incoming").ExitCode != 0)

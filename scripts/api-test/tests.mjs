@@ -19,6 +19,8 @@ status(guestMade, 200, "create guest");
 const guestLogin = await anon.post("/auth/login", { username: "guest", password: "guest-password-1" });
 status(guestLogin, 200, "guest login");
 export const guest = new Client(guestLogin.json.token);
+// A person an admin creates has a temporary password and can do nothing else until they set their own.
+status(await guest.patch("/me", { currentPassword: "guest-password-1", newPassword: "guest-password-1" }), 200, "guest sets own password");
 
 globalThis.ari = { anon, master, guest };
 
