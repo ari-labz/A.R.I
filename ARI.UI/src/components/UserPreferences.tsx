@@ -45,7 +45,7 @@ export default function UserPreferences({ user, onClose, onLogout, onUserUpdated
     const [allowedError,      setAllowedError]       = useState<string | null>(null)
 
     useEffect(() => {
-        apiFetch("/api/v1/user/preferences").then(r => r.ok ? r.json() : null).then(data => {
+        apiFetch("/api/v1/me").then(r => r.ok ? r.json() : null).then(data => {
             if (data?.sessions) setSessions(data.sessions)
         }).catch(() => {}).finally(() => setSessionsLoading(false))
     }, [])
@@ -77,8 +77,8 @@ export default function UserPreferences({ user, onClose, onLogout, onUserUpdated
         setNameLoading(true)
         setNameSaved(false)
         try {
-            const res = await apiFetch("/api/v1/user/preferences", {
-                method:  "PUT",
+            const res = await apiFetch("/api/v1/me", {
+                method:  "PATCH",
                 headers: { "Content-Type": "application/json" },
                 body:    JSON.stringify({ displayName: name }),
             })
@@ -123,10 +123,10 @@ export default function UserPreferences({ user, onClose, onLogout, onUserUpdated
         setUnError(null)
         setUnLoading(true)
         try {
-            const res = await apiFetch("/api/v1/user/username", {
-                method:  "PUT",
+            const res = await apiFetch("/api/v1/me", {
+                method:  "PATCH",
                 headers: { "Content-Type": "application/json" },
-                body:    JSON.stringify({ newUsername: name, currentPassword: unPassword }),
+                body:    JSON.stringify({ username: name, currentPassword: unPassword }),
             })
             const d = await res.json().catch(() => ({}))
             if (!res.ok) { setUnError((d as { error?: string }).error ?? "Failed"); return }
@@ -138,7 +138,7 @@ export default function UserPreferences({ user, onClose, onLogout, onUserUpdated
     }
 
     async function revokeSession(id: string) {
-        await apiFetch(`/api/v1/user/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {})
+        await apiFetch(`/api/v1/me/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {})
         setSessions(prev => prev.filter(s => s.sessionId !== id))
     }
 
