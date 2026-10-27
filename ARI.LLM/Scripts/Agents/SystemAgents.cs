@@ -10,9 +10,9 @@ namespace ARI.LLM;
 /// time they're missing, so they start out identical to what Memory has always done, and are never overwritten afterwards.</summary>
 internal static class SystemAgents
 {
-    internal const string Pick = "Memory Pick", Extract = "Memory Extract", Privacy = "Memory Privacy", Walker = "Memory Walker";
+    internal const string Pick = "Memory Pick", Extract = "Memory Extract", Privacy = "Memory Privacy", Walker = "Recall";
 
-    internal static readonly string[] Names = [Pick, Extract, Privacy, Walker];
+    internal static readonly string[] Names = [Walker];
 
     private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
 
@@ -31,17 +31,12 @@ internal static class SystemAgents
             JsonObject templates = Get(memory, "PromptTemplates") as JsonObject ?? new JsonObject();
 
             bool changed = false;
-            foreach ((string name, string key, string fallback) in new[] { (Pick, "HopPrompt", ""), (Extract, "ExtractPrompt", ""), (Privacy, "PrivacyFilter", Memory.PrivacyFilterFallback) })
+            // Earlier builds seeded the Memory pipeline's step agents and called the walker "Memory Walker". Recall replaces them all.
+            foreach (JsonObject old in agents.OfType<JsonObject>().Where(a => NameOf(a) is "Memory Pick" or "Memory Extract" or "Memory Privacy").ToList()) { agents.Remove(old); changed = true; }
+            JsonObject? renamed = agents.OfType<JsonObject>().FirstOrDefault(a => NameOf(a).Equals("Memory Walker", StringComparison.OrdinalIgnoreCase));
+            if (renamed is not null && !agents.OfType<JsonObject>().Any(a => NameOf(a).Equals(Walker, StringComparison.OrdinalIgnoreCase)))
             {
-                if (agents.OfType<JsonObject>().Any(a => NameOf(a).Equals(name, StringComparison.OrdinalIgnoreCase))) continue;
-                JsonObject entry = (JsonObject)memory.DeepClone();
-                foreach (string drop in new[] { "HopLimit", "PromptTemplates", "Name", "name" }.Where(d => Get(entry, d) is not null)) entry.Remove(KeyOf(entry, drop)!);
-                entry["Name"]           = name;
-                entry["Custom"]         = true;
-                entry["System"]         = true;
-                entry["Enabled"]        = true;
-                entry["MessagePrompt"]  = (Get(templates, key) as JsonValue)?.GetValue<string>() is { Length: > 0 } t ? t : fallback;
-                agents.Add(entry);
+                renamed[KeyOf(renamed, "Name") ?? "Name"] = Walker;
                 changed = true;
             }
             if (!agents.OfType<JsonObject>().Any(a => NameOf(a).Equals(Walker, StringComparison.OrdinalIgnoreCase)))
@@ -54,7 +49,7 @@ internal static class SystemAgents
                 entry["Enabled"]        = true;
                 entry["AgentPrompt"]    = WalkerPrompt;
                 entry["MessagePrompt"]  = WalkerMessage;
-                entry["MaxToolCalls"]   = 30;
+                entry["MaxToolCalls"]   = 10;
                 entry["PreloadedTools"] = new JsonArray("memory_tools");
                 agents.Add(entry);
                 changed = true;
@@ -73,16 +68,17 @@ internal static class SystemAgents
 
     /// <summary>The Memory walker's starting prompt. It is an ordinary agent prompt, so tune it on the Agents page.</summary>
     internal const string WalkerPrompt = """
-        You are Memory, ARI's memory. You are given a conversation and some starting points in ARI's brain, which is a graph of notes joined by [[links]]. Your job is to work out what ARI should remember for this conversation and write it up, so ARI can answer well.
+        You are Recall, ARI's memory. You are given a conversation and some starting points in ARI's brain, which is a graph of notes joined by [[links]]. Your job is to work out what ARI should remember for this conversation and write it up, so ARI can answer well.
 
         HOW TO WORK
-        - Read the starting points. Then use your tools to find more: search_brain looks things up by words, recall_memory reads a note in full, neighbours shows what a note links to.
-        - Read the notes that matter. When a note mentions a person, place or thing that matters to this conversation, follow that link and read that note too. Keep following relevant links, up to 6 steps from where you started, and stop when nothing more is relevant.
-        - Don't follow links that have nothing to do with the conversation, and don't read the same note twice.
+        - Start from what the conversation is about: the latest message, read in the light of the conversation so far and the context it sits in. Everything you read has to serve that, nothing else.
+        - The starting points are only the names of notes that might be relevant. You know nothing about them until you open them. Use your tools: recall_memory reads a note in full, search_brain looks things up by words, neighbours shows what a note links to. Anything you write has to come from a note you opened.
+        - Before you open any note, ask yourself: would ARI answer this conversation worse without it? If not, don't open it. A note is not relevant just because it is linked, mentions the speaker, or looks interesting. Do not browse.
+        - When a note mentions a person, place or thing that this conversation needs, follow that link. Keep following relevant links, up to 6 steps from where you started, and stop when nothing more is relevant. Don't read the same note twice.
         - You keep this conversation between messages, so you remember what you read earlier. When the topic changes, or the person corrects themselves ("no, I meant ..."), look up the new thing and keep what you already know. Only read again if something you need is not already in front of you.
 
         WHAT TO WRITE
-        Your final message is the memory block ARI reads before it replies. Write clear notes for ARI about everything relevant: who people are, what happened, dates, decisions, preferences. Be thorough rather than terse: keep the specifics (names, dates, numbers, wording that matters) and drop only what has nothing to do with the conversation. Group it by subject. Cover the conversation so far, not only the latest message.
+        Your final message is the memory block ARI reads before it replies. Write clear notes for ARI about what bears on this conversation: who people are, what happened, how things are connected, dates, decisions, preferences. Be thorough about that, and keep the specifics (names, dates, numbers, wording that matters). Leave out everything else, even things you happened to read: other facts about the person's life that this conversation does not touch do not belong in the block. Group it by subject. Cover the conversation so far, not only the latest message.
 
         PRIVACY
         The starting points say who is listening. If it is the MASTER, include everything relevant. If it is GUARDED, use your judgement: leave out anything private or sensitive about the Master that is not right to share with this person (health, legal, money, intimate matters, identity, relationships and the like). When you leave something out, end the block with this section:

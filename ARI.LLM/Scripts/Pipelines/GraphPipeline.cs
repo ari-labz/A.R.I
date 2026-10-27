@@ -184,8 +184,20 @@ internal sealed class GraphPipeline : Pipeline
                 string agentName = node.Agent!;
                 Stopwatch sw = Stopwatch.StartNew();
 
+                // Recall: the Memory step traverses the brain with tools, on its own sub-thread under the chat. Code works out who is
+                // listening and which notes to start from (names only); the Recall agent opens them, follows links, and writes the block.
+                string? threadCode = node.ThreadCode;
                 if (agentName.Equals("Memory", StringComparison.OrdinalIgnoreCase))
-                    return await Recall();
+                {
+                    if (!customAgents.ContainsKey(SystemAgents.Walker)) return await Recall();
+                    if (memory is null || !thread.HasMemoryAccess) return null;
+                    StartingPoints start = new MemoryApi(memory, thread, contextSummary, privacy, AskAgent).Start(message);
+                    if (start.Text is null) return null;
+                    inputs["starting"] = start.Text;
+                    inputs["audience"] = start.Audience;
+                    agentName  = SystemAgents.Walker;
+                    threadCode ??= "memory";
+                }
 
                 if (agentName.Equals("Dialogue", StringComparison.OrdinalIgnoreCase))
                 {
@@ -227,7 +239,7 @@ internal sealed class GraphPipeline : Pipeline
                 // An agent with a sub-thread code keeps its own thread under this chat, found again by that code on every message, so it
                 // remembers what it did before. Only one run uses it at a time, and a run that is cancelled leaves nothing half-finished.
                 Thread? own = null;
-                if (!isReply && node.ThreadCode is { } code)
+                if (!isReply && threadCode is { } code)
                 {
                     own = thread.GetOrCreateChild(code, agentName, () => NewOwnThread(thread, code, agent));
                     await own.RunLock.WaitAsync(cts.Token);
