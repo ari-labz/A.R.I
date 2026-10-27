@@ -531,6 +531,7 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
         <div class="cp-nav-item" data-tab="models" data-group="llm">Models</div>
         <div class="cp-nav-item" data-tab="agents" data-group="llm">Agents</div>
         <div class="cp-nav-item" data-tab="pipelines" data-group="llm">Pipelines</div>
+        <div class="cp-nav-item" data-tab="scripts" data-group="llm">Scripts</div>
         <div class="cp-nav-item" data-tab="conventions" data-group="llm">Coding Conventions</div>
         <div class="cp-nav-item" data-tab="persona" data-group="llm">Persona</div>
         <div class="cp-nav-item" data-tab="feedback" data-group="llm">Response Feedback</div>
@@ -1207,6 +1208,10 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 .pip-menu div{padding:6px 12px;border-radius:5px;cursor:pointer}.pip-menu div:hover{background:var(--user-bubble)}
 .pip-menu .hd{font-size:11px;color:var(--text-dim);cursor:default;font-weight:700;letter-spacing:.06em;text-transform:uppercase}.pip-menu .hd:hover{background:none}
 </style>
+    <div id="tab-scripts" class="cp-tab" style="display:none;flex:1;min-width:0;overflow:hidden;">
+      <div style="width:260px;flex:none;overflow-y:auto;border-right:1px solid var(--border);padding:16px 12px;"><div id="scr-list"></div></div>
+      <div id="scr-editor" style="flex:1;min-width:0;overflow-y:auto;padding:24px 32px;"></div>
+    </div>
     <div id="tab-pipelines" class="cp-tab" style="display:none;flex:1;min-width:0;overflow-y:auto;padding:24px 28px;">
       <div id="ag-view-pipelines"></div>
     </div>
@@ -1503,8 +1508,8 @@ cpGetSettings().then(d => { if (d.userName) window._ariUserName = d.userName; })
 
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), pipelines: document.getElementById('tab-pipelines'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), github: document.getElementById('tab-github'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), users: document.getElementById('tab-users'), settings: document.getElementById('tab-settings'), modules: document.getElementById('tab-modules'), 'imagegen-model': document.getElementById('tab-imagegen-model'), 'imagegen-settings': document.getElementById('tab-imagegen-settings'), calendar: document.getElementById('tab-calendar'), customisation: document.getElementById('tab-customisation') };
-const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', pipelines: 'Pipelines', brain: 'Brain', discord: 'Discord', github: 'GitHub', llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', users: 'Users', settings: 'Settings', modules: 'Modules', 'imagegen-model': 'Image Generation — Model', 'imagegen-settings': 'Image Generation — Settings', calendar: 'Calendar', customisation: 'Customisation', prompts: 'Prompts' };
+const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), pipelines: document.getElementById('tab-pipelines'), scripts: document.getElementById('tab-scripts'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), github: document.getElementById('tab-github'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), users: document.getElementById('tab-users'), settings: document.getElementById('tab-settings'), modules: document.getElementById('tab-modules'), 'imagegen-model': document.getElementById('tab-imagegen-model'), 'imagegen-settings': document.getElementById('tab-imagegen-settings'), calendar: document.getElementById('tab-calendar'), customisation: document.getElementById('tab-customisation') };
+const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', pipelines: 'Pipelines', scripts: 'Scripts', brain: 'Brain', discord: 'Discord', github: 'GitHub', llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', users: 'Users', settings: 'Settings', modules: 'Modules', 'imagegen-model': 'Image Generation — Model', 'imagegen-settings': 'Image Generation — Settings', calendar: 'Calendar', customisation: 'Customisation', prompts: 'Prompts' };
 
 let srvPollTimer = null;
 // Declared here (not down in the GitHub section) because switchTab('overview') below calls stopGhPoll()
@@ -1529,6 +1534,7 @@ function switchTab(name) {
     if (name === 'brain') loadBrain();
     if (name === 'servers') loadServers();
     if (name === 'agents' || name === 'pipelines') loadAgents();
+    if (name === 'scripts') loadScripts();
     if (name === 'llmconfigs') loadLLMConfigs();
     if (name === 'calendar') loadCalendar();
     if (name === 'discord') loadDiscord();
@@ -4399,10 +4405,12 @@ function pipDef(n) { return n.type === 'agent' ? (agData.agents || []).find(a =>
 // A sub-pipeline is a node too: it takes the same two things START gives (both optional: left unwired it sees what the pipeline around it received) and has one output.
 const PIP_SUB_PORTS = ['history', 'message'];
 function pipSubOf(n) { return (pipD.data.pipelines || []).find(x => x.id === n.pipeline); }
-function pipLabel(n) { return n.type === 'pipeline' ? (pipSubOf(n) ? pipSubOf(n).name : '(missing pipeline)') : n.agent; }
-const pipIsBox = n => n.type === 'agent' || n.type === 'pipeline';
+function pipLabel(n) { return n.type === 'pipeline' ? (pipSubOf(n) ? pipSubOf(n).name : '(missing pipeline)') : n.type === 'script' ? n.script : n.agent; }
+function pipScriptOf(n) { return (pipD.scripts || {})[n.script]; }
+const pipIsBox = n => n.type === 'agent' || n.type === 'pipeline' || n.type === 'script';
+function pipOutputs(n) { return n.type === 'start' ? ['history', 'message'] : n.type === 'script' ? ((pipScriptOf(n) || {}).outputs || ['output']) : ['output']; }
 function pipPortsOf(name) { const d = (agData.agents || []).find(a => a.name === name); if (!d) return null; return d.custom ? pipTokens(d.agentPrompt) : (pipD.ports && pipD.ports[name]) || PIP_BUILTIN[name] || null; }
-function pipInputs(n) { return n.type === 'agent' ? (pipPortsOf(n.agent) || []) : n.type === 'pipeline' ? PIP_SUB_PORTS : n.type === 'end' ? ['stream'] : []; }
+function pipInputs(n) { return n.type === 'agent' ? (pipPortsOf(n.agent) || []) : n.type === 'pipeline' ? PIP_SUB_PORTS : n.type === 'script' ? ((pipScriptOf(n) || {}).inputs || []) : n.type === 'end' ? ['stream'] : []; }
 function pipCur() { return pipD.data.pipelines.find(p => p.id === pipD.cur) || pipD.data.pipelines[0]; }
 function pipView(p) { return pipViews[p.id] = pipViews[p.id] || { x: 0, y: 0, k: 1, fresh: true }; }
 function pipTouch() { pipDirty = true; const s = document.getElementById('pip-status'); if (s) s.textContent = 'Unsaved changes'; }
@@ -4415,7 +4423,7 @@ async function pipLoad() {
     try {
         const r = await cpFetch('/api/v1/admin/pipelineGraphs'); if (!r.ok) throw new Error();
         const j = await r.json();
-        pipD = { data: j.data, ports: j.ports || {}, optional: j.optional || {}, problems: j.problems || {}, cur: (pipD && pipD.cur) || j.data.pipelines[0].id };
+        pipD = { data: j.data, ports: j.ports || {}, optional: j.optional || {}, scripts: j.scripts || {}, problems: j.problems || {}, cur: (pipD && pipD.cur) || j.data.pipelines[0].id };
         pipDirty = false;
     } catch { host.textContent = 'Failed to load pipelines.'; return; }
     pipRender();
@@ -4489,6 +4497,13 @@ function pipIssues(p) {
         if (!pipReaches(p, n.id, end.id)) out.push('“' + sub.name + '” never reaches END, so it does nothing.');
         if (into.length && into[0].from === n.id) out.push('A sub-pipeline can\'t be the one connected to END; end with an agent that writes the reply.');
     });
+    p.nodes.filter(n => n.type === 'script').forEach(n => {
+        const sh = pipScriptOf(n);
+        if (!sh) { out.push('Script “' + n.script + '” isn\'t loaded (does it have errors? see the Scripts page).'); return; }
+        sh.inputs.filter(q => !(sh.optionalInputs || []).includes(q)).forEach(q => { if (!p.edges.some(e => e.to === n.id && e.port === q)) out.push(n.script + ': {' + q + '} has nothing wired in.'); });
+        if (!pipReaches(p, n.id, end.id)) out.push('Script “' + n.script + '” never reaches END, so it does nothing.');
+        if (into.length && into[0].from === n.id) out.push('A script can\'t be the one connected to END; end with an agent that writes the reply.');
+    });
     const sl = {}; p.nodes.filter(n => n.type === 'agent').forEach(n => { const d = pipDef(n); if (d.serverName) (sl[d.serverName + '/' + d.slotName] = sl[d.serverName + '/' + d.slotName] || []).push(n.agent); });
     Object.entries(sl).forEach(([k, v]) => { if (v.length > 1) out.push(v.join(' and ') + ' share ' + k + ' — they will evict each other\'s cache.'); });
     return out;
@@ -4496,9 +4511,10 @@ function pipIssues(p) {
 
 var pipCanvas = null, pipWorld = null, pipSvg = null;
 function pipPos(n, side, port) {
-    if (n.type === 'start') return { x: n.x + PIP_W, y: n.y + 46 + (port === 'message' ? 28 : 0) };   // START has two outputs: history, message
-    if (!pipIsBox(n)) return { x: n.x + 13, y: n.y + 13 };
-    return side === 'out' ? { x: n.x + PIP_W, y: n.y + 46 } : { x: n.x, y: n.y + 74 + pipInputs(n).indexOf(port) * 28 };
+    if (!pipIsBox(n) && n.type !== 'start') return { x: n.x + 13, y: n.y + 13 };
+    const outs = pipOutputs(n);
+    if (side === 'out') return { x: n.x + PIP_W, y: n.y + 46 + Math.max(0, outs.indexOf(port)) * 28 };
+    return { x: n.x, y: n.y + 46 + outs.length * 28 + pipInputs(n).indexOf(port) * 28 };
 }
 const pipWirePath = (a, b) => { const d = Math.max(60, Math.abs(b.x - a.x) / 2); return `M${a.x},${a.y} C${a.x + d},${a.y} ${b.x - d},${b.y} ${b.x},${b.y}`; };
 function pipApplyView(p) {
@@ -4528,12 +4544,14 @@ function pipAddable(p) {   // agents that can sit in a graph and aren't in this 
     return (agData.agents || []).filter(a => !have.has(a.name) && (a.custom || PIP_BUILTIN[a.name]));
 }
 function pipAddPipelineNode(p, sub, at) { const id = pipUid(); p.nodes.push({ id, type: 'pipeline', pipeline: sub.id, x: at.x, y: at.y }); pipSel = id; pipTouch(); pipRender(); }
+function pipAddScriptNode(p, name, at) { const id = pipUid(); p.nodes.push({ id, type: 'script', script: name, x: at.x, y: at.y }); pipSel = id; pipTouch(); pipRender(); }
 function pipAddablePipelines(p) { return (pipD.data.pipelines || []).filter(x => x.id !== p.id && x.id !== 'default'); }
 function pipAddMenu(anchor) {
     const p = pipCur(), r = anchor.getBoundingClientRect(), v = pipView(p), rc = pipCanvas.getBoundingClientRect(), free = pipAddable(p);
     const at = { x: (rc.width / 2 - v.x) / v.k - 115, y: (rc.height / 2 - v.y) / v.k - 40 };
     pipMenu({ clientX: r.left, clientY: r.bottom + 4, preventDefault() {} }, 'Add agent', free.map(a => [a.name, () => pipAddAgentNode(p, a, at)]).concat(free.length ? [] : [['(every agent is already here — make more on the Agents page)', () => {}]])
-        .concat(pipAddablePipelines(p).map(x => ['Pipeline: ' + x.name, () => pipAddPipelineNode(p, x, at)])));
+        .concat(pipAddablePipelines(p).map(x => ['Pipeline: ' + x.name, () => pipAddPipelineNode(p, x, at)]))
+        .concat(Object.keys(pipD.scripts || {}).map(nm => ['Script: ' + nm, () => pipAddScriptNode(p, nm, at)])));
 }
 function pipDraw(p) {
     const c = pipCanvas; c.innerHTML = '';
@@ -4544,14 +4562,14 @@ function pipDraw(p) {
     p.nodes.forEach(n => {
         let d;
         if (pipIsBox(n)) {
-            const def = pipDef(n), ports = pipInputs(n), isSub = n.type === 'pipeline';
+            const def = pipDef(n), ports = pipInputs(n), outs = pipOutputs(n), isSub = n.type === 'pipeline', isScript = n.type === 'script';
             d = agEl('div'); d.className = 'pip-node' + (pipSel === n.id ? ' sel' : '') + (def.enabled === false ? ' off' : '');
-            const h = agEl('div'); h.className = 'pip-nh'; h.append(agEl('span', '', pipLabel(n))); const tg = agEl('span', '', isSub ? 'pipeline' : def.custom ? 'custom' : 'built-in'); tg.className = 'pip-tag'; h.append(tg);
-            const out = agEl('div', '', 'Output'); out.className = 'pip-row out'; d.append(h, out);
+            const h = agEl('div'); h.className = 'pip-nh'; h.append(agEl('span', '', pipLabel(n))); const tg = agEl('span', '', isScript ? 'script' : isSub ? 'pipeline' : def.custom ? 'custom' : 'built-in'); tg.className = 'pip-tag'; h.append(tg);
+            d.append(h); outs.forEach(o => { const out = agEl('div', '', o === 'output' ? 'Output' : o); out.className = 'pip-row out'; d.append(out); });
             ports.forEach(q => { const r = agEl('div', '', q); r.className = 'pip-row in'; d.append(r); });
-            const nb = agEl('div', '', isSub ? 'runs its own agents' : (def.serverName || '?') + ' · ' + (def.slotName || 'default slot') + (def.enabled === false ? ' · off' : '')); nb.className = 'pip-nb'; d.append(nb);
-            const po = agEl('div'); po.className = 'pip-port'; po.style.cssText = 'right:-7px;top:39px'; po.onmousedown = e => pipDragWire(p, n, e); d.append(po);
-            ports.forEach((q, i) => { const pi = agEl('div'); pi.className = 'pip-port' + (taken.has(n.id + ':' + q) ? ' taken' : ''); pi.dataset.node = n.id; pi.dataset.port = q; pi.style.cssText = `left:-7px;top:${67 + i * 28}px`; d.append(pi); });
+            const nb = agEl('div', '', isScript ? 'C# script' : isSub ? 'runs its own agents' : (def.serverName || '?') + ' · ' + (def.slotName || 'default slot') + (def.enabled === false ? ' · off' : '')); nb.className = 'pip-nb'; d.append(nb);
+            outs.forEach((o, i) => { const po = agEl('div'); po.className = 'pip-port'; po.style.cssText = `right:-7px;top:${39 + i * 28}px`; po.onmousedown = e => pipDragWire(p, n, e, o); d.append(po); });
+            ports.forEach((q, i) => { const pi = agEl('div'); pi.className = 'pip-port' + (taken.has(n.id + ':' + q) ? ' taken' : ''); pi.dataset.node = n.id; pi.dataset.port = q; pi.style.cssText = `left:-7px;top:${39 + (outs.length + i) * 28}px`; d.append(pi); });
             d.onmousedown = e => { if (e.button === 0 && !e.target.classList.contains('pip-port')) { e.stopPropagation(); pipDragNode(p, n, d, e); } };
             d.oncontextmenu = e => { e.stopPropagation(); pipMenu(e, pipLabel(n), [['Disconnect all', () => { p.edges = p.edges.filter(x => x.from !== n.id && x.to !== n.id); pipTouch(); pipRender(); }], ['Remove from pipeline', () => pipDelete(p, n)]]); };
         } else if (n.type === 'start') {
@@ -4601,7 +4619,7 @@ function pipDragWire(p, from, e, fromPort) {
         if (!el || !el.dataset || !el.dataset.port || el.dataset.node === from.id) return;
         const to = pipNode(p, el.dataset.node); if (!to || pipReaches(p, to.id, from.id)) return;
         p.edges = p.edges.filter(x => !(x.to === to.id && x.port === el.dataset.port));
-        p.edges.push({ from: from.id, to: to.id, port: el.dataset.port, mode: to.type === 'end' ? 'stream' : 'complete', ...(from.type === 'start' ? { fromPort: fromPort || 'history' } : {}) }); pipTouch(); pipRender();
+        p.edges.push({ from: from.id, to: to.id, port: el.dataset.port, mode: to.type === 'end' ? 'stream' : 'complete', ...(from.type === 'start' || from.type === 'script' ? { fromPort: fromPort || pipOutputs(from)[0] } : {}) }); pipTouch(); pipRender();
     };
     document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up); mv(e);
 }
@@ -4616,7 +4634,7 @@ function pipHook(p) {
         document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
     };
     c.onwheel = e => { e.preventDefault(); const v = pipView(p), r = c.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top, k = Math.min(2, Math.max(.3, v.k * (e.deltaY < 0 ? 1.1 : 1 / 1.1))), f = k / v.k; v.x = mx - (mx - v.x) * f; v.y = my - (my - v.y) * f; v.k = k; pipApplyView(p); };
-    c.oncontextmenu = e => { const at = pipToWorld(p, e), free = pipAddable(p); pipMenu(e, 'Add agent here', free.map(a => [a.name, () => pipAddAgentNode(p, a, { x: at.x - 115, y: at.y - 20 })]).concat(pipAddablePipelines(p).map(x => ['Pipeline: ' + x.name, () => pipAddPipelineNode(p, x, { x: at.x - 115, y: at.y - 20 })])).concat(free.length ? [] : [['(every agent is already here)', () => {}]]).concat([['Recenter', () => pipRecenter(p)]])); };
+    c.oncontextmenu = e => { const at = pipToWorld(p, e), free = pipAddable(p); pipMenu(e, 'Add agent here', free.map(a => [a.name, () => pipAddAgentNode(p, a, { x: at.x - 115, y: at.y - 20 })]).concat(pipAddablePipelines(p).map(x => ['Pipeline: ' + x.name, () => pipAddPipelineNode(p, x, { x: at.x - 115, y: at.y - 20 })])).concat(Object.keys(pipD.scripts || {}).map(nm => ['Script: ' + nm, () => pipAddScriptNode(p, nm, { x: at.x - 115, y: at.y - 20 })])).concat(free.length ? [] : [['(every agent is already here)', () => {}]]).concat([['Recenter', () => pipRecenter(p)]])); };
     if (!pipHooked) {
         pipHooked = true;
         document.addEventListener('click', pipCloseMenu);
@@ -4632,6 +4650,16 @@ function pipInspector(p) {
     const dim = t => { const d = agEl('div', 'color:var(--text-dim);line-height:1.5;white-space:pre-wrap;margin-bottom:10px;', t); box.append(d); return d; };
     const lab = t => box.append(agEl('label', '', t));
     if (!n || !pipIsBox(n)) return null;
+    if (n.type === 'script') {
+        const sh = pipScriptOf(n) || {};
+        box.append(agEl('div', 'font-size:15px;font-weight:600;', n.script));
+        dim(sh.description || 'A C# script.');
+        lab('Inputs'); dim((sh.inputs || []).map(q => '{' + q + '}' + ((sh.optionalInputs || []).includes(q) ? ' (optional)' : '')).join('\n') || 'none');
+        lab('Outputs'); dim((sh.outputs || []).join('\n') || 'none');
+        const ed = agEl('button', 'margin-right:8px;', 'Edit this script'); ed.className = 'agv-btn'; ed.type = 'button'; ed.onclick = () => { scrSelected = n.script; switchTab('scripts'); }; box.append(ed);
+        const rm = agEl('button', '', 'Remove from pipeline'); rm.className = 'agv-btn'; rm.type = 'button'; rm.onclick = () => pipDelete(p, n); box.append(rm);
+        return box;
+    }
     if (n.type === 'pipeline') {
         const sub = pipSubOf(n);
         box.append(agEl('div', 'font-size:15px;font-weight:600;', pipLabel(n)));
@@ -4663,6 +4691,87 @@ function pipInspector(p) {
     const go = agEl('button', 'margin-right:8px;', 'Edit this agent'); go.className = 'agv-btn'; go.type = 'button'; go.onclick = () => { prSelected = 'agent:' + n.agent; switchTab('agents'); }; box.append(go);
     const d = agEl('button', '', 'Remove from pipeline'); d.className = 'agv-btn'; d.type = 'button'; d.onclick = () => pipDelete(p, n); box.append(d);
     return box;
+}
+
+
+// ── Scripts: C# nodes for pipelines ─────────────────────────────────────────
+// A script is one C# class that inherits from ScriptNode. Saving compiles it; if it compiles, the next run of any node using it
+// runs the new version (no restart), and if not the old version keeps running and the errors are shown here.
+var scrList = [], scrSelected = null, scrDraft = '', scrStatus = '';
+const SCR_TEMPLATE = `public class MyNode : ScriptNode
+{
+    public override string Description => "What this node does.";
+
+    // Each [Input] becomes an input port and each [Output] an output port. Ports carry text.
+    [Input]  public string Text   { get; set; }
+    [Output] public string Result { get; set; }
+
+    public override Task Run(ScriptContext ctx)
+    {
+        Result = Text.ToUpper();
+        ctx.Log("done");
+        return Task.CompletedTask;
+    }
+}
+`;
+async function loadScripts() {
+    const host = document.getElementById('scr-editor'); if (!host) return;
+    try { const r = await cpFetch('/api/v1/admin/scripts'); if (!r.ok) throw new Error(); scrList = await r.json(); }
+    catch { host.textContent = 'Failed to load scripts.'; return; }
+    if (scrSelected && !scrList.some(x => x.name === scrSelected) && scrSelected !== '__new__') scrSelected = null;
+    if (!scrSelected && scrList.length) scrSelected = scrList[0].name;
+    scrRenderList(); await scrLoadSource();
+}
+function scrRenderList() {
+    const host = document.getElementById('scr-list'); host.innerHTML = '';
+    const nw = agEl('button', 'width:100%;margin-bottom:12px;', '+ New script'); nw.className = 'vs-btn-primary'; nw.type = 'button';
+    nw.onclick = () => { const n = (prompt('Name for the script (letters, numbers, - or _)?') || '').trim(); if (!n) return; if (!/^[A-Za-z][A-Za-z0-9_-]{0,39}$/.test(n)) { alert('Start with a letter; then letters, numbers, - or _ (up to 40 characters).'); return; } if (scrList.some(x => x.name === n)) { alert('There is already a script called ' + n + '.'); return; } scrSelected = n; scrDraft = SCR_TEMPLATE; scrStatus = 'New script — save to compile it.'; scrEditor(true); };
+    host.append(nw);
+    scrList.forEach(x => {
+        const row = agEl('div', 'padding:7px 10px;border-radius:7px;cursor:pointer;font-size:13px;display:flex;justify-content:space-between;gap:8px;' + (x.name === scrSelected ? 'background:var(--user-bubble);font-weight:600;' : ''));
+        row.append(agEl('span', '', x.name)); if (x.error) row.append(agEl('span', 'color:#d9534f;font-size:11px;', 'errors'));
+        row.onclick = () => { scrSelected = x.name; scrStatus = ''; scrRenderList(); scrLoadSource(); };
+        host.append(row);
+    });
+    if (!scrList.length) host.append(agEl('div', 'font-size:12.5px;color:var(--text-dim);line-height:1.5;', 'No scripts yet. A script is a C# class that becomes a node you can wire into a pipeline.'));
+}
+async function scrLoadSource() {
+    if (!scrSelected || scrSelected === '__new__') { scrDraft = ''; scrEditor(false); return; }
+    try { const r = await cpFetch('/api/v1/admin/scripts/' + encodeURIComponent(scrSelected)); const j = await r.json(); scrDraft = r.ok ? j.source : ''; } catch { scrDraft = ''; }
+    scrEditor(false);
+}
+function scrEditor(isNew) {
+    const host = document.getElementById('scr-editor'); host.innerHTML = '';
+    if (!scrSelected) { host.append(agEl('div', 'font-size:13px;color:var(--text-dim);line-height:1.6;max-width:560px;', 'Scripts let you write your own pipeline nodes in C#. Make one with “New script”. It compiles when you save it, and the nodes using it pick up the new version straight away, with no restart.')); return; }
+    const info = scrList.find(x => x.name === scrSelected);
+    host.append(agEl('h2', 'font-size:20px;font-weight:700;margin:0 0 4px;', scrSelected));
+    host.append(agEl('p', 'font-size:13px;color:var(--text-dim);margin:0 0 14px;line-height:1.5;max-width:720px;', 'One public class that inherits from ScriptNode. Add it to a pipeline from the Pipelines page (Add agent → Script). Scripts are trusted code: they run inside A·R·I with the same access as A·R·I itself. ctx gives you Log, Ct (cancellation), Ask(agent, prompt), Http, SearchBrain and ReadNote.'));
+    const ta = agEl('textarea', 'width:100%;min-height:380px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.5;padding:12px;border:1px solid var(--border);border-radius:10px;background:transparent;color:var(--text);tab-size:4;white-space:pre;overflow:auto;resize:vertical;box-sizing:border-box;');
+    ta.value = scrDraft; ta.spellcheck = false;
+    ta.oninput = () => { scrDraft = ta.value; };
+    ta.onkeydown = e => { if (e.key === 'Tab') { e.preventDefault(); const a = ta.selectionStart; ta.setRangeText('    ', a, ta.selectionEnd, 'end'); scrDraft = ta.value; } };
+    host.append(ta);
+    const bar = agEl('div', 'display:flex;align-items:center;gap:12px;margin-top:10px;flex-wrap:wrap;');
+    const save = agEl('button', '', 'Save and compile'); save.className = 'vs-btn-primary'; save.type = 'button';
+    const st = agEl('span', 'font-size:12.5px;color:var(--text-dim);', scrStatus);
+    save.onclick = async () => {
+        st.textContent = 'Compiling…';
+        const r = await cpFetch('/api/v1/admin/scripts/' + encodeURIComponent(scrSelected), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source: scrDraft }) });
+        const j = await r.json().catch(() => ({}));
+        if (r.ok) { scrStatus = 'Compiled and loaded. Nodes using it run this version from now on.'; scrSelected = scrSelected; await loadScripts(); }
+        else { scrStatus = ''; st.textContent = ''; scrErr(host, j.error || 'Save failed.'); }
+    };
+    bar.append(save);
+    if (!isNew && info) { const del = agEl('button', '', 'Delete script'); del.className = 'agv-btn'; del.type = 'button'; del.onclick = async () => { if (!confirm('Delete ' + scrSelected + '? Pipelines using it stop being valid.')) return; await cpFetch('/api/v1/admin/scripts/' + encodeURIComponent(scrSelected), { method: 'DELETE' }); scrSelected = null; loadScripts(); }; bar.append(del); }
+    bar.append(st); host.append(bar);
+    if (info && info.error) scrErr(host, info.error);
+    if (info && !info.error) {
+        host.append(agEl('div', 'margin-top:14px;font-size:12.5px;color:var(--text-dim);line-height:1.6;', 'Inputs: ' + (info.inputs.map(q => '{' + q + '}' + (info.optionalInputs.includes(q) ? ' (optional)' : '')).join(', ') || 'none') + '   ·   Outputs: ' + (info.outputs.join(', ') || 'none')));
+    }
+}
+function scrErr(host, text) {
+    host.querySelector('.scr-err')?.remove();
+    const e = agEl('pre', 'margin-top:12px;padding:10px 12px;border:1px solid #d9534f;border-radius:8px;color:#d9534f;font-size:12px;white-space:pre-wrap;line-height:1.5;', text); e.className = 'scr-err'; host.append(e);
 }
 
 var agIsDirty = false;

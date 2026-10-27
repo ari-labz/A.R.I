@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using ARI.Common;
+using ARI.Scripting;
 using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
@@ -25,6 +26,8 @@ internal sealed class GraphPipeline : Pipeline
 
     private const int MaxDepth = 8;
 
+    private readonly ScriptRegistry scripts;
+
     internal event Action<string>? ThreadBufferFull;
     internal event Action<string>? ThreadBecameInactive;
 
@@ -36,6 +39,7 @@ internal sealed class GraphPipeline : Pipeline
         IReadOnlyDictionary<string, CustomAgent> customAgents,
         Func<string?, PipelineGraph> graphFor,
         Func<string, PipelineGraph?> pipelineById,
+        ScriptRegistry scripts,
         ConcurrentDictionary<string, CancellationTokenSource> processingThreads,
         ConcurrentDictionary<string, LiveCallInfo>             liveCalls,
         Action<string>                                          notifyWatchers)
@@ -48,6 +52,7 @@ internal sealed class GraphPipeline : Pipeline
         this.customAgents = customAgents;
         this.graphFor     = graphFor;
         this.pipelineById = pipelineById;
+        this.scripts      = scripts;
 
         textingAgent.ThreadBufferFull     += key => ThreadBufferFull?.Invoke(key);
         textingAgent.ThreadBecameInactive += key => ThreadBecameInactive?.Invoke(key);
@@ -140,6 +145,18 @@ internal sealed class GraphPipeline : Pipeline
                     return subResult;
                 }
 
+                // A script is one node too: its [Input] properties are the ports wired in, its [Output] properties the ports it offers.
+                if (node.Type == "script")
+                {
+                    ScriptShape shape = scripts.Shape(node.Script!) ?? throw new InvalidOperationException($"Script '{node.Script}' isn't loaded (does it have errors?).");
+                    Stopwatch scriptSw = Stopwatch.StartNew();
+                    ScriptContext scriptCtx = new(threadKey, username, cts.Token, _ => { }, AskAgent);
+                    Dictionary<string, string?> produced = await scripts.Run(node.Script!, inputs, scriptCtx);
+                    foreach ((string port, string? value) in produced) outputs[$"{node.Id}:{port.ToLowerInvariant()}"] = value;
+                    Shared.Logger.LogInformation("[Graph:{Graph}] ({Thread}) script '{Script}' finished in {Sec:F1}s.", graph.Name, threadKey, node.Script, scriptSw.Elapsed.TotalSeconds);
+                    return produced.GetValueOrDefault(shape.Outputs[0]);
+                }
+
                 string agentName = node.Agent!;
                 Stopwatch sw = Stopwatch.StartNew();
 
@@ -200,9 +217,30 @@ internal sealed class GraphPipeline : Pipeline
         }
     }
 
-    /// <summary>Where a wire's value is stored: a node's output, or for START the specific output the wire leaves from.</summary>
-    private static string OutputKey(PipelineGraph graph, PipelineGraph.Edge e) =>
-        graph.Nodes.Any(n => n.Id == e.From && n.Type == "start") ? $"{e.From}:{e.FromPort.ToLowerInvariant()}" : e.From;
+    /// <summary>Where a wire's value is stored: a node's output, or for START and scripts the specific output the wire leaves from
+    /// (a script wire that names none, or one the script doesn't have, takes its first output).</summary>
+    private string OutputKey(PipelineGraph graph, PipelineGraph.Edge e)
+    {
+        PipelineGraph.Node? source = graph.Nodes.FirstOrDefault(n => n.Id == e.From);
+        if (source?.Type == "start") return $"{e.From}:{e.FromPort.ToLowerInvariant()}";
+        if (source?.Type == "script" && source.Script is { } name && scripts.Shape(name) is { Outputs.Length: > 0 } shape)
+        {
+            string port = shape.Outputs.FirstOrDefault(o => o.Equals(e.FromPort, StringComparison.OrdinalIgnoreCase)) ?? shape.Outputs[0];
+            return $"{e.From}:{port.ToLowerInvariant()}";
+        }
+        return e.From;
+    }
+
+    /// <summary>What a script's ctx.Ask does: run one of the custom agents once, on a throw-away thread, and hand back its text.</summary>
+    private async Task<string> AskAgent(string agentName, string prompt, CancellationToken ct)
+    {
+        if (!customAgents.TryGetValue(agentName, out CustomAgent? agent)) throw new InvalidOperationException($"There is no custom agent called '{agentName}'.");
+        using IDisposable _ = CustomAgent.Resolve(PipelineGraph.Fill(agent.AgentPrompt, new Dictionary<string, string> { ["message"] = prompt }));
+        Thread scratch = new(ThreadPipeline.Dialogue, $"script:{Guid.NewGuid():N}") { Internal = true, ReadOnlyTools = true };
+        new ListTools(scratch).Register(scratch);
+        new RequestTools(scratch).Register(scratch);
+        return await agent.Prompt(scratch, prompt, new PromptOptions { Ct = ct });
+    }
 
     private static string FormatHistory(List<ThreadMessage> history)
     {

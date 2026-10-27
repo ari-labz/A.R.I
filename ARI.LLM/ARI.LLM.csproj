@@ -18,6 +18,8 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="HtmlAgilityPack" Version="1.11.71" />
+    <!-- Compiles the C# scripts people write for pipeline nodes and tools, while A·R·I is running. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.12.0" />
     <ProjectReference Include="..\Submodules\SmartReader\src\SmartReader\SmartReader.csproj" />
   </ItemGroup>
 
