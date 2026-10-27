@@ -33,7 +33,7 @@ public class AgentsController(PersistentData persistentData) : ControllerBase
     }
 
     /// <summary>Names that belong to shipped agents, so a custom agent can never shadow one.</summary>
-    private static readonly string[] ReservedNames = ["Dialogue", "Coder", "Context", "Awareness", "Memory", "Engram", "Refactor", "Curiosity", "Subagent", "Dreamer", "Shared"];
+    private static readonly string[] ReservedNames = ["Dialogue", "Coder", "Context", "Awareness", "Memory", "Engram", "Curiosity", "Subagent", "Dreamer", "Shared"];
 
     public sealed record NewAgent(string Name, string? ServerName, string? SlotName, string? AgentPrompt, bool ReadOnly = false);
 

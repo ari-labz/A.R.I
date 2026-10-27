@@ -3983,8 +3983,7 @@ const AG_TREE = [
                    ['transcript', 'the conversation so far']] },
     ]},
     { name: 'Coder',      prompts: [], phases: true },
-    { name: 'MemoryAgent', abstract: true, shared: 'MemoryAgent', children: [
-        { name: 'Engram', prompts: [
+    { name: 'Engram', prompts: [
             { key: 'ExtractSystem', label: 'Extract: system prompt',
               hint: 'step one: lists every entity worth remembering, with the real lines it came from', tokens: [] },
             { key: 'ExtractTask',   label: 'Extract: task',
@@ -4003,29 +4002,6 @@ const AG_TREE = [
               hint: 'the question that gate is asked',
               tokens: [['transcript', 'the conversation being judged']] },
         ]},
-        { name: 'Refactor',  prompts: [
-            { key: 'Task', label: 'Task', hint: 'the turn sent on each scheduled run', tokens: [] },
-        ]},
-    ]},
-];
-
-const AG_SHARED = {
-    MemoryAgent: [
-        { key: 'GraphRulebook', label: 'Graph rulebook',
-          hint: "appended to each child's system prompt — the one taxonomy/hub/dedup rulebook", tokens: [] },
-        { key: 'EpochPrompt',  label: 'Epoch prompt',
-          hint: 'sent after each look at the graph',
-          tokens: [['seedTitle', 'the note at the centre of this neighbourhood'],
-                   ['skeleton', "the neighbourhood's notes and their links"],
-                   ['task', "the child agent's own task text, inserted here"]] },
-    ],
-};
-
-const AG_BUDGET_TOKENS = [
-    ['thinkingTokens', 'thinking tokens allowed before the chain of thought is cut off mid-sentence'],
-    ['replyTokens',    'tokens allowed for the reply itself before it is truncated'],
-    ['contextTokens',  'total context the agent may use before older turns are dropped'],
-    ['toolBudget',     'tool calls allowed in one turn before the loop is stopped'],
 ];
 
 var agData = null;
@@ -4236,7 +4212,6 @@ const AG_INFO = [
     ['Awareness', 'Decides whether she should reply in group chats such as Discord.'],
     ['Recall',    'Recalls what the conversation needs from the brain: it is given the names of notes that might matter, opens them with tools, follows their links, and writes the memory block Dialogue reads. It keeps its own sub-thread under each chat.'],
     ['Engram',    'Writes new memories after conversations (reflection). Off makes the brain read-only.'],
-    ['Refactor',  'Tidies the memory graph in the background on a schedule.'],
     ['Subagent',  'Runs the side tasks she starts with spawn_agent.'],
 ];
 
@@ -4328,10 +4303,12 @@ function prRenderList() {
         list.append(it);
     };
     const group = t => { const g = agEl('div', '', t); g.className = 'pr-group'; list.append(g); };
-    group('Shared');
-    item('shared:budgets', 'Budgets block');
-    item('shared:memory', 'Memory graph rules');
-    group('Agents');
+    const ordered = agOrdered();
+    // Everything ARI runs from its own code, then the agents you make yourself.
+    const isOwn = a => a.custom && !a.system;
+    group('System Agents');
+    ordered.filter(a => !isOwn(a) && a.name !== 'Memory').forEach(a => item('agent:' + a.name, a.name, a.enabled === false));
+    group('Your agents');
     const add = agEl('div', 'color:var(--text-dim);'); add.className = 'pr-item'; add.append(agEl('span', '', '+ New agent'));
     add.onclick = async () => {
         const name = (prompt('Name for the new agent?') || '').trim(); if (!name) return;
@@ -4343,25 +4320,13 @@ function prRenderList() {
         const n = document.getElementById('pr-restart'); if (n) n.style.display = '';
     };
     list.append(add);
-    const ordered = agOrdered();
-    // The agents ARI runs from its own code sit in their own group; the old pick-based Memory agent is only a fallback behind Recall.
-    const SYSTEM = ['Recall', 'Engram'];
-    ordered.filter(a => !a.system && a.name !== 'Memory' && !SYSTEM.includes(a.name)).forEach(a => item('agent:' + a.name, a.name, a.enabled === false));
-    group('System Agents');
-    SYSTEM.map(n => ordered.find(a => a.name === n)).filter(Boolean).forEach(a => item('agent:' + a.name, a.name, a.enabled === false));
+    ordered.filter(isOwn).forEach(a => item('agent:' + a.name, a.name, a.enabled === false));
 }
 
 function prRenderEditor() {
     const ed = document.getElementById('pr-editor'); ed.innerHTML = '';
     const title = (t, sub) => { ed.append(agEl('h2', 'font-size:20px;font-weight:700;margin:0 0 4px;', t)); ed.append(agEl('p', 'font-size:13px;color:var(--text-dim);margin:0 0 22px;line-height:1.5;', sub)); };
-    if (prSelected === 'shared:budgets') {
-        title('Budgets block', "Appended to the bottom of every agent's prompt.");
-        prField(ed, 'Template', 'A line whose token is 0 is dropped; if all four are 0 the block is omitted. The numbers come from each agent\'s own settings. It always sits at the bottom of the system prompt: the values change every turn, and everything above must stay identical or the llama-server cache re-prefills.',
-                AG_BUDGET_TOKENS, agData.shared.budgets.Block, v => agData.shared.budgets.Block = v);
-    } else if (prSelected === 'shared:memory') {
-        title('Memory graph rules', 'Shared by Engram, Refactor and Curiosity: the rulebook and the per-pass prompt they all use.');
-        (AG_SHARED.MemoryAgent || []).forEach(p => prField(ed, p.label, p.hint, p.tokens, agData.shared.memoryAgent[p.key], v => agData.shared.memoryAgent[p.key] = v));
-    } else {
+    {
         const name = prSelected.slice(6), agent = (agData.agents || []).find(a => a.name === name), spec = agSpec(name);
         if (!agent) { ed.textContent = 'Not found.'; return; }
         title(name, (AG_INFO.find(x => x[0] === name) || [])[1] || (agent.custom ? (agent.description || 'A custom agent. Wire it into a pipeline on the Pipelines page.') : ''));
@@ -4806,9 +4771,6 @@ async function loadAgents() {
             host.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Failed to load agents.</span>';
             return;
         }
-        agData.shared = agData.shared || {};
-        agData.shared.budgets     = agData.shared.budgets     || {};
-        agData.shared.memoryAgent = agData.shared.memoryAgent || {};
         agIsDirty = false;
     }
     prRenderList();
@@ -4826,11 +4788,6 @@ async function agSave() {
             });
             if (!r.ok) throw new Error(a.name);
         }
-        const r2 = await cpFetch('/api/v1/admin/agents/shared', {
-            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ memoryAgent: agData.shared.memoryAgent, budgets: agData.shared.budgets }),
-        });
-        if (!r2.ok) throw new Error('shared');
         setStatus('');
         agIsDirty = false;
         ['ag-restart', 'pr-restart'].forEach(id => { const n = document.getElementById(id); if (n) n.style.display = ''; });

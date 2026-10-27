@@ -40,7 +40,6 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly Memory?           memory;
     private readonly Context?          context;
     private readonly Engram?           engram;
-    private readonly Refactor?         refactor;
     private readonly Awareness?        awareness;
     
     
@@ -51,8 +50,6 @@ public class LLMModule : ILLMModule, IDisposable
     private bool                        dreamingEnabled;
 
     //refactor's own daily schedule (self-contained now that there is no generic Scheduler module)
-    private CancellationTokenSource?    refactorLoopCts;
-    private DateTime                    lastScheduledRefactorUtc;
 
     private readonly CommandService    commands;
     // One queue per physical server — two servers can genuinely run at the same time; agents sharing
@@ -146,15 +143,13 @@ public class LLMModule : ILLMModule, IDisposable
         {
             using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(agentsJsonPath), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
 
-            Dictionary<string, string>? sharedMemory = null, sharedToolSystem = null;
+            Dictionary<string, string>? sharedToolSystem = null;
             if (TryGetPropCI(doc.RootElement, "Shared", out JsonElement sharedEl))
             {
-                if (TryGetPropCI(sharedEl, "MemoryAgent", out JsonElement memEl))
-                    sharedMemory = JsonSerializer.Deserialize<Dictionary<string, string>>(memEl.GetRawText(), JsonOptions);
                 if (TryGetPropCI(sharedEl, "ToolSystem", out JsonElement toolEl))
                     sharedToolSystem = JsonSerializer.Deserialize<Dictionary<string, string>>(toolEl.GetRawText(), JsonOptions);
             }
-            SharedPrompts.Load(sharedMemory, sharedToolSystem);
+            SharedPrompts.Load(sharedToolSystem);
             // Unlike Agents.json, ToolGroups.json has no control-panel edit UI yet — read straight from
             // the shipped copy (Paths.BuildPath) rather than agentsJsonPath's seeded-into-AppData copy,
             // which only exists for files a user is meant to tune in place.
@@ -283,18 +278,7 @@ public class LLMModule : ILLMModule, IDisposable
 
             ToolApprovals.Notify = NotifyWatchers;   // approval prompts ride the thread's watch stream
 
-            if (rawAgents.TryGetValue("Refactor", out JsonElement refactorEl))
-            {
-                refactor = Deserialize<Refactor>(refactorEl);
-                refactor.engram = engram;
-                refactor.PersistentDir = PersistentDataDir;
-                refactor.Registry = threads;
-                refactor.Notify = NotifyWatchers;
-                agentMap["Refactor"] = refactor;
-                _logger.LogInformation("Refactor is active.");
-            }
-
-            commands = new CommandService(engram, refactor);
+            commands = new CommandService(engram);
         }
         else
         {
@@ -847,7 +831,6 @@ public class LLMModule : ILLMModule, IDisposable
         await Task.WhenAll(boots);
 
         dreamOrchestrator?.Start();
-        StartRefactorLoop();
 
         async Task BootOne(Server server, Model? model)
         {
@@ -934,8 +917,6 @@ public class LLMModule : ILLMModule, IDisposable
         dreamOrchestrator?.Dispose();
         brainWatchCts?.Cancel();
         brainWatchCts?.Dispose();
-        refactorLoopCts?.Cancel();
-        refactorLoopCts?.Dispose();
         engram?.Dispose();
         foreach (Server server in _servers)
             server.Dispose();
@@ -1438,7 +1419,7 @@ public class LLMModule : ILLMModule, IDisposable
     public ThreadPhase GetThreadPhase(string threadKey) => threadPhases.TryGetValue(threadKey, out ThreadPhase p) ? p : ThreadPhase.Idle;
 
     // Idle = no thread is currently being processed. Read statically via Activity.IsIdle(); background
-    // work (Refactor's loop, Dream) runs only while this holds, and yields the moment Ari is busy.
+    // work (Dream) runs only while this holds, and yields the moment Ari is busy.
     public bool IsIdle => processingThreads.IsEmpty;
 
     // Ari is "active" whenever any visible (non-Internal) thread is in a state the user can see in the
@@ -1448,79 +1429,9 @@ public class LLMModule : ILLMModule, IDisposable
         threads.Values.Any(t => !t.Internal &&
             t.State is ThreadState.Unread or ThreadState.Active or ThreadState.Streaming or ThreadState.Inactive);
 
-    /// <summary>True when Refactor is loaded and can be run on a schedule (the graph walk that replaced BrainScan).</summary>
-    public bool HasRefactor => refactor is not null;
-
     // Canonical persistent-data location. Only needed by the manual /brainscan and /proactive commands
-    // (which don't receive it from ARI.Core) and by the dreaming/refactor schedule state below.
+    // (which don't receive it from ARI.Core) and by the dreaming state below.
     private static string PersistentDataDir => Paths.PersistentData;
-
-    /// <summary>Runs a scheduled graph-walk refactor pass, capped at 10 epochs (honours the token so it
-    /// yields when cancelled). The manual /refactor command still runs the full uncapped walk.</summary>
-    public Task RunRefactorAsync(CancellationToken ct) =>
-        refactor?.Run(allNotes: true, ct, epochsOverride: SCHEDULED_REFACTOR_EPOCHS) ?? Task.CompletedTask;
-
-    // ── Refactor's own schedule ──────────────────────────────────────────────────
-    // Roughly once a day, while Ari is idle. There's exactly one scheduled job left in the whole
-    // process, so it isn't worth a generic cron/scheduler module for it — a plain poll loop covers it.
-
-    private static readonly TimeSpan REFACTOR_INTERVAL      = TimeSpan.FromDays(1);
-    private static readonly TimeSpan REFACTOR_POLL_INTERVAL = TimeSpan.FromMinutes(30);
-    private static string RefactorScheduleStatePath => Path.Combine(PersistentDataDir, "RefactorSchedule.json");
-
-    private void StartRefactorLoop()
-    {
-        if (refactor is null) return;
-        lastScheduledRefactorUtc = LoadLastRefactorRunUtc();
-        refactorLoopCts = new CancellationTokenSource();
-        _ = RefactorLoopAsync(refactorLoopCts.Token);
-    }
-
-    private async Task RefactorLoopAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                if (IsIdle && DateTime.UtcNow - lastScheduledRefactorUtc >= REFACTOR_INTERVAL)
-                {
-                    await RunRefactorAsync(ct);
-                    lastScheduledRefactorUtc = DateTime.UtcNow;
-                    SaveLastRefactorRunUtc(lastScheduledRefactorUtc);
-                }
-            }
-            catch (OperationCanceledException) { break; }
-            catch (Exception ex) { _logger.LogWarning(ex, "[Refactor] Scheduled check failed."); }
-
-            try { await Task.Delay(REFACTOR_POLL_INTERVAL, ct); }
-            catch (OperationCanceledException) { break; }
-        }
-    }
-
-    private sealed record RefactorScheduleState(DateTime LastRunUtc);
-
-    // A fresh install has never run Refactor — treated as "just ran" so it doesn't fire the moment
-    // Ari first goes idle, rather than waiting out a full day like every subsequent run.
-    private static DateTime LoadLastRefactorRunUtc()
-    {
-        try
-        {
-            if (File.Exists(RefactorScheduleStatePath))
-                return JsonSerializer.Deserialize<RefactorScheduleState>(File.ReadAllText(RefactorScheduleStatePath))?.LastRunUtc ?? DateTime.UtcNow;
-        }
-        catch { /* fall through to "just ran" */ }
-        return DateTime.UtcNow;
-    }
-
-    private static void SaveLastRefactorRunUtc(DateTime utc)
-    {
-        try
-        {
-            Directory.CreateDirectory(PersistentDataDir);
-            File.WriteAllText(RefactorScheduleStatePath, JsonSerializer.Serialize(new RefactorScheduleState(utc)));
-        }
-        catch { /* best-effort — worst case Refactor re-runs sooner than once a day */ }
-    }
 
     // ── Dreaming on/off ──────────────────────────────────────────────────────────
     // Runtime-editable from the control panel; persisted here now that there is no Scheduler module
@@ -1559,7 +1470,6 @@ public class LLMModule : ILLMModule, IDisposable
 
     // The scheduled walk is deliberately short: 10 seeds per run, then it reschedules. Ordering by
     // LastRefactored (oldest first) means each run advances to notes the previous runs never reached.
-    private const int SCHEDULED_REFACTOR_EPOCHS = 10;
 
     /// <summary>
     /// Creates a fresh, Master-facing Dialogue thread whose history is a single assistant message — Ari

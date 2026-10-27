@@ -31,8 +31,25 @@ internal static class SystemAgents
             JsonObject templates = Get(memory, "PromptTemplates") as JsonObject ?? new JsonObject();
 
             bool changed = false;
+            // The memory graph rules used to be shared by Engram, Refactor and Curiosity. Engram is the one left, so they live in its own prompt,
+            // and the "budgets" block that was appended to every prompt is gone.
+            if (Get(root, "Shared") is JsonObject shared)
+            {
+                if (KeyOf(shared, "MemoryAgent") is { } maKey)
+                {
+                    string? rules = Get((JsonObject)shared[maKey]!, "GraphRulebook") is JsonValue rv ? rv.GetValue<string>() : null;
+                    JsonObject? engramEntry = agents.OfType<JsonObject>().FirstOrDefault(a => NameOf(a).Equals("Engram", StringComparison.OrdinalIgnoreCase));
+                    if (rules is { Length: > 0 } && engramEntry is not null && KeyOf(engramEntry, "AgentPrompt") is { } apKey
+                        && !(engramEntry[apKey]?.GetValue<string>() ?? "").Contains(rules[..Math.Min(60, rules.Length)]))
+                        engramEntry[apKey] = (engramEntry[apKey]?.GetValue<string>() ?? "") + "\n\n" + rules;
+                    shared.Remove(maKey);
+                    changed = true;
+                }
+                if (KeyOf(shared, "Budgets") is { } bKey) { shared.Remove(bKey); changed = true; }
+            }
             // Earlier builds seeded the Memory pipeline's step agents and called the walker "Memory Walker". Recall replaces them all.
             foreach (JsonObject old in agents.OfType<JsonObject>().Where(a => NameOf(a) is "Memory Pick" or "Memory Extract" or "Memory Privacy").ToList()) { agents.Remove(old); changed = true; }
+            foreach (JsonObject gone in agents.OfType<JsonObject>().Where(a => NameOf(a).Equals("Refactor", StringComparison.OrdinalIgnoreCase)).ToList()) { agents.Remove(gone); changed = true; }   // Dreaming replaced it
             JsonObject? renamed = agents.OfType<JsonObject>().FirstOrDefault(a => NameOf(a).Equals("Memory Walker", StringComparison.OrdinalIgnoreCase));
             if (renamed is not null && !agents.OfType<JsonObject>().Any(a => NameOf(a).Equals(Walker, StringComparison.OrdinalIgnoreCase)))
             {

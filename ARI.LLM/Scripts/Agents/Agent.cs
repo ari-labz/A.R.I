@@ -103,25 +103,6 @@ public abstract class Agent
     internal virtual string BuildSystemPrompt(Thread thread) =>
         PromptTokens.Value is { } tokens ? ARI.LLM.PipelineGraph.Fill(AgentPrompt, tokens) : AgentPrompt;
 
-    private static string BuildBudgets(int thinking, int reply, int context, int toolCalls)
-    {
-        List<string> lines = new List<string>();
-
-        if (thinking  > 0) lines.Add($"Thinking Token Budget: {thinking}");
-        if (reply     > 0) lines.Add($"Reply Token Budget: {reply}");
-        if (context   > 0) lines.Add($"Context Token Budget: {context}");
-        if (toolCalls > 0) lines.Add($"Tool Call Budget: {toolCalls}");
-
-        if (lines.Count == 0) return "";
-
-        lines.Add("Deliver a COMPLETE answer within these budgets.");
-        if (thinking > 0 && reply > 0)
-            lines.Add("These two budgets are separate pools, not one shared allowance — thinking cannot borrow from the reply, and spending the whole thinking budget still leaves the reply its full amount.");
-        if (thinking > 0)
-            lines.Add("Your thinking budget is tight — decide fast. Do not restate your instructions or plan at length, and never draft your reply inside your thinking; work out the key insight, then write the reply itself once, for real, in the reply.");
-        return "\n\n# Budgets\n" + string.Join("\n", lines);
-    }
-
     internal string ResolveTemplate(string key, string fallback, params (string Token, string Value)[] tokens)
     {
         string text = PromptTemplates is not null && PromptTemplates.TryGetValue(key, out string? v) && !string.IsNullOrWhiteSpace(v)
@@ -331,7 +312,6 @@ public abstract class Agent
 
         // ── System block ─────────────────────────────────────────────────────
         internal string BaseSystem   = "";
-        internal string BudgetsBlock = "";
         internal string ThinkSuffix  = "";
 
         // ── Message list (grows across steps) ────────────────────────────────
@@ -551,8 +531,8 @@ public abstract class Agent
 
         // ── System block & messages ───────────────────────────────────────────
         int maxChars = BudgetContext > 0 ? (int)(BudgetContext * 3.5) : 0;
-        (turn.BaseSystem, turn.BudgetsBlock, turn.ThinkSuffix) = BuildSystemBlock(thread, turn.ThinkBudget, turn.RespBudget, Think);
-        turn.Messages.AddRange(BuildMessages(thread, prompt, opts, msgAtts, maxChars, turn.BaseSystem, turn.BudgetsBlock, turn.ThinkSuffix));
+        (turn.BaseSystem, turn.ThinkSuffix) = BuildSystemBlock(thread, turn.ThinkBudget, turn.RespBudget, Think);
+        turn.Messages.AddRange(BuildMessages(thread, prompt, opts, msgAtts, maxChars, turn.BaseSystem, turn.ThinkSuffix));
 
         // ── Telemetry bootstrap ───────────────────────────────────────────────
         foreach (object m in turn.Messages)
@@ -790,7 +770,7 @@ public abstract class Agent
         }
 
         // Refresh system message so per-turn budget numbers are current.
-        turn.Messages[0] = new { role = "system", content = turn.BaseSystem + turn.BudgetsBlock + turn.ThinkSuffix };
+        turn.Messages[0] = new { role = "system", content = turn.BaseSystem + turn.ThinkSuffix };
 
         if (SupportsCompaction)
             Compact(turn.Messages, turn.ToolResultSlots, BudgetContext, CompactHighPct, CompactLowPct, thread.Snapshots);
@@ -1986,11 +1966,10 @@ public abstract class Agent
 
     private const string BlockRule = "--------------------------------";
 
-    private (string baseSystem, string budgetsBlock, string thinkSuffix) BuildSystemBlock(
+    private (string baseSystem, string thinkSuffix) BuildSystemBlock(
         Thread thread, int thinkBudget, int respBudget, bool Think)
     {
-        // All blocks below are byte-identical across turns so the KV prefix cache survives —
-        // only [Budgets] at the very bottom carries per-turn values.
+        // All blocks below are byte-identical across turns so the KV prefix cache survives.
         string roleBody   = BuildSystemPrompt(thread);
         string systemBody = UsePersona ? SystemPromptStore.Get() : "";
         string systemFull = systemBody.Length == 0 ? roleBody : $"{systemBody}\n\n{roleBody}";
@@ -2025,16 +2004,14 @@ public abstract class Agent
 
         string baseSystem = string.Join("\n\n", sections) + PersistentContext(thread);
 
-        // [Budgets] at the BOTTOM — per-turn values must not invalidate the cached prefix above.
-        string budgetsBlock = BuildBudgets(thinkBudget, respBudget, BudgetContext, MaxToolCalls);
         string thinkSuffix  = Think ? "" : "\n<|think_off|>";
 
-        return (baseSystem, budgetsBlock, thinkSuffix);
+        return (baseSystem, thinkSuffix);
     }
 
     private List<object> BuildMessages(Thread thread, string prompt, PromptOptions opts,
         List<Attachment> msgAtts,
-        int maxChars, string baseSystem, string budgetsBlock, string thinkSuffix)
+        int maxChars, string baseSystem, string thinkSuffix)
     {
         List<ThreadMessage> chatHistory = thread.GetChatHistory(MemoryLimit, maxChars);
 
@@ -2051,7 +2028,7 @@ public abstract class Agent
         if (opts.AugmentedPrompt is not null && collapsed.Count > 0)
             collapsed[^1] = collapsed[^1] with { Content = opts.AugmentedPrompt };
 
-        List<object> messages = new() { new { role = "system", content = baseSystem + budgetsBlock + thinkSuffix } };
+        List<object> messages = new() { new { role = "system", content = baseSystem + thinkSuffix } };
 
         for (int i = 0; i < collapsed.Count - 1; i++)
         {
