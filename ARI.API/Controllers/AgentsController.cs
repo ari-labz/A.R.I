@@ -57,6 +57,8 @@ public class AgentsController(PersistentData persistentData) : ControllerBase
     [HttpDelete("{id}")]
     public IActionResult DeleteAgent(string id)
     {
+        if (persistentData.GetAgentEntryJson(id) is { } entry && System.Text.Json.Nodes.JsonNode.Parse(entry)?.AsObject().Any(kv => kv.Key.Equals("System", StringComparison.OrdinalIgnoreCase) && kv.Value?.GetValue<bool>() == true) == true)
+            return BadRequest(new { error = $"'{id}' is shipped with A·R·I and used by its own pipelines. You can edit it but not delete it." });
         if (!persistentData.RemoveCustomAgent(id))
             return NotFound(new { error = $"'{id}' is not a custom agent." });
         Llm?.RemoveCustomAgent(id);

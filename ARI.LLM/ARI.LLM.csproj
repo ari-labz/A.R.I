@@ -16,6 +16,11 @@
   <ItemGroup>
     <InternalsVisibleTo Include="ARI.API" />
   </ItemGroup>
+  <!-- The scripts ARI ships are C# text compiled at run time, not part of this assembly. -->
+  <ItemGroup>
+    <Compile Remove="Scripts/SystemScripts/**" />
+    <EmbeddedResource Include="Scripts/SystemScripts/**/*.cs" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="HtmlAgilityPack" Version="1.11.71" />
     <!-- Compiles the C# scripts people write for pipeline nodes and tools, while A·R·I is running. -->

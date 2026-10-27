@@ -4343,7 +4343,9 @@ function prRenderList() {
         const n = document.getElementById('pr-restart'); if (n) n.style.display = '';
     };
     list.append(add);
-    agOrdered().forEach(a => item('agent:' + a.name, a.name, a.enabled === false));
+    const ordered = agOrdered();
+    ordered.filter(a => !a.system).forEach(a => item('agent:' + a.name, a.name, a.enabled === false));
+    if (ordered.some(a => a.system)) { group('Agents ARI uses in its own pipelines'); ordered.filter(a => a.system).forEach(a => item('agent:' + a.name, a.name, a.enabled === false)); }
 }
 
 function prRenderEditor() {
@@ -4362,7 +4364,7 @@ function prRenderEditor() {
         title(name, agent.custom ? (agent.description || 'A custom agent. Wire it into a pipeline on the Pipelines page.') : (AG_INFO.find(x => x[0] === name) || [])[1] || '');
         const hdr = agEl('div', 'display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:-8px 0 24px;');
         hdr.append(buildToggle(agent.enabled !== false, on => { agent.enabled = on; agDirty(); prRenderList(); }), agEl('span', 'font-size:13px;color:var(--text-dim);', 'Runs on'), agBindingPickers(agent));
-        if (agent.custom) {
+        if (agent.custom && !agent.system) {
             hdr.append(buildToggle(!!agent.readOnly, on => { agent.readOnly = on; agDirty(); }), agEl('span', 'font-size:13px;color:var(--text-dim);', 'Read-only (can look things up, can\'t change anything)'));
             const del = agEl('button', 'margin-left:auto;', 'Delete agent'); del.className = 'agv-btn'; del.type = 'button';
             del.onclick = async () => { if (!confirm('Delete ' + name + '? Pipelines using it will stop being valid.')) return; const r = await cpFetch('/api/v1/admin/agents/' + encodeURIComponent(name), { method: 'DELETE' }); if (!r.ok) { alert('Could not delete it.'); return; } agIsDirty = false; agData = null; prSelected = 'agent:Dialogue'; await loadAgents(); };
@@ -4370,6 +4372,7 @@ function prRenderEditor() {
         }
         ed.append(hdr);
         prField(ed, 'Agent prompt', 'The system prompt this agent starts every conversation with.', agent.custom ? [['message', "the user's latest message (always available)"], ['history', 'the conversation so far — wire START into this port in a pipeline'], ['anything_else', 'any other {name} becomes an input port you can wire another agent into']] : (spec.systemTokens || []), agent.agentPrompt, v => agent.agentPrompt = v);
+        if (agent.custom) prField(ed, 'Message prompt', 'The message this agent is sent, with {tokens} filled in like the prompt above. Leave it empty to send the user\'s latest message as it is. Use it to keep a role in the prompt above and the task here.', [['message', "the user's latest message"], ['anything_else', 'any other {name} becomes an input port']], agent.messagePrompt || '', v => agent.messagePrompt = v);
         (spec.prompts || []).forEach(p => { agent.promptTemplates = agent.promptTemplates || {}; prField(ed, p.label, p.hint, p.tokens, agent.promptTemplates[p.key], v => agent.promptTemplates[p.key] = v); });
         const known = new Set((spec.prompts || []).map(p => p.key));
         Object.keys(agent.promptTemplates || {}).filter(k => !known.has(k)).forEach(k => {
@@ -4401,6 +4404,7 @@ var pipD = null, pipSel = null, pipDirty = false, pipHooked = false, pipViews = 
 const PIP_W = 230, PIP_BUILTIN = { Memory: ['history'], Dialogue: ['history', 'memories'] };
 const pipUid = () => Math.random().toString(36).slice(2, 8);
 const pipTokens = t => [...new Set(((t || '').match(/\{(\w+)\}/g) || []).map(x => x.slice(1, -1)))].filter(x => x !== 'message');
+const pipAgentTokens = d => pipTokens((d.agentPrompt || '') + '\n' + (d.messagePrompt || ''));
 function pipDef(n) { return n.type === 'agent' ? (agData.agents || []).find(a => a.name === n.agent) || {} : {}; }
 // A sub-pipeline is a node too: it takes the same two things START gives (both optional: left unwired it sees what the pipeline around it received) and has one output.
 const PIP_SUB_PORTS = ['history', 'message'];
@@ -4409,7 +4413,7 @@ function pipLabel(n) { return n.type === 'pipeline' ? (pipSubOf(n) ? pipSubOf(n)
 function pipScriptOf(n) { return (pipD.scripts || {})[n.script]; }
 const pipIsBox = n => n.type === 'agent' || n.type === 'pipeline' || n.type === 'script';
 function pipOutputs(n) { return n.type === 'start' ? ['history', 'message'] : n.type === 'script' ? ((pipScriptOf(n) || {}).outputs || ['output']) : ['output']; }
-function pipPortsOf(name) { const d = (agData.agents || []).find(a => a.name === name); if (!d) return null; return d.custom ? pipTokens(d.agentPrompt) : (pipD.ports && pipD.ports[name]) || PIP_BUILTIN[name] || null; }
+function pipPortsOf(name) { const d = (agData.agents || []).find(a => a.name === name); if (!d) return null; return d.custom ? pipAgentTokens(d) : (pipD.ports && pipD.ports[name]) || PIP_BUILTIN[name] || null; }
 function pipInputs(n) { return n.type === 'agent' ? (pipPortsOf(n.agent) || []) : n.type === 'pipeline' ? PIP_SUB_PORTS : n.type === 'script' ? ((pipScriptOf(n) || {}).inputs || []) : n.type === 'end' ? ['stream'] : []; }
 function pipCur() { return pipD.data.pipelines.find(p => p.id === pipD.cur) || pipD.data.pipelines[0]; }
 function pipView(p) { return pipViews[p.id] = pipViews[p.id] || { x: 0, y: 0, k: 1, fresh: true }; }
@@ -4495,14 +4499,14 @@ function pipIssues(p) {
         if (sub.nodes.some(x => x.type === 'agent' && x.agent === 'Dialogue')) out.push('“' + sub.name + '” has the built-in Dialogue agent, which can only reply to the chat — it can\'t run as a step inside another pipeline.');
         if (sub.id === p.id || sub.nodes.some(x => x.type === 'pipeline' && x.pipeline === p.id)) out.push('“' + sub.name + '” would end up running itself.');
         if (!pipReaches(p, n.id, end.id)) out.push('“' + sub.name + '” never reaches END, so it does nothing.');
-        if (into.length && into[0].from === n.id) out.push('A sub-pipeline can\'t be the one connected to END; end with an agent that writes the reply.');
+        if (into.length && into[0].from === n.id) out.push('A sub-pipeline is connected to END, so this pipeline can\'t answer a chat by itself (an agent has to write the reply), but it can run as a step inside another pipeline.');
     });
     p.nodes.filter(n => n.type === 'script').forEach(n => {
         const sh = pipScriptOf(n);
         if (!sh) { out.push('Script “' + n.script + '” isn\'t loaded (does it have errors? see the Scripts page).'); return; }
         sh.inputs.filter(q => !(sh.optionalInputs || []).includes(q)).forEach(q => { if (!p.edges.some(e => e.to === n.id && e.port === q)) out.push(n.script + ': {' + q + '} has nothing wired in.'); });
         if (!pipReaches(p, n.id, end.id)) out.push('Script “' + n.script + '” never reaches END, so it does nothing.');
-        if (into.length && into[0].from === n.id) out.push('A script can\'t be the one connected to END; end with an agent that writes the reply.');
+        if (into.length && into[0].from === n.id) out.push('A script is connected to END, so this pipeline can\'t answer a chat by itself (an agent has to write the reply), but it can run as a step inside another pipeline.');
     });
     const sl = {}; p.nodes.filter(n => n.type === 'agent').forEach(n => { const d = pipDef(n); if (d.serverName) (sl[d.serverName + '/' + d.slotName] = sl[d.serverName + '/' + d.slotName] || []).push(n.agent); });
     Object.entries(sl).forEach(([k, v]) => { if (v.length > 1) out.push(v.join(' and ') + ' share ' + k + ' — they will evict each other\'s cache.'); });

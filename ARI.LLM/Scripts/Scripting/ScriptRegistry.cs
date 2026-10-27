@@ -45,6 +45,23 @@ internal sealed class ScriptRegistry
 
     internal static bool ValidName(string name) => NameRx.IsMatch(name);
 
+    /// <summary>Copies the scripts ARI ships (the Memory steps) into the scripts folder if they're missing. They are ordinary scripts
+    /// from then on: edit them freely, ARI never overwrites a copy that exists.</summary>
+    internal void SeedShipped()
+    {
+        Assembly assembly = typeof(ScriptRegistry).Assembly;
+        foreach (string resource in assembly.GetManifestResourceNames().Where(n => n.Contains(".SystemScripts.") && n.EndsWith(".cs")))
+        {
+            string name = resource[..^3][(resource.LastIndexOf(".SystemScripts.") + ".SystemScripts.".Length)..];
+            string file = Path.Combine(folder, name + ".cs");
+            if (File.Exists(file) || !ValidName(name)) continue;
+            using Stream stream = assembly.GetManifestResourceStream(resource)!;
+            using StreamReader reader = new(stream);
+            Directory.CreateDirectory(folder);
+            File.WriteAllText(file, reader.ReadToEnd());
+        }
+    }
+
     /// <summary>Compiles every script in the folder. One that doesn't compile is recorded and skipped.</summary>
     internal void LoadAll()
     {
@@ -117,7 +134,7 @@ internal sealed class ScriptRegistry
 
         using CancellationTokenSource limit = CancellationTokenSource.CreateLinkedTokenSource(ctx.Ct);
         limit.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(node.TimeoutSeconds, 1, 600)));
-        ScriptContext bounded = new(ctx.ThreadKey, ctx.Username, limit.Token, m => Shared.Logger.LogInformation("[Script:{Name}] {Message}", name, m), ctx.AskDelegate);
+        ScriptContext bounded = new(ctx.ThreadKey, ctx.Username, limit.Token, m => Shared.Logger.LogInformation("[Script:{Name}] {Message}", name, m), ctx.AskDelegate, ctx.MemoryDelegate);
         Task work = Task.Run(() => node.Run(bounded), limit.Token);
         Task finished = await Task.WhenAny(work, Task.Delay(Timeout.Infinite, limit.Token).ContinueWith(_ => { }));
         if (finished != work)

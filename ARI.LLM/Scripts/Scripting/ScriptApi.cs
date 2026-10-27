@@ -41,14 +41,16 @@ public sealed record BrainHit(string Name, string Title, double Score);
 /// keep working when the inside of A·R·I changes.</summary>
 public sealed class ScriptContext
 {
-    private readonly Func<string, string, CancellationToken, Task<string>>? ask;
-    internal Func<string, string, CancellationToken, Task<string>>? AskDelegate => ask;
+    private readonly Func<string, IReadOnlyDictionary<string, string>, CancellationToken, Task<string>>? ask;
+    internal Func<string, IReadOnlyDictionary<string, string>, CancellationToken, Task<string>>? AskDelegate => ask;
+    internal IMemoryApi? MemoryDelegate => memory;
+    private readonly IMemoryApi? memory;
     private readonly Action<string> log;
 
     public ScriptContext(string threadKey, string username, CancellationToken ct, Action<string> log,
-        Func<string, string, CancellationToken, Task<string>>? ask)
+        Func<string, IReadOnlyDictionary<string, string>, CancellationToken, Task<string>>? ask, IMemoryApi? memory = null)
     {
-        ThreadKey = threadKey; Username = username; Ct = ct; this.log = log; this.ask = ask;
+        ThreadKey = threadKey; Username = username; Ct = ct; this.log = log; this.ask = ask; this.memory = memory;
     }
 
     /// <summary>The conversation this run belongs to.</summary>
@@ -64,8 +66,14 @@ public sealed class ScriptContext
     public void Log(string message) => log(message);
 
     /// <summary>Sends a prompt to one of your custom agents (it runs on its own server and slot) and returns its answer.</summary>
-    public Task<string> Ask(string agentName, string prompt) =>
-        ask is null ? throw new InvalidOperationException("Ask isn't available here.") : ask(agentName, prompt, Ct);
+    public Task<string> Ask(string agentName, string prompt) => Ask(agentName, new Dictionary<string, string> { ["message"] = prompt });
+
+    /// <summary>Same, filling the agent's {tokens} (in its system prompt and its message prompt) from <paramref name="tokens"/>.</summary>
+    public Task<string> Ask(string agentName, IReadOnlyDictionary<string, string> tokens) =>
+        ask is null ? throw new InvalidOperationException("Ask isn't available here.") : ask(agentName, tokens, Ct);
+
+    /// <summary>The steps of ARI's own memory recall, for scripts that rebuild or change it. Null if memory isn't set up.</summary>
+    public IMemoryApi? Memory => memory;
 
     /// <summary>A shared HTTP client for calling out.</summary>
     public HttpClient Http { get; } = SharedHttp;
@@ -77,3 +85,15 @@ public sealed class ScriptContext
     /// <summary>The full text of a brain note, or null if there is no such note.</summary>
     public string? ReadNote(string name) => ScriptBrain.Read(name);
 }
+
+/// <summary>What a pipeline's memory scripts can call. <see cref="Find"/> does the search and builds what the model is asked;
+/// <see cref="Finish"/> takes the model's pick and returns the finished memory block (it asks the "Memory Extract" and
+/// "Memory Privacy" agents itself). The state between them is plain text, so it can travel along a wire.</summary>
+public interface IMemoryApi
+{
+    MemoryFound Find(string message);
+    Task<string?> Finish(string state, string? picks, CancellationToken ct);
+}
+
+/// <summary><see cref="Transcript"/> and <see cref="Candidates"/> are null when there is nothing for a model to pick from.</summary>
+public sealed record MemoryFound(string State, string? Transcript, string? Candidates);

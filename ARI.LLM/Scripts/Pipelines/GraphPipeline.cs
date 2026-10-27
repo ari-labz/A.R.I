@@ -63,7 +63,7 @@ internal sealed class GraphPipeline : Pipeline
     {
         if (PipelineGraph.BuiltInPorts.TryGetValue(agent, out string[]? ports))
             return agent.Equals("Memory", StringComparison.OrdinalIgnoreCase) && memory is null ? null : ports;
-        return customAgents.TryGetValue(agent, out CustomAgent? c) ? PipelineGraph.PromptTokens(c.AgentPrompt).ToArray() : null;
+        return customAgents.TryGetValue(agent, out CustomAgent? c) ? PipelineGraph.PromptTokens(c.AgentPrompt + "\n" + c.MessagePrompt).ToArray() : null;
     }
 
     protected override LiveCallInfo BuildLiveCall(string threadKey) =>
@@ -126,9 +126,23 @@ internal sealed class GraphPipeline : Pipeline
                     outputs[wave[i].Id] = results[i];
                 }
             }
+            // A script feeding END can have several outputs; the wire says which one the pipeline returns.
+            PipelineGraph.Edge endEdge = graph.Edges.First(e => graph.Nodes.First(n => n.Id == e.To).Type == "end");
+            if (graph.Nodes.FirstOrDefault(n => n.Id == endEdge.From)?.Type == "script") result = outputs.GetValueOrDefault(OutputKey(graph, endEdge)) ?? result;
             return result;
 
+            // A node that fails can carry on with its onError text instead of taking the whole reply down with it.
             async Task<string?> RunNode(PipelineGraph.Node node)
+            {
+                try { return await RunNodeCore(node); }
+                catch (Exception ex) when (node.OnError is not null && !cts.IsCancellationRequested)
+                {
+                    Shared.Logger.LogWarning(ex, "[Graph:{Graph}] ({Thread}) {Node} failed — carrying on with its fallback text. {Error}", graph.Name, threadKey, node.Agent ?? node.Script ?? node.Pipeline ?? node.Id, ex.Message);
+                    return node.OnError;
+                }
+            }
+
+            async Task<string?> RunNodeCore(PipelineGraph.Node node)
             {
                 Dictionary<string, string?> inputs = new(StringComparer.OrdinalIgnoreCase);
                 foreach (PipelineGraph.Edge e in graph.Edges.Where(e => e.To == node.Id))
@@ -150,7 +164,8 @@ internal sealed class GraphPipeline : Pipeline
                 {
                     ScriptShape shape = scripts.Shape(node.Script!) ?? throw new InvalidOperationException($"Script '{node.Script}' isn't loaded (does it have errors?).");
                     Stopwatch scriptSw = Stopwatch.StartNew();
-                    ScriptContext scriptCtx = new(threadKey, username, cts.Token, _ => { }, AskAgent);
+                    ScriptContext scriptCtx = new(threadKey, username, cts.Token, _ => { }, AskAgent,
+                        memory is null ? null : new MemoryApi(memory, thread, contextSummary, privacy, AskAgent));
                     Dictionary<string, string?> produced = await scripts.Run(node.Script!, inputs, scriptCtx);
                     foreach ((string port, string? value) in produced) outputs[$"{node.Id}:{port.ToLowerInvariant()}"] = value;
                     Shared.Logger.LogInformation("[Graph:{Graph}] ({Thread}) script '{Script}' finished in {Sec:F1}s.", graph.Name, threadKey, node.Script, scriptSw.Elapsed.TotalSeconds);
@@ -179,11 +194,21 @@ internal sealed class GraphPipeline : Pipeline
                 }
 
                 CustomAgent agent = customAgents[agentName];
+
+                // Something upstream had nothing to hand over (Memory finding nothing, say): an agent behind the scenes has nothing to work on, so it doesn't run.
+                if (!isReply && inputs.Values.Any(v => v is null))
+                {
+                    Shared.Logger.LogInformation("[Graph:{Graph}] ({Thread}) {Agent} skipped: an input was empty.", graph.Name, threadKey, agentName);
+                    return null;
+                }
                 inputs["message"] = message;
-                using IDisposable _ = CustomAgent.Resolve(PipelineGraph.Fill(agent.AgentPrompt, inputs.ToDictionary(kv => kv.Key, kv => kv.Value ?? "", StringComparer.OrdinalIgnoreCase)));
+                Dictionary<string, string> filled = inputs.ToDictionary(kv => kv.Key, kv => kv.Value ?? "", StringComparer.OrdinalIgnoreCase);
+                using IDisposable _ = CustomAgent.Resolve(PipelineGraph.Fill(agent.AgentPrompt, filled));
+                string userText = string.IsNullOrWhiteSpace(agent.MessagePrompt) ? message : PipelineGraph.Fill(agent.MessagePrompt, filled);
                 string result;
                 if (isReply)
                 {
+                    // The reply agent answers the user's own message, which is already in the thread; a message template only applies to steps behind the scenes.
                     result = await agent.Prompt(thread, message, new PromptOptions
                     {
                         Username = username, ContextSummary = contextSummary, Ct = cts.Token, UserMessagePreadded = true, OnDelta = onDelta,
@@ -194,7 +219,7 @@ internal sealed class GraphPipeline : Pipeline
                     Thread scratch = new(ThreadPipeline.Dialogue, $"graph:{Guid.NewGuid():N}") { Internal = true, ReadOnlyTools = true };
                     new ListTools(scratch).Register(scratch);
                     new RequestTools(scratch).Register(scratch);
-                    result = await agent.Prompt(scratch, message, new PromptOptions { Username = username, Ct = cts.Token });
+                    result = await agent.Prompt(scratch, userText, new PromptOptions { Username = username, Ct = cts.Token });
                 }
                 Shared.Logger.LogInformation("[Graph:{Graph}] ({Thread}) {Agent} finished in {Sec:F1}s.", graph.Name, threadKey, agentName, sw.Elapsed.TotalSeconds);
                 return result;
@@ -231,15 +256,18 @@ internal sealed class GraphPipeline : Pipeline
         return e.From;
     }
 
-    /// <summary>What a script's ctx.Ask does: run one of the custom agents once, on a throw-away thread, and hand back its text.</summary>
-    private async Task<string> AskAgent(string agentName, string prompt, CancellationToken ct)
+    /// <summary>What a script's ctx.Ask does: run one of the custom agents once, on a throw-away thread, with its {tokens} filled in
+    /// from <paramref name="tokens"/>, and hand back its text.</summary>
+    private async Task<string> AskAgent(string agentName, IReadOnlyDictionary<string, string> tokens, CancellationToken ct)
     {
         if (!customAgents.TryGetValue(agentName, out CustomAgent? agent)) throw new InvalidOperationException($"There is no custom agent called '{agentName}'.");
-        using IDisposable _ = CustomAgent.Resolve(PipelineGraph.Fill(agent.AgentPrompt, new Dictionary<string, string> { ["message"] = prompt }));
+        Dictionary<string, string> filled = new(tokens, StringComparer.OrdinalIgnoreCase);
+        using IDisposable _ = CustomAgent.Resolve(PipelineGraph.Fill(agent.AgentPrompt, filled));
+        string userText = string.IsNullOrWhiteSpace(agent.MessagePrompt) ? filled.GetValueOrDefault("message") ?? "" : PipelineGraph.Fill(agent.MessagePrompt, filled);
         Thread scratch = new(ThreadPipeline.Dialogue, $"script:{Guid.NewGuid():N}") { Internal = true, ReadOnlyTools = true };
         new ListTools(scratch).Register(scratch);
         new RequestTools(scratch).Register(scratch);
-        return await agent.Prompt(scratch, prompt, new PromptOptions { Ct = ct });
+        return await agent.Prompt(scratch, userText, new PromptOptions { Ct = ct });
     }
 
     private static string FormatHistory(List<ThreadMessage> history)

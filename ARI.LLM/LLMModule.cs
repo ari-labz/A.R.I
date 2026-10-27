@@ -130,10 +130,13 @@ public class LLMModule : ILLMModule, IDisposable
 
         pipelinesPath = Path.Combine(Path.GetDirectoryName(agentsJsonPath) ?? ".", "Pipelines.json");
         scripts = new ScriptRegistry(Path.Combine(Path.GetDirectoryName(agentsJsonPath) ?? ".", "Scripts"));
+        scripts.SeedShipped();
         scripts.LoadAll();
         dreamingEnabled = LoadDreamingState();
 
         CleanScratchpads();
+
+        SystemAgents.Ensure(agentsJsonPath);
 
         Dictionary<string, JsonElement> rawAgents = new(StringComparer.OrdinalIgnoreCase);
         // Agents switched off with "Enabled": false. They're absent from rawAgents, and this set stops the
@@ -694,7 +697,7 @@ public class LLMModule : ILLMModule, IDisposable
     {
         Dictionary<string, List<string>> result = new();
         if (graphPipeline is null) return result;
-        List<PipelineGraph> all = PipelineGraph.ParseAll(root);
+        List<PipelineGraph> all = WithShipped(PipelineGraph.ParseAll(root));
         Dictionary<string, PipelineGraph> byId = all.GroupBy(g => g.Id).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
         foreach (PipelineGraph g in all)
         {
@@ -705,6 +708,13 @@ public class LLMModule : ILLMModule, IDisposable
         return result;
     }
 
+    /// <summary>The pipelines in the file plus any of the ones ARI ships that the file doesn't have yet.</summary>
+    private static List<PipelineGraph> WithShipped(List<PipelineGraph> fromFile)
+    {
+        using JsonDocument shipped = JsonDocument.Parse(PipelineGraph.ShippedJson);
+        return fromFile.Concat(PipelineGraph.ParseAll(shipped.RootElement).Where(s => !fromFile.Any(f => f.Id.Equals(s.Id, StringComparison.OrdinalIgnoreCase)))).ToList();
+    }
+
     /// <summary>Re-reads Pipelines.json and keeps every graph that can run. A pipeline that can answer a chat is offered as a
     /// reply type; one that can only run as a step inside another is kept for that. One that does neither (an agent it uses was
     /// deleted, say) is left out and the reasons logged; threads on it answer with Default until it is fixed. Default is always
@@ -713,29 +723,27 @@ public class LLMModule : ILLMModule, IDisposable
     {
         if (graphPipeline is null) return;
         Dictionary<string, PipelineGraph> loaded = new(StringComparer.OrdinalIgnoreCase), loadedSub = new(StringComparer.OrdinalIgnoreCase);
-        if (File.Exists(pipelinesPath))
+        try
         {
-            try
+            using JsonDocument doc = JsonDocument.Parse(File.Exists(pipelinesPath) ? File.ReadAllText(pipelinesPath) : "{\"pipelines\":[]}", new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
+            List<PipelineGraph> all = WithShipped(PipelineGraph.ParseAll(doc.RootElement));
+            Dictionary<string, PipelineGraph> byId = all.GroupBy(g => g.Id).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+            foreach (PipelineGraph graph in all)
             {
-                using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(pipelinesPath), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
-                List<PipelineGraph> all = PipelineGraph.ParseAll(doc.RootElement);
-                Dictionary<string, PipelineGraph> byId = all.GroupBy(g => g.Id).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
-                foreach (PipelineGraph graph in all)
-                {
-                    PipelineGraph.Env env = new(graphPipeline.PortsOf, id => byId.GetValueOrDefault(id), scripts.Shape);
-                    List<string> asReply = graph.Validate(env);
-                    List<string> asSub   = graph.Validate(env, asSub: true);
-                    if (asReply.Count == 0) loaded[graph.Id] = graph;
-                    if (asSub.Count == 0)   loadedSub[graph.Id] = graph;
-                    if (asReply.Count > 0 && asSub.Count > 0)
-                        _logger.LogWarning("Pipeline '{Name}' can't run and is not available: {Problems}", graph.Name, string.Join(" | ", asReply));
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Could not read Pipelines.json — only the built-in Default pipeline is available.");
+                PipelineGraph.Env env = new(graphPipeline.PortsOf, id => byId.GetValueOrDefault(id), scripts.Shape);
+                List<string> asReply = graph.Validate(env);
+                List<string> asSub   = graph.Validate(env, asSub: true);
+                if (asReply.Count == 0) loaded[graph.Id] = graph;
+                if (asSub.Count == 0)   loadedSub[graph.Id] = graph;
+                if (asReply.Count > 0 && asSub.Count > 0)
+                    _logger.LogWarning("Pipeline '{Name}' can't run and is not available: {Problems}", graph.Name, string.Join(" | ", asReply));
             }
         }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Could not read Pipelines.json — only the built-in Default pipeline is available.");
+        }
+    
         if (!loaded.ContainsKey(PipelineGraph.DefaultId)) loaded[PipelineGraph.DefaultId] = PipelineGraph.BuiltInDefault(graphPipeline.PortsOf("Memory") is not null);
 
         foreach (string gone in graphs.Keys.Where(k => !loaded.ContainsKey(k)).ToList()) graphs.TryRemove(gone, out _);

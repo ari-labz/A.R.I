@@ -52,6 +52,7 @@ public class PipelineGraphsController(PersistentData persistentData) : Controlle
     public IActionResult Get()
     {
         JsonObject data = persistentData.GetPipelinesRaw() ?? Seed(Llm?.AgentPorts().ContainsKey("Memory") ?? true);
+        AddShipped(data);
         return Ok(new
         {
             data,
@@ -69,6 +70,11 @@ public class PipelineGraphsController(PersistentData persistentData) : Controlle
             return BadRequest(new { error = "Expected { active, pipelines: [...] }." });
 
         Dictionary<string, List<string>> problems = Problems(body);
+        // The pipelines ARI ships can be edited but not deleted: Default is where every thread starts, and the others are steps
+        // its own pipelines use.
+        if (body["pipelines"] is JsonArray sent && PipelineGraph.ShippedIds.FirstOrDefault(id => !sent.Any(p => p?["id"]?.GetValue<string>() == id)) is { } missing)
+            return BadRequest(new { error = $"The shipped pipeline '{missing}' can't be deleted." });
+
         // Default is the reply type every thread starts on and falls back to, so it must stay and must be able to run.
         if (!problems.TryGetValue(PipelineGraph.DefaultId, out List<string>? defaultProblems))
             return BadRequest(new { error = "The Default pipeline can't be deleted." });
@@ -78,6 +84,19 @@ public class PipelineGraphsController(PersistentData persistentData) : Controlle
         persistentData.SavePipelinesRaw(body);
         Llm?.ReloadPipelines();
         return Ok(new { ok = true, problems });
+    }
+
+    /// <summary>Adds the pipelines ARI ships that the saved file doesn't have yet, so they show up in the editor.</summary>
+    private static void AddShipped(JsonObject data)
+    {
+        if (data["pipelines"] is not JsonArray list) return;
+        JsonArray shipped = JsonNode.Parse(PipelineGraph.ShippedJson)!["pipelines"]!.AsArray();
+        foreach (JsonNode? p in shipped.ToList())
+            if (!list.Any(x => x?["id"]?.GetValue<string>() == p!["id"]!.GetValue<string>()))
+            {
+                shipped.Remove(p);
+                list.Add(p);
+            }
     }
 
     private Dictionary<string, List<string>> Problems(JsonObject data)
