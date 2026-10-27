@@ -9,7 +9,8 @@ namespace ARI.LLM;
 internal sealed class PipelineGraph
 {
     /// <param name="Type">start, end, agent (a named agent), pipeline (another pipeline run as a single step) or script (a C# script).</param>
-    internal sealed record Node(string Id, string Type, string? Agent, string? Pipeline = null, string? Script = null);
+    /// <param name="OnError">If set and this node fails, the pipeline carries on with this text as the node's output instead of failing.</param>
+    internal sealed record Node(string Id, string Type, string? Agent, string? Pipeline = null, string? Script = null, string? OnError = null);
 
     /// <summary>How the validator looks things up: an agent's input ports, another pipeline, a script's ports.</summary>
     internal sealed record Env(Func<string, string[]?> PortsOf, Func<string, PipelineGraph?> PipelineById, Func<string, ScriptShape?> ScriptShape);
@@ -58,7 +59,34 @@ internal sealed class PipelineGraph
         return new PipelineGraph { Id = DefaultId, Name = "Default", Nodes = nodes, Edges = edges };
     }
 
-    internal const string DefaultId = "default";
+    internal const string DefaultId = "default", MemoryId = "memory";
+
+    /// <summary>Shipped pipelines other than Default, which can be edited but never deleted.</summary>
+    internal static readonly string[] ShippedIds = [MemoryId];
+
+    /// <summary>Pipelines ARI ships besides Default, as the editor's JSON. Memory recall as a pipeline: find candidates (a script), ask
+    /// the "Memory Pick" agent which to use, then finish (a script that has the "Memory Extract" and "Memory Privacy" agents do their
+    /// part). It is meant to run as a step inside another pipeline.</summary>
+    internal const string ShippedJson = """
+    { "pipelines": [
+      { "id": "memory", "name": "Memory",
+        "nodes": [
+          { "id": "start",  "type": "start",  "x": 20,  "y": 150 },
+          { "id": "find",   "type": "script", "script": "Memory_Find",   "x": 300, "y": 90 },
+          { "id": "pick",   "type": "agent",  "agent": "Memory Pick",    "x": 620, "y": 20 },
+          { "id": "finish", "type": "script", "script": "Memory_Finish", "x": 920, "y": 150 },
+          { "id": "end",    "type": "end",    "x": 1230, "y": 190 }
+        ],
+        "edges": [
+          { "from": "start", "to": "find",   "port": "Message",    "mode": "complete", "fromPort": "message" },
+          { "from": "find",  "to": "pick",   "port": "transcript", "mode": "complete", "fromPort": "Transcript" },
+          { "from": "find",  "to": "pick",   "port": "candidates", "mode": "complete", "fromPort": "Candidates" },
+          { "from": "find",  "to": "finish", "port": "State",      "mode": "complete", "fromPort": "State" },
+          { "from": "pick",  "to": "finish", "port": "Picks",      "mode": "complete" },
+          { "from": "finish","to": "end",    "port": "stream",     "mode": "stream",   "fromPort": "Block" }
+        ] }
+    ] }
+    """;
 
     /// <summary>Tokens a custom agent's prompt can use without wiring: the user's latest message.</summary>
     internal static readonly string[] ImplicitTokens = ["message"];
@@ -83,7 +111,8 @@ internal sealed class PipelineGraph
                 foreach (JsonElement n in ns.EnumerateArray())
                     nodes.Add(new Node(Str(n, "id"), Str(n, "type"), n.TryGetProperty("agent", out JsonElement a) ? a.GetString() : null,
                         n.TryGetProperty("pipeline", out JsonElement sp) ? sp.GetString() : null,
-                        n.TryGetProperty("script", out JsonElement sc) ? sc.GetString() : null));
+                        n.TryGetProperty("script", out JsonElement sc) ? sc.GetString() : null,
+                        n.TryGetProperty("onError", out JsonElement oe) && oe.ValueKind == JsonValueKind.String ? oe.GetString() : null));
             if (p.TryGetProperty("edges", out JsonElement es))
                 foreach (JsonElement e in es.EnumerateArray())
                     edges.Add(new Edge(Str(e, "from"), Str(e, "to"), Str(e, "port"), e.TryGetProperty("mode", out JsonElement m) && m.GetString() == "stream",

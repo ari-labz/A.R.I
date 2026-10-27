@@ -5,6 +5,13 @@ namespace ARI.LLM;
 /// finished text over through <see cref="Resolve"/>, so concurrent runs never see each other's values.</summary>
 internal sealed class CustomAgent : Agent
 {
+    /// <summary>The message this agent is sent, with {tokens} filled in the same way as its system prompt. Empty means the
+    /// user's latest message goes through as it is. Lets an agent keep a role in the system prompt and the task in the message.</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("messagePrompt")] public string? MessagePrompt { get; init; }
+
+    /// <summary>Shipped with ARI and used by its own pipelines (the Memory steps): can be edited but not deleted.</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("system")] public bool IsSystem { get; init; }
+
     private static readonly AsyncLocal<string?> resolved = new();
 
     /// <summary>Makes <paramref name="systemPrompt"/> this agent's system prompt for the calling async flow until disposed.</summary>
