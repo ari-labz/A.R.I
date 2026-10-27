@@ -8,7 +8,8 @@ namespace ARI.LLM;
 /// a custom agent gets one per {token} in its prompt. Each port takes exactly one wire.</summary>
 internal sealed class PipelineGraph
 {
-    internal sealed record Node(string Id, string Type, string? Agent);
+    /// <param name="Type">start, end, agent (a named agent) or pipeline (another pipeline run as a single step).</param>
+    internal sealed record Node(string Id, string Type, string? Agent, string? Pipeline = null);
     /// <param name="FromPort">Which output of the source the wire leaves from. Only START has more than one: "history" and "message".</param>
     internal sealed record Edge(string From, string To, string Port, bool Stream, string FromPort = StartHistory);
 
@@ -77,7 +78,8 @@ internal sealed class PipelineGraph
             List<Node> nodes = new(); List<Edge> edges = new();
             if (p.TryGetProperty("nodes", out JsonElement ns))
                 foreach (JsonElement n in ns.EnumerateArray())
-                    nodes.Add(new Node(Str(n, "id"), Str(n, "type"), n.TryGetProperty("agent", out JsonElement a) ? a.GetString() : null));
+                    nodes.Add(new Node(Str(n, "id"), Str(n, "type"), n.TryGetProperty("agent", out JsonElement a) ? a.GetString() : null,
+                        n.TryGetProperty("pipeline", out JsonElement sp) ? sp.GetString() : null));
             if (p.TryGetProperty("edges", out JsonElement es))
                 foreach (JsonElement e in es.EnumerateArray())
                     edges.Add(new Edge(Str(e, "from"), Str(e, "to"), Str(e, "port"), e.TryGetProperty("mode", out JsonElement m) && m.GetString() == "stream",
@@ -91,9 +93,10 @@ internal sealed class PipelineGraph
 
     /// <summary>What is wrong with this graph, empty when it can run. <paramref name="portsOf"/> returns an agent's input
     /// ports, or null when no such agent is loaded.</summary>
-    internal List<string> Validate(Func<string, string[]?> portsOf)
+    internal List<string> Validate(Func<string, string[]?> portsOf, Func<string, PipelineGraph?> pipelineById, bool asSub = false, HashSet<string>? chain = null)
     {
         List<string> problems = new();
+        chain = new HashSet<string>(chain ?? [], StringComparer.OrdinalIgnoreCase) { Id };
         Node? end = Nodes.FirstOrDefault(n => n.Type == "end");
         if (Nodes.FirstOrDefault(n => n.Type == "start") is null) problems.Add("There is no START node.");
         if (end is null) { problems.Add("There is no END node."); return problems; }
@@ -120,6 +123,27 @@ internal sealed class PipelineGraph
         foreach (Node n in Nodes.Where(n => n.Type == "agent" && n.Agent!.Equals("Dialogue", StringComparison.OrdinalIgnoreCase) && n.Id != replyId))
             problems.Add("The built-in Dialogue agent must be the one connected to END.");
 
+        // Sub-pipelines: what feeds END at the top level is the reply, which is written into the chat, so it has to be an agent.
+        // Inside a sub-pipeline nothing can write to the chat, so Dialogue (whose output IS the chat) can't be used there.
+        if (!asSub && Nodes.FirstOrDefault(n => n.Id == replyId) is { } feeder)
+        {
+            if (feeder.Type == "pipeline")
+                problems.Add("A sub-pipeline can't be the one connected to END; end with an agent that writes the reply.");
+            else if (feeder.Type == "agent" && feeder.Agent!.Equals("Memory", StringComparison.OrdinalIgnoreCase))
+                problems.Add("Memory finds notes but can't write a reply; connect an agent that does to END.");
+        }
+        if (asSub)
+            foreach (Node n in Nodes.Where(n => n.Type == "agent" && n.Agent!.Equals("Dialogue", StringComparison.OrdinalIgnoreCase)))
+                problems.Add("The built-in Dialogue agent can't be used inside a sub-pipeline.");
+        foreach (Node n in Nodes.Where(n => n.Type == "pipeline"))
+        {
+            PipelineGraph? sub = n.Pipeline is null ? null : pipelineById(n.Pipeline);
+            if (sub is null) { problems.Add($"Pipeline '{n.Pipeline}' doesn't exist."); continue; }
+            if (chain.Contains(sub.Id)) { problems.Add($"Pipeline '{sub.Name}' ends up running itself."); continue; }
+            foreach (string inner in sub.Validate(portsOf, pipelineById, asSub: true, chain))
+                problems.Add($"In '{sub.Name}': {inner}");
+        }
+
         if (Order() is null) problems.Add("The pipeline loops back on itself.");
         return problems;
     }
@@ -130,7 +154,7 @@ internal sealed class PipelineGraph
     {
         HashSet<string> done = new() { StartId };
         foreach (Node n in Nodes.Where(n => n.Type == "start")) done.Add(n.Id);
-        List<Node> left = Nodes.Where(n => n.Type == "agent").ToList();
+        List<Node> left = Nodes.Where(n => n.Type is "agent" or "pipeline").ToList();
         List<List<Node>> waves = new();
         while (left.Count > 0)
         {

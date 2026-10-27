@@ -4395,9 +4395,14 @@ var pipD = null, pipSel = null, pipDirty = false, pipHooked = false, pipViews = 
 const PIP_W = 230, PIP_BUILTIN = { Memory: ['history'], Dialogue: ['history', 'memories'] };
 const pipUid = () => Math.random().toString(36).slice(2, 8);
 const pipTokens = t => [...new Set(((t || '').match(/\{(\w+)\}/g) || []).map(x => x.slice(1, -1)))].filter(x => x !== 'message');
-function pipDef(n) { return (agData.agents || []).find(a => a.name === n.agent) || {}; }
+function pipDef(n) { return n.type === 'agent' ? (agData.agents || []).find(a => a.name === n.agent) || {} : {}; }
+// A sub-pipeline is a node too: it takes the same two things START gives (both optional: left unwired it sees what the pipeline around it received) and has one output.
+const PIP_SUB_PORTS = ['history', 'message'];
+function pipSubOf(n) { return (pipD.data.pipelines || []).find(x => x.id === n.pipeline); }
+function pipLabel(n) { return n.type === 'pipeline' ? (pipSubOf(n) ? pipSubOf(n).name : '(missing pipeline)') : n.agent; }
+const pipIsBox = n => n.type === 'agent' || n.type === 'pipeline';
 function pipPortsOf(name) { const d = (agData.agents || []).find(a => a.name === name); if (!d) return null; return d.custom ? pipTokens(d.agentPrompt) : (pipD.ports && pipD.ports[name]) || PIP_BUILTIN[name] || null; }
-function pipInputs(n) { return n.type === 'agent' ? (pipPortsOf(n.agent) || []) : n.type === 'end' ? ['stream'] : []; }
+function pipInputs(n) { return n.type === 'agent' ? (pipPortsOf(n.agent) || []) : n.type === 'pipeline' ? PIP_SUB_PORTS : n.type === 'end' ? ['stream'] : []; }
 function pipCur() { return pipD.data.pipelines.find(p => p.id === pipD.cur) || pipD.data.pipelines[0]; }
 function pipView(p) { return pipViews[p.id] = pipViews[p.id] || { x: 0, y: 0, k: 1, fresh: true }; }
 function pipTouch() { pipDirty = true; const s = document.getElementById('pip-status'); if (s) s.textContent = 'Unsaved changes'; }
@@ -4476,6 +4481,14 @@ function pipIssues(p) {
         if (!pipReaches(p, n.id, end.id)) out.push(n.agent + ' never reaches END, so it does nothing.');
         if (n.agent === 'Dialogue' && into.length && into[0].from !== n.id) out.push('The built-in Dialogue agent must be the one connected to END.');
     });
+    p.nodes.filter(n => n.type === 'pipeline').forEach(n => {
+        const sub = pipSubOf(n);
+        if (!sub) { out.push('A sub-pipeline in here no longer exists — remove it.'); return; }
+        if (sub.nodes.some(x => x.type === 'agent' && x.agent === 'Dialogue')) out.push('“' + sub.name + '” has the built-in Dialogue agent, which can only reply to the chat — it can\'t run as a step inside another pipeline.');
+        if (sub.id === p.id || sub.nodes.some(x => x.type === 'pipeline' && x.pipeline === p.id)) out.push('“' + sub.name + '” would end up running itself.');
+        if (!pipReaches(p, n.id, end.id)) out.push('“' + sub.name + '” never reaches END, so it does nothing.');
+        if (into.length && into[0].from === n.id) out.push('A sub-pipeline can\'t be the one connected to END; end with an agent that writes the reply.');
+    });
     const sl = {}; p.nodes.filter(n => n.type === 'agent').forEach(n => { const d = pipDef(n); if (d.serverName) (sl[d.serverName + '/' + d.slotName] = sl[d.serverName + '/' + d.slotName] || []).push(n.agent); });
     Object.entries(sl).forEach(([k, v]) => { if (v.length > 1) out.push(v.join(' and ') + ' share ' + k + ' — they will evict each other\'s cache.'); });
     return out;
@@ -4484,7 +4497,7 @@ function pipIssues(p) {
 var pipCanvas = null, pipWorld = null, pipSvg = null;
 function pipPos(n, side, port) {
     if (n.type === 'start') return { x: n.x + PIP_W, y: n.y + 46 + (port === 'message' ? 28 : 0) };   // START has two outputs: history, message
-    if (n.type !== 'agent') return { x: n.x + 13, y: n.y + 13 };
+    if (!pipIsBox(n)) return { x: n.x + 13, y: n.y + 13 };
     return side === 'out' ? { x: n.x + PIP_W, y: n.y + 46 } : { x: n.x, y: n.y + 74 + pipInputs(n).indexOf(port) * 28 };
 }
 const pipWirePath = (a, b) => { const d = Math.max(60, Math.abs(b.x - a.x) / 2); return `M${a.x},${a.y} C${a.x + d},${a.y} ${b.x - d},${b.y} ${b.x},${b.y}`; };
@@ -4509,15 +4522,18 @@ function pipMenu(e, title, items) {
     document.body.append(m);
 }
 function pipAddAgentNode(p, a, at) { const id = pipUid(); p.nodes.push({ id, type: 'agent', agent: a.name, x: at.x, y: at.y }); pipSel = id; pipTouch(); pipRender(); }
-function pipDelete(p, n) { if (n.type !== 'agent') return; p.nodes = p.nodes.filter(x => x !== n); p.edges = p.edges.filter(e => e.from !== n.id && e.to !== n.id); if (pipSel === n.id) pipSel = null; pipTouch(); pipRender(); }
+function pipDelete(p, n) { if (!pipIsBox(n)) return; p.nodes = p.nodes.filter(x => x !== n); p.edges = p.edges.filter(e => e.from !== n.id && e.to !== n.id); if (pipSel === n.id) pipSel = null; pipTouch(); pipRender(); }
 function pipAddable(p) {   // agents that can sit in a graph and aren't in this one yet
     const have = new Set(p.nodes.filter(n => n.type === 'agent').map(n => n.agent));
     return (agData.agents || []).filter(a => !have.has(a.name) && (a.custom || PIP_BUILTIN[a.name]));
 }
+function pipAddPipelineNode(p, sub, at) { const id = pipUid(); p.nodes.push({ id, type: 'pipeline', pipeline: sub.id, x: at.x, y: at.y }); pipSel = id; pipTouch(); pipRender(); }
+function pipAddablePipelines(p) { return (pipD.data.pipelines || []).filter(x => x.id !== p.id && x.id !== 'default'); }
 function pipAddMenu(anchor) {
     const p = pipCur(), r = anchor.getBoundingClientRect(), v = pipView(p), rc = pipCanvas.getBoundingClientRect(), free = pipAddable(p);
     const at = { x: (rc.width / 2 - v.x) / v.k - 115, y: (rc.height / 2 - v.y) / v.k - 40 };
-    pipMenu({ clientX: r.left, clientY: r.bottom + 4, preventDefault() {} }, 'Add agent', free.map(a => [a.name, () => pipAddAgentNode(p, a, at)]).concat(free.length ? [] : [['(every agent is already here — make more on the Agents page)', () => {}]]));
+    pipMenu({ clientX: r.left, clientY: r.bottom + 4, preventDefault() {} }, 'Add agent', free.map(a => [a.name, () => pipAddAgentNode(p, a, at)]).concat(free.length ? [] : [['(every agent is already here — make more on the Agents page)', () => {}]])
+        .concat(pipAddablePipelines(p).map(x => ['Pipeline: ' + x.name, () => pipAddPipelineNode(p, x, at)])));
 }
 function pipDraw(p) {
     const c = pipCanvas; c.innerHTML = '';
@@ -4527,17 +4543,17 @@ function pipDraw(p) {
     const taken = new Set(p.edges.map(e => e.to + ':' + e.port));
     p.nodes.forEach(n => {
         let d;
-        if (n.type === 'agent') {
-            const def = pipDef(n), ports = pipInputs(n);
+        if (pipIsBox(n)) {
+            const def = pipDef(n), ports = pipInputs(n), isSub = n.type === 'pipeline';
             d = agEl('div'); d.className = 'pip-node' + (pipSel === n.id ? ' sel' : '') + (def.enabled === false ? ' off' : '');
-            const h = agEl('div'); h.className = 'pip-nh'; h.append(agEl('span', '', n.agent)); const tg = agEl('span', '', def.custom ? 'custom' : 'built-in'); tg.className = 'pip-tag'; h.append(tg);
+            const h = agEl('div'); h.className = 'pip-nh'; h.append(agEl('span', '', pipLabel(n))); const tg = agEl('span', '', isSub ? 'pipeline' : def.custom ? 'custom' : 'built-in'); tg.className = 'pip-tag'; h.append(tg);
             const out = agEl('div', '', 'Output'); out.className = 'pip-row out'; d.append(h, out);
             ports.forEach(q => { const r = agEl('div', '', q); r.className = 'pip-row in'; d.append(r); });
-            const nb = agEl('div', '', (def.serverName || '?') + ' · ' + (def.slotName || 'default slot') + (def.enabled === false ? ' · off' : '')); nb.className = 'pip-nb'; d.append(nb);
+            const nb = agEl('div', '', isSub ? 'runs its own agents' : (def.serverName || '?') + ' · ' + (def.slotName || 'default slot') + (def.enabled === false ? ' · off' : '')); nb.className = 'pip-nb'; d.append(nb);
             const po = agEl('div'); po.className = 'pip-port'; po.style.cssText = 'right:-7px;top:39px'; po.onmousedown = e => pipDragWire(p, n, e); d.append(po);
             ports.forEach((q, i) => { const pi = agEl('div'); pi.className = 'pip-port' + (taken.has(n.id + ':' + q) ? ' taken' : ''); pi.dataset.node = n.id; pi.dataset.port = q; pi.style.cssText = `left:-7px;top:${67 + i * 28}px`; d.append(pi); });
             d.onmousedown = e => { if (e.button === 0 && !e.target.classList.contains('pip-port')) { e.stopPropagation(); pipDragNode(p, n, d, e); } };
-            d.oncontextmenu = e => { e.stopPropagation(); pipMenu(e, n.agent, [['Disconnect all', () => { p.edges = p.edges.filter(x => x.from !== n.id && x.to !== n.id); pipTouch(); pipRender(); }], ['Remove from pipeline', () => pipDelete(p, n)]]); };
+            d.oncontextmenu = e => { e.stopPropagation(); pipMenu(e, pipLabel(n), [['Disconnect all', () => { p.edges = p.edges.filter(x => x.from !== n.id && x.to !== n.id); pipTouch(); pipRender(); }], ['Remove from pipeline', () => pipDelete(p, n)]]); };
         } else if (n.type === 'start') {
             d = agEl('div'); d.className = 'pip-node start';
             const h = agEl('div'); h.className = 'pip-nh'; h.append(agEl('span', '', 'START'), agEl('span', 'font-size:11px;opacity:.8;', 'every pipeline begins here')); d.append(h);
@@ -4600,7 +4616,7 @@ function pipHook(p) {
         document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
     };
     c.onwheel = e => { e.preventDefault(); const v = pipView(p), r = c.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top, k = Math.min(2, Math.max(.3, v.k * (e.deltaY < 0 ? 1.1 : 1 / 1.1))), f = k / v.k; v.x = mx - (mx - v.x) * f; v.y = my - (my - v.y) * f; v.k = k; pipApplyView(p); };
-    c.oncontextmenu = e => { const at = pipToWorld(p, e), free = pipAddable(p); pipMenu(e, 'Add agent here', free.map(a => [a.name, () => pipAddAgentNode(p, a, { x: at.x - 115, y: at.y - 20 })]).concat(free.length ? [] : [['(every agent is already here)', () => {}]]).concat([['Recenter', () => pipRecenter(p)]])); };
+    c.oncontextmenu = e => { const at = pipToWorld(p, e), free = pipAddable(p); pipMenu(e, 'Add agent here', free.map(a => [a.name, () => pipAddAgentNode(p, a, { x: at.x - 115, y: at.y - 20 })]).concat(pipAddablePipelines(p).map(x => ['Pipeline: ' + x.name, () => pipAddPipelineNode(p, x, { x: at.x - 115, y: at.y - 20 })])).concat(free.length ? [] : [['(every agent is already here)', () => {}]]).concat([['Recenter', () => pipRecenter(p)]])); };
     if (!pipHooked) {
         pipHooked = true;
         document.addEventListener('click', pipCloseMenu);
@@ -4615,7 +4631,16 @@ function pipInspector(p) {
     const box = agEl('div'); box.className = 'pip-insp'; const n = pipNode(p, pipSel);
     const dim = t => { const d = agEl('div', 'color:var(--text-dim);line-height:1.5;white-space:pre-wrap;margin-bottom:10px;', t); box.append(d); return d; };
     const lab = t => box.append(agEl('label', '', t));
-    if (!n || n.type !== 'agent') return null;
+    if (!n || !pipIsBox(n)) return null;
+    if (n.type === 'pipeline') {
+        const sub = pipSubOf(n);
+        box.append(agEl('div', 'font-size:15px;font-weight:600;', pipLabel(n)));
+        dim('A pipeline run as one step. Its START receives the two inputs below (left unwired, they are what this pipeline received), and whatever feeds its END comes out as this node\'s Output.');
+        lab('Inputs'); dim('{history} and {message}, both optional.');
+        if (sub) { const open = agEl('button', 'margin-right:8px;', 'Open this pipeline'); open.className = 'agv-btn'; open.type = 'button'; open.onclick = () => { pipD.cur = sub.id; pipSel = null; pipRender(); }; box.append(open); }
+        const d = agEl('button', '', 'Remove from pipeline'); d.className = 'agv-btn'; d.type = 'button'; d.onclick = () => pipDelete(p, n); box.append(d);
+        return box;
+    }
     const def = pipDef(n);
     box.append(agEl('div', 'font-size:15px;font-weight:600;', n.agent));
     lab('Runs on'); dim((def.serverName || '?') + ' · ' + (def.slotName || 'default slot'));

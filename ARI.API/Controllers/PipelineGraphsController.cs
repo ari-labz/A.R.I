@@ -81,14 +81,8 @@ public class PipelineGraphsController(PersistentData persistentData) : Controlle
 
     private Dictionary<string, List<string>> Problems(JsonObject data)
     {
-        Dictionary<string, List<string>> result = new();
-        if (Llm is null || data["pipelines"] is not JsonArray list) return result;
-        foreach (JsonNode? p in list)
-        {
-            if (p is not JsonObject po) continue;
-            using JsonDocument doc = JsonDocument.Parse(po.ToJsonString());
-            result[po["id"]?.GetValue<string>() ?? ""] = Llm.ValidatePipeline(doc.RootElement);
-        }
-        return result;
+        if (Llm is null || data["pipelines"] is not JsonArray) return new();
+        using JsonDocument doc = JsonDocument.Parse(data.ToJsonString());
+        return Llm.ValidatePipelines(doc.RootElement);
     }
 }
