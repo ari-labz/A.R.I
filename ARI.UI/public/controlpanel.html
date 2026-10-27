@@ -457,7 +457,7 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 .dbg-cloud-head { padding: 7px 15px 3px; font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--col-dbg-cloud-head-colour); }
 .dbg-cloud-body { padding: 2px 15px 12px; font-family: ui-monospace, monospace; font-size: 11.5px; white-space: pre-wrap; word-break: break-word; color: var(--col-dbg-cloud-body-colour); line-height: 1.55; }
 /* nested sub-thread (architect plan / per-task coder) */
-.dbg-subthread { border: 1px solid var(--col-dbg-subthread-colour); border-radius: 10px; margin: 2px 0; background: var(--col-dbg-subthread-colour-2); overflow: hidden; }
+.dbg-subthread { border: 1px solid var(--col-dbg-subthread-colour); border-radius: 10px; margin: 2px 0; background: var(--col-dbg-subthread-colour-2); overflow: hidden; flex: none; }
 .dbg-sub-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: pointer; background: var(--col-dbg-sub-head-colour); font-size: 11px; user-select: none; }
 .dbg-sub-head:hover { background: var(--col-dbg-sub-head-hover-colour); }
 .dbg-sub-caret { color: var(--col-dbg-sub-caret-colour); font-size: 10px; width: 10px; }
@@ -4372,6 +4372,10 @@ function prRenderEditor() {
         }
         ed.append(hdr);
         prField(ed, 'Agent prompt', 'The system prompt this agent starts every conversation with.', agent.custom ? [['message', "the user's latest message (always available)"], ['history', 'the conversation so far — wire START into this port in a pipeline'], ['anything_else', 'any other {name} becomes an input port you can wire another agent into']] : (spec.systemTokens || []), agent.agentPrompt, v => agent.agentPrompt = v);
+        if (agent.custom) { const row = agEl('div', 'margin:0 0 18px;'); row.append(agEl('label', 'display:block;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text-dim);margin-bottom:4px;', 'Tools it starts with'));
+            const inp = document.createElement('input'); inp.type = 'text'; inp.className = 'vs-input'; inp.style.cssText = 'width:100%;max-width:520px;box-sizing:border-box;'; inp.placeholder = 'e.g. memory_tools'; inp.value = (agent.preloadedTools || []).join(', ');
+            inp.oninput = () => { agent.preloadedTools = inp.value.split(',').map(x => x.trim()).filter(Boolean); agDirty(); };
+            row.append(inp, agEl('div', 'font-size:12px;color:var(--text-dim);margin-top:4px;', 'Tool groups loaded from the start, so it does not have to ask for them. Behind the scenes in a pipeline an agent can only use tools that read.')); ed.append(row); }
         if (agent.custom) prField(ed, 'Message prompt', 'The message this agent is sent, with {tokens} filled in like the prompt above. Leave it empty to send the user\'s latest message as it is. Use it to keep a role in the prompt above and the task here.', [['message', "the user's latest message"], ['anything_else', 'any other {name} becomes an input port']], agent.messagePrompt || '', v => agent.messagePrompt = v);
         (spec.prompts || []).forEach(p => { agent.promptTemplates = agent.promptTemplates || {}; prField(ed, p.label, p.hint, p.tokens, agent.promptTemplates[p.key], v => agent.promptTemplates[p.key] = v); });
         const known = new Set((spec.prompts || []).map(p => p.key));
@@ -4403,7 +4407,7 @@ function prRenderEditor() {
 var pipD = null, pipSel = null, pipDirty = false, pipHooked = false, pipViews = {};
 const PIP_W = 230, PIP_BUILTIN = { Memory: ['history'], Dialogue: ['history', 'memories'] };
 const pipUid = () => Math.random().toString(36).slice(2, 8);
-const pipTokens = t => [...new Set(((t || '').match(/\{(\w+)\}/g) || []).map(x => x.slice(1, -1)))].filter(x => x !== 'message');
+const pipTokens = t => [...new Set(((t || '').match(/\{(\w+)\}/g) || []).map(x => x.slice(1, -1)))].filter(x => x !== 'message' && x !== 'since');   // both are always filled in, never wired
 const pipAgentTokens = d => pipTokens((d.agentPrompt || '') + '\n' + (d.messagePrompt || ''));
 function pipDef(n) { return n.type === 'agent' ? (agData.agents || []).find(a => a.name === n.agent) || {} : {}; }
 // A sub-pipeline is a node too: it takes the same two things START gives (both optional: left unwired it sees what the pipeline around it received) and has one output.
@@ -4571,7 +4575,7 @@ function pipDraw(p) {
             const h = agEl('div'); h.className = 'pip-nh'; h.append(agEl('span', '', pipLabel(n))); const tg = agEl('span', '', isScript ? 'script' : isSub ? 'pipeline' : def.custom ? 'custom' : 'built-in'); tg.className = 'pip-tag'; h.append(tg);
             d.append(h); outs.forEach(o => { const out = agEl('div', '', o === 'output' ? 'Output' : o); out.className = 'pip-row out'; d.append(out); });
             ports.forEach(q => { const r = agEl('div', '', q); r.className = 'pip-row in'; d.append(r); });
-            const nb = agEl('div', '', isScript ? 'C# script' : isSub ? 'runs its own agents' : (def.serverName || '?') + ' · ' + (def.slotName || 'default slot') + (def.enabled === false ? ' · off' : '')); nb.className = 'pip-nb'; d.append(nb);
+            const nb = agEl('div', '', isScript ? 'C# script' : isSub ? 'runs its own agents' : (def.serverName || '?') + ' · ' + (def.slotName || 'default slot') + (def.enabled === false ? ' · off' : '') + (n.thread ? ' · thread: ' + n.thread : '')); nb.className = 'pip-nb'; d.append(nb);
             outs.forEach((o, i) => { const po = agEl('div'); po.className = 'pip-port'; po.style.cssText = `right:-7px;top:${39 + i * 28}px`; po.onmousedown = e => pipDragWire(p, n, e, o); d.append(po); });
             ports.forEach((q, i) => { const pi = agEl('div'); pi.className = 'pip-port' + (taken.has(n.id + ':' + q) ? ' taken' : ''); pi.dataset.node = n.id; pi.dataset.port = q; pi.style.cssText = `left:-7px;top:${39 + (outs.length + i) * 28}px`; d.append(pi); });
             d.onmousedown = e => { if (e.button === 0 && !e.target.classList.contains('pip-port')) { e.stopPropagation(); pipDragNode(p, n, d, e); } };
@@ -4676,8 +4680,15 @@ function pipInspector(p) {
     const def = pipDef(n);
     box.append(agEl('div', 'font-size:15px;font-weight:600;', n.agent));
     lab('Runs on'); dim((def.serverName || '?') + ' · ' + (def.slotName || 'default slot'));
-    lab('Inputs'); dim(pipInputs(n).map(q => '{' + q + '}  ←  ' + ((p.edges.find(e => e.to === n.id && e.port === q) || {}).from ? (() => { const f = pipNode(p, p.edges.find(e => e.to === n.id && e.port === q).from); return f.type === 'start' ? 'conversation' : f.agent; })() : 'nothing') ).join('\n') || 'none');
+    lab('Inputs'); dim(pipInputs(n).map(q => '{' + q + '}  ←  ' + ((p.edges.find(e => e.to === n.id && e.port === q) || {}).from ? (() => { const f = pipNode(p, p.edges.find(e => e.to === n.id && e.port === q).from); return f.type === 'start' ? (p.edges.find(e => e.to === n.id && e.port === q).fromPort === 'message' ? 'latest message' : 'conversation history') : pipLabel(f); })() : 'nothing') ).join('\n') || 'none');
     lab('System prompt'); dim(((def.agentPrompt || '').slice(0, 300) + ((def.agentPrompt || '').length > 300 ? '…' : '')) || '(empty)');
+    if (def.custom) {
+        lab('Own sub-thread');
+        const code = document.createElement('input'); code.type = 'text'; code.value = n.thread || ''; code.placeholder = 'e.g. memory'; code.className = 'vs-input'; code.style.cssText = 'width:100%;box-sizing:border-box;';
+        code.onchange = () => { const v = code.value.trim(); if (v && !/^[A-Za-z][A-Za-z0-9_-]{0,29}$/.test(v)) { alert('Letters, numbers, - or _ (up to 30), starting with a letter.'); code.value = n.thread || ''; return; } if (v) n.thread = v; else delete n.thread; pipTouch(); pipRender(); };
+        box.append(code);
+        dim('Give this agent a code to keep its own thread under the chat. It is found again by that code on every message, so the agent remembers what it did before, and it shows nested under the chat in the thread inspector. Leave empty to start fresh each time. Each agent needs its own code.');
+    }
     if (def.custom) {
         const add = agEl('button', 'margin:4px 8px 4px 0;', 'Add input'); add.className = 'agv-btn'; add.type = 'button';
         add.onclick = async () => {

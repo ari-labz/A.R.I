@@ -26,6 +26,9 @@ internal sealed class GraphPipeline : Pipeline
 
     private const int MaxDepth = 8;
 
+    /// <summary>Tokens Dialogue's prompt may use that aren't extra inputs: the memory block (either spelling) and the two it always has.</summary>
+    private static readonly string[] DialogueOwnTokens = ["history", "memories", "memory"];
+
     private readonly ScriptRegistry scripts;
 
     internal event Action<string>? ThreadBufferFull;
@@ -62,7 +65,13 @@ internal sealed class GraphPipeline : Pipeline
     internal string[]? PortsOf(string agent)
     {
         if (PipelineGraph.BuiltInPorts.TryGetValue(agent, out string[]? ports))
-            return agent.Equals("Memory", StringComparison.OrdinalIgnoreCase) && memory is null ? null : ports;
+        {
+            if (agent.Equals("Memory", StringComparison.OrdinalIgnoreCase) && memory is null) return null;
+            // Dialogue's own prompt can hold {tokens} too: each one beyond its fixed ports becomes an input.
+            if (agent.Equals("Dialogue", StringComparison.OrdinalIgnoreCase))
+                return ports.Concat(PipelineGraph.PromptTokens(textingAgent.AgentPrompt).Where(t => !DialogueOwnTokens.Contains(t, StringComparer.OrdinalIgnoreCase))).ToArray();
+            return ports;
+        }
         return customAgents.TryGetValue(agent, out CustomAgent? c) ? PipelineGraph.PromptTokens(c.AgentPrompt + "\n" + c.MessagePrompt).ToArray() : null;
     }
 
@@ -181,16 +190,27 @@ internal sealed class GraphPipeline : Pipeline
                 if (agentName.Equals("Dialogue", StringComparison.OrdinalIgnoreCase))
                 {
                     inputs.TryGetValue("memories", out string? mem);
-                    return await textingAgent.Prompt(thread, effectivePrompt, new PromptOptions
+                    // Dialogue's prompt can place the memory itself with {memory} and take extra inputs as {tokens}; without those it works as it always has.
+                    Dictionary<string, string> dialogueTokens = inputs.ToDictionary(kv => kv.Key, kv => kv.Value ?? "", StringComparer.OrdinalIgnoreCase);
+                    dialogueTokens["memory"] = dialogueTokens["memories"] = mem?.Trim() ?? "";
+                    foreach (string extra in PortsOf("Dialogue") ?? []) dialogueTokens.TryAdd(extra, "");   // an input left unwired reads as empty, not as the literal {token}
+                    bool placesMemory = System.Text.RegularExpressions.Regex.IsMatch(textingAgent.AgentPrompt, @"\{(memory|memories)\}");
+                    Agent.PromptTokens.Value = dialogueTokens;
+                    try
                     {
-                        Username            = username,
-                        RecallNotes         = mem,
-                        RecallSeconds       = recallSeconds,
-                        ContextSummary      = contextSummary,
-                        Ct                  = cts.Token,
-                        UserMessagePreadded = true,
-                        OnDelta             = onDelta,
-                    });
+                        return await textingAgent.Prompt(thread, effectivePrompt, new PromptOptions
+                        {
+                            Username            = username,
+                            RecallNotes         = mem,
+                            MemoryInPrompt      = placesMemory,
+                            RecallSeconds       = recallSeconds,
+                            ContextSummary      = contextSummary,
+                            Ct                  = cts.Token,
+                            UserMessagePreadded = true,
+                            OnDelta             = onDelta,
+                        });
+                    }
+                    finally { Agent.PromptTokens.Value = null; }
                 }
 
                 CustomAgent agent = customAgents[agentName];
@@ -203,24 +223,45 @@ internal sealed class GraphPipeline : Pipeline
                 }
                 inputs["message"] = message;
                 Dictionary<string, string> filled = inputs.ToDictionary(kv => kv.Key, kv => kv.Value ?? "", StringComparer.OrdinalIgnoreCase);
-                using IDisposable _ = CustomAgent.Resolve(PipelineGraph.Fill(agent.AgentPrompt, filled));
-                string userText = string.IsNullOrWhiteSpace(agent.MessagePrompt) ? message : PipelineGraph.Fill(agent.MessagePrompt, filled);
+
+                // An agent with a sub-thread code keeps its own thread under this chat, found again by that code on every message, so it
+                // remembers what it did before. Only one run uses it at a time, and a run that is cancelled leaves nothing half-finished.
+                Thread? own = null;
+                if (!isReply && node.ThreadCode is { } code)
+                {
+                    own = thread.GetOrCreateChild(code, agentName, () => NewOwnThread(thread, code, agent));
+                    await own.RunLock.WaitAsync(cts.Token);
+                }
                 string result;
-                if (isReply)
+                try
                 {
-                    // The reply agent answers the user's own message, which is already in the thread; a message template only applies to steps behind the scenes.
-                    result = await agent.Prompt(thread, message, new PromptOptions
+                    int checkpoint = own?.History.Count ?? 0;
+                    List<ThreadMessage> chat = thread.GetChatHistory();
+                    filled["since"] = own is null ? history : SinceText(chat, own);
+                    using IDisposable _ = CustomAgent.Resolve(PipelineGraph.Fill(agent.AgentPrompt, filled));
+                    string userText = string.IsNullOrWhiteSpace(agent.MessagePrompt) ? message : PipelineGraph.Fill(agent.MessagePrompt, filled);
+                    if (isReply)
                     {
-                        Username = username, ContextSummary = contextSummary, Ct = cts.Token, UserMessagePreadded = true, OnDelta = onDelta,
-                    });
+                        // The reply agent answers the user's own message, which is already in the thread; a message template only applies to steps behind the scenes.
+                        result = await agent.Prompt(thread, message, new PromptOptions
+                        {
+                            Username = username, ContextSummary = contextSummary, Ct = cts.Token, UserMessagePreadded = true, OnDelta = onDelta,
+                        });
+                    }
+                    else
+                    {
+                        try { result = await agent.Prompt(own ?? NewScratch(agent), userText, new PromptOptions { Username = username, Ct = cts.Token }); }
+                        catch
+                        {
+                            if (own is not null && own.History.Count > checkpoint) own.History.RemoveRange(checkpoint, own.History.Count - checkpoint);
+                            throw;
+                        }
+                        if (own is not null) own.LastChatCount = chat.Count;
+                        // A step that used tools comes back with the chat's display markers in its text; what the next box receives is plain text.
+                        result = System.Text.RegularExpressions.Regex.Replace(result, @"<!--ari-[^>]*-->", "").Trim();
+                    }
                 }
-                else
-                {
-                    Thread scratch = new(ThreadPipeline.Dialogue, $"graph:{Guid.NewGuid():N}") { Internal = true, ReadOnlyTools = true };
-                    new ListTools(scratch).Register(scratch);
-                    new RequestTools(scratch).Register(scratch);
-                    result = await agent.Prompt(scratch, userText, new PromptOptions { Username = username, Ct = cts.Token });
-                }
+                finally { own?.RunLock.Release(); }
                 Shared.Logger.LogInformation("[Graph:{Graph}] ({Thread}) {Agent} finished in {Sec:F1}s.", graph.Name, threadKey, agentName, sw.Elapsed.TotalSeconds);
                 return result;
 
@@ -240,6 +281,42 @@ internal sealed class GraphPipeline : Pipeline
                 }
             }
         }
+    }
+
+    /// <summary>A throw-away thread for one run of a step: read-only tools, and any tool groups the agent starts with.</summary>
+    private static Thread NewScratch(CustomAgent agent)
+    {
+        Thread scratch = new(ThreadPipeline.Dialogue, $"graph:{Guid.NewGuid():N}") { Internal = true, ReadOnlyTools = true };
+        EquipThread(scratch, agent);
+        return scratch;
+    }
+
+    /// <summary>A step's own sub-thread under the chat. Internal, so it's off the chat list and Engram leaves it alone, but it shows
+    /// under its parent in the thread inspector.</summary>
+    private static Thread NewOwnThread(Thread parent, string code, CustomAgent agent)
+    {
+        Thread child = new(ThreadPipeline.Dialogue, $"{parent.Key}:{code}")
+        {
+            Internal = true, ReadOnlyTools = true, KeepToolHistory = true, Parent = parent, Code = code, OwnerAgent = agent.Name, Label = $"{agent.Name} ({code})",
+        };
+        EquipThread(child, agent);
+        return child;
+    }
+
+    private static void EquipThread(Thread thread, CustomAgent agent)
+    {
+        new ListTools(thread).Register(thread);
+        new RequestTools(thread).Register(thread);
+        foreach (string group in agent.PreloadedTools ?? [])
+            ToolFactories.LoadGroup(group, thread);
+    }
+
+    /// <summary>What was said in the chat since this sub-thread last looked: ARI's last reply and the new message. On its first look, the last few messages.</summary>
+    private static string SinceText(List<ThreadMessage> chat, Thread sub)
+    {
+        const int FirstLook = 12;
+        IEnumerable<ThreadMessage> fresh = sub.History.Count == 0 || sub.LastChatCount > chat.Count ? chat.TakeLast(FirstLook) : chat.Skip(sub.LastChatCount);
+        return string.Join("\n", fresh.Select(m => $"{m.Username}: {m.Content}"));
     }
 
     /// <summary>Where a wire's value is stored: a node's output, or for START and scripts the specific output the wire leaves from
@@ -264,10 +341,7 @@ internal sealed class GraphPipeline : Pipeline
         Dictionary<string, string> filled = new(tokens, StringComparer.OrdinalIgnoreCase);
         using IDisposable _ = CustomAgent.Resolve(PipelineGraph.Fill(agent.AgentPrompt, filled));
         string userText = string.IsNullOrWhiteSpace(agent.MessagePrompt) ? filled.GetValueOrDefault("message") ?? "" : PipelineGraph.Fill(agent.MessagePrompt, filled);
-        Thread scratch = new(ThreadPipeline.Dialogue, $"script:{Guid.NewGuid():N}") { Internal = true, ReadOnlyTools = true };
-        new ListTools(scratch).Register(scratch);
-        new RequestTools(scratch).Register(scratch);
-        return await agent.Prompt(scratch, userText, new PromptOptions { Ct = ct });
+        return await agent.Prompt(NewScratch(agent), userText, new PromptOptions { Ct = ct });
     }
 
     private static string FormatHistory(List<ThreadMessage> history)

@@ -11,7 +11,8 @@ internal sealed class PipelineGraph
 {
     /// <param name="Type">start, end, agent (a named agent), pipeline (another pipeline run as a single step) or script (a C# script).</param>
     /// <param name="OnError">If set and this node fails, the pipeline carries on with this text as the node's output instead of failing.</param>
-    internal sealed record Node(string Id, string Type, string? Agent, string? Pipeline = null, string? Script = null, string? OnError = null);
+    /// <param name="ThreadCode">An agent step with a code keeps its own sub-thread under the chat, found again by that code on every message, so it remembers what it did before.</param>
+    internal sealed record Node(string Id, string Type, string? Agent, string? Pipeline = null, string? Script = null, string? OnError = null, string? ThreadCode = null);
 
     /// <summary>How the validator looks things up: an agent's input ports, another pipeline, a script's ports.</summary>
     internal sealed record Env(Func<string, string[]?> PortsOf, Func<string, PipelineGraph?> PipelineById, Func<string, ScriptShape?> ScriptShape);
@@ -43,7 +44,9 @@ internal sealed class PipelineGraph
     };
 
     internal static bool IsOptional(string agent, string port) =>
-        OptionalPorts.TryGetValue(agent, out string[]? o) && o.Contains(port, StringComparer.OrdinalIgnoreCase);
+        // Dialogue only needs the conversation; everything else it takes (memories, and any {token} its prompt adds) may be left unwired.
+        agent.Equals("Dialogue", StringComparison.OrdinalIgnoreCase) ? !port.Equals("history", StringComparison.OrdinalIgnoreCase)
+            : OptionalPorts.TryGetValue(agent, out string[]? o) && o.Contains(port, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The pipeline ARI ships and always has: recall memories, then reply with them. <paramref name="withMemory"/> false
     /// gives the same without the recall step, for an install that has no Memory agent.</summary>
@@ -93,7 +96,11 @@ internal sealed class PipelineGraph
     }
 
     /// <summary>Shipped pipelines other than Default, which can be edited but never deleted.</summary>
-    internal static readonly string[] ShippedIds = [MemoryId];
+    internal const string WalkId = "memory-walk", WalkChatId = "walker-chat";
+    internal static readonly string[] ShippedIds = [MemoryId, WalkId, WalkChatId];
+
+    /// <summary>Shipped pipelines that are only steps inside others, so they aren't offered as a way to reply to a chat.</summary>
+    internal static readonly string[] StepOnlyIds = [MemoryId, WalkId];
 
     /// <summary>Pipelines ARI ships besides Default, as the editor's JSON. Memory recall as a pipeline: find candidates (a script), ask
     /// the "Memory Pick" agent which to use, then finish (a script that has the "Memory Extract" and "Memory Privacy" agents do their
@@ -115,12 +122,37 @@ internal sealed class PipelineGraph
           { "from": "find",  "to": "finish", "port": "State",      "mode": "complete", "fromPort": "State" },
           { "from": "pick",  "to": "finish", "port": "Picks",      "mode": "complete" },
           { "from": "finish","to": "end",    "port": "stream",     "mode": "stream",   "fromPort": "Block" }
+        ] },
+      { "id": "memory-walk", "name": "Memory walker",
+        "nodes": [
+          { "id": "start",  "type": "start",  "x": 20,  "y": 110 },
+          { "id": "begin",  "type": "script", "script": "Memory_Start", "x": 300, "y": 70 },
+          { "id": "walker", "type": "agent",  "agent": "Memory Walker", "thread": "memory", "x": 640, "y": 50 },
+          { "id": "end",    "type": "end",    "x": 980, "y": 110 }
+        ],
+        "edges": [
+          { "from": "start", "to": "begin",  "port": "Message",  "mode": "complete", "fromPort": "message" },
+          { "from": "begin", "to": "walker", "port": "starting", "mode": "complete", "fromPort": "Starting" },
+          { "from": "begin", "to": "walker", "port": "audience", "mode": "complete", "fromPort": "Audience" },
+          { "from": "walker","to": "end",    "port": "stream",   "mode": "stream" }
+        ] },
+      { "id": "walker-chat", "name": "Memory walker chat",
+        "nodes": [
+          { "id": "start", "type": "start",    "x": 20,  "y": 140 },
+          { "id": "mem",   "type": "pipeline", "pipeline": "memory-walk", "x": 290, "y": 30, "onError": "@memory-unavailable" },
+          { "id": "dia",   "type": "agent",    "agent": "Dialogue", "x": 620, "y": 120 },
+          { "id": "end",   "type": "end",      "x": 940, "y": 150 }
+        ],
+        "edges": [
+          { "from": "start", "to": "dia", "port": "history",  "mode": "complete", "fromPort": "history" },
+          { "from": "mem",   "to": "dia", "port": "memories", "mode": "complete" },
+          { "from": "dia",   "to": "end", "port": "stream",   "mode": "stream" }
         ] }
     ] }
     """;
 
     /// <summary>Tokens a custom agent's prompt can use without wiring: the user's latest message.</summary>
-    internal static readonly string[] ImplicitTokens = ["message"];
+    internal static readonly string[] ImplicitTokens = ["message", "since"];
 
     private static readonly Regex TokenRx = new(@"\{(\w+)\}", RegexOptions.Compiled);
 
@@ -143,7 +175,8 @@ internal sealed class PipelineGraph
                     nodes.Add(new Node(Str(n, "id"), Str(n, "type"), n.TryGetProperty("agent", out JsonElement a) ? a.GetString() : null,
                         n.TryGetProperty("pipeline", out JsonElement sp) ? sp.GetString() : null,
                         n.TryGetProperty("script", out JsonElement sc) ? sc.GetString() : null,
-                        n.TryGetProperty("onError", out JsonElement oe) && oe.ValueKind == JsonValueKind.String ? oe.GetString() : null));
+                        n.TryGetProperty("onError", out JsonElement oe) && oe.ValueKind == JsonValueKind.String ? (oe.GetString() == "@memory-unavailable" ? MemoryUnavailableText : oe.GetString()) : null,
+                        n.TryGetProperty("thread", out JsonElement tc) && tc.ValueKind == JsonValueKind.String && tc.GetString() is { Length: > 0 } code ? code : null));
             if (p.TryGetProperty("edges", out JsonElement es))
                 foreach (JsonElement e in es.EnumerateArray())
                     edges.Add(new Edge(Str(e, "from"), Str(e, "to"), Str(e, "port"), e.TryGetProperty("mode", out JsonElement m) && m.GetString() == "stream",
@@ -215,6 +248,13 @@ internal sealed class PipelineGraph
             foreach (string input in shape.Inputs.Where(i => !shape.OptionalInputs.Contains(i, StringComparer.OrdinalIgnoreCase)))
                 if (!Edges.Any(e => e.To == n.Id && e.Port.Equals(input, StringComparison.OrdinalIgnoreCase)))
                     problems.Add($"{n.Script}: {{{input}}} has nothing wired in.");
+        }
+
+        // A sub-thread code belongs to one agent: two different agents can't share "memory".
+        foreach (IGrouping<string, Node> sharing in Nodes.Where(n => n.Type == "agent" && n.ThreadCode is not null).GroupBy(n => n.ThreadCode!, StringComparer.OrdinalIgnoreCase))
+        {
+            string[] owners = sharing.Select(n => n.Agent!).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            if (owners.Length > 1) problems.Add($"The sub-thread code '{sharing.Key}' is used by {string.Join(" and ", owners)}; each agent needs its own.");
         }
 
         if (Order() is null) problems.Add("The pipeline loops back on itself.");

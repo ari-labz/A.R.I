@@ -96,7 +96,12 @@ public abstract class Agent
     // ── Context-building hooks ───────────────────────────────────────────────
     internal virtual string PersistentContext(Thread thread)    => "";
     internal virtual string DynamicContext(Thread thread, bool lastStepToolOnly) => "";
-    internal virtual string BuildSystemPrompt(Thread thread) => AgentPrompt;
+    /// <summary>Values for the {tokens} in this agent's system prompt during one pipeline run. Set by the pipeline around the call, so
+    /// a prompt can hold {topic} or {memory} and have it filled in; a token with no value stays as written.</summary>
+    internal static readonly AsyncLocal<IReadOnlyDictionary<string, string>?> PromptTokens = new();
+
+    internal virtual string BuildSystemPrompt(Thread thread) =>
+        PromptTokens.Value is { } tokens ? ARI.LLM.PipelineGraph.Fill(AgentPrompt, tokens) : AgentPrompt;
 
     private static string BuildBudgets(int thinking, int reply, int context, int toolCalls)
     {
@@ -2069,7 +2074,7 @@ public abstract class Agent
         }
 
         // modeNudge is a trailing system message — mid-conversation system messages ARE rendered by Qwen3's template.
-        string memoryBlock = opts.RecallNotes != null
+        string memoryBlock = opts.RecallNotes != null && !opts.MemoryInPrompt
             ? $"--- **Ari's Memories** ---\n\n" +
               "(These memories describe the USER's life, possessions, and experiences — not yours. Never adopt them as your own.)\n\n" +
               $"{(string.IsNullOrWhiteSpace(opts.RecallNotes) ? "None" : opts.RecallNotes.Trim())}\n\n{BlockRule}\n\n"

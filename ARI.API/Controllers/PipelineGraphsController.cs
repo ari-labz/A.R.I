@@ -58,7 +58,7 @@ public class PipelineGraphsController(PersistentData persistentData) : Controlle
         {
             data,
             ports    = Llm?.AgentPorts() ?? new Dictionary<string, string[]>(),
-            optional = PipelineGraph.OptionalPorts,
+            optional = Llm?.AgentOptionalPorts() ?? PipelineGraph.OptionalPorts,
             scripts  = (Llm?.ListScripts() ?? []).Where(x => x.Error is null).ToDictionary(x => x.Name, x => new { description = x.Description, inputs = x.Inputs, optionalInputs = x.OptionalInputs, outputs = x.Outputs }),
             problems = Problems(data),
         });
