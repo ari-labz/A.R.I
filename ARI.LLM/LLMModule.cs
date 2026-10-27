@@ -24,6 +24,8 @@ public class LLMModule : ILLMModule, IDisposable
 {
     //pipelines
     private readonly ConcurrentDictionary<string, PipelineGraph> graphs = new(StringComparer.OrdinalIgnoreCase);
+    // Every pipeline that can run as a step inside another, which includes ones that couldn't answer a chat by themselves.
+    private readonly ConcurrentDictionary<string, PipelineGraph> subGraphs = new(StringComparer.OrdinalIgnoreCase);
     private readonly CodePipeline?     codePipeline;
     private readonly SpeechPipeline?   speechPipeline;
     private readonly GraphPipeline?    graphPipeline;
@@ -302,7 +304,7 @@ public class LLMModule : ILLMModule, IDisposable
 
         if (textingAgent is not null)
         {
-            graphPipeline = new GraphPipeline(textingAgent, memory, context, engram, customAgents, GraphFor, processingThreads, liveCalls, NotifyWatchers);
+            graphPipeline = new GraphPipeline(textingAgent, memory, context, engram, customAgents, GraphFor, id => subGraphs.GetValueOrDefault(id), processingThreads, liveCalls, NotifyWatchers);
             graphPipeline.ThreadBufferFull     += key => NotifyWatchers(key);
             graphPipeline.ThreadBecameInactive += key => NotifyWatchers(key);
             ReloadPipelines();
@@ -660,34 +662,45 @@ public class LLMModule : ILLMModule, IDisposable
         return result;
     }
 
-    /// <summary>Problems with a pipeline graph given as the control panel's JSON (one entry of Pipelines.json), empty if it can run.</summary>
-    public List<string> ValidatePipeline(JsonElement pipeline)
+    /// <summary>Problems with each pipeline in Pipelines.json as the control panel sends it, by pipeline id; empty when it can run.
+    /// A pipeline counts as fine if it can answer a chat or run as a step inside another one.</summary>
+    public Dictionary<string, List<string>> ValidatePipelines(JsonElement root)
     {
-        if (graphPipeline is null) return new() { "Dialogue is not configured, so no pipeline can run." };
-        using JsonDocument wrap = JsonDocument.Parse("{\"pipelines\":[" + pipeline.GetRawText() + "]}");
-        List<PipelineGraph> parsed = PipelineGraph.ParseAll(wrap.RootElement);
-        return parsed.Count == 0 ? new() { "Not a pipeline." } : parsed[0].Validate(graphPipeline.PortsOf);
+        Dictionary<string, List<string>> result = new();
+        if (graphPipeline is null) return result;
+        List<PipelineGraph> all = PipelineGraph.ParseAll(root);
+        Dictionary<string, PipelineGraph> byId = all.GroupBy(g => g.Id).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        foreach (PipelineGraph g in all)
+        {
+            List<string> asReply = g.Validate(graphPipeline.PortsOf, id => byId.GetValueOrDefault(id));
+            result[g.Id] = asReply.Count == 0 || g.Validate(graphPipeline.PortsOf, id => byId.GetValueOrDefault(id), asSub: true).Count == 0 ? [] : asReply;
+        }
+        return result;
     }
 
-    /// <summary>Re-reads Pipelines.json and keeps every graph that can run. One that doesn't validate (an agent it uses was
-    /// deleted, say) is left out and the reasons logged; threads on it answer with Default until it is fixed. Default is
-    /// always there: the one in the file, or the built-in one.</summary>
+    /// <summary>Re-reads Pipelines.json and keeps every graph that can run. A pipeline that can answer a chat is offered as a
+    /// reply type; one that can only run as a step inside another is kept for that. One that does neither (an agent it uses was
+    /// deleted, say) is left out and the reasons logged; threads on it answer with Default until it is fixed. Default is always
+    /// there: the one in the file, or the built-in one.</summary>
     public void ReloadPipelines()
     {
         if (graphPipeline is null) return;
-        Dictionary<string, PipelineGraph> loaded = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, PipelineGraph> loaded = new(StringComparer.OrdinalIgnoreCase), loadedSub = new(StringComparer.OrdinalIgnoreCase);
         if (File.Exists(pipelinesPath))
         {
             try
             {
                 using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(pipelinesPath), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
-                foreach (PipelineGraph graph in PipelineGraph.ParseAll(doc.RootElement))
+                List<PipelineGraph> all = PipelineGraph.ParseAll(doc.RootElement);
+                Dictionary<string, PipelineGraph> byId = all.GroupBy(g => g.Id).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+                foreach (PipelineGraph graph in all)
                 {
-                    List<string> problems = graph.Validate(graphPipeline.PortsOf);
-                    if (problems.Count > 0)
-                        _logger.LogWarning("Pipeline '{Name}' can't run and is not available: {Problems}", graph.Name, string.Join(" | ", problems));
-                    else
-                        loaded[graph.Id] = graph;
+                    List<string> asReply = graph.Validate(graphPipeline.PortsOf, id => byId.GetValueOrDefault(id));
+                    List<string> asSub   = graph.Validate(graphPipeline.PortsOf, id => byId.GetValueOrDefault(id), asSub: true);
+                    if (asReply.Count == 0) loaded[graph.Id] = graph;
+                    if (asSub.Count == 0)   loadedSub[graph.Id] = graph;
+                    if (asReply.Count > 0 && asSub.Count > 0)
+                        _logger.LogWarning("Pipeline '{Name}' can't run and is not available: {Problems}", graph.Name, string.Join(" | ", asReply));
                 }
             }
             catch (Exception ex)
@@ -699,6 +712,8 @@ public class LLMModule : ILLMModule, IDisposable
 
         foreach (string gone in graphs.Keys.Where(k => !loaded.ContainsKey(k)).ToList()) graphs.TryRemove(gone, out _);
         foreach ((string id, PipelineGraph g) in loaded) graphs[id] = g;
+        foreach (string gone in subGraphs.Keys.Where(k => !loadedSub.ContainsKey(k)).ToList()) subGraphs.TryRemove(gone, out _);
+        foreach ((string id, PipelineGraph g) in loadedSub) subGraphs[id] = g;
     }
 
     // ── Agent assignment ─────────────────────────────────────────────────────────
