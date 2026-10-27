@@ -23,6 +23,7 @@ public enum ThreadPhase { Idle, Prefilling, Thinking, Typing, Researching, Gener
 public class LLMModule : ILLMModule, IDisposable
 {
     //pipelines
+    private ScriptRegistry scripts = null!;
     private readonly ConcurrentDictionary<string, PipelineGraph> graphs = new(StringComparer.OrdinalIgnoreCase);
     // Every pipeline that can run as a step inside another, which includes ones that couldn't answer a chat by themselves.
     private readonly ConcurrentDictionary<string, PipelineGraph> subGraphs = new(StringComparer.OrdinalIgnoreCase);
@@ -128,6 +129,8 @@ public class LLMModule : ILLMModule, IDisposable
         foreach (Server s in _servers) queues[s] = new LLMQueue();
 
         pipelinesPath = Path.Combine(Path.GetDirectoryName(agentsJsonPath) ?? ".", "Pipelines.json");
+        scripts = new ScriptRegistry(Path.Combine(Path.GetDirectoryName(agentsJsonPath) ?? ".", "Scripts"));
+        scripts.LoadAll();
         dreamingEnabled = LoadDreamingState();
 
         CleanScratchpads();
@@ -304,7 +307,7 @@ public class LLMModule : ILLMModule, IDisposable
 
         if (textingAgent is not null)
         {
-            graphPipeline = new GraphPipeline(textingAgent, memory, context, engram, customAgents, GraphFor, id => subGraphs.GetValueOrDefault(id), processingThreads, liveCalls, NotifyWatchers);
+            graphPipeline = new GraphPipeline(textingAgent, memory, context, engram, customAgents, GraphFor, id => subGraphs.GetValueOrDefault(id), scripts, processingThreads, liveCalls, NotifyWatchers);
             graphPipeline.ThreadBufferFull     += key => NotifyWatchers(key);
             graphPipeline.ThreadBecameInactive += key => NotifyWatchers(key);
             ReloadPipelines();
@@ -662,6 +665,29 @@ public class LLMModule : ILLMModule, IDisposable
         return result;
     }
 
+    // ── Scripts ─────────────────────────────────────────────────────────────────
+
+    /// <summary>Every script, with its ports (or its compile error).</summary>
+    public IReadOnlyList<(string Name, string Description, string[] Inputs, string[] OptionalInputs, string[] Outputs, string? Error)> ListScripts() =>
+        scripts.List().Select(s => (s.Name, s.Shape?.Description ?? "", s.Shape?.Inputs ?? [], s.Shape?.OptionalInputs ?? [], s.Shape?.Outputs ?? [], s.Error)).ToList();
+
+    public string? ScriptSource(string name) => scripts.Source(name);
+
+    /// <summary>Compiles and saves a script; null on success, otherwise the errors. Pipelines are re-checked, since the script's ports may have changed.</summary>
+    public string? SaveScript(string name, string source)
+    {
+        string? error = scripts.Save(name, source);
+        if (error is null) ReloadPipelines();
+        return error;
+    }
+
+    public bool DeleteScript(string name)
+    {
+        bool had = scripts.Delete(name);
+        if (had) ReloadPipelines();
+        return had;
+    }
+
     /// <summary>Problems with each pipeline in Pipelines.json as the control panel sends it, by pipeline id; empty when it can run.
     /// A pipeline counts as fine if it can answer a chat or run as a step inside another one.</summary>
     public Dictionary<string, List<string>> ValidatePipelines(JsonElement root)
@@ -672,8 +698,9 @@ public class LLMModule : ILLMModule, IDisposable
         Dictionary<string, PipelineGraph> byId = all.GroupBy(g => g.Id).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
         foreach (PipelineGraph g in all)
         {
-            List<string> asReply = g.Validate(graphPipeline.PortsOf, id => byId.GetValueOrDefault(id));
-            result[g.Id] = asReply.Count == 0 || g.Validate(graphPipeline.PortsOf, id => byId.GetValueOrDefault(id), asSub: true).Count == 0 ? [] : asReply;
+            PipelineGraph.Env env = new(graphPipeline.PortsOf, id => byId.GetValueOrDefault(id), scripts.Shape);
+            List<string> asReply = g.Validate(env);
+            result[g.Id] = asReply.Count == 0 || g.Validate(env, asSub: true).Count == 0 ? [] : asReply;
         }
         return result;
     }
@@ -695,8 +722,9 @@ public class LLMModule : ILLMModule, IDisposable
                 Dictionary<string, PipelineGraph> byId = all.GroupBy(g => g.Id).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
                 foreach (PipelineGraph graph in all)
                 {
-                    List<string> asReply = graph.Validate(graphPipeline.PortsOf, id => byId.GetValueOrDefault(id));
-                    List<string> asSub   = graph.Validate(graphPipeline.PortsOf, id => byId.GetValueOrDefault(id), asSub: true);
+                    PipelineGraph.Env env = new(graphPipeline.PortsOf, id => byId.GetValueOrDefault(id), scripts.Shape);
+                    List<string> asReply = graph.Validate(env);
+                    List<string> asSub   = graph.Validate(env, asSub: true);
                     if (asReply.Count == 0) loaded[graph.Id] = graph;
                     if (asSub.Count == 0)   loadedSub[graph.Id] = graph;
                     if (asReply.Count > 0 && asSub.Count > 0)
