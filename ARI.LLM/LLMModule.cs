@@ -76,6 +76,7 @@ public class LLMModule : ILLMModule, IDisposable
     private ILogger                   _logger;
 
     /// <summary>All managed llama servers.</summary>
+    private readonly ConcurrentDictionary<string, byte> nearFull = new(StringComparer.OrdinalIgnoreCase);   // chats whose context is close to compaction and already swept for it
     public IReadOnlyList<Server> Servers    => _servers;
     public string                   ModelsPath => _modelsPath;
 
@@ -169,6 +170,7 @@ public class LLMModule : ILLMModule, IDisposable
 
         if (brainConfig is not null)
         {
+            if (Shared.DevMode) brainConfig.VaultPath = PrepareDevSandbox(brainConfig);
             IndexStats brainStats = Brain.Initialize(brainConfig);
             _logger.LogInformation("Brain vault indexed: {Notes} notes, {Edges} edges, {Aliases} aliases, {Thoughts} thoughts.",
                 brainStats.Notes, brainStats.Edges, brainStats.Aliases, brainStats.Thoughts);
@@ -504,6 +506,8 @@ public class LLMModule : ILLMModule, IDisposable
         // own copy for the same reason.
         new ListTools(thread).Register(thread);
         new RequestTools(thread).Register(thread);
+        // The reflex for corrections and "remember this" is always on for people-facing chats.
+        if (type is ThreadPipeline.Dialogue or ThreadPipeline.Speech) new RememberTool(thread).Register(thread);
         // Discord threads get discord_tools hot — no request_tools round-trip needed.
         bool isDiscord = threadKey.StartsWith("dm:", StringComparison.OrdinalIgnoreCase) ||
                          threadKey.StartsWith("guild:", StringComparison.OrdinalIgnoreCase);
@@ -574,10 +578,17 @@ public class LLMModule : ILLMModule, IDisposable
                 thread.ExchangeCompleted += (_, _) =>
                 {
                     if (thread.Internal || !thread.HasUserMessages || !thread.HasMemoryAccess || thread.OwnerId is null) return;
-                    if (!engram.ShouldIntervalSweep(threadKey)) return;
+                    bool nearCompaction = false;
+                    if (textingAgent is { BudgetContext: > 0 } && thread.History.OfType<Response>().LastOrDefault()?.Data.PromptTokens is int used and > 0)
+                    {
+                        double share = used / (double)textingAgent.BudgetContext;
+                        if (share >= textingAgent.CompactHighPct / 100.0 - 0.1) nearCompaction = nearFull.TryAdd(threadKey, 0);
+                        else if (share < 0.5) nearFull.TryRemove(threadKey, out _);
+                    }
+                    if (!engram.ShouldIntervalSweep(threadKey) && !nearCompaction) return;
                     _ = Task.Run(async () =>
                     {
-                        try { await engram.RunEngram(threadKey, "interval"); }
+                        try { await engram.RunEngram(threadKey, nearCompaction ? "compaction" : "interval"); }
                         catch (Exception ex) { _logger.LogWarning("[Interval] Engram failed for {Key}: {Err}", threadKey, ex.Message); }
                     });
                 };
@@ -751,6 +762,21 @@ public class LLMModule : ILLMModule, IDisposable
 
     // ── Agent assignment ─────────────────────────────────────────────────────────
 
+    /// <summary>Applies an edited prompt, templates, thinking flag or tool-call cap to a live agent so a change takes effect on its next run without a restart.</summary>
+    public void ApplyAgentPatch(string agentName, System.Text.Json.Nodes.JsonObject patch)
+    {
+        if (!agentMap.TryGetValue(agentName, out Agent? agent)) return;
+        if (patch["agentPrompt"]?.GetValue<string>() is { } prompt) agent.AgentPrompt = prompt;
+        if (patch["promptTemplates"] is System.Text.Json.Nodes.JsonObject tpl)
+        {
+            Dictionary<string, string> merged = new(agent.PromptTemplates ?? new());
+            foreach ((string k, System.Text.Json.Nodes.JsonNode? v) in tpl) if (v is not null) merged[k] = v.GetValue<string>();
+            agent.PromptTemplates = merged;
+        }
+        if (patch["think"]?.GetValue<bool>() is { } think) agent.Think = think;
+        if (patch["maxToolCalls"]?.GetValue<int>() is { } cap) agent.MaxToolCalls = cap;
+    }
+
     /// <summary>
     /// Reassigns a live agent to a different server. Resolves the server name to an endpoint
     /// from the current server list. Returns false if the agent or server is not found.
@@ -912,11 +938,34 @@ public class LLMModule : ILLMModule, IDisposable
         });
     }
 
+    /// <summary>DevMode never touches the real brain. Engram and everything else still run in full, but against a throwaway copy of it made fresh at
+    /// every start (<c>Brain.devrun</c> beside the real one), so you can read exactly what she tried to remember without any of it being kept.</summary>
+    private string PrepareDevSandbox(BrainConfig config)
+    {
+        string real = Path.GetFullPath(config.VaultPath.Length > 0 ? config.VaultPath : Paths.Brain);
+        string sandbox = real.TrimEnd(Path.DirectorySeparatorChar) + ".devrun";
+        if (Directory.Exists(sandbox)) Directory.Delete(sandbox, recursive: true);   // only ever our own ".devrun" copy
+        if (Directory.Exists(real)) CopyDirectory(real, sandbox);
+        _logger.LogWarning("DevMode: the brain for this run is a throwaway copy at {Sandbox}. Engram runs in full and its notes are written there; your real brain at {Real} is untouched.", sandbox, real);
+        return sandbox;
+    }
+
+    private static void CopyDirectory(string from, string to)
+    {
+        Directory.CreateDirectory(to);
+        foreach (string file in Directory.GetFiles(from))
+            File.Copy(file, Path.Combine(to, Path.GetFileName(file)), overwrite: true);
+        foreach (string dir in Directory.GetDirectories(from))
+            if (Path.GetFileName(dir) != ".ari") CopyDirectory(dir, Path.Combine(to, Path.GetFileName(dir)));   // the index is rebuilt
+    }
+
     public void Dispose()
     {
         dreamOrchestrator?.Dispose();
         brainWatchCts?.Cancel();
         brainWatchCts?.Dispose();
+        // Conversations that haven't been swept yet are swept before the servers go, so closing ARI doesn't lose them.
+        try { engram?.FlushAsync(TimeSpan.FromMinutes(3)).GetAwaiter().GetResult(); } catch { /* best effort */ }
         engram?.Dispose();
         foreach (Server server in _servers)
             server.Dispose();

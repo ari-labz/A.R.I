@@ -8,11 +8,10 @@ using Serilog.Events;
 using Serilog.Templates;
 
 // One file per process run, timestamped and never deleted — a crash or restart mid-run used to wipe
-// ARI.log before anyone could read why, since the old path was truncated on every launch. Retention is
-// handled the same way as the other Logs subfolders (see SessionRecorder.Prune).
+// ARI.log before anyone could read why, since the old path was truncated on every launch. Nothing prunes
+// these: the logs are how conversations get rebuilt later.
 string logPath = Path.Combine(Paths.SystemLogs, $"ARI_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.log");
 Shared.LogPath = logPath;
-PruneSystemLogs();
 
 // Level token after the timestamp — [WARN] for warnings, [ERROR] for errors, [FATAL] for fatals,
 // nothing otherwise — so the server console window can colour whole lines by level.
@@ -49,19 +48,6 @@ return;
 
 // Mirrors SessionRecorder's default retention (30d) — keeps SystemLogs from growing forever now that
 // every run gets its own file instead of one path that used to self-overwrite.
-void PruneSystemLogs()
-{
-    const int retentionDays = 30;
-    try
-    {
-        DateTime cutoff = DateTime.Now.AddDays(-retentionDays);
-        foreach (string file in Directory.GetFiles(Paths.SystemLogs, "ARI_*.log"))
-            if (File.GetLastWriteTime(file) < cutoff)
-                try { File.Delete(file); } catch { /* best effort */ }
-    }
-    catch { /* best effort — never block startup on log cleanup */ }
-}
-
 void EmergencyShutdown()
 {
     try

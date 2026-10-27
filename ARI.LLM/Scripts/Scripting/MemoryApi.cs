@@ -1,3 +1,4 @@
+using ARI.BrainVault;
 using System.Text;
 using System.Text.Json;
 using ARI.Scripting;
@@ -29,10 +30,18 @@ internal sealed class MemoryApi(
         // Names only, never the notes themselves: the walker has to open a note with its tools before it can use anything in it.
         StringBuilder text = new();
         if (prep.SpeakerNoteName is { Length: > 0 }) text.AppendLine("THE SPEAKER'S OWN NOTE: " + prep.SpeakerNoteName).AppendLine();
+        if (Brain.GetNote("ARI") is { } self) text.AppendLine("ARI'S OWN NOTE (who she is; open it first): " + self.Title).AppendLine();
         if (prep.Terms.Count > 0) text.AppendLine("WORDS FROM THE MESSAGE THAT WERE SEARCHED FOR: " + string.Join(", ", prep.Terms)).AppendLine();
         text.AppendLine(prep.Offered.Count > 0
             ? "NOTES THAT MIGHT BE RELEVANT, BEST MATCH FIRST (names only: open a note with recall_memory to read it):\n" + string.Join("\n", prep.Offered.Select(n => "- " + n))
             : "No note matched those words directly. Search for the people and things the conversation is about.");
+        // A capitalised name in the message that no note matches: ARI doesn't know who or what it is, so she should ask, not guess.
+        string speaker = thread.History.OfType<Prompt>().Select(p => p.AuthorName).FirstOrDefault(a => !string.IsNullOrWhiteSpace(a)) ?? "";
+        List<string> unknown = System.Text.RegularExpressions.Regex.Matches(message, @"(?<![.!?]\s)(?<!^)\b[A-Z][a-zA-Z'’-]{2,}\b").Select(m => m.Value).Distinct()
+            .Where(w => !w.Equals(speaker, StringComparison.OrdinalIgnoreCase) && !w.Equals("ARI", StringComparison.OrdinalIgnoreCase) && !w.Equals("Ari", StringComparison.OrdinalIgnoreCase))
+            .Where(w => !prep.Offered.Any(n => n.Contains(w, StringComparison.OrdinalIgnoreCase)))
+            .Where(w => Brain.GetNote(w) is null).ToList();
+        if (unknown.Count > 0) text.AppendLine().AppendLine("NAMES IN THE MESSAGE WITH NO NOTE AT ALL: " + string.Join(", ", unknown) + ". Nothing is known about them yet.");
         return new StartingPoints(text.ToString().TrimEnd(), audience);
     }
 

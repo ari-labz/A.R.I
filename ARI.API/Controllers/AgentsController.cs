@@ -85,6 +85,7 @@ public class AgentsController(PersistentData persistentData) : ControllerBase
         if (Llm is not null)
         {
             string? server = req["serverName"]?.GetValue<string>(), slot = req["slotName"]?.GetValue<string>();
+            Llm.ApplyAgentPatch(name, req);
             if (server is not null) Llm.AssignAgentServer(name, server);
             if (slot is { Length: > 0 }) Llm.AssignAgentSlot(name, slot);
             // A custom agent is rebuilt from its saved entry, so an edited prompt applies to the next run too.

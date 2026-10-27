@@ -229,6 +229,12 @@ public class Thread
     /// changes things, so only tools that read are offered.</summary>
     internal bool ReadOnlyTools { get; set; }
 
+    /// <summary>True while Engram's thread is doing a one-fact reflex save, so it ends after the first write.</summary>
+    internal bool EngramReflex { get; set; }
+
+    /// <summary>Notes this thread has opened with recall_memory. Engram may only delete what it has read.</summary>
+    internal HashSet<string> BrainReads { get; } = new(StringComparer.OrdinalIgnoreCase);
+
     internal readonly Dictionary<string, (object Schema, Func<string, Task<ToolResult>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter, Func<string, string?>? StreamingDisplay, Func<string, string?>? StreamingPreCheck, Func<string, string?>? PreCheck, Func<string, ToolResult, ToolResult>? PostRun)> tools = new();
 
     // ── Lifecycle ──────────────────────────────────────────────────────────────

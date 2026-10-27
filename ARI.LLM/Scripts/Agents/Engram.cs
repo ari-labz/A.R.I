@@ -12,7 +12,7 @@ namespace ARI.LLM;
 internal class Engram : MemoryAgent, IDisposable
 {
     // ── Constants ────────────────────────────────────────────────────────────────
-    private const int    EXTRACT_MAX_TOKENS   = 1500;
+    private const int    EXTRACT_MAX_TOKENS   = 6000;
     private const double EXTRACT_TEMPERATURE = 0.3;
     private const int    SAVE_MAX_TOKENS      = 300;
     private const int    OVERSIZED_BLOCK_CHARS = 600;
@@ -37,6 +37,7 @@ internal class Engram : MemoryAgent, IDisposable
     /// <summary>A thread restored from disk (Persistent Threads) already went through Engram: sweeps start after these items.</summary>
     internal void MarkHistoryRestored(string threadKey, int itemCount) { lock (lastRun) lastHistoryCount[threadKey] = itemCount; }
     private readonly SemaphoreSlim                      engramLock       = new(1, 1);
+    private readonly SemaphoreSlim                      reflexLock       = new(1, 1);
     private readonly ConcurrentDictionary<string, byte> sweepingThreads  = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string>                    pendingQueue     = new(StringComparer.OrdinalIgnoreCase);
     private readonly HttpClient                         httpClient       = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
@@ -76,8 +77,11 @@ internal class Engram : MemoryAgent, IDisposable
 
     public Engram() { }
 
+    internal static Engram? Current { get; private set; }
+
     internal void Init(Dialogue dialogue, Context? context, ConcurrentDictionary<string, Thread> threads)
     {
+        Current = this;
         this.dialogue = dialogue;
         this.context  = context;
         this.threads  = threads;
@@ -137,15 +141,7 @@ internal class Engram : MemoryAgent, IDisposable
     /// flag is left untouched so the caller's delete-retry poll tries again.</summary>
     internal async Task RunEngram(string threadKey, string trigger, bool force = false)
     {
-        // Global dev kill switch — force-proof. In DevMode Engram never runs (not even on a manual
-        // close, which passes force), so an autonomous run can never mutate the brain. The thread is
-        // still marked processed so its deletion timer proceeds normally.
-        if (Shared.DevMode)
-        {
-            if (threads.TryGetValue(threadKey, out Thread? devThread)) devThread.EngramProcessed = true;
-            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] skipped — DevMode is on.", threadKey);
-            return;
-        }
+        // In DevMode Engram still runs in full: the brain it writes to is a throwaway copy (see LLMModule.PrepareDevSandbox), so nothing it does is kept.
 
         // Guild threads never reach the brain. A Discord server is multi-party: anyone whitelisted can
         // speak into the transcript, and a sweep treats every line as material to store — so a guest's
@@ -217,10 +213,10 @@ internal class Engram : MemoryAgent, IDisposable
 
             // --- Classify: is there anything worth remembering? ---
             transcriptSeen = BuildTranscript(recentItems, code);
-            if (!await Classify(recentItems, trigger, code))
+            if (string.IsNullOrWhiteSpace(transcriptSeen))
             {
-                outcome   = "skipped — classified as task-only (or no new messages)";
-                processed = true;   // nothing to save is still "processed" — the thread may be deleted
+                outcome   = "skipped — no new messages";
+                processed = true;
                 return;
             }
 
@@ -251,6 +247,7 @@ internal class Engram : MemoryAgent, IDisposable
             //     pre-resolved set of paths — one call now covers the whole sweep's entities instead of
             //     one call per entity, but no entity can still reach a note it wasn't resolved against. ---
             (int commits, int blocked) = await SaveAllAsync(threadKey, entities, speaker, conversationDate, code, project);
+            if (!code && entities.Count > 0) CleanLinks();
 
             // A short linked summary of what was concluded; falls back to a linked entity list if the summary call fails.
             if (entities.Count > 0)
@@ -303,14 +300,12 @@ internal class Engram : MemoryAgent, IDisposable
         }
     }
 
-    // Test-only: runs Classify + Extract like RunEngram, then stops — never touches Save or writes anything.
+    // Test-only: runs Extract like RunEngram, then stops — never touches Save or writes anything.
     internal async Task<List<(string Entity, bool IsNew, string Excerpt, bool Sensitive)>> DebugExtractOnly(string threadKey)
     {
         List<ThreadItem> allItems = threads.TryGetValue(threadKey, out Thread? dialogueThread) ? dialogueThread.History : new List<ThreadItem>();
         List<ThreadItem> conversationItems = allItems.Where(i => i is LLM.Prompt or Response).ToList();
         List<ThreadItem> recentItems = conversationItems;   // treat as a fresh, first-ever sweep
-
-        if (!await Classify(recentItems, "debug-extract-only")) return new();
 
         string transcript = BuildTranscript(recentItems);
         string contextSummary = context?.GetContext(threadKey) ?? string.Empty;
@@ -321,13 +316,46 @@ internal class Engram : MemoryAgent, IDisposable
     // ── Stage 2: extract ───────────────────────────────────────────────────────────────
 
     // Entity is always the plain subject name, never an invented compound title — that's what let two notes about the same subject drift apart and never resolve to each other.
-    private readonly record struct ExtractedEntity(string Entity, bool IsNew, string Excerpt, bool Sensitive);
+    private readonly record struct ExtractedEntity(string Entity, bool IsNew, string Excerpt, bool Sensitive,
+        string Kind = "entity", string Theme = "", string Involves = "", string Date = "", bool Correction = false, string Thought = "", int Retries = 0);
 
     /// <summary>One tool-free completion over the whole transcript: every entity worth remembering,
     /// regardless of whether it's already in the vault (Stage 3 checks that), each with the actual
     /// transcript lines it came from — not a paraphrase, so Stage 3 has real material to work from
     /// without needing to share a thread with this call.</summary>
+    // A small model told to list everything in a long message summarises instead. Reading it a few paragraphs at a time
+    // keeps each answer short and complete, so nothing in the middle is skipped.
+    private const int EXTRACT_CHUNK_CHARS = 1600;
+
     private async Task<List<ExtractedEntity>> ExtractAsync(string transcript, string contextSummary, bool code = false, string? project = null)
+    {
+        if (code || transcript.Length <= EXTRACT_CHUNK_CHARS) return await ExtractChunkAsync(transcript, contextSummary, code, project);
+
+        List<ExtractedEntity> all = new();
+        StringBuilder chunk = new();
+        async Task Flush()
+        {
+            if (chunk.ToString().Trim().Length == 0) return;
+            all.AddRange(await ExtractChunkAsync(chunk.ToString(), contextSummary, code, project));
+            chunk.Clear();
+        }
+        // A chunk that starts mid-message would lose who is speaking, and the model then takes the most-named person for the speaker.
+        string label = "";
+        foreach (string paragraph in transcript.Split("\n\n"))
+        {
+            System.Text.RegularExpressions.Match m = System.Text.RegularExpressions.Regex.Match(paragraph, @"^([^\n:]{1,40}): ");
+            if (m.Success) label = m.Groups[1].Value;
+            foreach (System.Text.RegularExpressions.Match inner in System.Text.RegularExpressions.Regex.Matches(paragraph, @"^([A-Za-z][^\n:]{0,39}): ", System.Text.RegularExpressions.RegexOptions.Multiline))
+                label = inner.Groups[1].Value;
+            if (chunk.Length > 0 && chunk.Length + paragraph.Length > EXTRACT_CHUNK_CHARS) await Flush();
+            if (chunk.Length == 0 && !m.Success && label.Length > 0) chunk.Append(label).Append(" (continued): ");
+            chunk.Append(paragraph).Append("\n\n");
+        }
+        await Flush();
+        return all;
+    }
+
+    private async Task<List<ExtractedEntity>> ExtractChunkAsync(string transcript, string contextSummary, bool code = false, string? project = null)
     {
         string context = string.IsNullOrWhiteSpace(contextSummary)
             ? ""
@@ -416,7 +444,13 @@ internal class Engram : MemoryAgent, IDisposable
         string excerpt   = el.TryGetProperty("excerpt",   out JsonElement x) ? x.GetString() ?? "" : "";
         bool   isNew     = el.TryGetProperty("is_new",    out JsonElement n) && n.ValueKind == JsonValueKind.True;
         bool   sensitive = el.TryGetProperty("sensitive", out JsonElement s) && s.ValueKind == JsonValueKind.True;
-        return entity.Length > 0 && excerpt.Length > 0 ? new ExtractedEntity(entity, isNew, excerpt, sensitive) : null;
+        string Text(string prop) => el.TryGetProperty(prop, out JsonElement v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+        string involves = el.TryGetProperty("involves", out JsonElement inv) && inv.ValueKind == JsonValueKind.Array
+            ? string.Join(", ", inv.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()))
+            : Text("involves");
+        bool correction = el.TryGetProperty("correction", out JsonElement cor) && cor.ValueKind == JsonValueKind.True;
+        string kind = Text("kind").ToLowerInvariant() is "event" or "relationship" ? Text("kind").ToLowerInvariant() : "entity";
+        return entity.Length > 0 && excerpt.Length > 0 ? new ExtractedEntity(entity, isNew, excerpt, sensitive, kind, Text("theme"), involves, Text("date"), correction, Text("thought")) : null;
     }
 
     // ── Stage 3: save ──────────────────────────────────────────────────────────────────
@@ -428,47 +462,49 @@ internal class Engram : MemoryAgent, IDisposable
     // Resolves one entity's note by exact match, never fuzzy search — a fuzzy match once let a write land on an unrelated note.
     private static ResolvedEntity ResolveEntity(ExtractedEntity entity)
     {
-        Note? normalNote = Brain.GetNote(entity.Entity);
-        HashSet<string> allowedNames = new(StringComparer.OrdinalIgnoreCase);
-        if (normalNote is not null) allowedNames.Add(normalNote.Name);
-
-        string block = normalNote is not null
-            ? $"Already exists — call edit_memory(name: \"{normalNote.Name}\"):\n\n{normalNote.Content}"
-            : "Does not exist yet — call create_memory with a name/path chosen per the rulebook above (e.g. \"People/Name\"), " +
-              "but only if this is a distinct entity worth its own note per the identity rules — a passing detail is a bullet " +
-              "on the note it actually concerns, not a new note.";
-        if (normalNote is not null)
-        {
-            // One bullet/paragraph that keeps absorbing updates is a separate idea — the line count limit never catches it.
-            string? oversized = normalNote.Content.Split('\n')
-                .Where(l => l.Length > OVERSIZED_BLOCK_CHARS)
-                .OrderByDescending(l => l.Length)
-                .FirstOrDefault();
-            if (oversized is not null)
-                block += $"\n\nOne line of this note is over {OVERSIZED_BLOCK_CHARS} characters (it starts \"{oversized.TrimStart()[..Math.Min(80, oversized.TrimStart().Length)]}…\"). " +
-                         $"If this conversation adds to it, move that whole line into its own sibling note with create_memory " +
-                         $"(\"{normalNote.Name}/<Topic>\") and replace it here with a one-line summary linking to the new note — don't make it longer.";
-        }
+        Note? note = Brain.GetNote(entity.Entity);
+        string block = note is not null
+            ? $"A note with this name exists: '{note.Name}'. Read it (recall_memory) before deciding where this belongs."
+            : "No note has exactly this name. Search (search_brain) in case it's already known under another name, or is a detail of a note that already exists.";
         if (entity.Sensitive)
-            block += "\n\nThis is information about a user's private life. Keep it on the same note as everything else about " +
-                     "this subject, under its own topic subheading if needed — never a separate Private/ note or file. Mark it " +
-                     "with a `> [!sensitive]` callout right after the specific line/section it covers, same as `> [!ari-thought]`. " +
-                     "Only pass is_sensitive: true on the tool call if the note is entirely about this subject's private life — " +
-                     "not just because this one new bit is.";
-        // Lets Save split an oversized note into a sibling create_memory call in the same turn.
-        return new ResolvedEntity(entity.Entity, block, allowedNames, normalNote?.Name ?? "");
+            block += "\nThis is private. Keep it with everything else about its subject, in its own short `> [!sensitive]` paragraph covering only that fact.";
+        return new ResolvedEntity(entity.Entity, block, new HashSet<string>(StringComparer.OrdinalIgnoreCase), note?.Name ?? "");
     }
 
     // Saves every entity in one call; edit_memory is confined to each entity's own pre-resolved name/prefix (see ResolveEntity).
-    private async Task<(int Commits, int Blocked)> SaveAllAsync(string threadKey, List<ExtractedEntity> entities, string speaker, string conversationDate, bool code = false, string? project = null)
+    private Thread EngramThread(string threadKey)
+    {
+        Thread Make(Thread? parent, string key)
+        {
+            Thread t = new(ThreadPipeline.Dialogue, key)
+            {
+                Internal = true, KeepToolHistory = true, Parent = parent, Code = parent is null ? null : "engram", OwnerAgent = Name, Label = "Engram",
+            };
+            t.FilesystemRoot = Brain.VaultRoot;
+            t.IsBrainVault   = true;
+            t.Ct             = CancellationToken.None;
+            // Look before writing: find, read and follow links; then add to a note, make a new one, correct, delete, merge or relink. Each write commits itself.
+            new SearchBrain().Register(t);
+            new RecallMemory().Register(t);
+            new Neighbours().Register(t);
+            new MemoriesOn().Register(t);
+            new CreateMemory().Register(t);
+            new EditMemory().Register(t);
+            new DeleteMemory().Register(t);
+            new MergeNotesTool().Register(t);
+            return t;
+        }
+        Thread? chat = threads.GetValueOrDefault(threadKey);
+        return chat is null ? Make(null, $"engram:{threadKey}:{Guid.NewGuid():N}") : chat.GetOrCreateChild("engram", Name, () => Make(chat, $"{chat.Key}:engram"));
+    }
+
+    private async Task<(int Commits, int Blocked)> SaveAllAsync(string threadKey, List<ExtractedEntity> entities, string speaker, string conversationDate, bool code = false, string? project = null, bool reflex = false)
     {
         if (entities.Count == 0) return (0, 0);
 
         Brain.Index();   // pick up any commits made just before this sweep started
         List<ResolvedEntity> resolved = entities.Select(ResolveEntity).ToList();
 
-        HashSet<string> allowedNames    = new(StringComparer.OrdinalIgnoreCase);
-        List<string>    allowedPrefixes = new();
         StringBuilder   entityBlocks    = new();
         // Entities resolving to the same note share one block, so the note gets one combined edit and one commit.
         IEnumerable<IGrouping<string, int>> byNote = Enumerable.Range(0, resolved.Count)
@@ -477,21 +513,26 @@ internal class Engram : MemoryAgent, IDisposable
         {
             // Prefer a sensitive member's block so its marking instruction isn't lost in the merge.
             ResolvedEntity r = resolved[group.OrderByDescending(i => entities[i].Sensitive).First()];
-            foreach (string n in r.AllowedNames) allowedNames.Add(n);
-            if (r.AllowedPrefix.Length > 0) allowedPrefixes.Add(r.AllowedPrefix);
             string excerpts = string.Join("\n\n", group.Select(i => entities[i].Excerpt).Distinct());
             string header   = string.Join(" / ", group.Select(i => entities[i].Entity).Distinct(StringComparer.OrdinalIgnoreCase));
-            entityBlocks.Append($"### {header}\n{r.ExistingBlock}\n\nWhat was said (speaker: {speaker}):\n{excerpts}\n\n");
+            ExtractedEntity lead = entities[group.OrderByDescending(i => entities[i].Correction).First()];
+            string meta = $"Kind: {lead.Kind}" + (lead.Theme.Length > 0 ? $" · Theme: {lead.Theme}" : "") + (lead.Involves.Length > 0 ? $" · Involves: {lead.Involves}" : "")
+                        + (lead.Date.Length > 0 ? $" · Date: {lead.Date}" : "");
+            string note = lead.Correction ? "\nCORRECTION: the speaker said the older version of this was wrong or out of date. Replace it; do not keep both." : "";
+            string thought = string.Join(" ", group.Select(i => entities[i].Thought).Where(t => t.Length > 0));
+            if (thought.Length > 0) note += $"\nMARGIN THOUGHT to leave beside the fact it relates to (as a thought, never as a fact): {thought}";
+            string groupHint = "";
+            entityBlocks.Append($"### {header}\n{meta}{note}{groupHint}\n{r.ExistingBlock}\n\nWhat was said (speaker: {speaker}):\n{excerpts}\n\n");
         }
 
-        Thread mini = new(ThreadPipeline.Dialogue, $"engram:{threadKey}:{Guid.NewGuid():N}") { Internal = true };
-        mini.FilesystemRoot = Brain.VaultRoot;
-        mini.IsBrainVault   = true;
-        mini.Ct             = CancellationToken.None;
-        // create_memory/edit_memory, never the generic filesystem tools — each commits itself, one note at a time.
-        new CreateMemory().Register(mini);
-        new EditMemory(allowedNames: allowedNames, allowedPrefixes: allowedPrefixes).Register(mini);
-        PublishForInspection(mini);
+        // One Engram thread per conversation, kept under the chat like Recall's: it remembers what it read and decided across sweeps and
+        // reflexes, instead of a new thread being born for every save. Only one run uses it at a time.
+        Thread mini = EngramThread(threadKey);
+        await mini.RunLock.WaitAsync();
+        try
+        {
+        mini.EngramReflex = reflex;
+        int historyBefore = mini.History.Count;
 
         string task = code
             ? ResolveTemplate("CodeSaveTask", CodePrompts.SaveTask,
@@ -501,6 +542,10 @@ internal class Engram : MemoryAgent, IDisposable
             : ResolveTemplate("SaveTask", "",
                 ("entities", entityBlocks.ToString().TrimEnd()),
                 ("date",     conversationDate));
+        // A quick save leads with the conversation and treats the noted facts as the headline of what to change; a sweep keeps them first and adds the source after.
+        if (!code) task = reflex
+            ? RecentConversation(threadKey, true) + "\n\nHEADLINE: the chat noted these facts as what changed in the conversation above. Change only this, writing from the conversation, not from the headline's wording.\n\n" + task
+            : task + RecentConversation(threadKey, false);
 
         await Prompt(mini, task, new PromptOptions
         {
@@ -509,7 +554,7 @@ internal class Engram : MemoryAgent, IDisposable
         });
 
         // Pairs each tool_call to its next same-name tool_result so one turn covering several entities still reports per-note outcomes.
-        List<TraceStep> trace = mini.History.OfType<Response>().SelectMany(r => r.Trace ?? Enumerable.Empty<TraceStep>()).ToList();
+        List<TraceStep> trace = mini.History.Skip(historyBefore).OfType<Response>().SelectMany(r => r.Trace ?? Enumerable.Empty<TraceStep>()).ToList();
         int commits = 0, blocked = 0;
         for (int i = 0; i < trace.Count; i++)
         {
@@ -537,6 +582,136 @@ internal class Engram : MemoryAgent, IDisposable
         }
 
         return (commits, blocked);
+        }
+        finally { mini.EngramReflex = false; mini.RunLock.Release(); }
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────────────────────
+
+    private static string NoMd(string path) => path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? path[..^3] : path;
+
+    /// <summary>After a sweep: any link that points at nothing becomes plain words, so the graph only holds links someone can follow.</summary>
+    private static void CleanLinks()
+    {
+        try
+        {
+            if (Brain.StripUnresolvedLinks() > 0) { AriGit.Run(Brain.VaultRoot, ["add", "-A"]); AriGit.Commit(Brain.VaultRoot, "Turn links to notes that don't exist into plain words"); }
+        }
+        catch (Exception ex) { Shared.Logger.LogWarning("[Engram] link cleanup failed: {Error}", ex.Message); }
+    }
+
+    // ── Reflex: one fact, one note, right now ───────────────────────────────────────────
+
+    /// <summary>The quick path: a correction, or "remember this". It changes just that one note, without reading a conversation. Runs
+    /// alongside the reply, so the chat never waits for it.</summary>
+    internal override string OnToolResult(Thread thread, ToolTurnState state, string toolName, string argsJson, string result)
+    {
+        string text = base.OnToolResult(thread, state, toolName, argsJson, result);
+        if (toolName == "recall_memory")
+        {
+            try { if (System.Text.Json.JsonDocument.Parse(argsJson).RootElement.TryGetProperty("name", out System.Text.Json.JsonElement rn) && rn.GetString() is { Length: > 0 } read) thread.BrainReads.Add(read); } catch { }
+        }
+        return text;
+    }
+
+    // Reads and edits as it goes: far more than the walk's eight calls before the breaker.
+    internal override int? EpochToolCeiling => 40;
+
+    private readonly ConcurrentDictionary<string, List<ExtractedEntity>> reflexQueue = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> reflexDraining = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Several facts said in one breath ("remember this" six times for one message) are collected for a moment and saved in one pass,
+    /// so Engram sees them all together instead of queueing a pass for each.</summary>
+    internal Task Remember(string threadKey, string about, string fact, bool correction)
+    {
+        if (!IsEnabled) return Task.CompletedTask;
+        ExtractedEntity entity = new(about.Trim().Equals("Ari", StringComparison.OrdinalIgnoreCase) ? "ARI" : about.Trim(), false, fact.Trim(), false, Correction: correction);
+        List<ExtractedEntity> queue = reflexQueue.GetOrAdd(threadKey, _ => new());
+        lock (queue) queue.Add(entity);
+        if (reflexDraining.TryAdd(threadKey, 0)) _ = Task.Run(() => DrainReflex(threadKey, queue));
+        return Task.CompletedTask;
+    }
+
+    private async Task DrainReflex(string threadKey, List<ExtractedEntity> queue)
+    {
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(2500);   // let the rest of a burst arrive
+                List<ExtractedEntity> batch;
+                lock (queue) { batch = queue.ToList(); queue.Clear(); }
+                if (batch.Count == 0) break;
+                await reflexLock.WaitAsync();
+                try
+                {
+                    Shared.Logger.LogInformation("[Engram] [{ThreadKey}] reflex: {Count} fact(s) about {About}", threadKey, batch.Count, string.Join(", ", batch.Select(b => b.Entity).Distinct()));
+                    await SaveAllAsync(threadKey, batch, SpeakerOf(threadKey), DateTime.Now.ToString("yyyy-MM-dd"), reflex: true);
+                }
+                catch (Exception ex)
+                {
+                    // The model server can fail for a moment (out of memory, restarting). Keep the facts and try again rather than lose them.
+                    Shared.Logger.LogWarning("[Engram] reflex failed ({Error}); will retry.", ex.Message);
+                    bool giveUp = batch.All(b => b.Retries >= 3);
+                    if (!giveUp) { lock (queue) queue.AddRange(batch.Select(b => b with { Retries = b.Retries + 1 })); await Task.Delay(20000); }
+                    else Shared.Logger.LogError("[Engram] gave up saving {Count} fact(s) after retries: {About}", batch.Count, string.Join(", ", batch.Select(b => b.Entity)));
+                }
+                finally { reflexLock.Release(); }
+            }
+        }
+        finally { reflexDraining.TryRemove(threadKey, out _); lock (queue) { if (queue.Count > 0 && reflexDraining.TryAdd(threadKey, 0)) _ = Task.Run(() => DrainReflex(threadKey, queue)); } }
+    }
+
+    private const int SOURCE_ITEMS = 10, SOURCE_CHARS = 9000;
+
+    /// <summary>The last few turns, word for word. The facts above are someone's summary of them (the chat's notes, or the extraction), and a summary can
+    /// be wrong, so Engram checks every fact against what was actually said and writes from that.</summary>
+    private string RecentConversation(string threadKey, bool leading)
+    {
+        if (threads.GetValueOrDefault(threadKey) is not { } chat) return "";
+        List<ThreadItem> recent = chat.History.Where(i => i is LLM.Prompt or Response).TakeLast(SOURCE_ITEMS).ToList();
+        string text = BuildTranscript(recent);
+        if (text.Length > SOURCE_CHARS) text = text[^SOURCE_CHARS..];
+        return text.Trim().Length == 0 ? "" :
+            (leading ? "" : "\n\n") + "THE CONVERSATION ITSELF, word for word (the most recent turns). Any facts noted for you were written in someone else's words and may be wrong or coloured; this is the source of truth. "
+          + "Check every fact against it, write from what the person actually said (their words and facts, never ARI's phrasing or opinions), and where the two disagree, trust this:\n"
+          + text;
+    }
+
+    private string SpeakerOf(string threadKey) =>
+        threads.GetValueOrDefault(threadKey)?.History.OfType<LLM.Prompt>().Select(p => p.AuthorName).FirstOrDefault(a => !string.IsNullOrWhiteSpace(a)) ?? ReadStoredUserName() ?? "the user";
+
+    private static readonly HashSet<string> SelfWords = new(StringComparer.OrdinalIgnoreCase) { "master", "the master", "user", "the user", "me", "myself", "i", "owner", "the owner", "my" };
+    private static readonly HashSet<string> RoleWords = new(StringComparer.OrdinalIgnoreCase)
+        { "partner", "boyfriend", "girlfriend", "brother", "sister", "mum", "mom", "dad", "mother", "father", "friend", "wife", "husband", "boss", "colleague", "manager", "son", "daughter", "parents", "family" };
+
+    /// <summary>What a reflex save is about: the person's own name for "me/Master/the user", the name as given otherwise. A role instead of a name
+    /// ("partner"), or several things at once, comes back as guidance for the model to fix and call again.</summary>
+    internal (string? Name, string? Error) ResolveAbout(string threadKey, string about)
+    {
+        string a = about.Trim();
+        if (SelfWords.Contains(a)) return (SpeakerOf(threadKey), null);
+        if (RoleWords.Contains(a) || RoleWords.Contains(a.TrimStart("my ".ToCharArray()).Trim()))
+            return (null, "Use their actual name. If you don't know it, record this as a fact about the user instead (about: the user's own name).");
+        if (a.Contains(" and ", StringComparison.OrdinalIgnoreCase) || a.Contains(',') || a.Contains('&') || a.Contains('/'))
+            return (null, "One person, place or thing per call. Call again for each of them.");
+        return (a, null);
+    }
+
+    // ── Closing ARI: finish the conversations that haven't been swept yet ───────────────
+
+    internal async Task FlushAsync(TimeSpan limit)
+    {
+        if (!IsEnabled) return;
+        using CancellationTokenSource cts = new(limit);
+        foreach (Thread thread in threads.Values.ToList())
+        {
+            if (cts.IsCancellationRequested) break;
+            if (thread.Internal || thread.EngramProcessed || !thread.HasUserMessages || !thread.HasMemoryAccess || thread.OwnerId is null) continue;
+            try { await RunEngram(thread.Key, "shutdown", force: true).WaitAsync(cts.Token); }
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex) { Shared.Logger.LogWarning("[Engram] shutdown sweep failed for {Key}: {Error}", thread.Key, ex.Message); }
+        }
     }
 
     // ── Code threads ───────────────────────────────────────────────────────────────────
@@ -561,7 +736,7 @@ internal class Engram : MemoryAgent, IDisposable
     private Task<string> GenerateConversationSummary(string transcript, string speaker) =>
         CompleteSummary(
             ResolveTemplate("LogSummarySystem",
-                "You write one entry in a daily conversation log. In 1-3 sentences, past tense, third person (refer to the user by name), say what the conversation was about and what was decided, learned, or planned — not just who or what came up. Wrap every named person, place, project, or organisation in [[wikilinks]]. Never mention the assistant. No bullet points, no preamble."),
+                "You write one entry in ARI's log for the day. Say what was discussed: every topic, with the specifics that matter (names, numbers, dates, decisions, plans, how the person seemed to feel), in short past-tense sentences or a few bullets. Third person, refer to the user by name. It is a summary of the information, never a script, so no 'then she said' and no quotes. Wrap every named person, place, project or organisation in [[wikilinks]]. Put anything private (health, therapy, sexual or secret matters, anything they asked to keep private) in its own line starting '> [!sensitive]' so it can be left out when needed. Never mention the assistant. No preamble."),
             ResolveTemplate("LogSummaryTask", "Summarise this conversation with {speaker}:\n\n{transcript}",
                 ("speaker", speaker), ("transcript", transcript)));
 
@@ -678,66 +853,6 @@ internal class Engram : MemoryAgent, IDisposable
 
     // ── Classify (unchanged) ─────────────────────────────────────────────────────────
 
-    private async Task<bool> Classify(IReadOnlyList<ThreadItem> recentItems, string trigger, bool code = false)
-    {
-        string transcript = BuildTranscript(recentItems, code);
-        if (string.IsNullOrWhiteSpace(transcript))
-        {
-            Shared.Logger.LogInformation("[Engram] [{Trigger}] no new messages to classify, skipping.", trigger);
-            return false;
-        }
-
-        object requestBody = new
-        {
-            model    = "local",
-            messages = new[]
-            {
-                // <|think_off|> is appended in code, not stored with the prompt: it is a model control
-                // token, not prose, and editing it would silently stop think-off rather than reword anything.
-                new { role = "system", content = ResolveTemplate("ClassifierSystem", "") + "\n<|think_off|>" },
-                new { role = "user",   content = code
-                        ? ResolveTemplate("CodeClassifierTask", CodePrompts.ClassifierTask, ("transcript", transcript))
-                        : ResolveTemplate("ClassifierTask", "", ("transcript", transcript)) }
-            },
-            stream      = false,
-            max_tokens  = 5,
-            temperature = 0.0,
-            // Without these the template force-opens a <think> block and the model burns all 5
-            // tokens inside it — content never contains "yes", so every sweep classified as task-only.
-            thinking             = false,
-            enable_thinking      = false,
-            chat_template_kwargs = new { enable_thinking = false }
-        };
-
-        try
-        {
-            HttpRequestMessage request = new(HttpMethod.Post, $"{Endpoint}/v1/chat/completions")
-            {
-                Content = new StringContent(JsonSerializer.Serialize(requestBody), Encoding.UTF8, "application/json")
-            };
-            HttpResponseMessage response = await httpClient.SendAsync(request);
-            response.EnsureSuccessStatusCode();
-
-            string responseJson = await response.Content.ReadAsStringAsync();
-            using JsonDocument doc = JsonDocument.Parse(responseJson);
-            string answer = doc.RootElement
-                .GetProperty("choices")[0]
-                .GetProperty("message")
-                .GetProperty("content")
-                .GetString() ?? string.Empty;
-
-            bool worthStoring = answer.Trim().StartsWith("yes", StringComparison.OrdinalIgnoreCase);
-            if (!worthStoring)
-                Shared.Logger.LogInformation("[Engram] [{Trigger}] classified as task-only, skipping extraction.", trigger);
-            return worthStoring;
-        }
-        catch (Exception ex)
-        {
-            Shared.Logger.LogWarning("[Engram] Classification failed ({Error}), proceeding with extraction.", ex.Message);
-            return true;
-        }
-    }
-
     private static string? ReadStoredUserName()
     {
         try
@@ -770,7 +885,12 @@ internal class Engram : MemoryAgent, IDisposable
         {
             switch (item)
             {
-                case Prompt u: sb.AppendLine($"{u.AuthorName}: {(code ? ForCodeTranscript(u.Text) : u.Text)}"); break;
+                case Prompt u:
+                    // A pasted or attached text file is part of what the person said: without it a message with only an attachment is empty.
+                    string attached = string.Join("\n\n", (u.Attachments ?? new()).Where(a => !a.IsImage && !string.IsNullOrWhiteSpace(a.Content)).Select(a => a.Content.Trim()));
+                    string said = string.IsNullOrWhiteSpace(attached) ? u.Text : $"{attached}\n\n{u.Text}".Trim();
+                    sb.AppendLine($"{u.AuthorName}: {(code ? ForCodeTranscript(said) : said)}");
+                    break;
                 case Response r: sb.AppendLine($"ARI: {(code ? ForCodeTranscript(r.ContentText) : r.ContentText)}"); break;
             }
         }

@@ -18,7 +18,7 @@ public class AriConfig
 {
     public Modules modules { get; init; }
 
-    // Global dev flag. When true, Engram (memory writes) never runs — see Shared.DevMode. Defaults
+    // Global dev flag. When true, the brain is a throwaway copy made at start (the real one is never written) — see Shared.DevMode. Defaults
     // to false (normal operation / official builds). Automated runs force it on via ARI_DEVMODE.
     public bool DevMode { get; init; }
 
