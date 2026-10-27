@@ -28,6 +28,8 @@ public sealed class AgentDefinition
     public bool    ReadOnly          { get; set; }
     // The message the agent is sent, with {tokens}; empty sends the user's message through as it is.
     public string? MessagePrompt     { get; set; }
+    // Tool groups the agent starts with, instead of asking for them with request_tools first.
+    public string[]? PreloadedTools  { get; set; }
     // Shipped with ARI for its own pipelines (the Memory steps): editable, never deletable.
     [System.Text.Json.Serialization.JsonPropertyName("system")]
     public bool    IsSystem          { get; set; }

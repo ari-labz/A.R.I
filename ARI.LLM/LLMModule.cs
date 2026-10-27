@@ -638,7 +638,7 @@ public class LLMModule : ILLMModule, IDisposable
 
     /// <summary>The pipelines a thread can be switched to: every graph that can run, Default first.</summary>
     public IReadOnlyList<(string Id, string Name)> ReplyPipelines() =>
-        graphs.Values.OrderBy(g => g.Id == PipelineGraph.DefaultId ? 0 : 1).ThenBy(g => g.Name, StringComparer.OrdinalIgnoreCase)
+        graphs.Values.Where(g => !PipelineGraph.StepOnlyIds.Contains(g.Id, StringComparer.OrdinalIgnoreCase)).OrderBy(g => g.Id == PipelineGraph.DefaultId ? 0 : 1).ThenBy(g => g.Name, StringComparer.OrdinalIgnoreCase)
               .Select(g => (g.Id, g.Name)).ToList();
 
     /// <summary>The graph a thread runs on. An id that no longer exists (deleted, or broken by a deleted agent) answers
@@ -657,6 +657,14 @@ public class LLMModule : ILLMModule, IDisposable
         if (!threads.TryGetValue(threadKey, out Thread? t)) return false;
         t.GraphId = string.IsNullOrEmpty(id) || id.Equals(PipelineGraph.DefaultId, StringComparison.OrdinalIgnoreCase) ? null : id;
         return true;
+    }
+
+    /// <summary>The input ports each built-in agent can leave unwired: Dialogue's memories and any extra {token} its prompt adds.</summary>
+    public Dictionary<string, string[]> AgentOptionalPorts()
+    {
+        Dictionary<string, string[]> result = new(PipelineGraph.OptionalPorts, StringComparer.OrdinalIgnoreCase);
+        if (graphPipeline?.PortsOf("Dialogue") is { } d) result["Dialogue"] = d.Where(p => !p.Equals("history", StringComparison.OrdinalIgnoreCase)).ToArray();
+        return result;
     }
 
     /// <summary>What can be wired into each agent: the built-ins' fixed ports, and a custom agent's {tokens}.</summary>

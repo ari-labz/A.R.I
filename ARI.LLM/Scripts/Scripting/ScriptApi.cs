@@ -92,8 +92,14 @@ public sealed class ScriptContext
 public interface IMemoryApi
 {
     MemoryFound Find(string message);
+
+    /// <summary>The starting points for an agent that explores the brain itself: who is talking, the notes the message points at, and who is listening.</summary>
+    StartingPoints Start(string message);
     Task<string?> Finish(string state, string? picks, CancellationToken ct);
 }
 
 /// <summary><see cref="Transcript"/> and <see cref="Candidates"/> are null when there is nothing for a model to pick from.</summary>
 public sealed record MemoryFound(string State, string? Transcript, string? Candidates);
+
+/// <summary><see cref="Text"/> is null when this conversation has no memory access, which tells a step that depends on it to skip itself.</summary>
+public sealed record StartingPoints(string? Text, string Audience);

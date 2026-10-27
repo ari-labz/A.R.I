@@ -6,6 +6,8 @@ internal sealed class PromptOptions
     public string?             AugmentedPrompt     { get; init; }
     public string?             ModeNudge           { get; init; }
     public string?             RecallNotes         { get; init; }
+    /// <summary>The agent's own prompt places the memory (a {memory} token), so the usual memory block is left out of the message.</summary>
+    public bool                MemoryInPrompt      { get; init; }
     public double?             RecallSeconds       { get; init; }
     public string?             ContextSummary      { get; init; }
     public int                 MaxTokensOverride   { get; init; }
