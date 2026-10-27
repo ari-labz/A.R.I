@@ -697,7 +697,7 @@ public class LLMModule : ILLMModule, IDisposable
     {
         Dictionary<string, List<string>> result = new();
         if (graphPipeline is null) return result;
-        List<PipelineGraph> all = WithShipped(PipelineGraph.ParseAll(root));
+        List<PipelineGraph> all = WithShipped(PipelineGraph.ParseAll(root), false);
         Dictionary<string, PipelineGraph> byId = all.GroupBy(g => g.Id).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
         foreach (PipelineGraph g in all)
         {
@@ -709,10 +709,13 @@ public class LLMModule : ILLMModule, IDisposable
     }
 
     /// <summary>The pipelines in the file plus any of the ones ARI ships that the file doesn't have yet.</summary>
-    private static List<PipelineGraph> WithShipped(List<PipelineGraph> fromFile)
+    private static List<PipelineGraph> WithShipped(List<PipelineGraph> fromFile, bool memoryAvailable)
     {
         using JsonDocument shipped = JsonDocument.Parse(PipelineGraph.ShippedJson);
-        return fromFile.Concat(PipelineGraph.ParseAll(shipped.RootElement).Where(s => !fromFile.Any(f => f.Id.Equals(s.Id, StringComparison.OrdinalIgnoreCase)))).ToList();
+        List<PipelineGraph> all = fromFile.Concat(PipelineGraph.ParseAll(shipped.RootElement).Where(s => !fromFile.Any(f => f.Id.Equals(s.Id, StringComparison.OrdinalIgnoreCase)))).ToList();
+        // No saved Default: use the shipped one, with Memory as a pipeline.
+        if (memoryAvailable && !all.Any(g => g.Id.Equals(PipelineGraph.DefaultId, StringComparison.OrdinalIgnoreCase))) all.Add(PipelineGraph.BuiltInDefault(true, memoryAsPipeline: true));
+        return all;
     }
 
     /// <summary>Re-reads Pipelines.json and keeps every graph that can run. A pipeline that can answer a chat is offered as a
@@ -725,8 +728,10 @@ public class LLMModule : ILLMModule, IDisposable
         Dictionary<string, PipelineGraph> loaded = new(StringComparer.OrdinalIgnoreCase), loadedSub = new(StringComparer.OrdinalIgnoreCase);
         try
         {
-            using JsonDocument doc = JsonDocument.Parse(File.Exists(pipelinesPath) ? File.ReadAllText(pipelinesPath) : "{\"pipelines\":[]}", new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
-            List<PipelineGraph> all = WithShipped(PipelineGraph.ParseAll(doc.RootElement));
+            System.Text.Json.Nodes.JsonObject saved = System.Text.Json.Nodes.JsonNode.Parse(File.Exists(pipelinesPath) ? File.ReadAllText(pipelinesPath) : "{\"pipelines\":[]}", documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip })!.AsObject();
+            PipelineGraph.UpgradeLegacyDefault(saved);
+            using JsonDocument doc = JsonDocument.Parse(saved.ToJsonString());
+            List<PipelineGraph> all = WithShipped(PipelineGraph.ParseAll(doc.RootElement), graphPipeline.PortsOf("Memory") is not null);
             Dictionary<string, PipelineGraph> byId = all.GroupBy(g => g.Id).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
             foreach (PipelineGraph graph in all)
             {
