@@ -12,8 +12,8 @@ public abstract class Agent
     // ── JSON-serialised fields (common to all agents) ────────────────────────
     public string Name { get; init; } = "";
     public string ServerName { get; set; } = "";
-    public string AgentPrompt { get; init; } = "";
-    public Dictionary<string, string>? PromptTemplates { get; init; }
+    public string AgentPrompt { get; set; } = "";
+    public Dictionary<string, string>? PromptTemplates { get; set; }
     
     // Tool groups registered eagerly (skips the request_tools round-trip). Null/empty = defer all.
     public string[]? PreloadedTools { get; init; }
@@ -25,8 +25,8 @@ public abstract class Agent
     public int Priority { get; init; }
     public bool Enabled { get; init; }
     public int BudgetResponse { get; init; } = -1;
-    public int MaxToolCalls { get; init; }
-    public bool    Think                  { get; init; }
+    public int MaxToolCalls { get; set; }
+    public bool    Think                  { get; set; }
     /// <summary>When set, overrides the global ReasoningEffortStore level for this agent's requests.</summary>
     public string? ReasoningEffortOverride { get; init; }
     public int BudgetThinking { get; init; }

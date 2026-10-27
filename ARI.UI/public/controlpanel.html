@@ -1500,7 +1500,29 @@ function cpPatchSettings(changes) {
 }
 // The server always answers a failure as { error: "..." }; this pulls out the words.
 async function cpErrorText(r) { try { return (await r.json()).error || r.statusText; } catch { return r.statusText; } }
-function cpEventSource(url) { return new EventSource(url); }
+// A browser allows only six connections to one host over plain HTTP, and every open stream (live log, thread watch, events) holds one for as long
+// as the page lives. Streams in a tab nobody is looking at would use them up and leave a page you open next stuck loading while ARI is busy.
+// So a stream gives its connection back when its tab is hidden and takes it again when the tab is shown. It looks like an EventSource to callers.
+const cpStreams = new Set();
+function cpEventSource(url) {
+    const h = { url, es: null, closed: false, onmessage: null, onerror: null, onopen: null };
+    h.open = () => {
+        if (h.closed || document.hidden || h.es) return;
+        h.es = new EventSource(url);
+        h.es.onmessage = e => h.onmessage && h.onmessage(e);
+        h.es.onerror   = e => h.onerror && h.onerror(e);
+        h.es.onopen    = e => h.onopen && h.onopen(e);
+    };
+    cpStreams.add(h); h.open();
+    return {
+        set onmessage(f) { h.onmessage = f; }, set onerror(f) { h.onerror = f; }, set onopen(f) { h.onopen = f; },
+        close() { h.closed = true; cpStreams.delete(h); if (h.es) { h.es.close(); h.es = null; } },
+        get readyState() { return h.closed ? 2 : h.es ? h.es.readyState : 0; },
+    };
+}
+document.addEventListener('visibilitychange', () => cpStreams.forEach(h => {
+    if (document.hidden) { if (h.es) { h.es.close(); h.es = null; } } else h.open();
+}));
 
 // ── tab switching ─────────────────────────────────────────
 window._ariUserName = 'User';
@@ -1517,6 +1539,8 @@ let srvPollTimer = null;
 // which silently aborts every script statement after it, including every other tab's event listeners.
 let ghPollTimer = null;
 function stopGhPoll() { if (ghPollTimer) { clearInterval(ghPollTimer); ghPollTimer = null; } }
+// The streams below are declared further down the page, so they are only touched once the page has finished loading.
+let cpStreamsReady = false;
 function switchTab(name) {
     navItems.forEach(n => n.classList.toggle('active', n.dataset.tab === name));
     Object.entries(tabs).forEach(([k, el]) => { if (el) el.style.display = k === name ? '' : 'none'; });
@@ -1526,6 +1550,10 @@ function switchTab(name) {
     if (name === 'overview') requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
     if (name !== 'servers') { clearTimeout(srvPollTimer); srvPollTimer = null; }
     if (name !== 'debug') dbgCloseWatch();
+    if (cpStreamsReady) {
+        if (name === 'overview') openLog(); else closeLog();
+        if (name === 'debug') openDtiEvents(); else closeDtiEvents();
+    }
     if (name === 'customisation') { loadBranding(); loadCustomisation(); }
     if (name === 'conventions') loadConventions();
     if (name === 'persona') loadPersona();
@@ -3527,12 +3555,19 @@ function appendLogLine(text) {
     if (!logUserScrolled) logLines.scrollTop = logLines.scrollHeight;
     else scrollHint.classList.add('visible');
 }
-(function connectLog() {
-    const es = cpEventSource('/api/v1/admin/system/log');
+// The live log only streams while the Overview page is showing, so no other page holds a connection for it.
+let logEs = null;
+const logWanted = () => document.getElementById('cp-grid-wrap')?.style.display !== 'none';
+function openLog() {
+    if (logEs) return;
+    const es = logEs = cpEventSource('/api/v1/admin/system/log');
     es.onopen    = () => { logStatus.textContent = 'live'; logStatus.classList.add('live'); };
-    es.onerror   = () => { logStatus.textContent = 'reconnecting…'; logStatus.classList.remove('live'); setTimeout(connectLog, 3000); es.close(); };
+    es.onerror   = () => { logStatus.textContent = 'reconnecting…'; logStatus.classList.remove('live'); es.close(); logEs = null; setTimeout(() => { if (logWanted()) openLog(); }, 3000); };
     es.onmessage = e  => appendLogLine(e.data.replace(/↵/g, '\n'));
-})();
+}
+function closeLog() { if (logEs) { logEs.close(); logEs = null; logStatus.textContent = 'paused'; logStatus.classList.remove('live'); } }
+openLog();
+setTimeout(() => { cpStreamsReady = true; }, 0);
 
 // ── RAM line chart ────────────────────────────────────────
 const RAM_HISTORY = 1800;
@@ -7755,8 +7790,10 @@ document.getElementById('dbg-view-download').addEventListener('click', dbgDownlo
 // ── DTI live events — auto-refresh thread list and auto-select active threads ──
 function dbgIsActive() { return document.getElementById('tab-debug')?.style.display !== 'none'; }
 
-(function connectDtiEvents() {
-    const es = cpEventSource('/api/v1/events');
+let dtiEs = null;
+function openDtiEvents() {
+    if (dtiEs) return;
+    const es = dtiEs = cpEventSource('/api/v1/events');
     es.onmessage = e => {
         let evt;
         try { evt = JSON.parse(e.data); } catch { return; }
@@ -7782,8 +7819,9 @@ function dbgIsActive() { return document.getElementById('tab-debug')?.style.disp
             }
         }
     };
-    es.onerror = () => { es.close(); setTimeout(connectDtiEvents, 5000); };
-})();
+    es.onerror = () => { es.close(); dtiEs = null; setTimeout(() => { if (dbgIsActive()) openDtiEvents(); }, 5000); };
+}
+function closeDtiEvents() { if (dtiEs) { dtiEs.close(); dtiEs = null; } }
 
 // ── Image Generation ───────────────────────────────────────────────────────────
 

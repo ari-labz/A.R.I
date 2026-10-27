@@ -39,6 +39,8 @@ internal sealed class CreateMemory : Tool
         try
         {
             using JsonDocument doc = JsonDocument.Parse(argsJson);
+            if (doc.RootElement.TryGetProperty("name", out JsonElement pn) && pn.GetString() is { } picked && (picked.Contains('(') || picked.Contains(')')))
+                return "[Blocked] Note names are plain everyday names, with no brackets and no temporary or placeholder notes. Put the detail on the note it belongs to.";
             if (doc.RootElement.TryGetProperty("name", out JsonElement n) && n.GetString() is { Length: > 0 } name
                 && Brain.GetNote(name) is not null)
                 return $"[Blocked] A note named '{name}' already exists. Use edit_memory to change it instead of create_memory.";

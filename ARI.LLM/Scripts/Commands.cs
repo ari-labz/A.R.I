@@ -62,7 +62,7 @@ internal class CommandService
     {
         if (!engram!.IsEnabled) return "Engram is disabled — sweep skipped.";
         if (threadKey is null)  return "No active thread — sweep skipped.";
-        await engram.RunEngram(threadKey, "manual");
+        await engram.RunEngram(threadKey, "manual", force: true);
         return "Engram sweep complete.";
     }
 

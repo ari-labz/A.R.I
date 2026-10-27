@@ -37,6 +37,10 @@ internal sealed class DeleteMemory : Tool
             if (doc.RootElement.TryGetProperty("name", out JsonElement n) && n.GetString() is { Length: > 0 } name
                 && Brain.GetNote(name) is null)
                 return $"[Blocked] No note named '{name}' found. Use search_brain to find the correct name.";
+            // Engram only deletes what it has read: a note it hasn't looked at is a note it can't judge.
+            if ((thread.OwnerAgent == "Engram" || thread.Key.StartsWith("engram:", StringComparison.Ordinal)) && doc.RootElement.TryGetProperty("name", out JsonElement dn) && dn.GetString() is { Length: > 0 } target
+                && !thread.BrainReads.Contains(target) && !(Brain.GetNote(target) is { } hit && thread.BrainReads.Contains(hit.Title)))
+                return $"[Blocked] Read '{target}' with recall_memory first, so you only delete what you've actually looked at.";
         }
         catch { }
         return null;

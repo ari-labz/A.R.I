@@ -101,7 +101,7 @@ public class SettingsController(PersistentData persistentData, ILogger<SettingsC
                 enabled             = rec?["Enabled"]?.GetValue<bool>()             ?? true,
                 includeFullRequests = rec?["IncludeFullRequests"]?.GetValue<bool>() ?? true,
                 includeToolResults  = rec?["IncludeToolResults"]?.GetValue<bool>()  ?? true,
-                retentionDays       = rec?["RetentionDays"]?.GetValue<int>()        ?? 30,
+                retentionDays       = rec?["RetentionDays"]?.GetValue<int>()        ?? 0,
             },
         };
     }

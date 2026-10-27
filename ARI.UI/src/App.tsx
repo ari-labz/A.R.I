@@ -424,10 +424,17 @@ export default function App() {
         // When the app comes back to the foreground (minimised → restored, tab switch, etc.),
         // re-sync thread state and reconnect the global SSE if it dropped while backgrounded.
         function handleVisibilityChange() {
-            if (document.visibilityState !== "visible") return
+            if (document.visibilityState !== "visible") {
+                // A tab nobody is looking at gives its streams back. A browser allows six connections to one host, and these
+                // would otherwise sit on them and leave the page you open next stuck loading while ARI is typing.
+                globalEsRef.current?.close(); globalEsRef.current = null
+                watchStreamRef.current?.close(); watchStreamRef.current = null
+                return
+            }
             loadThreads()
             if (!globalEsRef.current || globalEsRef.current.readyState === EventSource.CLOSED)
                 openGlobalStream()
+            if (activeThreadRef.current && !watchStreamRef.current) attachWatchRef.current?.(activeThreadRef.current)
             if (activeThreadRef.current && !streamingRef.current)
                 loadHistory(activeThreadRef.current)
                     .then(hist => { if (activeThreadRef.current) setItems(dedupeRecentUserMessages(hist)) })
@@ -782,6 +789,7 @@ export default function App() {
     // without it threadStatus never leaves "idle" and the indicator falls back to guessing from content,
     // which cannot tell thinking apart from an empty reply.
     const isSyncingRef = useRef(false)
+    const attachWatchRef = useRef<((key: string) => void) | null>(null)
 
     const attachWatch = useCallback((key: string) => {
         watchStreamRef.current?.close()
@@ -814,6 +822,7 @@ export default function App() {
             }
         }, () => { /* ignore reconnect errors */ })
     }, [])
+    attachWatchRef.current = attachWatch
 
     const openThread = useCallback(async (
         key: string, internal = false, agName: string | null = null, isCode = false,

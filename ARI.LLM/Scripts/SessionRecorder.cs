@@ -22,7 +22,7 @@ public sealed class RecordingConfig
     public bool IncludeToolResults { get; init; } = true;
 
     /// <summary>Date folders older than this are deleted at startup. 0 disables cleanup.</summary>
-    public int RetentionDays { get; init; } = 30;
+    public int RetentionDays { get; init; } = 0;   // 0 = keep every log: conversations can be rebuilt from them
 }
 
 /// <summary>

@@ -83,7 +83,7 @@ public class ARI : BackgroundService, IModuleLifecycle
 
         Shared.ResolveDevMode(config.DevMode);
         if (Shared.DevMode)
-            _logger.LogWarning("DevMode is ON — Engram is disabled; no memories will be written to the brain this run.");
+            _logger.LogWarning("DevMode is ON — Engram runs, but against a throwaway copy of the brain; your real brain is untouched this run.");
         else
             _logger.LogInformation("DevMode is off — Engram is active.");
 
