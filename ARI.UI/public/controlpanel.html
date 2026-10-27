@@ -1176,8 +1176,8 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 <style id="pip-css">
 .agv-btn{border:1px solid var(--border);background:var(--main-bg);color:var(--text);border-radius:7px;padding:5px 12px;font-size:13px;cursor:pointer}
 .agv-btn:hover{border-color:var(--text-dim)}
-.pip-wrap{display:flex;gap:14px;align-items:flex-start}
-.pip-canvas{position:relative;flex:1;min-width:0;height:560px;overflow:hidden;border:1px solid var(--border);border-radius:12px;background-color:var(--main-bg);background-image:linear-gradient(var(--border) 1px,transparent 1px),linear-gradient(90deg,var(--border) 1px,transparent 1px);cursor:grab;user-select:none}
+.pip-wrap{position:relative}
+.pip-canvas{position:relative;flex:1;min-width:0;height:560px;min-height:420px;overflow:hidden;border:1px solid var(--border);border-radius:12px;background-color:var(--main-bg);background-image:linear-gradient(var(--border) 1px,transparent 1px),linear-gradient(90deg,var(--border) 1px,transparent 1px);cursor:grab;user-select:none}
 .pip-canvas.panning{cursor:grabbing}
 .pip-world{position:absolute;left:0;top:0;transform-origin:0 0}
 .pip-world svg{position:absolute;left:0;top:0;width:1px;height:1px;overflow:visible;pointer-events:none}
@@ -1201,7 +1201,7 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 .pip-lab{position:absolute;top:-34px;left:-8px;white-space:nowrap;font-weight:700;font-size:12px;cursor:grab;color:var(--text)}
 .pip-lab small{display:block;font-weight:400;color:var(--text-dim)}
 .pip-term.end .pip-lab{left:auto;right:-8px;text-align:right}
-.pip-insp{width:270px;flex:none;border:1px solid var(--border);border-radius:12px;padding:14px;font-size:13px}
+.pip-insp{position:absolute;top:12px;right:12px;z-index:5;width:270px;max-height:calc(100% - 24px);overflow:auto;border:1px solid var(--border);border-radius:12px;padding:14px;font-size:13px;background:var(--main-bg);box-shadow:0 8px 28px rgba(0,0,0,.18)}
 .pip-insp label{display:block;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);margin:12px 0 4px}
 .pip-menu{position:fixed;z-index:9999;min-width:200px;background:var(--main-bg);color:var(--text);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.3);padding:4px;font-size:13px}
 .pip-menu div{padding:6px 12px;border-radius:5px;cursor:pointer}.pip-menu div:hover{background:var(--user-bubble)}
@@ -4442,18 +4442,28 @@ function pipRender() {
     bar.append(sel, add, btn('Recenter', () => pipRecenter(p)), ren, neu, ...(p.id === 'default' ? [] : [del]), save, st);
 
     const state = agEl('div', 'font-size:12.5px;color:var(--text-dim);margin-bottom:10px;');
-    state.textContent = 'A pipeline is a way of building a reply: the agents that work on it and how they pass work along. Pick one when you start a chat. Default is what chats use unless you choose another, and it can be edited but not deleted.';
+    state.textContent = 'A pipeline is a way of building a reply: the agents that work on it and how they pass work along. Pick one when you start a chat. Default is what chats use unless you choose another, and it can be edited but not deleted. Each {token} in a custom agent\'s prompt becomes an input port you can wire an output into; select an agent and use Add input to make one.';
 
     const wrap = agEl('div'); wrap.className = 'pip-wrap';
     const canvas = agEl('div'); canvas.className = 'pip-canvas'; pipCanvas = canvas;
-    wrap.append(canvas, pipInspector(p));
+    wrap.append(canvas);
+    const insp = pipInspector(p); if (insp) wrap.append(insp);
     const issues = pipIssues(p);
     const warn = agEl('div', 'margin-top:10px;font-size:12.5px;line-height:1.6;white-space:pre-line;color:' + (issues.length ? '#d9a441' : 'var(--text-dim)'), issues.length ? issues.map(i => '⚠ ' + i).join('\n') : '✓ Pipeline is valid.');
     host.append(bar, state, wrap, warn);
+    pipFit();
     pipDraw(p); pipHook(p);
     const v = pipView(p);
     if (v.fresh) requestAnimationFrame(() => { if (pipCanvas && pipCanvas.clientWidth > 0 && v.fresh) { v.fresh = false; pipRecenter(p); } });
 }
+
+// The canvas takes whatever height is left on screen, so there is no dead space under it.
+function pipFit() {
+    if (!pipCanvas || !pipCanvas.isConnected) return;
+    const room = window.innerHeight - pipCanvas.getBoundingClientRect().top - 64;
+    pipCanvas.style.height = Math.max(420, room) + 'px';
+}
+window.addEventListener('resize', () => { if (pipCanvas && pipCanvas.isConnected) { pipFit(); if (typeof pipCur === 'function' && pipD) { try { pipApplyView(pipCur()); } catch {} } } });
 
 function pipReaches(p, from, to) { const seen = new Set(), st = [from]; while (st.length) { const x = st.pop(); if (x === to) return true; if (seen.has(x)) continue; seen.add(x); p.edges.filter(e => e.from === x).forEach(e => st.push(e.to)); } return false; }
 function pipIssues(p) {
@@ -4473,6 +4483,7 @@ function pipIssues(p) {
 
 var pipCanvas = null, pipWorld = null, pipSvg = null;
 function pipPos(n, side, port) {
+    if (n.type === 'start') return { x: n.x + PIP_W, y: n.y + 46 + (port === 'message' ? 28 : 0) };   // START has two outputs: history, message
     if (n.type !== 'agent') return { x: n.x + 13, y: n.y + 13 };
     return side === 'out' ? { x: n.x + PIP_W, y: n.y + 46 } : { x: n.x, y: n.y + 74 + pipInputs(n).indexOf(port) * 28 };
 }
@@ -4527,11 +4538,20 @@ function pipDraw(p) {
             ports.forEach((q, i) => { const pi = agEl('div'); pi.className = 'pip-port' + (taken.has(n.id + ':' + q) ? ' taken' : ''); pi.dataset.node = n.id; pi.dataset.port = q; pi.style.cssText = `left:-7px;top:${67 + i * 28}px`; d.append(pi); });
             d.onmousedown = e => { if (e.button === 0 && !e.target.classList.contains('pip-port')) { e.stopPropagation(); pipDragNode(p, n, d, e); } };
             d.oncontextmenu = e => { e.stopPropagation(); pipMenu(e, n.agent, [['Disconnect all', () => { p.edges = p.edges.filter(x => x.from !== n.id && x.to !== n.id); pipTouch(); pipRender(); }], ['Remove from pipeline', () => pipDelete(p, n)]]); };
+        } else if (n.type === 'start') {
+            d = agEl('div'); d.className = 'pip-node start';
+            const h = agEl('div'); h.className = 'pip-nh'; h.append(agEl('span', '', 'START'), agEl('span', 'font-size:11px;opacity:.8;', 'every pipeline begins here')); d.append(h);
+            [['history', 'Conversation history'], ['message', 'Latest message']].forEach(([key, text], i) => {
+                const r = agEl('div', '', text); r.className = 'pip-row out'; d.append(r);
+                const po = agEl('div'); po.className = 'pip-port'; po.style.cssText = `right:-7px;top:${39 + i * 28}px`; po.onmousedown = e => pipDragWire(p, n, e, key); d.append(po);
+            });
+            d.append(agEl('div', 'height:6px;'));
+            d.onmousedown = e => { if (e.button === 0 && !e.target.classList.contains('pip-port')) { e.stopPropagation(); pipDragNode(p, n, d, e); } };
         } else {
             d = agEl('div'); d.className = 'pip-term ' + n.type;
-            const lab = agEl('div', '', n.type === 'start' ? 'START' : 'END'); lab.className = 'pip-lab'; const sm = agEl('small', '', n.type === 'start' ? 'Conversation history' : 'Stream to user'); lab.append(sm);
+            const lab = agEl('div', '', 'END'); lab.className = 'pip-lab'; const sm = agEl('small', '', 'Stream to user'); lab.append(sm);
             const pt = agEl('div'); pt.className = 'pip-port';
-            if (n.type === 'start') pt.onmousedown = e => pipDragWire(p, n, e); else { pt.dataset.node = n.id; pt.dataset.port = 'stream'; }
+            pt.dataset.node = n.id; pt.dataset.port = 'stream';
             d.append(lab, pt); lab.onmousedown = e => { e.stopPropagation(); pipDragNode(p, n, d, e); };
         }
         d.style.left = n.x + 'px'; d.style.top = n.y + 'px'; world.append(d);
@@ -4542,7 +4562,7 @@ function pipWires(p) {
     p.edges.forEach((e, i) => {
         const A = pipNode(p, e.from), B = pipNode(p, e.to); if (!A || !B) return;
         const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        path.setAttribute('d', pipWirePath(pipPos(A, 'out'), pipPos(B, 'in', e.port))); if (e.mode === 'stream') path.setAttribute('class', 'stream');
+        path.setAttribute('d', pipWirePath(pipPos(A, 'out', e.fromPort), pipPos(B, 'in', e.port))); if (e.mode === 'stream') path.setAttribute('class', 'stream');
         const flip = () => { e.mode = e.mode === 'stream' ? 'complete' : 'stream'; pipTouch(); pipRender(); };
         path.onclick = flip;
         path.oncontextmenu = ev => pipMenu(ev, 'Connection', [[e.mode === 'stream' ? 'Wait until finished' : 'Stream live (not run yet)', flip], ['Disconnect', () => { p.edges.splice(i, 1); pipTouch(); pipRender(); }]]);
@@ -4555,17 +4575,17 @@ function pipDragNode(p, n, el, e) {
     const up = () => { document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); if (moved) pipTouch(); if (pipSel !== n.id) { pipSel = n.id; pipRender(); } };
     document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
 }
-function pipDragWire(p, from, e) {
+function pipDragWire(p, from, e, fromPort) {
     e.stopPropagation();
     const t = document.createElementNS('http://www.w3.org/2000/svg', 'path'); t.setAttribute('class', 'tmp'); pipSvg.append(t);
-    const a = pipPos(from, 'out'), mv = ev => t.setAttribute('d', pipWirePath(a, pipToWorld(p, ev)));
+    const a = pipPos(from, 'out', fromPort), mv = ev => t.setAttribute('d', pipWirePath(a, pipToWorld(p, ev)));
     const up = ev => {
         document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); t.remove();
         const el = document.elementFromPoint(ev.clientX, ev.clientY);
         if (!el || !el.dataset || !el.dataset.port || el.dataset.node === from.id) return;
         const to = pipNode(p, el.dataset.node); if (!to || pipReaches(p, to.id, from.id)) return;
         p.edges = p.edges.filter(x => !(x.to === to.id && x.port === el.dataset.port));
-        p.edges.push({ from: from.id, to: to.id, port: el.dataset.port, mode: to.type === 'end' ? 'stream' : 'complete' }); pipTouch(); pipRender();
+        p.edges.push({ from: from.id, to: to.id, port: el.dataset.port, mode: to.type === 'end' ? 'stream' : 'complete', ...(from.type === 'start' ? { fromPort: fromPort || 'history' } : {}) }); pipTouch(); pipRender();
     };
     document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up); mv(e);
 }
@@ -4595,16 +4615,26 @@ function pipInspector(p) {
     const box = agEl('div'); box.className = 'pip-insp'; const n = pipNode(p, pipSel);
     const dim = t => { const d = agEl('div', 'color:var(--text-dim);line-height:1.5;white-space:pre-wrap;margin-bottom:10px;', t); box.append(d); return d; };
     const lab = t => box.append(agEl('label', '', t));
-    if (!n || n.type !== 'agent') {
-        dim(n ? (n.type === 'start' ? 'START carries the conversation history into the pipeline.' : 'END streams whatever arrives here to the user.') : 'Select an agent to see it.');
-        dim('Each {token} in a custom agent\'s prompt becomes an input port; wire any agent\'s output into it. The built-in Memory and Dialogue have fixed ports. A solid wire waits until the agent has finished; a streaming wire is planned but not run yet.');
-        return box;
-    }
+    if (!n || n.type !== 'agent') return null;
     const def = pipDef(n);
     box.append(agEl('div', 'font-size:15px;font-weight:600;', n.agent));
     lab('Runs on'); dim((def.serverName || '?') + ' · ' + (def.slotName || 'default slot'));
     lab('Inputs'); dim(pipInputs(n).map(q => '{' + q + '}  ←  ' + ((p.edges.find(e => e.to === n.id && e.port === q) || {}).from ? (() => { const f = pipNode(p, p.edges.find(e => e.to === n.id && e.port === q).from); return f.type === 'start' ? 'conversation' : f.agent; })() : 'nothing') ).join('\n') || 'none');
     lab('System prompt'); dim(((def.agentPrompt || '').slice(0, 300) + ((def.agentPrompt || '').length > 300 ? '…' : '')) || '(empty)');
+    if (def.custom) {
+        const add = agEl('button', 'margin:4px 8px 4px 0;', 'Add input'); add.className = 'agv-btn'; add.type = 'button';
+        add.onclick = async () => {
+            const t = (prompt('Name for the new input (letters, numbers or _). It is added to this agent\'s prompt as {name}, and you can wire an output into it.') || '').trim();
+            if (!t) return;
+            if (!/^\w+$/.test(t) || t.toLowerCase() === 'message') { alert('Use letters, numbers or _ only, and not "message" (that one is always there).'); return; }
+            if (pipInputs(n).includes(t)) { alert('{' + t + '} is already an input.'); return; }
+            const text = (def.agentPrompt || '').replace(/\s+$/, '') + '\n\n' + t + ':\n{' + t + '}\n';
+            const r = await cpFetch('/api/v1/admin/agents/' + encodeURIComponent(n.agent), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentPrompt: text }) });
+            if (!r.ok) { alert('Could not add the input.'); return; }
+            def.agentPrompt = text; pipRender();
+        };
+        box.append(add);
+    }
     const go = agEl('button', 'margin-right:8px;', 'Edit this agent'); go.className = 'agv-btn'; go.type = 'button'; go.onclick = () => { prSelected = 'agent:' + n.agent; switchTab('agents'); }; box.append(go);
     const d = agEl('button', '', 'Remove from pipeline'); d.className = 'agv-btn'; d.type = 'button'; d.onclick = () => pipDelete(p, n); box.append(d);
     return box;

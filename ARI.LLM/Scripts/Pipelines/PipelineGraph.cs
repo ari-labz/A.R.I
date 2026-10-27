@@ -9,7 +9,8 @@ namespace ARI.LLM;
 internal sealed class PipelineGraph
 {
     internal sealed record Node(string Id, string Type, string? Agent);
-    internal sealed record Edge(string From, string To, string Port, bool Stream);
+    /// <param name="FromPort">Which output of the source the wire leaves from. Only START has more than one: "history" and "message".</param>
+    internal sealed record Edge(string From, string To, string Port, bool Stream, string FromPort = StartHistory);
 
     internal string       Id    { get; init; } = "";
     internal string       Name  { get; init; } = "";
@@ -17,6 +18,9 @@ internal sealed class PipelineGraph
     internal List<Edge>   Edges { get; init; } = new();
 
     internal const string StartId = "start", EndId = "end";
+
+    /// <summary>The two things every pipeline starts with: the conversation so far, and (separately) the user's latest message.</summary>
+    internal const string StartHistory = "history", StartMessage = "message";
 
     /// <summary>The built-in agents that can sit in a graph, and the input ports each one has. "history" is the START output.</summary>
     internal static readonly IReadOnlyDictionary<string, string[]> BuiltInPorts = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
@@ -76,7 +80,8 @@ internal sealed class PipelineGraph
                     nodes.Add(new Node(Str(n, "id"), Str(n, "type"), n.TryGetProperty("agent", out JsonElement a) ? a.GetString() : null));
             if (p.TryGetProperty("edges", out JsonElement es))
                 foreach (JsonElement e in es.EnumerateArray())
-                    edges.Add(new Edge(Str(e, "from"), Str(e, "to"), Str(e, "port"), e.TryGetProperty("mode", out JsonElement m) && m.GetString() == "stream"));
+                    edges.Add(new Edge(Str(e, "from"), Str(e, "to"), Str(e, "port"), e.TryGetProperty("mode", out JsonElement m) && m.GetString() == "stream",
+                        Str(e, "fromPort") is { Length: > 0 } fp ? fp : StartHistory));
             result.Add(new PipelineGraph { Id = Str(p, "id"), Name = Str(p, "name"), Nodes = nodes, Edges = edges });
         }
         return result;
@@ -92,6 +97,10 @@ internal sealed class PipelineGraph
         Node? end = Nodes.FirstOrDefault(n => n.Type == "end");
         if (Nodes.FirstOrDefault(n => n.Type == "start") is null) problems.Add("There is no START node.");
         if (end is null) { problems.Add("There is no END node."); return problems; }
+
+        foreach (Edge e in Edges.Where(e => Nodes.Any(n => n.Id == e.From && n.Type == "start")))
+            if (!e.FromPort.Equals(StartHistory, StringComparison.OrdinalIgnoreCase) && !e.FromPort.Equals(StartMessage, StringComparison.OrdinalIgnoreCase))
+                problems.Add($"START has no '{e.FromPort}' output (it has {StartHistory} and {StartMessage}).");
 
         IEnumerable<Edge> intoEnd = Edges.Where(e => e.To == end.Id);
         if (intoEnd.Count() != 1) problems.Add(intoEnd.Any() ? "END can only take one source." : "Nothing is connected to END.");
