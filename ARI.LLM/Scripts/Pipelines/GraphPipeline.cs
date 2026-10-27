@@ -235,7 +235,7 @@ internal sealed class GraphPipeline : Pipeline
                     {
                         Shared.Logger.LogWarning(ex, "[Memory] ({Thread}) Memory recall failed — continuing without memories. {Error}", threadKey, ex.Message);
                         recallSeconds = recallSw.Elapsed.TotalSeconds;
-                        return "Memory recall is unavailable right now — the memory server appears to be offline. Tell the user at the start of your response that you cannot access your memories at the moment and that your answer may be inaccurate or incomplete as a result. Then respond as best you can.";
+                        return PipelineGraph.MemoryUnavailableText;
                     }
                 }
             }

@@ -25,12 +25,11 @@ public class PipelineGraphsController(PersistentData persistentData) : Controlle
           "id": "default", "name": "Default",
           "nodes": [
             { "id": "start", "type": "start", "x": 20,  "y": 143 },
-            { "id": "mem",   "type": "agent", "agent": "Memory",   "x": 270, "y": 20 },
+            { "id": "mem",   "type": "pipeline", "pipeline": "memory", "x": 270, "y": 20, "onError": "" },
             { "id": "dia",   "type": "agent", "agent": "Dialogue", "x": 560, "y": 110 },
             { "id": "end",   "type": "end",   "x": 900, "y": 143 }
           ],
           "edges": [
-            { "from": "start", "to": "mem", "port": "history",  "mode": "complete" },
             { "from": "start", "to": "dia", "port": "history",  "mode": "complete" },
             { "from": "mem",   "to": "dia", "port": "memories", "mode": "complete" },
             { "from": "dia",   "to": "end", "port": "stream",   "mode": "stream" }
@@ -39,6 +38,7 @@ public class PipelineGraphsController(PersistentData persistentData) : Controlle
       ]
     }
     """)!.AsObject();
+        foreach (JsonNode? n in seed["pipelines"]![0]!["nodes"]!.AsArray().Where(n => n!["onError"] is not null)) n!["onError"] = PipelineGraph.MemoryUnavailableText;
         if (withMemory) return seed;
         // No Memory agent on this install: Dialogue answers straight from the conversation.
         JsonObject graph = seed["pipelines"]![0]!.AsObject();
@@ -52,6 +52,7 @@ public class PipelineGraphsController(PersistentData persistentData) : Controlle
     public IActionResult Get()
     {
         JsonObject data = persistentData.GetPipelinesRaw() ?? Seed(Llm?.AgentPorts().ContainsKey("Memory") ?? true);
+        PipelineGraph.UpgradeLegacyDefault(data);
         AddShipped(data);
         return Ok(new
         {

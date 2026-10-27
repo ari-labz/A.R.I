@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
 namespace ARI.LLM;
@@ -46,11 +47,17 @@ internal sealed class PipelineGraph
 
     /// <summary>The pipeline ARI ships and always has: recall memories, then reply with them. <paramref name="withMemory"/> false
     /// gives the same without the recall step, for an install that has no Memory agent.</summary>
-    internal static PipelineGraph BuiltInDefault(bool withMemory)
+    internal static PipelineGraph BuiltInDefault(bool withMemory, bool memoryAsPipeline = false)
     {
         List<Node> nodes = [new(StartId, "start", null), new("dia", "agent", "Dialogue"), new(EndId, "end", null)];
         List<Edge> edges = [new(StartId, "dia", "history", false), new("dia", EndId, "stream", true)];
-        if (withMemory)
+        if (withMemory && memoryAsPipeline)
+        {
+            // Memory recall is its own pipeline (see ShippedJson); if it fails, Dialogue still answers, and says it couldn't remember.
+            nodes.Insert(1, new Node("mem", "pipeline", null, Pipeline: MemoryId, OnError: MemoryUnavailableText));
+            edges.Insert(1, new Edge("mem", "dia", "memories", false));
+        }
+        else if (withMemory)
         {
             nodes.Insert(1, new Node("mem", "agent", "Memory"));
             edges.Insert(0, new Edge(StartId, "mem", "history", false));
@@ -60,6 +67,30 @@ internal sealed class PipelineGraph
     }
 
     internal const string DefaultId = "default", MemoryId = "memory";
+
+    /// <summary>What Dialogue is told when memory recall fails, so it can say so instead of answering as if it had remembered.</summary>
+    internal const string MemoryUnavailableText = "Memory recall is unavailable right now — the memory server appears to be offline. Tell the user at the start of your response that you cannot access your memories at the moment and that your answer may be inaccurate or incomplete as a result. Then respond as best you can.";
+
+    /// <summary>Older saved copies of Default have the Memory agent as a step. This swaps that step for the Memory pipeline in place
+    /// (same position, same wire into Dialogue) and returns true if it did. Default pipelines the user changed beyond that are left alone.</summary>
+    internal static bool UpgradeLegacyDefault(JsonObject root)
+    {
+        if (root["pipelines"] is not JsonArray list) return false;
+        JsonObject? def = list.OfType<JsonObject>().FirstOrDefault(p => p["id"]?.GetValue<string>() == DefaultId);
+        if (def?["nodes"] is not JsonArray nodes || def["edges"] is not JsonArray edges) return false;
+        List<JsonObject> boxes = nodes.OfType<JsonObject>().Where(n => n["type"]?.GetValue<string>() is not ("start" or "end")).ToList();
+        JsonObject? mem = boxes.FirstOrDefault(n => n["type"]?.GetValue<string>() == "agent" && n["agent"]?.GetValue<string>() == "Memory");
+        bool onlyMemoryAndDialogue = boxes.Count == 2 && mem is not null
+            && boxes.Any(n => n["type"]?.GetValue<string>() == "agent" && n["agent"]?.GetValue<string>() == "Dialogue");
+        if (!onlyMemoryAndDialogue) return false;
+        string memId = mem!["id"]!.GetValue<string>();
+        mem.Remove("agent");
+        mem["type"] = "pipeline";
+        mem["pipeline"] = MemoryId;
+        mem["onError"] = MemoryUnavailableText;
+        foreach (JsonNode? e in edges.Where(e => e?["to"]?.GetValue<string>() == memId).ToList()) edges.Remove(e);   // the sub-pipeline's inputs default to the chat's own
+        return true;
+    }
 
     /// <summary>Shipped pipelines other than Default, which can be edited but never deleted.</summary>
     internal static readonly string[] ShippedIds = [MemoryId];

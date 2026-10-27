@@ -11,7 +11,8 @@ internal sealed class MemoryApi(
 {
     public MemoryFound Find(string message)
     {
-        if (memory.HopLimit <= 0) return new MemoryFound(JsonSerializer.Serialize(new Memory.MemoryPrep(true, "", "", "", "", [], null, [], 0, 0, "", message, null, Disabled: true)), null, null);
+        // The same gate the Memory step has always had: no recall for a conversation that has no memory access.
+        if (memory.HopLimit <= 0 || !thread.HasMemoryAccess) return new MemoryFound(JsonSerializer.Serialize(new Memory.MemoryPrep(true, "", "", "", "", [], null, [], 0, 0, "", message, null, Disabled: true)), null, null);
         Memory.MemoryPrep prep = memory.Prepare(thread.GetChatHistory(), message, contextSummary, privacy);
         return new MemoryFound(JsonSerializer.Serialize(prep), prep.Done ? null : prep.Transcript, prep.Done ? null : prep.CandidateText);
     }
