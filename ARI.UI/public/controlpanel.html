@@ -4234,7 +4234,7 @@ const AG_INFO = [
     ['Coder',     'Code mode: reads and edits files and runs commands inside a project.'],
     ['Context',   'Keeps a running summary of each conversation and gives threads their titles.'],
     ['Awareness', 'Decides whether she should reply in group chats such as Discord.'],
-    ['Memory',    'Recalls relevant notes from the brain while a conversation is going.'],
+    ['Recall',    'Recalls what the conversation needs from the brain: it is given the names of notes that might matter, opens them with tools, follows their links, and writes the memory block Dialogue reads. It keeps its own sub-thread under each chat.'],
     ['Engram',    'Writes new memories after conversations (reflection). Off makes the brain read-only.'],
     ['Refactor',  'Tidies the memory graph in the background on a schedule.'],
     ['Subagent',  'Runs the side tasks she starts with spawn_agent.'],
@@ -4344,8 +4344,11 @@ function prRenderList() {
     };
     list.append(add);
     const ordered = agOrdered();
-    ordered.filter(a => !a.system).forEach(a => item('agent:' + a.name, a.name, a.enabled === false));
-    if (ordered.some(a => a.system)) { group('Agents ARI uses in its own pipelines'); ordered.filter(a => a.system).forEach(a => item('agent:' + a.name, a.name, a.enabled === false)); }
+    // The agents ARI runs from its own code sit in their own group; the old pick-based Memory agent is only a fallback behind Recall.
+    const SYSTEM = ['Recall', 'Engram'];
+    ordered.filter(a => !a.system && a.name !== 'Memory' && !SYSTEM.includes(a.name)).forEach(a => item('agent:' + a.name, a.name, a.enabled === false));
+    group('System Agents');
+    SYSTEM.map(n => ordered.find(a => a.name === n)).filter(Boolean).forEach(a => item('agent:' + a.name, a.name, a.enabled === false));
 }
 
 function prRenderEditor() {
@@ -4361,7 +4364,7 @@ function prRenderEditor() {
     } else {
         const name = prSelected.slice(6), agent = (agData.agents || []).find(a => a.name === name), spec = agSpec(name);
         if (!agent) { ed.textContent = 'Not found.'; return; }
-        title(name, agent.custom ? (agent.description || 'A custom agent. Wire it into a pipeline on the Pipelines page.') : (AG_INFO.find(x => x[0] === name) || [])[1] || '');
+        title(name, (AG_INFO.find(x => x[0] === name) || [])[1] || (agent.custom ? (agent.description || 'A custom agent. Wire it into a pipeline on the Pipelines page.') : ''));
         const hdr = agEl('div', 'display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:-8px 0 24px;');
         hdr.append(buildToggle(agent.enabled !== false, on => { agent.enabled = on; agDirty(); prRenderList(); }), agEl('span', 'font-size:13px;color:var(--text-dim);', 'Runs on'), agBindingPickers(agent));
         if (agent.custom && !agent.system) {
@@ -4376,6 +4379,10 @@ function prRenderEditor() {
             const inp = document.createElement('input'); inp.type = 'text'; inp.className = 'vs-input'; inp.style.cssText = 'width:100%;max-width:520px;box-sizing:border-box;'; inp.placeholder = 'e.g. memory_tools'; inp.value = (agent.preloadedTools || []).join(', ');
             inp.oninput = () => { agent.preloadedTools = inp.value.split(',').map(x => x.trim()).filter(Boolean); agDirty(); };
             row.append(inp, agEl('div', 'font-size:12px;color:var(--text-dim);margin-top:4px;', 'Tool groups loaded from the start, so it does not have to ask for them. Behind the scenes in a pipeline an agent can only use tools that read.')); ed.append(row); }
+        if (agent.custom) { const row = agEl('div', 'margin:0 0 18px;'); row.append(agEl('label', 'display:block;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text-dim);margin-bottom:4px;', 'Max tool calls'));
+            const inp = document.createElement('input'); inp.type = 'number'; inp.min = 0; inp.className = 'vs-input'; inp.style.cssText = 'width:90px;'; inp.value = agent.maxToolCalls || 0;
+            inp.oninput = () => { agent.maxToolCalls = Math.max(0, parseInt(inp.value) || 0); agDirty(); };
+            row.append(inp, agEl('div', 'font-size:12px;color:var(--text-dim);margin-top:4px;', 'How many tool calls it may make for one message. After that its tools are taken away and it has to answer with what it has. 0 means no limit.')); ed.append(row); }
         if (agent.custom) prField(ed, 'Message prompt', 'The message this agent is sent, with {tokens} filled in like the prompt above. Leave it empty to send the user\'s latest message as it is. Use it to keep a role in the prompt above and the task here.', [['message', "the user's latest message"], ['anything_else', 'any other {name} becomes an input port']], agent.messagePrompt || '', v => agent.messagePrompt = v);
         (spec.prompts || []).forEach(p => { agent.promptTemplates = agent.promptTemplates || {}; prField(ed, p.label, p.hint, p.tokens, agent.promptTemplates[p.key], v => agent.promptTemplates[p.key] = v); });
         const known = new Set((spec.prompts || []).map(p => p.key));
@@ -4413,7 +4420,7 @@ function pipDef(n) { return n.type === 'agent' ? (agData.agents || []).find(a =>
 // A sub-pipeline is a node too: it takes the same two things START gives (both optional: left unwired it sees what the pipeline around it received) and has one output.
 const PIP_SUB_PORTS = ['history', 'message'];
 function pipSubOf(n) { return (pipD.data.pipelines || []).find(x => x.id === n.pipeline); }
-function pipLabel(n) { return n.type === 'pipeline' ? (pipSubOf(n) ? pipSubOf(n).name : '(missing pipeline)') : n.type === 'script' ? n.script : n.agent; }
+function pipLabel(n) { return n.type === 'pipeline' ? (pipSubOf(n) ? pipSubOf(n).name : '(missing pipeline)') : n.type === 'script' ? n.script : n.agent === 'Memory' ? 'Recall' : n.agent; }
 function pipScriptOf(n) { return (pipD.scripts || {})[n.script]; }
 const pipIsBox = n => n.type === 'agent' || n.type === 'pipeline' || n.type === 'script';
 function pipOutputs(n) { return n.type === 'start' ? ['history', 'message'] : n.type === 'script' ? ((pipScriptOf(n) || {}).outputs || ['output']) : ['output']; }
@@ -4519,7 +4526,7 @@ function pipIssues(p) {
 
 var pipCanvas = null, pipWorld = null, pipSvg = null;
 function pipPos(n, side, port) {
-    if (!pipIsBox(n) && n.type !== 'start') return { x: n.x + 13, y: n.y + 13 };
+    if (!pipIsBox(n)) return { x: n.x + 13, y: n.y + 13 };
     const outs = pipOutputs(n);
     if (side === 'out') return { x: n.x + PIP_W, y: n.y + 46 + Math.max(0, outs.indexOf(port)) * 28 };
     return { x: n.x, y: n.y + 46 + outs.length * 28 + pipInputs(n).indexOf(port) * 28 };
@@ -4549,7 +4556,7 @@ function pipAddAgentNode(p, a, at) { const id = pipUid(); p.nodes.push({ id, typ
 function pipDelete(p, n) { if (!pipIsBox(n)) return; p.nodes = p.nodes.filter(x => x !== n); p.edges = p.edges.filter(e => e.from !== n.id && e.to !== n.id); if (pipSel === n.id) pipSel = null; pipTouch(); pipRender(); }
 function pipAddable(p) {   // agents that can sit in a graph and aren't in this one yet
     const have = new Set(p.nodes.filter(n => n.type === 'agent').map(n => n.agent));
-    return (agData.agents || []).filter(a => !have.has(a.name) && (a.custom || PIP_BUILTIN[a.name]));
+    return (agData.agents || []).filter(a => !have.has(a.name) && !a.system && (a.custom || PIP_BUILTIN[a.name]));
 }
 function pipAddPipelineNode(p, sub, at) { const id = pipUid(); p.nodes.push({ id, type: 'pipeline', pipeline: sub.id, x: at.x, y: at.y }); pipSel = id; pipTouch(); pipRender(); }
 function pipAddScriptNode(p, name, at) { const id = pipUid(); p.nodes.push({ id, type: 'script', script: name, x: at.x, y: at.y }); pipSel = id; pipTouch(); pipRender(); }
@@ -4557,7 +4564,7 @@ function pipAddablePipelines(p) { return (pipD.data.pipelines || []).filter(x =>
 function pipAddMenu(anchor) {
     const p = pipCur(), r = anchor.getBoundingClientRect(), v = pipView(p), rc = pipCanvas.getBoundingClientRect(), free = pipAddable(p);
     const at = { x: (rc.width / 2 - v.x) / v.k - 115, y: (rc.height / 2 - v.y) / v.k - 40 };
-    pipMenu({ clientX: r.left, clientY: r.bottom + 4, preventDefault() {} }, 'Add agent', free.map(a => [a.name, () => pipAddAgentNode(p, a, at)]).concat(free.length ? [] : [['(every agent is already here — make more on the Agents page)', () => {}]])
+    pipMenu({ clientX: r.left, clientY: r.bottom + 4, preventDefault() {} }, 'Add agent', free.map(a => [a.name === 'Memory' ? 'Recall' : a.name, () => pipAddAgentNode(p, a, at)]).concat(free.length ? [] : [['(every agent is already here — make more on the Agents page)', () => {}]])
         .concat(pipAddablePipelines(p).map(x => ['Pipeline: ' + x.name, () => pipAddPipelineNode(p, x, at)]))
         .concat(Object.keys(pipD.scripts || {}).map(nm => ['Script: ' + nm, () => pipAddScriptNode(p, nm, at)])));
 }
@@ -4581,14 +4588,11 @@ function pipDraw(p) {
             d.onmousedown = e => { if (e.button === 0 && !e.target.classList.contains('pip-port')) { e.stopPropagation(); pipDragNode(p, n, d, e); } };
             d.oncontextmenu = e => { e.stopPropagation(); pipMenu(e, pipLabel(n), [['Disconnect all', () => { p.edges = p.edges.filter(x => x.from !== n.id && x.to !== n.id); pipTouch(); pipRender(); }], ['Remove from pipeline', () => pipDelete(p, n)]]); };
         } else if (n.type === 'start') {
-            d = agEl('div'); d.className = 'pip-node start';
-            const h = agEl('div'); h.className = 'pip-nh'; h.append(agEl('span', '', 'START'), agEl('span', 'font-size:11px;opacity:.8;', 'every pipeline begins here')); d.append(h);
-            [['history', 'Conversation history'], ['message', 'Latest message']].forEach(([key, text], i) => {
-                const r = agEl('div', '', text); r.className = 'pip-row out'; d.append(r);
-                const po = agEl('div'); po.className = 'pip-port'; po.style.cssText = `right:-7px;top:${39 + i * 28}px`; po.onmousedown = e => pipDragWire(p, n, e, key); d.append(po);
-            });
-            d.append(agEl('div', 'height:6px;'));
-            d.onmousedown = e => { if (e.button === 0 && !e.target.classList.contains('pip-port')) { e.stopPropagation(); pipDragNode(p, n, d, e); } };
+            // One round start, like END: a wire to a port called "message" carries the latest message, a wire to any other port carries the conversation.
+            d = agEl('div'); d.className = 'pip-term start';
+            const lab = agEl('div', '', 'START'); lab.className = 'pip-lab'; lab.append(agEl('small', '', 'Conversation in'));
+            const pt = agEl('div'); pt.className = 'pip-port'; pt.onmousedown = e => pipDragWire(p, n, e, 'history');
+            d.append(lab, pt); lab.onmousedown = e => { e.stopPropagation(); pipDragNode(p, n, d, e); };
         } else {
             d = agEl('div'); d.className = 'pip-term ' + n.type;
             const lab = agEl('div', '', 'END'); lab.className = 'pip-lab'; const sm = agEl('small', '', 'Stream to user'); lab.append(sm);
@@ -4627,7 +4631,7 @@ function pipDragWire(p, from, e, fromPort) {
         if (!el || !el.dataset || !el.dataset.port || el.dataset.node === from.id) return;
         const to = pipNode(p, el.dataset.node); if (!to || pipReaches(p, to.id, from.id)) return;
         p.edges = p.edges.filter(x => !(x.to === to.id && x.port === el.dataset.port));
-        p.edges.push({ from: from.id, to: to.id, port: el.dataset.port, mode: to.type === 'end' ? 'stream' : 'complete', ...(from.type === 'start' || from.type === 'script' ? { fromPort: fromPort || pipOutputs(from)[0] } : {}) }); pipTouch(); pipRender();
+        p.edges.push({ from: from.id, to: to.id, port: el.dataset.port, mode: to.type === 'end' ? 'stream' : 'complete', ...(from.type === 'start' ? { fromPort: /^message$/i.test(el.dataset.port) ? 'message' : 'history' } : from.type === 'script' ? { fromPort: fromPort || pipOutputs(from)[0] } : {}) }); pipTouch(); pipRender();
     };
     document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up); mv(e);
 }
@@ -7160,11 +7164,11 @@ function dbgRenderThreadList(threads, diskSessions = []) {
     }
     list.innerHTML = '';
 
-    function addThreadItem(key, typeLabel, meta, onClick, container) {
+    function addThreadItem(key, typeLabel, meta, onClick, container, title) {
         const item = document.createElement('div');
         item.className = 'dbg-thread-item' + (key === dbgSelectedThread ? ' active' : '');
         item.innerHTML = `
-            <div class="dbg-thread-key">${escHtml(key)}</div>
+            <div class="dbg-thread-key">${escHtml(title ?? key)}</div>
             <div class="dbg-thread-meta">${escHtml(typeLabel)} · ${escHtml(meta)}</div>`;
         item.addEventListener('click', () => {
             dbgSelectedThread = key;
@@ -7176,14 +7180,19 @@ function dbgRenderThreadList(threads, diskSessions = []) {
         return item;
     }
 
-    threads
-        .filter(t => !t.key.startsWith('memory:') && !t.key.startsWith('extract:'))
-        .forEach(t => {
-            const typeLabel = t.isInternal ? (t.agentName || 'Internal') : (t.isCodeMode ? 'Code' : 'Dialogue');
-            const ago = t.lastMessageAt ? dbgFmtAgo(t.lastMessageAt) : '';
-            const meta = `${t.messageCount || 0} msgs${ago ? ' · ' + ago : ''}`;
-            addThreadItem(t.key, typeLabel, meta, () => { dbgOpenWatch(t.key); dbgLoadThread(t.key); });
-        });
+    // An agent's own sub-thread (carries parentKey) is listed indented straight under its chat, and opens on its own.
+    const visible = threads.filter(t => !t.key.startsWith('memory:') && !t.key.startsWith('extract:'));
+    const childrenOf = {};
+    visible.filter(t => t.parentKey).forEach(t => (childrenOf[t.parentKey] ??= []).push(t));
+    function addThread(t, depth) {
+        const typeLabel = t.parentKey ? 'Sub-thread' : t.isInternal ? (t.agentName || 'Internal') : (t.isCodeMode ? 'Code' : 'Dialogue');
+        const ago = t.lastMessageAt ? dbgFmtAgo(t.lastMessageAt) : '';
+        const meta = `${t.messageCount || 0} msgs${ago ? ' · ' + ago : ''}`;
+        const item = addThreadItem(t.key, typeLabel, meta, () => { dbgOpenWatch(t.key); dbgLoadThread(t.key); }, undefined, t.parentKey ? (t.agentName || 'Sub-thread') : undefined);
+        if (depth) { item.style.marginLeft = (depth * 14) + 'px'; item.style.borderLeft = '2px solid var(--accent)'; }
+        (childrenOf[t.key] || []).forEach(c => addThread(c, depth + 1));
+    }
+    visible.filter(t => !t.parentKey).forEach(t => addThread(t, 0));
 
     const visibleDisk = diskSessions.filter(s => !s.key.startsWith('Memory_memory_') && !s.key.startsWith('Memory_extract_'));
     if (visibleDisk.length) {
@@ -7346,7 +7355,8 @@ function dbgRenderThreadNode(thread, container, depth) {
     // sub-thread frame INLINE, directly beneath the spawn_coder call that created it — so its tool calls and
     // thinking sit next to their trigger instead of being dumped in a pile at the bottom of the view.
     const planChild = (thread.children || []).find(c => (c.key || '').includes('#plan'));
-    const workers   = (thread.children || []).filter(c => c !== planChild);
+    // An agent's own sub-thread (it has a code) is listed under its chat in the thread list instead of being folded in here.
+    const workers   = (thread.children || []).filter(c => c !== planChild && !c.code);
     const history   = planChild ? (planChild.history || []) : (thread.history || []);
 
     // Shared cursor into workers[]: dbgRenderTrace consumes one per spawn_coder call it renders.

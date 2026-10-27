@@ -26,11 +26,12 @@ internal sealed class MemoryApi(
         // The same gate recall has always had: nothing for a conversation without memory access.
         if (memory.HopLimit <= 0 || !thread.HasMemoryAccess) return new StartingPoints(null, audience);
         Memory.MemoryPrep prep = memory.Prepare(thread.GetChatHistory(), message, contextSummary, privacy);
+        // Names only, never the notes themselves: the walker has to open a note with its tools before it can use anything in it.
         StringBuilder text = new();
-        if (prep.Pinned.Length > 0) text.AppendLine("THE SPEAKER'S OWN NOTE:").AppendLine(prep.Pinned.TrimEnd()).AppendLine();
+        if (prep.SpeakerNoteName is { Length: > 0 }) text.AppendLine("THE SPEAKER'S OWN NOTE: " + prep.SpeakerNoteName).AppendLine();
         if (prep.Terms.Count > 0) text.AppendLine("WORDS FROM THE MESSAGE THAT WERE SEARCHED FOR: " + string.Join(", ", prep.Terms)).AppendLine();
-        text.AppendLine(prep.CandidateText.Length > 0
-            ? "NOTES THAT MATCH, BEST FIRST (read the ones that matter; follow their links):\n" + prep.CandidateText.TrimEnd()
+        text.AppendLine(prep.Offered.Count > 0
+            ? "NOTES THAT MIGHT BE RELEVANT, BEST MATCH FIRST (names only: open a note with recall_memory to read it):\n" + string.Join("\n", prep.Offered.Select(n => "- " + n))
             : "No note matched those words directly. Search for the people and things the conversation is about.");
         return new StartingPoints(text.ToString().TrimEnd(), audience);
     }

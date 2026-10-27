@@ -722,7 +722,7 @@ public class LLMModule : ILLMModule, IDisposable
         using JsonDocument shipped = JsonDocument.Parse(PipelineGraph.ShippedJson);
         List<PipelineGraph> all = fromFile.Concat(PipelineGraph.ParseAll(shipped.RootElement).Where(s => !fromFile.Any(f => f.Id.Equals(s.Id, StringComparison.OrdinalIgnoreCase)))).ToList();
         // No saved Default: use the shipped one, with Memory as a pipeline.
-        if (memoryAvailable && !all.Any(g => g.Id.Equals(PipelineGraph.DefaultId, StringComparison.OrdinalIgnoreCase))) all.Add(PipelineGraph.BuiltInDefault(true, memoryAsPipeline: true));
+        if (memoryAvailable && !all.Any(g => g.Id.Equals(PipelineGraph.DefaultId, StringComparison.OrdinalIgnoreCase))) all.Add(PipelineGraph.BuiltInDefault(true));
         return all;
     }
 

@@ -65,6 +65,11 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         {
             if (!CanAccessThread(thread)) context.Result = new StatusCodeResult(403);
         }
+        // An agent's own sub-thread ("{chat}:{code}") isn't in the table; whoever may see its chat may see it.
+        else if (key.LastIndexOf(':') is > 0 and int cut && Llm.Threads.TryGetValue(key[..cut], out ARI.LLM.Thread? owner))
+        {
+            if (!CanAccessThread(owner)) context.Result = new StatusCodeResult(403);
+        }
         // A saved (expired) thread is not in memory, but it still belongs to its owner.
         else if (Llm.GetPersistedInfo(key) is { } saved)
         {
@@ -194,6 +199,26 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
             threads.AddRange(internalThreads);
         }
 
+        // An agent's own sub-thread (the Memory walker's, say) is listed under the chat it belongs to, so the debug view can
+        // show it indented beneath its parent and open it on its own.
+        if (includeInternal)
+        {
+            List<ThreadEntry> owned = new();
+            void AddOwned(ARI.LLM.Thread parent)
+            {
+                foreach (ARI.LLM.Thread child in parent.Children.Where(c => c.Code is not null))
+                {
+                    owned.Add(new ThreadEntry(child.Key, child.OwnerAgent, IsInternal: true, child.LastMessageAt,
+                        child.History.Count(m => m is Prompt or ARI.LLM.Response), State: child.State.ToString().ToLowerInvariant(),
+                        ParentKey: parent.Key, Label: child.Label));
+                    AddOwned(child);
+                }
+            }
+            foreach (ThreadEntry t in threads.ToList())
+                if (allThreads.TryGetValue(t.Key, out ARI.LLM.Thread? live)) AddOwned(live);
+            threads.AddRange(owned);
+        }
+
         return Ok(this.Page(threads.OrderByDescending(t => t.LastMessageAt).ToList()));
     }
 
@@ -321,7 +346,13 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
 
         if (!Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? thread))
-            return NotFound();
+        {
+            // An agent's own sub-thread isn't a thread of its own in the table: it hangs off its parent as "{parent}:{code}".
+            thread = null;
+            ARI.LLM.Thread? Find(ARI.LLM.Thread t) => t.Children.Select(c => string.Equals(c.Key, threadKey, StringComparison.OrdinalIgnoreCase) ? c : Find(c)).FirstOrDefault(c => c is not null);
+            foreach (ARI.LLM.Thread root in Llm.Threads.Values) if ((thread = Find(root)) is not null) break;
+            if (thread is null) return NotFound();
+        }
 
         return Ok(SerializeDebugThread(thread));
     }
@@ -384,6 +415,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         pipeline   = thread.GraphId ?? thread.Pipeline.ToString().ToLowerInvariant(),
         state      = thread.State.ToString().ToLowerInvariant(),
         history    = thread.History.Select(DebugItem).ToList(),
+        code       = thread.Code,
         children   = thread.Children.Select(SerializeDebugThread).ToList(),
     };
 
@@ -1283,4 +1315,4 @@ public record PromoteToProjectRequest(string Name, string? Category = null);
 public record CommandRequest(string? ThreadKey, string Input);
 public record NewThreadRequest(string? ProjectId, bool Desktop = false, string? Pipeline = null);
 public record InjectContextRequest(string Name, string Content);
-public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active", bool IsCodeMode = false, string? ProjectName = null, string? ProjectId = null, string Pipeline = "dialogue", string? Title = null, string? OwnerName = null);
+public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active", bool IsCodeMode = false, string? ProjectName = null, string? ProjectId = null, string Pipeline = "dialogue", string? Title = null, string? OwnerName = null, string? ParentKey = null, string? Label = null);

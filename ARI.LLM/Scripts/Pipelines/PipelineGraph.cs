@@ -50,19 +50,14 @@ internal sealed class PipelineGraph
 
     /// <summary>The pipeline ARI ships and always has: recall memories, then reply with them. <paramref name="withMemory"/> false
     /// gives the same without the recall step, for an install that has no Memory agent.</summary>
-    internal static PipelineGraph BuiltInDefault(bool withMemory, bool memoryAsPipeline = false)
+    internal static PipelineGraph BuiltInDefault(bool withMemory)
     {
         List<Node> nodes = [new(StartId, "start", null), new("dia", "agent", "Dialogue"), new(EndId, "end", null)];
         List<Edge> edges = [new(StartId, "dia", "history", false), new("dia", EndId, "stream", true)];
-        if (withMemory && memoryAsPipeline)
+        if (withMemory)
         {
-            // Memory recall is its own pipeline (see ShippedJson); if it fails, Dialogue still answers, and says it couldn't remember.
-            nodes.Insert(1, new Node("mem", "pipeline", null, Pipeline: MemoryId, OnError: MemoryUnavailableText));
-            edges.Insert(1, new Edge("mem", "dia", "memories", false));
-        }
-        else if (withMemory)
-        {
-            nodes.Insert(1, new Node("mem", "agent", "Memory"));
+            // Recall: if it fails, Dialogue still answers, and says it couldn't remember.
+            nodes.Insert(1, new Node("mem", "agent", "Memory", OnError: MemoryUnavailableText, ThreadCode: "memory"));
             edges.Insert(0, new Edge(StartId, "mem", "history", false));
             edges.Insert(2, new Edge("mem", "dia", "memories", false));
         }
@@ -74,85 +69,35 @@ internal sealed class PipelineGraph
     /// <summary>What Dialogue is told when memory recall fails, so it can say so instead of answering as if it had remembered.</summary>
     internal const string MemoryUnavailableText = "Memory recall is unavailable right now — the memory server appears to be offline. Tell the user at the start of your response that you cannot access your memories at the moment and that your answer may be inaccurate or incomplete as a result. Then respond as best you can.";
 
-    /// <summary>Older saved copies of Default have the Memory agent as a step. This swaps that step for the Memory pipeline in place
-    /// (same position, same wire into Dialogue) and returns true if it did. Default pipelines the user changed beyond that are left alone.</summary>
+    /// <summary>A saved Default whose Memory step is the sub-pipeline from earlier builds goes back to the plain Memory step (shown as
+    /// Recall), with the history wired in and a fallback if it fails. Returns true if it changed anything.</summary>
     internal static bool UpgradeLegacyDefault(JsonObject root)
     {
         if (root["pipelines"] is not JsonArray list) return false;
         JsonObject? def = list.OfType<JsonObject>().FirstOrDefault(p => p["id"]?.GetValue<string>() == DefaultId);
         if (def?["nodes"] is not JsonArray nodes || def["edges"] is not JsonArray edges) return false;
-        List<JsonObject> boxes = nodes.OfType<JsonObject>().Where(n => n["type"]?.GetValue<string>() is not ("start" or "end")).ToList();
-        JsonObject? mem = boxes.FirstOrDefault(n => n["type"]?.GetValue<string>() == "agent" && n["agent"]?.GetValue<string>() == "Memory");
-        bool onlyMemoryAndDialogue = boxes.Count == 2 && mem is not null
-            && boxes.Any(n => n["type"]?.GetValue<string>() == "agent" && n["agent"]?.GetValue<string>() == "Dialogue");
-        if (!onlyMemoryAndDialogue) return false;
-        string memId = mem!["id"]!.GetValue<string>();
-        mem.Remove("agent");
-        mem["type"] = "pipeline";
-        mem["pipeline"] = MemoryId;
+        JsonObject? mem = nodes.OfType<JsonObject>().FirstOrDefault(n => n["type"]?.GetValue<string>() == "pipeline" && n["pipeline"]?.GetValue<string>() == MemoryId);
+        if (mem is null) return false;
+        string memId = mem["id"]!.GetValue<string>();
+        mem.Remove("pipeline");
+        mem["type"] = "agent";
+        mem["agent"] = "Memory";
+        mem["thread"] = "memory";
         mem["onError"] = MemoryUnavailableText;
-        foreach (JsonNode? e in edges.Where(e => e?["to"]?.GetValue<string>() == memId).ToList()) edges.Remove(e);   // the sub-pipeline's inputs default to the chat's own
+        foreach (JsonNode? e in edges.Where(e => e?["to"]?.GetValue<string>() == memId).ToList()) edges.Remove(e);
+        edges.Add(new JsonObject { ["from"] = StartId, ["to"] = memId, ["port"] = "history", ["mode"] = "complete", ["fromPort"] = StartHistory });
         return true;
     }
 
     /// <summary>Shipped pipelines other than Default, which can be edited but never deleted.</summary>
+    /// <summary>Pipelines ARI ships besides Default: none. Memory is the Recall step inside Default.</summary>
     internal const string WalkId = "memory-walk", WalkChatId = "walker-chat";
-    internal static readonly string[] ShippedIds = [MemoryId, WalkId, WalkChatId];
-
-    /// <summary>Shipped pipelines that are only steps inside others, so they aren't offered as a way to reply to a chat.</summary>
-    internal static readonly string[] StepOnlyIds = [MemoryId, WalkId];
-
-    /// <summary>Pipelines ARI ships besides Default, as the editor's JSON. Memory recall as a pipeline: find candidates (a script), ask
-    /// the "Memory Pick" agent which to use, then finish (a script that has the "Memory Extract" and "Memory Privacy" agents do their
-    /// part). It is meant to run as a step inside another pipeline.</summary>
-    internal const string ShippedJson = """
-    { "pipelines": [
-      { "id": "memory", "name": "Memory",
-        "nodes": [
-          { "id": "start",  "type": "start",  "x": 20,  "y": 150 },
-          { "id": "find",   "type": "script", "script": "Memory_Find",   "x": 300, "y": 90 },
-          { "id": "pick",   "type": "agent",  "agent": "Memory Pick",    "x": 620, "y": 20 },
-          { "id": "finish", "type": "script", "script": "Memory_Finish", "x": 920, "y": 150 },
-          { "id": "end",    "type": "end",    "x": 1230, "y": 190 }
-        ],
-        "edges": [
-          { "from": "start", "to": "find",   "port": "Message",    "mode": "complete", "fromPort": "message" },
-          { "from": "find",  "to": "pick",   "port": "transcript", "mode": "complete", "fromPort": "Transcript" },
-          { "from": "find",  "to": "pick",   "port": "candidates", "mode": "complete", "fromPort": "Candidates" },
-          { "from": "find",  "to": "finish", "port": "State",      "mode": "complete", "fromPort": "State" },
-          { "from": "pick",  "to": "finish", "port": "Picks",      "mode": "complete" },
-          { "from": "finish","to": "end",    "port": "stream",     "mode": "stream",   "fromPort": "Block" }
-        ] },
-      { "id": "memory-walk", "name": "Memory walker",
-        "nodes": [
-          { "id": "start",  "type": "start",  "x": 20,  "y": 110 },
-          { "id": "begin",  "type": "script", "script": "Memory_Start", "x": 300, "y": 70 },
-          { "id": "walker", "type": "agent",  "agent": "Memory Walker", "thread": "memory", "x": 640, "y": 50 },
-          { "id": "end",    "type": "end",    "x": 980, "y": 110 }
-        ],
-        "edges": [
-          { "from": "start", "to": "begin",  "port": "Message",  "mode": "complete", "fromPort": "message" },
-          { "from": "begin", "to": "walker", "port": "starting", "mode": "complete", "fromPort": "Starting" },
-          { "from": "begin", "to": "walker", "port": "audience", "mode": "complete", "fromPort": "Audience" },
-          { "from": "walker","to": "end",    "port": "stream",   "mode": "stream" }
-        ] },
-      { "id": "walker-chat", "name": "Memory walker chat",
-        "nodes": [
-          { "id": "start", "type": "start",    "x": 20,  "y": 140 },
-          { "id": "mem",   "type": "pipeline", "pipeline": "memory-walk", "x": 290, "y": 30, "onError": "@memory-unavailable" },
-          { "id": "dia",   "type": "agent",    "agent": "Dialogue", "x": 620, "y": 120 },
-          { "id": "end",   "type": "end",      "x": 940, "y": 150 }
-        ],
-        "edges": [
-          { "from": "start", "to": "dia", "port": "history",  "mode": "complete", "fromPort": "history" },
-          { "from": "mem",   "to": "dia", "port": "memories", "mode": "complete" },
-          { "from": "dia",   "to": "end", "port": "stream",   "mode": "stream" }
-        ] }
-    ] }
-    """;
+    internal static readonly string[] ShippedIds = [];
+    internal static readonly string[] StepOnlyIds = [];
+    internal const string ShippedJson = "{ \"pipelines\": [] }";
 
     /// <summary>Tokens a custom agent's prompt can use without wiring: the user's latest message.</summary>
-    internal static readonly string[] ImplicitTokens = ["message", "since"];
+    internal static readonly string[] ImplicitTokens = ["message", "since", "starting", "audience"];
 
     private static readonly Regex TokenRx = new(@"\{(\w+)\}", RegexOptions.Compiled);
 
