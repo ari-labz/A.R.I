@@ -83,7 +83,12 @@ internal sealed class GraphPipeline : Pipeline
 
         // Null is a real value: "this agent had nothing to say" (Memory with no access) — the Dialogue agent leaves its memory block out for null but writes "None" for "".
         ConcurrentDictionary<string, string?> outputs = new();
-        foreach (PipelineGraph.Node start in graph.Nodes.Where(n => n.Type == "start")) outputs[start.Id] = historyText;
+        // START has two outputs: the conversation so far, and the latest message on its own.
+        foreach (PipelineGraph.Node start in graph.Nodes.Where(n => n.Type == "start"))
+        {
+            outputs[$"{start.Id}:{PipelineGraph.StartHistory}"] = historyText;
+            outputs[$"{start.Id}:{PipelineGraph.StartMessage}"] = effectivePrompt;
+        }
 
         string replyId = graph.Edges.First(e => graph.Nodes.First(n => n.Id == e.To).Type == "end").From;
         string? reply  = null;
@@ -104,7 +109,7 @@ internal sealed class GraphPipeline : Pipeline
         {
             Dictionary<string, string?> inputs = new(StringComparer.OrdinalIgnoreCase);
             foreach (PipelineGraph.Edge e in graph.Edges.Where(e => e.To == node.Id))
-                inputs[e.Port] = outputs.TryGetValue(e.From, out string? v) ? v : null;
+                inputs[e.Port] = outputs.TryGetValue(OutputKey(graph, e), out string? v) ? v : null;
             bool isReply = node.Id == replyId;
             string agentName = node.Agent!;
             Stopwatch sw = Stopwatch.StartNew();
@@ -164,6 +169,10 @@ internal sealed class GraphPipeline : Pipeline
             }
         }
     }
+
+    /// <summary>Where a wire's value is stored: a node's output, or for START the specific output the wire leaves from.</summary>
+    private static string OutputKey(PipelineGraph graph, PipelineGraph.Edge e) =>
+        graph.Nodes.Any(n => n.Id == e.From && n.Type == "start") ? $"{e.From}:{e.FromPort.ToLowerInvariant()}" : e.From;
 
     private static string FormatHistory(List<ThreadMessage> history)
     {
