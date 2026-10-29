@@ -151,6 +151,7 @@ public class LLMModule : ILLMModule, IDisposable
             // the shipped copy (Paths.BuildPath) rather than agentsJsonPath's seeded-into-AppData copy,
             // which only exists for files a user is meant to tune in place.
             ToolGroups.Load(Path.Combine(Paths.BuildPath, "ToolGroups.json"));
+            CustomTools.Start();
 
             if (TryGetPropCI(doc.RootElement, "Agents", out JsonElement arr) && arr.ValueKind == JsonValueKind.Array)
                 foreach (JsonElement el in arr.EnumerateArray())
@@ -502,6 +503,7 @@ public class LLMModule : ILLMModule, IDisposable
         // own copy for the same reason.
         new ListTools(thread).Register(thread);
         new RequestTools(thread).Register(thread);
+        new ToolSearch(thread).Register(thread);
         // The reflex for corrections and "remember this" is always on for people-facing chats.
         if (type is ThreadPipeline.Dialogue or ThreadPipeline.Speech) new RememberTool(thread).Register(thread);
         // Discord threads get discord_tools hot — no request_tools round-trip needed.
@@ -523,6 +525,9 @@ public class LLMModule : ILLMModule, IDisposable
         // propose_persona_edit — discovering it via list_tools is not something to rely on mid-request.
         if (!isDiscord && type is ThreadPipeline.Dialogue)
             new HandToCoder(thread).Register(thread);
+        // The pinned tools are in hand from the first message. This is the conversation's first sync; the chat API repeats it on
+        // each message, once it knows whether the Master or a guest is talking.
+        ToolFactories.SyncPinned(thread);
         thread.Updated           += () => Broadcast(new AppEvent("threadUpdated", threadKey));
         thread.Deleted           += () =>
         {

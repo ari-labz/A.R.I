@@ -1989,9 +1989,8 @@ public abstract class Agent
         if (thread.tools.ContainsKey("list_tools"))
         {
             string capabilities = UsePersona ? CapabilitiesStore.Get() : "";
-            string capsBlock = capabilities.Length == 0
-                ? SharedPrompts.ToolSystemBlock
-                : $"{capabilities}\n\n{SharedPrompts.ToolSystemBlock}";
+            string live = CapabilitiesBlock.For(thread);
+            string capsBlock = string.Join("\n\n", new[] { capabilities, live, SharedPrompts.ToolSystemBlock }.Where(x => x.Length > 0));
             sections.Add($"--- **Capabilities** ---\n\n{capsBlock}\n\n{BlockRule}");
         }
 

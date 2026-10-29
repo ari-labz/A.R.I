@@ -63,3 +63,11 @@ license — A·R·I does not bundle one.
 | Component | Role | License |
 |-----------|------|---------|
 | [Obsidian](https://obsidian.md/) | Optional viewer for the memory vault (not bundled; the vault is plain markdown) | Proprietary (free) |
+
+## Documents
+
+| Component | Role | License |
+|-----------|------|---------|
+| [PdfPig](https://github.com/UglyToad/PdfPig) | Reads text from PDF files | Apache-2.0 |
+| [ClosedXML](https://github.com/ClosedXML/ClosedXML) | Reads and writes Excel workbooks | MIT |
+| [Open XML SDK](https://github.com/dotnet/Open-XML-SDK) | Reads Word and PowerPoint files (via ClosedXML) | MIT |

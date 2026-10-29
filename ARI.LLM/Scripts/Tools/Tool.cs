@@ -1,19 +1,26 @@
+using System.Reflection;
 using System.Text.Json;
 
 namespace ARI.LLM;
 
 /// <summary>
-/// Base class for ARI's built-in tools. A tool owns its own schema, execution and
-/// display markers, and registers itself onto a thread through the same public
-/// <see cref="Thread.RegisterTool"/> extension point that external clients use.
+/// Base class for ARI's tools, built-in and custom. A built-in owns its own schema, execution and display markers
+/// (the internal members below) and registers itself onto a thread through the same public
+/// <see cref="Thread.RegisterTool"/> extension point that external clients use. A custom tool, written as a C#
+/// script, overrides the public lifecycle methods in ToolBehaviour.cs instead and gets its schema from attributes.
+/// Nothing here is abstract, so a class outside this assembly can inherit it.
 /// </summary>
-internal enum ToolAccess { Read, Write, ReadWrite }
+public enum ToolAccess { Read, Write, ReadWrite }
 
-internal abstract class Tool
+public abstract partial class Tool
 {
-    internal abstract string     Name   { get; }
-    internal abstract object     Schema { get; }
-    internal virtual  ToolAccess Access => ToolAccess.ReadWrite;
+    private ToolAttribute? Meta => GetType().GetCustomAttribute<ToolAttribute>();
+
+    internal virtual string      Name   => Meta?.Name ?? GetType().Name;
+    internal virtual object      Schema => Meta is { } m
+        ? ToolParams.Schema(m.Name, m.Description, ToolParams.Describe(GetType()))
+        : throw new NotSupportedException($"{GetType().Name} doesn't describe itself; mark it with [Tool] and [Param].");
+    internal virtual ToolAccess  Access => Meta?.Access ?? ToolAccess.ReadWrite;
 
     /// <summary>One-line description extracted from the schema's function.description field.</summary>
     internal string SchemaDescription
@@ -32,7 +39,9 @@ internal abstract class Tool
         }
     }
 
-    internal abstract Task<ToolResult> Execute(string argsJson);
+    // A tool written with [Tool]/[Param] needs no Execute: each call gets a fresh instance (so parameters never leak
+    // between calls), is bound, and runs through the lifecycle with the tool's time limit.
+    internal virtual Task<ToolResult> Execute(string argsJson) => RunGuarded(argsJson, Meta?.TimeoutSeconds ?? 120, Name);
 
     /// <summary>Marker emitted when the call is made. Null = no marker.</summary>
     internal virtual Func<string, string>?  Display          => null;
