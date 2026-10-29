@@ -137,6 +137,7 @@ internal class Read : Tool
     {
         "png" or "jpg" or "jpeg" or "gif" or "webp" or "bmp" => new ReadImage(fs),
         "ipynb"                                              => new ReadNotebook(fs),
+        "pdf" or "docx" or "pptx" or "xlsx"                  => new ReadOffice(fs),
         _                                                    => null
     };
 

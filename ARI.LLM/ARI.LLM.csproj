@@ -21,8 +21,18 @@
     <Compile Remove="Scripts/SystemScripts/**" />
     <EmbeddedResource Include="Scripts/SystemScripts/**/*.cs" />
   </ItemGroup>
+  <!-- The built-in tools' own source, shipped as text so the control panel's Tools tab can show it as a reference. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Scripts/Tools/**/*.cs" LogicalName="ToolSource/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="HtmlAgilityPack" Version="1.11.71" />
+    <!-- Reads PDFs (text and layout), pure managed code. -->
+    <PackageReference Include="PdfPig" Version="0.1.10" />
+    <!-- Reads and writes Excel workbooks; brings the Open XML SDK, which also reads Word and PowerPoint files. -->
+    <PackageReference Include="ClosedXML" Version="0.104.2" />
+    <!-- Drives a headless Chrome/Chromium so Ari can open, read, click and screenshot web pages. -->
+    <PackageReference Include="PuppeteerSharp" Version="25.15.0" />
     <!-- Compiles the C# scripts people write for pipeline nodes and tools, while A·R·I is running. -->
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.12.0" />
     <ProjectReference Include="..\Submodules\SmartReader\src\SmartReader\SmartReader.csproj" />

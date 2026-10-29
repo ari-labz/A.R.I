@@ -179,13 +179,6 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 .cp-placeholder { color: var(--text-dim); font-size: 13px; padding: 6px 0; font-style: italic; }
 
 /* ── tab ─────────────────────────────────────────────── */
-.tl-loose { border-radius:10px; border:1px dashed transparent; }
-.tl-loose-head { font-size:12px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--text-dim); padding:0 14px 6px; }
-.tl-group { border:1px solid var(--border); border-radius:10px; background:var(--user-bubble,var(--col-control-panel-line-1656-colour)); overflow:hidden; }
-.tl-new { border:1px dashed var(--border); border-radius:10px; padding:14px; text-align:center; font-size:13px; color:var(--text-dim); cursor:pointer; }
-.tl-new:hover { color:var(--text); border-color:var(--accent); }
-.tl-over { outline:2px solid var(--accent); outline-offset:-2px; background:color-mix(in srgb, var(--accent) 8%, transparent); }
-body.tl-dragging .tl-loose { border-color:var(--border); }
 .ig-mode { display:flex; gap:12px; padding:12px 14px; border:1px solid var(--border); border-radius:10px; margin-bottom:8px; cursor:pointer; }
 .ig-mode.on { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 6%, transparent); }
 .ig-mode-t { font-size:13.5px; font-weight:600; }
@@ -194,6 +187,59 @@ body.tl-dragging .tl-loose { border-color:var(--border); }
 .ig-row.act { border-color:var(--accent); }
 .ig-bar { height:5px; background:var(--border); border-radius:3px; overflow:hidden; margin-top:5px; }
 .ig-bar i { display:block; height:100%; background:var(--accent); }
+.ce { display:flex; height:380px; border:1px solid #3c3c3c; border-radius:8px; overflow:hidden; background:#1e1e1e; font:13px/20px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+.ce.over { outline:2px solid var(--accent); outline-offset:-2px; }
+.ce-gutter { background:#252526; color:#858585; text-align:right; padding:8px 10px 8px 12px; min-width:46px; overflow:hidden; user-select:none; white-space:pre; }
+.ce-gutter .err { color:#f48771; font-weight:700; }
+.ce-body { position:relative; flex:1; min-width:0; }
+.ce-hl, .ce-in { position:absolute; inset:0; margin:0; padding:8px 12px; font:inherit; white-space:pre; tab-size:4; box-sizing:border-box; }
+.ce-hl { overflow:hidden; pointer-events:none; color:#d4d4d4; }
+.ce-hl > div { min-width:100%; width:max-content; }
+.ce-in { overflow:auto; background:transparent; color:transparent; caret-color:#aeafad; border:0; outline:0; resize:none; }
+.ce-in::selection { background:#264f78; color:transparent; }
+.ce-ln { display:block; height:20px; }
+.ce-ln.cur { background:#2a2d2e; }
+.ce-ln.bad { background:rgba(244,135,113,.12); }
+.t-kw{color:#569cd6}.t-ctl{color:#c586c0}.t-str{color:#ce9178}.t-com{color:#6a9955;font-style:italic}.t-num{color:#b5cea8}.t-type{color:#4ec9b0}.t-fn{color:#dcdcaa}.t-var{color:#9cdcfe}.t-pp{color:#9b9b9b}
+.ce-diag { background:#1e1e1e; border:1px solid #3c3c3c; border-top:0; border-radius:0 0 8px 8px; font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:#d4d4d4; max-height:130px; overflow:auto; }
+.ce-diag div { padding:3px 12px; cursor:pointer; } .ce-diag div:hover { background:#2a2d2e; }
+.ce-diag .e { color:#f48771; } .ce-diag .w { color:#cca700; }
+.tw { border:1px solid var(--border); border-radius:10px; overflow:hidden; background:var(--user-bubble,var(--col-control-panel-line-1656-colour)); }
+.tw-top { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid var(--border); }
+.tw-top #tl-filter { flex:1; min-width:180px; max-width:340px; font-size:12.5px; padding:5px 10px; }
+.tw-chip { font-size:12px; padding:3px 10px; border-radius:14px; border:1px solid var(--border); color:var(--text-dim); cursor:pointer; user-select:none; }
+.tw-chip.on { background:color-mix(in srgb, var(--accent) 14%, transparent); border-color:var(--accent); color:var(--text); }
+.tw-bulk { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:6px 12px; background:color-mix(in srgb, var(--accent) 12%, transparent); font-size:12.5px; }
+.tw-bulk button { font-size:12px; padding:2px 10px; }
+.tw-body { display:flex; min-height:0; }
+.tw-grid { flex:1; min-width:0; }
+.tw-gh, .tw-gr { display:grid; grid-template-columns:24px 190px minmax(0,1fr) 120px 76px 46px 46px 46px; align-items:center; gap:8px; padding:0 12px; }
+.tw-gh { height:30px; font-size:11.5px; font-weight:600; color:var(--text-dim); border-bottom:1px solid var(--border); position:sticky; top:0; }
+.tw-gh span.s { cursor:pointer; user-select:none; } .tw-gh span.s:hover { color:var(--text); }
+.tw-scroll { height:calc(100vh - 360px); min-height:380px; overflow-y:auto; position:relative; }
+.tw-gr { position:absolute; left:0; right:0; height:34px; border-bottom:1px solid var(--border); cursor:pointer; font-size:12.5px; }
+.tw-gr:hover { background:color-mix(in srgb, var(--text) 4%, transparent); }
+.tw-gr.sel { background:color-mix(in srgb, var(--accent) 12%, transparent); }
+.tw-gr.off { opacity:.55; }
+.tw-gr code { font-size:12.5px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tw-gr .ds, .tw-gr .gp { color:var(--text-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tw-src { font-size:11px; padding:1px 8px; border-radius:6px; width:fit-content; background:color-mix(in srgb, var(--text) 8%, transparent); color:var(--text-dim); }
+.tw-src.c { background:color-mix(in srgb, #3fb950 18%, transparent); color:var(--text); }
+.tw-src.b { background:color-mix(in srgb, #f85149 18%, transparent); color:var(--text); }
+.tw-ck { width:15px; height:15px; border:1.5px solid var(--border); border-radius:4px; display:inline-block; cursor:pointer; }
+.tw-ck.on { background:var(--accent); border-color:var(--accent); }
+.tw-side { width:400px; flex:none; border-left:1px solid var(--border); padding:14px; overflow-y:auto; max-height:calc(100vh - 300px); min-height:430px; }
+.tw-tabs { display:flex; gap:16px; border-bottom:1px solid var(--border); margin:10px 0 12px; font-size:12.5px; }
+.tw-tabs span { padding:4px 0; color:var(--text-dim); cursor:pointer; } .tw-tabs span.on { color:var(--text); border-bottom:2px solid var(--accent); }
+.tw-kv { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:5px 0; font-size:12.5px; color:var(--text-dim); }
+@media (max-width: 1150px) {
+  .tw-gh, .tw-gr { grid-template-columns:24px 170px 100px 72px 44px 44px 44px; }
+  .tw-gh > span:nth-child(3), .tw-gr > .ds { display:none; }
+  .tw-body { flex-direction:column; }
+  .tw-side { width:auto; border-left:0; border-top:1px solid var(--border); max-height:none; min-height:0; }
+  .tw-scroll { height:calc(100vh - 420px); min-height:300px; }
+}
+.tw-p { padding:6px 0; border-top:1px solid var(--border); font-size:12.5px; } .tw-p b { font-family:ui-monospace,Menlo,monospace; }
 .cp-tab { display: flex; flex-direction: column; }
 
 /* ── voice synthesis ─────────────────────────────────── */
@@ -1124,29 +1170,35 @@ body.tl-dragging .tl-loose { border-color:var(--border); }
     </div>
 
     <!-- Tools tab -->
-    <div id="tab-tools" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+    <div id="tab-tools" class="cp-tab" style="display:none;flex:1;min-width:0;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
         <div class="vs-section-title">Tools</div>
-        <p style="color:var(--text-dim);font-size:13px;margin:0 0 4px;">
-          Everything Ari can call. Switch a tool off and she can no longer see or use it, even mid-conversation.
-          Groups are how she asks for several tools at once; move a tool to another group, or make a new one, to suit you.
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 14px;">
+          Everything Ari can use, built-in and your own. Switch a tool off and she can no longer see or use it. <b>Async</b> tools run in the background:
+          she carries on and is handed the result when it finishes. Click a tool to see how it works.
         </p>
-        <p style="color:var(--text-dim);font-size:13px;margin:0 0 16px;">
-          <b>Async</b> tools don't make Ari wait: she calls one, carries on talking, and the result is handed to her when it finishes.
-          Changes apply straight away.
+        <div class="tw">
+          <div class="tw-top">
+            <input id="tl-filter" class="vs-input" type="text" placeholder="Search tools by name or what they do" autocomplete="off">
+            <span class="tw-chip on" data-src="all">All</span><span class="tw-chip" data-src="builtin">Built-in</span><span class="tw-chip" data-src="custom">Custom</span><span class="tw-chip" data-src="system">System</span><span class="tw-chip" data-src="pinned">Pinned</span><span class="tw-chip" data-src="async">Async</span><span class="tw-chip" data-src="off">Off</span>
+            <select id="tl-group-filter" class="vs-input" style="width:auto;font-size:12px;padding:3px 8px;"></select>
+            <span id="tl-count" style="font-size:12px;color:var(--text-dim);white-space:nowrap;"></span>
+            <span style="flex:1;"></span>
+            <select id="tl-new-template" class="vs-input" style="width:auto;font-size:12px;padding:3px 8px;"></select>
+            <button class="vs-btn-primary" id="tl-new-btn" type="button" style="font-size:12px;padding:5px 12px;">New tool</button>
+          </div>
+          <div id="tl-bulk" class="tw-bulk" style="display:none;"></div>
+          <div class="tw-body">
+            <div class="tw-grid">
+              <div class="tw-gh" id="tl-head"></div>
+              <div class="tw-scroll" id="tl-scroll"><div id="tl-inner" style="position:relative;"></div></div>
+            </div>
+            <div class="tw-side" id="tl-side" style="display:none;"></div>
+          </div>
+        </div>
+        <p style="font-size:12px;color:var(--text-dim);margin:10px 0 0;">
+          Drop a <code>.cs</code> or <code>.txt</code> file anywhere on this table to start a new custom tool from it. A saved custom tool is live straight away and runs with full access to this machine.
         </p>
-        <input id="tl-filter" class="vs-input" type="text" placeholder="Filter tools…" style="width:100%;max-width:320px;margin-bottom:16px;">
-        <div id="tl-builtin" style="display:flex;flex-direction:column;gap:12px;">
-          <span style="font-size:12px;color:var(--text-dim);">Loading…</span>
-        </div>
-      </div>
-
-      <div class="vs-section" style="margin-top:28px;">
-        <div class="vs-section-title">Custom tools</div>
-        <div id="tl-custom" style="padding:18px 16px;border:1px dashed var(--border);border-radius:10px;font-size:13px;color:var(--text-dim);line-height:1.5;">
-          No custom tools yet. Soon you'll be able to write your own in C# here — start from an example tool, or drop in a <code>.cs</code> file —
-          and they'll appear in this list with the same switches as the built-in ones.
-        </div>
       </div>
     </div>
 
@@ -1851,146 +1903,391 @@ async function applyModuleVisibility() {
 }
 applyModuleVisibility();
 
-// ── tools ─────────────────────────────────────────────────
-// One card per group (shipped or user-made), one row per tool. Every switch saves at once and the server
-// applies it to the next tool load and the next call, so there is nothing to restart.
-const tlBuiltin = document.getElementById('tl-builtin');
-const tlFilter  = document.getElementById('tl-filter');
-let tlData = null;
+// ── custom tools ──────────────────────────────────────────────────────────
+// C# scripts for the Tools tab: a list, and an editor with Visual Studio Dark+ colours. A dropped .cs/.txt file
+// fills the editor. Saving compiles on the server and the tool is live at once; errors come back with line numbers.
+const CS_KW = new Set('abstract as base bool break byte case catch char checked class const continue decimal default delegate do double else enum event explicit extern false finally fixed float for foreach goto if implicit in int interface internal is lock long namespace new null object operator out override params private protected public readonly ref return sbyte sealed short sizeof stackalloc static string struct switch this throw true try typeof uint ulong unchecked unsafe ushort using virtual void volatile while async await var record init get set yield when where global partial required nameof'.split(' '));
+const CS_CTL = new Set('if else for foreach while do switch case break continue return try catch finally throw yield goto await using lock'.split(' '));
+const CS_RX = /(\/\/[^\n]*|\/\*[\s\S]*?(?:\*\/|$))|(@\$?"(?:""|[^"])*"?|\$@"(?:""|[^"])*"?|\$?"(?:\\.|[^"\\\n])*"?|'(?:\\.|[^'\\\n])*'?)|(^[ \t]*#[^\n]*)|(0[xX][0-9a-fA-F_]+|\b\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?[fFdDmMlLuU]*\b)|([A-Za-z_]\w*)/gm;
+
+// Returns one HTML string per line, with a span per token. A token that spans lines (a block comment, a verbatim
+// string) is split so every line is self-contained.
+function csHighlightLines(code) {
+    const lines = ['']; let last = 0;
+    const push = (text, cls) => {
+        text.split('\n').forEach((part, i) => {
+            if (i > 0) lines.push('');
+            if (part) lines[lines.length - 1] += cls ? `<span class="${cls}">${escHtml(part)}</span>` : escHtml(part);
+        });
+    };
+    let m; CS_RX.lastIndex = 0;
+    while ((m = CS_RX.exec(code))) {
+        push(code.slice(last, m.index), '');
+        const t = m[0]; let cls = '';
+        if (m[1]) cls = 't-com';
+        else if (m[2]) cls = 't-str';
+        else if (m[3]) cls = 't-pp';
+        else if (m[4]) cls = 't-num';
+        else {
+            const before = code.slice(0, m.index), prev = before.replace(/\s+$/, '').slice(-1);
+            const next = code.slice(m.index + t.length).match(/^\s*(\S?)/)[1];
+            const lineStart = /(^|\n)[ \t]*$/.test(before.replace(/\[\s*$/, ''));
+            if (CS_KW.has(t)) cls = CS_CTL.has(t) ? 't-ctl' : 't-kw';
+            else if (/\bnew\s+$/.test(before)) cls = 't-type';
+            else if (prev === '[' && lineStart) cls = 't-type';
+            else if (next === '(') cls = 't-fn';
+            else if (next === '=' && !code.startsWith('==', m.index + t.length + (code.slice(m.index + t.length).match(/^\s*/)[0].length))) cls = 't-var';
+            else if (/^[A-Z]/.test(t) && prev !== '.') cls = 't-type';
+            else cls = 't-var';
+        }
+        push(t, cls); last = m.index + t.length;
+    }
+    push(code.slice(last), '');
+    return lines;
+}
+
+// A code editor: a transparent textarea over a highlighted copy. Returns get/set/mark helpers.
+function ceCreate(host, { onDropFile, readOnly } = {}) {
+    host.innerHTML = '<div class="ce"><div class="ce-gutter"></div><div class="ce-body"><div class="ce-hl"><div></div></div><textarea class="ce-in" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off"></textarea></div></div><div class="ce-diag" style="display:none;"></div>';
+    const wrap = host.querySelector('.ce'), gut = host.querySelector('.ce-gutter'), hl = host.querySelector('.ce-hl'), hlIn = hl.firstElementChild;
+    const ta = host.querySelector('.ce-in'), diag = host.querySelector('.ce-diag');
+    ta.readOnly = !!readOnly;
+    let marks = [];
+    const curLine = () => ta.value.slice(0, ta.selectionStart).split('\n').length - 1;
+    const render = () => {
+        const lines = csHighlightLines(ta.value), cur = curLine(), bad = new Set(marks.filter(d => d.severity === 'Error').map(d => d.line - 1));
+        hlIn.innerHTML = lines.map((h, i) => `<span class="ce-ln${i === cur ? ' cur' : ''}${bad.has(i) ? ' bad' : ''}">${h || '&#8203;'}</span>`).join('');
+        gut.innerHTML = lines.map((_, i) => bad.has(i) ? `<span class="err">${i + 1}</span>` : i + 1).join('\n');
+        sync();
+    };
+    const sync = () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; gut.scrollTop = ta.scrollTop; };
+    const edit = (start, end, text, caret) => { ta.setRangeText(text, start, end, 'end'); if (caret != null) ta.selectionStart = ta.selectionEnd = caret; render(); };
+    ta.addEventListener('input', render);
+    ta.addEventListener('scroll', sync);
+    ['keyup', 'click', 'select', 'focus'].forEach(ev => ta.addEventListener(ev, () => { const c = curLine(); hlIn.querySelectorAll('.ce-ln').forEach((el, i) => el.classList.toggle('cur', i === c)); }));
+    ta.addEventListener('keydown', e => {
+        if (e.key === 'Tab') { e.preventDefault(); edit(ta.selectionStart, ta.selectionEnd, '    '); }
+        else if (e.key === 'Enter') {                  // keep the previous line's indent, and add one after an opening brace
+            e.preventDefault();
+            const before = ta.value.slice(0, ta.selectionStart), line = before.slice(before.lastIndexOf('\n') + 1);
+            const indent = line.match(/^[ \t]*/)[0] + (/\{\s*$/.test(line) ? '    ' : '');
+            edit(ta.selectionStart, ta.selectionEnd, '\n' + indent);
+        }
+    });
+    wrap.addEventListener('dragover', e => { e.preventDefault(); wrap.classList.add('over'); });
+    wrap.addEventListener('dragleave', () => wrap.classList.remove('over'));
+    wrap.addEventListener('drop', async e => {
+        e.preventDefault(); e.stopPropagation(); wrap.classList.remove('over');
+        const f = e.dataTransfer.files[0]; if (f && onDropFile) onDropFile(f);
+    });
+    const api = {
+        get: () => ta.value,
+        set: text => { ta.value = text; marks = []; ta.scrollTop = ta.scrollLeft = 0; render(); },
+        focus: () => ta.focus(),
+        mark: list => {
+            marks = list || []; render();
+            diag.style.display = marks.length ? '' : 'none';
+            diag.innerHTML = marks.map(d => `<div class="${d.severity === 'Error' ? 'e' : 'w'}" data-line="${d.line}">${d.severity === 'Error' ? 'error' : 'warning'} ${escHtml(d.id)} · line ${d.line}:${d.column} · ${escHtml(d.message)}</div>`).join('');
+            diag.querySelectorAll('div').forEach(row => row.onclick = () => {
+                const ln = +row.dataset.line, pos = ta.value.split('\n').slice(0, ln - 1).join('\n').length + (ln > 1 ? 1 : 0);
+                ta.focus(); ta.setSelectionRange(pos, pos); ta.scrollTop = Math.max(0, (ln - 4) * 20); render();
+            });
+        },
+    };
+    api.set('');
+    return api;
+}
+
+const cleanFileName = n => { const b = (n || 'NewTool').replace(/\.[^.]*$/, '').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 56) || 'NewTool'; return b + '.cs'; };
+
+// ── the Tools window ──────────────────────────────────────────────────────
+// One grid of every tool (built-in and custom), filtered in the browser and drawn a screenful at a time so a few
+// thousand rows stay smooth. Click a row to open it in the sidebar: overview, code, and a try-it box.
+const TL_ROW = 34;
+const tlById = id => document.getElementById(id);
+let tlRowsAll = [], tlGroups = [], tlTemplates = [], tlView = [];
+let tlSel = new Set(), tlOpen = null, tlTab = 'overview', tlDetail = null, tlNew = null, tlEd = null;
+let tlSort = { key: 'name', dir: 1 }, tlSrc = 'all', tlQ = '', tlGroupFilter = '';
 
 async function loadTools() {
-    if (!tlBuiltin) return;
     try {
-        const r = await cpFetch('/api/v1/admin/tools');
-        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
-        tlData = await r.json();
-        renderTools();
+        const [tr, cr] = await Promise.all([cpFetch('/api/v1/admin/tools'), cpFetch('/api/v1/admin/tools/custom')]);
+        if (!tr.ok) throw new Error((await tr.json().catch(() => ({}))).error || tr.statusText);
+        const t = await tr.json(), c = cr.ok ? await cr.json() : { tools: [], templates: [] };
+        const fileOf = new Map(c.tools.filter(x => x.name).map(x => [x.name, x.file]));
+        tlRowsAll = t.tools.map(x => ({ ...x, file: fileOf.get(x.name) || null }));
+        // A script that didn't compile has no tool name yet, but it still needs to be visible so it can be fixed.
+        for (const f of c.tools.filter(x => !x.compiled)) {
+            const err = f.diagnostics.find(d => d.severity === 'Error');
+            tlRowsAll.push({ name: f.file, description: err ? `Did not compile: ${err.message}` : 'Did not compile', group: '', source: 'custom', enabled: true, async: false, broken: true, file: f.file, diagnostics: f.diagnostics });
+        }
+        tlGroups = t.groups.map(g => g.name); tlTemplates = c.templates;
+        const ts = tlById('tl-new-template');
+        if (!ts.options.length) ts.innerHTML = tlTemplates.map((x, i) => `<option value="${i}">${escHtml(x.name)}</option>`).join('');
+        const gf = tlById('tl-group-filter'), keep = tlGroupFilter;
+        gf.innerHTML = '<option value="">All groups</option><option value="@none">(no group)</option>' + tlGroups.map(g => `<option value="${escHtml(g)}">${escHtml(g)}</option>`).join('');
+        gf.value = keep;
+        tlSel = new Set([...tlSel].filter(n => tlRowsAll.some(r => r.name === n)));
+        tlRender();
+        if (tlOpen && tlOpen !== '@new') { const r = tlRowsAll.find(x => x.name === tlOpen); if (r) tlLoadSide(tlOpen, true); else tlCloseSide(); }
     } catch (e) {
-        tlBuiltin.innerHTML = `<span style="font-size:13px;color:var(--col-control-panel-line-1647-text);">Could not load tools: ${escHtml(e.message)}</span>`;
+        tlById('tl-inner').innerHTML = `<div style="padding:16px;font-size:13px;color:var(--col-control-panel-line-1647-text);">Could not load tools: ${escHtml(e.message)}</div>`;
     }
 }
 
-async function tlSave(url, body) {
-    const r = await cpFetch(url, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    if (!r.ok) alert((await r.json().catch(() => ({}))).error || 'Could not save.');
-    await loadTools();
+function tlFilterRows() {
+    const q = tlQ.toLowerCase();
+    let rows = tlRowsAll.filter(r =>
+        (!q || r.name.toLowerCase().includes(q) || (r.description || '').toLowerCase().includes(q) || (r.group || '').toLowerCase().includes(q)) &&
+        (tlSrc === 'all' || (tlSrc === 'builtin' && r.source === 'builtin') || (tlSrc === 'custom' && r.source === 'custom') || (tlSrc === 'system' && r.source === 'system') || (tlSrc === 'pinned' && r.pinned) || (tlSrc === 'async' && r.async) || (tlSrc === 'off' && !r.enabled)) &&
+        (!tlGroupFilter || (tlGroupFilter === '@none' ? !r.group : r.group === tlGroupFilter)));
+    const k = tlSort.key, d = tlSort.dir;
+    rows.sort((a, b) => {
+        const flag = k === 'enabled' || k === 'async' || k === 'pinned';
+        const av = flag ? (a[k] ? 0 : 1) : String(a[k] ?? '').toLowerCase(), bv = flag ? (b[k] ? 0 : 1) : String(b[k] ?? '').toLowerCase();
+        return (av < bv ? -1 : av > bv ? 1 : a.name.localeCompare(b.name)) * d;
+    });
+    return rows;
 }
 
-function tlMove(name, group) {
-    return tlSave(`/api/v1/admin/tools/${encodeURIComponent(name)}`, { group });
-}
-function tlNewGroupName() {
-    return (prompt('Name for the new group (lowercase letters, numbers and _):') || '').trim().toLowerCase().replace(/[^a-z0-9_]+/g, '_');
+function tlRender() {
+    tlView = tlFilterRows();
+    tlById('tl-count').textContent = tlView.length === tlRowsAll.length ? `${tlRowsAll.length} tools` : `${tlView.length} of ${tlRowsAll.length}`;
+    document.querySelectorAll('.tw-chip').forEach(c => c.classList.toggle('on', c.dataset.src === tlSrc));
+    const allSel = tlView.length > 0 && tlView.every(r => tlSel.has(r.name));
+    const arrow = key => tlSort.key === key ? (tlSort.dir > 0 ? ' ▲' : ' ▼') : '';
+    tlById('tl-head').innerHTML = `<span class="tw-ck${allSel ? ' on' : ''}" id="tl-all" title="Select all shown"></span>
+        <span class="s" data-k="name">Name${arrow('name')}</span><span>Description</span><span class="s" data-k="group">Group${arrow('group')}</span>
+        <span class="s" data-k="source">Source${arrow('source')}</span><span class="s" data-k="pinned" title="Always loaded: Ari starts every conversation with it in hand">Pin${arrow('pinned')}</span><span class="s" data-k="async">Async${arrow('async')}</span><span class="s" data-k="enabled">On${arrow('enabled')}</span>`;
+    tlById('tl-all').onclick = () => { if (allSel) tlView.forEach(r => tlSel.delete(r.name)); else tlView.forEach(r => !r.broken && tlSel.add(r.name)); tlRender(); };
+    tlById('tl-head').querySelectorAll('.s').forEach(el => el.onclick = () => { const k = el.dataset.k; tlSort = { key: k, dir: tlSort.key === k ? -tlSort.dir : 1 }; tlRender(); });
+    tlRenderBulk();
+    tlDrawRows();
 }
 
-// A tool row. Drag it onto a group (or the loose area) to move it; the select does the same by keyboard or touch.
-function tlRow(t, groupNames, loose) {
+function tlDrawRows() {
+    const sc = tlById('tl-scroll'), inner = tlById('tl-inner');
+    const top = sc.scrollTop, h = sc.clientHeight || 400;
+    const start = Math.max(0, Math.floor(top / TL_ROW) - 8), end = Math.min(tlView.length, Math.ceil((top + h) / TL_ROW) + 8);
+    inner.style.height = tlView.length * TL_ROW + 'px';
+    inner.innerHTML = '';
+    if (!tlView.length) { inner.innerHTML = '<div style="padding:18px;font-size:13px;color:var(--text-dim);">No tools match.</div>'; return; }
+    const frag = document.createDocumentFragment();
+    for (let i = start; i < end; i++) frag.appendChild(tlRowEl(tlView[i], i));
+    inner.appendChild(frag);
+}
+
+function tlRowEl(r, i) {
     const row = document.createElement('div');
-    row.draggable = true;
-    row.dataset.tool = t.name;
-    row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:9px 14px;border-top:1px solid var(--border);' + (t.enabled ? '' : 'opacity:.55;');
-    row.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', t.name); e.dataTransfer.effectAllowed = 'move'; row.style.opacity = '.4'; document.body.classList.add('tl-dragging'); });
-    row.addEventListener('dragend', () => { row.style.opacity = t.enabled ? '' : '.55'; document.body.classList.remove('tl-dragging'); });
-
-    const handle = document.createElement('span');
-    handle.textContent = '⠿'; handle.title = 'Drag onto a group to move this tool';
-    handle.style.cssText = 'cursor:grab;color:var(--text-dim);font-size:15px;line-height:1;user-select:none;';
-    row.appendChild(handle);
-
-    const text = document.createElement('div'); text.style.cssText = 'flex:1;min-width:0;';
-    text.innerHTML =
-        `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-           <code style="font-size:13px;font-weight:600;">${escHtml(t.name)}</code>
-           ${t.module ? `<span class="mdl-badge notdl">needs ${escHtml(t.module)}</span>` : ''}
-         </div>
-         ${t.description ? `<div style="font-size:12px;color:var(--text-dim);line-height:1.4;margin-top:2px;">${escHtml(t.description)}</div>` : ''}`;
-    row.appendChild(text);
-
-    const sel = document.createElement('select'); sel.className = 'vs-input';
-    sel.style.cssText = 'width:145px;font-size:12px;padding:3px 6px;';
-    const opts = [...new Set([...groupNames, t.group].filter(Boolean))];
-    sel.innerHTML = `<option value="">${loose ? 'Add to group…' : '(no group)'}</option>`
-                  + opts.map(g => `<option value="${escHtml(g)}"${g === t.group ? ' selected' : ''}>${escHtml(g)}</option>`).join('')
-                  + `<option value="@new">New group…</option>`;
-    sel.onchange = () => {
-        let g = sel.value;
-        if (g === '@new') { g = tlNewGroupName(); if (!g) { sel.value = t.group || ''; return; } }
-        if (g === '' && loose) return;
-        tlMove(t.name, g);
-    };
-    row.appendChild(sel);
-
-    for (const [label, key, tip] of [['Async', 'async', 'Ari carries on while this runs and is handed the result when it finishes.'], ['On', 'enabled', '']]) {
-        const box = document.createElement('div'); box.style.cssText = 'display:flex;align-items:center;gap:6px;'; if (tip) box.title = tip;
-        box.innerHTML = `<span style="font-size:11.5px;color:var(--text-dim);">${label}</span>`;
-        box.appendChild(buildToggle(t[key], on => tlSave(`/api/v1/admin/tools/${encodeURIComponent(t.name)}`, { [key]: on })));
-        row.appendChild(box);
+    row.className = 'tw-gr' + (tlOpen === r.name ? ' sel' : '') + (r.enabled ? '' : ' off');
+    row.style.top = i * TL_ROW + 'px';
+    const ck = document.createElement('span'); ck.className = 'tw-ck' + (tlSel.has(r.name) ? ' on' : '');
+    if (r.broken) ck.style.visibility = 'hidden';
+    ck.onclick = e => { e.stopPropagation(); if (tlSel.has(r.name)) tlSel.delete(r.name); else tlSel.add(r.name); tlRender(); };
+    const name = document.createElement('code'); name.textContent = r.name; name.title = r.name;
+    const ds = document.createElement('span'); ds.className = 'ds'; ds.textContent = r.description || ''; ds.title = r.description || '';
+    const gp = document.createElement('span'); gp.className = 'gp'; gp.textContent = r.group || '—';
+    const src = document.createElement('span'); src.className = 'tw-src' + (r.broken ? ' b' : r.source === 'custom' ? ' c' : ''); src.textContent = r.broken ? 'Error' : r.source === 'custom' ? 'Custom' : r.source === 'system' ? 'System' : 'Built-in';
+    row.append(ck, name, ds, gp, src);
+    for (const key of ['pinned', 'async', 'enabled']) {
+        if (r.broken || r.source === 'system') { const dash = document.createElement('span'); dash.style.cssText = 'color:var(--text-dim);font-size:11px;'; dash.textContent = r.source === 'system' && key !== 'async' ? 'always' : ''; if (key === 'enabled') dash.textContent = ''; row.appendChild(dash); continue; }
+        const t = buildToggle(r[key], on => tlPatch([r.name], { [key]: on }));
+        t.addEventListener('click', e => e.stopPropagation());
+        row.appendChild(t);
     }
+    row.onclick = () => { tlTab = r.broken ? 'code' : 'overview'; tlLoadSide(r.name); };
     return row;
 }
 
-// Anything dropped on `el` calls onDrop(toolName); the target lights up while a tool hovers over it.
-function tlDropTarget(el, onDrop) {
-    el.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; el.classList.add('tl-over'); });
-    el.addEventListener('dragleave', e => { if (!el.contains(e.relatedTarget)) el.classList.remove('tl-over'); });
-    el.addEventListener('drop', e => { e.preventDefault(); el.classList.remove('tl-over'); const n = e.dataTransfer.getData('text/plain'); if (n) onDrop(n); });
+tlById('tl-scroll').addEventListener('scroll', tlDrawRows);
+tlById('tl-filter').addEventListener('input', e => { tlQ = e.target.value.trim(); tlRender(); });
+tlById('tl-group-filter').addEventListener('change', e => { tlGroupFilter = e.target.value; tlRender(); });
+document.querySelectorAll('.tw-chip').forEach(c => c.addEventListener('click', () => { tlSrc = c.dataset.src; tlRender(); }));
+
+// Applies one change to some tools: updates the rows in place, with no reload unless the groups changed.
+async function tlPatch(names, patch) {
+    names = names.filter(n => tlRowsAll.some(r => r.name === n && !r.broken && r.source !== 'system'));
+    if (!names.length) return;
+    const r = await cpFetch('/api/v1/admin/tools', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names, patch }) });
+    if (!r.ok) { alert((await r.json().catch(() => ({}))).error || 'Could not save.'); return; }
+    if (patch.group !== undefined) { await loadTools(); return; }
+    for (const row of tlRowsAll) if (names.includes(row.name)) { if (patch.enabled !== undefined) row.enabled = patch.enabled; if (patch.async !== undefined) row.async = patch.async; if (patch.pinned !== undefined) row.pinned = patch.pinned; }
+    tlRender(); if (tlOpen && names.includes(tlOpen)) tlRenderSide();
 }
 
-function renderTools() {
-    const q = (tlFilter.value || '').trim().toLowerCase();
-    const match = (t, g) => !q || t.name.includes(q) || (t.description || '').toLowerCase().includes(q) || g.includes(q);
-    const builtin = tlData.tools.filter(t => t.source === 'builtin');
-    const groupNames = tlData.groups.map(g => g.name);
-    tlBuiltin.innerHTML = '';
+function tlNewGroupName() {
+    return (prompt('Name for the new group (lowercase letters, numbers and _):') || '').trim().toLowerCase().replace(/[^a-z0-9_]+/g, '_');
+}
+function tlGroupSelect(current, onPick, firstLabel = '(no group)') {
+    const sel = document.createElement('select'); sel.className = 'vs-input'; sel.style.cssText = 'width:150px;font-size:12px;padding:3px 6px;';
+    const opts = [...new Set([...tlGroups, current].filter(Boolean))];
+    sel.innerHTML = `<option value="">${escHtml(firstLabel)}</option>` + opts.map(g => `<option value="${escHtml(g)}"${g === current ? ' selected' : ''}>${escHtml(g)}</option>`).join('') + '<option value="@new">New group…</option>';
+    sel.onchange = () => { let g = sel.value; if (g === '@new') { g = tlNewGroupName(); if (!g) { sel.value = current || ''; return; } } onPick(g); };
+    return sel;
+}
 
-    // Loose tools first: no card, just rows. Dropping a tool here takes it out of its group.
-    const loose = builtin.filter(t => !t.group && match(t, ''));
-    const looseBox = document.createElement('div');
-    looseBox.className = 'tl-loose';
-    looseBox.innerHTML = `<div class="tl-loose-head">Loose tools <span style="font-weight:400;">· in no group — Ari asks for these by name</span></div>`;
-    for (const t of loose) { const r = tlRow(t, groupNames, true); r.style.borderTop = '0'; r.style.borderBottom = '1px solid var(--border)'; looseBox.appendChild(r); }
-    if (loose.length === 0) looseBox.insertAdjacentHTML('beforeend', '<div style="padding:12px 14px;font-size:12.5px;color:var(--text-dim);">Drop a tool here to take it out of its group.</div>');
-    tlDropTarget(looseBox, n => tlMove(n, ''));
-    tlBuiltin.appendChild(looseBox);
+function tlRenderBulk() {
+    const box = tlById('tl-bulk'), names = [...tlSel];
+    box.style.display = names.length ? '' : 'none';
+    if (!names.length) return;
+    box.innerHTML = `<b>${names.length} selected</b>`;
+    const btn = (label, fn) => { const b = document.createElement('button'); b.className = 'vs-btn-outline'; b.type = 'button'; b.textContent = label; b.onclick = fn; box.appendChild(b); };
+    btn('Turn on', () => tlPatch(names, { enabled: true })); btn('Turn off', () => tlPatch(names, { enabled: false }));
+    btn('Async on', () => tlPatch(names, { async: true })); btn('Async off', () => tlPatch(names, { async: false }));
+    btn('Pin', () => tlPatch(names, { pinned: true })); btn('Unpin', () => tlPatch(names, { pinned: false }));
+    box.appendChild(tlGroupSelect('', g => tlPatch(names, { group: g }), 'Move to group…'));
+    btn('Clear', () => { tlSel.clear(); tlRender(); });
+}
 
-    for (const info of tlData.groups) {
-        const tools = builtin.filter(t => t.group === info.name);
-        const shown = tools.filter(t => match(t, info.name));
-        if (q && shown.length === 0) continue;
+// ── sidebar ──
+function tlCloseSide() { tlOpen = null; tlDetail = null; tlNew = null; tlEd = null; tlById('tl-side').style.display = 'none'; tlById('tl-side').innerHTML = ''; tlRender(); }
 
-        const card = document.createElement('div');
-        card.className = 'tl-group';
-        const head = document.createElement('div');
-        head.style.cssText = 'display:flex;align-items:center;gap:12px;padding:11px 14px;';
-        head.innerHTML =
-            `<div style="flex:1;min-width:0;">
-               <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                 <span style="font-size:14px;font-weight:600;">${escHtml(info.name)}</span>
-                 ${info.custom ? '<span class="mdl-badge startup">Yours</span>' : ''}
-                 <span style="font-size:12px;color:var(--text-dim);">${tools.length} tool${tools.length === 1 ? '' : 's'}</span>
-               </div>
-               <div style="font-size:12.5px;color:var(--text-dim);line-height:1.4;margin-top:2px;">${escHtml(info.description)}</div>
-             </div>`;
-        const slot = document.createElement('div'); slot.style.cssText = 'display:flex;align-items:center;gap:8px;';
-        slot.innerHTML = '<span style="font-size:11.5px;color:var(--text-dim);">All on</span>';
-        slot.appendChild(buildToggle(info.enabled, on => tlSave(`/api/v1/admin/tools/groups/${encodeURIComponent(info.name)}`, { enabled: on })));
-        head.appendChild(slot);
-        card.appendChild(head);
-        for (const t of shown) card.appendChild(tlRow(t, groupNames, false));
-        tlDropTarget(card, n => tlMove(n, info.name));
-        tlBuiltin.appendChild(card);
+async function tlLoadSide(name, keepTab) {
+    tlOpen = name; tlNew = null;
+    const row = tlRowsAll.find(r => r.name === name);
+    if (row?.broken) {
+        const r = await cpFetch('/api/v1/admin/tools/custom/' + encodeURIComponent(row.file));
+        tlDetail = { name: row.file, description: row.description, source: 'custom', parameters: [], code: r.ok ? (await r.json()).code : '', codeFile: row.file, editable: true, enabled: true, async: false, group: '', broken: true, diagnostics: row.diagnostics };
+    } else {
+        const r = await cpFetch(`/api/v1/admin/tools/${encodeURIComponent(name)}/detail`);
+        if (!r.ok) { tlCloseSide(); return; }
+        tlDetail = await r.json();
+        tlDetail.file = row?.file || null;
     }
-
-    // Dropping on (or clicking) this makes a new group.
-    const fresh = document.createElement('div');
-    fresh.className = 'tl-new';
-    fresh.textContent = '+ New group — click, or drop a tool here';
-    const makeGroup = n => { const g = tlNewGroupName(); if (g) tlMove(n, g); };
-    fresh.onclick = () => { const g = tlNewGroupName(); if (!g) return; const t = prompt('Which tool should go in it first? (tool name)'); if (t) tlMove(t.trim(), g); };
-    tlDropTarget(fresh, makeGroup);
-    tlBuiltin.appendChild(fresh);
+    tlRender(); tlRenderSide();
 }
-if (tlFilter) tlFilter.addEventListener('input', () => { if (tlData) renderTools(); });
+
+function tlOpenNew(code, file, note) {
+    tlOpen = '@new'; tlDetail = null; tlNew = { code, file: file || 'NewTool.cs', note: note || '' }; tlTab = 'code';
+    tlRender(); tlRenderSide();
+}
+
+function tlRenderSide() {
+    const side = tlById('tl-side'); side.style.display = '';
+    const d = tlDetail, isNew = !!tlNew;
+    const title = isNew ? 'New tool' : d.name;
+    const tabs = isNew ? [['code', 'Code']] : [['overview', 'Overview'], ['code', 'Code']].concat(d.editable && !d.broken ? [['try', 'Try it']] : []);
+    if (!tabs.some(t => t[0] === tlTab)) tlTab = tabs[0][0];
+    side.innerHTML = `<div style="display:flex;align-items:flex-start;gap:8px;"><div style="flex:1;min-width:0;"><code style="font-size:14px;font-weight:700;word-break:break-all;">${escHtml(title)}</code>
+        ${isNew ? '' : `<div style="font-size:12.5px;color:var(--text-dim);margin-top:3px;line-height:1.4;">${escHtml(d.description || '')}</div>`}</div>
+        <button class="vs-btn-outline" id="tl-x" type="button" style="font-size:12px;padding:2px 9px;">✕</button></div>
+        <div class="tw-tabs">${tabs.map(t => `<span data-t="${t[0]}" class="${tlTab === t[0] ? 'on' : ''}">${t[1]}</span>`).join('')}</div><div id="tl-pane"></div>`;
+    tlById('tl-x').onclick = tlCloseSide;
+    side.querySelectorAll('.tw-tabs span').forEach(el => el.onclick = () => { tlTab = el.dataset.t; tlRenderSide(); });
+    const pane = tlById('tl-pane');
+    if (tlTab === 'overview') tlOverview(pane, d); else if (tlTab === 'code') tlCode(pane, d); else tlTry(pane, d);
+}
+
+function tlOverview(pane, d) {
+    const kv = (label, node) => { const el = document.createElement('div'); el.className = 'tw-kv'; el.innerHTML = `<span>${label}</span>`; if (typeof node === 'string') el.insertAdjacentHTML('beforeend', `<span style="color:var(--text);">${node}</span>`); else el.appendChild(node); pane.appendChild(el); };
+    kv('Source', (d.source === 'custom' ? 'Custom' : d.source === 'system' ? 'System' : 'Built-in') + ` · ${escHtml(d.codeFile || '')}`);
+    if (d.module) kv('Needs module', escHtml(d.module));
+    kv('Group', tlGroupSelect(d.group, g => tlPatch([d.name], { group: g })));
+    if (d.source === 'system') kv('Always loaded', 'Every conversation gets this tool itself');
+    else {
+        kv('On', buildToggle(d.enabled, on => tlPatch([d.name], { enabled: on })));
+        kv('Always loaded', buildToggle(d.pinned, on => tlPatch([d.name], { pinned: on })));
+        kv('Async', buildToggle(d.async, on => tlPatch([d.name], { async: on })));
+    }
+    if (d.name === 'shell' || d.name === 'run_code') {
+        const holder = document.createElement('div'); holder.className = 'tw-kv'; holder.innerHTML = '<span title="Off: Ari asks you before any command that is not read-only or on your allowed list. On: she runs everything.">Approve everything</span>';
+        const saveShell = (autoApprove, allow) => cpFetch('/api/v1/admin/tools/shell-settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ autoApprove, allow }) });
+        cpFetch('/api/v1/admin/tools/shell-settings').then(r => r.json()).then(j => {
+            holder.appendChild(buildToggle(j.autoApprove, async on => {
+                if (on && !confirm('Let Ari run every command and program without asking you first?')) { tlRenderSide(); return; }
+                await saveShell(on, j.allow); j.autoApprove = on;
+            }));
+            if (d.name !== 'shell') return;
+            const box = document.createElement('div'); box.style.cssText = 'margin-top:10px;';
+            box.innerHTML = `<div style="font-size:12.5px;color:var(--text-dim);margin-bottom:4px;line-height:1.4;">Commands that never need your approval, one per line (for example <code>git commit</code> or <code>npm run build</code>). Read-only commands like <code>ls</code> and <code>git status</code> already run freely. A line matches a command that starts with it.</div>
+                <textarea id="tl-allow" class="vs-input" rows="5" style="width:100%;font-family:ui-monospace,Menlo,monospace;font-size:12px;" spellcheck="false">${escHtml((j.allow || []).join('\n'))}</textarea>
+                <button class="vs-btn-outline" id="tl-allow-save" type="button" style="margin-top:6px;font-size:12px;padding:3px 12px;">Save allowed commands</button> <span id="tl-allow-msg" style="font-size:12px;color:var(--text-dim);"></span>`;
+            pane.appendChild(box);
+            tlById('tl-allow-save').onclick = async () => {
+                const allow = tlById('tl-allow').value.split('\n').map(x => x.trim()).filter(Boolean);
+                await saveShell(j.autoApprove, allow); j.allow = allow; tlById('tl-allow-msg').textContent = 'Saved.';
+            };
+        });
+        pane.appendChild(holder);
+    }
+    const h = document.createElement('div'); h.style.cssText = 'font-size:11px;font-weight:600;color:var(--text-dim);margin:14px 0 4px;letter-spacing:.04em;'; h.textContent = 'PARAMETERS'; pane.appendChild(h);
+    if (!d.parameters.length) pane.insertAdjacentHTML('beforeend', `<div style="font-size:12.5px;color:var(--text-dim);">${d.source === 'custom' ? 'This tool takes no parameters.' : 'Shown while the tool’s module or project is available. The Code tab has the full definition.'}</div>`);
+    for (const p of d.parameters)
+        pane.insertAdjacentHTML('beforeend', `<div class="tw-p"><b>${escHtml(p.name)}</b> <span style="color:var(--text-dim);">· ${escHtml(p.type)} · ${p.required ? 'required' : 'optional'}</span><div style="color:var(--text-dim);margin-top:2px;line-height:1.4;">${escHtml(p.description)}</div></div>`);
+}
+
+function tlCode(pane, d) {
+    const isNew = !!tlNew, editable = isNew || d.editable;
+    pane.innerHTML = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+        <input id="tl-file" class="vs-input" style="flex:1;min-width:130px;font-family:ui-monospace,Menlo,monospace;font-size:12px;" value="${escHtml(isNew ? tlNew.file : (d.codeFile || ''))}" ${isNew ? '' : 'readonly'} autocomplete="off">
+        ${editable ? '<button class="vs-btn-primary" id="tl-save" type="button" style="font-size:12px;padding:4px 12px;">Save</button>' : '<button class="vs-btn-outline" id="tl-fork" type="button" style="font-size:12px;padding:4px 12px;" title="Copy this into a custom tool you can edit">Fork to edit</button>'}
+        ${!isNew && d.editable ? '<button class="vs-btn-outline" id="tl-del" type="button" style="font-size:12px;padding:4px 10px;">Delete</button>' : ''}</div>
+        <div id="tl-ce"></div><div id="tl-status" style="font-size:12.5px;color:var(--text-dim);margin-top:8px;min-height:18px;line-height:1.4;">${escHtml(isNew ? tlNew.note : editable ? '' : 'Built-in tool source, for reference. Fork it to make your own version.')}</div>`;
+    const status = tlById('tl-status');
+    tlEd = ceCreate(tlById('tl-ce'), {
+        readOnly: !editable,
+        onDropFile: async f => {
+            if (!editable) return;
+            if (!/\.(cs|txt)$/i.test(f.name)) { status.textContent = 'Only .cs and .txt files can be dropped here.'; return; }
+            tlEd.set(await f.text()); if (isNew) tlById('tl-file').value = cleanFileName(f.name);
+            status.textContent = `Filled in from ${f.name}. Press Save to compile it.`;
+        },
+    });
+    tlEd.set(isNew ? tlNew.code : (d.code || '')); if (d.diagnostics) tlEd.mark(d.diagnostics);
+    if (!editable) {
+        tlById('tl-fork').onclick = async () => {
+            const r = await cpFetch(`/api/v1/admin/tools/${encodeURIComponent(d.name)}/fork`, { method: 'POST' });
+            if (!r.ok) { status.textContent = 'Could not make a copy.'; return; }
+            const f = await r.json();
+            tlOpenNew(f.code, f.file, `A copy of ${d.name}. Saving it replaces the built-in until you delete the copy. It starts as a stub, so write Run() before you save if you want the tool to keep working.`);
+        };
+        return;
+    }
+    tlById('tl-save').onclick = async () => {
+        const file = tlById('tl-file').value.trim(), btn = tlById('tl-save');
+        btn.disabled = true; status.textContent = 'Compiling…';
+        try {
+            const r = await cpFetch('/api/v1/admin/tools/custom/' + encodeURIComponent(file), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: tlEd.get() }) });
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok) { status.textContent = j.error || 'Could not save.'; return; }
+            tlEd.mark(j.diagnostics);
+            const errs = j.diagnostics.filter(x => x.severity === 'Error').length;
+            if (errs) { status.textContent = `Saved, but it didn't compile (${errs} error${errs === 1 ? '' : 's'}). ${j.compiled ? 'The last version that worked is still running.' : ''}`; await loadTools(); return; }
+            status.textContent = `Saved. ${j.name} is live.`;
+            tlNew = null; tlOpen = j.name; await loadTools();
+        } finally { btn.disabled = false; }
+    };
+    const del = tlById('tl-del');
+    if (del) del.onclick = async () => {
+        if (!confirm(`Delete ${d.codeFile}? The tool stops working at once.${d.broken ? '' : ' If it replaced a built-in, the built-in comes back.'}`)) return;
+        await cpFetch('/api/v1/admin/tools/custom/' + encodeURIComponent(d.codeFile), { method: 'DELETE' });
+        tlCloseSide(); loadTools();
+    };
+}
+
+function tlTry(pane, d) {
+    pane.innerHTML = `<div style="font-size:12.5px;color:var(--text-dim);margin-bottom:8px;line-height:1.4;">Call this tool once, as if Ari had. Write the arguments as JSON.</div>
+        <input id="tl-try-args" class="vs-input" style="width:100%;font-family:ui-monospace,Menlo,monospace;font-size:12px;" placeholder='${d.parameters.length ? '{"' + escHtml(d.parameters[0].name) + '": "value"}' : '{}'}' autocomplete="off">
+        <button class="vs-btn-primary" id="tl-try-btn" type="button" style="margin-top:8px;font-size:12px;padding:4px 14px;">Run</button>
+        <pre id="tl-try-out" style="margin:10px 0 0;padding:8px 10px;background:color-mix(in srgb,var(--text) 6%,transparent);border-radius:8px;font-size:12px;white-space:pre-wrap;display:none;"></pre>`;
+    tlById('tl-try-btn').onclick = async () => {
+        const out = tlById('tl-try-out'); out.style.display = ''; out.textContent = 'Running…';
+        const r = await cpFetch('/api/v1/admin/tools/custom/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: d.name, args: tlById('tl-try-args').value }) });
+        out.textContent = r.ok ? (await r.json()).result : 'The test call failed.';
+    };
+}
+
+tlById('tl-new-btn').addEventListener('click', () => { const t = tlTemplates[+tlById('tl-new-template').value]; tlOpenNew(t ? t.code : '', 'NewTool.cs'); });
+// Dropping a .cs or .txt file anywhere on the table starts a new tool from it.
+(() => {
+    const tw = document.querySelector('.tw');
+    tw.addEventListener('dragover', e => { if (e.dataTransfer.types.includes('Files')) e.preventDefault(); });
+    tw.addEventListener('drop', async e => {
+        const f = e.dataTransfer.files[0]; if (!f) return; e.preventDefault();
+        if (!/\.(cs|txt)$/i.test(f.name)) { alert('Only .cs and .txt files can be dropped here.'); return; }
+        tlOpenNew(await f.text(), cleanFileName(f.name), `Filled in from ${f.name}. Press Save to compile it.`);
+    });
+})();
 
 // ── Persistent Threads ────────────────────────────────────
 function fmtBytes(n) { return n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; }

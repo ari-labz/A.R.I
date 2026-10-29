@@ -1279,6 +1279,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
             // Also marks whose thread it is, so a guest's chat never gets the Master's memories.
             ARI.LLM.Thread chatThread = GetOrCreateThread(threadKey);
             chatThread.IsAdminChat = User.IsInRole(ARI.API.Auth.Roles.Admin);
+            ARI.LLM.ToolFactories.SyncPinned(chatThread);   // owner-only pinned tools are kept for the owner, taken back from a guest
 
             if (v2) await WriteEventAsync(events.Format("message.start", new { threadId = threadKey }));
             await Llm.PromptStreaming(threadKey, prompt, username, platformContext, async accumulated =>

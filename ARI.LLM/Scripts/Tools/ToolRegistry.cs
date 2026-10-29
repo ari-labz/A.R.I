@@ -7,14 +7,21 @@ namespace ARI.LLM;
 
 /// <summary>What the user changed about one tool. Only deviations from the defaults are stored: enabled, not async,
 /// in the group ToolGroups.json puts it in.</summary>
-public sealed record ToolSetting(bool Enabled = true, bool Async = false, string? Group = null);
+public sealed record ToolSetting(bool Enabled = true, bool Async = false, string? Group = null, bool? Pinned = null);
 
 /// <summary>A change to one tool. Null fields are left alone. Group: "@default" restores the shipped group, "" takes
 /// it out of every group, anything else moves it there.</summary>
-public sealed record ToolPatch(bool? Enabled, bool? Async, string? Group);
+public sealed record ToolPatch(bool? Enabled, bool? Async, string? Group, bool? Pinned = null);
 
 public sealed record ToolInfo(string Name, string Description, string Group, string DefaultGroup, string Source,
-                              string? Module, bool Enabled, bool Async);
+                              string? Module, bool Enabled, bool Async, bool Pinned);
+
+public sealed record ToolParam(string Name, string Type, bool Required, string Description);
+
+/// <summary>Everything the Tools tab's sidebar shows for one tool. Code is the tool's source: editable for a custom
+/// tool (CodeFile is its script), read-only for a built-in.</summary>
+public sealed record ToolDetail(string Name, string Description, string Source, string? Module, string Group, bool Enabled, bool Async, bool Pinned,
+                                List<ToolParam> Parameters, string? Code, string? CodeFile, bool Editable);
 
 public sealed record ToolGroupInfo(string Name, string Description, bool Custom, bool Enabled);
 
@@ -34,6 +41,9 @@ public static class ToolRegistry
     private static string FilePath => Path.Combine(Paths.PersistentData, "tool_settings.json");
 
     // Tools that only exist while a module is on. Shown in the control panel so it's clear why one is missing.
+    // Registered on every conversation outside the tool factories (the meta tools and the two always-on reflexes).
+    internal static readonly string[] SystemTools = ["list_tools", "request_tools", "tool_search", "remember", "hand_to_coder"];
+
     private static readonly Dictionary<string, string> ModuleOf = new(StringComparer.OrdinalIgnoreCase)
     {
         ["search_brain"] = "Brain", ["recall_memory"] = "Brain", ["memories_on"] = "Brain", ["create_memory"] = "Brain",
@@ -80,6 +90,22 @@ public static class ToolRegistry
         lock (Lock) return !Load().TryGetValue(name, out ToolSetting? s) || s.Enabled;
     }
 
+    // The tools every conversation starts with in hand, so Ari doesn't have to find them first. The owner can pin or unpin any tool.
+    private static readonly HashSet<string> DefaultPinned = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "read_file", "read_document", "write_file", "edit_file", "list_directory", "search_files", "find_files", "deliver_file",
+        "search_web", "fetch_page", "shell", "run_code", "todo",
+    };
+
+    internal static bool IsPinned(string name)
+    {
+        lock (Lock) return Load().TryGetValue(name, out ToolSetting? s) && s.Pinned is { } p ? p : DefaultPinned.Contains(name);
+    }
+
+    /// <summary>Pinned tools, in a fixed order so the prompt Ari starts with is the same every time and stays cached.</summary>
+    internal static List<string> PinnedNames()
+        => ToolFactories.AllNames().Where(IsPinned).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+
     internal static bool IsAsync(string name)
     {
         lock (Lock) return Load().TryGetValue(name, out ToolSetting? s) && s.Async;
@@ -91,6 +117,24 @@ public static class ToolRegistry
         lock (Lock) return Load().TryGetValue(name, out ToolSetting? s) ? s.Group : null;
     }
 
+    /// <summary>Gives a tool the group and async setting its author chose, the first time ARI sees it. After that the
+    /// user's own choices in the control panel are the only ones that count.</summary>
+    internal static void SeedIfNew(string name, string? group, bool async)
+    {
+        lock (Lock)
+        {
+            Dictionary<string, ToolSetting> all = Load();
+            if (all.ContainsKey(name) || (group is null && !async)) return;
+            all[name] = new ToolSetting(Async: async, Group: group);
+            Save();
+        }
+    }
+
+    internal static string GroupOf(string name) => GroupOverride(name) ?? ToolGroups.BaseGroupOf(name) ?? "";
+    internal static string DescriptionFor(string name) => Describe(name);
+
+    internal static void ForgetDescription(string name) => descriptions.TryRemove(name, out _);
+
     /// <summary>Applies a change and rebuilds the group table. Returns false when the tool is unknown.</summary>
     public static bool Update(string name, ToolPatch patch)
     {
@@ -100,13 +144,75 @@ public static class ToolRegistry
             Dictionary<string, ToolSetting> all = Load();
             ToolSetting current = all.TryGetValue(name, out ToolSetting? s) ? s : new ToolSetting();
             string? group = patch.Group switch { null => current.Group, DefaultGroup => null, { } g => g.Trim() };
-            ToolSetting next = current with { Enabled = patch.Enabled ?? current.Enabled, Async = patch.Async ?? current.Async, Group = group };
+            ToolSetting next = current with { Enabled = patch.Enabled ?? current.Enabled, Async = patch.Async ?? current.Async, Group = group, Pinned = patch.Pinned ?? current.Pinned };
             if (next == new ToolSetting()) all.Remove(name); else all[name] = next;
             Save();
         }
         ToolGroups.Rebuild();
         return true;
     }
+
+    /// <summary>Applies one change to many tools at once, saving once. Unknown names are skipped; returns how many changed.</summary>
+    public static int UpdateMany(IEnumerable<string> names, ToolPatch patch)
+    {
+        HashSet<string> known = new(ToolFactories.AllNames(), StringComparer.OrdinalIgnoreCase);
+        int n = 0;
+        lock (Lock)
+        {
+            Dictionary<string, ToolSetting> all = Load();
+            foreach (string name in names.Where(known.Contains).Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                ToolSetting current = all.TryGetValue(name, out ToolSetting? s) ? s : new ToolSetting();
+                string? group = patch.Group switch { null => current.Group, DefaultGroup => null, { } g => g.Trim() };
+                ToolSetting next = current with { Enabled = patch.Enabled ?? current.Enabled, Async = patch.Async ?? current.Async, Group = group, Pinned = patch.Pinned ?? current.Pinned };
+                if (next == new ToolSetting()) all.Remove(name); else all[name] = next;
+                n++;
+            }
+            if (n > 0) Save();
+        }
+        if (n > 0) ToolGroups.Rebuild();
+        return n;
+    }
+
+    /// <summary>One tool in full, for the sidebar. Null when there's no such tool.</summary>
+    public static ToolDetail? Detail(string name)
+    {
+        bool system = SystemTools.Contains(name);
+        if (!system && !ToolFactories.AllNames().Contains(name, StringComparer.OrdinalIgnoreCase)) return null;
+        bool custom = CustomTools.IsCustom(name);
+        List<ToolParam> ps = new();
+        string description = Describe(name);
+        try
+        {
+            if (ToolFactories.TryBuild(name, Scratch(), out Tool tool, ignoreSettings: true))
+            {
+                using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(System.Text.Json.JsonSerializer.Serialize(tool.Schema));
+                if (doc.RootElement.TryGetProperty("function", out System.Text.Json.JsonElement fn) && fn.TryGetProperty("parameters", out System.Text.Json.JsonElement pr)
+                    && pr.TryGetProperty("properties", out System.Text.Json.JsonElement props))
+                {
+                    HashSet<string> required = pr.TryGetProperty("required", out System.Text.Json.JsonElement req)
+                        ? req.EnumerateArray().Select(e => e.GetString() ?? "").ToHashSet() : new();
+                    foreach (System.Text.Json.JsonProperty p in props.EnumerateObject())
+                        ps.Add(new ToolParam(p.Name, p.Value.TryGetProperty("type", out System.Text.Json.JsonElement t) && t.ValueKind == System.Text.Json.JsonValueKind.String ? t.GetString()! : "string",
+                                             required.Contains(p.Name), p.Value.TryGetProperty("description", out System.Text.Json.JsonElement d) ? d.GetString() ?? "" : ""));
+                }
+            }
+        }
+        catch { }
+
+        string? code = null, codeFile = null;
+        if (custom && CustomTools.FileOf(name) is { } file) { codeFile = file; code = CustomTools.ReadCode(file); }
+        else if (ToolSources.For(name) is { } src) { codeFile = src.File; code = src.Code; }
+
+        return new ToolDetail(name, description, system ? "system" : custom ? "custom" : "builtin", ModuleOf.GetValueOrDefault(name),
+            GroupOverride(name) ?? ToolGroups.BaseGroupOf(name) ?? "", system || IsEnabled(name), !system && IsAsync(name), system || IsPinned(name), ps, code, codeFile, custom);
+    }
+
+    private static readonly Lazy<string> EmptyDir = new(() => Directory.CreateTempSubdirectory("ari-tools-").FullName);
+
+    // A thread to build tools on when no conversation is involved. It has an empty folder bound so the file tools
+    // can describe themselves.
+    private static Thread Scratch() => new(ThreadPipeline.Dialogue, "tool-catalogue") { Internal = true, FilesystemRoot = EmptyDir.Value };
 
     /// <summary>Switches every tool in a group on or off. Returns false when no such group exists.</summary>
     public static bool SetGroupEnabled(string group, bool enabled)
@@ -132,9 +238,12 @@ public static class ToolRegistry
         foreach (string name in ToolFactories.AllNames().OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
         {
             string? group = GroupOverride(name) ?? ToolGroups.BaseGroupOf(name);
-            tools.Add(new ToolInfo(name, Describe(name), group ?? "", ToolGroups.BaseGroupOf(name) ?? "", "builtin",
-                                   ModuleOf.GetValueOrDefault(name), IsEnabled(name), IsAsync(name)));
+            tools.Add(new ToolInfo(name, Describe(name), group ?? "", ToolGroups.BaseGroupOf(name) ?? "", CustomTools.IsCustom(name) ? "custom" : "builtin",
+                                   ModuleOf.GetValueOrDefault(name), IsEnabled(name), IsAsync(name), IsPinned(name)));
         }
+        // Tools every conversation gets by itself. They're shown so everything Ari can use is visible, but they can't be switched off.
+        foreach (string name in SystemTools)
+            tools.Add(new ToolInfo(name, Describe(name), "", "", "system", null, true, false, true));
 
         List<ToolGroupInfo> groups = ToolGroups.AllNames().OrderBy(g => g, StringComparer.OrdinalIgnoreCase).Select(g =>
         {
@@ -150,8 +259,8 @@ public static class ToolRegistry
     {
         try
         {
-            Thread scratch = new(ThreadPipeline.Dialogue, "tool-catalogue") { Internal = true };
-            return ToolFactories.TryBuild(n, scratch, out Tool tool, ignoreSettings: true) ? tool.SchemaDescription : "";
+            string built = ToolFactories.TryBuild(n, Scratch(), out Tool tool, ignoreSettings: true) ? tool.SchemaDescription : "";
+            return built.Length > 0 ? built : ToolSources.DescriptionOf(n);
         }
         catch { return ""; }
     });

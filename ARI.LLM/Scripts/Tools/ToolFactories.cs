@@ -34,6 +34,9 @@ internal static class ToolFactories
 
         ["preview_file"]   = t => Fs(t) is { } fs ? new PreviewFile(fs)   : null,
         ["read_file"]      = t => Fs(t) is { } fs ? new Read(fs)      : null,
+        ["read_document"]  = t => Fs(t) is { } fs ? new ReadDocument(fs)  : null,
+        ["write_xlsx"]     = t => With<WriteXlsx>(t),
+        ["edit_xlsx"]      = t => With<EditXlsx>(t),
         ["list_directory"] = t => Fs(t) is { } fs ? new ListDirectory(fs) : null,
         ["search_files"]   = t => Fs(t) is { } fs ? new SearchFiles(fs)   : null,
         ["find_files"]     = t => Fs(t) is { } fs ? new FindFiles(fs)     : null,
@@ -91,23 +94,67 @@ internal static class ToolFactories
         ["wait_for_agent"] = t => SubagentManager.AvailableFor(t) ? new WaitForAgent(t) : null,
         ["cancel_agent"]   = t => SubagentManager.AvailableFor(t) ? new CancelAgent(t)  : null,
 
+        // Tools written in the [Tool]/[Param] style: the same shape a custom tool has, so each can be read and forked in the Tools tab.
+        ["shell"]          = t => With<Shell>(t),
+        ["shell_job"]      = t => With<ShellJob>(t),
+        ["run_code"]       = t => With<RunCode>(t),
+        ["http_request"]   = t => With<HttpRequest>(t),
+        ["todo"]           = t => With<Todo>(t),
+        ["list_chats"]     = t => With<ListChats>(t),
+        ["read_chat"]      = t => With<ReadChat>(t),
+        ["list_skills"]    = t => With<ListSkills>(t),
+        ["read_skill"]     = t => With<ReadSkill>(t),
+        ["write_skill"]    = t => With<WriteSkill>(t),
+        ["delete_skill"]   = t => With<DeleteSkill>(t),
+        ["tool_docs"]      = t => With<ToolDocs>(t),
+        ["write_tool"]     = t => With<WriteTool>(t),
+        ["test_tool"]      = t => With<TestTool>(t),
+        ["read_tool"]      = t => With<ReadTool>(t),
+        ["list_my_tools"]  = t => With<ListMyTools>(t),
+        ["delete_tool"]    = t => With<DeleteTool>(t),
+
+        ["browser"]        = t => new BrowserTool(t),
+
         ["generate_image"] = t => Modules.ImageGen?.IsReady == true ? new GenerateImage(t) : null,
         ["present_image"]  = t => Modules.ImageGen?.IsReady == true ? new PresentImage(t)  : null,
     };
 
+    private static Tool With<T>(Thread t) where T : Tool, new() => new T { CallThread = t };
+
+    private static readonly HashSet<string> AdminChatOnly = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "shell", "shell_job", "run_code", "http_request", "browser", "tool_docs", "write_tool", "test_tool", "read_tool", "list_my_tools", "delete_tool",
+    };
+
     private static bool IsVault(Thread t, string root) => t.IsBrainVault || Directory.Exists(Path.Combine(root, ".obsidian"));
 
-    private static ServerFileSystem? Fs(Thread t)
+    // With no project bound, a conversation's file tools work in a scratchpad made on first use (see ThreadFileSystem), so
+    // they can be loaded from the first message instead of waiting for create_scratchpad.
+    private static FileSystem? Fs(Thread t)
     {
-        if (t.FilesystemRoot is not { } r) return null;
+        if (t.FilesystemRoot is not { } r) return t.Internal ? null : new ThreadFileSystem(t);
         bool isVault = t.IsBrainVault || Directory.Exists(Path.Combine(r, ".obsidian"));
         return new ServerFileSystem(r, t.Ct, brainVault: isVault, snapshotSource: () => t.Snapshots);
     }
 
+    /// <summary>Loads the pinned tools onto a conversation (and takes back the owner-only ones from a guest's). Safe to call again:
+    /// it only adds what's missing, so it runs when the conversation is made and again on each message, when we know who is talking.</summary>
+    internal static void SyncPinned(Thread t)
+    {
+        if (t.Internal || t.Pipeline != ThreadPipeline.Dialogue) return;
+        foreach (string name in ToolRegistry.PinnedNames())
+        {
+            // Tools that act on this machine are only ever given to the owner chatting in the app, never a Discord or guest thread.
+            bool withheld = (t.IsGuarded && MASTER_ONLY_TOOLS.Contains(name)) || (AdminChatOnly.Contains(name) && !t.IsAdminChat);
+            if (t.tools.ContainsKey(name)) { if (withheld) t.UnregisterTool(name); continue; }
+            if (!withheld && TryBuild(name, t, out Tool tool)) tool.Register(t);
+        }
+    }
+
     // Filesystem tool names that unlock when a FilesystemRoot is set.
     // Read-only subset registered for dream/read-only agents; full set for normal agents.
-    private static readonly string[] FilesystemReadToolNames  = ["preview_file", "read_file", "list_directory", "search_files", "find_files", "search_vault"];
-    private static readonly string[] FilesystemWriteToolNames = ["edit_file", "write_file", "deliver_file", "create_scratchpad", "build_project"];
+    private static readonly string[] FilesystemReadToolNames  = ["preview_file", "read_file", "read_document", "list_directory", "search_files", "find_files", "search_vault"];
+    private static readonly string[] FilesystemWriteToolNames = ["edit_file", "write_file", "write_xlsx", "edit_xlsx", "deliver_file", "create_scratchpad", "build_project"];
 
     /// <summary>
     /// Registers all filesystem tools that now resolve for the thread. Call this immediately after
@@ -126,7 +173,9 @@ internal static class ToolFactories
                 tool.Register(thread);
     }
 
-    internal static IEnumerable<string> AllNames() => _factories.Keys;
+    internal static IEnumerable<string> AllNames() => _factories.Keys.Concat(CustomTools.Names).Distinct(StringComparer.OrdinalIgnoreCase);
+
+    internal static bool IsBuiltIn(string name) => _factories.ContainsKey(name);
 
     /// <summary>Why a known tool didn't resolve for this thread — the real reason, so ARI doesn't blame a
     /// missing project binding for everything (e.g. git fails on a bound project with no repos in it).</summary>
@@ -158,6 +207,10 @@ internal static class ToolFactories
         "list_projects", "create_project", "rename_project", "bind_project", "set_project_path",
         "git", "git_clone", "github",
         "build_project",   // runs the project's own build scripts on this machine
+        // Run code, read other people's conversations, or change what Ari can do: the owner only.
+        "shell", "shell_job", "run_code", "http_request", "list_chats", "read_chat",
+        "browser", "list_skills", "read_skill", "write_skill", "delete_skill",
+        "tool_docs", "write_tool", "test_tool", "read_tool", "list_my_tools", "delete_tool",
     };
 
     internal static bool TryBuild(string toolName, Thread thread, out Tool tool, bool ignoreSettings = false)
@@ -165,6 +218,12 @@ internal static class ToolFactories
         tool = null!;
         if (!ignoreSettings && !ToolRegistry.IsEnabled(toolName)) return false;
         if (thread.IsGuarded && MASTER_ONLY_TOOLS.Contains(toolName)) return false;
+        // Custom tools are available to everyone Ari talks to. Only the admin can add or change one, in the control panel.
+        if (CustomTools.IsCustom(toolName))
+        {
+            tool = CustomTools.Host(toolName, thread);
+            return true;
+        }
         if (!_factories.TryGetValue(toolName, out Func<Thread, Tool?>? factory)) return false;
         if (factory(thread) is not { } built) return false;
         tool = built;

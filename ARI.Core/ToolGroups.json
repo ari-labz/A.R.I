@@ -9,8 +9,8 @@
       "Tools": ["github"]
     },
     "filesystem_tools": {
-      "Description": "Work with files: preview, read, list, search, find, edit, write, and deliver a file to the user as a download. Files live in a filesystem — either a bound project (persistent) or a scratchpad (ephemeral, deleted with the conversation). If you have neither and need to write or juggle files (e.g. to give the user a file), call create_scratchpad first to get an ephemeral filesystem; you do NOT need a project.",
-      "Tools": ["create_scratchpad", "preview_file", "read_file", "list_directory", "search_files", "find_files", "edit_file", "write_file", "deliver_file"]
+      "Description": "Work with files: preview, read, list, search, find, edit, write, and deliver a file to the user as a download. read_document opens PDF, Word, PowerPoint and Excel files a page or sheet at a time and can search a long one; write_xlsx and edit_xlsx make and change Excel workbooks. Files live in a filesystem — either a bound project (persistent) or a scratchpad (ephemeral, deleted with the conversation). If you have neither and need to write or juggle files (e.g. to give the user a file), call create_scratchpad first to get an ephemeral filesystem; you do NOT need a project.",
+      "Tools": ["create_scratchpad", "preview_file", "read_file", "read_document", "write_xlsx", "edit_xlsx", "list_directory", "search_files", "find_files", "edit_file", "write_file", "deliver_file"]
     },
     "coding_tools": {
       "Description": "Build the current project to verify edits compile.",
@@ -46,7 +46,31 @@
     },
     "web_tools": {
       "Description": "Search the web and read web pages. Use for current events, factual lookups, or anything time-sensitive.",
-      "Tools": ["search_web", "fetch_page"]
+      "Tools": ["search_web", "fetch_page", "http_request"]
+    },
+    "shell_tools": {
+      "Description": "Run commands and programs on the server Ari runs on: shell runs a command (and can start long jobs in the background), shell_job checks on or stops those jobs, run_code runs a short Python, JavaScript or bash program and returns what it prints. The owner approves anything that isn't read-only. For the user's own computer use run_command.",
+      "Tools": ["shell", "shell_job", "run_code"]
+    },
+    "browser_tools": {
+      "Description": "A real web browser: browser opens a page, takes a screenshot you can look at, reads its text, clicks, types and scrolls. Use it to see how a website actually looks, to use pages that need JavaScript, and to check a site you've built.",
+      "Tools": ["browser"]
+    },
+    "task_tools": {
+      "Description": "Keep a checklist for a multi-step job so no step is forgotten: todo.",
+      "Tools": ["todo"]
+    },
+    "chat_tools": {
+      "Description": "Read other conversations when you're missing context: list_chats shows the recent ones, read_chat reads the latest messages of one.",
+      "Tools": ["list_chats", "read_chat"]
+    },
+    "skill_tools": {
+      "Description": "Your own how-to notes: list_skills, read_skill, write_skill, delete_skill. Save one when you work out something worth repeating; check them before starting something you may have done before.",
+      "Tools": ["list_skills", "read_skill", "write_skill", "delete_skill"]
+    },
+    "authoring_tools": {
+      "Description": "Write tools of your own. tool_docs explains the format, write_tool compiles a tool you wrote, test_tool tries it, read_tool and list_my_tools show what exists, delete_tool removes one. Use these when you need a capability you don't have.",
+      "Tools": ["tool_docs", "write_tool", "test_tool", "read_tool", "list_my_tools", "delete_tool"]
     },
     "subagent_tools": {
       "Description": "Run subagents: spawn_agent starts one on a goal in the background with a subset of your loaded tools, wait_for_agent holds your reply open until they report back, cancel_agent stops one. Use for side tasks that need several tool calls, or to work on two things at once.",
