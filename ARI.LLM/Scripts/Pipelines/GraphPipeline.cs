@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using ARI.Common;
-using ARI.Scripting;
 using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
@@ -29,7 +28,6 @@ internal sealed class GraphPipeline : Pipeline
     /// <summary>Tokens Dialogue's prompt may use that aren't extra inputs: the memory block (either spelling) and the two it always has.</summary>
     private static readonly string[] DialogueOwnTokens = ["history", "memories", "memory"];
 
-    private readonly ScriptRegistry scripts;
 
     internal event Action<string>? ThreadBufferFull;
     internal event Action<string>? ThreadBecameInactive;
@@ -42,7 +40,6 @@ internal sealed class GraphPipeline : Pipeline
         IReadOnlyDictionary<string, CustomAgent> customAgents,
         Func<string?, PipelineGraph> graphFor,
         Func<string, PipelineGraph?> pipelineById,
-        ScriptRegistry scripts,
         ConcurrentDictionary<string, CancellationTokenSource> processingThreads,
         ConcurrentDictionary<string, LiveCallInfo>             liveCalls,
         Action<string>                                          notifyWatchers)
@@ -55,7 +52,6 @@ internal sealed class GraphPipeline : Pipeline
         this.customAgents = customAgents;
         this.graphFor     = graphFor;
         this.pipelineById = pipelineById;
-        this.scripts      = scripts;
 
         textingAgent.ThreadBufferFull     += key => ThreadBufferFull?.Invoke(key);
         textingAgent.ThreadBecameInactive += key => ThreadBecameInactive?.Invoke(key);
@@ -91,10 +87,12 @@ internal sealed class GraphPipeline : Pipeline
     {
         PipelineGraph graph = graphFor(thread.GraphId);
 
-        if (engram?.IsSweeping(threadKey) == true)
+        if (engram?.BlocksReply(threadKey) == true)
         {
             Shared.Logger.LogInformation("[Graph] ({Thread}) waiting for Engram sweep to finish before processing.", threadKey);
-            await engram.WaitForSweep(threadKey, cts.Token);
+            thread.WaitingOnMemory = true; notifyWatchers(threadKey);
+            try { await engram.WaitForSweep(threadKey, cts.Token); }
+            finally { thread.WaitingOnMemory = false; notifyWatchers(threadKey); }
         }
         Shared.Logger.LogInformation("[Graph:{Graph}] ({Thread}) prompt\n\"{Prompt}\"", graph.Name, threadKey, effectivePrompt);
 
@@ -135,9 +133,6 @@ internal sealed class GraphPipeline : Pipeline
                     outputs[wave[i].Id] = results[i];
                 }
             }
-            // A script feeding END can have several outputs; the wire says which one the pipeline returns.
-            PipelineGraph.Edge endEdge = graph.Edges.First(e => graph.Nodes.First(n => n.Id == e.To).Type == "end");
-            if (graph.Nodes.FirstOrDefault(n => n.Id == endEdge.From)?.Type == "script") result = outputs.GetValueOrDefault(OutputKey(graph, endEdge)) ?? result;
             return result;
 
             // A node that fails can carry on with its onError text instead of taking the whole reply down with it.
@@ -146,7 +141,7 @@ internal sealed class GraphPipeline : Pipeline
                 try { return await RunNodeCore(node); }
                 catch (Exception ex) when (node.OnError is not null && !cts.IsCancellationRequested)
                 {
-                    Shared.Logger.LogWarning(ex, "[Graph:{Graph}] ({Thread}) {Node} failed — carrying on with its fallback text. {Error}", graph.Name, threadKey, node.Agent ?? node.Script ?? node.Pipeline ?? node.Id, ex.Message);
+                    Shared.Logger.LogWarning(ex, "[Graph:{Graph}] ({Thread}) {Node} failed — carrying on with its fallback text. {Error}", graph.Name, threadKey, node.Agent ?? node.Pipeline ?? node.Id, ex.Message);
                     return node.OnError;
                 }
             }
@@ -168,19 +163,6 @@ internal sealed class GraphPipeline : Pipeline
                     return subResult;
                 }
 
-                // A script is one node too: its [Input] properties are the ports wired in, its [Output] properties the ports it offers.
-                if (node.Type == "script")
-                {
-                    ScriptShape shape = scripts.Shape(node.Script!) ?? throw new InvalidOperationException($"Script '{node.Script}' isn't loaded (does it have errors?).");
-                    Stopwatch scriptSw = Stopwatch.StartNew();
-                    ScriptContext scriptCtx = new(threadKey, username, cts.Token, _ => { }, AskAgent,
-                        memory is null ? null : new MemoryApi(memory, thread, contextSummary, privacy, AskAgent));
-                    Dictionary<string, string?> produced = await scripts.Run(node.Script!, inputs, scriptCtx);
-                    foreach ((string port, string? value) in produced) outputs[$"{node.Id}:{port.ToLowerInvariant()}"] = value;
-                    Shared.Logger.LogInformation("[Graph:{Graph}] ({Thread}) script '{Script}' finished in {Sec:F1}s.", graph.Name, threadKey, node.Script, scriptSw.Elapsed.TotalSeconds);
-                    return produced.GetValueOrDefault(shape.Outputs[0]);
-                }
-
                 string agentName = node.Agent!;
                 Stopwatch sw = Stopwatch.StartNew();
 
@@ -191,7 +173,7 @@ internal sealed class GraphPipeline : Pipeline
                 {
                     if (!customAgents.ContainsKey(SystemAgents.Walker)) return await Recall();
                     if (memory is null || !thread.HasMemoryAccess) return null;
-                    StartingPoints start = new MemoryApi(memory, thread, contextSummary, privacy, AskAgent).Start(message);
+                    StartingPoints start = new MemoryApi(memory, thread, contextSummary, privacy).Start(message);
                     if (start.Text is null) return null;
                     inputs["starting"] = start.Text;
                     inputs["audience"] = start.Audience;
@@ -331,29 +313,12 @@ internal sealed class GraphPipeline : Pipeline
         return string.Join("\n", fresh.Select(m => $"{m.Username}: {m.Content}"));
     }
 
-    /// <summary>Where a wire's value is stored: a node's output, or for START and scripts the specific output the wire leaves from
-    /// (a script wire that names none, or one the script doesn't have, takes its first output).</summary>
+    /// <summary>Where a wire's value is stored: a node's output, or for START the specific output (history or message) the wire leaves from.</summary>
     private string OutputKey(PipelineGraph graph, PipelineGraph.Edge e)
     {
         PipelineGraph.Node? source = graph.Nodes.FirstOrDefault(n => n.Id == e.From);
         if (source?.Type == "start") return $"{e.From}:{e.FromPort.ToLowerInvariant()}";
-        if (source?.Type == "script" && source.Script is { } name && scripts.Shape(name) is { Outputs.Length: > 0 } shape)
-        {
-            string port = shape.Outputs.FirstOrDefault(o => o.Equals(e.FromPort, StringComparison.OrdinalIgnoreCase)) ?? shape.Outputs[0];
-            return $"{e.From}:{port.ToLowerInvariant()}";
-        }
         return e.From;
-    }
-
-    /// <summary>What a script's ctx.Ask does: run one of the custom agents once, on a throw-away thread, with its {tokens} filled in
-    /// from <paramref name="tokens"/>, and hand back its text.</summary>
-    private async Task<string> AskAgent(string agentName, IReadOnlyDictionary<string, string> tokens, CancellationToken ct)
-    {
-        if (!customAgents.TryGetValue(agentName, out CustomAgent? agent)) throw new InvalidOperationException($"There is no custom agent called '{agentName}'.");
-        Dictionary<string, string> filled = new(tokens, StringComparer.OrdinalIgnoreCase);
-        using IDisposable _ = CustomAgent.Resolve(PipelineGraph.Fill(agent.AgentPrompt, filled));
-        string userText = string.IsNullOrWhiteSpace(agent.MessagePrompt) ? filled.GetValueOrDefault("message") ?? "" : PipelineGraph.Fill(agent.MessagePrompt, filled);
-        return await agent.Prompt(NewScratch(agent), userText, new PromptOptions { Ct = ct });
     }
 
     private static string FormatHistory(List<ThreadMessage> history)

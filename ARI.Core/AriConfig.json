@@ -10,12 +10,12 @@
       "ModelsPath": ""
     },
     "VoiceSynthesis": {
-      "Enabled": true,
+      "Enabled": false,
       "StyleTtsPath": "",
       "VoicesPath": ""
     },
     "Voice": {
-      "Enabled": true,
+      "Enabled": false,
       "ModelName": ""
     },
     "Brain": {

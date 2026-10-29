@@ -54,12 +54,17 @@ public class PipelineGraphsController(PersistentData persistentData) : Controlle
         JsonObject data = persistentData.GetPipelinesRaw() ?? Seed(Llm?.AgentPorts().ContainsKey("Memory") ?? true);
         PipelineGraph.UpgradeLegacyDefault(data);
         AddShipped(data);
+        // An agent deleted since this was saved can't stay in a pipeline: take it out and keep the file in step.
+        if (Llm is not null && PipelineGraph.RemoveMissingAgents(data, name => Llm.AgentPorts().ContainsKey(name)))
+        {
+            persistentData.SavePipelinesRaw(data);
+            Llm.ReloadPipelines();
+        }
         return Ok(new
         {
             data,
             ports    = Llm?.AgentPorts() ?? new Dictionary<string, string[]>(),
             optional = Llm?.AgentOptionalPorts() ?? PipelineGraph.OptionalPorts,
-            scripts  = (Llm?.ListScripts() ?? []).Where(x => x.Error is null).ToDictionary(x => x.Name, x => new { description = x.Description, inputs = x.Inputs, optionalInputs = x.OptionalInputs, outputs = x.Outputs }),
             problems = Problems(data),
         });
     }

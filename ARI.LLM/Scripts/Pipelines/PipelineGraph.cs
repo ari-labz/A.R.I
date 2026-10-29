@@ -9,18 +9,20 @@ namespace ARI.LLM;
 /// a custom agent gets one per {token} in its prompt. Each port takes exactly one wire.</summary>
 internal sealed class PipelineGraph
 {
-    /// <param name="Type">start, end, agent (a named agent), pipeline (another pipeline run as a single step) or script (a C# script).</param>
+    /// <param name="Type">start, end, agent (a named agent), pipeline (another pipeline run as a single step).</param>
     /// <param name="OnError">If set and this node fails, the pipeline carries on with this text as the node's output instead of failing.</param>
     /// <param name="ThreadCode">An agent step with a code keeps its own sub-thread under the chat, found again by that code on every message, so it remembers what it did before.</param>
-    internal sealed record Node(string Id, string Type, string? Agent, string? Pipeline = null, string? Script = null, string? OnError = null, string? ThreadCode = null);
+    internal sealed record Node(string Id, string Type, string? Agent, string? Pipeline = null, string? OnError = null, string? ThreadCode = null);
 
-    /// <summary>How the validator looks things up: an agent's input ports, another pipeline, a script's ports.</summary>
-    internal sealed record Env(Func<string, string[]?> PortsOf, Func<string, PipelineGraph?> PipelineById, Func<string, ScriptShape?> ScriptShape);
+    /// <summary>How the validator looks things up: an agent's input ports, or another pipeline.</summary>
+    internal sealed record Env(Func<string, string[]?> PortsOf, Func<string, PipelineGraph?> PipelineById);
     /// <param name="FromPort">Which output of the source the wire leaves from. Only START has more than one: "history" and "message".</param>
     internal sealed record Edge(string From, string To, string Port, bool Stream, string FromPort = StartHistory);
 
     internal string       Id    { get; init; } = "";
     internal string       Name  { get; init; } = "";
+    /// <summary>Left out of the new-thread selector. Default is never hidden, since every thread starts on it.</summary>
+    internal bool         Hidden { get; init; }
     internal List<Node>   Nodes { get; init; } = new();
     internal List<Edge>   Edges { get; init; } = new();
 
@@ -105,6 +107,26 @@ internal sealed class PipelineGraph
         TokenRx.Matches(prompt).Select(m => m.Groups[1].Value)
             .Where(t => !ImplicitTokens.Contains(t, StringComparer.OrdinalIgnoreCase)).Distinct().ToList();
 
+    /// <summary>Takes every step that names an agent <paramref name="exists"/> says is gone out of saved pipelines JSON, with the wires touching it,
+    /// so a deleted agent can't linger in the editor. True when anything changed.</summary>
+    internal static bool RemoveMissingAgents(System.Text.Json.Nodes.JsonObject data, Func<string, bool> exists)
+    {
+        bool changed = false;
+        if (data["pipelines"] is not System.Text.Json.Nodes.JsonArray list) return false;
+        foreach (System.Text.Json.Nodes.JsonObject pipeline in list.OfType<System.Text.Json.Nodes.JsonObject>())
+        {
+            if (pipeline["nodes"] is not System.Text.Json.Nodes.JsonArray nodes || pipeline["edges"] is not System.Text.Json.Nodes.JsonArray edges) continue;
+            HashSet<string> gone = nodes.OfType<System.Text.Json.Nodes.JsonObject>()
+                .Where(n => n["type"]?.GetValue<string>() == "agent" && n["agent"]?.GetValue<string>() is { Length: > 0 } a && !exists(a))
+                .Select(n => n["id"]!.GetValue<string>()).ToHashSet();
+            if (gone.Count == 0) continue;
+            foreach (System.Text.Json.Nodes.JsonNode? n in nodes.ToList()) if (gone.Contains(n!["id"]!.GetValue<string>())) nodes.Remove(n);
+            foreach (System.Text.Json.Nodes.JsonNode? e in edges.ToList()) if (gone.Contains(e!["from"]!.GetValue<string>()) || gone.Contains(e["to"]!.GetValue<string>())) edges.Remove(e);
+            changed = true;
+        }
+        return changed;
+    }
+
     internal static string Fill(string prompt, IReadOnlyDictionary<string, string> values) =>
         TokenRx.Replace(prompt, m => values.TryGetValue(m.Groups[1].Value, out string? v) ? v : m.Value);
 
@@ -119,14 +141,14 @@ internal sealed class PipelineGraph
                 foreach (JsonElement n in ns.EnumerateArray())
                     nodes.Add(new Node(Str(n, "id"), Str(n, "type"), n.TryGetProperty("agent", out JsonElement a) ? a.GetString() : null,
                         n.TryGetProperty("pipeline", out JsonElement sp) ? sp.GetString() : null,
-                        n.TryGetProperty("script", out JsonElement sc) ? sc.GetString() : null,
                         n.TryGetProperty("onError", out JsonElement oe) && oe.ValueKind == JsonValueKind.String ? (oe.GetString() == "@memory-unavailable" ? MemoryUnavailableText : oe.GetString()) : null,
                         n.TryGetProperty("thread", out JsonElement tc) && tc.ValueKind == JsonValueKind.String && tc.GetString() is { Length: > 0 } code ? code : null));
             if (p.TryGetProperty("edges", out JsonElement es))
                 foreach (JsonElement e in es.EnumerateArray())
                     edges.Add(new Edge(Str(e, "from"), Str(e, "to"), Str(e, "port"), e.TryGetProperty("mode", out JsonElement m) && m.GetString() == "stream",
                         Str(e, "fromPort") is { Length: > 0 } fp ? fp : StartHistory));
-            result.Add(new PipelineGraph { Id = Str(p, "id"), Name = Str(p, "name"), Nodes = nodes, Edges = edges });
+            result.Add(new PipelineGraph { Id = Str(p, "id"), Name = Str(p, "name"), Nodes = nodes, Edges = edges,
+                Hidden = p.TryGetProperty("hidden", out JsonElement hid) && hid.ValueKind == JsonValueKind.True });
         }
         return result;
     }
@@ -169,8 +191,8 @@ internal sealed class PipelineGraph
         // Inside a sub-pipeline nothing can write to the chat, so Dialogue (whose output IS the chat) can't be used there.
         if (!asSub && Nodes.FirstOrDefault(n => n.Id == replyId) is { } feeder)
         {
-            if (feeder.Type is "pipeline" or "script")
-                problems.Add($"A {(feeder.Type == "script" ? "script" : "sub-pipeline")} can't be the one connected to END; end with an agent that writes the reply.");
+            if (feeder.Type is "pipeline")
+                problems.Add("A sub-pipeline can't be the one connected to END; end with an agent that writes the reply.");
             else if (feeder.Type == "agent" && feeder.Agent!.Equals("Memory", StringComparison.OrdinalIgnoreCase))
                 problems.Add("Memory finds notes but can't write a reply; connect an agent that does to END.");
         }
@@ -186,14 +208,8 @@ internal sealed class PipelineGraph
                 problems.Add($"In '{sub.Name}': {inner}");
         }
 
-        foreach (Node n in Nodes.Where(n => n.Type == "script"))
-        {
-            ScriptShape? shape = n.Script is null ? null : env.ScriptShape(n.Script);
-            if (shape is null) { problems.Add($"Script '{n.Script}' isn't loaded (does it have errors?)."); continue; }
-            foreach (string input in shape.Inputs.Where(i => !shape.OptionalInputs.Contains(i, StringComparer.OrdinalIgnoreCase)))
-                if (!Edges.Any(e => e.To == n.Id && e.Port.Equals(input, StringComparison.OrdinalIgnoreCase)))
-                    problems.Add($"{n.Script}: {{{input}}} has nothing wired in.");
-        }
+        foreach (Node n in Nodes.Where(n => n.Type is not ("start" or "end" or "agent" or "pipeline")))
+            problems.Add($"A '{n.Type}' step isn't supported any more; remove it.");
 
         // A sub-thread code belongs to one agent: two different agents can't share "memory".
         foreach (IGrouping<string, Node> sharing in Nodes.Where(n => n.Type == "agent" && n.ThreadCode is not null).GroupBy(n => n.ThreadCode!, StringComparer.OrdinalIgnoreCase))
@@ -212,7 +228,7 @@ internal sealed class PipelineGraph
     {
         HashSet<string> done = new() { StartId };
         foreach (Node n in Nodes.Where(n => n.Type == "start")) done.Add(n.Id);
-        List<Node> left = Nodes.Where(n => n.Type is "agent" or "pipeline" or "script").ToList();
+        List<Node> left = Nodes.Where(n => n.Type is "agent" or "pipeline").ToList();
         List<List<Node>> waves = new();
         while (left.Count > 0)
         {

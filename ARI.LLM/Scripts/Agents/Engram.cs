@@ -27,8 +27,8 @@ internal class Engram : MemoryAgent, IDisposable
     [JsonIgnore] internal Context?     context        { get; set; }
     [JsonIgnore] internal string       PersistentDir  { get; set; } = string.Empty;
 
-    // Completed exchanges an active thread accumulates before an interval sweep; 0 disables it.
-    public int TurnsBeforeSweep { get; set; } = 5;
+    // Completed exchanges (a message from the user and the reply) an active thread accumulates before an interval sweep; 0 disables it.
+    public int TurnsBeforeSweep { get; set; } = 10;
 
     private readonly Dictionary<string, DateTime>       lastRun          = new();
     private readonly Dictionary<string, int>            lastHistoryCount = new();
@@ -42,19 +42,28 @@ internal class Engram : MemoryAgent, IDisposable
     private readonly HashSet<string>                    pendingQueue     = new(StringComparer.OrdinalIgnoreCase);
     private readonly HttpClient                         httpClient       = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
 
-    // Per-thread count of exchanges, never reset by a sweep — "every N turns" means N wall-clock turns.
+    // Per-thread count of exchanges since the thread was last swept, for any reason. Reset when a sweep starts.
     internal bool ShouldIntervalSweep(string threadKey)
     {
         if (TurnsBeforeSweep <= 0) return false;
         int count = exchangeCounts.AddOrUpdate(threadKey, 1, (_, c) => c + 1);
-        return count % TurnsBeforeSweep == 0;
+        return count >= TurnsBeforeSweep;
     }
+
+    // Sweeps (interval, compaction) that run beside the conversation: the reply does not wait for them.
+    private readonly ConcurrentDictionary<string, byte> backgroundSweeps = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>A sweep the next reply must wait for (dormant, closed, manual...). Interval and compaction sweeps run in parallel with replies.</summary>
+    internal bool BlocksReply(string threadKey) => IsSweeping(threadKey) && !backgroundSweeps.ContainsKey(threadKey);
 
     private ConcurrentDictionary<string, Thread> threads = new();
 
     internal event Action<string>? SweepCompleted;
 
     internal bool IsSweeping(string threadKey) => sweepingThreads.ContainsKey(threadKey);
+
+    /// <summary>Saving something right now, from a full sweep or from the chat's quick "remember" saves. Drives the "adding to memory" notice.</summary>
+    internal bool IsSaving(string threadKey) => IsSweeping(threadKey) || reflexDraining.ContainsKey(threadKey);
 
     internal async Task WaitForSweep(string threadKey, CancellationToken ct)
     {
@@ -139,17 +148,29 @@ internal class Engram : MemoryAgent, IDisposable
     /// store" classification — the thread's <see cref="Thread.EngramProcessed"/> flag is set, which is what
     /// releases it for deletion. If the run can't start (disabled, or a concurrent sweep holds the lock) the
     /// flag is left untouched so the caller's delete-retry poll tries again.</summary>
+    /// <summary>A thread Engram may remember: the Master's own conversations, and with the "remember other people" setting on, everyone else's too.</summary>
+    internal static bool MaySweep(Thread thread) =>
+        !thread.Internal && thread.HasUserMessages && (EngramOthersSetting.Enabled || (thread.HasMemoryAccess && thread.OwnerId is not null));
+
+    /// <summary>Copy of a live history: a reply may append to it while a parallel sweep reads.</summary>
+    private static List<ThreadItem> SnapshotHistory(Thread t)
+    {
+        for (int i = 0; i < 5; i++)
+            try { return new List<ThreadItem>(t.History); } catch (InvalidOperationException) { }
+        return new List<ThreadItem>();
+    }
+
     internal async Task RunEngram(string threadKey, string trigger, bool force = false)
     {
         // In DevMode Engram still runs in full: the brain it writes to is a throwaway copy (see LLMModule.PrepareDevSandbox), so nothing it does is kept.
 
-        // Guild threads never reach the brain. A Discord server is multi-party: anyone whitelisted can
+        // Guild threads don't reach the brain unless "remember other people" is switched on. A Discord server is multi-party: anyone whitelisted can
         // speak into the transcript, and a sweep treats every line as material to store — so a guest's
         // provocation becomes a durable note about a third party, and guarded mode cannot help because it
         // filters recall, not writes. Master-only filtering is not a substitute: the misfiled note that
         // prompted this gate was built from the Master's own messages, misread by pronoun resolution.
         // Force-proof like the DevMode gate above — a manual close must not be a way around it either.
-        if (threadKey.StartsWith("guild:", StringComparison.Ordinal))
+        if (threadKey.StartsWith("guild:", StringComparison.Ordinal) && !EngramOthersSetting.Enabled)
         {
             if (threads.TryGetValue(threadKey, out Thread? guildThread)) guildThread.EngramProcessed = true;
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] skipped — guild threads are never swept into the brain.", threadKey);
@@ -158,7 +179,7 @@ internal class Engram : MemoryAgent, IDisposable
 
         // Same for a DM conversation ARI opened with someone other than the Master (discord_dm_user): what they say
         // is theirs, not material for the Master's brain. Keys are dm:{userId} or dm:{userId}:{opened}.
-        if (threadKey.StartsWith("dm:", StringComparison.Ordinal) && Modules.Discord is { } discord
+        if (!EngramOthersSetting.Enabled && threadKey.StartsWith("dm:", StringComparison.Ordinal) && Modules.Discord is { } discord
             && ulong.TryParse(threadKey.Split(':')[1], out ulong dmUser) && dmUser != discord.MasterDiscordId)
         {
             if (threads.TryGetValue(threadKey, out Thread? dmThread)) dmThread.EngramProcessed = true;
@@ -174,6 +195,8 @@ internal class Engram : MemoryAgent, IDisposable
         if (force) await engramLock.WaitAsync();
         else if (!await engramLock.WaitAsync(0)) return;
         sweepingThreads[threadKey] = 0;
+        if (trigger is "interval" or "compaction") backgroundSweeps[threadKey] = 0;
+        exchangeCounts[threadKey] = 0;
 
         // --- Session record: the sweep's non-LLM decisions. The placement thread's own LLM traffic is
         //     recorded by the agent itself; these are the facts around it that explain the run. ---
@@ -186,7 +209,7 @@ internal class Engram : MemoryAgent, IDisposable
 
         try
         {
-            List<ThreadItem> allItems = threads.TryGetValue(threadKey, out Thread? dialogueThread) ? dialogueThread.History : new List<ThreadItem>();
+            List<ThreadItem> allItems = threads.TryGetValue(threadKey, out Thread? dialogueThread) ? SnapshotHistory(dialogueThread) : new List<ThreadItem>();
             List<ThreadItem> conversationItems = allItems.Where(i => i is LLM.Prompt or Response).ToList();
 
             // A code thread is swept with its own prompts: what was done and decided, filed on the project's note —
@@ -295,6 +318,7 @@ internal class Engram : MemoryAgent, IDisposable
                 processedThread.EngramProcessed = true;
 
             sweepingThreads.TryRemove(threadKey, out _);
+            backgroundSweeps.TryRemove(threadKey, out _);
             engramLock.Release();
             SweepCompleted?.Invoke(threadKey);
         }
@@ -303,7 +327,7 @@ internal class Engram : MemoryAgent, IDisposable
     // Test-only: runs Extract like RunEngram, then stops — never touches Save or writes anything.
     internal async Task<List<(string Entity, bool IsNew, string Excerpt, bool Sensitive)>> DebugExtractOnly(string threadKey)
     {
-        List<ThreadItem> allItems = threads.TryGetValue(threadKey, out Thread? dialogueThread) ? dialogueThread.History : new List<ThreadItem>();
+        List<ThreadItem> allItems = threads.TryGetValue(threadKey, out Thread? dialogueThread) ? SnapshotHistory(dialogueThread) : new List<ThreadItem>();
         List<ThreadItem> conversationItems = allItems.Where(i => i is LLM.Prompt or Response).ToList();
         List<ThreadItem> recentItems = conversationItems;   // treat as a fresh, first-ever sweep
 
@@ -707,7 +731,7 @@ internal class Engram : MemoryAgent, IDisposable
         foreach (Thread thread in threads.Values.ToList())
         {
             if (cts.IsCancellationRequested) break;
-            if (thread.Internal || thread.EngramProcessed || !thread.HasUserMessages || !thread.HasMemoryAccess || thread.OwnerId is null) continue;
+            if (thread.EngramProcessed || !MaySweep(thread)) continue;
             try { await RunEngram(thread.Key, "shutdown", force: true).WaitAsync(cts.Token); }
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { Shared.Logger.LogWarning("[Engram] shutdown sweep failed for {Key}: {Error}", thread.Key, ex.Message); }

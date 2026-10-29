@@ -8,7 +8,6 @@ export interface PipelineOption { id: string; label: string }
 const FALLBACK: PipelineOption[] = [
     { id: "dialogue", label: "Default" },
     { id: "code",     label: "Code" },
-    { id: "speech",   label: "Talk" },
 ]
 
 export function usePipelines(): PipelineOption[] {

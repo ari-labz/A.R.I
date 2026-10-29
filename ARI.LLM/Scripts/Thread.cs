@@ -261,6 +261,9 @@ public class Thread
     /// (Discord, proactive, internal) so existing behaviour is preserved.</summary>
     public bool HasMemoryAccess { get; set; } = true;
 
+    /// <summary>True while a reply is being held back because Engram is still saving this conversation. Shown to the user as "Reply queued".</summary>
+    public volatile bool WaitingOnMemory;
+
     /// <summary>True when she's talking to someone other than the Master: a guest's chat, a server channel, or a DM she
     /// opened with someone else. Such conversations get filtered recall and none of the Master's own tools.</summary>
     internal bool IsGuarded =>

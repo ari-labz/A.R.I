@@ -30,9 +30,7 @@ public class ModulesController(ILogger<ModulesController> logger) : ControllerBa
         ("API", "Web control panel",
          "Serves this control panel and the web chat. Turning it off would leave no way to turn it back on.", true),
         ("Voice", "Voice",
-         "Speaks Ari's replies out loud using the active speech engine.", false),
-        ("VoiceSynthesis", "Voice training",
-         "Installs the speech engines and trains new voices from your recordings.", false),
+         "Speaks Ari's replies out loud, installs the speech engines and trains new voices from your recordings. Turns on the Talk mode in the chat.", false),
         ("Listener", "Listener",
          "Transcribes your microphone with Whisper so you can talk to Ari instead of typing.", false),
         ("Brain", "Brain",
@@ -110,6 +108,13 @@ public class ModulesController(ILogger<ModulesController> logger) : ControllerBa
         }
 
         moduleNode["Enabled"] = req.Enabled;
+
+        // Voice is one switch for speaking and for training: the training half has no use on its own.
+        if (entry.Key.Equals("Voice", StringComparison.OrdinalIgnoreCase))
+        {
+            if (modules["VoiceSynthesis"] is not JsonObject t) { t = new JsonObject(); modules["VoiceSynthesis"] = t; }
+            t["Enabled"] = req.Enabled;
+        }
 
         try
         {
