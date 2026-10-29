@@ -465,9 +465,12 @@ public class ARI : BackgroundService, IModuleLifecycle
         try
         {
             _logger.LogInformation("ImageGen module is enabled. Checking ComfyUI...");
-            await ImageGenDependency.Check(config.modules.ImageGen.ComfyUiPath);
+            if (config.modules.ImageGen.IsRemote)
+                _logger.LogInformation("ImageGen is set to use the ComfyUI at {Url}; nothing to install.", config.modules.ImageGen.RemoteUrl);
+            else
+                await ImageGenDependency.Check(config.modules.ImageGen.ComfyUiPath);
 
-            if (string.IsNullOrEmpty(ImageGenDependency.Status))
+            if (config.modules.ImageGen.IsRemote || string.IsNullOrEmpty(ImageGenDependency.Status))
             {
                 imageGenModule = new ImageGenModule(config.modules.ImageGen);
                 CommonModules.Register(imageGen: imageGenModule);
