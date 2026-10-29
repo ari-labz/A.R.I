@@ -19,7 +19,13 @@ public class ImageGenModule : IImageGenModule
     private Process?                _process = null;
     private Timer?                  _idleTimer;
 
-    public bool IsReady => Dependency.Status == "";
+    // A remote ComfyUI needs nothing installed here, so it is ready as soon as it is configured.
+    public bool IsReady => config.IsRemote || Dependency.Status == "";
+
+    public ImageGenConfig Config => config;
+
+    /// <summary>Where ComfyUI answers: the configured remote URL, or the copy ARI runs on this machine.</summary>
+    public string BaseUrl => config.IsRemote ? config.RemoteUrl.Trim().TrimEnd('/') : $"http://127.0.0.1:{config.Port}";
 
     public ImageGenModule(ImageGenConfig config)
     {
@@ -30,9 +36,9 @@ public class ImageGenModule : IImageGenModule
         string   prompt,
         string   negativePrompt     = "",
         string   checkpointFilename = "",
-        int      steps              = 25,
-        int      width              = 1024,
-        int      height             = 1024,
+        int?     steps              = null,
+        int?     width              = null,
+        int?     height             = null,
         long     seed               = -1,
         string[] referenceImages    = default!,
         float    denoise            = 1.0f,
@@ -47,9 +53,12 @@ public class ImageGenModule : IImageGenModule
             checkpointFilename = config.Checkpoint;
 
         referenceImages ??= [];
+        int drawSteps  = steps  ?? config.Steps;
+        int drawWidth  = width  ?? config.Width;
+        int drawHeight = height ?? config.Height;
 
         // Upload reference images to ComfyUI's input directory before building the workflow.
-        string baseUrl = $"http://127.0.0.1:{config.Port}";
+        string baseUrl = BaseUrl;
         List<string> uploadedNames = new();
         using HttpClient hc = new();
         foreach (string path in referenceImages)
@@ -69,8 +78,8 @@ public class ImageGenModule : IImageGenModule
         }
 
         string workflow = uploadedNames.Count > 0
-            ? BuildImg2ImgWorkflow(prompt, negativePrompt, checkpointFilename, steps, width, height, seed, uploadedNames[0], denoise)
-            : BuildWorkflow(prompt, negativePrompt, checkpointFilename, steps, width, height, seed);
+            ? BuildImg2ImgWorkflow(prompt, negativePrompt, checkpointFilename, drawSteps, drawWidth, drawHeight, seed, uploadedNames[0], denoise)
+            : BuildWorkflow(prompt, negativePrompt, checkpointFilename, drawSteps, drawWidth, drawHeight, seed);
 
         // Submit the prompt
         HttpResponseMessage submitResp = await hc.PostAsync(
@@ -159,6 +168,7 @@ public class ImageGenModule : IImageGenModule
 
     private async Task EnsureRunning(CancellationToken ct)
     {
+        if (config.IsRemote) return;   // not ours to start
         lock (_lock)
         {
             if (_process is { HasExited: false }) return;
@@ -236,6 +246,7 @@ public class ImageGenModule : IImageGenModule
 
     private void ResetIdleTimer()
     {
+        if (config.IsRemote) return;   // never stop a ComfyUI that isn't ours
         lock (_lock)
         {
             _idleTimer?.Dispose();
@@ -247,7 +258,7 @@ public class ImageGenModule : IImageGenModule
 
     // ── Workflow builder ──────────────────────────────────────────────────────
 
-    private static string BuildWorkflow(
+    private string BuildWorkflow(
         string prompt, string negativePrompt, string checkpoint,
         int steps, int width, int height, long seed)
     {
@@ -294,9 +305,9 @@ public class ImageGenModule : IImageGenModule
                     ["latent_image"]   = new JsonArray { "4", 0 },
                     ["seed"]           = seed,
                     ["steps"]          = steps,
-                    ["cfg"]            = 7.0,
-                    ["sampler_name"]   = "euler",
-                    ["scheduler"]      = "normal",
+                    ["cfg"]            = config.Cfg,
+                    ["sampler_name"]   = config.Sampler,
+                    ["scheduler"]      = config.Scheduler,
                     ["denoise"]        = 1.0
                 }
             },
@@ -324,7 +335,7 @@ public class ImageGenModule : IImageGenModule
     }
 
     // Standard img2img: load reference image → VAE encode → KSampler with denoise < 1 → SaveImage.
-    private static string BuildImg2ImgWorkflow(
+    private string BuildImg2ImgWorkflow(
         string prompt, string negativePrompt, string checkpoint,
         int steps, int width, int height, long seed,
         string referenceImageName, float denoise)
@@ -394,9 +405,9 @@ public class ImageGenModule : IImageGenModule
                     ["latent_image"]   = new JsonArray { "10", 0 },
                     ["seed"]           = seed,
                     ["steps"]          = steps,
-                    ["cfg"]            = 7.0,
-                    ["sampler_name"]   = "euler",
-                    ["scheduler"]      = "normal",
+                    ["cfg"]            = config.Cfg,
+                    ["sampler_name"]   = config.Sampler,
+                    ["scheduler"]      = config.Scheduler,
                     ["denoise"]        = (double)denoise
                 }
             },

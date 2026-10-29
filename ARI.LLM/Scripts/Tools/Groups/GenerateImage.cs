@@ -73,17 +73,17 @@ internal sealed class GenerateImage : Tool
                     width = new
                     {
                         type        = "integer",
-                        description = "Image width in pixels. Defaults to 1024. Use multiples of 64."
+                        description = "Image width in pixels. Leave out to use the configured default. Use multiples of 64."
                     },
                     height = new
                     {
                         type        = "integer",
-                        description = "Image height in pixels. Defaults to 1024. Use multiples of 64."
+                        description = "Image height in pixels. Leave out to use the configured default. Use multiples of 64."
                     },
                     steps = new
                     {
                         type        = "integer",
-                        description = "Denoising steps. Higher = better quality but slower. Defaults to 25. Range: 10–50."
+                        description = "Denoising steps. Higher = better quality but slower. Leave out to use the configured default. Range: 10–50."
                     }
                 },
                 required = new[] { "prompt" }
@@ -105,9 +105,9 @@ internal sealed class GenerateImage : Tool
 
         string  prompt         = root.TryGetProperty("prompt",           out JsonElement pr) ? pr.GetString() ?? "" : "";
         string  negativePrompt = root.TryGetProperty("negative_prompt",  out JsonElement np) ? np.GetString() ?? "" : "";
-        int     width          = root.TryGetProperty("width",            out JsonElement w)  ? w.GetInt32()  : 1024;
-        int     height         = root.TryGetProperty("height",           out JsonElement h)  ? h.GetInt32()  : 1024;
-        int     steps          = root.TryGetProperty("steps",            out JsonElement sp) ? sp.GetInt32() : 25;
+        int?    width          = root.TryGetProperty("width",            out JsonElement w)  ? w.GetInt32()  : null;
+        int?    height         = root.TryGetProperty("height",           out JsonElement h)  ? h.GetInt32()  : null;
+        int?    steps          = root.TryGetProperty("steps",            out JsonElement sp) ? sp.GetInt32() : null;
         float   denoise        = root.TryGetProperty("denoise",          out JsonElement dn) ? (float)dn.GetDouble() : -1f;
 
         // Resolve reference images: filenames → absolute scratchpad paths
