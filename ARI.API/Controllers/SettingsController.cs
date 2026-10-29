@@ -31,6 +31,7 @@ public class SettingsController(PersistentData persistentData, ILogger<SettingsC
         int? ReasoningEffort,
         bool? PersistedThreadsEnabled,
         bool? EngramOthers,
+        bool? DevMode,
         LoggingSettings? Logging);
 
     [HttpGet]
@@ -67,6 +68,7 @@ public class SettingsController(PersistentData persistentData, ILogger<SettingsC
         if (patch.SafeModePrompt is not null) SafeModePromptStore.Set(patch.SafeModePrompt);
         if (patch.Persona        is not null) PersonaStore.Set(patch.Persona);
         if (patch.PersistedThreadsEnabled is { } persisted) PersistedThreadsSetting.Set(persisted);
+        if (patch.DevMode is { } dev) Llm?.SetDevMode(dev);
         if (patch.EngramOthers is { } others) EngramOthersSetting.Set(others);
         if (patch.ReasoningEffort is { } effort) ReasoningEffortStore.Step = effort;
         if (patch.DreamingEnabled is { } dreaming) Modules.Llm!.DreamingEnabled = dreaming;
@@ -97,6 +99,8 @@ public class SettingsController(PersistentData persistentData, ILogger<SettingsC
             persistedThreadsEnabled = PersistedThreadsSetting.Enabled,
             // Whether Engram may remember conversations that are not the Master's own: server channels, DMs with other people, guests.
             engramOthers = EngramOthersSetting.Enabled,
+            // Engram writes to a throwaway copy of the brain while this is on; switch it from the control panel header or Ctrl+Shift+D.
+            devMode = Shared.DevMode,
             // How many completed exchanges a thread builds up before Engram sweeps it mid-conversation. 0 = off.
             engramTurns    = Llm?.GetEngramTurnInterval() ?? persistentData.GetAgent("Engram")?.TurnsBeforeSweep ?? 5,
             // The session recorder (DTI, dream and chat logs): what it keeps and for how long. Read when ARI starts.

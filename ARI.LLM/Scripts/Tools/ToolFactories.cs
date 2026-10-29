@@ -35,8 +35,18 @@ internal static class ToolFactories
         ["preview_file"]   = t => Fs(t) is { } fs ? new PreviewFile(fs)   : null,
         ["read_file"]      = t => Fs(t) is { } fs ? new Read(fs)      : null,
         ["read_document"]  = t => Fs(t) is { } fs ? new ReadDocument(fs)  : null,
+        ["read_docx"]      = t => Fs(t) is { } fs ? new ReadDocument(fs, "read_docx", "docx", "Read a Word document (.docx). With only a path you get its length and the opening; then use pages to read sections, or find to search the whole document for a word and see where it appears. Check the contents before editing with edit_docx.", "pages", "find") : null,
+        ["read_xlsx"]      = t => Fs(t) is { } fs ? new ReadDocument(fs, "read_xlsx", "xlsx", "Read an Excel workbook (.xlsx). With only a path you get each sheet's name, size and its first rows; then name a sheet and a range such as A1:F50 to read cells, or use find to locate a value anywhere in the workbook.", "find", "sheet", "range") : null,
+        ["read_pdf"]      = t => Fs(t) is { } fs ? new ReadDocument(fs, "read_pdf", "pdf", "Read a PDF. With only a path you get its page count and the opening; for a long PDF use find to locate a word (it names the pages), then pages to read just those. A scanned PDF with no text layer comes back empty.", "pages", "find") : null,
+        ["read_pptx"]      = t => Fs(t) is { } fs ? new ReadDocument(fs, "read_pptx", "pptx", "Read a PowerPoint deck (.pptx), slide by slide including speaker notes. With only a path you get the slide count and the first slides; use pages to read specific slides or find to search the whole deck.", "pages", "find") : null,
         ["write_xlsx"]     = t => With<WriteXlsx>(t),
         ["edit_xlsx"]      = t => With<EditXlsx>(t),
+        ["write_docx"]     = t => With<WriteDocx>(t),
+        ["edit_docx"]      = t => With<EditDocx>(t),
+        ["write_pptx"]     = t => With<WritePptx>(t),
+        ["write_pdf"]      = t => With<WritePdf>(t),
+        ["pdf_merge"]      = t => With<PdfMerge>(t),
+        ["pdf_extract_pages"] = t => With<PdfExtractPages>(t),
         ["list_directory"] = t => Fs(t) is { } fs ? new ListDirectory(fs) : null,
         ["search_files"]   = t => Fs(t) is { } fs ? new SearchFiles(fs)   : null,
         ["find_files"]     = t => Fs(t) is { } fs ? new FindFiles(fs)     : null,
@@ -97,11 +107,13 @@ internal static class ToolFactories
         // Tools written in the [Tool]/[Param] style: the same shape a custom tool has, so each can be read and forked in the Tools tab.
         ["shell"]          = t => With<Shell>(t),
         ["shell_job"]      = t => With<ShellJob>(t),
+        ["jobs"]           = t => With<Jobs>(t),
         ["run_code"]       = t => With<RunCode>(t),
         ["http_request"]   = t => With<HttpRequest>(t),
         ["todo"]           = t => With<Todo>(t),
         ["list_chats"]     = t => With<ListChats>(t),
         ["read_chat"]      = t => With<ReadChat>(t),
+        ["search_chats"]   = t => With<SearchChats>(t),
         ["list_skills"]    = t => With<ListSkills>(t),
         ["read_skill"]     = t => With<ReadSkill>(t),
         ["write_skill"]    = t => With<WriteSkill>(t),
@@ -153,8 +165,8 @@ internal static class ToolFactories
 
     // Filesystem tool names that unlock when a FilesystemRoot is set.
     // Read-only subset registered for dream/read-only agents; full set for normal agents.
-    private static readonly string[] FilesystemReadToolNames  = ["preview_file", "read_file", "read_document", "list_directory", "search_files", "find_files", "search_vault"];
-    private static readonly string[] FilesystemWriteToolNames = ["edit_file", "write_file", "write_xlsx", "edit_xlsx", "deliver_file", "create_scratchpad", "build_project"];
+    private static readonly string[] FilesystemReadToolNames  = ["preview_file", "read_file", "read_document", "read_docx", "read_xlsx", "read_pdf", "read_pptx", "list_directory", "search_files", "find_files", "search_vault"];
+    private static readonly string[] FilesystemWriteToolNames = ["edit_file", "write_file", "write_xlsx", "edit_xlsx", "write_docx", "edit_docx", "write_pptx", "write_pdf", "pdf_merge", "pdf_extract_pages", "deliver_file", "create_scratchpad", "build_project"];
 
     /// <summary>
     /// Registers all filesystem tools that now resolve for the thread. Call this immediately after
@@ -208,7 +220,7 @@ internal static class ToolFactories
         "git", "git_clone", "github",
         "build_project",   // runs the project's own build scripts on this machine
         // Run code, read other people's conversations, or change what Ari can do: the owner only.
-        "shell", "shell_job", "run_code", "http_request", "list_chats", "read_chat",
+        "shell", "shell_job", "run_code", "http_request", "list_chats", "read_chat", "search_chats",
         "browser", "list_skills", "read_skill", "write_skill", "delete_skill",
         "tool_docs", "write_tool", "test_tool", "read_tool", "list_my_tools", "delete_tool",
     };

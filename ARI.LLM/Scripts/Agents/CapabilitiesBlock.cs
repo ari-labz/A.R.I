@@ -23,7 +23,10 @@ internal static class CapabilitiesBlock
         if (owner && ToolRegistry.IsEnabled("write_tool"))
             sb.AppendLine("You can write tools for yourself (tool_docs, then write_tool): if a job needs a capability that doesn't exist, build it, test it with test_tool, and use it.");
         if (owner && ToolRegistry.IsEnabled("run_code"))
-            sb.AppendLine("You can run code (run_code, shell) to calculate, process files, test an idea or check something instead of guessing. Check your work before saying it's done.");
+            sb.AppendLine("How you work on a real job: for anything with several steps, write the plan with todo and keep it up to date. Use your tools rather than guessing or " +
+                          "going from memory: run_code to calculate or process data, shell to run things, read_document for PDFs and spreadsheets, browser to look at a page. " +
+                          "When a tool returns an error, read it, fix the cause and try again before you give up or ask. Check your work before saying it's done: run it, open the file, " +
+                          "take a screenshot of the page you built. If you can't do something with what you have, search for a tool or write one.");
         if (owner && ToolRegistry.IsEnabled("list_chats"))
             sb.AppendLine("If you feel you're missing context, list_chats and read_chat show your other recent conversations.");
 

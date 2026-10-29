@@ -84,6 +84,21 @@ internal static class BrowserHost
         finally { gate.Release(); }
     }
 
+    /// <summary>Prints HTML to an A4 PDF in a throwaway page, so it never disturbs the page a conversation has open.</summary>
+    internal static async Task<byte[]> PdfFromHtml(string html)
+    {
+        IPage page;
+        await gate.WaitAsync();
+        try { page = await (await Launch()).NewPageAsync(); } finally { gate.Release(); }
+        try
+        {
+            await page.SetContentAsync(html);
+            return await page.PdfDataAsync(new PdfOptions { Format = PuppeteerSharp.Media.PaperFormat.A4, PrintBackground = true,
+                MarginOptions = new PuppeteerSharp.Media.MarginOptions { Top = "18mm", Bottom = "18mm", Left = "18mm", Right = "18mm" } });
+        }
+        finally { try { await page.CloseAsync(); } catch { } }
+    }
+
     internal static async Task Close(string conversation)
     {
         if (pages.TryRemove(conversation, out IPage? p)) try { await p.CloseAsync(); } catch { }
@@ -114,7 +129,7 @@ internal sealed class BrowserTool : Tool
                 properties = new
                 {
                     action    = new { type = "string", description = "open, screenshot, text, click, type, press, scroll, eval, back, links or close.", @enum = new[] { "open", "screenshot", "text", "click", "type", "press", "scroll", "eval", "back", "links", "close" } },
-                    url       = new { type = "string", description = "For open: the address. Use http://localhost:PORT for something running on this machine." },
+                    url       = new { type = "string", description = "For open: the address. Use http://localhost:PORT for something running on this machine, or file:///full/path/page.html for an HTML file you made." },
                     selector  = new { type = "string", description = "For click and type: a CSS selector, or text:Some visible words to click an element by its text." },
                     text      = new { type = "string", description = "For type: what to type. For press: a key like Enter or Tab. For eval: the JavaScript expression." },
                     direction = new { type = "string", description = "For scroll: down, up, top or bottom." },
@@ -141,7 +156,8 @@ internal sealed class BrowserTool : Tool
                 case "open":
                 {
                     string url = Arg("url");
-                    if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? u) || u.Scheme is not ("http" or "https")) return "[Error: give a full address starting with http:// or https://.]";
+                    if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? u) || u.Scheme is not ("http" or "https" or "file")) return "[Error: give a full address starting with http://, https:// or file://.]";
+                    if (u.Scheme == "file" && !File.Exists(u.LocalPath)) return $"[Error: there is no file at {u.LocalPath}.]";
                     IResponse? resp = await page.GoToAsync(url, WaitUntilNavigation.Load);
                     return $"Opened {page.Url} — \"{await page.GetTitleAsync()}\" (HTTP {(int?)resp?.Status}). Take a screenshot to see it, or use text to read it.";
                 }

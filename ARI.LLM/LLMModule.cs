@@ -67,6 +67,7 @@ public class LLMModule : ILLMModule, IDisposable
     // its active view (see ARI.UI's attachWatch), so a count of zero means nobody is currently looking.
     // Backs the "push if unwatched" rule: a completed response only rings the thread owner's phone when this is 0.
     private readonly ConcurrentDictionary<string, int>                     threadWatchers      = new();
+    private UnreadNotifier? unreadNotifier;
     private readonly ConcurrentDictionary<string, Thread>                                         threads           = new();
 
     private readonly List<Server>  _servers    = new();
@@ -152,6 +153,8 @@ public class LLMModule : ILLMModule, IDisposable
             // which only exists for files a user is meant to tune in place.
             ToolGroups.Load(Path.Combine(Paths.BuildPath, "ToolGroups.json"));
             CustomTools.Start();
+            // Long standalone jobs run in the background by default, so she can keep talking while they work (switchable per tool in the control panel).
+            foreach (string slow in new[] { "write_pdf", "write_pptx", "generate_image", "git_clone" }) ToolRegistry.SeedIfNew(slow, null, async: true);
 
             if (TryGetPropCI(doc.RootElement, "Agents", out JsonElement arr) && arr.ValueKind == JsonValueKind.Array)
                 foreach (JsonElement el in arr.EnumerateArray())
@@ -165,6 +168,7 @@ public class LLMModule : ILLMModule, IDisposable
         }
 
 
+        realBrainConfig = brainConfig;
         if (brainConfig is not null)
         {
             if (Shared.DevMode) brainConfig.VaultPath = PrepareDevSandbox(brainConfig);
@@ -329,6 +333,8 @@ public class LLMModule : ILLMModule, IDisposable
                     "- Search an Obsidian note vault: search_vault — only useful if the bound project is an Obsidian graph, not a code repo; calling it on code will return nothing\n" +
                     "- Check the current time: get_time — the time was already given to you at the start of this dream, but call this again if the dream has run long and you want a fresh read before waking\n" +
                     "- Check when your master actually last messaged you: recent_activity — reads real conversation timestamps, not your memory notes (which can lag hours behind an actual conversation). Your memory notes going quiet does NOT mean your owner has gone quiet — call recent_activity before saying or implying 'you've been quiet' or 'it's been a while,' and only use that framing if it confirms a real gap\n\n" +
+                    "Dreaming is read-only. You can look at anything you have a tool to read, but you cannot change anything: you cannot write, edit, move or delete a file, edit or create a memory, run a command, make a document, write a tool or a skill, or message anyone except through wake. " +
+                    "If you decide something should change (a note is wrong, a file needs fixing, a tool should exist), don't try to do it. Keep it as the one thing you wake your master about, or leave it for a future dream.\n\n" +
                     "The wake tool ends the dream and sends your master a message that will notify them. " +
                     "The threshold is 'worth a notification' — not urgency. A question you need answered, a curiosity, something you noticed, something you want to say — all of these clear the bar. " +
                     "A wake message is about ONE topic — name it in the topic field before you write the content, and let that be the one thing the whole message stays on. If you found several separate things worth raising, send the strongest one now and leave the rest — they're not lost, a future dream can still pick them up. " +
@@ -918,6 +924,25 @@ public class LLMModule : ILLMModule, IDisposable
 
     /// <summary>DevMode never touches the real brain. Engram and everything else still run in full, but against a throwaway copy of it made fresh at
     /// every start (<c>Brain.devrun</c> beside the real one), so you can read exactly what she tried to remember without any of it being kept.</summary>
+    private BrainConfig? realBrainConfig;
+    private readonly object devModeLock = new();
+
+    /// <summary>Turns Dev Mode on or off while running. On: a fresh throwaway copy of the brain is made and everything points at it. Off: the
+    /// real brain is loaded again. Either way the index is rebuilt for the brain now in use. Does nothing if the brain module is disabled.</summary>
+    public void SetDevMode(bool on)
+    {
+        lock (devModeLock)
+        {
+            if (Shared.DevMode == on) return;
+            Shared.SetDevMode(on);
+            if (realBrainConfig is null) return;
+            BrainConfig config = new() { Enabled = realBrainConfig.Enabled, VaultPath = realBrainConfig.VaultPath, BackupPath = realBrainConfig.BackupPath, MaxBackups = realBrainConfig.MaxBackups };
+            if (on) config.VaultPath = PrepareDevSandbox(config);
+            IndexStats stats = Brain.Initialize(config);
+            _logger.LogWarning("Dev Mode switched {State}: brain is now {Root} ({Notes} notes).", on ? "ON" : "OFF", Brain.VaultRoot, stats.Notes);
+        }
+    }
+
     private string PrepareDevSandbox(BrainConfig config)
     {
         string real = Path.GetFullPath(config.VaultPath.Length > 0 ? config.VaultPath : Paths.Brain);
@@ -1087,6 +1112,7 @@ public class LLMModule : ILLMModule, IDisposable
     public Task<string> Prompt(string threadKey, string prompt, string username, string? platformContext = null, List<Attachment>? messageAttachments = null, InferencePriority priority = InferencePriority.Normal)
     {
         wakeStreak.TryRemove(threadKey, out _);
+        unreadNotifier?.Read(threadKey);   // replying means they've read it
         return RouteThenWake(threadKey, prompt, username, platformContext, null, CancellationToken.None, messageAttachments, priority: priority);
     }
 
@@ -1378,6 +1404,7 @@ public class LLMModule : ILLMModule, IDisposable
     public IDisposable WatchThread(string threadKey, Channel<bool?> channel)
     {
         threadWatchers.AddOrUpdate(threadKey, 1, (_, n) => n + 1);
+        unreadNotifier?.Read(threadKey);   // opening a thread is reading it
         int released = 0;
         void Release()
         {
@@ -1589,22 +1616,22 @@ public class LLMModule : ILLMModule, IDisposable
 
     private async Task SendProactivePush(string body, string threadKey, string? ownerId)
     {
-        try { await (Modules.WebPush?.SendPushNotification(body, url: $"/?thread={threadKey}", title: "Ari", ownerUserId: ownerId) ?? Task.CompletedTask); }
+        try { await (Modules.WebPush?.SendPushNotification(body, url: $"/?thread={threadKey}", title: "Ari", ownerUserId: ownerId, tag: $"ari-{threadKey}") ?? Task.CompletedTask); }
         catch (Exception ex) { _logger.LogWarning("[Push] notification failed for thread '{Key}': {Msg}", threadKey, ex.Message); }
     }
 
-    /// <summary>A completed response that nobody was watching live is exactly the case a push exists for
-    /// — the thread's owner would otherwise only find out next time they happen to open the app. Internal/guest
-    /// threads never ring the phone; a thread with a watcher already saw the reply stream in, so no push.</summary>
+    /// <summary>A reply nobody was watching is the case a push exists for, but not at once: someone may be about to look. If the thread is
+    /// still unread two minutes after the first unread reply, its owner's devices (and only theirs) get one notification; tapping it
+    /// opens the thread. Voice, background and ownerless threads never ring the phone. See <see cref="UnreadNotifier"/>.</summary>
     private void PushIfUnwatched(Thread thread, string threadKey)
     {
-        if (thread.Internal || thread.OwnerId is null) return;   // no owner, nobody to ring
-        if (HasWatchers(threadKey)) return;
-
-        string? body = thread.History.OfType<Response>().LastOrDefault(r => r.State == State.Complete)?.ContentText;
-        if (string.IsNullOrWhiteSpace(body)) return;
-
-        _ = SendProactivePush(body, threadKey, thread.OwnerId);
+        if (thread.Internal || thread.OwnerId is null || thread.Pipeline is not (ThreadPipeline.Dialogue or ThreadPipeline.Code)) return;
+        unreadNotifier ??= new UnreadNotifier(TimeSpan.FromMinutes(2), HasWatchers,
+            key => threads.TryGetValue(key, out Thread? t)
+                ? (t.OwnerId, t.History.OfType<Response>().LastOrDefault(r => r.State == State.Complete)?.ContentText)
+                : null,
+            (key, text, owner) => SendProactivePush(text, key, owner));
+        unreadNotifier.ReplyFinished(threadKey, thread.OwnerId);
     }
 
     public void NotifyTyping(string threadKey)

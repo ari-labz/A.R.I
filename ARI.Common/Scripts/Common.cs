@@ -26,6 +26,9 @@ public static class Shared
     // automated launcher sets ARI_DEVMODE=1 and Engram is guaranteed disabled regardless of config.
     public static bool DevMode { get; private set; }
 
+    /// <summary>The control panel's live Dev Mode switch. Only flips the flag; <c>LLMModule.SetDevMode</c> is what swaps the brain.</summary>
+    public static void SetDevMode(bool on) => DevMode = on;
+
     public static void ResolveDevMode(bool configValue)
     {
         string env = (Environment.GetEnvironmentVariable("ARI_DEVMODE") ?? "").Trim().ToLowerInvariant();

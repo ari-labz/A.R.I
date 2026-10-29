@@ -93,7 +93,7 @@ public static class ToolRegistry
     // The tools every conversation starts with in hand, so Ari doesn't have to find them first. The owner can pin or unpin any tool.
     private static readonly HashSet<string> DefaultPinned = new(StringComparer.OrdinalIgnoreCase)
     {
-        "read_file", "read_document", "write_file", "edit_file", "list_directory", "search_files", "find_files", "deliver_file",
+        "read_file", "write_file", "edit_file", "list_directory", "search_files", "find_files", "deliver_file", "jobs",
         "search_web", "fetch_page", "shell", "run_code", "todo",
     };
 
@@ -273,34 +273,60 @@ public static class ToolRegistry
 /// </summary>
 internal static class AsyncToolJobs
 {
+    internal sealed class Job
+    {
+        internal required string Label, ToolName, Thread; internal required DateTime Started; internal required CancellationTokenSource Cancel;
+        internal string State = "running"; internal string? Result; internal DateTime? Finished;
+        internal string Summary => $"{Label}: {State}" + (Finished is { } f ? $" after {(f - Started).TotalSeconds:0.#}s" : $" for {(DateTime.Now - Started).TotalSeconds:0}s");
+    }
+
     private static readonly TimeSpan MaxRunTime = TimeSpan.FromMinutes(30);
     private static readonly ConcurrentDictionary<string, int> nextId = new();
+    private static readonly ConcurrentDictionary<string, List<Job>> jobs = new();
+
+    /// <summary>The background jobs this conversation has started, oldest first (finished ones stay listed so their result can be read again).</summary>
+    internal static List<Job> For(string threadKey) { lock (jobs) return jobs.TryGetValue(threadKey, out List<Job>? l) ? l.ToList() : new(); }
+
+    internal static Job? Find(string threadKey, string id) =>
+        For(threadKey).FirstOrDefault(j => j.Label.Equals(id, StringComparison.OrdinalIgnoreCase) || j.Label.EndsWith("#" + id.TrimStart('#'), StringComparison.OrdinalIgnoreCase) && (id.All(char.IsDigit) || id.StartsWith('#')));
+
+    internal static string Cancel(Job job)
+    {
+        if (job.State != "running") return $"{job.Label} had already {job.State}.";
+        job.State = "cancelled"; job.Finished = DateTime.Now; job.Cancel.Cancel();
+        return $"{job.Label} cancelled; its result will be ignored.";
+    }
 
     internal static ToolResult Start(Thread thread, Tool tool, string argsJson)
     {
         string label = $"{tool.Name} #{nextId.AddOrUpdate(thread.Key, 1, (_, n) => n + 1)}";
         string key   = thread.Key;
+        Job job = new() { Label = label, ToolName = tool.Name, Thread = key, Started = DateTime.Now, Cancel = new CancellationTokenSource() };
+        lock (jobs) { if (!jobs.TryGetValue(key, out List<Job>? l)) jobs[key] = l = new(); l.Add(job); if (l.Count > 30) l.RemoveAt(0); }
 
         _ = Task.Run(async () =>
         {
             string text;
             try
             {
-                ToolResult result = await tool.Execute(argsJson).WaitAsync(MaxRunTime);
+                ToolResult result = await tool.Execute(argsJson).WaitAsync(MaxRunTime, job.Cancel.Token);
                 result = tool.PostRun(thread, argsJson, result);
                 text = result.Kind == ToolResult.ContentKind.Text
                     ? result.Text
                     : "it produced something that isn't text, which can't be handed over after the fact";
+                job.State = "finished";
             }
-            catch (TimeoutException) { text = $"it ran past its {MaxRunTime.TotalMinutes:0}-minute limit and was given up on"; }
+            catch (OperationCanceledException) { job.Result = "cancelled"; return; }   // already reported to her by the cancel itself
+            catch (TimeoutException) { text = $"it ran past its {MaxRunTime.TotalMinutes:0}-minute limit and was given up on"; job.State = "failed"; }
             catch (Exception e)
             {
                 Shared.Logger.LogWarning(e, "[Tools] ({Thread}) async {Job} failed", key, label);
-                text = $"it failed: {e.Message}";
+                text = $"it failed: {e.Message}"; job.State = "failed";
             }
+            job.Result = text; job.Finished = DateTime.Now;
             ParentReports.Send(key, $"tool:{label}", $"[Result of {label}, which you started in the background]\n{text}");
         });
 
-        return $"{label} started in the background. Carry on — its result will reach you when it finishes, so don't wait for it.";
+        return $"{label} started in the background. Carry on — its result will reach you when it finishes, so don't wait for it. (Check on it or stop it with the jobs tool.)";
     }
 }

@@ -47,7 +47,7 @@ internal static class Xlsx
 
 [Tool("write_xlsx", "Create an Excel workbook (.xlsx) from text. Give each sheet a line starting with ## and its name, then its rows as comma-separated values, one row per line. " +
                     "A value starting with = is a formula (=SUM(B2:B9)); numbers, true/false and dates like 2026-10-29 are stored as such. Quote a value that contains a comma. " +
-                    "It saves into your working folder; give it to the user with deliver_file. To change an existing workbook use edit_xlsx.")]
+                    "It saves into your working folder; give it to the user with deliver_file. It never overwrites a file that was there before the conversation. To change an existing workbook use edit_xlsx.", Group = "xlsx_tools")]
 public class WriteXlsx : Tool
 {
     [Param("Where to save it, ending in .xlsx, e.g. budget.xlsx")]
@@ -61,7 +61,8 @@ public class WriteXlsx : Tool
 
     public override Task<string> Run()
     {
-        string full = Xlsx.Resolve(WorkingFolder, Path);
+        string full = SaveRules.Resolve(WorkingFolder, Path, ".xlsx", CallThread, out string? refusal);
+        if (refusal is not null) return Task.FromResult(refusal);
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(full)!);
         using XLWorkbook wb = new();
         IXLWorksheet? ws = null; int row = 0, sheets = 0, cells = 0;
@@ -81,13 +82,14 @@ public class WriteXlsx : Tool
         }
         if (sheets == 0) return Task.FromResult("[Error: there was nothing to write.]");
         wb.SaveAs(full);
+        SaveRules.Created(CallThread, full);
         return Task.FromResult($"Saved {full} ({sheets} sheet{(sheets == 1 ? "" : "s")}, {cells} cells). Give it to the user with deliver_file.");
     }
 }
 
 [Tool("edit_xlsx", "Change an existing Excel workbook: set cells, add rows, add sheets. One edit per line. " +
                    "Set a cell:  Sheet1!B2 = 42   (the sheet name is optional and defaults to the first). A value starting with = is a formula:  C10 = =SUM(C2:C9). " +
-                   "Add a row after the last used row:  append Sheet1: Rent,1200,=B5*12. Add a sheet:  sheet Totals. Look at the file first with read_document so you know the layout.")]
+                   "Add a row after the last used row:  append Sheet1: Rent,1200,=B5*12. Add a sheet:  sheet Totals. Look at the file first with read_xlsx so you know the layout. The user's own workbook is never changed in place: your edits go to a copy.", Group = "xlsx_tools")]
 public class EditXlsx : Tool
 {
     [Param("The workbook to change, ending in .xlsx.")]
@@ -96,10 +98,22 @@ public class EditXlsx : Tool
     [Param("The edits, one per line, in the formats above.")]
     public string Edits;
 
+    [Param("Where to save the changed copy, ending in .xlsx. The user's own workbook is never changed in place, so this defaults to \"<name> - edited.xlsx\".", Optional = true)]
+    public string SaveAs;
+
     public override Task<string> Run()
     {
         string full = Xlsx.Resolve(WorkingFolder, Path);
         if (!File.Exists(full)) return Task.FromResult($"[Error: {full} doesn't exist. Create it with write_xlsx.]");
+        // The user's own workbook is never changed in place: the edits go to a copy.
+        if (CallThread is not null && !CallThread.CreatedFiles.Contains(full))
+        {
+            string name = string.IsNullOrWhiteSpace(SaveAs) ? System.IO.Path.GetFileNameWithoutExtension(full) + " - edited.xlsx" : SaveAs;
+            string copy = SaveRules.Resolve(WorkingFolder, name, ".xlsx", CallThread, out string? refusal);
+            if (refusal is not null) return Task.FromResult(refusal);
+            File.Copy(full, copy, overwrite: true); full = copy;
+        }
+        SaveRules.Created(CallThread, full);
         using XLWorkbook wb = new(full);
         int done = 0; List<string> problems = new();
         foreach (string raw in Edits.Replace("\r", "").Split('\n'))

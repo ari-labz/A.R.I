@@ -66,7 +66,7 @@ public sealed class WebPushModule : IWebPushModule
         if (_subs.TryGetValue(endpoint, out StoredSubscription? sub) && sub.UserId == userId && _subs.TryRemove(endpoint, out _)) { Save(); log.LogInformation("[WebPush] subscription removed ({Count} left).", _subs.Count); }
     }
 
-    public async Task SendPushNotification(string text, string? url = null, string? title = null, string? ownerUserId = null)
+    public async Task SendPushNotification(string text, string? url = null, string? title = null, string? ownerUserId = null, string? tag = null)
     {
         // A push goes to the devices of the person it is for: a thread's owner. A thread with no owner (a public Discord
         // chat, an integration) has nobody to ring, so it sends nothing.
@@ -80,6 +80,7 @@ public sealed class WebPushModule : IWebPushModule
             title = string.IsNullOrWhiteSpace(title) ? "Ari" : title,
             body  = text,
             url,
+            tag,
         });
 
         log.LogInformation("[WebPush] sending to {Count} subscription(s)…", targets.Length);
@@ -88,7 +89,7 @@ public sealed class WebPushModule : IWebPushModule
         {
             // Last path segment (the token) is enough to tell subscriptions apart in the log without
             // dumping the full endpoint URL every time.
-            string tag = s.Endpoint.Length > 24 ? s.Endpoint[^24..] : s.Endpoint;
+            string device = s.Endpoint.Length > 24 ? s.Endpoint[^24..] : s.Endpoint;
             try
             {
                 await _client.SendNotificationAsync(new PushSubscription(s.Endpoint, s.P256dh, s.Auth), payload, _vapid);
@@ -96,18 +97,18 @@ public sealed class WebPushModule : IWebPushModule
                 // far as the server can ever confirm; whether the OS/browser actually surfaces it on
                 // the device is outside this process (battery optimization, the PWA not being
                 // installed to the home screen, notifications disabled at the OS level, etc.).
-                log.LogInformation("[WebPush] accepted by push service ({Tag}).", tag);
+                log.LogInformation("[WebPush] accepted by push service ({Tag}).", device);
             }
             catch (WebPushException ex) when (ex.StatusCode is System.Net.HttpStatusCode.Gone
                                                             or System.Net.HttpStatusCode.NotFound)
             {
                 // 404/410 — the browser dropped this subscription; prune it.
-                log.LogWarning("[WebPush] subscription gone ({Tag}, {Status}) — pruning.", tag, ex.StatusCode);
+                log.LogWarning("[WebPush] subscription gone ({Tag}, {Status}) — pruning.", device, ex.StatusCode);
                 dead.Add(s.Endpoint);
             }
             catch (Exception ex)
             {
-                log.LogWarning("[WebPush] send failed ({Tag}): {Msg}", tag, ex.Message);
+                log.LogWarning("[WebPush] send failed ({Tag}): {Msg}", device, ex.Message);
             }
         }
 

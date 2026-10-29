@@ -1865,8 +1865,8 @@ public abstract class Agent
             turn.SearchSoftGateFired = true;
             turn.Messages.Add(new { role = "user", content =
                 $"[Research gate — {turn.ProductiveSearches} searches done] Stop searching and start reading. If a result looks " +
-                "right, open it with fetch_page rather than searching again — you have plenty of reads left and only one search. " +
-                "If you already have enough to answer, answer now." });
+                "right, open it with fetch_page rather than searching again — you have plenty of reads left. " +
+                "Keep searching only if a specific fact is still missing; if you already have enough to answer, answer now." });
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) search soft gate fired ({N} productive searches).", Name, thread.Key, turn.ProductiveSearches);
         }
 

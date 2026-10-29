@@ -85,3 +85,40 @@ public class ReadChat : Tool
         return Task.FromResult(text.Length == 0 ? "No matching messages." : $"Last {Math.Min(take, msgs.Count)} of {msgs.Count} messages in {name}:\n\n{text}");
     }
 }
+
+[Tool("search_chats", "Search every saved conversation for a word or phrase, to find what was said about something: a decision, a name, a file, something the user told you. " +
+                      "Returns where it appears with a little context; then open that conversation with read_chat.", Access = ToolAccess.Read)]
+public class SearchChats : Tool
+{
+    [Param("The word or phrase to look for.")]
+    public string Query;
+
+    [Param("How many matches to show. Default 12, at most 40.", Optional = true)]
+    public int Count = 12;
+
+    public override string OnValidate() => CallThread is { IsGuarded: false } ? null : "Only the owner's own conversations can see other chats.";
+
+    public override Task<string> Run()
+    {
+        if (string.IsNullOrWhiteSpace(Query)) return Task.FromResult("[Error: say what to search for.]");
+        if (!Directory.Exists(ChatTranscripts.Folder)) return Task.FromResult("There are no saved conversations yet.");
+        int limit = Math.Clamp(Count, 1, 40);
+        StringBuilder sb = new();
+        int hits = 0;
+        foreach (FileInfo f in new DirectoryInfo(ChatTranscripts.Folder).GetFiles("*.txt").OrderByDescending(f => f.LastWriteTime))
+        {
+            foreach (string m in ChatTranscripts.Messages(File.ReadAllText(f.FullName)))
+            {
+                int at = m.IndexOf(Query, StringComparison.OrdinalIgnoreCase);
+                if (at < 0) continue;
+                string stamp = m.Length > 21 ? m[1..20] : "";
+                string body = Regex.Replace(m, @"^\[[^\]]+\] ", "").Replace('\n', ' ');
+                int from = Math.Max(0, body.IndexOf(Query, StringComparison.OrdinalIgnoreCase) - 70);
+                string snippet = body.Substring(from, Math.Min(body.Length - from, 200));
+                sb.AppendLine($"- {Path.GetFileNameWithoutExtension(f.Name)} · {stamp}: …{snippet}…");
+                if (++hits >= limit) return Task.FromResult($"First {limit} matches for \"{Query}\" (newest conversations first; refine the search for fewer):\n{sb.ToString().TrimEnd()}");
+            }
+        }
+        return Task.FromResult(hits == 0 ? $"No conversation mentions \"{Query}\"." : $"{hits} match{(hits == 1 ? "" : "es")} for \"{Query}\":\n{sb.ToString().TrimEnd()}");
+    }
+}

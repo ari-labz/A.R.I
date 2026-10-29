@@ -623,6 +623,7 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
     <div id="cp-header">
       <img id="cp-logo" src="/images/logo-header.png?v=2" alt="A·R·I" />
       <span id="cp-title">Overview</span>
+      <button id="cp-devmode" type="button" title="Dev Mode: Engram writes to a throwaway copy of the brain. Ctrl+Shift+D" style="margin-left:auto;font-size:11px;font-weight:700;letter-spacing:.06em;padding:4px 10px;border-radius:999px;border:1px solid var(--border);background:transparent;color:var(--text-dim);cursor:pointer;">DEV MODE: OFF</button>
     </div>
 
     <!-- Servers tab -->
@@ -8457,6 +8458,31 @@ document.getElementById('ig-save-settings-btn').addEventListener('click', async 
     } catch (e) { status.textContent = 'Save failed: ' + e.message; }
 });
 
+</script>
+<script>
+// Dev Mode switch: while on, Engram writes to a throwaway copy of the brain. Header button or Ctrl+Shift+D.
+(function () {
+    const btn = document.getElementById('cp-devmode');
+    let on = false, busy = false;
+    function paint() {
+        btn.textContent = 'DEV MODE: ' + (on ? 'ON' : 'OFF');
+        btn.style.color = on ? '#101618' : 'var(--text-dim)';
+        btn.style.background = on ? '#CADDE2' : 'transparent';
+    }
+    async function set(value) {
+        if (busy) return; busy = true; btn.disabled = true;
+        try {
+            const r = await cpPatchSettings({ devMode: value });
+            if (r.ok) on = !!(await r.json()).settings.devMode;
+        } catch (e) { console.error('Dev Mode switch failed', e); }
+        busy = false; btn.disabled = false; paint();
+    }
+    btn.addEventListener('click', () => set(!on));
+    document.addEventListener('keydown', e => {
+        if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'd') { e.preventDefault(); set(!on); }
+    });
+    (async () => { try { on = !!(await cpGetSettings()).devMode; } catch {} paint(); })();
+})();
 </script>
 </body>
 </html>

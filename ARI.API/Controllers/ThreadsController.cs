@@ -724,7 +724,11 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         }
 
         // ── Normal single file ────────────────────────────────────────────────────
-        if (BinaryMimes.Contains(mime))
+        // PDF, Word, Excel and PowerPoint are binary but Ari reads them (read_file / read_document), so they are accepted here.
+        string ext = Path.GetExtension(fileName);
+        bool readableDocument = ext.Equals(".pdf", StringComparison.OrdinalIgnoreCase) || ext.Equals(".docx", StringComparison.OrdinalIgnoreCase)
+                             || ext.Equals(".xlsx", StringComparison.OrdinalIgnoreCase) || ext.Equals(".pptx", StringComparison.OrdinalIgnoreCase);
+        if (BinaryMimes.Contains(mime) && !readableDocument)
             return StatusCode(415, new { error = $"{Path.GetExtension(fileName).TrimStart('.').ToUpper()} files cannot be attached — binary formats are not supported." });
 
         // All files land on the filesystem (scratchpad or project dir); ARI reads them via read_file.
@@ -1146,7 +1150,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
                 listing.AppendLine("[Workspace files]");
                 foreach (string f in files)
                     listing.AppendLine(Path.GetRelativePath(scratchpadDir, f));
-                listing.AppendLine("Use list_directory and read_file to inspect these files.");
+                listing.AppendLine("Use list_directory and read_file to inspect these files. PDF, Word, PowerPoint and Excel files are read with read_document (never the shell).");
                 platformContext = listing.ToString().TrimEnd();
             }
         }
