@@ -132,6 +132,7 @@ internal static class ToolFactories
     /// missing project binding for everything (e.g. git fails on a bound project with no repos in it).</summary>
     internal static string UnavailableReason(string toolName, Thread thread) => toolName.ToLowerInvariant() switch
     {
+        _ when !ToolRegistry.IsEnabled(toolName) => "it has been switched off in the control panel",
         _ when thread.IsGuarded && MASTER_ONLY_TOOLS.Contains(toolName) => "it isn't available in this conversation",
         "github" when !thread.IsAdminChat              => "it's only available in the master's own chats in the app",
         "github" when GitHubStore.ResolveToken() is null => "no GitHub account is connected — the user can connect one on the control panel's GitHub page",
@@ -159,9 +160,10 @@ internal static class ToolFactories
         "build_project",   // runs the project's own build scripts on this machine
     };
 
-    internal static bool TryBuild(string toolName, Thread thread, out Tool tool)
+    internal static bool TryBuild(string toolName, Thread thread, out Tool tool, bool ignoreSettings = false)
     {
         tool = null!;
+        if (!ignoreSettings && !ToolRegistry.IsEnabled(toolName)) return false;
         if (thread.IsGuarded && MASTER_ONLY_TOOLS.Contains(toolName)) return false;
         if (!_factories.TryGetValue(toolName, out Func<Thread, Tool?>? factory)) return false;
         if (factory(thread) is not { } built) return false;

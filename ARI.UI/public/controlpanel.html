@@ -179,6 +179,13 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 .cp-placeholder { color: var(--text-dim); font-size: 13px; padding: 6px 0; font-style: italic; }
 
 /* ── tab ─────────────────────────────────────────────── */
+.tl-loose { border-radius:10px; border:1px dashed transparent; }
+.tl-loose-head { font-size:12px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--text-dim); padding:0 14px 6px; }
+.tl-group { border:1px solid var(--border); border-radius:10px; background:var(--user-bubble,var(--col-control-panel-line-1656-colour)); overflow:hidden; }
+.tl-new { border:1px dashed var(--border); border-radius:10px; padding:14px; text-align:center; font-size:13px; color:var(--text-dim); cursor:pointer; }
+.tl-new:hover { color:var(--text); border-color:var(--accent); }
+.tl-over { outline:2px solid var(--accent); outline-offset:-2px; background:color-mix(in srgb, var(--accent) 8%, transparent); }
+body.tl-dragging .tl-loose { border-color:var(--border); }
 .cp-tab { display: flex; flex-direction: column; }
 
 /* ── voice synthesis ─────────────────────────────────── */
@@ -531,6 +538,7 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
         <div class="cp-nav-item" data-tab="models" data-group="llm">Models</div>
         <div class="cp-nav-item" data-tab="agents" data-group="llm">Agents</div>
         <div class="cp-nav-item" data-tab="pipelines" data-group="llm">Pipelines</div>
+        <div class="cp-nav-item" data-tab="tools" data-group="llm">Tools</div>
         <div class="cp-nav-item" data-tab="conventions" data-group="llm">Coding Conventions</div>
         <div class="cp-nav-item" data-tab="persona" data-group="llm">Persona</div>
         <div class="cp-nav-item" data-tab="feedback" data-group="llm">Response Feedback</div>
@@ -1107,6 +1115,33 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 
     </div>
 
+    <!-- Tools tab -->
+    <div id="tab-tools" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div class="vs-section">
+        <div class="vs-section-title">Tools</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 4px;">
+          Everything Ari can call. Switch a tool off and she can no longer see or use it, even mid-conversation.
+          Groups are how she asks for several tools at once; move a tool to another group, or make a new one, to suit you.
+        </p>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 16px;">
+          <b>Async</b> tools don't make Ari wait: she calls one, carries on talking, and the result is handed to her when it finishes.
+          Changes apply straight away.
+        </p>
+        <input id="tl-filter" class="vs-input" type="text" placeholder="Filter tools…" style="width:100%;max-width:320px;margin-bottom:16px;">
+        <div id="tl-builtin" style="display:flex;flex-direction:column;gap:12px;">
+          <span style="font-size:12px;color:var(--text-dim);">Loading…</span>
+        </div>
+      </div>
+
+      <div class="vs-section" style="margin-top:28px;">
+        <div class="vs-section-title">Custom tools</div>
+        <div id="tl-custom" style="padding:18px 16px;border:1px dashed var(--border);border-radius:10px;font-size:13px;color:var(--text-dim);line-height:1.5;">
+          No custom tools yet. Soon you'll be able to write your own in C# here — start from an example tool, or drop in a <code>.cs</code> file —
+          and they'll appear in this list with the same switches as the built-in ones.
+        </div>
+      </div>
+    </div>
+
     <!-- Settings tab -->
     <div id="tab-settings" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
 
@@ -1542,8 +1577,8 @@ cpGetSettings().then(d => { if (d.userName) window._ariUserName = d.userName; })
 
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), pipelines: document.getElementById('tab-pipelines'),  brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), github: document.getElementById('tab-github'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), users: document.getElementById('tab-users'), settings: document.getElementById('tab-settings'), modules: document.getElementById('tab-modules'), 'imagegen-model': document.getElementById('tab-imagegen-model'), 'imagegen-settings': document.getElementById('tab-imagegen-settings'), calendar: document.getElementById('tab-calendar'), customisation: document.getElementById('tab-customisation') };
-const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', pipelines: 'Pipelines',  brain: 'Brain', discord: 'Discord', github: 'GitHub', llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', users: 'Users', settings: 'Settings', modules: 'Modules', 'imagegen-model': 'Image Generation — Model', 'imagegen-settings': 'Image Generation — Settings', calendar: 'Calendar', customisation: 'Customisation', prompts: 'Prompts' };
+const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), pipelines: document.getElementById('tab-pipelines'),  brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), github: document.getElementById('tab-github'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), users: document.getElementById('tab-users'), settings: document.getElementById('tab-settings'), modules: document.getElementById('tab-modules'), 'imagegen-model': document.getElementById('tab-imagegen-model'), 'imagegen-settings': document.getElementById('tab-imagegen-settings'), tools: document.getElementById('tab-tools'), calendar: document.getElementById('tab-calendar'), customisation: document.getElementById('tab-customisation') };
+const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', pipelines: 'Pipelines', tools: 'Tools', brain: 'Brain', discord: 'Discord', github: 'GitHub', llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', users: 'Users', settings: 'Settings', modules: 'Modules', 'imagegen-model': 'Image Generation — Model', 'imagegen-settings': 'Image Generation — Settings', calendar: 'Calendar', customisation: 'Customisation', prompts: 'Prompts' };
 
 let srvPollTimer = null;
 // Declared here (not down in the GitHub section) because switchTab('overview') below calls stopGhPoll()
@@ -1576,6 +1611,7 @@ function switchTab(name) {
     if (name === 'pipelines' && !pipDirty) pipMode = 'list';   // the tab always opens on the list; Edit opens the editor
     if (name === 'agents' || name === 'pipelines') loadAgents();
     if (name === 'llmconfigs') loadLLMConfigs();
+    if (name === 'tools') loadTools();
     if (name === 'calendar') loadCalendar();
     if (name === 'discord') loadDiscord();
     if (name === 'github') loadGitHub();
@@ -1800,6 +1836,147 @@ async function applyModuleVisibility() {
     } catch {}
 }
 applyModuleVisibility();
+
+// ── tools ─────────────────────────────────────────────────
+// One card per group (shipped or user-made), one row per tool. Every switch saves at once and the server
+// applies it to the next tool load and the next call, so there is nothing to restart.
+const tlBuiltin = document.getElementById('tl-builtin');
+const tlFilter  = document.getElementById('tl-filter');
+let tlData = null;
+
+async function loadTools() {
+    if (!tlBuiltin) return;
+    try {
+        const r = await cpFetch('/api/v1/admin/tools');
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+        tlData = await r.json();
+        renderTools();
+    } catch (e) {
+        tlBuiltin.innerHTML = `<span style="font-size:13px;color:var(--col-control-panel-line-1647-text);">Could not load tools: ${escHtml(e.message)}</span>`;
+    }
+}
+
+async function tlSave(url, body) {
+    const r = await cpFetch(url, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!r.ok) alert((await r.json().catch(() => ({}))).error || 'Could not save.');
+    await loadTools();
+}
+
+function tlMove(name, group) {
+    return tlSave(`/api/v1/admin/tools/${encodeURIComponent(name)}`, { group });
+}
+function tlNewGroupName() {
+    return (prompt('Name for the new group (lowercase letters, numbers and _):') || '').trim().toLowerCase().replace(/[^a-z0-9_]+/g, '_');
+}
+
+// A tool row. Drag it onto a group (or the loose area) to move it; the select does the same by keyboard or touch.
+function tlRow(t, groupNames, loose) {
+    const row = document.createElement('div');
+    row.draggable = true;
+    row.dataset.tool = t.name;
+    row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:9px 14px;border-top:1px solid var(--border);' + (t.enabled ? '' : 'opacity:.55;');
+    row.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', t.name); e.dataTransfer.effectAllowed = 'move'; row.style.opacity = '.4'; document.body.classList.add('tl-dragging'); });
+    row.addEventListener('dragend', () => { row.style.opacity = t.enabled ? '' : '.55'; document.body.classList.remove('tl-dragging'); });
+
+    const handle = document.createElement('span');
+    handle.textContent = '⠿'; handle.title = 'Drag onto a group to move this tool';
+    handle.style.cssText = 'cursor:grab;color:var(--text-dim);font-size:15px;line-height:1;user-select:none;';
+    row.appendChild(handle);
+
+    const text = document.createElement('div'); text.style.cssText = 'flex:1;min-width:0;';
+    text.innerHTML =
+        `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+           <code style="font-size:13px;font-weight:600;">${escHtml(t.name)}</code>
+           ${t.module ? `<span class="mdl-badge notdl">needs ${escHtml(t.module)}</span>` : ''}
+         </div>
+         ${t.description ? `<div style="font-size:12px;color:var(--text-dim);line-height:1.4;margin-top:2px;">${escHtml(t.description)}</div>` : ''}`;
+    row.appendChild(text);
+
+    const sel = document.createElement('select'); sel.className = 'vs-input';
+    sel.style.cssText = 'width:145px;font-size:12px;padding:3px 6px;';
+    const opts = [...new Set([...groupNames, t.group].filter(Boolean))];
+    sel.innerHTML = `<option value="">${loose ? 'Add to group…' : '(no group)'}</option>`
+                  + opts.map(g => `<option value="${escHtml(g)}"${g === t.group ? ' selected' : ''}>${escHtml(g)}</option>`).join('')
+                  + `<option value="@new">New group…</option>`;
+    sel.onchange = () => {
+        let g = sel.value;
+        if (g === '@new') { g = tlNewGroupName(); if (!g) { sel.value = t.group || ''; return; } }
+        if (g === '' && loose) return;
+        tlMove(t.name, g);
+    };
+    row.appendChild(sel);
+
+    for (const [label, key, tip] of [['Async', 'async', 'Ari carries on while this runs and is handed the result when it finishes.'], ['On', 'enabled', '']]) {
+        const box = document.createElement('div'); box.style.cssText = 'display:flex;align-items:center;gap:6px;'; if (tip) box.title = tip;
+        box.innerHTML = `<span style="font-size:11.5px;color:var(--text-dim);">${label}</span>`;
+        box.appendChild(buildToggle(t[key], on => tlSave(`/api/v1/admin/tools/${encodeURIComponent(t.name)}`, { [key]: on })));
+        row.appendChild(box);
+    }
+    return row;
+}
+
+// Anything dropped on `el` calls onDrop(toolName); the target lights up while a tool hovers over it.
+function tlDropTarget(el, onDrop) {
+    el.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; el.classList.add('tl-over'); });
+    el.addEventListener('dragleave', e => { if (!el.contains(e.relatedTarget)) el.classList.remove('tl-over'); });
+    el.addEventListener('drop', e => { e.preventDefault(); el.classList.remove('tl-over'); const n = e.dataTransfer.getData('text/plain'); if (n) onDrop(n); });
+}
+
+function renderTools() {
+    const q = (tlFilter.value || '').trim().toLowerCase();
+    const match = (t, g) => !q || t.name.includes(q) || (t.description || '').toLowerCase().includes(q) || g.includes(q);
+    const builtin = tlData.tools.filter(t => t.source === 'builtin');
+    const groupNames = tlData.groups.map(g => g.name);
+    tlBuiltin.innerHTML = '';
+
+    // Loose tools first: no card, just rows. Dropping a tool here takes it out of its group.
+    const loose = builtin.filter(t => !t.group && match(t, ''));
+    const looseBox = document.createElement('div');
+    looseBox.className = 'tl-loose';
+    looseBox.innerHTML = `<div class="tl-loose-head">Loose tools <span style="font-weight:400;">· in no group — Ari asks for these by name</span></div>`;
+    for (const t of loose) { const r = tlRow(t, groupNames, true); r.style.borderTop = '0'; r.style.borderBottom = '1px solid var(--border)'; looseBox.appendChild(r); }
+    if (loose.length === 0) looseBox.insertAdjacentHTML('beforeend', '<div style="padding:12px 14px;font-size:12.5px;color:var(--text-dim);">Drop a tool here to take it out of its group.</div>');
+    tlDropTarget(looseBox, n => tlMove(n, ''));
+    tlBuiltin.appendChild(looseBox);
+
+    for (const info of tlData.groups) {
+        const tools = builtin.filter(t => t.group === info.name);
+        const shown = tools.filter(t => match(t, info.name));
+        if (q && shown.length === 0) continue;
+
+        const card = document.createElement('div');
+        card.className = 'tl-group';
+        const head = document.createElement('div');
+        head.style.cssText = 'display:flex;align-items:center;gap:12px;padding:11px 14px;';
+        head.innerHTML =
+            `<div style="flex:1;min-width:0;">
+               <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                 <span style="font-size:14px;font-weight:600;">${escHtml(info.name)}</span>
+                 ${info.custom ? '<span class="mdl-badge startup">Yours</span>' : ''}
+                 <span style="font-size:12px;color:var(--text-dim);">${tools.length} tool${tools.length === 1 ? '' : 's'}</span>
+               </div>
+               <div style="font-size:12.5px;color:var(--text-dim);line-height:1.4;margin-top:2px;">${escHtml(info.description)}</div>
+             </div>`;
+        const slot = document.createElement('div'); slot.style.cssText = 'display:flex;align-items:center;gap:8px;';
+        slot.innerHTML = '<span style="font-size:11.5px;color:var(--text-dim);">All on</span>';
+        slot.appendChild(buildToggle(info.enabled, on => tlSave(`/api/v1/admin/tools/groups/${encodeURIComponent(info.name)}`, { enabled: on })));
+        head.appendChild(slot);
+        card.appendChild(head);
+        for (const t of shown) card.appendChild(tlRow(t, groupNames, false));
+        tlDropTarget(card, n => tlMove(n, info.name));
+        tlBuiltin.appendChild(card);
+    }
+
+    // Dropping on (or clicking) this makes a new group.
+    const fresh = document.createElement('div');
+    fresh.className = 'tl-new';
+    fresh.textContent = '+ New group — click, or drop a tool here';
+    const makeGroup = n => { const g = tlNewGroupName(); if (g) tlMove(n, g); };
+    fresh.onclick = () => { const g = tlNewGroupName(); if (!g) return; const t = prompt('Which tool should go in it first? (tool name)'); if (t) tlMove(t.trim(), g); };
+    tlDropTarget(fresh, makeGroup);
+    tlBuiltin.appendChild(fresh);
+}
+if (tlFilter) tlFilter.addEventListener('input', () => { if (tlData) renderTools(); });
 
 // ── Persistent Threads ────────────────────────────────────
 function fmtBytes(n) { return n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; }
