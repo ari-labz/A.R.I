@@ -30,19 +30,19 @@ internal static class AfterWriting
 
 internal static class WordWriter
 {
-    internal static void Write(string path, string markdown)
+    internal static void Write(string path, string markdown, string? folder = null)
     {
         using WordprocessingDocument doc = WordprocessingDocument.Create(path, WordprocessingDocumentType.Document);
         MainDocumentPart main = doc.AddMainDocumentPart();
         main.Document = new Document(new Body());
         AddStyles(main); AddNumbering(main);
         Body body = main.Document.Body!;
-        foreach (Block b in MarkdownDoc.Parse(markdown)) body.Append(Build(main, b));
+        foreach (Block b in MarkdownDoc.Parse(markdown)) body.Append(Build(main, b, folder));
         body.Append(new SectionProperties(new PageSize { Width = 11906, Height = 16838 }, new PageMargin { Top = 1134, Bottom = 1134, Left = 1134, Right = 1134, Header = 708, Footer = 708 }));
         main.Document.Save();
     }
 
-    private static IEnumerable<OpenXmlElement> Build(MainDocumentPart main, Block b)
+    private static IEnumerable<OpenXmlElement> Build(MainDocumentPart main, Block b, string? folder = null)
     {
         switch (b.Kind)
         {
@@ -53,6 +53,8 @@ internal static class WordWriter
             case BlockKind.Rule:
                 yield return new Paragraph(new ParagraphProperties(new ParagraphBorders(new BottomBorder { Val = BorderValues.Single, Size = 6, Color = "BBBBBB", Space = 1 })));
                 break;
+            case BlockKind.Image:
+                yield return Picture(main, b, folder); break;
             case BlockKind.PageBreak: yield return new Paragraph(new DocumentFormat.OpenXml.Wordprocessing.Run(new Break { Type = BreakValues.Page })); break;
             case BlockKind.Table:
                 Table t = new(new TableProperties(new TableStyle { Val = "TableGrid" }, new TableWidth { Width = "5000", Type = TableWidthUnitValues.Pct }));
@@ -71,6 +73,28 @@ internal static class WordWriter
                 yield return t; yield return new Paragraph();
                 break;
         }
+    }
+
+    private static Paragraph Picture(MainDocumentPart main, Block b, string? folder)
+    {
+        if (MarkdownDoc.LoadImage(folder, b.Runs[0].Link!) is not { } pic) return Para(main, new[] { new ARI.LLM.Run($"[picture {b.Runs[0].Link} not found]", Italic: true) });
+        ImagePart part = main.AddImagePart(pic.Mime == "image/png" ? ImagePartType.Png : ImagePartType.Jpeg);
+        using (MemoryStream ms = new(pic.Bytes)) part.FeedData(ms);
+        long cx = Math.Min(pic.Width * 9525L, 5_760_000), cy = cx * pic.Height / Math.Max(1, pic.Width);
+        string id = main.GetIdOfPart(part);
+        var drawing = new Drawing(new DocumentFormat.OpenXml.Drawing.Wordprocessing.Inline(
+            new DocumentFormat.OpenXml.Drawing.Wordprocessing.Extent { Cx = cx, Cy = cy },
+            new DocumentFormat.OpenXml.Drawing.Wordprocessing.DocProperties { Id = (uint)(main.ImageParts.Count() + 1), Name = "Picture", Description = b.Runs[0].Text },
+            new DocumentFormat.OpenXml.Drawing.Wordprocessing.NonVisualGraphicFrameDrawingProperties(new DocumentFormat.OpenXml.Drawing.GraphicFrameLocks { NoChangeAspect = true }),
+            new DocumentFormat.OpenXml.Drawing.Graphic(new DocumentFormat.OpenXml.Drawing.GraphicData(
+                new DocumentFormat.OpenXml.Drawing.Pictures.Picture(
+                    new DocumentFormat.OpenXml.Drawing.Pictures.NonVisualPictureProperties(new DocumentFormat.OpenXml.Drawing.Pictures.NonVisualDrawingProperties { Id = 0, Name = "Picture" }, new DocumentFormat.OpenXml.Drawing.Pictures.NonVisualPictureDrawingProperties()),
+                    new DocumentFormat.OpenXml.Drawing.Pictures.BlipFill(new DocumentFormat.OpenXml.Drawing.Blip { Embed = id }, new DocumentFormat.OpenXml.Drawing.Stretch(new DocumentFormat.OpenXml.Drawing.FillRectangle())),
+                    new DocumentFormat.OpenXml.Drawing.Pictures.ShapeProperties(new DocumentFormat.OpenXml.Drawing.Transform2D(new DocumentFormat.OpenXml.Drawing.Offset { X = 0, Y = 0 }, new DocumentFormat.OpenXml.Drawing.Extents { Cx = cx, Cy = cy }),
+                        new DocumentFormat.OpenXml.Drawing.PresetGeometry(new DocumentFormat.OpenXml.Drawing.AdjustValueList()) { Preset = DocumentFormat.OpenXml.Drawing.ShapeTypeValues.Rectangle })))
+                { Uri = "http://schemas.openxmlformats.org/drawingml/2006/picture" })) { DistanceFromTop = 0, DistanceFromBottom = 0, DistanceFromLeft = 0, DistanceFromRight = 0 });
+        Paragraph p = new(new ParagraphProperties(new Justification { Val = JustificationValues.Center }), new DocumentFormat.OpenXml.Wordprocessing.Run(drawing));
+        return p;
     }
 
     private static Paragraph Para(MainDocumentPart main, IEnumerable<ARI.LLM.Run> runs, string? style = null, int num = 0, int level = 0)
@@ -201,7 +225,7 @@ internal static class WordWriter
 }
 
 [Tool("write_docx", "Create a Word document (.docx) from Markdown. Use it whenever the user asks for a Word document, CV, letter, report or any .docx. " +
-                    "Markdown supported: # ## ### headings, paragraphs, - bullets (indent two spaces to nest), 1. numbered lists, **bold**, *italic*, [text](url), | tables | with a |---| row, --- for a divider, and a line \\pagebreak for a new page. " +
+                    "Markdown supported: # ## ### headings, paragraphs, - bullets (indent two spaces to nest), 1. numbered lists, **bold**, *italic*, [text](url), | tables | with a |---| row, --- for a divider, a picture on its own line ![caption](chart.png) from your working folder (make charts with make_chart), and a line \\pagebreak for a new page. " +
                     "Use only facts the user gave you; if you have to assume something, say so in your reply instead of putting it in the document. It saves into your working folder; give it to the user with deliver_file. " +
                     "It never overwrites a file that was there before the conversation: save a changed version under a new name.", Group = "docx_tools")]
 public class WriteDocx : Tool
@@ -217,7 +241,7 @@ public class WriteDocx : Tool
         string full = SaveRules.Resolve(WorkingFolder, Path, ".docx", CallThread, out string? refusal);
         if (refusal is not null) return Task.FromResult(refusal);
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(full)!);
-        WordWriter.Write(full, Content);
+        WordWriter.Write(full, Content, WorkingFolder);
         SaveRules.Created(CallThread, full);
         int words = Content.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
         return Task.FromResult($"Saved {full} (about {words} words). Give it to the user with deliver_file." + AfterWriting.Check);

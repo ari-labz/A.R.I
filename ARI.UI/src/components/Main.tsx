@@ -4,6 +4,7 @@ import Messages from "./Messages"
 import InputArea from "./InputArea"
 import ThreadPanel from "./ThreadPanel"
 import DropOverlay from "./DropOverlay"
+import BrowserPane from "./BrowserPane"
 import Orb from "./Orb"
 import type { AppMode, PendingAttachment } from "../App"
 import type { ThreadItem, Attachment, Project } from "../hooks/useThreads"
@@ -162,6 +163,8 @@ export default function Main({
                     <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>
                 </svg>
             </button>
+
+            <BrowserPane activeThread={activeThread} />
 
             <div id="chat-col">
                 {/* animated logo header */}

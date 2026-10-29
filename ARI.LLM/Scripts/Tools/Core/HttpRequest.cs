@@ -57,7 +57,7 @@ public class HttpRequest : Tool
         sb.AppendLine();
 
         bool text = type.Length == 0 || type.StartsWith("text/") || type.Contains("json") || type.Contains("xml") || type.Contains("javascript") || type.Contains("yaml") || type.Contains("html");
-        if (!text) { sb.Append($"(binary content, {type}. Save it with shell, e.g. curl -L -o file '{Url}', if you need the file.)"); return sb.ToString(); }
+        if (!text) { sb.Append($"(binary content, {type}. Use download_file to save it if you need the file.)"); return sb.ToString(); }
 
         byte[] bytes = await res.Content.ReadAsByteArrayAsync(cts.Token);
         string body = Encoding.UTF8.GetString(bytes);

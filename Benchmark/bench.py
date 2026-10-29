@@ -42,7 +42,7 @@ class Run:
     def upload(self, name, content):
         data = content if isinstance(content, bytes) else content.encode()
         self.uploaded[name] = data
-        r = s.post(f"{BASE}/threads/{self.key}/files", files={"file": (name, data, "application/octet-stream")}); r.raise_for_status()
+        r = s.post(f"{BASE}/threads/{self.key}/files", files={"file": (name, data, "application/octet-stream" if name.lower().endswith((".pdf", ".docx", ".xlsx", ".pptx")) else "text/plain")}); r.raise_for_status()
 
     def say(self, text, timeout=1200):
         t = time.time()
@@ -89,7 +89,9 @@ def office_text(path):
 
 
 def main():
-    from tasks import TASKS
+    sys.modules.setdefault('bench', sys.modules['__main__'])   # tasks that import bench get this module, with its logged-in session
+    import importlib
+    TASKS = importlib.import_module(os.environ.get('BENCH_TASKS', 'tasks')).TASKS
     wanted = sys.argv[1:]
     login()
     results = []
@@ -99,6 +101,7 @@ def main():
         run = Run(); ctx = {"run": run, "replies": [], "secs": []}
         try:
             for name, content in task.get("files", {}).items(): run.upload(name, content() if callable(content) else content)
+            if "during" in task: threading.Thread(target=task["during"], args=(run,), daemon=True).start()
             for msg in task["messages"]:
                 reply, secs = run.say(msg); ctx["replies"].append(reply); ctx["secs"].append(secs)
                 print(f"  [{secs}s] {reply[:140].replace(chr(10), ' ')}", flush=True)
@@ -107,11 +110,13 @@ def main():
         except Exception as e:
             checks = [(f"ran without error ({e})", False)]
         calls = run.tool_calls()
+        run.last_calls = calls
         passed = sum(ok for _, ok in checks)
         for what, ok in checks: print(f"  {'PASS' if ok else 'FAIL'}  {what}", flush=True)
         results.append({"id": task["id"], "title": task["title"], "passed": passed, "total": len(checks), "seconds": round(sum(ctx["secs"]), 1),
                         "tool_calls": len(calls), "tools": sorted(set(c for c in calls if c)), "checks": [{"what": w, "ok": bool(o)} for w, o in checks],
                         "replies": ctx["replies"]})
+        os.makedirs("results", exist_ok=True); json.dump(results, open(os.path.join("results", "partial-" + os.environ.get("BENCH_TASKS", "tasks") + ".json"), "w"), indent=1)
     print("\n" + "-" * 78)
     for r in results: print(f"{r['id']:<14} {r['passed']}/{r['total']}  {r['seconds']:>7}s  {r['tool_calls']:>3} tool calls  {r['title']}")
     tp = sum(r["passed"] for r in results); tt = sum(r["total"] for r in results)

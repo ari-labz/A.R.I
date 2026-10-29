@@ -45,6 +45,9 @@ internal static class ToolFactories
         ["edit_docx"]      = t => With<EditDocx>(t),
         ["write_pptx"]     = t => With<WritePptx>(t),
         ["write_pdf"]      = t => With<WritePdf>(t),
+        ["make_chart"]     = t => With<MakeChart>(t),
+        ["show_visual"]    = t => t.Medium == ThreadMedium.Discord ? null : new ShowVisual(t),
+        ["archive"]        = t => With<Archive>(t),
         ["pdf_merge"]      = t => With<PdfMerge>(t),
         ["pdf_extract_pages"] = t => With<PdfExtractPages>(t),
         ["list_directory"] = t => Fs(t) is { } fs ? new ListDirectory(fs) : null,
@@ -110,6 +113,7 @@ internal static class ToolFactories
         ["jobs"]           = t => With<Jobs>(t),
         ["run_code"]       = t => With<RunCode>(t),
         ["http_request"]   = t => With<HttpRequest>(t),
+        ["download_file"]  = t => With<DownloadFile>(t),
         ["todo"]           = t => With<Todo>(t),
         ["list_chats"]     = t => With<ListChats>(t),
         ["read_chat"]      = t => With<ReadChat>(t),
@@ -135,7 +139,7 @@ internal static class ToolFactories
 
     private static readonly HashSet<string> AdminChatOnly = new(StringComparer.OrdinalIgnoreCase)
     {
-        "shell", "shell_job", "run_code", "http_request", "browser", "tool_docs", "write_tool", "test_tool", "read_tool", "list_my_tools", "delete_tool",
+        "shell", "shell_job", "run_code", "http_request", "download_file", "browser", "tool_docs", "write_tool", "test_tool", "read_tool", "list_my_tools", "delete_tool",
     };
 
     private static bool IsVault(Thread t, string root) => t.IsBrainVault || Directory.Exists(Path.Combine(root, ".obsidian"));
@@ -166,7 +170,7 @@ internal static class ToolFactories
     // Filesystem tool names that unlock when a FilesystemRoot is set.
     // Read-only subset registered for dream/read-only agents; full set for normal agents.
     private static readonly string[] FilesystemReadToolNames  = ["preview_file", "read_file", "read_document", "read_docx", "read_xlsx", "read_pdf", "read_pptx", "list_directory", "search_files", "find_files", "search_vault"];
-    private static readonly string[] FilesystemWriteToolNames = ["edit_file", "write_file", "write_xlsx", "edit_xlsx", "write_docx", "edit_docx", "write_pptx", "write_pdf", "pdf_merge", "pdf_extract_pages", "deliver_file", "create_scratchpad", "build_project"];
+    private static readonly string[] FilesystemWriteToolNames = ["edit_file", "write_file", "write_xlsx", "edit_xlsx", "write_docx", "edit_docx", "write_pptx", "write_pdf", "make_chart", "archive", "pdf_merge", "pdf_extract_pages", "deliver_file", "create_scratchpad", "build_project"];
 
     /// <summary>
     /// Registers all filesystem tools that now resolve for the thread. Call this immediately after
@@ -220,7 +224,7 @@ internal static class ToolFactories
         "git", "git_clone", "github",
         "build_project",   // runs the project's own build scripts on this machine
         // Run code, read other people's conversations, or change what Ari can do: the owner only.
-        "shell", "shell_job", "run_code", "http_request", "list_chats", "read_chat", "search_chats",
+        "shell", "shell_job", "run_code", "http_request", "download_file", "list_chats", "read_chat", "search_chats",
         "browser", "list_skills", "read_skill", "write_skill", "delete_skill",
         "tool_docs", "write_tool", "test_tool", "read_tool", "list_my_tools", "delete_tool",
     };

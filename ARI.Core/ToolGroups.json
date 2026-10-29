@@ -21,6 +21,7 @@
         "list_directory",
         "search_files",
         "find_files",
+        "archive",
         "edit_file",
         "write_file",
         "deliver_file"
@@ -97,7 +98,8 @@
       "Tools": [
         "search_web",
         "fetch_page",
-        "http_request"
+        "http_request",
+        "download_file"
       ]
     },
     "shell_tools": {
@@ -163,6 +165,18 @@
         "read_docx",
         "write_docx",
         "edit_docx"
+      ]
+    },
+    "visual_tools": {
+      "Description": "Show a visual in the chat itself: show_visual displays HTML you write (a chart, diagram, table, timeline, calculator or small interactive page) under your message. Use it when a picture or something interactive explains better than words.",
+      "Tools": [
+        "show_visual"
+      ]
+    },
+    "chart_tools": {
+      "Description": "Draw charts as PNG pictures: make_chart turns CSV data into a bar, line, area, pie, scatter or histogram chart. Put the picture into a Word document, PDF or deck with ![caption](chart.png), or deliver it.",
+      "Tools": [
+        "make_chart"
       ]
     },
     "pdf_tools": {

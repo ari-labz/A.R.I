@@ -1673,3 +1673,26 @@ details.tool-card--report[open] { width: 100%; box-sizing: border-box; }
 .reply-queued { align-self: flex-end; display: flex; align-items: center; gap: 6px; margin: 2px 0 8px; font-size: 12px; color: var(--text-dim, #6b7b80); }
 @keyframes memory-marker-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes memory-marker-pulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+
+/* ── Ari's browser, shown beside the chat while she has a page open ─────────────────────────────────────────────── */
+#browser-pane { position: fixed; top: 64px; right: 16px; bottom: 96px; width: min(46vw, 760px); z-index: 40; display: flex; flex-direction: column;
+    background: var(--bg, #fff); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,.18); overflow: hidden; }
+#browser-pane.waiting { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 8px 32px rgba(0,0,0,.25); }
+#browser-pane .bp-bar { display: flex; gap: 6px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--border); font-size: 12px; }
+#browser-pane .bp-url { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+#browser-pane .bp-bar form { flex: 0 0 34%; }
+#browser-pane .bp-bar input { width: 100%; font: inherit; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--text); }
+#browser-pane button { font: inherit; font-size: 13px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--text); cursor: pointer; }
+#browser-pane button:hover { background: var(--user-bubble); }
+#browser-pane .bp-ask { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 8px 12px; background: var(--accent); color: #fff; font-size: 13px; }
+#browser-pane .bp-ask button { background: #fff; color: #000; font-weight: 600; }
+#browser-pane .bp-view { flex: 1; overflow: auto; outline: none; background: #222; display: flex; align-items: flex-start; }
+#browser-pane .bp-view img { width: 100%; height: auto; display: block; cursor: pointer; user-select: none; }
+#browser-pane .bp-loading { color: #aaa; padding: 24px; font-size: 13px; }
+#browser-pane-tab { position: fixed; top: 64px; right: 16px; z-index: 40; font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg, #fff); color: var(--text); cursor: pointer; }
+@media (max-width: 800px) { #browser-pane { left: 8px; right: 8px; width: auto; top: 56px; bottom: 88px; } }
+
+/* ── Visuals Ari draws in the chat (show_visual) ─────────────────────────────────────────────────────────────────── */
+.ari-visual { margin: 10px 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; max-width: 760px; }
+.ari-visual iframe { display: block; width: 100%; }
+.ari-visual .ari-visual-loading { display: block; padding: 18px; color: var(--text-dim); font-size: 13px; }
