@@ -14,6 +14,7 @@ const TOOL_ERROR_RE = /<!--ari-tool-error:([^:]+):([^:]*):([^>]*?)-->/g
 const TOOL_MODE_RE  = /<!--ari-tool-mode:([^:]+):([^>]*?)-->/g
 const FILE_RE       = /<!--ari-file:([^:]+):([^>]*?)-->/g
 const IMAGE_RE      = /<!--ari-image:([^:]+):([^>]+?)-->/g
+const VISUAL_RE     = /<!--ari-visual:([^:]+):([^>]+?)-->/g
 
 // Turns deliver_file markers into a hover-to-download card. Shared by the streaming render
 // (preprocessToolCards) and the finished-blocks render (renderBlockHtml text blocks), so the card
@@ -33,6 +34,14 @@ function renderFileMarkers(s: string): string {
 
 function escHtml(s: string): string {
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+}
+
+// A visual Ari drew (show_visual): an empty frame the page mounts a sandboxed iframe into (see visuals.ts).
+function renderVisualMarkers(s: string): string {
+    return s.replace(VISUAL_RE, (_, threadKey, filename) => {
+        const src = `/api/v1/threads/${encodeURIComponent(threadKey)}/files/content?path=${encodeURIComponent(filename)}`
+        return `\n\n<div class="ari-visual" data-visual-src="${escHtml(src)}" data-visual-name="${escHtml(filename)}"><span class="ari-visual-loading">Drawing…</span></div>\n\n`
+    })
 }
 
 function renderImageMarkers(s: string): string {
@@ -199,7 +208,7 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
     // Delivered file: a download card ARI emitted with deliver_file. Also applied in the finished-blocks
     // path (renderBlockHtml) so the card survives after streaming — the marker rides in a text block there.
     out = renderFileMarkers(out)
-    out = renderImageMarkers(out)
+    out = renderVisualMarkers(renderImageMarkers(out))
 
     // Mode switch (replan): a light-blue info card, NOT an error.
     out = out.replace(TOOL_MODE_RE, (_, _name, rawLabel) => {
@@ -504,7 +513,7 @@ export function renderBlockHtml(block: BlockLike): string {
     const done = (block.state ?? 0) === 1
     const err  = (block.state ?? 0) === 2
 
-    if (block.type === "text")     return marked.parse(renderImageMarkers(renderFileMarkers(block.text ?? "")), { async: false }) as string
+    if (block.type === "text")     return marked.parse(renderVisualMarkers(renderImageMarkers(renderFileMarkers(block.text ?? ""))), { async: false }) as string
     if (block.type === "thinking") return ""   // reasoning is shown via the thought-block, not inline
 
     // Plan proposed: a subtle non-interactive chip in the transcript — the Accept/Amend actions live in the

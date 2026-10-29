@@ -4,8 +4,8 @@ namespace ARI.LLM;
 
 // Documents are written as a small, forgiving subset of Markdown, which the model produces reliably and the document tools turn into
 // Word, PDF or slides. Supported: # headings (1-3), paragraphs, - or * bullets (indent two spaces to nest), 1. numbered lists, **bold**,
-// *italic*, `code`, [text](url), | tables | with a --- separator row, a line of --- for a divider, and a line "\pagebreak" for a new page.
-internal enum BlockKind { Heading, Paragraph, Bullet, Number, Table, Rule, PageBreak }
+// *italic*, `code`, [text](url), a picture on its own line ![caption](chart.png) from the working folder, | tables | with a --- separator row, a line of --- for a divider, and a line "\pagebreak" for a new page.
+internal enum BlockKind { Heading, Paragraph, Bullet, Number, Table, Rule, PageBreak, Image }
 
 internal sealed record Run(string Text, bool Bold = false, bool Italic = false, bool Code = false, string? Link = null);
 
@@ -54,6 +54,8 @@ internal static class MarkdownDoc
             string line = lines[i], t = line.Trim();
             if (t.Length == 0) { Flush(); continue; }
             if (t is "\\pagebreak" or "<pagebreak>" or "---pagebreak---") { Flush(); blocks.Add(new Block { Kind = BlockKind.PageBreak }); continue; }
+            Match img = Regex.Match(t, @"^!\[(.*?)\]\((.+?)\)$");
+            if (img.Success) { Flush(); blocks.Add(new Block { Kind = BlockKind.Image, Runs = new List<Run> { new Run(img.Groups[1].Value, Link: img.Groups[2].Value.Trim()) } }); continue; }
             if (Regex.IsMatch(t, @"^(-{3,}|\*{3,}|_{3,})$")) { Flush(); blocks.Add(new Block { Kind = BlockKind.Rule }); continue; }
             Match h = Regex.Match(t, @"^(#{1,6})\s+(.*?)\s*#*$");
             if (h.Success) { Flush(); blocks.Add(new Block { Kind = BlockKind.Heading, Level = Math.Min(3, h.Groups[1].Length), Runs = Runs(h.Groups[2].Value) }); continue; }
@@ -84,7 +86,29 @@ internal static class MarkdownDoc
 
     internal static string PlainText(IEnumerable<Run> runs) => string.Concat(runs.Select(r => r.Text));
 
-    internal static string Html(string markdown, string title)
+    /// <summary>The bytes of a picture named in the Markdown (a path in the working folder), or null if it isn't there or isn't a PNG/JPEG.</summary>
+    internal static (byte[] Bytes, string Mime, int Width, int Height)? LoadImage(string? folder, string path)
+    {
+        try
+        {
+            string full = Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Combine(folder ?? "", path));
+            if (!File.Exists(full)) return null;
+            byte[] b = File.ReadAllBytes(full);
+            if (b.Length > 24 && b[0] == 0x89 && b[1] == 0x50) return (b, "image/png", System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(b.AsSpan(16)), System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(b.AsSpan(20)));
+            if (b.Length > 4 && b[0] == 0xFF && b[1] == 0xD8)
+                for (int i = 2; i + 9 < b.Length;)
+                {
+                    if (b[i] != 0xFF) { i++; continue; }
+                    byte mk = b[i + 1];
+                    if (mk is >= 0xC0 and <= 0xCF and not (0xC4 or 0xC8 or 0xCC)) return (b, "image/jpeg", b[i + 7] << 8 | b[i + 8], b[i + 5] << 8 | b[i + 6]);
+                    i += 2 + (b[i + 2] << 8 | b[i + 3]);
+                }
+        }
+        catch { }
+        return null;
+    }
+
+    internal static string Html(string markdown, string title, string? folder = null)
     {
         System.Text.StringBuilder sb = new();
         string Esc(string s) => System.Net.WebUtility.HtmlEncode(s);
@@ -118,6 +142,10 @@ internal static class MarkdownDoc
                     for (int r = 0; r < b.Rows.Count; r++)
                         sb.Append("<tr>").Append(string.Concat(b.Rows[r].Select(c => r == 0 ? $"<th>{R(c)}</th>" : $"<td>{R(c)}</td>"))).Append("</tr>");
                     sb.Append("</table>"); break;
+                case BlockKind.Image:
+                    if (LoadImage(folder, b.Runs[0].Link!) is { } pic) sb.Append($"<figure style=\"margin:8pt 0;text-align:center\"><img style=\"max-width:100%\" src=\"data:{pic.Mime};base64,{Convert.ToBase64String(pic.Bytes)}\">{(b.Runs[0].Text.Length > 0 ? $"<figcaption style=\"font-size:9pt;color:#555\">{Esc(b.Runs[0].Text)}</figcaption>" : "")}</figure>");
+                    else sb.Append($"<p><em>[picture {Esc(b.Runs[0].Link!)} not found]</em></p>");
+                    break;
                 case BlockKind.Rule: sb.Append("<hr>"); break;
                 case BlockKind.PageBreak: sb.Append("<div class=\"pb\"></div>"); break;
             }

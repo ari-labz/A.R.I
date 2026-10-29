@@ -629,6 +629,55 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         return ARI.LLM.ToolApprovals.Resolve(threadKey, id, body?.Allow == true) ? Ok() : NotFound();
     }
 
+    // ── The conversation's browser, shown live in the chat window ───────────────────────────────────────────────────
+    // Ari opens a page with the browser tool; the window then shows it (a picture refreshed every second or so) and the person
+    // can click and type in it themselves, e.g. to log in. Only the owner of the conversation, and only an admin chat.
+
+    private bool CanSeeBrowser(string key) => Llm is not null && Llm.Threads.TryGetValue(key, out ARI.LLM.Thread? t) && t.IsAdminChat && CanAccessThread(t);
+
+    /// <summary>Whether this conversation has a page open, and if Ari is waiting for the person to do something with it.</summary>
+    [HttpGet("{id}/browser")]
+    public IActionResult BrowserStatus([FromRoute(Name = "id")] string threadKey)
+    {
+        if (!CanSeeBrowser(threadKey)) return NotFound();
+        var s = ARI.LLM.BrowserHost.SessionOf(threadKey);
+        if (s is null) return Ok(new { open = false });
+        return Ok(new { open = true, waiting = s.Handover is not null, prompt = s.Prompt, tabs = s.Tabs.Select(t => t.Url).ToArray(), active = s.Active });
+    }
+
+    /// <summary>A picture of the page, as a JPEG.</summary>
+    [HttpGet("{id}/browser/screen")]
+    public async Task<IActionResult> BrowserScreen([FromRoute(Name = "id")] string threadKey)
+    {
+        if (!CanSeeBrowser(threadKey)) return NotFound();
+        try { return await ARI.LLM.BrowserHost.Snapshot(threadKey) is { } shot ? File(shot.Jpeg, "image/jpeg") : NotFound(); }
+        catch { return StatusCode(503); }
+    }
+
+    public record BrowserInput(string Kind, double X = 0, double Y = 0, string? Text = null, double DeltaY = 0);
+
+    /// <summary>The person clicking, typing, pressing a key or scrolling in the page. Coordinates are in the page's own 1280x900 view.</summary>
+    [HttpPost("{id}/browser/input")]
+    public async Task<IActionResult> BrowserSend([FromRoute(Name = "id")] string threadKey, [FromBody] BrowserInput body)
+    {
+        if (!CanSeeBrowser(threadKey)) return NotFound();
+        try { await ARI.LLM.BrowserHost.Input(threadKey, body.Kind, body.X, body.Y, body.Text ?? "", body.DeltaY); return Ok(); }
+        catch (Exception e) { return BadRequest(new { error = e.Message }); }
+    }
+
+    /// <summary>"Done": the person has finished what Ari asked them to do in the page.</summary>
+    [HttpPost("{id}/browser/done")]
+    public IActionResult BrowserDone([FromRoute(Name = "id")] string threadKey)
+        => CanSeeBrowser(threadKey) && ARI.LLM.BrowserHost.FinishHandover(threadKey) ? Ok() : NotFound();
+
+    /// <summary>Closes the page.</summary>
+    [HttpPost("{id}/browser/close")]
+    public async Task<IActionResult> BrowserClose([FromRoute(Name = "id")] string threadKey)
+    {
+        if (!CanSeeBrowser(threadKey)) return NotFound();
+        await ARI.LLM.BrowserHost.Close(threadKey); return Ok();
+    }
+
     [HttpPost("~/api/v1/commands")]
     public async Task<IActionResult> RunCommand([FromBody] CommandRequest req)
     {

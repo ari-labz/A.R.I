@@ -29,10 +29,27 @@ internal static class DocumentVenv
         finally { gate.Release(); }
     }
 
-    internal static async Task<(int Code, string Out, string Err)> RunScript(string script, string stdin, string workingFolder)
+    /// <summary>Adds a Python package to the document environment once (the chart tool needs matplotlib), the same way the first setup does.</summary>
+    internal static async Task EnsurePackage(string package)
     {
         string py = await Ensure();
-        string file = Path.Combine(Folder, "scripts"); Directory.CreateDirectory(file); file = Path.Combine(file, "pptx_build.py");
+        string marker = Path.Combine(Folder, $".ari-{package}");
+        if (File.Exists(marker)) return;
+        await gate.WaitAsync();
+        try
+        {
+            if (File.Exists(marker)) return;
+            Shared.Logger.LogInformation("[Documents] Adding {Package} to ARI's document tools (one time)…", package);
+            await Run(py, $"-m pip install -q --disable-pip-version-check {package}");
+            File.WriteAllText(marker, DateTime.UtcNow.ToString("O"));
+        }
+        finally { gate.Release(); }
+    }
+
+    internal static async Task<(int Code, string Out, string Err)> RunScript(string script, string stdin, string workingFolder, string scriptName = "pptx_build.py")
+    {
+        string py = await Ensure();
+        string file = Path.Combine(Folder, "scripts"); Directory.CreateDirectory(file); file = Path.Combine(file, scriptName);
         File.WriteAllText(file, script);
         ProcessStartInfo psi = new(py) { RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, WorkingDirectory = workingFolder };
         psi.ArgumentList.Add(file);

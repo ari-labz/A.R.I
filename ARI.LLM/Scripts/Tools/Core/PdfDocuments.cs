@@ -3,7 +3,7 @@ using UglyToad.PdfPig.Writer;
 
 namespace ARI.LLM;
 
-[Tool("write_pdf", "Create a PDF from Markdown (same Markdown as write_docx: # headings, paragraphs, - bullets, 1. lists, **bold**, *italic*, [links](url), | tables |, --- dividers, \\pagebreak). " +
+[Tool("write_pdf", "Create a PDF from Markdown (same Markdown as write_docx: # headings, paragraphs, - bullets, 1. lists, **bold**, *italic*, [links](url), | tables |, --- dividers, a picture on its own line ![caption](chart.png) from your working folder, \\pagebreak). " +
                    "Use it for a PDF the user asked for: a handout, report, invoice, a CV as PDF. Use only facts the user gave you. It saves into your working folder; give it to the user with deliver_file. " +
                    "It never overwrites a file that was there before the conversation.", Group = "pdf_tools")]
 public class WritePdf : Tool
@@ -22,7 +22,7 @@ public class WritePdf : Tool
         string full = SaveRules.Resolve(WorkingFolder, Path, ".pdf", CallThread, out string? refusal);
         if (refusal is not null) return refusal;
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(full)!);
-        byte[] pdf = await BrowserHost.PdfFromHtml(MarkdownDoc.Html(Content, string.IsNullOrWhiteSpace(Title) ? System.IO.Path.GetFileNameWithoutExtension(full) : Title));
+        byte[] pdf = await BrowserHost.PdfFromHtml(MarkdownDoc.Html(Content, string.IsNullOrWhiteSpace(Title) ? System.IO.Path.GetFileNameWithoutExtension(full) : Title, WorkingFolder));
         await File.WriteAllBytesAsync(full, pdf);
         SaveRules.Created(CallThread, full);
         using PdfDocument check = PdfDocument.Open(pdf);

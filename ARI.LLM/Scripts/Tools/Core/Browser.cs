@@ -13,7 +13,20 @@ internal static class BrowserHost
 {
     private static IBrowser? browser;
     private static readonly SemaphoreSlim gate = new(1, 1);
-    private static readonly ConcurrentDictionary<string, IPage> pages = new();
+    private static readonly HttpClient Fetcher = new() { Timeout = TimeSpan.FromMinutes(5) };
+    private static readonly ConcurrentDictionary<string, Session> sessions = new();
+
+    /// <summary>One conversation's browser: its tabs, which one it is looking at, and whether it is waiting for the person to do something.</summary>
+    internal sealed class Session
+    {
+        internal readonly List<IPage> Tabs = new();
+        internal int Active;
+        internal string? Prompt;                      // what the person is being asked to do (login, captcha, …); null when nothing is waiting
+        internal TaskCompletionSource? Handover;
+        internal readonly List<(string Url, string Name, IPage Page)> Downloads = new();
+        internal string? LastDialog;                  // what a pop-up (alert, confirm) said; they are accepted so a page never hangs on one
+        internal IPage? Page => Active >= 0 && Active < Tabs.Count ? Tabs[Active] : null;
+    }
 
     /// <summary>The browser to use, or null for the Chromium ARI downloads. By default Ari has her own: a Chromium of exactly the version the
     /// automation library was built for, fetched once into ARI's data folder, so a Chrome update on this machine can't break her. Set ARI_CHROME
@@ -61,6 +74,8 @@ internal static class BrowserHost
         browser = await Puppeteer.LaunchAsync(new LaunchOptions
         {
             Headless = true, ExecutablePath = exe,
+            // One profile for all her pages, so a site the person logs her into stays logged in across conversations and restarts.
+            UserDataDir = Path.Combine(Paths.AppData, "Browser", "profile"),
             Args = new[] { "--no-sandbox", "--disable-dev-shm-usage", "--hide-scrollbars", "--window-size=1280,900" },
             DefaultViewport = new ViewPortOptions { Width = 1280, Height = 900 },
         });
@@ -68,20 +83,121 @@ internal static class BrowserHost
         return browser;
     }
 
+    /// <summary>Downloads the page started since the last call, saved into the folder with the page's own cookies (so a logged-in download works). Returns the file names.</summary>
+    internal static async Task<List<string>> CollectDownloads(string conversation, string folder)
+    {
+        List<string> saved = new();
+        if (SessionOf(conversation) is not { } s) return saved;
+        for (int wait = 0; wait < 6; wait++)
+        {
+            lock (s.Downloads) if (s.Downloads.Count > 0) break;
+            await Task.Delay(400);
+        }
+        (string Url, string Name, IPage Page)[] items;
+        lock (s.Downloads) { items = s.Downloads.ToArray(); s.Downloads.Clear(); }
+        foreach (var d in items)
+        {
+            try
+            {
+                using HttpRequestMessage req = new(HttpMethod.Get, d.Url);
+                var cookies = await d.Page.GetCookiesAsync(d.Url);
+                if (cookies.Length > 0) req.Headers.TryAddWithoutValidation("Cookie", string.Join("; ", cookies.Select(c => $"{c.Name}={c.Value}")));
+                using HttpResponseMessage res = await Fetcher.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+                if (!res.IsSuccessStatusCode) continue;
+                string name = string.IsNullOrWhiteSpace(d.Name) ? Path.GetFileName(new Uri(d.Url).LocalPath) : d.Name;
+                name = Path.GetFileName(string.IsNullOrWhiteSpace(name) ? "download" : name);
+                string target = Path.Combine(folder, name);
+                for (int n = 2; File.Exists(target); n++) target = Path.Combine(folder, $"{Path.GetFileNameWithoutExtension(name)} ({n}){Path.GetExtension(name)}");
+                await using (FileStream fs = File.Create(target)) await res.Content.CopyToAsync(fs);
+                saved.Add(Path.GetFileName(target));
+            }
+            catch (Exception e) { Shared.Logger.LogWarning(e, "[Browser] Couldn't fetch the download {Url}", d.Url); }
+        }
+        return saved;
+    }
+
     internal static async Task<IPage> PageFor(string conversation, bool create)
     {
         await gate.WaitAsync();
         try
         {
-            if (pages.TryGetValue(conversation, out IPage? existing) && !existing.IsClosed) return existing;
+            Session session = sessions.GetOrAdd(conversation, _ => new Session());
+            session.Tabs.RemoveAll(t => t.IsClosed);
+            if (session.Active >= session.Tabs.Count) session.Active = Math.Max(0, session.Tabs.Count - 1);
+            if (session.Page is { } existing) return existing;
             if (!create) throw new InvalidOperationException("No page is open. Use action \"open\" with a url first.");
-            IPage page = await (await Launch()).NewPageAsync();
-            page.DefaultTimeout = 30_000;
-            page.DefaultNavigationTimeout = 30_000;
-            pages[conversation] = page;
-            return page;
+            return await NewTab(session);
         }
         finally { gate.Release(); }
+    }
+
+    private static async Task<IPage> NewTab(Session session)
+    {
+        IPage page = await (await Launch()).NewPageAsync();
+        page.DefaultTimeout = 30_000;
+        page.DefaultNavigationTimeout = 30_000;
+        // Chrome's own downloader stalls in a headless profile, so a download is spotted when it begins and fetched with the page's cookies instead.
+        try { await page.Client.SendAsync("Page.setDownloadBehavior", new { behavior = "deny" }); } catch { }
+        page.Client.MessageReceived += (_, e) =>
+        {
+            if (e.MessageID != "Page.downloadWillBegin") return;
+            string url = e.MessageData.GetProperty("url").GetString() ?? "", name = e.MessageData.TryGetProperty("suggestedFilename", out var n) ? n.GetString() ?? "" : "";
+            lock (session.Downloads) session.Downloads.Add((url, name, page));
+        };
+        page.Dialog += async (_, e) => { session.LastDialog = $"{e.Dialog.DialogType}: {e.Dialog.Message}"; try { await e.Dialog.Accept(); } catch { } };
+        session.Tabs.Add(page); session.Active = session.Tabs.Count - 1;
+        return page;
+    }
+
+    internal static Session? SessionOf(string conversation) => sessions.TryGetValue(conversation, out Session? s) && s.Tabs.Any(t => !t.IsClosed) ? s : null;
+
+    internal static async Task<IPage> OpenTab(string conversation) { await gate.WaitAsync(); try { return await NewTab(sessions.GetOrAdd(conversation, _ => new Session())); } finally { gate.Release(); } }
+
+    internal static async Task CloseTab(string conversation)
+    {
+        if (SessionOf(conversation) is not { } s || s.Page is not { } p) return;
+        try { await p.CloseAsync(); } catch { }
+        s.Tabs.RemoveAll(t => t.IsClosed); s.Active = Math.Max(0, Math.Min(s.Active, s.Tabs.Count - 1));
+    }
+
+    /// <summary>A picture of the page the conversation is looking at, for the person to watch. Null if there isn't one.</summary>
+    internal static async Task<(byte[] Jpeg, string Url, string Title)?> Snapshot(string conversation)
+    {
+        if (SessionOf(conversation)?.Page is not { } page) return null;
+        byte[] jpeg = await page.ScreenshotDataAsync(new ScreenshotOptions { Type = ScreenshotType.Jpeg, Quality = 62 });
+        return (jpeg, page.Url, await page.GetTitleAsync());
+    }
+
+    /// <summary>The person using the page themselves, through the picture they see: a click, some typing, a key or a scroll.</summary>
+    internal static async Task Input(string conversation, string kind, double x, double y, string text, double deltaY)
+    {
+        if (SessionOf(conversation)?.Page is not { } page) throw new InvalidOperationException("No page is open.");
+        switch (kind)
+        {
+            case "click": await page.Mouse.ClickAsync((decimal)x, (decimal)y); break;
+            case "type": await page.Keyboard.TypeAsync(text); break;
+            case "key": await page.Keyboard.PressAsync(text); break;
+            case "scroll": await page.Mouse.MoveAsync((decimal)x, (decimal)y); await page.Mouse.WheelAsync(0, (decimal)deltaY); break;
+            case "navigate": if (Uri.TryCreate(text, UriKind.Absolute, out Uri? u) && u.Scheme is "http" or "https") await page.GoToAsync(text, WaitUntilNavigation.Load); break;
+            default: throw new ArgumentException($"unknown input {kind}");
+        }
+    }
+
+    /// <summary>Hands the page to the person (to log in, solve a check, pick something) and waits until they say they're done.</summary>
+    internal static async Task<bool> WaitForPerson(string conversation, string prompt, CancellationToken ct)
+    {
+        if (SessionOf(conversation) is not { } s) throw new InvalidOperationException("No page is open. Use action \"open\" with a url first.");
+        TaskCompletionSource tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        s.Prompt = prompt; s.Handover = tcs;
+        try { await tcs.Task.WaitAsync(TimeSpan.FromMinutes(15), ct); return true; }
+        catch (TimeoutException) { return false; }
+        finally { s.Prompt = null; s.Handover = null; }
+    }
+
+    internal static bool FinishHandover(string conversation)
+    {
+        if (!sessions.TryGetValue(conversation, out Session? s) || s.Handover is not { } h) return false;
+        h.TrySetResult(); return true;
     }
 
     /// <summary>Prints HTML to an A4 PDF in a throwaway page, so it never disturbs the page a conversation has open.</summary>
@@ -99,9 +215,33 @@ internal static class BrowserHost
         finally { try { await page.CloseAsync(); } catch { } }
     }
 
+    /// <summary>Loads a page of HTML in a throwaway tab and returns the JavaScript errors it raised, so a visual Ari wrote can be fixed before anyone sees it broken.</summary>
+    internal static async Task<List<string>> CheckHtml(string html)
+    {
+        List<string> errors = new();
+        IPage page;
+        await gate.WaitAsync();
+        try { page = await (await Launch()).NewPageAsync(); } finally { gate.Release(); }
+        try
+        {
+            page.PageError += (_, e) => errors.Add(e.Message.Split('\n')[0]);
+            page.Console += (_, e) => { if (e.Message.Type == ConsoleType.Error && !e.Message.Text.Contains("Failed to load resource")) errors.Add(e.Message.Text.Split('\n')[0]); };
+            page.RequestFailed += (_, e) => errors.Add($"couldn't load {e.Request.Url}");
+            await page.SetContentAsync(html, new NavigationOptions { WaitUntil = new[] { WaitUntilNavigation.Load }, Timeout = 15_000 });
+            await Task.Delay(1500);
+            if (await page.EvaluateExpressionAsync<int>("document.body ? document.body.innerText.trim().length + document.querySelectorAll('canvas,svg,img,table,input,button').length : 0") == 0)
+                errors.Add("the page shows nothing");
+        }
+        catch (Exception e) { errors.Add(e.Message.Split('\n')[0]); }
+        finally { try { await page.CloseAsync(); } catch { } }
+        return errors.Distinct().Take(6).ToList();
+    }
+
     internal static async Task Close(string conversation)
     {
-        if (pages.TryRemove(conversation, out IPage? p)) try { await p.CloseAsync(); } catch { }
+        if (!sessions.TryRemove(conversation, out Session? s)) return;
+        s.Handover?.TrySetResult();
+        foreach (IPage p in s.Tabs) try { await p.CloseAsync(); } catch { }
     }
 }
 
@@ -122,16 +262,17 @@ internal sealed class BrowserTool : Tool
             description = "Use a real web browser: open a page, SEE it with a screenshot, read its text, click things, type into forms, scroll. " +
                           "Use it to look at how a website actually appears, to use pages that need JavaScript, or to check a site you built. " +
                           "Actions: open (url), screenshot, text, click (selector or the visible text of the thing), type (selector, text), press (key), scroll (direction), " +
-                          "eval (a JavaScript expression), back, links, close. A screenshot comes back as an image you can look at. For plain reading, fetch_page is quicker.",
+                          "eval (a JavaScript expression), back, links, elements, select, upload (a file from your working folder), wait, tabs, new_tab, switch (tab number), close. elements lists everything clickable or typeable on the page as numbered refs; then click or type with selector ref:3.  A screenshot comes back as an image you can look at. For plain reading, fetch_page is quicker. " +
+                          "The person can watch the page live in their chat window and use it themselves. When a page needs them (logging in, a code, a human check), open it, then call this same browser tool with action \"handover\" and text saying what to do (it is an action of browser, not a separate tool). It waits until they press Done, and you carry on logged in. Never ask for a password in chat, and never type a name, password or code for the person yourself: hand over instead.",
             parameters  = new
             {
                 type       = "object",
                 properties = new
                 {
-                    action    = new { type = "string", description = "open, screenshot, text, click, type, press, scroll, eval, back, links or close.", @enum = new[] { "open", "screenshot", "text", "click", "type", "press", "scroll", "eval", "back", "links", "close" } },
+                    action    = new { type = "string", description = "open, screenshot, text, click, type, press, scroll, eval, back, links, elements, select, upload (a file from your working folder), wait, tabs, new_tab, switch, handover or close.", @enum = new[] { "open", "screenshot", "text", "click", "type", "press", "scroll", "eval", "back", "links", "elements", "select", "upload", "wait", "tabs", "new_tab", "switch", "handover", "close" } },
                     url       = new { type = "string", description = "For open: the address. Use http://localhost:PORT for something running on this machine, or file:///full/path/page.html for an HTML file you made." },
-                    selector  = new { type = "string", description = "For click and type: a CSS selector, or text:Some visible words to click an element by its text." },
-                    text      = new { type = "string", description = "For type: what to type. For press: a key like Enter or Tab. For eval: the JavaScript expression." },
+                    selector  = new { type = "string", description = "For click and type: a CSS selector, or text:Some visible words to click an element by its text, or ref:N for item N from the elements action." },
+                    text      = new { type = "string", description = "For type: what to type. For press: a key like Enter or Tab. For eval: the JavaScript expression. For handover: what the person should do. For upload: the file name in your working folder (selector = the file input). For wait: a CSS selector to wait for, or milliseconds. For switch: the tab number." },
                     direction = new { type = "string", description = "For scroll: down, up, top or bottom." },
                     full_page = new { type = "string", description = "For screenshot: true to capture the whole page, not just what's on screen." },
                 },
@@ -146,11 +287,40 @@ internal sealed class BrowserTool : Tool
         JsonElement root = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson).RootElement;
         string Arg(string k) => root.TryGetProperty(k, out JsonElement v) && v.ValueKind != JsonValueKind.Null ? (v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : v.GetRawText()) : "";
         string action = Arg("action").ToLowerInvariant();
+        string Sel() => Arg("selector") is var sl && sl.StartsWith("ref:", StringComparison.OrdinalIgnoreCase) ? $"[data-ari-ref=\"{sl[4..].Trim()}\"]" : Arg("selector");
 
         try
         {
-            if (action == "close") { await BrowserHost.Close(thread.Key); return "Browser page closed."; }
+            if (action == "close") { await BrowserHost.Close(thread.Key); return "Browser closed."; }
+            if (action == "new_tab")
+            {
+                IPage tab = await BrowserHost.OpenTab(thread.Key);
+                if (Arg("url") is { Length: > 0 } nu) { if (!Uri.TryCreate(nu, UriKind.Absolute, out Uri? tu) || tu.Scheme is not ("http" or "https" or "file")) return "[Error: give a full address starting with http://, https:// or file://.]"; await tab.GoToAsync(nu, WaitUntilNavigation.Load); }
+                return $"Opened a new tab ({BrowserHost.SessionOf(thread.Key)!.Tabs.Count} open).";
+            }
+            if (action is "tabs" or "switch")
+            {
+                BrowserHost.Session? ss = BrowserHost.SessionOf(thread.Key);
+                if (ss is null) return "No page is open.";
+                if (action == "switch")
+                {
+                    if (!int.TryParse(Arg("text"), out int n) || n < 1 || n > ss.Tabs.Count) return $"[Error: give a tab number from 1 to {ss.Tabs.Count}.]";
+                    ss.Active = n - 1;
+                }
+                return string.Join("\n", ss.Tabs.Select((t, i) => $"{(i == ss.Active ? "*" : " ")} {i + 1}. {t.Url}"));
+            }
             IPage page = await BrowserHost.PageFor(thread.Key, create: action == "open");
+            string folder = thread.FilesystemRoot is { Length: > 0 } fr ? fr : Paths.ScratchpadDir(thread.Key);
+            async Task<string> After(string said)
+            {
+                if (action is "click" or "press")
+                {
+                    List<string> got = await BrowserHost.CollectDownloads(thread.Key, Directory.CreateDirectory(folder).FullName);
+                    if (got.Count > 0) said += $" Downloaded into your working folder: {string.Join(", ", got)}.";
+                }
+                if (BrowserHost.SessionOf(thread.Key) is { LastDialog: { } d } ss) { said += $" A pop-up appeared and was accepted ({d})."; ss.LastDialog = null; }
+                return said;
+            }
             switch (action)
             {
                 case "open":
@@ -180,7 +350,7 @@ internal sealed class BrowserTool : Tool
                 }
                 case "click":
                 {
-                    string sel = Arg("selector");
+                    string sel = Sel();
                     if (sel.StartsWith("text:", StringComparison.OrdinalIgnoreCase))
                     {
                         string words = sel[5..].Trim();
@@ -193,15 +363,49 @@ internal sealed class BrowserTool : Tool
                     }
                     else await page.ClickAsync(sel);
                     await Task.Delay(600);
-                    return $"Clicked. Now at {page.Url} — \"{await page.GetTitleAsync()}\".";
+                    return await After($"Clicked. Now at {page.Url} — \"{await page.GetTitleAsync()}\".");
                 }
                 case "type":
-                    await page.TypeAsync(Arg("selector"), Arg("text"));
+                    await page.TypeAsync(Sel(), Arg("text"));
                     return "Typed.";
+                case "upload":
+                {
+                    string file = Path.GetFullPath(Path.IsPathRooted(Arg("text")) ? Arg("text") : Path.Combine(folder, Arg("text")));
+                    if (!file.StartsWith(Path.GetFullPath(folder) + Path.DirectorySeparatorChar) || !File.Exists(file)) return $"[Error: there is no file {Arg("text")} in your working folder.]";
+                    IElementHandle? input = await page.QuerySelectorAsync(Sel());
+                    if (input is null) return "[Error: no file input matches that selector. Use elements to find it.]";
+                    await input.UploadFileAsync(file);
+                    return $"Attached {Path.GetFileName(file)}.";
+                }
+                case "select":
+                {
+                    string[] chosen = await page.SelectAsync(Sel(), Arg("text"));
+                    return chosen.Length > 0 ? $"Selected {Arg("text")}." : $"[Error: no option with the value \"{Arg("text")}\" there. Use eval to list the options.]";
+                }
+                case "elements":
+                {
+                    string json = await page.EvaluateExpressionAsync<string>(@"(() => {
+                        document.querySelectorAll('[data-ari-ref]').forEach(e => e.removeAttribute('data-ari-ref'));
+                        const sel = 'a[href],button,input,select,textarea,summary,[role=button],[role=link],[role=tab],[role=menuitem],[role=checkbox],[onclick],[contenteditable=true]';
+                        const out = []; let n = 0;
+                        for (const e of document.querySelectorAll(sel)) {
+                            const r = e.getBoundingClientRect(); const st = getComputedStyle(e);
+                            if (r.width < 2 || r.height < 2 || st.visibility === 'hidden' || st.display === 'none' || e.disabled) continue;
+                            n++; e.setAttribute('data-ari-ref', n);
+                            const tag = e.tagName.toLowerCase(), type = e.getAttribute('type') || '';
+                            const label = (e.innerText || e.value || e.getAttribute('aria-label') || e.placeholder || e.title || e.name || e.alt || '').trim().replace(/\s+/g, ' ').slice(0, 70);
+                            const kind = tag === 'a' ? 'link' : tag === 'input' ? (type || 'text') + ' field' : tag === 'textarea' ? 'text area' : tag === 'select' ? 'dropdown' : tag;
+                            out.push(n + ' [' + kind + '] ' + label + (tag === 'a' && e.href ? ' → ' + e.href.slice(0, 80) : '') + (e.checked ? ' (checked)' : '') + (tag === 'input' && type !== 'password' && e.value && type !== 'submit' && type !== 'button' ? ' = ' + e.value.slice(0, 40) : ''));
+                            if (n >= 80) break;
+                        }
+                        return JSON.stringify(out); })()");
+                    string[] items = JsonSerializer.Deserialize<string[]>(json) ?? Array.Empty<string>();
+                    return items.Length == 0 ? "(nothing clickable or typeable on this page)" : $"{page.Url}\n" + string.Join("\n", items) + "\nUse selector ref:N with click, type or select.";
+                }
                 case "press":
                     await page.Keyboard.PressAsync(Arg("text"));
                     await Task.Delay(400);
-                    return $"Pressed {Arg("text")}. Now at {page.Url}.";
+                    return await After($"Pressed {Arg("text")}. Now at {page.Url}.");
                 case "scroll":
                 {
                     string d = Arg("direction").ToLowerInvariant();
@@ -213,6 +417,21 @@ internal sealed class BrowserTool : Tool
                     JsonElement r = await page.EvaluateExpressionAsync<JsonElement>(Arg("text"));
                     string s = r.ValueKind == JsonValueKind.Undefined ? "undefined" : r.ValueKind == JsonValueKind.String ? r.GetString() ?? "" : r.GetRawText();
                     return s.Length > 8000 ? s[..8000] + "…" : s;
+                }
+                case "wait":
+                {
+                    string w = Arg("text");
+                    if (int.TryParse(w, out int ms)) await Task.Delay(Math.Clamp(ms, 0, 30_000));
+                    else await page.WaitForSelectorAsync(w, new WaitForSelectorOptions { Timeout = 15_000 });
+                    return $"Waited. Now at {page.Url} — \"{await page.GetTitleAsync()}\".";
+                }
+                case "handover": case "ask_user":
+                {
+                    string ask = Arg("text").Trim();
+                    if (ask.Length == 0) return "[Error: say what the person should do in text.]";
+                    bool done = await BrowserHost.WaitForPerson(thread.Key, ask, thread.Ct);
+                    return done ? $"The person has finished. The page is now at {page.Url} — \"{await page.GetTitleAsync()}\". Take a screenshot or read the text to continue."
+                                : "[The person didn't respond in 15 minutes. Tell them you're ready when they are, and stop.]";
                 }
                 case "back":
                     await page.GoBackAsync();
