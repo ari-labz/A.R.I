@@ -9,34 +9,32 @@ namespace ARI.LLM;
 internal sealed class ReadDocument : Tool
 {
     private readonly FileSystem fs;
-    internal ReadDocument(FileSystem fs) => this.fs = fs;
+    private readonly string name;
+    private readonly string? only;      // the one extension a per-format reader accepts; null for the general read_document
+    private readonly string description;
+    private readonly string[] extras;   // which of pages / find / sheet / range this reader offers
 
-    internal override string     Name   => "read_document";
+    internal ReadDocument(FileSystem fs) : this(fs, "read_document", null,
+        "(Same as the per-format readers.) Read a PDF, Word (.docx), PowerPoint (.pptx) or Excel (.xlsx) file. With only a path it gives the page or sheet count and the opening; use find to search the whole file, pages to read parts, and for Excel sheet and range.",
+        "pages", "find", "sheet", "range") { }
+
+    internal ReadDocument(FileSystem fs, string name, string? only, string description, params string[] extras)
+    { this.fs = fs; this.name = name; this.only = only; this.description = description; this.extras = extras; }
+
+    internal override string     Name   => name;
     internal override ToolAccess Access => ToolAccess.Read;
-    internal override object Schema => new
+    internal override object Schema
     {
-        type = "function",
-        function = new
+        get
         {
-            name        = "read_document",
-            description = "Read a PDF, Word (.docx), PowerPoint (.pptx) or Excel (.xlsx) file. With only a path it gives the page or sheet count and the opening. " +
-                          "For a long document use find to locate a word or phrase across the whole file (it names the pages), then pages to read just those. " +
-                          "For a spreadsheet, name a sheet and a range such as A1:F50. Never read a whole long document; look for the part you need.",
-            parameters  = new
-            {
-                type       = "object",
-                properties = new
-                {
-                    path  = new { type = "string", description = "The file's path in the project or working folder." },
-                    pages = new { type = "string", description = "Which pages, slides or sections: \"5\", \"5-8\" or \"1-3,9\". At most about 14,000 characters come back per call." },
-                    find  = new { type = "string", description = "Search the whole document for this text and list where it appears." },
-                    sheet = new { type = "string", description = "Excel only: the sheet name." },
-                    range = new { type = "string", description = "Excel only: cells to read, e.g. A1:F50. Needs a sheet." },
-                },
-                required = new[] { "path" }
-            }
+            Dictionary<string, object> props = new() { ["path"] = new { type = "string", description = "The file's path in the project or working folder." } };
+            if (extras.Contains("pages")) props["pages"] = new { type = "string", description = "Which pages, slides or sections: \"5\", \"5-8\" or \"1-3,9\". At most about 14,000 characters come back per call." };
+            if (extras.Contains("find"))  props["find"]  = new { type = "string", description = "Search the whole file for this text and list where it appears (use this on a long file, then read just those parts)." };
+            if (extras.Contains("sheet")) props["sheet"] = new { type = "string", description = "The sheet name (shown in the overview)." };
+            if (extras.Contains("range")) props["range"] = new { type = "string", description = "Cells to read, e.g. A1:F50. Needs sheet." };
+            return new { type = "function", function = new { name, description, parameters = new { type = "object", properties = props, required = new[] { "path" } } } };
         }
-    };
+    }
 
     internal override async Task<ToolResult> Execute(string argsJson)
     {
@@ -51,11 +49,13 @@ internal sealed class ReadDocument : Tool
         if (path.Length == 0) return "[Error: give the path of the document.]";
 
         string ext = Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
-        if (!DocumentReader.Extensions.Contains(ext)) return $"[Error: read_document opens .pdf, .docx, .pptx and .xlsx files; use read_file for .{ext}.]";
-
         byte[] raw;
         try { raw = await fs.ReadBytes(path); }
         catch (Exception e) { return $"[Error: couldn't read {path}: {e.Message}]"; }
+        // Judged by what the file starts with when its name doesn't say (an attachment saved without its extension).
+        if (!DocumentReader.Extensions.Contains(ext)) ext = Read.DocumentKind(raw) ?? ext;
+        if (!DocumentReader.Extensions.Contains(ext)) return $"[Error: that isn't a PDF, Word, PowerPoint or Excel file; use read_file for .{ext}.]";
+        if (only is not null && ext != only) return $"[Error: {name} opens .{only} files; this is .{ext}. Use read_{ext} (or read_file) instead.]";
 
         try
         {
@@ -66,6 +66,9 @@ internal sealed class ReadDocument : Tool
 
             List<int> wanted = DocumentReader.ParsePages(pages, d.Parts.Count);
             if (wanted.Count == 0) return $"[Error: {Path.GetFileName(path)} has {d.Parts.Count} parts; \"{pages}\" names none of them.]";
+            // A scanned page has no text, only a picture of the page: hand her the picture so she can read it with her own eyes.
+            if (ext == "pdf" && wanted.All(n => d.Parts[n - 1].Text.Trim().Length == 0) && ScannedPage(raw, wanted[0]) is { } picture)
+                return ToolResult.AsImage(picture.Bytes, picture.Mime);
             StringBuilder sb = new();
             foreach (int n in wanted)
             {
@@ -78,6 +81,20 @@ internal sealed class ReadDocument : Tool
             return sb.ToString().TrimEnd();
         }
         catch (Exception e) { return $"[Error: couldn't open {Path.GetFileName(path)}: {e.Message}]"; }
+    }
+
+    private static (byte[] Bytes, string Mime)? ScannedPage(byte[] raw, int page)
+    {
+        try
+        {
+            using UglyToad.PdfPig.PdfDocument pdf = UglyToad.PdfPig.PdfDocument.Open(raw);
+            var biggest = pdf.GetPage(page).GetImages().OrderByDescending(i => (long)i.WidthInSamples * i.HeightInSamples).FirstOrDefault();
+            if (biggest is null) return null;
+            if (biggest.TryGetPng(out byte[]? png) && png is { Length: > 0 }) return (png, "image/png");
+            byte[] bytes = biggest.RawBytes.ToArray();
+            return bytes.Length > 2 && bytes[0] == 0xFF && bytes[1] == 0xD8 ? (bytes, "image/jpeg") : null;
+        }
+        catch { return null; }
     }
 
     private static string ReadCells(byte[] raw, string sheet, string range)

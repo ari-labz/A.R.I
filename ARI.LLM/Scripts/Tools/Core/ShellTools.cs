@@ -15,7 +15,7 @@ public class Shell : Tool
     [Param("Give up after this many seconds. Default 60, at most 600.", Optional = true)]
     public int TimeoutSeconds = 60;
 
-    [Param("true to start it in the background and return at once. Use it for servers and long jobs, then read its output with shell_job.", Optional = true)]
+    [Param("true to start it in the background and return at once. Use it for servers and long jobs, then check on it with the jobs tool.", Optional = true)]
     public bool Background;
 
     public override async Task<string> Run()
@@ -28,7 +28,7 @@ public class Shell : Tool
         if (Background)
         {
             ShellJobs.Job job = ShellJobs.Start(psi, Command);
-            return $"Started job {job.Id} in the background. Check on it with shell_job (action \"read\", id {job.Id}); stop it with action \"kill\".";
+            return $"Started job {job.Id} in the background. Check on it or stop it with the jobs tool (id \"shell #{job.Id}\").";
         }
         ProcessRunner.Result r = await ProcessRunner.Run(psi, TimeSpan.FromSeconds(Math.Clamp(TimeoutSeconds, 1, 600)), Cancelled);
         return ProcessRunner.Format(r);
@@ -99,5 +99,52 @@ public class RunCode : Tool
         }
         catch (System.ComponentModel.Win32Exception) { return $"[Error: {exe} isn't installed on this machine, so {Language} can't run.]"; }
         finally { try { File.Delete(file); } catch { } }
+    }
+}
+
+[Tool("jobs", "Everything running or finished in the background in one place: tools you started that came back as \"started in the background\", and commands started with shell in the background. " +
+              "list shows them all, status shows one's state and its result or latest output, cancel stops one you no longer want.", Group = "task_tools")]
+public class Jobs : Tool
+{
+    [Param("list, status or cancel", Options = "list,status,cancel")]
+    public string Action;
+
+    [Param("Which job, as the list names it: e.g. \"write_pdf #2\" or \"shell #1\". A bare number works when it is unambiguous. Not needed for list.", Optional = true)]
+    public string Id;
+
+    private static string ShellLine(ShellJobs.Job j) => $"shell #{j.Id}: {(j.Running ? "running" : $"finished (exit {j.Process.ExitCode})")} since {j.Started:HH:mm:ss} · {(j.Command.Length > 70 ? j.Command[..70] + "…" : j.Command)}";
+
+    public override Task<string> Run()
+    {
+        string key = CallThread?.Key ?? "";
+        List<AsyncToolJobs.Job> tools = AsyncToolJobs.For(key);
+        List<ShellJobs.Job> shells = IsAdmin ? ShellJobs.All.ToList() : new();
+        if (Action == "list")
+        {
+            List<string> lines = tools.Select(j => j.Summary).Concat(shells.Select(ShellLine)).ToList();
+            return Task.FromResult(lines.Count == 0 ? "Nothing has been started in the background in this conversation." : string.Join("\n", lines));
+        }
+        if (string.IsNullOrWhiteSpace(Id)) return Task.FromResult("[Error: say which job. The list shows them.]");
+        string id = Id.Trim();
+
+        bool wantsShell = id.StartsWith("shell", StringComparison.OrdinalIgnoreCase);
+        AsyncToolJobs.Job? tool = wantsShell ? null : AsyncToolJobs.Find(key, id);
+        if (tool is not null)
+        {
+            if (Action == "cancel") return Task.FromResult(AsyncToolJobs.Cancel(tool));
+            return Task.FromResult($"{tool.Summary}\n" + (tool.State == "running" ? "Still running; its result will reach you when it finishes." : $"Result:\n{tool.Result}"));
+        }
+        string digits = new(id.Where(char.IsDigit).ToArray());
+        if (int.TryParse(digits, out int n) && ShellJobs.Get(n) is { } shell)
+        {
+            if (!IsAdmin) return Task.FromResult("[Error: only the owner, chatting in the app, can manage commands.]");
+            if (Action == "cancel")
+            {
+                if (shell.Running) try { shell.Process.Kill(entireProcessTree: true); } catch { }
+                return Task.FromResult($"shell #{shell.Id} stopped.");
+            }
+            return Task.FromResult($"{ShellLine(shell)}\n\n{ShellJobs.Tail(shell)}");
+        }
+        return Task.FromResult($"[Error: there is no job \"{Id}\". Use list to see them.]");
     }
 }

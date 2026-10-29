@@ -13,7 +13,7 @@ self.addEventListener('push', e => {
         icon: '/images/icon-dark.png',
         badge: '/images/icon-dark.png',
         data: { url: data.url || '/' },
-        tag: 'ari-proactive',
+        tag: data.tag || 'ari-proactive',
         renotify: true,
     };
     e.waitUntil(self.registration.showNotification(title, options));

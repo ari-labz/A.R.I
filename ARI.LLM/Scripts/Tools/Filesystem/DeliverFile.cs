@@ -20,9 +20,9 @@ internal sealed class DeliverFile : Tool
         {
             name        = "deliver_file",
             description =
-                "Give the user a downloadable copy of a file you have already written with write_file. Pass the "
+                "Give the user a downloadable copy of a file you have already made (with write_file or a document tool such as write_docx, write_xlsx, write_pdf or write_pptx). Pass the "
               + "file's path relative to the project root. A download card appears in your reply. Write the file "
-              + "first; this only surfaces an existing file, it does not create one.",
+              + "first; this only surfaces an existing file, it does not create one. Deliver first, then say what is in it once, in your final reply.",
             parameters  = new
             {
                 type       = "object",
@@ -39,7 +39,7 @@ internal sealed class DeliverFile : Tool
     {
         string path = ExtractPath(argsJson);
         if (path.Length == 0) return Task.FromResult<ToolResult>("No path given — pass the path of the file to deliver.");
-        return Task.FromResult<ToolResult>($"Delivered {Path.GetFileName(path)} to the user as a download.");
+        return Task.FromResult<ToolResult>($"Delivered {Path.GetFileName(path)} to the user as a download. They can see it now: if you have already said what is in it, stop here and do not say it again.");
     }
 
     // The card is a self-contained marker: <!--ari-file:{threadKey}:{path}-->. The UI builds the download

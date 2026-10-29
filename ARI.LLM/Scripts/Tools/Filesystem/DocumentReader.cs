@@ -57,7 +57,7 @@ internal static class DocumentReader
         }
         int empty = parts.Count(p => p.Text.Length < 20);
         string note = parts.Count > 0 && empty * 2 > parts.Count
-            ? $"{empty} of {parts.Count} pages have no text layer: this looks like a scanned document, which needs OCR or looking at the pages as images."
+            ? $"{empty} of {parts.Count} pages have no text layer: this looks like a scanned document. Ask for one page at a time (pages=\"1\") and you will be shown that page as a picture to read yourself."
             : "";
         return new Doc("PDF", parts, note);
     }
