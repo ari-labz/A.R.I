@@ -52,10 +52,21 @@ internal abstract class Tool
     /// up in size. A whole tool family (e.g. every read) can share one override. Default passes through.</summary>
     internal virtual ToolResult PostRun(Thread thread, string argsJson, ToolResult result) => result;
 
+    /// <summary>Applies the control panel's settings at call time: a tool switched off since it was loaded refuses,
+    /// and an async one starts in the background and returns at once (its result arrives later; see
+    /// <see cref="AsyncToolJobs"/>). Internal threads (subagents) have no one to report to, so they run it inline.</summary>
+    private Task<ToolResult> Dispatch(Thread thread, string argsJson)
+    {
+        if (!ToolRegistry.IsEnabled(Name))
+            return Task.FromResult<ToolResult>($"[Error: the {Name} tool has been switched off in the control panel.]");
+        if (!ToolRegistry.IsAsync(Name) || thread.Internal) return Execute(argsJson);
+        return Task.FromResult(AsyncToolJobs.Start(thread, this, argsJson));
+    }
+
     internal void Register(Thread thread)
     {
         thread.toolAccess[Name] = Access;
-        thread.RegisterTool(Name, Schema, Execute, Display, DisplayAfter, StreamingDisplay,
+        thread.RegisterTool(Name, Schema, argsJson => Dispatch(thread, argsJson), Display, DisplayAfter, StreamingDisplay,
             partialArgs => StreamingPreCheck(thread, partialArgs),
             argsJson    => PreCheck(thread, argsJson),
             (argsJson, result) => PostRun(thread, argsJson, result));
