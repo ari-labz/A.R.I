@@ -48,7 +48,7 @@ internal sealed class CodePipeline : Pipeline
         // Same brain as a Dialogue thread: wait out an Engram sweep of this thread, then recall memories and carry
         // the running context summary — so coding threads aren't a blank-slate Ari. Skipped on the approval turn
         // ("[approve-plan]" is a button press, not a message with anything to recall against).
-        if (engram?.IsSweeping(threadKey) == true)
+        if (engram?.BlocksReply(threadKey) == true)
         {
             Shared.Logger.LogInformation("[Code] ({Thread}) waiting for Engram sweep to finish before processing.", threadKey);
             await engram.WaitForSweep(threadKey, cts.Token);

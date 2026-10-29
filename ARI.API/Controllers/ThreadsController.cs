@@ -271,7 +271,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     [HttpGet("~/api/v1/pipelines")]
     public IActionResult GetPipelines()
     {
-        List<object> list = [new { id = "dialogue", label = "Default" }, new { id = "code", label = "Code" }, new { id = "speech", label = "Talk" }];
+        List<object> list = [new { id = "dialogue", label = "Default" }, new { id = "code", label = "Code" }];
+        if (ARI.Common.Modules.Voice is not null) list.Add(new { id = "speech", label = "Talk" });
         foreach ((string id, string name) in Llm?.ReplyPipelines() ?? [])
             if (!id.Equals("default", StringComparison.OrdinalIgnoreCase)) list.Add(new { id, label = name });
         return Ok(list);
@@ -291,7 +292,11 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         string? id = req?.Pipeline;
         if (string.IsNullOrWhiteSpace(id)) return BadRequest(new { error = "pipeline is required." });
         if (id.Equals("code", StringComparison.OrdinalIgnoreCase)) Llm.ForcePipeline(threadKey, ARI.LLM.ThreadPipeline.Code);
-        else if (id.Equals("speech", StringComparison.OrdinalIgnoreCase)) Llm.ForcePipeline(threadKey, ARI.LLM.ThreadPipeline.Speech);
+        else if (id.Equals("speech", StringComparison.OrdinalIgnoreCase))
+        {
+            if (ARI.Common.Modules.Voice is null) return BadRequest(new { error = "Talk needs the Voice module, which is turned off." });
+            Llm.ForcePipeline(threadKey, ARI.LLM.ThreadPipeline.Speech);
+        }
         else
         {
             if (id.Equals("dialogue", StringComparison.OrdinalIgnoreCase)) id = "default";
@@ -589,24 +594,30 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
     private async Task SendWatchEvent([FromRoute(Name = "id")] string threadKey, CancellationToken ct)
     {
-        string status = (Llm?.IsEngramSweeping(threadKey)  ?? false) ? "remembering"
-                      : Llm?.GetThreadPhase(threadKey) switch
-                        {
-                            ARI.LLM.ThreadPhase.Prefilling  => "prefilling",
-                            ARI.LLM.ThreadPhase.Thinking    => "thinking",
-                            ARI.LLM.ThreadPhase.Typing      => "typing",
-                            ARI.LLM.ThreadPhase.Researching => "researching",
-                            ARI.LLM.ThreadPhase.Generating  => "generating",
-                            ARI.LLM.ThreadPhase.Waiting     => "waiting",
-                            ARI.LLM.ThreadPhase.Working     => "working",
-                            _                              => (Llm?.IsThreadProcessing(threadKey) ?? false) ? "prefilling" : "idle",
-                        };
+        // The reply's own state comes first: a held-back reply is "queued", then whatever phase she is really in. Remembering is reported
+        // separately, so a reply can be reading or typing while Engram saves; "remembering" is only the status when nothing else is going on.
+        bool remembering = Llm?.IsEngramSweeping(threadKey) ?? false;
+        string phase = Llm?.GetThreadPhase(threadKey) switch
+        {
+            ARI.LLM.ThreadPhase.Prefilling  => "prefilling",
+            ARI.LLM.ThreadPhase.Thinking    => "thinking",
+            ARI.LLM.ThreadPhase.Typing      => "typing",
+            ARI.LLM.ThreadPhase.Researching => "researching",
+            ARI.LLM.ThreadPhase.Generating  => "generating",
+            ARI.LLM.ThreadPhase.Waiting     => "waiting",
+            ARI.LLM.ThreadPhase.Working     => "working",
+            _                               => (Llm?.IsThreadProcessing(threadKey) ?? false) ? "prefilling" : "idle",
+        };
+        string status = (Llm?.IsWaitingOnMemory(threadKey) ?? false) ? "queued"
+                      : phase != "idle" ? phase
+                      : remembering ? "remembering"
+                      : "idle";
         bool isCodeMode = Llm?.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? wt) == true && wt?.Pipeline == ARI.LLM.ThreadPipeline.Code;
         // A tool waiting on the user's OK (a destructive git/gh command) — the app shows its Allow/Deny prompt.
         object? approval = ARI.LLM.ToolApprovals.Get(threadKey) is { } pending
             ? new { id = pending.Id, title = pending.Title, command = pending.Command }
             : null;
-        string payload  = JsonSerializer.Serialize(new { status, isCodeMode, approval });
+        string payload  = JsonSerializer.Serialize(new { status, remembering, isCodeMode, approval });
         await Response.WriteAsync($"data: {payload}\n\n", ct);
         await Response.Body.FlushAsync(ct);
     }

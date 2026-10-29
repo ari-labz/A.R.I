@@ -1659,3 +1659,17 @@ details.tool-card--report[open] { width: 100%; box-sizing: border-box; }
 }
 #btn-begin-speech:hover { filter: brightness(1.08); }
 #btn-begin-speech:active { transform: translateY(1px); }
+
+
+/* ── "A·R·I will remember that" card, in the chat where remembering began; and the queued-reply line ── */
+.memory-marker { align-self: center; display: flex; align-items: center; gap: 14px; margin: 14px auto; padding: 13px 26px 13px 16px; border-radius: 12px; background: #101618; color: #CADDE2; animation: memory-marker-in .45s ease-out both; }
+.memory-marker-icon { width: 34px; height: 34px; flex: none; border-radius: 50%; border: 1.5px solid #CADDE2; display: flex; align-items: center; justify-content: center; }
+.memory-marker-text { display: flex; flex-direction: column; gap: 1px; }
+.memory-marker-title { font-size: 17px; font-weight: 500; letter-spacing: .01em; }
+.memory-marker-sub { font-size: 12px; color: #8fa9b0; }
+.memory-marker-dots b { display: inline-block; width: 4px; height: 4px; margin-left: 3px; border-radius: 50%; background: currentColor; animation: memory-marker-pulse 1.2s infinite; }
+.memory-marker-dots b:nth-child(2) { animation-delay: .2s; }
+.memory-marker-dots b:nth-child(3) { animation-delay: .4s; }
+.reply-queued { align-self: flex-end; display: flex; align-items: center; gap: 6px; margin: 2px 0 8px; font-size: 12px; color: var(--text-dim, #6b7b80); }
+@keyframes memory-marker-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes memory-marker-pulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }

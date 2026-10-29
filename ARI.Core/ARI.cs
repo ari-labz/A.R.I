@@ -264,8 +264,10 @@ public class ARI : BackgroundService, IModuleLifecycle
                 await StartVoiceSynthesisAsync();
                 return voiceSynthesisModule!.IsSetupComplete ? null : "Setup failed — check the server log for details.";
             case "Voice":
+                // One switch covers the speech engines and the voices that run on them: set the engines up first.
+                if (!(voiceSynthesisModule?.IsSetupComplete ?? false)) await StartVoiceSynthesisAsync();
                 if (!(voiceSynthesisModule?.IsSetupComplete ?? false))
-                    return "Voice needs VoiceSynthesis running first.";
+                    return "Setup failed — check the server log for details.";
                 await StartVoiceAsync();
                 return voiceModule is not null ? null : "Could not start — check the server log for details.";
             case "Listener":
@@ -292,7 +294,7 @@ public class ARI : BackgroundService, IModuleLifecycle
         switch (key)
         {
             case "VoiceSynthesis": StopVoiceSynthesis();     return null;
-            case "Voice":          StopVoice();              return null;
+            case "Voice":          StopVoice(); StopVoiceSynthesis(); return null;
             case "Listener":       StopListener();           return null;
             case "ImageGen":       StopImageGen();           return null;
             case "Discord":        await StopDiscordAsync(); return null;

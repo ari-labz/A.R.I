@@ -62,6 +62,12 @@ public class AgentsController(PersistentData persistentData) : ControllerBase
         if (!persistentData.RemoveCustomAgent(id))
             return NotFound(new { error = $"'{id}' is not a custom agent." });
         Llm?.RemoveCustomAgent(id);
+        // Take the agent out of every pipeline that used it, so no step is left pointing at nothing.
+        if (persistentData.GetPipelinesRaw() is { } pipelines && ARI.LLM.PipelineGraph.RemoveMissingAgents(pipelines, name => !name.Equals(id, StringComparison.OrdinalIgnoreCase)))
+        {
+            persistentData.SavePipelinesRaw(pipelines);
+            Llm?.ReloadPipelines();
+        }
         return Ok(new { ok = true });
     }
 

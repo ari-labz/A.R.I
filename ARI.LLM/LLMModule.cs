@@ -23,7 +23,6 @@ public enum ThreadPhase { Idle, Prefilling, Thinking, Typing, Researching, Gener
 public class LLMModule : ILLMModule, IDisposable
 {
     //pipelines
-    private ScriptRegistry scripts = null!;
     private readonly ConcurrentDictionary<string, PipelineGraph> graphs = new(StringComparer.OrdinalIgnoreCase);
     // Every pipeline that can run as a step inside another, which includes ones that couldn't answer a chat by themselves.
     private readonly ConcurrentDictionary<string, PipelineGraph> subGraphs = new(StringComparer.OrdinalIgnoreCase);
@@ -127,9 +126,6 @@ public class LLMModule : ILLMModule, IDisposable
         foreach (Server s in _servers) queues[s] = new LLMQueue();
 
         pipelinesPath = Path.Combine(Path.GetDirectoryName(agentsJsonPath) ?? ".", "Pipelines.json");
-        scripts = new ScriptRegistry(Path.Combine(Path.GetDirectoryName(agentsJsonPath) ?? ".", "Scripts"));
-        scripts.SeedShipped();
-        scripts.LoadAll();
         dreamingEnabled = LoadDreamingState();
 
         CleanScratchpads();
@@ -296,7 +292,7 @@ public class LLMModule : ILLMModule, IDisposable
 
         if (textingAgent is not null)
         {
-            graphPipeline = new GraphPipeline(textingAgent, memory, context, engram, customAgents, GraphFor, id => subGraphs.GetValueOrDefault(id), scripts, processingThreads, liveCalls, NotifyWatchers);
+            graphPipeline = new GraphPipeline(textingAgent, memory, context, engram, customAgents, GraphFor, id => subGraphs.GetValueOrDefault(id), processingThreads, liveCalls, NotifyWatchers);
             graphPipeline.ThreadBufferFull     += key => NotifyWatchers(key);
             graphPipeline.ThreadBecameInactive += key => NotifyWatchers(key);
             ReloadPipelines();
@@ -577,7 +573,7 @@ public class LLMModule : ILLMModule, IDisposable
             if (engram is not null)
                 thread.ExchangeCompleted += (_, _) =>
                 {
-                    if (thread.Internal || !thread.HasUserMessages || !thread.HasMemoryAccess || thread.OwnerId is null) return;
+                    if (!Engram.MaySweep(thread)) return;
                     bool nearCompaction = false;
                     if (textingAgent is { BudgetContext: > 0 } && thread.History.OfType<Response>().LastOrDefault()?.Data.PromptTokens is int used and > 0)
                     {
@@ -633,7 +629,7 @@ public class LLMModule : ILLMModule, IDisposable
 
     /// <summary>The pipelines a thread can be switched to: every graph that can run, Default first.</summary>
     public IReadOnlyList<(string Id, string Name)> ReplyPipelines() =>
-        graphs.Values.Where(g => !PipelineGraph.StepOnlyIds.Contains(g.Id, StringComparer.OrdinalIgnoreCase)).OrderBy(g => g.Id == PipelineGraph.DefaultId ? 0 : 1).ThenBy(g => g.Name, StringComparer.OrdinalIgnoreCase)
+        graphs.Values.Where(g => !PipelineGraph.StepOnlyIds.Contains(g.Id, StringComparer.OrdinalIgnoreCase) && (!g.Hidden || g.Id == PipelineGraph.DefaultId)).OrderBy(g => g.Id == PipelineGraph.DefaultId ? 0 : 1).ThenBy(g => g.Name, StringComparer.OrdinalIgnoreCase)
               .Select(g => (g.Id, g.Name)).ToList();
 
     /// <summary>The graph a thread runs on. An id that no longer exists (deleted, or broken by a deleted agent) answers
@@ -671,29 +667,6 @@ public class LLMModule : ILLMModule, IDisposable
         return result;
     }
 
-    // ── Scripts ─────────────────────────────────────────────────────────────────
-
-    /// <summary>Every script, with its ports (or its compile error).</summary>
-    public IReadOnlyList<(string Name, string Description, string[] Inputs, string[] OptionalInputs, string[] Outputs, string? Error)> ListScripts() =>
-        scripts.List().Select(s => (s.Name, s.Shape?.Description ?? "", s.Shape?.Inputs ?? [], s.Shape?.OptionalInputs ?? [], s.Shape?.Outputs ?? [], s.Error)).ToList();
-
-    public string? ScriptSource(string name) => scripts.Source(name);
-
-    /// <summary>Compiles and saves a script; null on success, otherwise the errors. Pipelines are re-checked, since the script's ports may have changed.</summary>
-    public string? SaveScript(string name, string source)
-    {
-        string? error = scripts.Save(name, source);
-        if (error is null) ReloadPipelines();
-        return error;
-    }
-
-    public bool DeleteScript(string name)
-    {
-        bool had = scripts.Delete(name);
-        if (had) ReloadPipelines();
-        return had;
-    }
-
     /// <summary>Problems with each pipeline in Pipelines.json as the control panel sends it, by pipeline id; empty when it can run.
     /// A pipeline counts as fine if it can answer a chat or run as a step inside another one.</summary>
     public Dictionary<string, List<string>> ValidatePipelines(JsonElement root)
@@ -704,7 +677,7 @@ public class LLMModule : ILLMModule, IDisposable
         Dictionary<string, PipelineGraph> byId = all.GroupBy(g => g.Id).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
         foreach (PipelineGraph g in all)
         {
-            PipelineGraph.Env env = new(graphPipeline.PortsOf, id => byId.GetValueOrDefault(id), scripts.Shape);
+            PipelineGraph.Env env = new(graphPipeline.PortsOf, id => byId.GetValueOrDefault(id));
             List<string> asReply = g.Validate(env);
             result[g.Id] = asReply.Count == 0 || g.Validate(env, asSub: true).Count == 0 ? [] : asReply;
         }
@@ -738,7 +711,7 @@ public class LLMModule : ILLMModule, IDisposable
             Dictionary<string, PipelineGraph> byId = all.GroupBy(g => g.Id).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
             foreach (PipelineGraph graph in all)
             {
-                PipelineGraph.Env env = new(graphPipeline.PortsOf, id => byId.GetValueOrDefault(id), scripts.Shape);
+                PipelineGraph.Env env = new(graphPipeline.PortsOf, id => byId.GetValueOrDefault(id));
                 List<string> asReply = graph.Validate(env);
                 List<string> asSub   = graph.Validate(env, asSub: true);
                 if (asReply.Count == 0) loaded[graph.Id] = graph;
@@ -1023,7 +996,7 @@ public class LLMModule : ILLMModule, IDisposable
     /// delete-retry poll tries again.</summary>
     private void OnThreadDormant(Thread thread)
     {
-        bool canSweep = engram is not null && !thread.Internal && thread.HasUserMessages && !thread.EngramProcessed && thread.HasMemoryAccess && thread.OwnerId is not null;
+        bool canSweep = engram is not null && !thread.EngramProcessed && Engram.MaySweep(thread);
         if (!canSweep) { thread.EngramProcessed = true; return; }
 
         if (thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech or ThreadPipeline.Code)
@@ -1449,7 +1422,10 @@ public class LLMModule : ILLMModule, IDisposable
         if (threads.TryGetValue(threadKey, out Thread? thread)) thread.RaiseUpdated();
     }
 
-    public bool IsEngramSweeping(string threadKey) => engram?.IsSweeping(threadKey) ?? false;
+    public bool IsEngramSweeping(string threadKey) => engram?.IsSaving(threadKey) ?? false;
+
+    /// <summary>A reply is held back until Engram finishes saving this chat.</summary>
+    public bool IsWaitingOnMemory(string threadKey) => threads.TryGetValue(threadKey, out Thread? t) && t.WaitingOnMemory;
 
     /// <summary>How many completed exchanges an active thread accumulates before Engram sweeps it
     /// mid-conversation. 0 = interval sweeping disabled (dormant/close remain the only triggers).</summary>

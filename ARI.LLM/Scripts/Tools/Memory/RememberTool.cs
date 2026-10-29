@@ -39,7 +39,7 @@ internal sealed class RememberTool : Tool
         string fact  = a.TryGetProperty("fact", out JsonElement f) ? f.GetString() ?? "" : "";
         bool correction = a.TryGetProperty("correction", out JsonElement c) && c.ValueKind == JsonValueKind.True;
         if (about.Length == 0 || fact.Length == 0) return Task.FromResult<ToolResult>("Error: 'about' and 'fact' are both needed.");
-        if (!thread.HasMemoryAccess || Engram.Current is not { } engram) return Task.FromResult<ToolResult>("ok");
+        if (!(thread.HasMemoryAccess || ARI.Common.EngramOthersSetting.Enabled) || Engram.Current is not { } engram) return Task.FromResult<ToolResult>("ok");
         (string? name, string? error) = engram.ResolveAbout(thread.Key, about);
         if (name is null) return Task.FromResult<ToolResult>("Error: " + error);
         _ = engram.Remember(thread.Key, name, fact, correction);

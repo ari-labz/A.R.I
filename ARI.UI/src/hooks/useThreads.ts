@@ -209,11 +209,13 @@ export function openWatchStream(
     return es
 }
 
-export type ThreadStatus = "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing" | "generating" | "waiting" | "working"
+export type ThreadStatus = "idle" | "prefilling" | "thinking" | "typing" | "queued" | "remembering" | "researching" | "syncing" | "generating" | "waiting" | "working"
 
 export interface WatchEvent {
     deleted?:    boolean
     status?:     ThreadStatus
+    // Engram is saving something for this thread right now (separate from status, so a reply can be reading while she remembers).
+    remembering?: boolean
     isCodeMode?: boolean
     // A server-side tool waiting on the user's OK (a destructive git/gh command); null once answered or expired.
     approval?:   { id: string; title: string; command: string } | null
