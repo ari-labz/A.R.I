@@ -16,6 +16,13 @@ internal static class BrowserHost
     private static readonly HttpClient Fetcher = new() { Timeout = TimeSpan.FromMinutes(5) };
     private static readonly ConcurrentDictionary<string, Session> sessions = new();
 
+    private const int DEFAULT_WIDTH = 1280;
+    private const int DEFAULT_HEIGHT = 900;
+    private const int MIN_WIDTH = 320;
+    private const int MAX_WIDTH = 1920;
+    private const int MIN_HEIGHT = 240;
+    private const int MAX_HEIGHT = 1400;
+
     /// <summary>One conversation's browser: its tabs, which one it is looking at, and whether it is waiting for the person to do something.</summary>
     internal sealed class Session
     {
@@ -25,6 +32,7 @@ internal static class BrowserHost
         internal TaskCompletionSource? Handover;
         internal readonly List<(string Url, string Name, IPage Page)> Downloads = new();
         internal string? LastDialog;                  // what a pop-up (alert, confirm) said; they are accepted so a page never hangs on one
+        internal ViewPortOptions Viewport = new() { Width = DEFAULT_WIDTH, Height = DEFAULT_HEIGHT };   // the size of the pane the person watches it in
         internal IPage? Page => Active >= 0 && Active < Tabs.Count ? Tabs[Active] : null;
     }
 
@@ -145,6 +153,7 @@ internal static class BrowserHost
             lock (session.Downloads) session.Downloads.Add((url, name, page));
         };
         page.Dialog += async (_, e) => { session.LastDialog = $"{e.Dialog.DialogType}: {e.Dialog.Message}"; try { await e.Dialog.Accept(); } catch { } };
+        await page.SetViewportAsync(session.Viewport);
         session.Tabs.Add(page); session.Active = session.Tabs.Count - 1;
         return page;
     }
@@ -158,6 +167,14 @@ internal static class BrowserHost
         if (SessionOf(conversation) is not { } s || s.Page is not { } p) return;
         try { await p.CloseAsync(); } catch { }
         s.Tabs.RemoveAll(t => t.IsClosed); s.Active = Math.Max(0, Math.Min(s.Active, s.Tabs.Count - 1));
+    }
+
+    /// <summary>Makes the pages the size of the pane the person watches them in, so the picture fills it exactly.</summary>
+    internal static async Task Resize(string conversation, int width, int height)
+    {
+        if (SessionOf(conversation) is not { } session) return;
+        session.Viewport = new ViewPortOptions { Width = Math.Clamp(width, MIN_WIDTH, MAX_WIDTH), Height = Math.Clamp(height, MIN_HEIGHT, MAX_HEIGHT) };
+        foreach (IPage tab in session.Tabs.Where(t => !t.IsClosed)) await tab.SetViewportAsync(session.Viewport);
     }
 
     /// <summary>A picture of the page the conversation is looking at, for the person to watch. Null if there isn't one.</summary>

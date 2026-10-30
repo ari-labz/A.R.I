@@ -44,7 +44,10 @@ public static class Paths
     /// <summary>Full-fidelity snapshots of conversations that have expired, written only while the Persistent Threads
     /// setting is on, so a thread can be reopened exactly as it was. Not created until something is saved there.
     /// See PersistedThreads.</summary>
-    public static string PersistedThreads { get; }
+    public static string PersistedThreads => Shared.DevMode ? PersistedThreadsDev : PersistedThreadsLive;
+    /// <summary>Where Dev Mode keeps its conversations: a throwaway folder emptied at every start, so a test run survives a reboot but never mixes with the real ones.</summary>
+    public static string PersistedThreadsDev { get; }
+    private static string PersistedThreadsLive { get; }
     /// <summary>Upvoted/downvoted responses with the user's note and the turns that led to them —
     /// the growing liked/disliked dataset. See FeedbackStore.</summary>
     public static string Feedback       { get; }
@@ -172,7 +175,8 @@ public static class Paths
         DTILogs        = ServerDir("Logs/DTILogs");
         DreamLogs      = ServerDir("Logs/DreamLogs");
         ChatHistory    = ServerDir("ChatHistory");
-        PersistedThreads = Path.Combine(AppData, "Server", "PersistedThreads");
+        PersistedThreadsLive = Path.Combine(AppData, "Server", "PersistedThreads");
+        PersistedThreadsDev  = Path.Combine(AppData, "Server", "PersistedThreads.devrun");
         Feedback       = ServerDir("Feedback");
         Keys           = ServerDir("Keys");
         Push           = ServerDir("Push");

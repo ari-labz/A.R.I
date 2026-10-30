@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Threading.Channels;
 using ARI.BrainVault;
 using ARI.Common;
+using ARI.Sdk;
 using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
@@ -109,8 +110,14 @@ public class LLMModule : ILLMModule, IDisposable
         return false;
     }
 
+    /// <summary>Messages from chat services in, replies and notices out, whichever plugin carries the service.</summary>
+    public Channels Channels { get; }
+
+    public Task NotifyOwner(string text) => Channels.Notify(new Notice { Text = text });
+
     public LLMModule(IReadOnlyList<Server> servers, string agentsJsonPath, BrainConfig? brainConfig = null, ILoggerFactory? loggerFactory = null)
     {
+        Channels = new Channels(this);
         _logger = loggerFactory is not null
             ? loggerFactory.CreateLogger("ARI.LLM")
             : Shared.Logger;
@@ -169,6 +176,7 @@ public class LLMModule : ILLMModule, IDisposable
 
 
         realBrainConfig = brainConfig;
+        if (Shared.DevMode) ClearDevThreads();
         if (brainConfig is not null)
         {
             if (Shared.DevMode) brainConfig.VaultPath = PrepareDevSandbox(brainConfig);
@@ -512,16 +520,12 @@ public class LLMModule : ILLMModule, IDisposable
         new ToolSearch(thread).Register(thread);
         // The reflex for corrections and "remember this" is always on for people-facing chats.
         if (type is ThreadPipeline.Dialogue or ThreadPipeline.Speech) new RememberTool(thread).Register(thread);
-        // Discord threads get discord_tools hot — no request_tools round-trip needed.
-        bool isDiscord = threadKey.StartsWith("dm:", StringComparison.OrdinalIgnoreCase) ||
-                         threadKey.StartsWith("guild:", StringComparison.OrdinalIgnoreCase);
-        if (isDiscord)
-            ToolFactories.LoadGroup("discord_tools", thread);
+        bool isChannel = Channels.IsChannelKey(threadKey);
         // propose_persona_edit is hot for the same reason: the moment worth proposing a persona change is a
         // moment the user is criticising her, and a list_tools → request_tools discovery hop is not something
         // to rely on mid-apology. Chat clients only — the proposal is approved by clicking a diff, which a
-        // Discord or voice thread has no way to show.
-        if (!isDiscord && type is ThreadPipeline.Dialogue or ThreadPipeline.Code)
+        // chat-service or voice thread has no way to show.
+        if (!isChannel && type is ThreadPipeline.Dialogue or ThreadPipeline.Code)
             ToolFactories.LoadGroup("persona_tools", thread);
         // Image/video generation tools are always hot when the module is ready — no request_tools hop.
         if (Modules.ImageGen?.IsReady == true && type is ThreadPipeline.Dialogue or ThreadPipeline.Speech)
@@ -529,7 +533,7 @@ public class LLMModule : ILLMModule, IDisposable
         // hand_to_coder is the net under the deterministic Code routing: if a coding request lands on a Dialogue
         // thread (the gate never fired), she can pass it to the Coder instead of improvising. Hot, like
         // propose_persona_edit — discovering it via list_tools is not something to rely on mid-request.
-        if (!isDiscord && type is ThreadPipeline.Dialogue)
+        if (!isChannel && type is ThreadPipeline.Dialogue)
             new HandToCoder(thread).Register(thread);
         // The pinned tools are in hand from the first message. This is the conversation's first sync; the chat API repeats it on
         // each message, once it knows whether the Master or a guest is talking.
@@ -935,12 +939,18 @@ public class LLMModule : ILLMModule, IDisposable
         {
             if (Shared.DevMode == on) return;
             Shared.SetDevMode(on);
+            if (on) ClearDevThreads();
             if (realBrainConfig is null) return;
             BrainConfig config = new() { Enabled = realBrainConfig.Enabled, VaultPath = realBrainConfig.VaultPath, BackupPath = realBrainConfig.BackupPath, MaxBackups = realBrainConfig.MaxBackups };
             if (on) config.VaultPath = PrepareDevSandbox(config);
             IndexStats stats = Brain.Initialize(config);
             _logger.LogWarning("Dev Mode switched {State}: brain is now {Root} ({Notes} notes).", on ? "ON" : "OFF", Brain.VaultRoot, stats.Notes);
         }
+    }
+
+    private static void ClearDevThreads()
+    {
+        if (Directory.Exists(Paths.PersistedThreadsDev)) Directory.Delete(Paths.PersistedThreadsDev, recursive: true);   // only ever our own ".devrun" folder
     }
 
     private string PrepareDevSandbox(BrainConfig config)
@@ -964,6 +974,7 @@ public class LLMModule : ILLMModule, IDisposable
 
     public void Dispose()
     {
+        Channels.Dispose();
         dreamOrchestrator?.Dispose();
         brainWatchCts?.Cancel();
         brainWatchCts?.Dispose();
@@ -1207,10 +1218,8 @@ public class LLMModule : ILLMModule, IDisposable
         processingThreads[threadKey] = cts;
         NotifyWatchers(threadKey);   // push "prefilling" snapshot immediately so the watch client doesn't wait for the first delta
 
-        // Discord threads always use Dialogue.
-        bool isDiscordThread = threadKey.StartsWith("dm:", StringComparison.OrdinalIgnoreCase)
-                            || threadKey.StartsWith("guild:", StringComparison.OrdinalIgnoreCase);
-        if (isDiscordThread)
+        // Conversations on chat services always use Dialogue.
+        if (Channels.IsChannelKey(threadKey))
         {
             Thread dlgThread = GetOrCreateThread(ThreadPipeline.Dialogue, threadKey, platformContext);
             return await graphPipeline!.ExecuteAsync(dlgThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments);

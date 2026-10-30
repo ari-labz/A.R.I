@@ -37,7 +37,7 @@ internal static class CapabilitiesBlock
         if (owner && ToolRegistry.IsEnabled("list_chats"))
             sb.AppendLine("If you feel you're missing context, list_chats and read_chat show your other recent conversations.");
 
-        if (conversation && thread.Medium != ThreadMedium.Discord)
+        if (conversation && thread.Medium != ThreadMedium.Channel)
             sb.AppendLine("Your files and commands are on the server you run on, not on the user's own computer or phone. You can't open a file from their device: they upload it into the chat, " +
                           "and you give them yours with deliver_file. If they mention a file on their desktop, ask them to attach it.");
 

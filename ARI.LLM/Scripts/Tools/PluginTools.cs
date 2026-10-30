@@ -2,8 +2,12 @@ using ARI.Common;
 
 namespace ARI.LLM;
 
-/// <summary>One tool a plugin brings. <paramref name="Create"/> makes the tool for a conversation, or returns null when it doesn't apply there.</summary>
-public sealed record ProvidedTool(string Name, string Description, Func<Thread, Tool?> Create);
+/// <summary>
+/// One tool a plugin brings. <paramref name="Create"/> makes the tool for a conversation, or returns null when it doesn't apply there.
+/// <paramref name="Card"/> names how the app's chat draws a call ("messaging" or "closing"); <paramref name="Waits"/> says, from the call's
+/// arguments, that Ari is now waiting for someone.
+/// </summary>
+public sealed record ProvidedTool(string Name, string Description, Func<Thread, Tool?> Create, string? Card = null, Func<string, bool>? Waits = null);
 
 /// <summary>
 /// A plugin that adds tools to Ari. The tools belong to the plugin: they exist only while it is switched on and running, and they go from

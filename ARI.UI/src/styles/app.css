@@ -1687,8 +1687,8 @@ details.tool-card--report[open] { width: 100%; box-sizing: border-box; }
 #browser-pane button:hover { background: var(--user-bubble); }
 #browser-pane .bp-ask { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 8px 12px; background: var(--accent); color: #fff; font-size: 13px; }
 #browser-pane .bp-ask button { background: #fff; color: #000; font-weight: 600; }
-#browser-pane .bp-view { flex: 1; overflow: auto; outline: none; background: #222; display: flex; align-items: flex-start; }
-#browser-pane .bp-view img { width: 100%; height: auto; display: block; cursor: pointer; user-select: none; }
+#browser-pane .bp-view { flex: 1; min-height: 0; overflow: hidden; outline: none; background: var(--bg, #fff); }
+#browser-pane .bp-view img { width: 100%; height: 100%; object-fit: contain; object-position: top left; display: block; cursor: pointer; user-select: none; }
 #browser-pane .bp-loading { color: #aaa; padding: 24px; font-size: 13px; }
 @media (max-width: 800px) {
     /* Too narrow to sit beside the chat: it becomes a sheet over it. */

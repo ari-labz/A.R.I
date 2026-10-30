@@ -287,7 +287,7 @@ public abstract class Agent
         "search_web" or "fetch_page" => ThreadPhase.Researching,
         "generate_image"             => ThreadPhase.Generating,
         "wait_for_agent"             => ThreadPhase.Waiting,
-        "discord_dm_user" when DmLabels.Waits(argsJson) => ThreadPhase.Waiting,
+        _ when PluginTools.Find(name)?.Tool.Waits?.Invoke(argsJson) == true => ThreadPhase.Waiting,
         _                            => ThreadPhase.Working,
     };
 

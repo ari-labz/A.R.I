@@ -213,9 +213,14 @@ public abstract class ContentBlock
         "build_project"  => new Building(),
         "spawn_agent"    => new StartingAgent(),
         "wait_for_agent" => new WaitingOnAgent(),
-        "discord_dm_user"  => new MessagingUser(),
-        "discord_close_dm" => new ClosingDm(),
-        _                => null
+        _                => FromPlugin(name)
+    };
+
+    private static Card? FromPlugin(string name) => PluginTools.Find(name)?.Tool.Card switch
+    {
+        "messaging" => new MessagingUser { Tool = name },
+        "closing"   => new ClosingDm { Tool = name },
+        _           => null
     };
 
     private static Card? FromVerb(string verb) => verb switch
@@ -559,12 +564,13 @@ public sealed class WaitingOnAgent : Card
 /// it waits for a reply, "Waiting For: X's reply" → "X replied". Label: "name|wait|replied".</summary>
 public sealed class MessagingUser : Card
 {
+    public string Tool    { get; set; } = "";
     public string Name    { get; set; } = "";
     public bool   Wait    { get; set; }
     public bool   Replied { get; set; }
 
     protected override string Label => Name;
-    protected override string ToolName => "discord_dm_user";
+    protected override string ToolName => Tool;
     protected override (string, string) Verbs => ("Messaging", "Messaged");
 
     protected internal override void Fill(string label)
@@ -577,7 +583,7 @@ public sealed class MessagingUser : Card
 
     public override void Flip(string result)
     {
-        Replied = Wait && result.Contains("\n" + DiscordConversations.ReportPrefix, StringComparison.Ordinal);
+        Replied = Wait && result.Contains("\n" + Conversations.REPORT_PREFIX, StringComparison.Ordinal);
         base.Flip();
     }
 
@@ -588,12 +594,13 @@ public sealed class MessagingUser : Card
     }
 }
 
-/// <summary>Closing a Discord DM conversation (discord_close_dm): "Closing DM with X" → "Closed DM with X".</summary>
+/// <summary>Closing a DM conversation (discord_close_dm): "Closing DM with X" → "Closed DM with X".</summary>
 public sealed class ClosingDm : Card
 {
+    public string Tool { get; set; } = "";
     public string Name { get; set; } = "";
     protected override string Label => Name;
-    protected override string ToolName => "discord_close_dm";
+    protected override string ToolName => Tool;
     protected override (string, string) Verbs => ("Closing DM with", "Closed DM with");
     protected internal override void Fill(string label) => Name = label;
 }

@@ -61,10 +61,9 @@ internal sealed class DreamPipeline : Pipeline
         return result;
     }
 
-    // Communication tools excluded from dreams — no voice channels, no external side-effects.
+    // Excluded from dreams, along with every plugin's tools: no external side-effects.
     private static readonly HashSet<string> DreamExcluded =
-        ["discord_list_voice_channels", "discord_join_voice_channel", "discord_leave_voice_channel",
-         "edit_memory",
+        ["edit_memory",
          // Reading how tools are written only leads to the owner-only authoring tools, which a dream can't use.
          "tool_docs", "read_tool", "list_my_tools"];
 
@@ -76,7 +75,7 @@ internal sealed class DreamPipeline : Pipeline
     internal static void RegisterDreamTools(Thread thread)
     {
         foreach (string name in ToolFactories.AllNames())
-            if (!DreamExcluded.Contains(name) &&
+            if (!DreamExcluded.Contains(name) && !PluginTools.IsProvided(name) &&
                 ToolFactories.TryBuild(name, thread, out Tool tool) && tool.Access == ToolAccess.Read)
                 tool.Register(thread);
 

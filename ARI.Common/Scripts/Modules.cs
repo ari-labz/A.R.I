@@ -1,40 +1,10 @@
 namespace ARI.Common;
 
-public record VoiceChannelInfo(ulong ChannelId, string ChannelName, ulong GuildId, string GuildName);
-
-public interface IDiscordModule
-{
-    /// <summary>The Master's Discord user ID.</summary>
-    ulong MasterDiscordId { get; }
-
-    /// <summary>Sends a direct message to a Discord user. Returns null on success, otherwise why it failed.</summary>
-    Task<string?> SendDirectMessageAsync(ulong userId, string message);
-
-    /// <summary>Sends a file to a Discord channel as a message attachment, with optional text. Returns null on success, otherwise why it failed.</summary>
-    Task<string?> SendFileAsync(ulong channelId, string filePath, string? text = null);
-
-    /// <summary>A user's display name if ARI has seen them, otherwise null. Cache only, so it never blocks.</summary>
-    string? GetUserName(ulong userId);
-
-    Task NotifyMaster(string message);
-    Task NotifyOffline();
-
-    /// <summary>Deletes every message ARI sent within the given window, across all reachable
-    /// channels (guild text channels and the Master's DM). Returns the number of messages deleted.</summary>
-    Task<int> DeleteRecentMessagesAsync(TimeSpan window);
-
-    /// <summary>Returns all voice channels across all guilds that the given user (by username) is currently in.</summary>
-    IReadOnlyList<VoiceChannelInfo> GetVoiceChannelsForUser(string username);
-
-    /// <summary>Joins the specified voice channel. Leaves any current channel in the same guild first.</summary>
-    Task<string> JoinVoiceChannelAsync(ulong channelId);
-
-    /// <summary>Leaves the voice channel in the specified guild, or all voice channels if guildId is null.</summary>
-    Task<string> LeaveVoiceChannelAsync(ulong? guildId = null);
-}
-
 public interface ILLMModule
 {
+    /// <summary>Tells the owner, through whichever plugins can reach them.</summary>
+    Task NotifyOwner(string text);
+
     Task StopAllServersAsync();
     Task RestartAllServersAsync();
     bool AssignAgentServer(string agentName, string serverName);
@@ -188,7 +158,6 @@ public interface IModuleLifecycle
 
 public static class Modules
 {
-    public static IDiscordModule?        Discord        { get; private set; }
     public static ILLMModule?            Llm            { get; private set; }
     public static IVoiceModule?          Voice          { get; private set; }
     public static IVoiceSynthesisModule? VoiceSynthesis { get; private set; }
@@ -201,7 +170,6 @@ public static class Modules
     public static IModuleLifecycle?      Lifecycle      { get; private set; }
 
     public static void Register(
-        IDiscordModule?        discord        = null,
         ILLMModule?            llm            = null,
         IVoiceModule?          voice          = null,
         IVoiceSynthesisModule? voiceSynthesis = null,
@@ -213,7 +181,6 @@ public static class Modules
         ICalendarModule?       calendar       = null,
         IModuleLifecycle?      lifecycle      = null)
     {
-        if (discord        is not null) Discord        = discord;
         if (llm            is not null) Llm            = llm;
         if (voice          is not null) Voice          = voice;
         if (voiceSynthesis is not null) VoiceSynthesis = voiceSynthesis;
@@ -233,7 +200,6 @@ public static class Modules
     public static void ClearVoice()          => Voice          = null;
     public static void ClearVoiceSynthesis() => VoiceSynthesis = null;
     public static void ClearListener()       => Listener       = null;
-    public static void ClearDiscord()        => Discord        = null;
     public static void ClearImageGen()       => ImageGen       = null;
     public static void ClearCalendar()       => Calendar       = null;
 }

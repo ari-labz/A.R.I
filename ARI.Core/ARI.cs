@@ -1,4 +1,5 @@
 using ARI.Common;
+using ARI.Sdk;
 using System.Diagnostics;
 using CommonModules = ARI.Common.Modules;
 using ARI.Core.Scripts;
@@ -107,7 +108,6 @@ public class ARI : BackgroundService, IModuleLifecycle
 
         await Dependency.CheckPython();
         await Dependency.CheckEspeakNg();
-        await Dependency.CheckLibDave();
         await Dependency.CheckLlamaCpp();
         // gh backs the github tool — only needed once an account is connected, so it's fetched in the
         // background rather than holding up startup.
@@ -607,8 +607,8 @@ public class ARI : BackgroundService, IModuleLifecycle
 
         _logger.LogInformation("ARI is shutting down...");
 
-        if (CommonModules.Discord is { } discord)
-            await discord.NotifyOffline();
+        if (llmModule is not null)
+            await llmModule.Channels.Notify(new Notice { Kind = NoticeKind.Offline });
 
         speechQueue?.Dispose();
         synthesiser?.Dispose();
@@ -636,4 +636,8 @@ internal sealed class PluginHost(ILoggerFactory loggers, Func<LLMModule?> llm, F
     public CancellationToken Stopping => stopping();
     public string PluginsFolder => ScriptPlugins.Folder;
     public void Track(Task task) => track(task);
+
+    public Task Receive(Message message, Handling handling) => llm()?.Channels.Receive(message, handling) ?? Task.CompletedTask;
+    public Task<string?> Command(string text, bool isOwner) => llm()?.Channels.Command(text, isOwner) ?? Task.FromResult<string?>(null);
+    public void LinkOwner(string service, string id) => llm()?.Channels.LinkOwner(service, id);
 }
