@@ -27,14 +27,12 @@ internal class Read : Tool
         {
             name        = "read_file",
             description =
-                "Read a SPECIFIC RANGE of a source file — use this sparingly. Most of the time preview_file is enough: it gives the exact " +
-                "members to USE a type, so you do NOT need to read it. Only read when you must see how a specific method BEHAVES inside because " +
-                "you are copying/imitating it — and then read just THAT method's lines (preview gave you its line number), not the whole file. " +
-                "HARD LIMIT: at most 100 lines per call — wider requests are rejected without being read. ALWAYS preview_file first, then pass " +
-                "start_line and end_line for the exact range. Reading a whole file, or reading 'to be sure', bloats your context and is the main " +
-                "reason this pipeline runs out of room before it finishes. You never need to read a file you have already read. " +
-                "You can also read an IMAGE — pass an image file's path, or an http(s) URL to an image, and you will SEE it (no download needed). " +
-                "A .ipynb notebook path returns its cells as text.",
+                "Read a file. What comes back depends on the kind of file, so you never choose a different tool: " +
+                "TEXT and CODE are read by lines (start_line/end_line; at most 100 lines per call, so pass the range you need: preview_file first shows what is in a code file). " +
+                "A PDF, Word (.docx), PowerPoint (.pptx) or Excel (.xlsx) file is opened as a document: with only a path you get its page or sheet count and the opening; " +
+                "then use pages to read parts, find to search the whole file for a word, and for Excel sheet and range such as A1:F50. " +
+                "An IMAGE (a path or an http(s) URL) is shown to you so you can see it. A .ipynb notebook returns its cells as text. " +
+                "Never open a document with the shell or by its raw bytes.",
             parameters  = new
             {
                 type       = "object",
@@ -42,7 +40,11 @@ internal class Read : Tool
                 {
                     path       = new { type = "string",  description = "Path to the file relative to the project root." },
                     start_line = new { type = "integer", description = "First line to return (1-indexed, inclusive). Use this whenever you know roughly where the content is." },
-                    end_line   = new { type = "integer", description = "Last line to return (1-indexed, inclusive). Pair with start_line — read a window, not the whole file." }
+                    end_line   = new { type = "integer", description = "Last line to return (1-indexed, inclusive). Pair with start_line — read a window, not the whole file." },
+                    pages      = new { type = "string",  description = "Documents only: which pages, slides or sections, e.g. \"5\", \"5-8\" or \"1-3,9\"." },
+                    find       = new { type = "string",  description = "Documents only: search the whole document for this text and list where it appears." },
+                    sheet      = new { type = "string",  description = "Excel only: the sheet name." },
+                    range      = new { type = "string",  description = "Excel only: cells to read, e.g. A1:F50. Needs sheet." }
                 },
                 required   = new[] { "path" }
             }
@@ -54,6 +56,10 @@ internal class Read : Tool
         string path = ExtractPath(argsJson);
 
         if (IsUrl(path)) return await ReadWeb(path);
+
+        // A document goes to the document reader, which also understands pages, find, sheet and range.
+        if (DocumentReader.Extensions.Contains(Extension(path)) || await SniffsAsDocument(path))
+            return await new ReadDocument(fs).Execute(argsJson);
 
         Read? decoder = For(path, fs);
 
@@ -81,6 +87,29 @@ internal class Read : Tool
     }
 
     private static readonly HttpClient Http = new();
+
+    // A file saved without its extension (a download called "attachment", "file.dat") is still recognised by what it starts with.
+    private async Task<bool> SniffsAsDocument(string path)
+    {
+        string ext = Extension(path);
+        if (ext.Length > 0 && ext is not ("dat" or "bin" or "tmp" or "download" or "file")) return false;
+        try { return DocumentKind(await fs.ReadBytes(path)) is not null; } catch { return false; }
+    }
+
+    internal static string? DocumentKind(byte[] raw)
+    {
+        if (raw.Length > 4 && raw[0] == '%' && raw[1] == 'P' && raw[2] == 'D' && raw[3] == 'F') return "pdf";
+        if (raw.Length < 4 || raw[0] != 'P' || raw[1] != 'K') return null;
+        try
+        {
+            using System.IO.Compression.ZipArchive z = new(new MemoryStream(raw));
+            if (z.GetEntry("word/document.xml") is not null) return "docx";
+            if (z.GetEntry("xl/workbook.xml") is not null) return "xlsx";
+            if (z.GetEntry("ppt/presentation.xml") is not null) return "pptx";
+        }
+        catch { }
+        return null;
+    }
 
     private static bool IsUrl(string path)
         => path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || path.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
@@ -137,6 +166,7 @@ internal class Read : Tool
     {
         "png" or "jpg" or "jpeg" or "gif" or "webp" or "bmp" => new ReadImage(fs),
         "ipynb"                                              => new ReadNotebook(fs),
+        "pdf" or "docx" or "pptx" or "xlsx"                  => new ReadOffice(fs),
         _                                                    => null
     };
 

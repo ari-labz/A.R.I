@@ -3,7 +3,6 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using ARI.BrainVault;
-using ARI.Discord;
 using ARI.LLM;
 using ARI.Voice;
 using ARI.VoiceSynthesis;
@@ -18,7 +17,7 @@ public class AriConfig
 {
     public Modules modules { get; init; }
 
-    // Global dev flag. When true, Engram (memory writes) never runs — see Shared.DevMode. Defaults
+    // Global dev flag. When true, the brain is a throwaway copy made at start (the real one is never written) — see Shared.DevMode. Defaults
     // to false (normal operation / official builds). Automated runs force it on via ARI_DEVMODE.
     public bool DevMode { get; init; }
 
@@ -114,7 +113,6 @@ public class Modules
     public VoiceSynthesisConfig VoiceSynthesis { get; init; } = new();
     public VoiceConfig Voice { get; init; } = new();
     public BrainConfig Brain { get; init; }
-    public DiscordConfig Discord { get; init; }
     public ListenerConfig Listener { get; init; } = new();
     public ImageGenConfig   ImageGen  { get; init; } = new();
     public CalendarConfig   Calendar  { get; init; } = new();

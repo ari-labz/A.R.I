@@ -30,6 +30,8 @@ public class SettingsController(PersistentData persistentData, ILogger<SettingsC
         int? EngramTurns,
         int? ReasoningEffort,
         bool? PersistedThreadsEnabled,
+        bool? EngramOthers,
+        bool? DevMode,
         LoggingSettings? Logging);
 
     [HttpGet]
@@ -66,6 +68,8 @@ public class SettingsController(PersistentData persistentData, ILogger<SettingsC
         if (patch.SafeModePrompt is not null) SafeModePromptStore.Set(patch.SafeModePrompt);
         if (patch.Persona        is not null) PersonaStore.Set(patch.Persona);
         if (patch.PersistedThreadsEnabled is { } persisted) PersistedThreadsSetting.Set(persisted);
+        if (patch.DevMode is { } dev) Llm?.SetDevMode(dev);
+        if (patch.EngramOthers is { } others) EngramOthersSetting.Set(others);
         if (patch.ReasoningEffort is { } effort) ReasoningEffortStore.Step = effort;
         if (patch.DreamingEnabled is { } dreaming) Modules.Llm!.DreamingEnabled = dreaming;
         if (engram is not null)
@@ -93,6 +97,10 @@ public class SettingsController(PersistentData persistentData, ILogger<SettingsC
             reasoningEffort = ReasoningEffortStore.Step,
             // Whether closed conversations are kept so they can be reopened later. The saved ones are at /admin/persistedThreads.
             persistedThreadsEnabled = PersistedThreadsSetting.Enabled,
+            // Whether Engram may remember conversations that are not the Master's own: server channels, DMs with other people, guests.
+            engramOthers = EngramOthersSetting.Enabled,
+            // Engram writes to a throwaway copy of the brain while this is on; switch it from the control panel header or Ctrl+Shift+D.
+            devMode = Shared.DevMode,
             // How many completed exchanges a thread builds up before Engram sweeps it mid-conversation. 0 = off.
             engramTurns    = Llm?.GetEngramTurnInterval() ?? persistentData.GetAgent("Engram")?.TurnsBeforeSweep ?? 5,
             // The session recorder (DTI, dream and chat logs): what it keeps and for how long. Read when ARI starts.
@@ -101,7 +109,7 @@ public class SettingsController(PersistentData persistentData, ILogger<SettingsC
                 enabled             = rec?["Enabled"]?.GetValue<bool>()             ?? true,
                 includeFullRequests = rec?["IncludeFullRequests"]?.GetValue<bool>() ?? true,
                 includeToolResults  = rec?["IncludeToolResults"]?.GetValue<bool>()  ?? true,
-                retentionDays       = rec?["RetentionDays"]?.GetValue<int>()        ?? 30,
+                retentionDays       = rec?["RetentionDays"]?.GetValue<int>()        ?? 0,
             },
         };
     }

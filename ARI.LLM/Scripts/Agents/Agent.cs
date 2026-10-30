@@ -12,19 +12,21 @@ public abstract class Agent
     // ── JSON-serialised fields (common to all agents) ────────────────────────
     public string Name { get; init; } = "";
     public string ServerName { get; set; } = "";
-    public string AgentPrompt { get; init; } = "";
-    public Dictionary<string, string>? PromptTemplates { get; init; }
+    public string AgentPrompt { get; set; } = "";
+    public Dictionary<string, string>? PromptTemplates { get; set; }
     
     // Tool groups registered eagerly (skips the request_tools round-trip). Null/empty = defer all.
     public string[]? PreloadedTools { get; init; }
+    // An agent that may look but not change anything: it only ever sees (and can only call) tools whose access is Read.
+    public bool ReadOnly { get; init; }
     // Inference queue priority (see InferencePriority) — higher runs first, ties break FIFO. Unset (0)
     // sits between Normal and Background: live-facing agents don't need to state one, background writers
     // (Engram, Refactor, Curiosity) set a negative value so they never delay a live reply.
     public int Priority { get; init; }
     public bool Enabled { get; init; }
     public int BudgetResponse { get; init; } = -1;
-    public int MaxToolCalls { get; init; }
-    public bool    Think                  { get; init; }
+    public int MaxToolCalls { get; set; }
+    public bool    Think                  { get; set; }
     /// <summary>When set, overrides the global ReasoningEffortStore level for this agent's requests.</summary>
     public string? ReasoningEffortOverride { get; init; }
     public int BudgetThinking { get; init; }
@@ -94,26 +96,12 @@ public abstract class Agent
     // ── Context-building hooks ───────────────────────────────────────────────
     internal virtual string PersistentContext(Thread thread)    => "";
     internal virtual string DynamicContext(Thread thread, bool lastStepToolOnly) => "";
-    internal virtual string BuildSystemPrompt(Thread thread) => AgentPrompt;
+    /// <summary>Values for the {tokens} in this agent's system prompt during one pipeline run. Set by the pipeline around the call, so
+    /// a prompt can hold {topic} or {memory} and have it filled in; a token with no value stays as written.</summary>
+    internal static readonly AsyncLocal<IReadOnlyDictionary<string, string>?> PromptTokens = new();
 
-    private static string BuildBudgets(int thinking, int reply, int context, int toolCalls)
-    {
-        List<string> lines = new List<string>();
-
-        if (thinking  > 0) lines.Add($"Thinking Token Budget: {thinking}");
-        if (reply     > 0) lines.Add($"Reply Token Budget: {reply}");
-        if (context   > 0) lines.Add($"Context Token Budget: {context}");
-        if (toolCalls > 0) lines.Add($"Tool Call Budget: {toolCalls}");
-
-        if (lines.Count == 0) return "";
-
-        lines.Add("Deliver a COMPLETE answer within these budgets.");
-        if (thinking > 0 && reply > 0)
-            lines.Add("These two budgets are separate pools, not one shared allowance — thinking cannot borrow from the reply, and spending the whole thinking budget still leaves the reply its full amount.");
-        if (thinking > 0)
-            lines.Add("Your thinking budget is tight — decide fast. Do not restate your instructions or plan at length, and never draft your reply inside your thinking; work out the key insight, then write the reply itself once, for real, in the reply.");
-        return "\n\n# Budgets\n" + string.Join("\n", lines);
-    }
+    internal virtual string BuildSystemPrompt(Thread thread) =>
+        PromptTokens.Value is { } tokens ? ARI.LLM.PipelineGraph.Fill(AgentPrompt, tokens) : AgentPrompt;
 
     internal string ResolveTemplate(string key, string fallback, params (string Token, string Value)[] tokens)
     {
@@ -168,6 +156,12 @@ public abstract class Agent
     internal Func<Thread, string, string?>? OnThinkingDeltaPipeline { get; set; }
 
     // Non-null = short-circuit the tool without executing it.
+    /// <summary>Whether this agent may use a registered tool on this thread. A read-only agent, or any agent on a thread with
+    /// no user attached to approve things (a pipeline's background step), gets only tools that declare Read access; a tool
+    /// registered without a declared access (a client's own) counts as one that changes things.</summary>
+    private bool MayUse(Thread thread, string toolName) =>
+        !(ReadOnly || thread.ReadOnlyTools) || (thread.toolAccess.TryGetValue(toolName, out ToolAccess access) && access == ToolAccess.Read);
+
     internal virtual string? OnToolCall(Thread thread, ToolTurnState state, string name, string callId, string argsJson) => null;
     internal Func<Thread, string, string, string?>? OnToolCallPipeline { get; set; }
 
@@ -318,7 +312,6 @@ public abstract class Agent
 
         // ── System block ─────────────────────────────────────────────────────
         internal string BaseSystem   = "";
-        internal string BudgetsBlock = "";
         internal string ThinkSuffix  = "";
 
         // ── Message list (grows across steps) ────────────────────────────────
@@ -538,8 +531,8 @@ public abstract class Agent
 
         // ── System block & messages ───────────────────────────────────────────
         int maxChars = BudgetContext > 0 ? (int)(BudgetContext * 3.5) : 0;
-        (turn.BaseSystem, turn.BudgetsBlock, turn.ThinkSuffix) = BuildSystemBlock(thread, turn.ThinkBudget, turn.RespBudget, Think);
-        turn.Messages.AddRange(BuildMessages(thread, prompt, opts, msgAtts, maxChars, turn.BaseSystem, turn.BudgetsBlock, turn.ThinkSuffix));
+        (turn.BaseSystem, turn.ThinkSuffix) = BuildSystemBlock(thread, turn.ThinkBudget, turn.RespBudget, Think);
+        turn.Messages.AddRange(BuildMessages(thread, prompt, opts, msgAtts, maxChars, turn.BaseSystem, turn.ThinkSuffix));
 
         // ── Telemetry bootstrap ───────────────────────────────────────────────
         foreach (object m in turn.Messages)
@@ -777,7 +770,7 @@ public abstract class Agent
         }
 
         // Refresh system message so per-turn budget numbers are current.
-        turn.Messages[0] = new { role = "system", content = turn.BaseSystem + turn.BudgetsBlock + turn.ThinkSuffix };
+        turn.Messages[0] = new { role = "system", content = turn.BaseSystem + turn.ThinkSuffix };
 
         if (SupportsCompaction)
             Compact(turn.Messages, turn.ToolResultSlots, BudgetContext, CompactHighPct, CompactLowPct, thread.Snapshots);
@@ -793,6 +786,7 @@ public abstract class Agent
                 // survives a search block and she can still finish the job from what she already found.
                 if (turn.SearchBlocked && name == "search_web") continue;
                 if (turn.ReadBlocked   && name == "fetch_page") continue;
+                if (!MayUse(thread, name)) continue;
                 schemas.Add(tool.Schema);
             }
             turn.ToolSchemas = schemas.ToArray();
@@ -1607,7 +1601,9 @@ public abstract class Agent
 
             string? guard = null;
             bool toolFound = thread.tools.TryGetValue(call.Name, out (object Schema, Func<string, Task<ToolResult>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter, Func<string, string?>? StreamingDisplay, Func<string, string?>? StreamingPreCheck, Func<string, string?>? PreCheck, Func<string, ToolResult, ToolResult>? PostRun) tool);
-            if (toolFound)
+            if (toolFound && !MayUse(thread, call.Name))
+                guard = $"{call.Name} isn't available to this agent: it can only use tools that read, not change anything.";
+            if (guard is null && toolFound)
                 guard = tool.PreCheck?.Invoke(argsJson);
             if (guard is null)
                 guard = OnToolCall(thread, turn.ToolTurn, call.Name, call.Id, argsJson);
@@ -1869,8 +1865,8 @@ public abstract class Agent
             turn.SearchSoftGateFired = true;
             turn.Messages.Add(new { role = "user", content =
                 $"[Research gate — {turn.ProductiveSearches} searches done] Stop searching and start reading. If a result looks " +
-                "right, open it with fetch_page rather than searching again — you have plenty of reads left and only one search. " +
-                "If you already have enough to answer, answer now." });
+                "right, open it with fetch_page rather than searching again — you have plenty of reads left. " +
+                "Keep searching only if a specific fact is still missing; if you already have enough to answer, answer now." });
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) search soft gate fired ({N} productive searches).", Name, thread.Key, turn.ProductiveSearches);
         }
 
@@ -1970,11 +1966,10 @@ public abstract class Agent
 
     private const string BlockRule = "--------------------------------";
 
-    private (string baseSystem, string budgetsBlock, string thinkSuffix) BuildSystemBlock(
+    private (string baseSystem, string thinkSuffix) BuildSystemBlock(
         Thread thread, int thinkBudget, int respBudget, bool Think)
     {
-        // All blocks below are byte-identical across turns so the KV prefix cache survives —
-        // only [Budgets] at the very bottom carries per-turn values.
+        // All blocks below are byte-identical across turns so the KV prefix cache survives.
         string roleBody   = BuildSystemPrompt(thread);
         string systemBody = UsePersona ? SystemPromptStore.Get() : "";
         string systemFull = systemBody.Length == 0 ? roleBody : $"{systemBody}\n\n{roleBody}";
@@ -1994,9 +1989,8 @@ public abstract class Agent
         if (thread.tools.ContainsKey("list_tools"))
         {
             string capabilities = UsePersona ? CapabilitiesStore.Get() : "";
-            string capsBlock = capabilities.Length == 0
-                ? SharedPrompts.ToolSystemBlock
-                : $"{capabilities}\n\n{SharedPrompts.ToolSystemBlock}";
+            string live = CapabilitiesBlock.For(thread);
+            string capsBlock = string.Join("\n\n", new[] { capabilities, live, SharedPrompts.ToolSystemBlock }.Where(x => x.Length > 0));
             sections.Add($"--- **Capabilities** ---\n\n{capsBlock}\n\n{BlockRule}");
         }
 
@@ -2009,16 +2003,14 @@ public abstract class Agent
 
         string baseSystem = string.Join("\n\n", sections) + PersistentContext(thread);
 
-        // [Budgets] at the BOTTOM — per-turn values must not invalidate the cached prefix above.
-        string budgetsBlock = BuildBudgets(thinkBudget, respBudget, BudgetContext, MaxToolCalls);
         string thinkSuffix  = Think ? "" : "\n<|think_off|>";
 
-        return (baseSystem, budgetsBlock, thinkSuffix);
+        return (baseSystem, thinkSuffix);
     }
 
     private List<object> BuildMessages(Thread thread, string prompt, PromptOptions opts,
         List<Attachment> msgAtts,
-        int maxChars, string baseSystem, string budgetsBlock, string thinkSuffix)
+        int maxChars, string baseSystem, string thinkSuffix)
     {
         List<ThreadMessage> chatHistory = thread.GetChatHistory(MemoryLimit, maxChars);
 
@@ -2035,7 +2027,7 @@ public abstract class Agent
         if (opts.AugmentedPrompt is not null && collapsed.Count > 0)
             collapsed[^1] = collapsed[^1] with { Content = opts.AugmentedPrompt };
 
-        List<object> messages = new() { new { role = "system", content = baseSystem + budgetsBlock + thinkSuffix } };
+        List<object> messages = new() { new { role = "system", content = baseSystem + thinkSuffix } };
 
         for (int i = 0; i < collapsed.Count - 1; i++)
         {
@@ -2058,7 +2050,7 @@ public abstract class Agent
         }
 
         // modeNudge is a trailing system message — mid-conversation system messages ARE rendered by Qwen3's template.
-        string memoryBlock = opts.RecallNotes != null
+        string memoryBlock = opts.RecallNotes != null && !opts.MemoryInPrompt
             ? $"--- **Ari's Memories** ---\n\n" +
               "(These memories describe the USER's life, possessions, and experiences — not yours. Never adopt them as your own.)\n\n" +
               $"{(string.IsNullOrWhiteSpace(opts.RecallNotes) ? "None" : opts.RecallNotes.Trim())}\n\n{BlockRule}\n\n"

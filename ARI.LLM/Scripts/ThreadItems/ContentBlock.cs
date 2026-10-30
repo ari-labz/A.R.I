@@ -71,6 +71,16 @@ public abstract class ContentBlock
         @"|(?<batch><!--ari-batch-end-->)",
         RegexOptions.Singleline | RegexOptions.Compiled);
 
+    /// <summary>The words of a rendered response with every web-only marker and card taken out: what a plain-text place like Discord
+    /// should show. Tool use belongs in the app's chat, not in someone's DMs.</summary>
+    public static string PlainText(string content)
+    {
+        System.Text.StringBuilder sb = new();
+        foreach (ContentBlock block in Parse(content))
+            if (block is TextBlock tb) sb.Append(tb.Text);
+        return Regex.Replace(sb.ToString(), @"<!--ari-[^>]*?-->", "", RegexOptions.Singleline).Trim();
+    }
+
     /// <summary>Splits a rendered response string into ordered text and card blocks. Prose runs become
     /// <see cref="TextBlock"/>s; tool markers become finalized <see cref="Card"/>s. A diff edit's start and
     /// end markers are paired into ONE card (Complete once its batch closes, Error on failure); the
@@ -567,7 +577,7 @@ public sealed class MessagingUser : Card
 
     public override void Flip(string result)
     {
-        Replied = Wait && result.Contains("\n" + DiscordDmUser.ReportPrefix, StringComparison.Ordinal);
+        Replied = Wait && result.Contains("\n" + DiscordConversations.ReportPrefix, StringComparison.Ordinal);
         base.Flip();
     }
 

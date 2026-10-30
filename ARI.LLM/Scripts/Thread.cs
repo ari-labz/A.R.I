@@ -41,6 +41,10 @@ public class Thread
 
     /// <summary>The pipeline this thread runs on.</summary>
     public ThreadPipeline Pipeline { get; }
+
+    /// <summary>The pipeline graph this thread's replies run through; null is Default. Switching it changes the agents that
+    /// build the next reply, and the thread pays one re-prefill when it does.</summary>
+    public string? GraphId { get; set; }
     /// <summary>
     /// Whether this thread is kept off the flat user thread list (e.g. an internal worker or a
     /// Coder sub-thread). Note: "off the list" is NOT the same as "hidden" — sub-threads remain
@@ -60,7 +64,49 @@ public class Thread
     /// <summary>Short (3-4 word) auto-generated title reflecting the conversation, refreshed by the Context agent each exchange. Null until the first update.</summary>
     public string? Title { get; set; }
 
+    /// <summary>The code this thread is known by under its parent ("memory"), or null for a sub-thread that has none. A chat can have
+    /// several sub-threads, and this is how a step finds its own again on the next message.</summary>
+    public string? Code { get; init; }
+
+    /// <summary>The agent this keyed sub-thread belongs to. Only that agent may use it: a sub-thread called "memory" can't be picked
+    /// up by some other agent that happens to ask for the same code.</summary>
+    public string? OwnerAgent { get; init; }
+
+    /// <summary>Replay this thread's past tool calls and what they returned, as a chat does. Background threads keep prose only to stay
+    /// small; a step's own sub-thread needs its reading kept, because remembering what it read is the point.</summary>
+    internal bool KeepToolHistory { get; init; }
+
+    /// <summary>Only one run at a time uses a sub-thread, so a new message waits for a cancelled run to finish unwinding.</summary>
+    internal readonly SemaphoreSlim RunLock = new(1, 1);
+
+    /// <summary>How many of the parent chat's messages this sub-thread has already been told about.</summary>
+    internal int LastChatCount;
+
     private readonly List<Thread> children = new();
+
+    /// <summary>The sub-thread with this code, made by <paramref name="create"/> the first time. Throws if the code already belongs to a
+    /// different agent.</summary>
+    internal Thread GetOrCreateChild(string code, string ownerAgent, Func<Thread> create)
+    {
+        lock (children)
+        {
+            Thread? existing = children.FirstOrDefault(c => string.Equals(c.Code, code, StringComparison.OrdinalIgnoreCase));
+            if (existing is not null)
+            {
+                if (!string.Equals(existing.OwnerAgent, ownerAgent, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException($"The sub-thread '{code}' belongs to {existing.OwnerAgent}, so {ownerAgent} can't use it. Give it its own code.");
+                return existing;
+            }
+            Thread child = create();
+            children.Add(child);
+            Updated?.Invoke();
+            return child;
+        }
+    }
+
+    /// <summary>The sub-thread with this code, if there is one.</summary>
+    public Thread? FindChild(string code) { lock (children) { return children.FirstOrDefault(c => string.Equals(c.Code, code, StringComparison.OrdinalIgnoreCase)); } }
+
 
     /// <summary>
     /// Sub-threads this thread has spawned (e.g. per-step Coder executors under a CodeArchitect plan).
@@ -176,6 +222,19 @@ public class Thread
         return blocks;
     }
 
+    /// <summary>Declared access of each registered tool, so a read-only agent can be limited to tools that only read.</summary>
+    internal readonly Dictionary<string, ToolAccess> toolAccess = new();
+
+    /// <summary>True for a thread no user is attached to (a pipeline's background step): nobody could approve a tool that
+    /// changes things, so only tools that read are offered.</summary>
+    internal bool ReadOnlyTools { get; set; }
+
+    /// <summary>True while Engram's thread is doing a one-fact reflex save, so it ends after the first write.</summary>
+    internal bool EngramReflex { get; set; }
+
+    /// <summary>Notes this thread has opened with recall_memory. Engram may only delete what it has read.</summary>
+    internal HashSet<string> BrainReads { get; } = new(StringComparer.OrdinalIgnoreCase);
+
     internal readonly Dictionary<string, (object Schema, Func<string, Task<ToolResult>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter, Func<string, string?>? StreamingDisplay, Func<string, string?>? StreamingPreCheck, Func<string, string?>? PreCheck, Func<string, ToolResult, ToolResult>? PostRun)> tools = new();
 
     // ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -201,6 +260,9 @@ public class Thread
     /// conversations never touch the Master's personal memory. Defaults to true for all other sources
     /// (Discord, proactive, internal) so existing behaviour is preserved.</summary>
     public bool HasMemoryAccess { get; set; } = true;
+
+    /// <summary>True while a reply is being held back because Engram is still saving this conversation. Shown to the user as "Reply queued".</summary>
+    public volatile bool WaitingOnMemory;
 
     /// <summary>True when she's talking to someone other than the Master: a guest's chat, a server channel, or a DM she
     /// opened with someone else. Such conversations get filtered recall and none of the Master's own tools.</summary>
@@ -387,7 +449,7 @@ public class Thread
             // something is visible rather than inferred. Internal/background threads keep prose only —
             // they run to a tight context budget.
             IReadOnlyList<IReadOnlyList<HistoryToolCall>>? toolBatches = null;
-            if (!Internal && item is Response { Trace: { } trace } && replayedTraces.Add(trace))
+            if ((!Internal || KeepToolHistory) && item is Response { Trace: { } trace } && replayedTraces.Add(trace))
             {
                 List<IReadOnlyList<HistoryToolCall>> batches = ToolHistory.Batches(trace);
                 if (batches.Count > 0)

@@ -28,22 +28,12 @@ internal abstract class MemoryAgent : Agent
     protected const int CONVERGED_AFTER       = 3;    // consecutive "no change needed" epochs ⇒ converged, stop early
     protected const int STALL_LIMIT           = 5;    // consecutive stalled epochs (no act, no "no change") ⇒ bail
 
-    // The taxonomy/hub/type/linking rulebook the memory agents obey, injected into every turn's system
-    // context so it stays the single source of truth (the config systemPrompt carries only the persona/role).
-    // Shared by all three; Curiosity opts out via UseGraphRulebook.
-    // Nullable: the control panel writes null for agents that never set it, and a non-nullable bool
-    // makes that a fatal deserialise error at startup.
-    [JsonPropertyName("useGraphRulebook")] public bool? UseGraphRulebook { get; init; }
-
     // The write-guard below predates Engram's 3-stage redesign — it was built for Refactor's line-edit
     // walk, where a blind write_file over a live note (no prior read) really did destroy frontmatter.
     // Engram's Save step always reads the existing note first and its own prompt promises write_file
     // as the only tool, so the guard's premise doesn't hold there. Refactor (and Curiosity, inert by
     // default) keep the protection they actually need; only Engram opts out.
     internal virtual bool BlocksWriteOverExisting => true;
-
-    internal override string PersistentContext(Thread thread)
-        => (UseGraphRulebook ?? true) ? "\n\n" + SharedPrompts.GraphRulebook : "";
 
     // ── Per-turn guard state ──────────────────────────────────────────────────────────────
     // Distinct notes the model may read in one epoch before it's pushed to act. The model fills its whole
@@ -57,10 +47,6 @@ internal abstract class MemoryAgent : Agent
     // This bound exists for the single-change Refactor epoch; Engram seeds a whole conversation and needs to
     // recon several entities before writing, so it overrides this to null (no ceiling).
     internal virtual int? EpochToolCeiling => 8;
-
-    // When true, the walk ranks seeds by least-recently-refactored (never-refactored first), degree as
-    // the tiebreak, and stamps each seed's title when its epoch ends. Only Refactor opts in.
-    internal virtual bool TrackLastRefactored => false;
 
     internal sealed class MemoryTurnState : ToolTurnState
     {
@@ -261,102 +247,6 @@ internal abstract class MemoryAgent : Agent
     }
 
     // ── The walk ──────────────────────────────────────────────────────────────────────────
-    // Seeds by degree, re-ranked each epoch; skips seeds visited since the last full pass so consecutive
-    // epochs don't re-walk the same region. `task` is the agent-specific instruction (tidy / place a
-    // memory). Returns a short summary. Backs nothing up — git history is the safety net.
-    // convergeOnNoChange: Refactor/Engram STOP once the region is clean (CONVERGED_AFTER quiet epochs).
-    // Curiosity sets this false — "no curiosity here" is not convergence (curiosities are sparse), so it
-    // keeps exploring across neighbourhoods until the epoch cap, giving broad coverage each run.
-    protected async Task<string> RunWalk(
-        Thread parent, string threadKey, string task, string persistentDir,
-        int maxEpochs, CancellationToken ct, Func<string, Task>? onDelta, bool convergeOnNoChange = true)
-    {
-        int epoch = 0, changes = 0, noChange = 0, stalled = 0;
-        HashSet<string> visitedThisPass = new(StringComparer.OrdinalIgnoreCase);
-        // Refactor rotates through the vault least-recently-refactored first; other walks pass null and
-        // keep the plain top-degree seed order.
-        RefactorLog? refactorLog = TrackLastRefactored ? new RefactorLog(persistentDir) : null;
-        PublishForInspection(parent);   // surface the walk in the DTI before the first epoch
-
-        while (epoch < maxEpochs && (!convergeOnNoChange || noChange < CONVERGED_AFTER) && stalled < STALL_LIMIT)
-        {
-            ct.ThrowIfCancellationRequested();
-            Brain.Index();
-
-            // Default: top-degree seeds. Refactor instead ranks the WHOLE vault by least-recently-
-            // refactored (never-refactored = DateTime.MinValue, so it sorts first), with the SQL
-            // degree-DESC order preserved as the tiebreak because OrderBy is a stable sort.
-            List<Note> seeds = refactorLog is null
-                ? Brain.TopDegreeSeeds(SEED_COUNT)
-                : Brain.AllSeedsByDegree().OrderBy(s => refactorLog.SortKey(s.Title)).ToList();
-            if (seeds.Count == 0) break;
-
-            Note? seed = seeds.FirstOrDefault(s => !visitedThisPass.Contains(s.Title));
-            if (seed is null) { visitedThisPass.Clear(); seed = seeds[0]; }  // full pass done — start another
-            visitedThisPass.Add(seed.Title);
-
-            string skeleton = Brain.Skeleton(seed.Title, WALK_DEPTH, WALK_CAP) ?? "";
-
-            Thread epochThread = new(ThreadPipeline.Dialogue, $"{threadKey}#epoch{epoch}:{Guid.NewGuid():N}")
-                { Internal = true, Parent = parent, Label = $"epoch {epoch}: {seed.Title}" };
-            parent.AddChild(epochThread);
-            parent.RaiseUpdated();   // poke the DTI to pick up the new epoch child
-            RegisterTools(epochThread, persistentDir, ct);
-
-            Shared.Logger.LogInformation("[{Agent}] epoch {Epoch} — seed '{Seed}' ({Nodes} nodes in view).",
-                Name, epoch, seed.Title, skeleton.Count(c => c == '\n'));
-
-            // Poke the DTI (via the registered parent's key) on every delta so its thinking streams live.
-            Func<string, Task> live = async delta => { Notify?.Invoke(threadKey); if (onDelta is not null) await onDelta(delta); };
-
-            EpochOutcome outcome;
-            try
-            {
-                await Prompt(epochThread, BuildEpochPrompt(task, seed.Title, skeleton),
-                    new PromptOptions { Username = "system", Ct = ct, OnDelta = live });
-                outcome = AssessEpoch(epochThread);
-            }
-            catch (OperationCanceledException) { throw; }   // a real cancel ends the whole walk
-            catch (Exception ex)
-            {
-                // Isolate epoch failures (e.g. a tool-call fallback loop): a single bad epoch must SKIP its
-                // seed and let the walk continue, not abort the whole run. Counts as a stall.
-                Shared.Logger.LogWarning("[{Agent}] epoch {Epoch} failed ({Error}) — skipping seed '{Seed}'.", Name, epoch, ex.Message, seed.Title);
-                outcome = EpochOutcome.Stalled;
-            }
-
-            switch (outcome)
-            {
-                case EpochOutcome.Committed: changes++; noChange = 0; stalled = 0; break;
-                case EpochOutcome.NoChange:  noChange++;              stalled = 0; break;
-                // A stalled epoch (model errored or thought itself into an empty turn) is NOT evidence the
-                // graph is clean, so it must not count toward convergence — only guard against an endless loop.
-                case EpochOutcome.Stalled:   stalled++; Shared.Logger.LogWarning("[{Agent}] epoch {Epoch} stalled.", Name, epoch); break;
-            }
-            // Stamp the seed as refactored regardless of outcome (committed OR no-change) so a clean
-            // note isn't re-picked ahead of never-refactored ones on the next run. A stalled epoch is
-            // NOT stamped — it never really examined the note, so it stays eligible.
-            if (outcome != EpochOutcome.Stalled) refactorLog?.Touch(seed.Title);
-            epoch++;
-        }
-
-        string reason = noChange >= CONVERGED_AFTER ? "converged"
-                      : stalled  >= STALL_LIMIT     ? $"halted after {STALL_LIMIT} stalled epochs"
-                      :                               "epoch cap reached";
-        string summary = $"Memory walk complete ({reason}) — {epoch} epoch(s), {changes} change(s) committed.";
-        // Log it (not just return it) so external tooling / the eval harness can detect the walk's end from
-        // the log — the returned string alone never reaches ARI.log.
-        Shared.Logger.LogInformation("[{Agent}] {Summary}", Name, summary);
-        return summary;
-    }
-
-    // The per-epoch prompt: the seed's neighbourhood skeleton + the agent's task + the one-change-then-
-    protected virtual string BuildEpochPrompt(string task, string seedTitle, string skeleton)
-        => SharedPrompts.Epoch(
-            ("seedTitle", seedTitle),
-            ("skeleton",  skeleton.Length > 0 ? skeleton : "(no connections)"),
-            ("task",      task));
-
     protected enum EpochOutcome { Committed, NoChange, Stalled }
 
     // Classify how an epoch ended: a successful git commit ⇒ Committed; an explicit "no change" reply ⇒

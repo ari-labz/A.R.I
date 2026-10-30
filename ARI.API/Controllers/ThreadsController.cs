@@ -65,6 +65,11 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         {
             if (!CanAccessThread(thread)) context.Result = new StatusCodeResult(403);
         }
+        // An agent's own sub-thread ("{chat}:{code}") isn't in the table; whoever may see its chat may see it.
+        else if (key.LastIndexOf(':') is > 0 and int cut && Llm.Threads.TryGetValue(key[..cut], out ARI.LLM.Thread? owner))
+        {
+            if (!CanAccessThread(owner)) context.Result = new StatusCodeResult(403);
+        }
         // A saved (expired) thread is not in memory, but it still belongs to its owner.
         else if (Llm.GetPersistedInfo(key) is { } saved)
         {
@@ -194,6 +199,26 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
             threads.AddRange(internalThreads);
         }
 
+        // An agent's own sub-thread (the Memory walker's, say) is listed under the chat it belongs to, so the debug view can
+        // show it indented beneath its parent and open it on its own.
+        if (includeInternal)
+        {
+            List<ThreadEntry> owned = new();
+            void AddOwned(ARI.LLM.Thread parent)
+            {
+                foreach (ARI.LLM.Thread child in parent.Children.Where(c => c.Code is not null))
+                {
+                    owned.Add(new ThreadEntry(child.Key, child.OwnerAgent, IsInternal: true, child.LastMessageAt,
+                        child.History.Count(m => m is Prompt or ARI.LLM.Response), State: child.State.ToString().ToLowerInvariant(),
+                        ParentKey: parent.Key, Label: child.Label));
+                    AddOwned(child);
+                }
+            }
+            foreach (ThreadEntry t in threads.ToList())
+                if (allThreads.TryGetValue(t.Key, out ARI.LLM.Thread? live)) AddOwned(live);
+            threads.AddRange(owned);
+        }
+
         return Ok(this.Page(threads.OrderByDescending(t => t.LastMessageAt).ToList()));
     }
 
@@ -219,6 +244,11 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         if (Enum.TryParse(req?.Pipeline, ignoreCase: true, out ARI.LLM.ThreadPipeline selected) && !int.TryParse(req?.Pipeline, out _)
             && selected is ARI.LLM.ThreadPipeline.Dialogue or ARI.LLM.ThreadPipeline.Code or ARI.LLM.ThreadPipeline.Speech)
             Llm.ForcePipeline(key, selected);
+        else if (req?.Pipeline is { Length: > 0 } graphId && Llm.ReplyPipelines().Any(p => p.Id.Equals(graphId, StringComparison.OrdinalIgnoreCase)))
+        {
+            Llm.GetOrCreateDialogueThread(key);
+            Llm.SetThreadPipeline(key, graphId);
+        }
         else if (project is not null && ProjectCodeRules.RunsAsCode(project))
             Llm.ForceCodeThread(key);
         else
@@ -234,13 +264,47 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     }
 
     /// <summary>
-    /// The pipelines a thread can run on, lowercased (e.g. "dialogue", "code", "speech"). The client
-    /// renders its selector from this list and maps each name to a label/icon with a generic fallback,
-    /// so adding a ThreadPipeline value surfaces in the UI without a frontend change.
+    /// The pipelines a thread can run on, as <c>{ id, label }</c>: the built-in "dialogue" (Default), "code" and "speech", then
+    /// every pipeline made in the control panel that can run. The client builds its selector from this list, so a new pipeline
+    /// appears there as soon as it is saved.
     /// </summary>
     [HttpGet("~/api/v1/pipelines")]
     public IActionResult GetPipelines()
-        => Ok(new[] { "dialogue", "code", "speech" });
+    {
+        List<object> list = [new { id = "dialogue", label = "Default" }, new { id = "code", label = "Code" }];
+        if (ARI.Common.Modules.Voice is not null) list.Add(new { id = "speech", label = "Talk" });
+        foreach ((string id, string name) in Llm?.ReplyPipelines() ?? [])
+            if (!id.Equals("default", StringComparison.OrdinalIgnoreCase)) list.Add(new { id, label = name });
+        return Ok(list);
+    }
+
+    public sealed record SetPipelineRequest(string? Pipeline);
+
+    /// <summary>Switches a thread to another pipeline for its next reply: "dialogue" is Default, "code" and "speech" are the
+    /// built-in modes, anything else is a pipeline made in the control panel. The thread keeps its history, but the next
+    /// reply has to read it all again (the new pipeline's agents have not seen it).</summary>
+    [HttpPut("{id}/pipeline")]
+    public IActionResult SetPipeline([FromRoute(Name = "id")] string threadKey, [FromBody] SetPipelineRequest req)
+    {
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        if (!Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? thread)) return NotFound();
+        if (!CanAccessThread(thread)) return StatusCode(403);
+        string? id = req?.Pipeline;
+        if (string.IsNullOrWhiteSpace(id)) return BadRequest(new { error = "pipeline is required." });
+        if (id.Equals("code", StringComparison.OrdinalIgnoreCase)) Llm.ForcePipeline(threadKey, ARI.LLM.ThreadPipeline.Code);
+        else if (id.Equals("speech", StringComparison.OrdinalIgnoreCase))
+        {
+            if (ARI.Common.Modules.Voice is null) return BadRequest(new { error = "Talk needs the Voice module, which is turned off." });
+            Llm.ForcePipeline(threadKey, ARI.LLM.ThreadPipeline.Speech);
+        }
+        else
+        {
+            if (id.Equals("dialogue", StringComparison.OrdinalIgnoreCase)) id = "default";
+            Llm.ForcePipeline(threadKey, ARI.LLM.ThreadPipeline.Dialogue);
+            if (!Llm.SetThreadPipeline(threadKey, id)) return NotFound(new { error = $"No pipeline '{id}' can run." });
+        }
+        return Ok(new { ok = true });
+    }
 
     /// <summary>
     /// Returns thread metadata plus full history. The primary polling endpoint for streaming threads.
@@ -267,7 +331,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         {
             key           = threadKey,
             state         = expired ? "expired" : thread.State.ToString().ToLowerInvariant(),
-            pipeline      = thread.Pipeline.ToString().ToLowerInvariant(),
+            pipeline      = thread.GraphId ?? thread.Pipeline.ToString().ToLowerInvariant(),
             isInternal    = thread.Internal,
             isProcessing  = !expired && Llm.IsThreadProcessing(threadKey),
             lastMessageAt = thread.LastMessageAt,
@@ -287,7 +351,13 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
 
         if (!Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? thread))
-            return NotFound();
+        {
+            // An agent's own sub-thread isn't a thread of its own in the table: it hangs off its parent as "{parent}:{code}".
+            thread = null;
+            ARI.LLM.Thread? Find(ARI.LLM.Thread t) => t.Children.Select(c => string.Equals(c.Key, threadKey, StringComparison.OrdinalIgnoreCase) ? c : Find(c)).FirstOrDefault(c => c is not null);
+            foreach (ARI.LLM.Thread root in Llm.Threads.Values) if ((thread = Find(root)) is not null) break;
+            if (thread is null) return NotFound();
+        }
 
         return Ok(SerializeDebugThread(thread));
     }
@@ -347,9 +417,10 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         key        = thread.Key,
         label      = thread.Label,
         isInternal = thread.Internal,
-        pipeline   = thread.Pipeline.ToString().ToLowerInvariant(),
+        pipeline   = thread.GraphId ?? thread.Pipeline.ToString().ToLowerInvariant(),
         state      = thread.State.ToString().ToLowerInvariant(),
         history    = thread.History.Select(DebugItem).ToList(),
+        code       = thread.Code,
         children   = thread.Children.Select(SerializeDebugThread).ToList(),
     };
 
@@ -523,24 +594,30 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
     private async Task SendWatchEvent([FromRoute(Name = "id")] string threadKey, CancellationToken ct)
     {
-        string status = (Llm?.IsEngramSweeping(threadKey)  ?? false) ? "remembering"
-                      : Llm?.GetThreadPhase(threadKey) switch
-                        {
-                            ARI.LLM.ThreadPhase.Prefilling  => "prefilling",
-                            ARI.LLM.ThreadPhase.Thinking    => "thinking",
-                            ARI.LLM.ThreadPhase.Typing      => "typing",
-                            ARI.LLM.ThreadPhase.Researching => "researching",
-                            ARI.LLM.ThreadPhase.Generating  => "generating",
-                            ARI.LLM.ThreadPhase.Waiting     => "waiting",
-                            ARI.LLM.ThreadPhase.Working     => "working",
-                            _                              => (Llm?.IsThreadProcessing(threadKey) ?? false) ? "prefilling" : "idle",
-                        };
+        // The reply's own state comes first: a held-back reply is "queued", then whatever phase she is really in. Remembering is reported
+        // separately, so a reply can be reading or typing while Engram saves; "remembering" is only the status when nothing else is going on.
+        bool remembering = Llm?.IsEngramSweeping(threadKey) ?? false;
+        string phase = Llm?.GetThreadPhase(threadKey) switch
+        {
+            ARI.LLM.ThreadPhase.Prefilling  => "prefilling",
+            ARI.LLM.ThreadPhase.Thinking    => "thinking",
+            ARI.LLM.ThreadPhase.Typing      => "typing",
+            ARI.LLM.ThreadPhase.Researching => "researching",
+            ARI.LLM.ThreadPhase.Generating  => "generating",
+            ARI.LLM.ThreadPhase.Waiting     => "waiting",
+            ARI.LLM.ThreadPhase.Working     => "working",
+            _                               => (Llm?.IsThreadProcessing(threadKey) ?? false) ? "prefilling" : "idle",
+        };
+        string status = (Llm?.IsWaitingOnMemory(threadKey) ?? false) ? "queued"
+                      : phase != "idle" ? phase
+                      : remembering ? "remembering"
+                      : "idle";
         bool isCodeMode = Llm?.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? wt) == true && wt?.Pipeline == ARI.LLM.ThreadPipeline.Code;
         // A tool waiting on the user's OK (a destructive git/gh command) — the app shows its Allow/Deny prompt.
         object? approval = ARI.LLM.ToolApprovals.Get(threadKey) is { } pending
             ? new { id = pending.Id, title = pending.Title, command = pending.Command }
             : null;
-        string payload  = JsonSerializer.Serialize(new { status, isCodeMode, approval });
+        string payload  = JsonSerializer.Serialize(new { status, remembering, isCodeMode, approval });
         await Response.WriteAsync($"data: {payload}\n\n", ct);
         await Response.Body.FlushAsync(ct);
     }
@@ -550,6 +627,55 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     public IActionResult AnswerApproval([FromRoute(Name = "id")] string threadKey, [FromRoute(Name = "approvalId")] string id, [FromBody] ApprovalAnswer body)
     {
         return ARI.LLM.ToolApprovals.Resolve(threadKey, id, body?.Allow == true) ? Ok() : NotFound();
+    }
+
+    // ── The conversation's browser, shown live in the chat window ───────────────────────────────────────────────────
+    // Ari opens a page with the browser tool; the window then shows it (a picture refreshed every second or so) and the person
+    // can click and type in it themselves, e.g. to log in. Only the owner of the conversation, and only an admin chat.
+
+    private bool CanSeeBrowser(string key) => Llm is not null && Llm.Threads.TryGetValue(key, out ARI.LLM.Thread? t) && t.IsAdminChat && CanAccessThread(t);
+
+    /// <summary>Whether this conversation has a page open, and if Ari is waiting for the person to do something with it.</summary>
+    [HttpGet("{id}/browser")]
+    public IActionResult BrowserStatus([FromRoute(Name = "id")] string threadKey)
+    {
+        if (!CanSeeBrowser(threadKey)) return NotFound();
+        var s = ARI.LLM.BrowserHost.SessionOf(threadKey);
+        if (s is null) return Ok(new { open = false });
+        return Ok(new { open = true, waiting = s.Handover is not null, prompt = s.Prompt, tabs = s.Tabs.Select(t => t.Url).ToArray(), active = s.Active });
+    }
+
+    /// <summary>A picture of the page, as a JPEG.</summary>
+    [HttpGet("{id}/browser/screen")]
+    public async Task<IActionResult> BrowserScreen([FromRoute(Name = "id")] string threadKey)
+    {
+        if (!CanSeeBrowser(threadKey)) return NotFound();
+        try { return await ARI.LLM.BrowserHost.Snapshot(threadKey) is { } shot ? File(shot.Jpeg, "image/jpeg") : NotFound(); }
+        catch { return StatusCode(503); }
+    }
+
+    public record BrowserInput(string Kind, double X = 0, double Y = 0, string? Text = null, double DeltaY = 0);
+
+    /// <summary>The person clicking, typing, pressing a key or scrolling in the page. Coordinates are in the page's own 1280x900 view.</summary>
+    [HttpPost("{id}/browser/input")]
+    public async Task<IActionResult> BrowserSend([FromRoute(Name = "id")] string threadKey, [FromBody] BrowserInput body)
+    {
+        if (!CanSeeBrowser(threadKey)) return NotFound();
+        try { await ARI.LLM.BrowserHost.Input(threadKey, body.Kind, body.X, body.Y, body.Text ?? "", body.DeltaY); return Ok(); }
+        catch (Exception e) { return BadRequest(new { error = e.Message }); }
+    }
+
+    /// <summary>"Done": the person has finished what Ari asked them to do in the page.</summary>
+    [HttpPost("{id}/browser/done")]
+    public IActionResult BrowserDone([FromRoute(Name = "id")] string threadKey)
+        => CanSeeBrowser(threadKey) && ARI.LLM.BrowserHost.FinishHandover(threadKey) ? Ok() : NotFound();
+
+    /// <summary>Closes the page.</summary>
+    [HttpPost("{id}/browser/close")]
+    public async Task<IActionResult> BrowserClose([FromRoute(Name = "id")] string threadKey)
+    {
+        if (!CanSeeBrowser(threadKey)) return NotFound();
+        await ARI.LLM.BrowserHost.Close(threadKey); return Ok();
     }
 
     [HttpPost("~/api/v1/commands")]
@@ -647,7 +773,11 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         }
 
         // ── Normal single file ────────────────────────────────────────────────────
-        if (BinaryMimes.Contains(mime))
+        // PDF, Word, Excel and PowerPoint are binary but Ari reads them (read_file / read_document), so they are accepted here.
+        string ext = Path.GetExtension(fileName);
+        bool readableDocument = ext.Equals(".pdf", StringComparison.OrdinalIgnoreCase) || ext.Equals(".docx", StringComparison.OrdinalIgnoreCase)
+                             || ext.Equals(".xlsx", StringComparison.OrdinalIgnoreCase) || ext.Equals(".pptx", StringComparison.OrdinalIgnoreCase);
+        if (BinaryMimes.Contains(mime) && !readableDocument)
             return StatusCode(415, new { error = $"{Path.GetExtension(fileName).TrimStart('.').ToUpper()} files cannot be attached — binary formats are not supported." });
 
         // All files land on the filesystem (scratchpad or project dir); ARI reads them via read_file.
@@ -1069,7 +1199,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
                 listing.AppendLine("[Workspace files]");
                 foreach (string f in files)
                     listing.AppendLine(Path.GetRelativePath(scratchpadDir, f));
-                listing.AppendLine("Use list_directory and read_file to inspect these files.");
+                listing.AppendLine("Use list_directory and read_file to inspect these files. PDF, Word, PowerPoint and Excel files are read with read_document (never the shell).");
                 platformContext = listing.ToString().TrimEnd();
             }
         }
@@ -1202,6 +1332,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
             // Also marks whose thread it is, so a guest's chat never gets the Master's memories.
             ARI.LLM.Thread chatThread = GetOrCreateThread(threadKey);
             chatThread.IsAdminChat = User.IsInRole(ARI.API.Auth.Roles.Admin);
+            ARI.LLM.ToolFactories.SyncPinned(chatThread);   // owner-only pinned tools are kept for the owner, taken back from a guest
 
             if (v2) await WriteEventAsync(events.Format("message.start", new { threadId = threadKey }));
             await Llm.PromptStreaming(threadKey, prompt, username, platformContext, async accumulated =>
@@ -1249,4 +1380,4 @@ public record PromoteToProjectRequest(string Name, string? Category = null);
 public record CommandRequest(string? ThreadKey, string Input);
 public record NewThreadRequest(string? ProjectId, bool Desktop = false, string? Pipeline = null);
 public record InjectContextRequest(string Name, string Content);
-public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active", bool IsCodeMode = false, string? ProjectName = null, string? ProjectId = null, string Pipeline = "dialogue", string? Title = null, string? OwnerName = null);
+public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active", bool IsCodeMode = false, string? ProjectName = null, string? ProjectId = null, string Pipeline = "dialogue", string? Title = null, string? OwnerName = null, string? ParentKey = null, string? Label = null);

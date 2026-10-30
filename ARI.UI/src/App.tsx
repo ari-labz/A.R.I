@@ -424,10 +424,17 @@ export default function App() {
         // When the app comes back to the foreground (minimised → restored, tab switch, etc.),
         // re-sync thread state and reconnect the global SSE if it dropped while backgrounded.
         function handleVisibilityChange() {
-            if (document.visibilityState !== "visible") return
+            if (document.visibilityState !== "visible") {
+                // A tab nobody is looking at gives its streams back. A browser allows six connections to one host, and these
+                // would otherwise sit on them and leave the page you open next stuck loading while ARI is typing.
+                globalEsRef.current?.close(); globalEsRef.current = null
+                watchStreamRef.current?.close(); watchStreamRef.current = null
+                return
+            }
             loadThreads()
             if (!globalEsRef.current || globalEsRef.current.readyState === EventSource.CLOSED)
                 openGlobalStream()
+            if (activeThreadRef.current && !watchStreamRef.current) attachWatchRef.current?.(activeThreadRef.current)
             if (activeThreadRef.current && !streamingRef.current)
                 loadHistory(activeThreadRef.current)
                     .then(hist => { if (activeThreadRef.current) setItems(dedupeRecentUserMessages(hist)) })
@@ -782,6 +789,7 @@ export default function App() {
     // without it threadStatus never leaves "idle" and the indicator falls back to guessing from content,
     // which cannot tell thinking apart from an empty reply.
     const isSyncingRef = useRef(false)
+    const attachWatchRef = useRef<((key: string) => void) | null>(null)
 
     const attachWatch = useCallback((key: string) => {
         watchStreamRef.current?.close()
@@ -790,8 +798,8 @@ export default function App() {
             if (e.status) {
                 // Don't let server status events overwrite the syncing indicator.
                 if (!isSyncingRef.current) setThreadStatus(e.status)
-                setIsRemembering(e.status === "remembering")
             }
+            if (e.remembering !== undefined || e.status) setIsRemembering(e.remembering ?? e.status === "remembering")
             if (e.isCodeMode !== undefined) setCodeMode(e.isCodeMode)
             // A server tool is waiting on approval — reuse the run_command prompt. When the request goes away
             // (answered on another device, or timed out) close the prompt if it's still showing.
@@ -814,6 +822,7 @@ export default function App() {
             }
         }, () => { /* ignore reconnect errors */ })
     }, [])
+    attachWatchRef.current = attachWatch
 
     const openThread = useCallback(async (
         key: string, internal = false, agName: string | null = null, isCode = false,
@@ -880,6 +889,25 @@ export default function App() {
         window.history.replaceState({}, "", window.location.pathname)
     }, [connState, openThread])
 
+    // A notification clicked while the app is already open: the service worker says which chat, and it opens once connected.
+    const [pushThread, setPushThread] = useState<string | null>(null)
+    useEffect(() => {
+        if (!("serviceWorker" in navigator)) return
+        const onMessage = (ev: MessageEvent) => {
+            if (ev.data?.type !== "ari-open-thread" || !ev.data.thread) return
+            ev.ports?.[0]?.postMessage("ok")
+            setPushThread(String(ev.data.thread))
+        }
+        navigator.serviceWorker.addEventListener("message", onMessage)
+        return () => navigator.serviceWorker.removeEventListener("message", onMessage)
+    }, [])
+    useEffect(() => {
+        if (!pushThread || connState !== "connected") return
+        const key = pushThread
+        setPushThread(null)
+        openThread(key).catch(() => {})
+    }, [pushThread, connState, openThread])
+
     // Create a Speech thread, open it into the orb view, and start streaming the mic to ARI.Listener.
     const beginSpeech = useCallback(async () => {
         const key = await createThread(selectedProject, "speech")
@@ -945,13 +973,27 @@ export default function App() {
             // Show the interjection immediately, appended AFTER the streaming bubble (which keeps streaming
             // above it). When the server folds it in, a [SPLIT] event finalizes that bubble and opens the
             // continuation below this message; the [SPLIT]/[DONE] handlers dedupe against this optimistic copy.
-            setItems(prev => [...prev, { type: "userMessage", content: prompt, timestamp: new Date().toISOString(), attachments: interjectAttach as Attachment[] | undefined }])
+            // Her reply hasn't got any text yet, so the new message goes ABOVE her pending bubble straight away: it is the last thing said, and
+            // what she writes will answer it. Once she has written something it goes after that bubble, as before.
+            const interjectStamp = new Date().toISOString()
+            setItems(prev => {
+                const msg: ThreadItem = { type: "userMessage", content: prompt, timestamp: interjectStamp, attachments: interjectAttach as Attachment[] | undefined }
+                const last = prev[prev.length - 1]
+                const pending = last?.type === "ariResponse" && last.isStreaming && !last.content && !(last.blocks?.length)
+                return pending ? [...prev.slice(0, -1), msg, last] : [...prev, msg]
+            })
             const res = await apiFetch(`/api/v1/threads/${key}/interjections`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ text: prompt }),
             }).catch(() => null)
-            // 409 = the turn finished between keypress and send; fall through to a normal new message.
+            // 409 = the turn finished between keypress and send, or she hasn't started it yet (she is waiting on memory); fall through to a normal
+            // new message. That send adds the message and a fresh reply bubble itself, so take back the copy shown above and the old pending
+            // bubble, or the message would appear twice with a stale "Reading" left behind.
             if (res && res.ok) return
+            setItems(prev => prev
+                .filter(it => !(it.type === "userMessage" && it.timestamp === interjectStamp && it.content === prompt))
+                .filter(it => !(it.type === "ariResponse" && it.isStreaming && !it.content && !(it.blocks?.length)))
+                .map(it => it.type === "ariResponse" && it.isStreaming ? { ...it, isStreaming: false } : it))
         }
         if (isStreaming) {
             abortRef.current?.abort(); abortRef.current = null
@@ -1146,6 +1188,10 @@ export default function App() {
                                 arr.splice(respIdx >= 0 ? respIdx : arr.length, 0, mkMsg())
                             } else {
                                 if (respIdx >= 0) arr[respIdx] = { ...arr[respIdx], isStreaming: false, continued: true }
+                                // The optimistic copy may sit above the bubble (it was placed there while she had written nothing); she has since
+                                // written some, so the message belongs after it.
+                                const early = arr.findIndex(it => it.type === "userMessage" && it.content === msgText)
+                                if (early >= 0 && early < respIdx) arr.splice(early, 1)
                                 if (!arr.some(it => it.type === "userMessage" && it.content === msgText)) arr.push(mkMsg())
                                 arr.push({ type: "ariResponse", content: "", timestamp: new Date().toISOString(), isStreaming: true })
                             }

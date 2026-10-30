@@ -1,7 +1,8 @@
 import { useRef, useState, useEffect, useLayoutEffect } from "react"
+import type { PipelineOption } from "../hooks/usePipelines"
 
 interface Props {
-    pipelines:   string[]
+    pipelines:   PipelineOption[]
     // null = Default (Dialogue unless a bound Repository project forces Code — no explicit pin).
     // A pipeline id pins the thread outright, same idea as switching from Claude to Claude Code.
     value:       string | null
@@ -10,23 +11,11 @@ interface Props {
     disabled?:   boolean
 }
 
-// Display label per known pipeline id. Unknown ids fall back to a capitalized name so a future backend
-// pipeline still renders without a change here. "dialogue" has no button of its own — it's what
-// "Default" resolves to, not a separate explicit pin (mirrors Claude vs. Claude Code: you don't select
-// "Claude" mode, you're just in it unless you switch to Code).
-const LABELS: Record<string, string> = {
-    code:   "Code",
-    speech: "Talk",
-}
-
-function labelFor(id: string) {
-    return LABELS[id] ?? id.charAt(0).toUpperCase() + id.slice(1)
-}
-
 export default function PipelineSelector({ pipelines, value, onChange, orientation = "horizontal", disabled = false }: Props) {
     const options: Array<{ id: string | null; label: string }> = [
         { id: null, label: "Default" },
-        ...pipelines.filter(id => id !== "dialogue" && id !== "dream").map(id => ({ id, label: labelFor(id) })),
+        // "dialogue" is what Default resolves to, not a separate explicit pin (you are in it unless you switch).
+        ...pipelines.filter(p => p.id !== "dialogue" && p.id !== "dream"),
     ]
 
     const activeIndex = Math.max(0, options.findIndex(o => o.id === value))

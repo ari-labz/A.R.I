@@ -27,7 +27,7 @@ internal sealed class Wake : Tool
                 properties = new
                 {
                     content = new { type = "string", description = "The message to send to the user. Stay on the single topic named below." },
-                    topic   = new { type = "string", description = "A short phrase (a few words) naming the ONE thing this message is about, e.g. 'Hydra processing check-in' or 'voice priority bug'. Decide this first — it's the thing the whole message has to stay on. Also used to avoid repeating yourself across dreams." },
+                    topic   = new { type = "string", description = "A short phrase (a few words) naming the ONE thing this message is about, e.g. 'weekend plans check-in' or 'voice priority bug'. Decide this first — it's the thing the whole message has to stay on. Also used to avoid repeating yourself across dreams." },
                     context = new { type = "string", description = "Private briefing injected into the new thread's system prompt so your waking self already knows the context. The user does not see this." },
                     title   = new { type = "string", description = "Short title for the conversation thread (3-6 words). Shown in the thread list — make it specific to what you're asking or saying, e.g. 'Pronoun inconsistency in brain' or 'Checking in on you'." },
                 }

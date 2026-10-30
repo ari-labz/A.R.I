@@ -33,11 +33,11 @@ public class AgentsController(PersistentData persistentData) : ControllerBase
     }
 
     /// <summary>Names that belong to shipped agents, so a custom agent can never shadow one.</summary>
-    private static readonly string[] ReservedNames = ["Dialogue", "Coder", "Context", "Awareness", "Memory", "Engram", "Refactor", "Curiosity", "Subagent", "Dreamer", "Shared"];
+    private static readonly string[] ReservedNames = ["Dialogue", "Coder", "Context", "Awareness", "Memory", "Engram", "Curiosity", "Subagent", "Dreamer", "Shared"];
 
-    public sealed record NewAgent(string Name, string? ServerName, string? SlotName, string? AgentPrompt);
+    public sealed record NewAgent(string Name, string? ServerName, string? SlotName, string? AgentPrompt, bool ReadOnly = false);
 
-    /// <summary>Creates a custom agent. Like every agent edit it is read at startup, so it takes effect on restart.</summary>
+    /// <summary>Creates a custom agent and adds it to the running server, so a pipeline can use it straight away.</summary>
     [HttpPost]
     public IActionResult CreateAgent([FromBody] NewAgent req)
     {
@@ -47,18 +47,28 @@ public class AgentsController(PersistentData persistentData) : ControllerBase
         if (ReservedNames.Contains(name, StringComparer.OrdinalIgnoreCase))
             return BadRequest(new { error = $"'{name}' is the name of a built-in agent." });
         Server? server = persistentData.GetServers().FirstOrDefault(s => s.Name == req.ServerName) ?? persistentData.GetServers().FirstOrDefault();
-        if (!persistentData.CreateCustomAgent(name, server?.Name ?? "", req.SlotName ?? server?.Slots.FirstOrDefault()?.Name, req.AgentPrompt ?? ""))
+        if (!persistentData.CreateCustomAgent(name, server?.Name ?? "", req.SlotName ?? server?.Slots.FirstOrDefault()?.Name, req.AgentPrompt ?? "", req.ReadOnly))
             return Conflict(new { error = $"An agent called '{name}' already exists." });
-        return Ok(new { ok = true, restartRequired = true });
+        LoadLive(name);
+        return Ok(new { ok = true });
     }
 
     /// <summary>Deletes a custom agent. Shipped agents cannot be deleted, only switched off.</summary>
     [HttpDelete("{id}")]
     public IActionResult DeleteAgent(string id)
     {
+        if (persistentData.GetAgentEntryJson(id) is { } entry && System.Text.Json.Nodes.JsonNode.Parse(entry)?.AsObject().Any(kv => kv.Key.Equals("System", StringComparison.OrdinalIgnoreCase) && kv.Value?.GetValue<bool>() == true) == true)
+            return BadRequest(new { error = $"'{id}' is shipped with A·R·I and used by its own pipelines. You can edit it but not delete it." });
         if (!persistentData.RemoveCustomAgent(id))
             return NotFound(new { error = $"'{id}' is not a custom agent." });
-        return Ok(new { ok = true, restartRequired = true });
+        Llm?.RemoveCustomAgent(id);
+        // Take the agent out of every pipeline that used it, so no step is left pointing at nothing.
+        if (persistentData.GetPipelinesRaw() is { } pipelines && ARI.LLM.PipelineGraph.RemoveMissingAgents(pipelines, name => !name.Equals(id, StringComparison.OrdinalIgnoreCase)))
+        {
+            persistentData.SavePipelinesRaw(pipelines);
+            Llm?.ReloadPipelines();
+        }
+        return Ok(new { ok = true });
     }
 
     /// <summary>Saves the prompts owned by no single agent (the MemoryAgent block, the Budgets footer).
@@ -81,10 +91,23 @@ public class AgentsController(PersistentData persistentData) : ControllerBase
         if (Llm is not null)
         {
             string? server = req["serverName"]?.GetValue<string>(), slot = req["slotName"]?.GetValue<string>();
+            Llm.ApplyAgentPatch(name, req);
             if (server is not null) Llm.AssignAgentServer(name, server);
             if (slot is { Length: > 0 }) Llm.AssignAgentSlot(name, slot);
+            // A custom agent is rebuilt from its saved entry, so an edited prompt applies to the next run too.
+            if (Llm.Agents.TryGetValue(name, out ARI.LLM.Agent? live) && live.GetType().Name == "CustomAgent")
+                LoadLive(name);
         }
 
         return Ok(new { ok = true });
+    }
+
+    /// <summary>Loads (or reloads) a custom agent from its saved entry into the running server.</summary>
+    private void LoadLive(string name)
+    {
+        if (Llm is null || persistentData.GetAgentEntryJson(name) is not { } json) return;
+        using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(json);
+        System.Text.Json.JsonElement entry = doc.RootElement.Clone();
+        if (!Llm.ReplaceCustomAgent(entry)) Llm.AddCustomAgent(entry);
     }
 }

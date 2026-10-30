@@ -92,7 +92,6 @@
 	
   <ItemGroup>
     <ProjectReference Include="..\ARI.Brain\ARI.Brain.csproj" />
-    <ProjectReference Include="..\ARI.Discord\ARI.Discord.csproj" />
     <ProjectReference Include="..\ARI.LLM\ARI.LLM.csproj" />
     <ProjectReference Include="..\ARI.API\ARI.API.csproj" />
     <ProjectReference Include="..\ARI.VoiceSynthesis\ARI.VoiceSynthesis.csproj" />

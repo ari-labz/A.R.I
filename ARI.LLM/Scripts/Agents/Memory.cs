@@ -67,11 +67,18 @@ internal class Memory : Agent
         .Where(t => t.Length >= 3 && !Stopwords.Contains(t))
         .ToList();
 
-    internal async Task<string?> GetNotes(List<ThreadMessage> chatHistory, string incomingPrompt, string? contextSummary = null, CancellationToken ct = default, PrivacyMode privacyMode = PrivacyMode.Unrestricted)
-    {
-        if (HopLimit <= 0) return null;
+    /// <summary>Everything Memory works out before it asks a model anything: the pinned note about the speaker, the search, the
+    /// candidates in the form the model is shown them, and the prompt that asks it to pick. <see cref="Done"/> means there is nothing
+    /// for a model to pick from, and <see cref="Early"/> is the answer.</summary>
+    internal sealed record MemoryPrep(
+        bool Done, string Early, string Pinned, string Transcript, string PickPrompt, IReadOnlyList<string> Offered,
+        string? SpeakerNoteName, IReadOnlyList<string> Terms, int Candidates, int Paths, string ThreadKey, string IncomingPrompt, string? ContextSummary,
+        string CandidateText = "", bool Disabled = false);
 
-        Thread memThread = new Thread(ThreadPipeline.Dialogue, $"memory:{Guid.NewGuid()}") { Internal = true };
+    /// <summary>The first half of recall: pure code, no model. See <see cref="MemoryPrep"/>.</summary>
+    internal MemoryPrep Prepare(List<ThreadMessage> chatHistory, string incomingPrompt, string? contextSummary = null, PrivacyMode privacyMode = PrivacyMode.Unrestricted)
+    {
+        string threadKey = $"memory:{Guid.NewGuid()}";
 
         // If a brain note exists whose title or alias matches the user's name, pin its header — always
         // surface identity/pronoun facts without model selection, but only the top block, not the full note.
@@ -88,6 +95,9 @@ internal class Memory : Agent
                 userNote = null;
             }
         }
+        string pinnedOnly() => string.IsNullOrEmpty(pinnedBlock) ? string.Empty : pinnedBlock.TrimEnd();
+        MemoryPrep Finished(string early, IReadOnlyList<string> terms, int candidates = 0, int paths = 0) =>
+            new(true, early, pinnedBlock, "", "", [], userNote?.Name, terms, candidates, paths, threadKey, incomingPrompt, contextSummary);
 
         // Recall always runs — it's fast enough that a keyword gate only ever costs a real hit.
         // If nothing matches, the SQL seed returns no candidates and we bail below at near-zero cost.
@@ -114,12 +124,12 @@ internal class Memory : Agent
         if (terms.Count == 0)
         {
             Shared.Logger.LogInformation("[Memory] complete 0.0s — no search terms");
-            SessionRecorder.StandaloneNote("Memory", memThread.Key, "no-terms", new Dictionary<string, object?>
+            SessionRecorder.StandaloneNote("Memory", threadKey, "no-terms", new Dictionary<string, object?>
             {
                 ["incoming_prompt"] = incomingPrompt,
                 ["outcome"]         = "no search terms survived tokenisation — nothing to recall",
             });
-            return string.IsNullOrEmpty(pinnedBlock) ? string.Empty : pinnedBlock.TrimEnd();
+            return Finished(pinnedOnly(), terms);
         }
 
         // Pure SQL, no LLM yet — see Brain.Recall.
@@ -139,14 +149,14 @@ internal class Memory : Agent
         if (candidates.Count == 0)
         {
             Shared.Logger.LogInformation("[Memory] complete 0.0s, 0 tokens, 0.0 t/s — no candidates found");
-            SessionRecorder.StandaloneNote("Memory", memThread.Key, "no-candidates", new Dictionary<string, object?>
+            SessionRecorder.StandaloneNote("Memory", threadKey, "no-candidates", new Dictionary<string, object?>
             {
                 ["incoming_prompt"] = incomingPrompt,
                 ["context_summary"] = contextSummary,
                 ["search_terms"]    = terms,
                 ["outcome"]         = "no candidate notes found — nothing shown to the model",
             });
-            return string.IsNullOrEmpty(pinnedBlock) ? string.Empty : pinnedBlock.TrimEnd();
+            return Finished(pinnedOnly(), terms);
         }
 
         // Snippets only, highest-scored first — a well-separated top score is a fast decision even though the model always runs.
@@ -177,36 +187,49 @@ internal class Memory : Agent
         candidates = readable;
         if (missingNote) ReindexAfterMissing();
         if (candidates.Count == 0)
-            return string.IsNullOrEmpty(pinnedBlock) ? string.Empty : pinnedBlock.TrimEnd();
+            return Finished(pinnedOnly(), terms);
 
         string pathBlock = recall.Paths.Count > 0
             ? "\nCONNECTIONS FOUND:\n" + string.Join("\n", recall.Paths.Select(p =>
                 $"- {p.From.Title} connects to {p.To.Title} via {string.Join(" -> ", p.Notes.Select(n => n.Title))}"))
             : string.Empty;
 
+        // The model is asked for exact titles but often echoes the whole decorated candidate line
+        // ("Alex: (aka Al) - **Formal Name:** Alexander"). Constrain the fuzzy fallback to the notes
+        // actually offered, so a mangled pick can never resolve to a note that wasn't in the list.
         string prompt = ResolveTemplate("HopPrompt", "",
             ("transcript", transcript),
             ("candidates", candidateBlock + pathBlock));
 
-        Stopwatch timer = Stopwatch.StartNew();
-        string raw = await Prompt(memThread, prompt, new PromptOptions { Ct = ct, ThinkingBudget = THINKING_BUDGET });
-        List<string> selected = ParseSelection(raw);
-        timer.Stop();
+        return new MemoryPrep(false, "", pinnedBlock, transcript, prompt, candidates.Select(c => c.Note.Name).ToList(),
+            userNote?.Name, terms, candidates.Count, recall.Paths.Count, threadKey, incomingPrompt, contextSummary, candidateBlock + pathBlock);
+    }
 
-        Response? last     = memThread.History.OfType<Response>().LastOrDefault();
-        int    completionTokens = last?.Data.CompletionTokens ?? 0;
-        double elapsed          = last?.TotalSeconds ?? last?.ThinkingSeconds ?? 0;
-        double tokPerSec        = elapsed > 0 ? completionTokens / elapsed : 0;
+    /// <summary>How a model step is run, so the same second half of recall can use the Memory agent itself (the default) or the
+    /// agents a pipeline wires in.</summary>
+    internal sealed record MemoryModelSteps(Func<string, string, string, Task<string>> Extract, Func<string, string, Task<string>> FilterPrivacy);
+
+    /// <summary>The second half of recall: reads the model's picks, pulls the relevant lines out of each chosen note (one model
+    /// call per note, in parallel), puts the block together and, in guarded mode, has it checked for privacy.</summary>
+    internal async Task<string> Finish(string pickRaw, MemoryPrep prep, PrivacyMode privacyMode, MemoryModelSteps? steps, CancellationToken ct,
+        Stopwatch? timer = null, int completionTokens = 0, double tokPerSec = 0)
+    {
+        timer ??= Stopwatch.StartNew();
+        string incomingPrompt = prep.IncomingPrompt;
+        string transcript = prep.Transcript;
+        string pinnedBlock = prep.Pinned;
+        IReadOnlyList<string> terms = prep.Terms;
+        List<string> selected = ParseSelection(pickRaw);
 
         if (selected.Count == 0)
         {
             Shared.Logger.LogInformation("[Memory] complete {Seconds}s, {Tokens} tokens, {TokPerSec} t/s — model selected nothing",
                 timer.Elapsed.TotalSeconds.ToString("F1"), completionTokens, tokPerSec.ToString("F1"));
-            SessionRecorder.StandaloneNote("Memory", memThread.Key, "no-recall", new Dictionary<string, object?>
+            SessionRecorder.StandaloneNote("Memory", prep.ThreadKey, "no-recall", new Dictionary<string, object?>
             {
                 ["incoming_prompt"]    = incomingPrompt,
                 ["search_terms"]       = terms,
-                ["candidates_offered"] = candidates.Count,
+                ["candidates_offered"] = prep.Candidates,
                 ["elapsed_s"]          = Math.Round(timer.Elapsed.TotalSeconds, 3),
                 ["completion_tokens"]  = completionTokens,
                 ["tok_per_sec"]        = Math.Round(tokPerSec, 2),
@@ -215,16 +238,13 @@ internal class Memory : Agent
             return string.IsNullOrEmpty(pinnedBlock) ? string.Empty : pinnedBlock.TrimEnd();
         }
 
-        // The model is asked for exact titles but often echoes the whole decorated candidate line
-        // ("Alex: (aka Al) - **Formal Name:** Alexander"). Constrain the fuzzy fallback to the notes
-        // actually offered, so a mangled pick can never resolve to a note that wasn't in the list.
-        HashSet<string> offered = candidates.Select(c => c.Note.Name).ToHashSet();
+        HashSet<string> offered = prep.Offered.ToHashSet();
 
         List<string> fetched = new();
         List<string> fuzzy = new();
         List<string> unresolved = new();
         // Pre-seed seen with the pinned user note so the model-selected pass never emits it again.
-        HashSet<string> seen = userNote is not null ? new() { userNote.Name } : new();
+        HashSet<string> seen = prep.SpeakerNoteName is not null ? new() { prep.SpeakerNoteName } : new();
         List<(Note Note, bool ViaFuzzy)> resolved = new();
         foreach (string title in selected)
         {
@@ -244,7 +264,7 @@ internal class Memory : Agent
         }
 
         // Extract only the relevant lines from each selected note in parallel.
-        Task<string>[] extractionTasks = resolved.Select(r => ExtractRelevant(r.Note, incomingPrompt, transcript, ct)).ToArray();
+        Task<string>[] extractionTasks = resolved.Select(r => ExtractRelevant(r.Note, incomingPrompt, transcript, ct, steps?.Extract)).ToArray();
         string[] extractions = await Task.WhenAll(extractionTasks);
 
         StringBuilder result = new();
@@ -267,12 +287,12 @@ internal class Memory : Agent
 
         Shared.Logger.LogInformation("[Memory] complete {Seconds}s, {Tokens} tokens, {TokPerSec} t/s",
             timer.Elapsed.TotalSeconds.ToString("F1"), completionTokens, tokPerSec.ToString("F1"));
-        SessionRecorder.StandaloneNote("Memory", memThread.Key, "recalled", new Dictionary<string, object?>
+        SessionRecorder.StandaloneNote("Memory", prep.ThreadKey, "recalled", new Dictionary<string, object?>
         {
             ["incoming_prompt"]    = incomingPrompt,
             ["search_terms"]       = terms,
-            ["candidates_offered"] = candidates.Count,
-            ["paths_found"]        = recall.Paths.Count,
+            ["candidates_offered"] = prep.Candidates,
+            ["paths_found"]        = prep.Paths,
             ["elapsed_s"]          = Math.Round(timer.Elapsed.TotalSeconds, 3),
             ["completion_tokens"]  = completionTokens,
             ["tok_per_sec"]        = Math.Round(tokPerSec, 2),
@@ -285,18 +305,45 @@ internal class Memory : Agent
         if (privacyMode == PrivacyMode.Guarded && !string.IsNullOrWhiteSpace(combined))
         {
             Shared.Logger.LogInformation("[Memory] privacy filter: guarded mode — filtering recalled notes.");
-            combined = await FilterForPrivacy(combined, transcript, ct);
+            combined = await FilterForPrivacy(combined, transcript, ct, steps?.FilterPrivacy);
         }
 
         return combined;
     }
 
+    internal async Task<string?> GetNotes(List<ThreadMessage> chatHistory, string incomingPrompt, string? contextSummary = null, CancellationToken ct = default, PrivacyMode privacyMode = PrivacyMode.Unrestricted)
+    {
+        if (HopLimit <= 0) return null;
+
+        MemoryPrep prep = Prepare(chatHistory, incomingPrompt, contextSummary, privacyMode);
+        if (prep.Done) return prep.Early;
+
+        Thread memThread = new Thread(ThreadPipeline.Dialogue, prep.ThreadKey) { Internal = true };
+        Stopwatch timer = Stopwatch.StartNew();
+        string raw = await Prompt(memThread, prep.PickPrompt, new PromptOptions { Ct = ct, ThinkingBudget = THINKING_BUDGET });
+        timer.Stop();
+
+        Response? last     = memThread.History.OfType<Response>().LastOrDefault();
+        int    completionTokens = last?.Data.CompletionTokens ?? 0;
+        double elapsed          = last?.TotalSeconds ?? last?.ThinkingSeconds ?? 0;
+        double tokPerSec        = elapsed > 0 ? completionTokens / elapsed : 0;
+
+        return await Finish(raw, prep, privacyMode, steps: null, ct, timer, completionTokens, tokPerSec);
+    }
+
     private const int PRIVACY_BUDGET = 400;
 
-    private async Task<string> FilterForPrivacy(string recallBlock, string transcript, CancellationToken ct)
+    private async Task<string> FilterForPrivacy(string recallBlock, string transcript, CancellationToken ct, Func<string, string, Task<string>>? run = null)
     {
         try
         {
+            if (run is not null)
+            {
+                string viaStep = await run(recallBlock, transcript);
+                if (string.IsNullOrWhiteSpace(viaStep)) return recallBlock;
+                Shared.Logger.LogInformation("[Memory] privacy filter applied.");
+                return viaStep.Trim();
+            }
             Thread filterThread = new Thread(ThreadPipeline.Dialogue, $"privacy-filter:{Guid.NewGuid()}") { Internal = true };
             string prompt = ResolveTemplate("PrivacyFilter", PrivacyFilterFallback,
                 ("memories", recallBlock),
@@ -313,7 +360,7 @@ internal class Memory : Agent
         }
     }
 
-    private const string PrivacyFilterFallback =
+    internal const string PrivacyFilterFallback =
         "You are ARI's privacy filter. You are in a GUARDED context — the person you are talking to is NOT your master.\n\n" +
         "Below are memories recalled for this conversation. Review each one and decide:\n" +
         "- KEEP: the memory is safe to share (general knowledge, shared projects, non-sensitive facts)\n" +
@@ -353,10 +400,11 @@ internal class Memory : Agent
         return line.Length > SNIPPET_LENGTH ? line[..SNIPPET_LENGTH] + "…" : line;
     }
 
-    private async Task<string> ExtractRelevant(Note note, string request, string transcript, CancellationToken ct)
+    private async Task<string> ExtractRelevant(Note note, string request, string transcript, CancellationToken ct, Func<string, string, string, Task<string>>? run = null)
     {
         try
         {
+            if (run is not null) return await run(request, transcript, note.ToPrompt());
             Thread extractThread = new Thread(ThreadPipeline.Dialogue, $"extract:{Guid.NewGuid()}") { Internal = true };
             string prompt = ResolveTemplate("ExtractPrompt", "",
                 ("request", request),

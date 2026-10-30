@@ -10,12 +10,12 @@
       "ModelsPath": ""
     },
     "VoiceSynthesis": {
-      "Enabled": true,
+      "Enabled": false,
       "StyleTtsPath": "",
       "VoicesPath": ""
     },
     "Voice": {
-      "Enabled": true,
+      "Enabled": false,
       "ModelName": ""
     },
     "Brain": {
@@ -23,14 +23,6 @@
       "VaultPath": "",
       "BackupPath": "./Backups",
       "MaxBackups": 5
-    },
-    "Discord": {
-      "Enabled": true,
-      "Token": "",
-      "MasterDiscordId": 0,
-      "WhitelistedUserIds": [],
-      "WatchedChannelIds": [],
-      "AllowedGuildIds": []
     },
     "Listener": {
       "Enabled": true,

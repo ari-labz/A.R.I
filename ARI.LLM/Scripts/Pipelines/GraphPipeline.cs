@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
-/// <summary>Runs a user-drawn <see cref="PipelineGraph"/> in place of <see cref="DialoguePipeline"/>. Agents run in waves
+/// <summary>Runs the <see cref="PipelineGraph"/> a thread is on (Default unless it was switched). Agents run in waves
 /// (everything in a wave has its inputs ready, so a wave runs in parallel); the one wired to END replies into the user's
 /// own thread, every other agent runs on a throw-away thread and only hands its text to the ports it is wired to.</summary>
 internal sealed class GraphPipeline : Pipeline
@@ -17,8 +17,20 @@ internal sealed class GraphPipeline : Pipeline
     private readonly Engram?                              engram;
     private readonly IReadOnlyDictionary<string, CustomAgent> customAgents;
 
-    /// <summary>The graph to run; null means "none valid" and the caller falls back to <see cref="DialoguePipeline"/>.</summary>
-    internal PipelineGraph? Graph { get; set; }
+    /// <summary>Finds the graph a thread runs on: the one it was switched to, or Default.</summary>
+    private readonly Func<string?, PipelineGraph> graphFor;
+
+    /// <summary>Finds a pipeline by id, so one can run inside another.</summary>
+    private readonly Func<string, PipelineGraph?> pipelineById;
+
+    private const int MaxDepth = 8;
+
+    /// <summary>Tokens Dialogue's prompt may use that aren't extra inputs: the memory block (either spelling) and the two it always has.</summary>
+    private static readonly string[] DialogueOwnTokens = ["history", "memories", "memory"];
+
+
+    internal event Action<string>? ThreadBufferFull;
+    internal event Action<string>? ThreadBecameInactive;
 
     protected override Agent  PrimaryAgent => textingAgent;
     protected override string PipelineName => "Graph";
@@ -26,6 +38,8 @@ internal sealed class GraphPipeline : Pipeline
     internal GraphPipeline(
         TextingAgent textingAgent, Memory? memory, Context? context, Engram? engram,
         IReadOnlyDictionary<string, CustomAgent> customAgents,
+        Func<string?, PipelineGraph> graphFor,
+        Func<string, PipelineGraph?> pipelineById,
         ConcurrentDictionary<string, CancellationTokenSource> processingThreads,
         ConcurrentDictionary<string, LiveCallInfo>             liveCalls,
         Action<string>                                          notifyWatchers)
@@ -36,14 +50,25 @@ internal sealed class GraphPipeline : Pipeline
         this.context      = context;
         this.engram       = engram;
         this.customAgents = customAgents;
+        this.graphFor     = graphFor;
+        this.pipelineById = pipelineById;
+
+        textingAgent.ThreadBufferFull     += key => ThreadBufferFull?.Invoke(key);
+        textingAgent.ThreadBecameInactive += key => ThreadBecameInactive?.Invoke(key);
     }
 
     /// <summary>The input ports of an agent that can sit in a graph, or null if it isn't loaded.</summary>
     internal string[]? PortsOf(string agent)
     {
         if (PipelineGraph.BuiltInPorts.TryGetValue(agent, out string[]? ports))
-            return agent.Equals("Memory", StringComparison.OrdinalIgnoreCase) && memory is null ? null : ports;
-        return customAgents.TryGetValue(agent, out CustomAgent? c) ? PipelineGraph.PromptTokens(c.AgentPrompt).ToArray() : null;
+        {
+            if (agent.Equals("Memory", StringComparison.OrdinalIgnoreCase) && memory is null) return null;
+            // Dialogue's own prompt can hold {tokens} too: each one beyond its fixed ports becomes an input.
+            if (agent.Equals("Dialogue", StringComparison.OrdinalIgnoreCase))
+                return ports.Concat(PipelineGraph.PromptTokens(textingAgent.AgentPrompt).Where(t => !DialogueOwnTokens.Contains(t, StringComparer.OrdinalIgnoreCase))).ToArray();
+            return ports;
+        }
+        return customAgents.TryGetValue(agent, out CustomAgent? c) ? PipelineGraph.PromptTokens(c.AgentPrompt + "\n" + c.MessagePrompt).ToArray() : null;
     }
 
     protected override LiveCallInfo BuildLiveCall(string threadKey) =>
@@ -60,12 +85,14 @@ internal sealed class GraphPipeline : Pipeline
         string?              localPath,
         Func<string, Task>?  onTextDelta = null)
     {
-        PipelineGraph graph = Graph ?? throw new InvalidOperationException("No pipeline graph is active.");
+        PipelineGraph graph = graphFor(thread.GraphId);
 
-        if (engram?.IsSweeping(threadKey) == true)
+        if (engram?.BlocksReply(threadKey) == true)
         {
             Shared.Logger.LogInformation("[Graph] ({Thread}) waiting for Engram sweep to finish before processing.", threadKey);
-            await engram.WaitForSweep(threadKey, cts.Token);
+            thread.WaitingOnMemory = true; notifyWatchers(threadKey);
+            try { await engram.WaitForSweep(threadKey, cts.Token); }
+            finally { thread.WaitingOnMemory = false; notifyWatchers(threadKey); }
         }
         Shared.Logger.LogInformation("[Graph:{Graph}] ({Thread}) prompt\n\"{Prompt}\"", graph.Name, threadKey, effectivePrompt);
 
@@ -73,86 +100,225 @@ internal sealed class GraphPipeline : Pipeline
         PrivacyMode privacy    = thread.IsGuarded ? PrivacyMode.Guarded : PrivacyMode.Unrestricted;
         string historyText     = FormatHistory(thread.GetChatHistory());
 
-        // Null is a real value: "this agent had nothing to say" (Memory with no access) — the Dialogue agent leaves its memory block out for null but writes "None" for "".
-        ConcurrentDictionary<string, string?> outputs = new();
-        foreach (PipelineGraph.Node start in graph.Nodes.Where(n => n.Type == "start")) outputs[start.Id] = historyText;
-
-        string replyId = graph.Edges.First(e => graph.Nodes.First(n => n.Id == e.To).Type == "end").From;
-        string? reply  = null;
         double? recallSeconds = null;
 
-        foreach (List<PipelineGraph.Node> wave in graph.Order()!)
+        string? top = await RunGraph(graph, historyText, effectivePrompt, isTop: true, depth: 0);
+        return top ?? "";
+
+        // One pass over a graph: START's two outputs go in, whatever feeds END comes out. At the top level that last agent
+        // writes straight into the user's thread; inside a sub-pipeline it can't (its result is handed to the node that called
+        // it), so every agent there runs on a throw-away thread.
+        async Task<string?> RunGraph(PipelineGraph graph, string history, string message, bool isTop, int depth)
         {
-            string?[] results = await Task.WhenAll(wave.Select(node => RunNode(node)));
-            for (int i = 0; i < wave.Count; i++)
+            if (depth > MaxDepth) throw new InvalidOperationException($"Sub-pipelines are nested more than {MaxDepth} deep.");
+
+            // Null is a real value: "this agent had nothing to say" (Memory with no access) — the Dialogue agent leaves its memory block out for null but writes "None" for "".
+            ConcurrentDictionary<string, string?> outputs = new();
+            // START has two outputs: the conversation so far, and the latest message on its own.
+            foreach (PipelineGraph.Node start in graph.Nodes.Where(n => n.Type == "start"))
             {
-                if (wave[i].Id == replyId) reply = results[i];
-                else outputs[wave[i].Id] = results[i];
+                outputs[$"{start.Id}:{PipelineGraph.StartHistory}"] = history;
+                outputs[$"{start.Id}:{PipelineGraph.StartMessage}"] = message;
             }
-        }
-        return reply ?? "";
 
-        async Task<string?> RunNode(PipelineGraph.Node node)
-        {
-            Dictionary<string, string?> inputs = new(StringComparer.OrdinalIgnoreCase);
-            foreach (PipelineGraph.Edge e in graph.Edges.Where(e => e.To == node.Id))
-                inputs[e.Port] = outputs.TryGetValue(e.From, out string? v) ? v : null;
-            bool isReply = node.Id == replyId;
-            string agentName = node.Agent!;
-            Stopwatch sw = Stopwatch.StartNew();
+            string feederId = graph.Edges.First(e => graph.Nodes.First(n => n.Id == e.To).Type == "end").From;
+            string? result = null;
 
-            if (agentName.Equals("Memory", StringComparison.OrdinalIgnoreCase))
-                return await Recall();
-
-            if (agentName.Equals("Dialogue", StringComparison.OrdinalIgnoreCase))
+            foreach (List<PipelineGraph.Node> wave in graph.Order()!)
             {
-                inputs.TryGetValue("memories", out string? mem);
-                return await textingAgent.Prompt(thread, effectivePrompt, new PromptOptions
+                string?[] results = await Task.WhenAll(wave.Select(node => RunNode(node)));
+                for (int i = 0; i < wave.Count; i++)
                 {
-                    Username            = username,
-                    RecallNotes         = mem,
-                    RecallSeconds       = recallSeconds,
-                    ContextSummary      = contextSummary,
-                    Ct                  = cts.Token,
-                    UserMessagePreadded = true,
-                    OnDelta             = onDelta,
-                });
+                    if (wave[i].Id == feederId) result = results[i];
+                    outputs[wave[i].Id] = results[i];
+                }
             }
-
-            CustomAgent agent = customAgents[agentName];
-            inputs["message"] = effectivePrompt;
-            using IDisposable _ = CustomAgent.Resolve(PipelineGraph.Fill(agent.AgentPrompt, inputs.ToDictionary(kv => kv.Key, kv => kv.Value ?? "", StringComparer.OrdinalIgnoreCase)));
-            string result;
-            if (isReply)
-            {
-                result = await agent.Prompt(thread, effectivePrompt, new PromptOptions
-                {
-                    Username = username, ContextSummary = contextSummary, Ct = cts.Token, UserMessagePreadded = true, OnDelta = onDelta,
-                });
-            }
-            else
-            {
-                Thread scratch = new(ThreadPipeline.Dialogue, $"graph:{Guid.NewGuid():N}") { Internal = true };
-                result = await agent.Prompt(scratch, effectivePrompt, new PromptOptions { Username = username, Ct = cts.Token });
-            }
-            Shared.Logger.LogInformation("[Graph:{Graph}] ({Thread}) {Agent} finished in {Sec:F1}s.", graph.Name, threadKey, agentName, sw.Elapsed.TotalSeconds);
             return result;
 
-            // Same recall the Dialogue pipeline does: skipped without access, and a failed recall never blocks the reply.
-            async Task<string?> Recall()
+            // A node that fails can carry on with its onError text instead of taking the whole reply down with it.
+            async Task<string?> RunNode(PipelineGraph.Node node)
             {
-                if (memory is null || !thread.HasMemoryAccess) return null;
-                Stopwatch recallSw = Stopwatch.StartNew();
-                try { string? notes = await memory.GetNotes(thread.GetChatHistory(), effectivePrompt, contextSummary, cts.Token, privacy); recallSeconds = recallSw.Elapsed.TotalSeconds; return notes; }
-                catch (OperationCanceledException) when (cts.IsCancellationRequested) { throw; }
-                catch (Exception ex)
+                try { return await RunNodeCore(node); }
+                catch (Exception ex) when (node.OnError is not null && !cts.IsCancellationRequested)
                 {
-                    Shared.Logger.LogWarning(ex, "[Memory] ({Thread}) Memory recall failed — continuing without memories. {Error}", threadKey, ex.Message);
-                    recallSeconds = recallSw.Elapsed.TotalSeconds;
-                    return "Memory recall is unavailable right now — the memory server appears to be offline. Tell the user at the start of your response that you cannot access your memories at the moment and that your answer may be inaccurate or incomplete as a result. Then respond as best you can.";
+                    Shared.Logger.LogWarning(ex, "[Graph:{Graph}] ({Thread}) {Node} failed — carrying on with its fallback text. {Error}", graph.Name, threadKey, node.Agent ?? node.Pipeline ?? node.Id, ex.Message);
+                    return node.OnError;
+                }
+            }
+
+            async Task<string?> RunNodeCore(PipelineGraph.Node node)
+            {
+                Dictionary<string, string?> inputs = new(StringComparer.OrdinalIgnoreCase);
+                foreach (PipelineGraph.Edge e in graph.Edges.Where(e => e.To == node.Id))
+                    inputs[e.Port] = outputs.TryGetValue(OutputKey(graph, e), out string? v) ? v : null;
+                bool isReply = isTop && node.Id == feederId;
+
+                // A sub-pipeline is one node: the same two inputs START has, each defaulting to what this pipeline itself received.
+                if (node.Type == "pipeline")
+                {
+                    PipelineGraph sub = pipelineById(node.Pipeline!) ?? throw new InvalidOperationException($"Pipeline '{node.Pipeline}' no longer exists.");
+                    Stopwatch subSw = Stopwatch.StartNew();
+                    string? subResult = await RunGraph(sub, inputs.GetValueOrDefault(PipelineGraph.StartHistory) ?? history, inputs.GetValueOrDefault(PipelineGraph.StartMessage) ?? message, isTop: false, depth + 1);
+                    Shared.Logger.LogInformation("[Graph:{Graph}] ({Thread}) sub-pipeline '{Sub}' finished in {Sec:F1}s.", graph.Name, threadKey, sub.Name, subSw.Elapsed.TotalSeconds);
+                    return subResult;
+                }
+
+                string agentName = node.Agent!;
+                Stopwatch sw = Stopwatch.StartNew();
+
+                // Recall: the Memory step traverses the brain with tools, on its own sub-thread under the chat. Code works out who is
+                // listening and which notes to start from (names only); the Recall agent opens them, follows links, and writes the block.
+                string? threadCode = node.ThreadCode;
+                if (agentName.Equals("Memory", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!customAgents.ContainsKey(SystemAgents.Walker)) return await Recall();
+                    if (memory is null || !thread.HasMemoryAccess) return null;
+                    StartingPoints start = new MemoryApi(memory, thread, contextSummary, privacy).Start(message);
+                    if (start.Text is null) return null;
+                    inputs["starting"] = start.Text;
+                    inputs["audience"] = start.Audience;
+                    agentName  = SystemAgents.Walker;
+                    threadCode ??= "memory";
+                }
+
+                if (agentName.Equals("Dialogue", StringComparison.OrdinalIgnoreCase))
+                {
+                    inputs.TryGetValue("memories", out string? mem);
+                    // Dialogue's prompt can place the memory itself with {memory} and take extra inputs as {tokens}; without those it works as it always has.
+                    Dictionary<string, string> dialogueTokens = inputs.ToDictionary(kv => kv.Key, kv => kv.Value ?? "", StringComparer.OrdinalIgnoreCase);
+                    dialogueTokens["memory"] = dialogueTokens["memories"] = mem?.Trim() ?? "";
+                    foreach (string extra in PortsOf("Dialogue") ?? []) dialogueTokens.TryAdd(extra, "");   // an input left unwired reads as empty, not as the literal {token}
+                    bool placesMemory = System.Text.RegularExpressions.Regex.IsMatch(textingAgent.AgentPrompt, @"\{(memory|memories)\}");
+                    Agent.PromptTokens.Value = dialogueTokens;
+                    try
+                    {
+                        return await textingAgent.Prompt(thread, effectivePrompt, new PromptOptions
+                        {
+                            Username            = username,
+                            RecallNotes         = mem,
+                            MemoryInPrompt      = placesMemory,
+                            RecallSeconds       = recallSeconds,
+                            ContextSummary      = contextSummary,
+                            Ct                  = cts.Token,
+                            UserMessagePreadded = true,
+                            OnDelta             = onDelta,
+                        });
+                    }
+                    finally { Agent.PromptTokens.Value = null; }
+                }
+
+                CustomAgent agent = customAgents[agentName];
+
+                // Something upstream had nothing to hand over (Memory finding nothing, say): an agent behind the scenes has nothing to work on, so it doesn't run.
+                if (!isReply && inputs.Values.Any(v => v is null))
+                {
+                    Shared.Logger.LogInformation("[Graph:{Graph}] ({Thread}) {Agent} skipped: an input was empty.", graph.Name, threadKey, agentName);
+                    return null;
+                }
+                inputs["message"] = message;
+                Dictionary<string, string> filled = inputs.ToDictionary(kv => kv.Key, kv => kv.Value ?? "", StringComparer.OrdinalIgnoreCase);
+
+                // An agent with a sub-thread code keeps its own thread under this chat, found again by that code on every message, so it
+                // remembers what it did before. Only one run uses it at a time, and a run that is cancelled leaves nothing half-finished.
+                Thread? own = null;
+                if (!isReply && threadCode is { } code)
+                {
+                    own = thread.GetOrCreateChild(code, agentName, () => NewOwnThread(thread, code, agent));
+                    await own.RunLock.WaitAsync(cts.Token);
+                }
+                string result;
+                try
+                {
+                    int checkpoint = own?.History.Count ?? 0;
+                    List<ThreadMessage> chat = thread.GetChatHistory();
+                    filled["since"] = own is null ? history : SinceText(chat, own);
+                    using IDisposable _ = CustomAgent.Resolve(PipelineGraph.Fill(agent.AgentPrompt, filled));
+                    string userText = string.IsNullOrWhiteSpace(agent.MessagePrompt) ? message : PipelineGraph.Fill(agent.MessagePrompt, filled);
+                    if (isReply)
+                    {
+                        // The reply agent answers the user's own message, which is already in the thread; a message template only applies to steps behind the scenes.
+                        result = await agent.Prompt(thread, message, new PromptOptions
+                        {
+                            Username = username, ContextSummary = contextSummary, Ct = cts.Token, UserMessagePreadded = true, OnDelta = onDelta,
+                        });
+                    }
+                    else
+                    {
+                        try { result = await agent.Prompt(own ?? NewScratch(agent), userText, new PromptOptions { Username = username, Ct = cts.Token }); }
+                        catch
+                        {
+                            if (own is not null && own.History.Count > checkpoint) own.History.RemoveRange(checkpoint, own.History.Count - checkpoint);
+                            throw;
+                        }
+                        if (own is not null) own.LastChatCount = chat.Count;
+                        // A step that used tools comes back with the chat's display markers in its text; what the next box receives is plain text.
+                        result = System.Text.RegularExpressions.Regex.Replace(result, @"<!--ari-[^>]*-->", "").Trim();
+                    }
+                }
+                finally { own?.RunLock.Release(); }
+                Shared.Logger.LogInformation("[Graph:{Graph}] ({Thread}) {Agent} finished in {Sec:F1}s.", graph.Name, threadKey, agentName, sw.Elapsed.TotalSeconds);
+                return result;
+
+                // Same recall the Dialogue pipeline does: skipped without access, and a failed recall never blocks the reply.
+                async Task<string?> Recall()
+                {
+                    if (memory is null || !thread.HasMemoryAccess) return null;
+                    Stopwatch recallSw = Stopwatch.StartNew();
+                    try { string? notes = await memory.GetNotes(thread.GetChatHistory(), message, contextSummary, cts.Token, privacy); recallSeconds = recallSw.Elapsed.TotalSeconds; return notes; }
+                    catch (OperationCanceledException) when (cts.IsCancellationRequested) { throw; }
+                    catch (Exception ex)
+                    {
+                        Shared.Logger.LogWarning(ex, "[Memory] ({Thread}) Memory recall failed — continuing without memories. {Error}", threadKey, ex.Message);
+                        recallSeconds = recallSw.Elapsed.TotalSeconds;
+                        return PipelineGraph.MemoryUnavailableText;
+                    }
                 }
             }
         }
+    }
+
+    /// <summary>A throw-away thread for one run of a step: read-only tools, and any tool groups the agent starts with.</summary>
+    private static Thread NewScratch(CustomAgent agent)
+    {
+        Thread scratch = new(ThreadPipeline.Dialogue, $"graph:{Guid.NewGuid():N}") { Internal = true, ReadOnlyTools = true };
+        EquipThread(scratch, agent);
+        return scratch;
+    }
+
+    /// <summary>A step's own sub-thread under the chat. Internal, so it's off the chat list and Engram leaves it alone, but it shows
+    /// under its parent in the thread inspector.</summary>
+    private static Thread NewOwnThread(Thread parent, string code, CustomAgent agent)
+    {
+        Thread child = new(ThreadPipeline.Dialogue, $"{parent.Key}:{code}")
+        {
+            Internal = true, ReadOnlyTools = true, KeepToolHistory = true, Parent = parent, Code = code, OwnerAgent = agent.Name, Label = $"{agent.Name} ({code})",
+        };
+        EquipThread(child, agent);
+        return child;
+    }
+
+    private static void EquipThread(Thread thread, CustomAgent agent)
+    {
+        new ListTools(thread).Register(thread);
+        new RequestTools(thread).Register(thread);
+        foreach (string group in agent.PreloadedTools ?? [])
+            ToolFactories.LoadGroup(group, thread);
+    }
+
+    /// <summary>What was said in the chat since this sub-thread last looked: ARI's last reply and the new message. On its first look, the last few messages.</summary>
+    private static string SinceText(List<ThreadMessage> chat, Thread sub)
+    {
+        const int FirstLook = 12;
+        IEnumerable<ThreadMessage> fresh = sub.History.Count == 0 || sub.LastChatCount > chat.Count ? chat.TakeLast(FirstLook) : chat.Skip(sub.LastChatCount);
+        return string.Join("\n", fresh.Select(m => $"{m.Username}: {m.Content}"));
+    }
+
+    /// <summary>Where a wire's value is stored: a node's output, or for START the specific output (history or message) the wire leaves from.</summary>
+    private string OutputKey(PipelineGraph graph, PipelineGraph.Edge e)
+    {
+        PipelineGraph.Node? source = graph.Nodes.FirstOrDefault(n => n.Id == e.From);
+        if (source?.Type == "start") return $"{e.From}:{e.FromPort.ToLowerInvariant()}";
+        return e.From;
     }
 
     private static string FormatHistory(List<ThreadMessage> history)

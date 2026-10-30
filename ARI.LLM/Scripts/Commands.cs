@@ -7,12 +7,10 @@ namespace ARI.LLM;
 internal class CommandService
 {
     private readonly Engram?   engram;
-    private readonly Refactor? refactor;
 
-    internal CommandService(Engram? engram, Refactor? refactor = null)
+    internal CommandService(Engram? engram)
     {
         this.engram   = engram;
-        this.refactor = refactor;
     }
 
     internal async Task<string?> Handle(string input, string? threadKey = null)
@@ -27,7 +25,6 @@ internal class CommandService
         return command switch
         {
             "/engram"        => await HandleEngram(sub, threadKey),
-            "/refactor"      => await HandleRefactor(sub),
             "/purge"         => sub == "notes" ? HandlePurge() : null,
             "/brain"         => sub == "backup" ? HandleBackup() : null,
             "/getdirtynotes" => HandleDirtyNotes(),
@@ -65,25 +62,12 @@ internal class CommandService
     {
         if (!engram!.IsEnabled) return "Engram is disabled — sweep skipped.";
         if (threadKey is null)  return "No active thread — sweep skipped.";
-        await engram.RunEngram(threadKey, "manual");
+        await engram.RunEngram(threadKey, "manual", force: true);
         return "Engram sweep complete.";
     }
 
     private string Status()
         => engram!.IsEnabled ? "Engram is currently **enabled**." : "Engram is currently **disabled**.";
-
-    private async Task<string> HandleRefactor(string sub)
-    {
-        if (refactor is null) return "Refactor is not loaded.";
-        if (sub == "once")   // eval: a single epoch, for fast iteration
-        {
-            Shared.Logger.LogInformation("[Commands] Refactor requested (mode: once — single epoch).");
-            return await refactor.Run(allNotes: true, epochsOverride: 1);
-        }
-        bool allNotes = sub == "all";
-        Shared.Logger.LogInformation("[Commands] Refactor requested (mode: {Mode}).", allNotes ? "all" : "dirty");
-        return await refactor.Run(allNotes);
-    }
 
     private static string HandlePurge()
     {

@@ -9,7 +9,7 @@ internal abstract class Pipeline
 
     private readonly ConcurrentDictionary<string, CancellationTokenSource> processingThreads;
     private readonly ConcurrentDictionary<string, LiveCallInfo>             liveCalls;
-    private readonly Action<string>                                          notifyWatchers;
+    protected readonly Action<string>                                        notifyWatchers;
 
     protected Pipeline(
         ConcurrentDictionary<string, CancellationTokenSource> processingThreads,

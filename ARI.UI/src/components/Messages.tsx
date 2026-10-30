@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react"
+import { Fragment, useEffect, useRef, useState, useCallback } from "react"
 import type { ThreadItem, Attachment } from "../hooks/useThreads"
 import { setBubbleMd, setBubbleBlocks, ensureImageLightbox } from "../hooks/useMarkdown"
 import type { ContentBlock } from "../hooks/useThreads"
@@ -313,7 +313,7 @@ interface Props {
     isInternal:    boolean
     agentName:     string | null
     processing?:   boolean
-    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing" | "generating" | "waiting" | "working"
+    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "queued" | "remembering" | "researching" | "syncing" | "generating" | "waiting" | "working"
 }
 
 function fileExtLabel(name: string) {
@@ -405,7 +405,7 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
     isInternal: boolean
     agentName: string | null
     msgIndex: number
-    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing" | "generating" | "waiting" | "working"
+    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "queued" | "remembering" | "researching" | "syncing" | "generating" | "waiting" | "working"
     activeThread: string | null
     feedback?: Feedback
     onFeedbackChange: (timestamp: string, feedback: Feedback | null) => void
@@ -765,6 +765,42 @@ function animateDiffBadges(root: HTMLElement) {
     })
 }
 
+/// The "A·R·I will remember that" card. It is put in the chat at the point where she started remembering, so whatever happens after
+/// (a queued reply, new messages) stacks underneath it. It says "Adding to memory" with moving dots while she works, "Added to memory" after.
+function MemoryMarker({ done }: { done: boolean }) {
+    return (
+        <div className="memory-marker" role="status" aria-live="polite">
+            <div className="memory-marker-icon" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M15.5 13a3.5 3.5 0 0 0 -3.5 3.5v1a3.5 3.5 0 0 0 7 0v-1.8" />
+                    <path d="M8.5 13a3.5 3.5 0 0 1 3.5 3.5v1a3.5 3.5 0 0 1 -7 0v-1.8" />
+                    <path d="M17.5 16a3.5 3.5 0 0 0 0 -7h-.5" />
+                    <path d="M6.5 16a3.5 3.5 0 0 1 0 -7h.5" />
+                    <path d="M12 3v6" />
+                </svg>
+            </div>
+            <div className="memory-marker-text">
+                <span className="memory-marker-title">A·R·I will remember that</span>
+                <span className="memory-marker-sub">
+                    {done ? "Added to memory" : <>Adding to memory<span className="memory-marker-dots"><b /><b /><b /></span></>}
+                </span>
+            </div>
+        </div>
+    )
+}
+
+/// Shown under a message whose reply has not started because memory is still being saved.
+function ReplyQueued() {
+    return (
+        <div className="reply-queued" role="status">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" />
+            </svg>
+            <span>Reply queued. Waiting for memory to finish</span>
+        </div>
+    )
+}
+
 export default function Messages({ items, isRemembering, activeThread, isInternal, agentName, processing, threadStatus }: Props) {
     const bottomRef  = useRef<HTMLDivElement>(null)
     const messagesEl = useRef<HTMLDivElement>(null)
@@ -777,6 +813,25 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
 
     const { byTimestamp: feedback, set: setFeedback } = useFeedback(activeThread)
 
+    // One card per stretch of remembering, anchored at the number of items there were when it began. Saves that follow each other with
+    // nothing in between reuse the same card, so a burst of "remember" calls doesn't stack up several.
+    const [markers, setMarkers] = useState<{ at: number; done: boolean }[]>([])
+    const itemCount = useRef(0); itemCount.current = items.length
+    const wasRemembering = useRef(false)
+    useEffect(() => { setMarkers([]); wasRemembering.current = false }, [activeThread])
+    useEffect(() => {
+        if (isRemembering && !wasRemembering.current) {
+            setMarkers(m => {
+                const last = m[m.length - 1]
+                if (last && last.done && last.at === itemCount.current) return [...m.slice(0, -1), { at: last.at, done: false }]
+                return [...m, { at: itemCount.current === 0 ? -1 : itemCount.current, done: false }]
+            })
+        } else if (!isRemembering && wasRemembering.current) {
+            setMarkers(m => m.length ? [...m.slice(0, -1), { ...m[m.length - 1], done: true }] : m)
+        }
+        wasRemembering.current = isRemembering
+    }, [isRemembering])
+
     // Track the user's scroll position: "near bottom" (within 80px) means keep auto-scrolling.
     useEffect(() => {
         const el = messagesEl.current
@@ -788,7 +843,7 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
 
     useEffect(() => {
         if (stick.current) bottomRef.current?.scrollIntoView({ behavior: "instant" })
-    }, [items, isRemembering, processing])
+    }, [items, processing])
 
     // Persona-edit cards are rendered as plain HTML inside the bubble, so their buttons are picked up by
     // delegation rather than React. Approving posts and stops there: the server raises threadUpdated, which
@@ -847,9 +902,11 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
         }
     })
 
+    const markersAt = (pos: number) => markers.filter(m => m.at === pos).map((m, i) => <MemoryMarker key={`mm-${pos}-${i}`} done={m.done} />)
+
     return (
         <div id="messages" ref={messagesEl}>
-            {units.map((u, ui) => {
+            {units.map((u, ui) => <Fragment key={u.key}>{markersAt(u.key)}{((): React.ReactNode => {
                 if (u.kind === "item") {
                     switch (u.item.type) {
                         case "userMessage":     return <UserMessage key={u.key} item={u.item} activeThread={activeThread} />
@@ -890,10 +947,17 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
                     data:            Object.keys(mergedData).length > 0 ? mergedData : undefined,
                 } as ThreadItem
                 const isLast = ui === units.length - 1
+                // Her reply hasn't begun because memory is still being saved: say so, instead of claiming she is reading.
+                const noOutput = !merged.content && !((last as { blocks?: unknown[] }).blocks?.length)
+                if (isLast && merged.isStreaming && noOutput && (threadStatus === "queued" || isRemembering)) return <ReplyQueued key={u.key} />
                 return <AriResponse key={u.key} item={merged} isInternal={isInternal} agentName={agentName} msgIndex={u.key}
                                     threadStatus={isLast ? threadStatus : undefined} activeThread={activeThread}
                                     feedback={feedback[merged.timestamp]} onFeedbackChange={setFeedback} />
-            })}
+            })()}</Fragment>)}
+
+            {markers.filter(m => m.at === -1 || m.at >= items.length).map((m, i) => <MemoryMarker key={`mm-end-${i}`} done={m.done} />)}
+
+            {threadStatus === "queued" && units.length > 0 && units[units.length - 1].kind === "item" && <ReplyQueued />}
 
             {threadStatus === "syncing" && (
                 <div className="msg-row assistant" id="typing-indicator">
@@ -901,17 +965,6 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
                     <div className="typing-indicator">
                         <span className="typing-prefix">Syncing</span>
                         <span className="phase-word">project files</span>
-                        <div className="typing-dots"><b /><b /><b /></div>
-                    </div>
-                </div>
-            )}
-
-            {isRemembering && (
-                <div className="msg-row assistant" id="typing-indicator">
-                    <div className="sender">A·R·I</div>
-                    <div className="typing-indicator">
-                        <span className="typing-prefix">A·R·I is</span>
-                        <span>Remembering</span>
                         <div className="typing-dots"><b /><b /><b /></div>
                     </div>
                 </div>

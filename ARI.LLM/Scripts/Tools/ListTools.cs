@@ -27,7 +27,7 @@ internal sealed class ListTools : Tool
     {
         HashSet<string> grouped = ToolGroups.AllGroupedToolNames();
         List<string> ungroupedLines = new();
-        foreach (string name in ToolFactories.AllNames().Where(n => !grouped.Contains(n)).OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
+        foreach (string name in ToolFactories.AllNames().Where(n => !grouped.Contains(n) && ToolRegistry.IsEnabled(n)).OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
         {
             string description = ToolFactories.TryBuild(name, thread, out Tool tool) ? tool.SchemaDescription : string.Empty;
             ungroupedLines.Add(description.Length > 0 ? $"- {name}: {description}" : $"- {name}");

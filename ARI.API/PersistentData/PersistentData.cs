@@ -24,6 +24,15 @@ public sealed class AgentDefinition
     public bool    Enabled           { get; set; } = true;
     // Made in the control panel rather than shipped: the only agents that can be deleted.
     public bool    Custom            { get; set; }
+    // May only use tools that read, never ones that change things.
+    public bool    ReadOnly          { get; set; }
+    // The message the agent is sent, with {tokens}; empty sends the user's message through as it is.
+    public string? MessagePrompt     { get; set; }
+    // Tool groups the agent starts with, instead of asking for them with request_tools first.
+    public string[]? PreloadedTools  { get; set; }
+    // Shipped with ARI for its own pipelines (the Memory steps): editable, never deletable.
+    [System.Text.Json.Serialization.JsonPropertyName("system")]
+    public bool    IsSystem          { get; set; }
     public string? SlotName          { get; set; }
     public bool    Think             { get; set; }
     public int     BudgetThinking    { get; set; }
@@ -350,7 +359,7 @@ public class PersistentData
 
     /// <summary>Adds a control-panel-made agent to Agents.json (merged into the raw file, so nothing else in it is touched).
     /// False if the name is taken.</summary>
-    public bool CreateCustomAgent(string name, string serverName, string? slotName, string prompt)
+    public bool CreateCustomAgent(string name, string serverName, string? slotName, string prompt, bool readOnly = false)
     {
         lock (_agentsLock)
         {
@@ -360,10 +369,23 @@ public class PersistentData
             if (agents.OfType<JsonObject>().Any(a => string.Equals(a[KeyFor(a, "Name") ?? "Name"]?.GetValue<string>(), name, StringComparison.OrdinalIgnoreCase)))
                 return false;
             JsonObject agent = new() { ["Name"] = name, ["Custom"] = true, ["Enabled"] = true, ["ServerName"] = serverName, ["AgentPrompt"] = prompt };
+            if (readOnly) agent["ReadOnly"] = true;
             if (!string.IsNullOrEmpty(slotName)) agent["SlotName"] = slotName;
             agents.Add(agent);
             File.WriteAllText(_agentsPath, root.ToJsonString(JsonOpts));
             return true;
+        }
+    }
+
+    /// <summary>One agent's Agents.json entry as JSON text, or null if there is no such agent.</summary>
+    public string? GetAgentEntryJson(string name)
+    {
+        lock (_agentsLock)
+        {
+            JsonObject root = LoadAgentsRaw();
+            if (root[KeyFor(root, "Agents") ?? "Agents"] is not JsonArray agents) return null;
+            return agents.OfType<JsonObject>().FirstOrDefault(a =>
+                string.Equals(a[KeyFor(a, "Name") ?? "Name"]?.GetValue<string>(), name, StringComparison.OrdinalIgnoreCase))?.ToJsonString();
         }
     }
 
