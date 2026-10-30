@@ -21,7 +21,8 @@ internal sealed record ToolGroupDef(
 internal static class ToolGroups
 {
     // What ToolGroups.json ships, and the groups after the user's moves (see ToolRegistry) are applied to it.
-    private static Dictionary<string, ToolGroupDef> _base   = new(StringComparer.OrdinalIgnoreCase);
+    private static Dictionary<string, ToolGroupDef> _file   = new(StringComparer.OrdinalIgnoreCase);
+    private static Dictionary<string, ToolGroupDef> _base => _file.Concat(PluginTools.Groups().Where(g => !_file.ContainsKey(g.Key))).ToDictionary(g => g.Key, g => g.Value, StringComparer.OrdinalIgnoreCase);
     private static Dictionary<string, ToolGroupDef> _groups = new(StringComparer.OrdinalIgnoreCase);
 
     internal static void Load(string path)
@@ -33,9 +34,10 @@ internal static class ToolGroups
         }
         using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(path), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
         if (doc.RootElement.TryGetProperty("Groups", out JsonElement groupsEl))
-            _base = JsonSerializer.Deserialize<Dictionary<string, ToolGroupDef>>(groupsEl.GetRawText(),
+            _file = JsonSerializer.Deserialize<Dictionary<string, ToolGroupDef>>(groupsEl.GetRawText(),
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
         Rebuild();
+        PluginRegistry.Changed -= Rebuild; PluginRegistry.Changed += Rebuild;   // a plugin added later brings its tools' group with it
     }
 
     /// <summary>Recomputes the groups from the shipped ones plus wherever the user has moved tools. A group nobody
@@ -43,8 +45,9 @@ internal static class ToolGroups
     internal static void Rebuild()
     {
         Dictionary<string, List<string>> members = new(StringComparer.OrdinalIgnoreCase);
-        foreach (string g in _base.Keys) members[g] = new();
-        foreach (string name in _base.Values.SelectMany(d => d.Tools).Concat(ToolFactories.AllNames()).Distinct(StringComparer.OrdinalIgnoreCase))
+        Dictionary<string, ToolGroupDef> baseGroups = _base;
+        foreach (string g in baseGroups.Keys) members[g] = new();
+        foreach (string name in baseGroups.Values.SelectMany(d => d.Tools).Concat(ToolFactories.AllNames()).Distinct(StringComparer.OrdinalIgnoreCase))
         {
             string? g = ToolRegistry.GroupOverride(name) ?? BaseGroupOf(name);
             if (string.IsNullOrEmpty(g)) continue;
@@ -53,7 +56,7 @@ internal static class ToolGroups
         }
         _groups = members.Where(m => m.Value.Count > 0).ToDictionary(
             m => m.Key,
-            m => new ToolGroupDef(_base.TryGetValue(m.Key, out ToolGroupDef? d) ? d.Description : "A group you made.", m.Value.ToArray()),
+            m => new ToolGroupDef(baseGroups.TryGetValue(m.Key, out ToolGroupDef? d) ? d.Description : "A group you made.", m.Value.ToArray()),
             StringComparer.OrdinalIgnoreCase);
     }
 
@@ -76,7 +79,7 @@ internal static class ToolGroups
     internal static string ManifestText()
     {
         // A group whose tools are all switched off in the control panel isn't offered at all.
-        List<KeyValuePair<string, ToolGroupDef>> live = _groups.Where(g => g.Value.Tools.Any(ToolRegistry.IsEnabled)).ToList();
+        List<KeyValuePair<string, ToolGroupDef>> live = _groups.Where(g => g.Value.Tools.Any(n => ToolRegistry.IsEnabled(n) && (PluginTools.Find(n) is not { } o || PluginTools.IsAvailable(o.Plugin)))).ToList();
         return live.Count == 0
             ? "No tool groups are currently defined."
             : string.Join("\n", live.Select(g => $"- {g.Key}: {g.Value.Description}"));

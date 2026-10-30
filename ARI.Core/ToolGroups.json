@@ -7,12 +7,6 @@
         "git_clone"
       ]
     },
-    "github_tools": {
-      "Description": "GitHub through its CLI (gh), as the connected account: issues, pull requests, repos, releases, Actions runs, or gh api for anything else. Needs a GitHub account connected in the control panel. For putting a repo on disk use git_clone (git_tools).",
-      "Tools": [
-        "github"
-      ]
-    },
     "filesystem_tools": {
       "Description": "Work with files: preview, read, list, search, find, edit, write, and deliver a file to the user as a download. read_file opens any file by what it is; Word, Excel, PDF and PowerPoint files each also have their own group (docx_tools, xlsx_tools, pdf_tools, pptx_tools) with readers, writers and editors. Every conversation has a working folder of its own, ready to use: write a file there and give it to the user with deliver_file. A bound project's files persist; the working folder is deleted with the conversation. You never need to set it up first.",
       "Tools": [
@@ -83,16 +77,6 @@
         "present_image"
       ]
     },
-    "discord_tools": {
-      "Description": "Discord: DM anyone (and wait for their reply), close a DM conversation, find which voice channel a user is in, join a voice channel, or leave one.",
-      "Tools": [
-        "discord_dm_user",
-        "discord_close_dm",
-        "discord_list_voice_channels",
-        "discord_join_voice_channel",
-        "discord_leave_voice_channel"
-      ]
-    },
     "web_tools": {
       "Description": "Search the web and read web pages. Use for current events, factual lookups, or anything time-sensitive.",
       "Tools": [
@@ -141,14 +125,20 @@
       ]
     },
     "authoring_tools": {
-      "Description": "Write tools of your own. tool_docs explains the format, write_tool compiles a tool you wrote, test_tool tries it, read_tool and list_my_tools show what exists, delete_tool removes one. Use these when you need a capability you don't have.",
+      "Description": "Write tools of your own. tool_docs explains the format, write_tool compiles a tool you wrote, test_tool tries it, read_tool and list_my_tools show what exists, delete_tool removes one. Use these when you need a capability you don't have. Plugins too: write_plugin, test_plugin, read_plugin, list_my_plugins, delete_plugin, with plugin_docs to read first.",
       "Tools": [
         "tool_docs",
         "write_tool",
         "test_tool",
         "read_tool",
         "list_my_tools",
-        "delete_tool"
+        "delete_tool",
+        "plugin_docs",
+        "write_plugin",
+        "test_plugin",
+        "read_plugin",
+        "list_my_plugins",
+        "delete_plugin"
       ]
     },
     "subagent_tools": {
@@ -171,6 +161,25 @@
       "Description": "Show a visual in the chat itself: show_visual displays HTML you write (a chart, diagram, table, timeline, calculator or small interactive page) under your message. Use it when a picture or something interactive explains better than words.",
       "Tools": [
         "show_visual"
+      ]
+    },
+    "image_tools": {
+      "Description": "Pictures: ocr reads the text out of an image or a scanned PDF, edit_image resizes, crops, rotates, adds text, adjusts or converts a picture. To look at a picture and understand it, open it with read_file; to generate one use generate_image.",
+      "Tools": [
+        "ocr",
+        "edit_image"
+      ]
+    },
+    "convert_tools": {
+      "Description": "Convert a document between formats: convert_document turns Word, PDF, PowerPoint, Excel, CSV, Markdown, HTML, text or a picture into md, txt, html, pdf, docx, csv or xlsx. Text, headings, lists and tables carry over; exact layout does not.",
+      "Tools": [
+        "convert_document"
+      ]
+    },
+    "ssh_tools": {
+      "Description": "Other machines over SSH: ssh lists the machines the owner has saved, runs a command on one (each command is approved), copies files to and from it, and saves new machines. Key-based logins only; owner chats only.",
+      "Tools": [
+        "ssh"
       ]
     },
     "chart_tools": {

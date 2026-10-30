@@ -15,6 +15,8 @@
        ARI.LLM.FileSystem. -->
   <ItemGroup>
     <InternalsVisibleTo Include="ARI.API" />
+    <InternalsVisibleTo Include="ARI.Plugin.GitHub" />
+    <InternalsVisibleTo Include="ARI.Plugin.Discord" />
   </ItemGroup>
   <!-- The scripts ARI ships are C# text compiled at run time, not part of this assembly. -->
   <ItemGroup>
