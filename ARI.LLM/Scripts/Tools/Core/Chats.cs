@@ -28,7 +28,7 @@ internal static class ChatTranscripts
     }
 }
 
-[Tool("list_chats", "List the most recent conversations (in the app, on Discord, background ones), newest first, with who last spoke. " +
+[Tool("list_chats", "List the most recent conversations (in the app, on chat services, background ones), newest first, with who last spoke. " +
                     "Use it when you feel you're missing context, or the user mentions something said elsewhere, then open one with read_chat.",
       Access = ToolAccess.Read)]
 public class ListChats : Tool

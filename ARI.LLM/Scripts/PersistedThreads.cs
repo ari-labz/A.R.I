@@ -47,7 +47,9 @@ internal static class PersistedThreads
         public string?  OwnerId         { get; set; }
         public string?  Title           { get; set; }
         public string   Medium          { get; set; } = "Web";
-        public ulong    DiscordChannelId { get; set; }
+        public ulong    DiscordChannelId { get; set; }   // before chat services were plugins; read so old threads still reply
+        public string?  ChannelService { get; set; }
+        public string?  ChannelTarget { get; set; }
         public string?  PlatformContext { get; set; }
         public string?  FilesystemRoot  { get; set; }
         public bool     IsBrainVault    { get; set; }
@@ -133,7 +135,7 @@ internal static class PersistedThreads
             Meta meta = new()
             {
                 Key = thread.Key, Pipeline = thread.Pipeline.ToString(), OwnerId = thread.OwnerId, Title = thread.Title,
-                Medium = thread.Medium.ToString(), DiscordChannelId = thread.DiscordChannelId, PlatformContext = thread.PlatformContext,
+                Medium = thread.Medium.ToString(), ChannelService = thread.ChannelService, ChannelTarget = thread.ChannelTarget, PlatformContext = thread.PlatformContext,
                 FilesystemRoot = thread.FilesystemRoot, IsBrainVault = thread.IsBrainVault,
                 IsRemoteProject = thread.IsRemoteProject, IsAdminChat = thread.IsAdminChat, HasMemoryAccess = thread.HasMemoryAccess,
                 SafeMode = thread.SafeMode, LastMessageAt = thread.LastMessageAt, ContextStart = thread.ContextStart,
@@ -247,8 +249,9 @@ internal static class PersistedThreads
 
             thread.OwnerId         = meta.OwnerId;
             thread.Title           = meta.Title;
-            thread.Medium          = Enum.TryParse(meta.Medium, out ThreadMedium medium) ? medium : ThreadMedium.Web;
-            thread.DiscordChannelId = meta.DiscordChannelId;
+            thread.Medium          = meta.Medium == "Discord" ? ThreadMedium.Channel : Enum.TryParse(meta.Medium, out ThreadMedium medium) ? medium : ThreadMedium.Web;
+            thread.ChannelService  = meta.ChannelService ?? (meta.Medium == "Discord" ? "discord" : null);
+            thread.ChannelTarget   = meta.ChannelTarget ?? (meta.DiscordChannelId != 0 ? meta.DiscordChannelId.ToString() : null);
             thread.PlatformContext ??= meta.PlatformContext;
             thread.FilesystemRoot  = meta.FilesystemRoot;
             thread.IsBrainVault    = meta.IsBrainVault;

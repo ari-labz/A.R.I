@@ -49,8 +49,6 @@ public static class ToolRegistry
         ["search_brain"] = "Brain", ["recall_memory"] = "Brain", ["memories_on"] = "Brain", ["create_memory"] = "Brain",
         ["edit_memory"] = "Brain", ["delete_memory"] = "Brain", ["neighbours"] = "Brain",
         ["create_event"] = "Calendar", ["create_reminder"] = "Calendar", ["list_events"] = "Calendar", ["delete_entry"] = "Calendar",
-        ["discord_list_voice_channels"] = "Discord", ["discord_join_voice_channel"] = "Discord", ["discord_leave_voice_channel"] = "Discord",
-        ["discord_dm_user"] = "Discord", ["discord_close_dm"] = "Discord",
         ["generate_image"] = "ImageGen", ["present_image"] = "ImageGen",
     };
 

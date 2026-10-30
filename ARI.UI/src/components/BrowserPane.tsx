@@ -6,6 +6,8 @@ import type { BrowserSession } from "../hooks/useBrowserSession"
 // beside the chat (BrowserPane), and a line above the input when she is waiting for the person (BrowserNeedsYou). A picture of the page
 // refreshes about once a second; clicking, typing and scrolling over it drive the real page, so the person can log in for her and press Done.
 
+const RESIZE_DELAY_MS = 250
+
 export function BrowserButton({ session }: { session: BrowserSession }) {
     const { status, hidden } = session
     if (!status.open) return null
@@ -36,6 +38,7 @@ export default function BrowserPane({ session }: { session: BrowserSession }) {
     const [shot, setShot] = useState<string | null>(null)
     const [address, setAddress] = useState("")
     const imgRef = useRef<HTMLImageElement>(null)
+    const viewRef = useRef<HTMLDivElement>(null)
 
     useEffect(() => { setShot(null) }, [base])
 
@@ -56,6 +59,24 @@ export default function BrowserPane({ session }: { session: BrowserSession }) {
         return () => { stop = true; clearInterval(t) }
     }, [base, status.open, status.waiting, hidden])
 
+    // The page is drawn at the size of the pane, so the picture fills it with no empty strip under it.
+    useEffect(() => {
+        const view = viewRef.current
+        if (!view || !base || !status.open || hidden) return
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const report = () => {
+            clearTimeout(timer)
+            timer = setTimeout(() => {
+                const { width, height } = view.getBoundingClientRect()
+                if (width > 0 && height > 0) apiFetch(base + "/size", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ width: Math.round(width), height: Math.round(height) }) }).catch(() => {})
+            }, RESIZE_DELAY_MS)
+        }
+        const observer = new ResizeObserver(report)
+        observer.observe(view)
+        report()
+        return () => { clearTimeout(timer); observer.disconnect() }
+    }, [base, status.open, hidden])
+
     if (!base || !status.open || hidden) return null
     const url = status.tabs?.[status.active ?? 0] ?? ""
 
@@ -63,7 +84,8 @@ export default function BrowserPane({ session }: { session: BrowserSession }) {
 
     function point(e: { clientX: number; clientY: number }) {
         const img = imgRef.current!, r = img.getBoundingClientRect()
-        return { x: (e.clientX - r.left) * (img.naturalWidth / r.width), y: (e.clientY - r.top) * (img.naturalHeight / r.height) }
+        const scale = Math.min(r.width / img.naturalWidth, r.height / img.naturalHeight)   // the picture is drawn top left, as large as fits
+        return { x: (e.clientX - r.left) / scale, y: (e.clientY - r.top) / scale }
     }
 
     function onKeyDown(e: React.KeyboardEvent) {
@@ -93,7 +115,7 @@ export default function BrowserPane({ session }: { session: BrowserSession }) {
                     <button onClick={() => apiFetch(base + "/done", { method: "POST" })}>Done</button>
                 </div>
             )}
-            <div className="bp-view" tabIndex={0} onKeyDown={onKeyDown} onPaste={onPaste}
+            <div ref={viewRef} className="bp-view" tabIndex={0} onKeyDown={onKeyDown} onPaste={onPaste}
                  onWheel={e => { const p = point(e); send({ kind: "scroll", x: p.x, y: p.y, deltaY: e.deltaY }) }}>
                 {shot ? <img ref={imgRef} src={shot} alt="Ari's browser" draggable={false}
                             onClick={e => { (e.currentTarget.parentElement as HTMLElement).focus(); const p = point(e); send({ kind: "click", x: p.x, y: p.y }) }} />

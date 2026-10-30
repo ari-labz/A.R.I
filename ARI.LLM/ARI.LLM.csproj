@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\ARI.Brain\ARI.Brain.csproj" />
     <ProjectReference Include="..\ARI.Common\ARI.Common.csproj" />
+    <ProjectReference Include="..\ARI.Sdk\ARI.Sdk.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

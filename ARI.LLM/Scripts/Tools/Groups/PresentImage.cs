@@ -43,7 +43,6 @@ internal sealed class PresentImage : Tool
         }
     };
 
-    private const long DiscordMaxFileBytes = 10 * 1024 * 1024;
 
     internal override async Task<ToolResult> Execute(string args)
     {
@@ -60,18 +59,14 @@ internal sealed class PresentImage : Tool
         if (!File.Exists(path))
             return $"No file named '{filename}' found in the scratchpad.";
 
-        // On Discord there's no app to raise an image event to — send the image as a message attachment instead.
-        if (boundThread.Medium == ThreadMedium.Discord)
+        // On a chat service there's no app to raise an image event to — send the image as an attachment instead.
+        if (boundThread.Medium == ThreadMedium.Channel)
         {
-            if (Modules.Discord is null || boundThread.DiscordChannelId == 0)
-                return "Couldn't send the image — this Discord conversation has no channel to send it to.";
-            if (new FileInfo(path).Length > DiscordMaxFileBytes)
-                return $"'{filename}' is too large to send on Discord (over 10 MB). Tell the user, or generate a smaller image.";
-
-            string? failure = await Modules.Discord.SendFileAsync(boundThread.DiscordChannelId, path);
+            if (Modules.Llm is not LLMModule llm) return "Couldn't send the image — the language model module isn't running.";
+            string? failure = await llm.Channels.SendFile(boundThread, path, null);
             return failure is null
-                ? $"'{filename}' has been sent to the user as a Discord attachment."
-                : $"Couldn't send the image on Discord: {failure}";
+                ? $"'{filename}' has been sent to the user as an attachment."
+                : $"Couldn't send the image: {failure}";
         }
 
         shownFilename  = filename;

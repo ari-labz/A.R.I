@@ -30,12 +30,9 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
         "coding_conventions.md",
         "Calendar.db",
         "Voice.json",
-        "Discord.json",
         "llamacpp.json",
         "username.txt",
     ];
-
-    private static readonly string[] DiscordTokenFields = ["Token", "BotToken"];
 
     // ── Meta (stored inside each zip as meta.json) ───────────────────────────
 
@@ -127,17 +124,7 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
                 string src = Path.Combine(PersistentDir, file);
                 if (!System.IO.File.Exists(src)) continue;
 
-                if (file == "Discord.json")
-                {
-                    string stripped = StripDiscordTokens(System.IO.File.ReadAllText(src));
-                    ZipArchiveEntry entry = zip.CreateEntry(file, CompressionLevel.Optimal);
-                    using StreamWriter w = new(entry.Open());
-                    w.Write(stripped);
-                }
-                else
-                {
-                    zip.CreateEntryFromFile(src, file, CompressionLevel.Optimal);
-                }
+                zip.CreateEntryFromFile(src, file, CompressionLevel.Optimal);
             }
 
             ConfigMeta meta = new()
@@ -183,12 +170,6 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
                 if (!ConfigFiles.Contains(entry.Name)) continue;   // only the files a saved setup is made of
 
                 string dest = Path.Combine(PersistentDir, entry.Name);
-
-                if (entry.Name == "Discord.json")
-                {
-                    MergeDiscordConfig(entry, dest);
-                    continue;
-                }
 
                 entry.ExtractToFile(dest, overwrite: true);
             }
@@ -251,56 +232,5 @@ public class LLMConfigController(PersistentData persistentData) : ControllerBase
     {
         using StreamReader sr = new(entry.Open());
         return sr.ReadToEnd();
-    }
-
-    private static string StripDiscordTokens(string json)
-    {
-        try
-        {
-            JsonNode? node = JsonNode.Parse(json);
-            if (node is JsonObject obj)
-            {
-                foreach (string field in DiscordTokenFields)
-                {
-                    if (obj.ContainsKey(field))
-                        obj[field] = "";
-                }
-                return obj.ToJsonString(JsonOpts);
-            }
-        }
-        catch { }
-        return json;
-    }
-
-    private static void MergeDiscordConfig(ZipArchiveEntry entry, string destPath)
-    {
-        string incoming = ReadEntryText(entry);
-
-        if (!System.IO.File.Exists(destPath))
-        {
-            System.IO.File.WriteAllText(destPath, incoming);
-            return;
-        }
-
-        try
-        {
-            JsonNode? existing = JsonNode.Parse(System.IO.File.ReadAllText(destPath));
-            JsonNode? restore  = JsonNode.Parse(incoming);
-
-            if (existing is JsonObject existingObj && restore is JsonObject restoreObj)
-            {
-                foreach (KeyValuePair<string, JsonNode?> kvp in restoreObj)
-                {
-                    if (DiscordTokenFields.Contains(kvp.Key))
-                        continue;
-                    existingObj[kvp.Key] = kvp.Value?.DeepClone();
-                }
-                System.IO.File.WriteAllText(destPath, existingObj.ToJsonString(JsonOpts));
-                return;
-            }
-        }
-        catch { }
-
-        System.IO.File.WriteAllText(destPath, incoming);
     }
 }

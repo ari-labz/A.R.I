@@ -1,9 +1,8 @@
-Changes since v0.8.3 (v0.8.5 was never published as a Docker image, so 0.8.6 is the first):
+Changes since v0.9.0:
 
-- A·R·I can now run in Docker, including on a DGX Spark: a published image (`ghcr.io/ari-labz/ari`) built for ARM64 and AMD64 with GPU-enabled llama.cpp, plus ready-made Docker Compose files.
-- First-run setup wizard and a guided tour: create the Master account, pick a model and start the server from the browser.
-- Privacy and security: guests can no longer see other people's threads or the admin controls, the Master account owns the brain, pushes only go to the person they are for, slash commands are Master-only unless listed as open to anyone, and refused requests now return 403.
-- Persistent Threads (off by default): expired conversations can be kept as snapshots, shown greyed in the sidebar and reopened by sending a message.
-- `/purge notes` now backs up the brain first, and backups live in the app data folder.
-- Control panel: a reworked overview with an AI-RAM limit line, one Users page, a new Settings page, per-agent on/off switches, prompts on their own page, and colour and logo customisation.
-- Docker: a `UMASK` setting makes everything ARI creates readable and writable by everyone, so a shared data folder (for example over SMB) can be edited. The DGX Spark compose file (`docker/compose.dgx-spark.yml`) keeps all data in plain folders under `/ARI`.
+- Plugin SDK: plugins talk to A·R·I through one standard route (`ARI.Sdk`). A chat plugin hands each incoming message to A·R·I, which works out who it is from, decides whether to answer, runs the normal dialogue and sends the reply back. Core no longer contains any Discord code.
+- Discord is now a plugin: install it from the Browse tab of the Plugins page. Direct messages A·R·I starts stay open until they time out, what the other person says is passed back to you, and tool use no longer shows up in Discord.
+- Plugin store: a Browse tab with search and featured plugins, installs checked against a checksum, `.ari` files you can export from a plugin's page or drop anywhere in the app to install, and a picture for every plugin.
+- Browser: the live view now fills its pane at any size, with no empty strip underneath, and the page is drawn at the pane's size.
+- Dev Mode now keeps conversations across restarts like a normal run, but in a throwaway folder that is emptied at every start, so your real saved conversations are never touched.
+- Plugins made for older versions of A·R·I (the first Discord release) need updating from the store.

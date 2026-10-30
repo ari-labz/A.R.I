@@ -53,7 +53,7 @@ internal sealed class ShowVisual : Tool
 
     internal override async Task<ToolResult> Execute(string argsJson)
     {
-        if (thread.Medium == ThreadMedium.Discord) return (ToolResult)("This conversation is on Discord, which can't show a live visual. Describe it in words, or save it with write_file and send it with deliver_file.");
+        if (thread.Medium == ThreadMedium.Channel) return (ToolResult)("This conversation is on a chat service, which can't show a live visual. Describe it in words, or save it with write_file and send it with deliver_file.");
         (string title, string html) = Parse(argsJson);
         if (html.Trim().Length < 10) return (ToolResult)("[Error: give the HTML to show in html.]");
         if (Encoding.UTF8.GetByteCount(html) > 600_000) return (ToolResult)("[Error: that page is over 600 KB. Make it smaller.]");
@@ -72,7 +72,7 @@ internal sealed class ShowVisual : Tool
     // The marker the chat window turns into the frame; the file name comes from the title, so it needs no state.
     internal override Func<string, string>? DisplayAfter => args =>
     {
-        try { (string title, string html) = Parse(args); return html.Trim().Length < 10 || thread.Medium == ThreadMedium.Discord ? "" : $"\n<!--ari-visual:{thread.Key}:{Slug(title)}-->"; }
+        try { (string title, string html) = Parse(args); return html.Trim().Length < 10 || thread.Medium == ThreadMedium.Channel ? "" : $"\n<!--ari-visual:{thread.Key}:{Slug(title)}-->"; }
         catch { return ""; }
     };
 }

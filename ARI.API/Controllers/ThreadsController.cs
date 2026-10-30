@@ -656,13 +656,24 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
     public record BrowserInput(string Kind, double X = 0, double Y = 0, string? Text = null, double DeltaY = 0);
 
-    /// <summary>The person clicking, typing, pressing a key or scrolling in the page. Coordinates are in the page's own 1280x900 view.</summary>
+    /// <summary>The person clicking, typing, pressing a key or scrolling in the page. Coordinates are in the page's own view, whatever size the pane last asked for.</summary>
     [HttpPost("{id}/browser/input")]
     public async Task<IActionResult> BrowserSend([FromRoute(Name = "id")] string threadKey, [FromBody] BrowserInput body)
     {
         if (!CanSeeBrowser(threadKey)) return NotFound();
         try { await ARI.LLM.BrowserHost.Input(threadKey, body.Kind, body.X, body.Y, body.Text ?? "", body.DeltaY); return Ok(); }
         catch (Exception e) { return BadRequest(new { error = e.Message }); }
+    }
+
+    public record BrowserSize(int Width, int Height);
+
+    /// <summary>The size of the pane the person watches the page in, so the page is drawn at that size.</summary>
+    [HttpPost("{id}/browser/size")]
+    public async Task<IActionResult> BrowserResize([FromRoute(Name = "id")] string threadKey, [FromBody] BrowserSize body)
+    {
+        if (!CanSeeBrowser(threadKey)) return NotFound();
+        await ARI.LLM.BrowserHost.Resize(threadKey, body.Width, body.Height);
+        return Ok();
     }
 
     /// <summary>"Done": the person has finished what Ari asked them to do in the page.</summary>

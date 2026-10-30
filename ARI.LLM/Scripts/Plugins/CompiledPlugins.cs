@@ -3,12 +3,14 @@ using System.IO.Compression;
 using System.Reflection;
 using System.Runtime.Loader;
 using ARI.Common;
+using ARI.Sdk;
 using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
 /// <summary>What ARI gives a compiled plugin when it creates it: the few things every plugin needs from the host, so a plugin never reaches for ARI's internals to get them.</summary>
-public interface IPluginHost
+/// <summary>What ARI gives a plugin: the public SDK surface (<see cref="IAri"/>) plus the internals first-party plugins still use.</summary>
+public interface IPluginHost : IAri
 {
     ILoggerFactory Loggers { get; }
     LLMModule? Llm { get; }

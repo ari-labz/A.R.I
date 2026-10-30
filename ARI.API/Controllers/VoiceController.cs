@@ -196,8 +196,8 @@ public class VoiceController(
                 try { Directory.Delete(stagingPath, recursive: true); }
                 catch { /* best-effort */ }
                 logger.LogInformation("[Voice] Voice Synthesis of {ModelName} complete", modelName);
-                if (Modules.Discord is not null)
-                    await Modules.Discord.NotifyMaster($"> Voice Synthesis of {modelName} complete");
+                if (Modules.Llm is not null)
+                    await Modules.Llm.NotifyOwner($"> Voice Synthesis of {modelName} complete");
             }
             else
             {
@@ -765,8 +765,8 @@ public class VoiceController(
             if (job.IsSuccess)
             {
                 logger.LogInformation("[Voice] Voice Synthesis of {ModelName} complete", modelName);
-                if (Modules.Discord is not null)
-                    await Modules.Discord.NotifyMaster($"> Voice Synthesis of {modelName} complete");
+                if (Modules.Llm is not null)
+                    await Modules.Llm.NotifyOwner($"> Voice Synthesis of {modelName} complete");
             }
             else
             {

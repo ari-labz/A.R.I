@@ -41,7 +41,7 @@ internal static class ToolFactories
         ["write_pptx"]     = t => With<WritePptx>(t),
         ["write_pdf"]      = t => With<WritePdf>(t),
         ["make_chart"]     = t => With<MakeChart>(t),
-        ["show_visual"]    = t => t.Medium == ThreadMedium.Discord ? null : new ShowVisual(t),
+        ["show_visual"]    = t => t.Medium == ThreadMedium.Channel ? null : new ShowVisual(t),
         ["archive"]        = t => With<Archive>(t),
         ["ocr"]            = t => With<Ocr>(t),
         ["edit_image"]     = t => With<EditImage>(t),
@@ -211,7 +211,7 @@ internal static class ToolFactories
         _ when PluginTools.Find(toolName) is { } owned => PluginTools.WhyUnavailable(owned.Plugin),
         "spawn_agent" or "wait_for_agent" or "cancel_agent" when SubagentManager.Agent is null
                                                          => "subagents aren't configured on this server",
-        "spawn_agent" or "wait_for_agent" or "cancel_agent" => "subagents aren't available here (only in direct conversations, not Discord server channels or agent threads)",
+        "spawn_agent" or "wait_for_agent" or "cancel_agent" => "subagents aren't available here (only in direct conversations, not group chats on chat services or agent threads)",
         "create_event" or "create_reminder" or "list_events" or "delete_entry" => "the calendar isn't running",
         "list_projects" or "create_project" or "rename_project" or "bind_project" or "set_project_path" => "the projects module isn't running",
         "create_memory" or "edit_memory" or "delete_memory" => "the brain isn't ready",

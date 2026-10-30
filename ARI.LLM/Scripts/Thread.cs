@@ -17,9 +17,9 @@ public enum ThreadState { Unread, Active, Streaming, Inactive, Dormant, Deleted 
 public enum ThreadPipeline { Dialogue, Code, Speech, Dream }
 
 /// <summary>Where a thread's conversation lives, which decides how things reach the user (e.g. present_image
-/// attaches the image to a Discord message instead of raising the app's image event). Set by whatever creates
+/// sends the image through the chat service instead of raising the app's image event). Set by whatever creates
 /// the thread; defaults to Web.</summary>
-public enum ThreadMedium { Web, Desktop, Discord }
+public enum ThreadMedium { Web, Desktop, Channel }
 
 /// <summary>Coding-pipeline state. Planning = explore/infer/propose (no edits); Development = execute the
 /// approved plan (no exploration). Each phase feeds the agent a different system prompt and sampling.</summary>
@@ -349,15 +349,17 @@ public class Thread
 
     internal string? PlatformContext { get; set; }
 
-    /// <summary>Where this conversation lives. The Discord module sets it to Discord on each incoming message.</summary>
+    /// <summary>Where this conversation lives. A message from a chat service sets it to Channel.</summary>
     public ThreadMedium Medium { get; set; } = ThreadMedium.Web;
 
-    /// <summary>The Discord channel (server channel or DM) of the latest message, so files ARI presents can be sent
-    /// back to it. 0 until the Discord module sets it; only meaningful when <see cref="Medium"/> is Discord.</summary>
-    public ulong DiscordChannelId { get; set; }
+    /// <summary>The chat service this conversation is on ("discord"), when <see cref="Medium"/> is Channel.</summary>
+    public string? ChannelService { get; set; }
+
+    /// <summary>Where the latest message came from on that service, so replies and files ARI presents go back there.</summary>
+    public string? ChannelTarget { get; set; }
 
     /// <summary>The thread this one reports to (see <see cref="ParentReports"/>), for a conversation another thread
-    /// opened, like a Discord DM from discord_dm_user. Null for a top-level thread.</summary>
+    /// opened, like a DM from discord_dm_user. Null for a top-level thread.</summary>
     internal string? ReportsTo { get; set; }
 
     /// <summary>Why the parent opened this conversation and what it needs back, shown to the agent in the system

@@ -177,12 +177,12 @@ internal class Engram : MemoryAgent, IDisposable
             return;
         }
 
-        // Same for a DM conversation ARI opened with someone other than the Master (discord_dm_user): what they say
-        // is theirs, not material for the Master's brain. Keys are dm:{userId} or dm:{userId}:{opened}.
-        if (!EngramOthersSetting.Enabled && threadKey.StartsWith("dm:", StringComparison.Ordinal) && Modules.Discord is { } discord
-            && ulong.TryParse(threadKey.Split(':')[1], out ulong dmUser) && dmUser != discord.MasterDiscordId)
+        // Same for a DM conversation ARI opened with someone other than the owner (discord_dm_user): what they say
+        // is theirs, not material for the owner's brain. Only the owner's own direct chat has an owner.
+        if (!EngramOthersSetting.Enabled && threadKey.StartsWith("dm:", StringComparison.Ordinal)
+            && threads.TryGetValue(threadKey, out Thread? dmThread) && dmThread.Medium == ThreadMedium.Channel && dmThread.OwnerId is null)
         {
-            if (threads.TryGetValue(threadKey, out Thread? dmThread)) dmThread.EngramProcessed = true;
+            dmThread.EngramProcessed = true;
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] skipped — DMs with people other than the Master are never swept into the brain.", threadKey);
             return;
         }
